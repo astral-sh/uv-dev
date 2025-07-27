@@ -1,5 +1,5 @@
 [package]
-name = "uv-cli-common"
+name = "uv-cli-pip"
 version = "0.0.90"
 edition = { workspace = true }
 rust-version = { workspace = true }
@@ -11,19 +11,19 @@ license = { workspace = true }
 [dependencies]
 anstream = { workspace = true }
 anyhow = { workspace = true }
-dotenvy = { workspace = true }
-indicatif = { workspace = true }
+itertools = { workspace = true }
 owo-colors = { workspace = true }
 rustc-hash = { workspace = true }
-serde_json = { workspace = true }
+serde = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
-version-ranges = { workspace = true }
 
 uv-cache = { workspace = true }
+uv-cli-common = { workspace = true }
 uv-client = { workspace = true }
 uv-configuration = { workspace = true }
+uv-dispatch = { workspace = true }
 uv-distribution = { workspace = true }
 uv-distribution-types = { workspace = true }
 uv-fs = { workspace = true }
@@ -31,13 +31,10 @@ uv-installer = { workspace = true }
 uv-normalize = { workspace = true }
 uv-pep440 = { workspace = true }
 uv-pep508 = { workspace = true }
-uv-publish = { workspace = true }
+uv-platform-tags = { workspace = true }
 uv-python = { workspace = true }
 uv-requirements = { workspace = true }
 uv-resolver = { workspace = true }
 uv-types = { workspace = true }
+uv-virtualenv = { workspace = true }
 uv-warnings = { workspace = true }
-
-[target.'cfg(unix)'.dependencies]
-nix = { workspace = true }
-

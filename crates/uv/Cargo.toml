@@ -26,6 +26,7 @@ uv-cache = { workspace = true }
 uv-cache-info = { workspace = true }
 uv-cli = { workspace = true }
 uv-cli-common = { workspace = true }
+uv-cli-pip = { workspace = true }
 uv-client = { workspace = true }
 uv-command-support = { workspace = true }
 uv-configuration = { workspace = true }

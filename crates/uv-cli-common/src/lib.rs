@@ -3,6 +3,9 @@
 pub mod child;
 pub mod exit_status;
 pub mod printer;
+pub mod reporters;
+pub mod settings;
+pub mod utils;
 
 /// Given a list of names, return a conjunction of the names (e.g., "Alice, Bob, and Charlie").
 pub fn conjunction(names: Vec<String>) -> String {
