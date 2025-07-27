@@ -1,0 +1,46 @@
+[package]
+name = "uv-cli-project"
+version = "0.0.90"
+edition = { workspace = true }
+rust-version = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+
+[dependencies]
+anyhow = { workspace = true }
+itertools = { workspace = true }
+owo-colors = { workspace = true }
+rustc-hash = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+uv-cache = { workspace = true }
+uv-cli-common = { workspace = true }
+uv-cli-pip = { workspace = true }
+uv-client = { workspace = true }
+uv-configuration = { workspace = true }
+uv-dispatch = { workspace = true }
+uv-distribution = { workspace = true }
+uv-distribution-types = { workspace = true }
+uv-fs = { workspace = true }
+uv-git = { workspace = true }
+uv-installer = { workspace = true }
+uv-normalize = { workspace = true }
+uv-pep440 = { workspace = true }
+uv-pep508 = { workspace = true }
+uv-pypi-types = { workspace = true }
+uv-python = { workspace = true }
+uv-requirements = { workspace = true }
+uv-resolver = { workspace = true }
+uv-scripts = { workspace = true }
+uv-settings = { workspace = true }
+uv-tool = { workspace = true }
+uv-types = { workspace = true }
+uv-virtualenv = { workspace = true }
+uv-warnings = { workspace = true }
+uv-workspace = { workspace = true }
+uv-cache-key = { workspace = true }
+fs-err = { workspace = true }
