@@ -477,6 +477,11 @@ pub enum PreviewFeature {
     Http2KeepAlive,
     /// Allows using [proxy indexes](./indexes.md#proxy-indexes).
     ProxyIndex,
+    /// If the running version of uv does not satisfy
+    /// [`required-version`](../reference/settings.md#required-version), uv looks up a compatible
+    /// release for the current platform, downloads it into the cache, and runs the original
+    /// command with that version. The installed copy of uv is unchanged.
+    InstallRequiredVersion,
 }
 
 impl Display for PreviewFeature {

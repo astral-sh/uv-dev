@@ -3,7 +3,7 @@
 use std::borrow::Cow;
 use std::ffi::OsString;
 use std::fmt::Write;
-use std::io::stdout;
+use std::io::{Seek, Write as _, stdout};
 #[cfg(feature = "self-update")]
 use std::ops::Bound;
 use std::path::Path;
@@ -11,16 +11,18 @@ use std::process::ExitCode;
 use std::str::FromStr;
 use std::sync::atomic::Ordering;
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use clap::error::{ContextKind, ContextValue};
 use clap::{CommandFactory, Error, Parser};
 use futures::FutureExt;
 use owo_colors::OwoColorize;
+use tokio::process::Command;
 use tokio::task::spawn_blocking;
 use tracing::{debug, instrument, trace};
 
 #[cfg(not(feature = "self-update"))]
 use crate::install_source::InstallSource;
+use uv_bin_install::{Binary, bin_install, find_matching_version};
 use uv_cache::{Cache, Refresh};
 use uv_cache_info::Timestamp;
 use uv_cli::settings;
@@ -39,14 +41,15 @@ use uv_cli::{
     TopLevelArgs, WorkspaceCommand, WorkspaceNamespace, compat::CompatArgs, options::ArgumentError,
 };
 use uv_client::BaseClientBuilder;
-use uv_command_support::{ExitStatus, Printer, UvError};
-use uv_configuration::{PythonUpgrade, PythonUpgradeSource, ToolRunCommand};
+use uv_command_support::{ExitStatus, Printer, UvError, child::run_to_completion};
+use uv_configuration::{PythonUpgrade, PythonUpgradeSource, RequiredVersion, ToolRunCommand};
 use uv_flags::EnvironmentFlags;
 use uv_fs::{CWD, Simplified, normalize_path};
 #[cfg(feature = "self-update")]
 use uv_pep440::release_specifiers_to_ranges;
 use uv_pep508::VersionOrUrl;
 use uv_preview::PreviewFeature;
+use uv_project_commands::BinaryDownloadReporter;
 use uv_pypi_types::{ParsedDirectoryUrl, ParsedUrl};
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_types::PythonRequest;
@@ -129,9 +132,17 @@ impl uv_errors::Hinted for ExternallyInstalledError {
     }
 }
 
-#[instrument(skip_all)]
 #[doc(hidden)]
 pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Result<ExitStatus> {
+    Box::pin(run_with_args(cli, global_initialization, None)).await
+}
+
+#[instrument(name = "run", skip_all)]
+async fn run_with_args(
+    cli: Cli,
+    global_initialization: GlobalInitialization,
+    original_args: Option<&[OsString]>,
+) -> Result<ExitStatus> {
     let config_discovery = ConfigDiscovery::from_args(cli.top_level.no_config);
 
     // Configure color before resolving settings so argument errors retain their styling.
@@ -147,6 +158,13 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
         cli.top_level.global_args.directory.clone().or_else(|| {
             std::env::var_os(EnvVars::UV_WORKING_DIRECTORY).map(std::path::PathBuf::from)
         });
+
+    // A child uv must resolve a relative `--directory` from the same starting directory.
+    let original_directory = if directory.as_ref().is_some_and(|path| path.is_relative()) {
+        Some(std::env::current_dir()?)
+    } else {
+        None
+    };
 
     // Switch directories as early as possible.
     if let Some(directory) = directory.as_ref() {
@@ -553,7 +571,58 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
     if let Some(required_version) = globals.required_version.as_ref() {
         let package_version = uv_pep440::Version::from_str(uv_version::version())?;
         if !required_version.contains(&package_version) {
-            return Err(required_version_error(required_version, &package_version));
+            let mismatch = required_version_error(required_version, &package_version);
+            let Some(args) = original_args else {
+                return Err(mismatch);
+            };
+            if !globals
+                .preview
+                .is_enabled(PreviewFeature::InstallRequiredVersion)
+            {
+                bail!(
+                    "{}. To run a compatible version automatically, use `--preview-features {}`.",
+                    mismatch.to_string().trim_end_matches('.'),
+                    PreviewFeature::InstallRequiredVersion,
+                );
+            }
+            // A misidentified release must not keep spawning copies of itself.
+            if std::env::var(EnvVars::UV_INTERNAL__REQUIRED_VERSION)
+                .is_ok_and(|value| value == required_version.to_string())
+            {
+                return Err(mismatch);
+            }
+
+            // Project settings must not redirect a binary download or supply an executable
+            // through a project-controlled cache directory. Still respect offline and no-cache.
+            let settings = GlobalSettings::resolve(
+                &cli.top_level.global_args,
+                None,
+                &environment,
+                custom_certificate_file,
+            )?;
+            let client_builder =
+                base_client_builder(&settings).connectivity(globals.network_settings.connectivity);
+            let cache = if cache_settings.no_cache && !discovery_cache.is_temporary() {
+                Cache::temp()?
+            } else {
+                discovery_cache
+            };
+            let printer = Printer::new(globals.quiet, globals.verbose, globals.no_progress);
+            writeln!(
+                printer.stderr(),
+                "Current uv version `{package_version}` does not match required version `{required_version}`. Looking for a compatible version."
+            )?;
+            return run_required_version(
+                required_version,
+                args,
+                original_directory.as_deref(),
+                run_command.as_ref(),
+                client_builder,
+                cache,
+                printer,
+            )
+            .await
+            .context(mismatch);
         }
     }
 
@@ -2204,6 +2273,67 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
     }
 }
 
+/// Fetch a compatible uv release and run the original command with it.
+async fn run_required_version(
+    required_version: &RequiredVersion,
+    args: &[OsString],
+    original_directory: Option<&Path>,
+    run_command: Option<&RunCommand>,
+    client_builder: BaseClientBuilder<'_>,
+    cache: Cache,
+    printer: Printer,
+) -> Result<ExitStatus> {
+    let retry_policy = client_builder.retry_policy();
+    let client = client_builder.retries(0).build()?;
+    let resolved = find_matching_version(
+        Binary::Uv,
+        Some(required_version.specifiers()),
+        None,
+        &client,
+        &retry_policy,
+    )
+    .await?;
+    let cache = cache.init().await?;
+    let path = bin_install(
+        Binary::Uv,
+        &resolved,
+        &client,
+        &retry_policy,
+        &cache,
+        &BinaryDownloadReporter::single(printer),
+    )
+    .await
+    .with_context(|| format!("Failed to install uv {}", resolved.version))?;
+
+    writeln!(printer.stderr(), "Running uv v{}", resolved.version)?;
+    let mut command = Command::new(path);
+    command.args(args.iter().skip(1));
+    command.env(
+        EnvVars::UV_INTERNAL__REQUIRED_VERSION,
+        required_version.to_string(),
+    );
+    if let Some(directory) = original_directory {
+        command.current_dir(directory);
+    }
+    // Script discovery has already consumed stdin for `uv run -`.
+    if let Some(RunCommand::PythonStdin(script, _) | RunCommand::PythonGuiStdin(script, _)) =
+        run_command
+    {
+        let mut stdin = tempfile::tempfile()?;
+        stdin.write_all(script)?;
+        stdin.rewind()?;
+        command.stdin(stdin);
+    }
+    let child = command
+        .spawn()
+        .with_context(|| format!("Failed to execute uv {}", resolved.version))?;
+    // Allow the child to take an exclusive cache lock, e.g., for `uv cache clean`.
+    if !cache.is_temporary() {
+        drop(cache);
+    }
+    run_to_completion(child).await
+}
+
 fn map_settings_error(err: uv_settings::Error) -> anyhow::Error {
     match err {
         uv_settings::Error::RequiredVersion {
@@ -2215,7 +2345,7 @@ fn map_settings_error(err: uv_settings::Error) -> anyhow::Error {
 }
 
 fn required_version_error(
-    required_version: &uv_configuration::RequiredVersion,
+    required_version: &RequiredVersion,
     package_version: &uv_pep440::Version,
 ) -> anyhow::Error {
     #[cfg(feature = "self-update")]
@@ -3095,7 +3225,8 @@ where
 
     // `std::env::args` is not `Send` so we parse before passing to our runtime
     // https://github.com/rust-lang/rust/pull/48005
-    let cli = match Cli::try_parse_from(args) {
+    let args: Vec<OsString> = args.into_iter().map(Into::into).collect();
+    let cli = match Cli::try_parse_from(&args) {
         Ok(cli) => cli,
         Err(mut err) => {
             suggest_subcommand(&mut err);
@@ -3120,7 +3251,11 @@ where
             .build()
             .expect("Failed building the Runtime");
         // Box the large main future to avoid stack overflows.
-        let result = runtime.block_on(Box::pin(run(cli, GlobalInitialization::Initialize)));
+        let result = runtime.block_on(Box::pin(run_with_args(
+            cli,
+            GlobalInitialization::Initialize,
+            Some(&args),
+        )));
         // Avoid waiting for pending tasks to complete.
         //
         // The resolver may have kicked off HTTP requests during resolution that
