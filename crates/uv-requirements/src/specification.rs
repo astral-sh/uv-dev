@@ -30,7 +30,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use rustc_hash::FxHashSet;
 use tracing::instrument;
 use url::Url;
@@ -741,11 +741,17 @@ async fn read_file(path: &Path, client_builder: &BaseClientBuilder<'_>) -> Resul
                 .for_host(&url)
                 .get(Url::from(url.clone()))
                 .send()
-                .await?;
+                .await
+                .map_err(|_| anyhow!("Failed to fetch remote script from `{url}`"))?;
 
-            response.error_for_status_ref()?;
+            response
+                .error_for_status_ref()
+                .map_err(|_| anyhow!("Failed to fetch remote script from `{url}`"))?;
 
-            return Ok(response.text().await?);
+            return response
+                .text()
+                .await
+                .map_err(|_| anyhow!("Failed to read remote script from `{url}`"));
         }
     }
 
