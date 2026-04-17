@@ -140,6 +140,10 @@ impl LockedFileMode {
     }
 }
 
+fn should_wait_for_lock(err: &std::fs::TryLockError) -> bool {
+    is_known_already_locked_error(err)
+}
+
 impl Display for LockedFileMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -176,7 +180,7 @@ impl LockedFile {
             }
             (Err(err), file) => {
                 // Log error code and enum kind to help debugging more exotic failures.
-                if !is_known_already_locked_error(&err) {
+                if !should_wait_for_lock(&err) {
                     debug!("Try lock {mode} error: {err:?}");
                 }
                 file
@@ -206,19 +210,26 @@ impl LockedFile {
                     file = acquired_file;
                     break;
                 }
-                (Err(std::fs::TryLockError::WouldBlock), file) => {
-                    tokio::time::sleep(Duration::from_millis(100)).await;
-                    // Continue polling until timeout.
-                    file
-                }
-                // Not an fs_err method, we need to build our own path context.
-                (Err(std::fs::TryLockError::Error(err)), _file) => {
-                    return Err(LockedFileError::Lock {
-                        resource: resource.to_string(),
-                        path: path.clone(),
-                        source: err,
-                    });
-                }
+                (Err(err), file) => match err {
+                    std::fs::TryLockError::WouldBlock => {
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                        // Continue polling until timeout.
+                        file
+                    }
+                    err @ std::fs::TryLockError::Error(_) if should_wait_for_lock(&err) => {
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                        // Continue polling until timeout.
+                        file
+                    }
+                    std::fs::TryLockError::Error(source) => {
+                        // Not an fs_err method, we need to build our own path context.
+                        return Err(LockedFileError::Lock {
+                            resource: resource.to_string(),
+                            path: path.clone(),
+                            source,
+                        });
+                    }
+                },
             };
         }
 
@@ -427,5 +438,32 @@ impl Drop for LockedFile {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io;
+
+    use super::should_wait_for_lock;
+
+    #[test]
+    fn would_block_requires_wait() {
+        assert!(should_wait_for_lock(&std::fs::TryLockError::WouldBlock));
+    }
+
+    #[test]
+    fn other_lock_errors_do_not_require_wait() {
+        assert!(!should_wait_for_lock(&std::fs::TryLockError::Error(
+            io::Error::other("boom")
+        )));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_lock_contention_requires_wait() {
+        assert!(should_wait_for_lock(&std::fs::TryLockError::Error(
+            io::Error::from_raw_os_error(33),
+        )));
     }
 }
