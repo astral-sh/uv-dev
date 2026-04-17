@@ -10,7 +10,6 @@ on:
       plan:
         required: true
         type: string
-
 permissions: {}
 
 env:
@@ -50,7 +49,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: astral-sh/versions
-          ref: main
+          ref: bfaa684f15a3024c938f151df91df5ad0f9af8ba
           path: astral-versions
           token: ${{ steps.token.outputs.token }}
           persist-credentials: false
