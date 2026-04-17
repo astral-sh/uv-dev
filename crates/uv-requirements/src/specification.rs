@@ -30,7 +30,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use rustc_hash::FxHashSet;
 use tracing::instrument;
 use url::Url;
