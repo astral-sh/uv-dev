@@ -17,6 +17,7 @@ test = false
 workspace = true
 
 [dependencies]
+uv-cli-output = { workspace = true }
 uv-console = { workspace = true }
 uv-fs = { workspace = true }
 uv-redacted = { workspace = true }

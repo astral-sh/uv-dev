@@ -54,6 +54,10 @@ impl Printer {
     }
 
     /// Return the [`Stdout`] for this printer.
+<<<<<<<< HEAD:crates/uv-command-support/src/printer.rs
+========
+    #[allow(dead_code, reason = "to be adopted incrementally")]
+>>>>>>>> a02bb9e48 (Create a `uv-cli-output` crate):crates/uv-cli-output/src/printer.rs
     pub fn stdout_important(self) -> Stdout {
         match self {
             Self::Silent => Stdout::Disabled,
