@@ -10,11 +10,10 @@ use std::time::Duration;
 use either::Either;
 
 pub mod child;
-mod printer;
 pub mod progress;
 pub mod update_shell;
 
-pub use printer::{Printer, Stderr, Stdout};
+pub use uv_cli_output::printer::{Printer, Stderr, Stdout};
 
 /// The process status for a command that completed without a final error to render.
 #[derive(Copy, Clone)]
