@@ -9,7 +9,6 @@ use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use owo_colors::OwoColorize;
 use rustc_hash::FxHashMap;
 
-use crate::printer::Printer;
 use uv_cache::Removal;
 use uv_console::human_readable_bytes;
 use uv_distribution_filename::DistFilename;
@@ -19,6 +18,8 @@ use uv_pep440::Version;
 use uv_python::PythonInstallationKey;
 use uv_redacted::DisplaySafeUrl;
 use uv_static::EnvVars;
+
+use crate::printer::Printer;
 
 /// Since downloads, fetches and builds run in parallel, their message output order is
 /// non-deterministic, so can't capture them in test output.

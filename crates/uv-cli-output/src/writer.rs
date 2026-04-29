@@ -1,7 +1,8 @@
-use anstream::AutoStream;
 use std::borrow::Cow;
 use std::io::stdout;
 use std::path::Path;
+
+use anstream::AutoStream;
 
 /// A multicasting writer that writes to both the standard output and an output file, if present.
 pub struct OutputWriter<'a> {
