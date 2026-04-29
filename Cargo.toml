@@ -63,6 +63,7 @@ uv-netrc = { version = "0.0.92", path = "crates/uv-netrc" }
 uv-normalize = { version = "0.0.92", path = "crates/uv-normalize" }
 uv-once-map = { version = "0.0.92", path = "crates/uv-once-map" }
 uv-options-metadata = { version = "0.0.92", path = "crates/uv-options-metadata" }
+uv-operations = { version = "0.0.92", path = "crates/uv-operations" }
 uv-pep440 = { version = "0.0.92", path = "crates/uv-pep440", features = [
   "tracing",
   "rkyv",

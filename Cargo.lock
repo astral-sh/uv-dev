@@ -5842,6 +5842,7 @@ dependencies = [
  "uv-cache-info",
  "uv-cache-key",
  "uv-cli",
+ "uv-cli-output",
  "uv-client",
  "uv-command-support",
  "uv-configuration",
@@ -5861,6 +5862,7 @@ dependencies = [
  "uv-lock-operations",
  "uv-logging",
  "uv-normalize",
+ "uv-operations",
  "uv-pep440",
  "uv-pep508",
  "uv-performance-memory-allocator",
@@ -6312,6 +6314,32 @@ dependencies = [
  "uv-version",
  "uv-warnings",
  "uv-workspace",
+]
+
+[[package]]
+name = "uv-cli-output"
+version = "0.0.92"
+dependencies = [
+ "anstream",
+ "fs-err",
+ "indicatif",
+ "owo-colors",
+ "rustc-hash",
+ "uv-bin-install",
+ "uv-cache",
+ "uv-console",
+ "uv-distribution",
+ "uv-distribution-filename",
+ "uv-distribution-types",
+ "uv-fs",
+ "uv-installer",
+ "uv-normalize",
+ "uv-pep440",
+ "uv-publish",
+ "uv-python",
+ "uv-redacted",
+ "uv-resolver",
+ "uv-static",
 ]
 
 [[package]]
@@ -7193,6 +7221,49 @@ dependencies = [
  "futures",
  "papaya",
  "tokio",
+]
+
+[[package]]
+name = "uv-operations"
+version = "0.0.92"
+dependencies = [
+ "anyhow",
+ "astral-version-ranges",
+ "fs-err",
+ "insta",
+ "itertools 0.14.0",
+ "jiff",
+ "owo-colors",
+ "rkyv",
+ "rustc-hash",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "uv-cache",
+ "uv-cli-output",
+ "uv-client",
+ "uv-configuration",
+ "uv-dispatch",
+ "uv-distribution",
+ "uv-distribution-filename",
+ "uv-distribution-types",
+ "uv-errors",
+ "uv-fs",
+ "uv-install-wheel",
+ "uv-installer",
+ "uv-normalize",
+ "uv-pep440",
+ "uv-pep508",
+ "uv-platform-tags",
+ "uv-preview",
+ "uv-pypi-types",
+ "uv-python",
+ "uv-requirements",
+ "uv-resolver",
+ "uv-tool",
+ "uv-types",
+ "uv-warnings",
 ]
 
 [[package]]
