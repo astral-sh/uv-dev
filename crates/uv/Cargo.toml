@@ -44,6 +44,7 @@ uv-lock = { workspace = true }
 uv-lock-operations = { workspace = true }
 uv-logging = { workspace = true }
 uv-normalize = { workspace = true }
+uv-operations = { workspace = true }
 uv-pep440 = { workspace = true }
 uv-pep508 = { workspace = true }
 uv-performance-memory-allocator = { workspace = true, optional = true }
