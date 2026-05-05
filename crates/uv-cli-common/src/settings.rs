@@ -1,7 +1,7 @@
 use uv_client::Connectivity;
 use uv_configuration::{
     BuildOptions, ConfigSettings, IndexStrategy, KeyringProviderType, PackageConfigSettings,
-    Reinstall, SourceStrategy,
+    Reinstall, SourceStrategy, Upgrade,
 };
 use uv_distribution_types::{DependencyMetadata, IndexLocations};
 use uv_resolver::{
@@ -33,6 +33,7 @@ pub struct ResolverSettings {
     pub resolution_mode: ResolutionMode,
     pub annotation_style: AnnotationStyle,
     pub source_strategy: SourceStrategy,
+    pub upgrade: Option<Upgrade>,
     // TODO: ExtrasResolver requires a generic BuildContext parameter
     // This needs to be handled differently in this crate
 }

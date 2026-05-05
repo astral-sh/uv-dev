@@ -1,45 +1,97 @@
-// Temporary stubs for functions needed by environment.rs
-// These would need to be properly moved from the project/mod.rs file
+//! Project environment synchronization functionality.
+
+use std::borrow::Cow;
+use std::path::Path;
+
+use tracing::{debug, warn};
 
 use uv_cache::Cache;
-use uv_cli_common::settings::NetworkSettings;
-use uv_cli_pip::operations::Modifications;
+use uv_client::BaseClientBuilder;
 use uv_configuration::{Concurrency, Constraints, Preview};
 use uv_dispatch::{BuildDispatch, PlatformState};
-use uv_distribution_types::Resolution;
+use uv_distribution::DistributionDatabase;
+use uv_distribution_types::{Name, Resolution};
+use uv_installer::{SatisfiesResult, SitePackages};
+use uv_pep440::Version;
+use uv_pypi_types::ConflictPackage;
 use uv_python::{Interpreter, PythonEnvironment};
 use uv_requirements::RequirementsSpecification;
+use uv_resolver::{FlatIndex, Lock, Preference, ResolverOutput};
+use uv_types::{BuildIsolation, EmptyInstalledPackages, HashStrategy};
 
 use crate::error::ProjectError;
+use uv_cli_common::printer::Printer;
+use uv_cli_common::settings::{NetworkSettings, ResolverSettings};
+use uv_cli_pip::loggers::{InstallLogger, ResolveLogger};
+use uv_cli_pip::operations::{Changelog, Modifications};
 
-#[derive(Debug)]
-pub struct EnvironmentSpecification {
+/// The preference for resolving packages in an environment.
+#[derive(Debug, Clone)]
+pub enum PreferenceLocation<'lock> {
+    /// The preferences should be extracted from a lockfile.
+    Lock {
+        lock: &'lock Lock,
+        install_path: &'lock Path,
+    },
+    /// The preferences will be provided directly as [`Preference`] entries.
+    Entries(Vec<Preference>),
+}
+
+/// A specification for an environment.
+#[derive(Debug, Clone)]
+pub struct EnvironmentSpecification<'lock> {
     /// The requirements to include in the environment.
     pub requirements: RequirementsSpecification,
     /// The preferences to respect when resolving.
-    // TODO: PreferenceLocation needs to be imported from correct location
-    pub preferences: Option<()>, // Placeholder
+    pub preferences: Option<PreferenceLocation<'lock>>,
 }
 
-// Stub implementations - these would need the actual implementation from project/mod.rs
+impl From<RequirementsSpecification> for EnvironmentSpecification<'_> {
+    fn from(requirements: RequirementsSpecification) -> Self {
+        Self {
+            requirements,
+            preferences: None,
+        }
+    }
+}
+
+impl<'lock> EnvironmentSpecification<'lock> {
+    /// Set the [`PreferenceLocation`] for the specification.
+    #[must_use]
+    pub fn with_preferences(self, preferences: PreferenceLocation<'lock>) -> Self {
+        Self {
+            preferences: Some(preferences),
+            ..self
+        }
+    }
+}
+
+/// The result of updating an environment.
+#[derive(Debug)]
+pub struct EnvironmentUpdate {
+    pub environment: PythonEnvironment,
+    pub changelog: Vec<String>,
+}
+
+// Placeholder type for InstallerSettingsRef - this needs to be properly defined
+pub type InstallerSettingsRef<'a> = &'a ();
+
+// TODO: These are placeholder implementations that need the actual code from project/mod.rs
 pub async fn resolve_environment(
-    _spec: EnvironmentSpecification,
+    _spec: EnvironmentSpecification<'_>,
     _interpreter: &Interpreter,
     _build_constraints: Constraints,
-    _settings: &uv_cli_common::settings::ResolverSettings,
+    _settings: &ResolverSettings,
     _network_settings: &NetworkSettings,
     _state: &PlatformState,
     _build_dispatch: &BuildDispatch<'_>,
-    _resolve: Box<dyn uv_cli_pip::loggers::ResolveLogger>,
+    _logger: Box<dyn ResolveLogger>,
     _cache: &Cache,
-    _printer: uv_cli_common::printer::Printer,
+    _printer: Printer,
     _preview: Preview,
-) -> Result<Resolution, ProjectError> {
-    todo!("This is a stub implementation that needs to be filled in from project/mod.rs")
+) -> Result<ResolverOutput, ProjectError> {
+    todo!("This needs to be implemented with the actual code from project/mod.rs")
 }
-
-// TODO: InstallerSettingsRef needs to be imported from correct location
-type InstallerSettingsRef<'a> = (); // Placeholder
 
 pub async fn sync_environment(
     _venv: PythonEnvironment,
@@ -51,36 +103,32 @@ pub async fn sync_environment(
     _concurrency: &Concurrency,
     _build_dispatch: &BuildDispatch<'_>,
     _cache: &Cache,
-    _printer: uv_cli_common::printer::Printer,
+    _printer: Printer,
     _dry_run: bool,
     _preview: Preview,
-) -> Result<(), ProjectError> {
-    todo!("This is a stub implementation that needs to be filled in from project/mod.rs")
+) -> Result<PythonEnvironment, ProjectError> {
+    todo!("This needs to be implemented with the actual code from project/mod.rs")
 }
 
-// More stub functions
 pub async fn resolve_names(
     _requirements: Vec<uv_pep508::VerbatimUrl>,
     _interpreter: &Interpreter,
-    _settings: &uv_cli_common::settings::ResolverSettings,
+    _settings: &ResolverSettings,
     _state: &PlatformState,
     _network_settings: &NetworkSettings,
     _preview: Preview,
 ) -> Result<Vec<uv_distribution_types::Requirement>, ProjectError> {
-    todo!("This is a stub implementation that needs to be filled in from project/mod.rs")
+    todo!("This needs to be implemented with the actual code from project/mod.rs")
 }
-
-#[derive(Debug)]
-pub struct EnvironmentUpdate;
 
 pub async fn update_environment(
     _venv: PythonEnvironment,
-    _spec: EnvironmentSpecification,
+    _spec: EnvironmentSpecification<'_>,
     _settings: &uv_cli_common::settings::ResolverInstallerSettings,
-    _platform_state: &PlatformState,
+    _state: &PlatformState,
     _cache: &Cache,
-    _printer: uv_cli_common::printer::Printer,
+    _printer: Printer,
     _preview: Preview,
 ) -> Result<EnvironmentUpdate, ProjectError> {
-    todo!("This is a stub implementation that needs to be filled in from project/mod.rs")
+    todo!("This needs to be implemented with the actual code from project/mod.rs")
 }
