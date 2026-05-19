@@ -1,8 +1,10 @@
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
+use assert_fs::fixture::FileWriteStr;
 use uv_platform::{Arch, Os};
-use uv_python_managed::platform_key_from_env;
+use uv_python_managed::{downloads::ManagedPythonDownloadList, platform_key_from_env};
+use uv_python_types::{PythonDownloadRequest, PythonRequest};
 use uv_static::EnvVars;
 
 use anyhow::Result;
@@ -288,6 +290,131 @@ fn python_list_warns_on_non_native_search_path_interpreters() -> Result<()> {
     error: Failed to inspect Python interpreter from provided path at `foreign-bin/python`
      cause: Failed to query Python interpreter at `[TEMP_DIR]/foreign-bin/python`
      cause: Bad CPU type in executable (os error 86)
+    ");
+
+    Ok(())
+}
+
+#[test]
+fn python_list_implicit_ndjson_source_preserves_non_cpython_downloads() {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_filtered_python_keys()
+        .with_filtered_latest_python_versions();
+
+    let download_list =
+        ManagedPythonDownloadList::new_only_embedded().expect("embedded downloads should parse");
+    let download_request = PythonDownloadRequest::from_request(&PythonRequest::parse("3.10"))
+        .expect("Python request should map to a download request")
+        .fill()
+        .expect("download request should be fillable");
+    let download = download_list
+        .find(&download_request)
+        .expect("embedded downloads should contain CPython 3.10");
+
+    let version = if let Some(build) = download.build() {
+        format!("{}+{build}", download.key().version())
+    } else {
+        download.key().version().to_string()
+    };
+    let sha256 = download
+        .sha256()
+        .expect("download should include a checksum");
+    let manifest = context.temp_dir.child("python-downloads.ndjson");
+    manifest
+        .write_str(&format!(
+            "{{\"version\":\"{version}\",\"artifacts\":[{{\"url\":\"{}\",\"platform\":\"{}\",\"sha256\":\"{}\",\"variant\":\"install_only\"}}]}}\n",
+            download.url(),
+            download.key().platform().as_cargo_dist_triple(),
+            sha256,
+        ))
+        .expect("manifest should be writable");
+
+    uv_snapshot!(context.filters(), context
+        .python_list()
+        .arg("3.10")
+        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS)
+        .env(
+            EnvVars::UV_INTERNAL__TEST_PYTHON_DOWNLOADS_JSON_URL,
+            manifest.path(),
+        ), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+    cpython-3.10.[LATEST]-[PLATFORM]    <download available>
+    pypy-3.10.16-[PLATFORM]       <download available>
+    graalpy-3.10.0-[PLATFORM]     <download available>
+
+    ----- stderr -----
+    ");
+}
+
+#[tokio::test]
+async fn python_list_remote_python_downloads_ndjson_falls_back_to_embedded() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_collapsed_whitespace()
+        .with_filtered_python_keys()
+        .with_filtered_latest_python_versions();
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/versions.ndjson"))
+        .respond_with(ResponseTemplate::new(404))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    uv_snapshot!(context.filters(), context
+        .python_list()
+        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS)
+        .env(
+            EnvVars::UV_INTERNAL__TEST_PYTHON_DOWNLOADS_JSON_URL,
+            format!("{}/versions.ndjson", server.uri()),
+        )
+        .arg("3.10"), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+    cpython-3.10.[LATEST]-[PLATFORM] <download available>
+    pypy-3.10.16-[PLATFORM] <download available>
+    graalpy-3.10.0-[PLATFORM] <download available>
+
+    ----- stderr -----
+    ");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn python_list_remote_python_downloads_ndjson_parse_error_falls_back() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_collapsed_whitespace()
+        .with_filtered_python_keys()
+        .with_filtered_latest_python_versions();
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/versions.ndjson"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw("{", "application/x-ndjson"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    uv_snapshot!(context.filters(), context
+        .python_list()
+        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS)
+        .env(
+            EnvVars::UV_INTERNAL__TEST_PYTHON_DOWNLOADS_JSON_URL,
+            format!("{}/versions.ndjson", server.uri()),
+        )
+        .arg("3.10"), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+    cpython-3.10.[LATEST]-[PLATFORM] <download available>
+    pypy-3.10.16-[PLATFORM] <download available>
+    graalpy-3.10.0-[PLATFORM] <download available>
+
+    ----- stderr -----
     ");
 
     Ok(())
