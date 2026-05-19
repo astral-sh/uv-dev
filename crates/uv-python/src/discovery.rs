@@ -1639,6 +1639,7 @@ pub(crate) async fn find_best_python_installation(
                         client_builder,
                         cache,
                         python_downloads_json_url,
+                        Some(cache),
                     )
                     .await?;
                     let retry_policy = client_builder.retry_policy();

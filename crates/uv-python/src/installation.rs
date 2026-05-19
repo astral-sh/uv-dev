@@ -172,6 +172,7 @@ impl PythonInstallation {
                 client_builder,
                 cache,
                 python_downloads_json_url,
+                cache,
             )
             .await?;
         Ok(installation)
@@ -203,6 +204,7 @@ impl PythonInstallation {
                         client_builder,
                         cache,
                         python_downloads_json_url,
+                        cache,
                     )
                     .await?;
                 return Ok(installation);
@@ -262,6 +264,7 @@ impl PythonInstallation {
                     match ManagedPythonDownloadList::find_streaming(
                         &client,
                         python_downloads_json_url,
+                        Some(cache),
                         &download_request,
                     )
                     .await
@@ -354,6 +357,7 @@ impl PythonInstallation {
                     request,
                     client_builder,
                     python_downloads_json_url,
+                    cache,
                 )
                 .await?;
         }
@@ -580,6 +584,7 @@ impl PythonInstallation {
         client_builder: &BaseClientBuilder<'_>,
         cache: &Cache,
         python_downloads_json_url: Option<&str>,
+        cache: &Cache,
     ) -> Result<(), Error> {
         if !self.should_check_outdated_prerelease_warning(request) {
             return Ok(());
