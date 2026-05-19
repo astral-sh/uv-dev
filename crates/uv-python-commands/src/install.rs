@@ -102,6 +102,7 @@ impl<'a> InstallRequest<'a> {
         arch: Option<PythonArchitecture>,
         client: &uv_client::BaseClient,
         python_downloads_json_url: Option<&str>,
+        cache: &Cache,
     ) -> Result<InstallRequest<'static>> {
         let download_request = PythonDownloadRequest::from_request(&request)
             .ok_or_else(|| {
@@ -116,6 +117,7 @@ impl<'a> InstallRequest<'a> {
         let download = match ManagedPythonDownloadList::find_streaming(
             client,
             python_downloads_json_url,
+            Some(cache),
             &download_request,
         )
         .await
@@ -292,6 +294,7 @@ pub async fn install(
         config_discovery,
         compile_bytecode.then_some(sender),
         concurrency,
+        cache,
         preview,
         printer,
     );
@@ -350,6 +353,7 @@ async fn perform_install(
     config_discovery: ConfigDiscovery,
     bytecode_compilation_sender: Option<mpsc::UnboundedSender<ManagedPythonInstallation>>,
     concurrency: &Concurrency,
+    cache: &Cache,
     preview: Preview,
     printer: Printer,
 ) -> Result<ExitStatus> {
@@ -406,9 +410,7 @@ async fn perform_install(
                         .await?,
                 );
             }
-            let download_list = download_list
-                .as_ref()
-                .expect("download list should be loaded before upgrade resolution");
+            let download_list = download_list.as_ref().unwrap();
 
             is_unspecified_upgrade = true;
             // On upgrade, derive requests for all of the existing installations
@@ -466,9 +468,7 @@ async fn perform_install(
                         .await?,
                 );
             }
-            let download_list = download_list
-                .as_ref()
-                .expect("download list should be loaded before version-file resolution");
+            let download_list = download_list.as_ref().unwrap();
             version_requests
                 .into_iter()
                 .map(|request| InstallRequest::new(request, python_arch, download_list))
@@ -481,6 +481,7 @@ async fn perform_install(
                 python_arch,
                 &client,
                 install_mirrors.python_downloads_json_url.as_deref(),
+                cache,
             )
             .await?,
         ]
@@ -495,9 +496,7 @@ async fn perform_install(
                     .await?,
             );
         }
-        let download_list = download_list
-            .as_ref()
-            .expect("download list should be loaded before multi-target resolution");
+        let download_list = download_list.as_ref().unwrap();
         targets
             .iter()
             .map(|target| PythonRequest::parse(target.as_str()))

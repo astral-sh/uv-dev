@@ -110,7 +110,6 @@ pub async fn list(
                 }
             }
         }
-        // Include pre-release versions
         .map(|request| request.with_prereleases(true))
     } else {
         None
@@ -122,6 +121,7 @@ pub async fn list(
         let download_list = ManagedPythonDownloadList::new_filtered(
             &client,
             install_mirrors.python_downloads_json_url.as_deref(),
+            Some(cache),
             Some(download_request),
             None,
         )
