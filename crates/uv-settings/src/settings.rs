@@ -1359,7 +1359,7 @@ pub struct PythonInstallMirrors {
     )]
     pub pypy_install_mirror: Option<String>,
 
-    /// URL pointing to JSON of custom Python installations.
+    /// URL pointing to JSON or NDJSON describing custom Python installations.
     #[option(
         default = "None",
         value_type = "str",
