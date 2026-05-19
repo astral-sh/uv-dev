@@ -101,6 +101,7 @@ pub async fn find(
             client_builder,
             cache,
             python_downloads_json_url,
+            cache,
         )
         .await?;
 
