@@ -4,20 +4,21 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use uv_auth::{AuthBackend, Credentials};
 use uv_keyring::windows::WinCredential;
-use uv_preview::{Preview, PreviewFeature};
+use uv_preview::{MaybePreviewFeature, Preview, PreviewFeature};
 use uv_redacted::DisplaySafeUrl;
 
 #[tokio::test]
 async fn native_store_enumerates_many_credentials_in_one_realm()
 -> Result<(), Box<dyn std::error::Error>> {
     let unique = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-    let provider =
-        match AuthBackend::from_settings(Preview::new(&[PreviewFeature::NativeAuth])).await? {
-            AuthBackend::System(provider) => provider,
-            AuthBackend::TextStore(..) => {
-                return Err(std::io::Error::other("expected native authentication backend").into());
-            }
-        };
+    let preview =
+        Preview::from_feature_names([&MaybePreviewFeature::Known(PreviewFeature::NativeAuth)]);
+    let provider = match AuthBackend::from_settings(preview).await? {
+        AuthBackend::System(provider) => provider,
+        AuthBackend::TextStore(..) => {
+            return Err(std::io::Error::other("expected native authentication backend").into());
+        }
+    };
     let mut entries = (0..16)
         .map(|index| {
             let url = DisplaySafeUrl::parse(&format!(

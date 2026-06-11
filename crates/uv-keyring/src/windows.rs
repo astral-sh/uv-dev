@@ -62,11 +62,11 @@ use zeroize::Zeroize;
 ///
 /// See the module header for the meanings of these fields.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct WinCredential {
-    username: String,
-    target_name: String,
-    target_alias: String,
-    comment: String,
+pub struct WinCredential {
+    pub username: String,
+    pub target_name: String,
+    pub target_alias: String,
+    pub comment: String,
 }
 
 /// A credential returned by [`WinCredential::enumerate`].

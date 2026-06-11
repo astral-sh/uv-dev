@@ -4,8 +4,8 @@ pub use index::{AuthPolicy, Index, Indexes};
 pub use keyring::KeyringProvider;
 pub use middleware::AuthMiddleware;
 pub use realm::{Realm, RealmRef};
-pub use service::Service;
-pub use store::{AuthBackend, TextCredentialStore, TomlCredentialError};
+pub use service::{Service, ServiceParseError};
+pub use store::{AuthBackend, AuthScheme, TextCredentialStore, TomlCredentialError};
 
 mod cache;
 mod credentials;
