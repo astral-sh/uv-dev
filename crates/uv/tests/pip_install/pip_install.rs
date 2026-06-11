@@ -1386,12 +1386,72 @@ fn reinstall_extras() -> Result<()> {
     Ok(())
 }
 
-/// Warn, but don't fail, when uninstalling incomplete packages.
+/// Do not uninstall any package when another candidate is missing its `RECORD` file.
 #[test]
 fn reinstall_incomplete() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
-    // Install anyio.
+    // Install anyio and a package that will become extraneous.
+    let requirements_txt = context.temp_dir.child("requirements.txt");
+    requirements_txt.write_str("anyio==3.7.0\niniconfig==1.1.1")?;
+
+    uv_snapshot!(context.pip_install()
+        .arg("-r")
+        .arg("requirements.txt"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    Prepared 4 packages in [TIME]
+    Installed 4 packages in [TIME]
+     + anyio==3.7.0
+     + idna==3.6
+     + iniconfig==1.1.1
+     + sniffio==1.3.1
+    "
+    );
+
+    // Manually remove the `RECORD` file.
+    fs_err::remove_file(context.site_packages().join("anyio-3.7.0.dist-info/RECORD"))?;
+
+    // Re-install anyio and remove the extraneous package. The preflight must fail before either
+    // package is uninstalled.
+    let requirements_txt = context.temp_dir.child("requirements.txt");
+    requirements_txt.write_str("anyio==4.0.0")?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--exact")
+        .arg("-r")
+        .arg("requirements.txt"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Prepared 1 package in [TIME]
+    error: Cannot uninstall package; `RECORD` file not found at: [SITE_PACKAGES]/anyio-3.7.0.dist-info/RECORD
+    "
+    );
+
+    assert!(
+        context
+            .site_packages()
+            .join("anyio-3.7.0.dist-info")
+            .is_dir()
+    );
+    assert!(
+        context
+            .site_packages()
+            .join("iniconfig-1.1.1.dist-info")
+            .is_dir()
+    );
+    context.assert_command("import anyio, iniconfig").success();
+
+    Ok(())
+}
+
+/// A same-version reinstall can restore the missing `RECORD` and repair the installation.
+#[test]
+fn reinstall_incomplete_same_version() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("anyio==3.7.0")?;
 
@@ -1409,16 +1469,14 @@ fn reinstall_incomplete() -> Result<()> {
     "
     );
 
-    // Manually remove the `RECORD` file.
-    fs_err::remove_file(context.site_packages().join("anyio-3.7.0.dist-info/RECORD"))?;
-
-    // Re-install anyio.
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("anyio==4.0.0")?;
+    let record = context.site_packages().join("anyio-3.7.0.dist-info/RECORD");
+    fs_err::remove_file(&record)?;
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("-r")
-        .arg("requirements.txt"), @"
+        .arg("requirements.txt")
+        .arg("--reinstall-package")
+        .arg("anyio"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
@@ -1426,10 +1484,12 @@ fn reinstall_incomplete() -> Result<()> {
     warning: Failed to uninstall package at [SITE_PACKAGES]/anyio-3.7.0.dist-info due to missing `RECORD` file. Installation may result in an incomplete environment.
     Uninstalled 1 package in [TIME]
     Installed 1 package in [TIME]
-     - anyio==3.7.0
-     + anyio==4.0.0
+     ~ anyio==3.7.0
     "
     );
+
+    assert!(record.is_file());
+    context.assert_command("import anyio").success();
 
     Ok(())
 }
