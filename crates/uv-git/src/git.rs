@@ -615,7 +615,7 @@ impl GitCheckout {
             Some(true) => Some(self.repo.lfs_fsck_objects(self.revision.as_str())),
         };
 
-        // The .ok file should be written when the reset is successful.
+        // The marker beside the checkout should be written when the reset is successful.
         // When Git LFS is enabled, the objects must also be fetched and
         // validated successfully as part of the corresponding db.
         if with_lfs.is_none() || lfs_validation == Some(true) {
