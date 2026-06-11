@@ -26,7 +26,7 @@ fn target(realm: &Realm, service: &Service, username: &Username) -> String {
     let service_url = service.url().as_str();
     let username = username.as_deref().unwrap_or_default();
     let identity = format!("{}:{service_url}{username}", service_url.len());
-    let digest = format!("{:x}", Sha256::digest(identity.as_bytes()));
+    let digest = hex::encode(Sha256::digest(identity.as_bytes()));
     format!("{}{digest}", target_prefix(realm))
 }
 
