@@ -38,11 +38,33 @@ pub enum Credentials {
 }
 
 #[derive(Debug, Error)]
+pub enum InvalidCredentialsError {
+    #[error("HTTP Basic Authentication username cannot contain a colon")]
+    BasicUsernameContainsColon,
+    #[error("HTTP Basic Authentication username cannot contain control characters")]
+    BasicUsernameContainsControlCharacter,
+    #[error("HTTP Basic Authentication password cannot contain control characters")]
+    BasicPasswordContainsControlCharacter,
+    #[error("Invalid authorization header")]
+    InvalidHeaderValue(#[from] InvalidHeaderValue),
+}
+
+#[derive(Debug, Error)]
 pub enum CredentialsFromUrlError {
     #[error("URL username contains invalid UTF-8")]
     InvalidUsernameUtf8(#[source] Utf8Error),
     #[error("URL password contains invalid UTF-8")]
     InvalidPasswordUtf8(#[source] Utf8Error),
+    #[error(transparent)]
+    InvalidCredentials(#[from] InvalidCredentialsError),
+}
+
+#[derive(Debug, Error)]
+pub(crate) enum CredentialsFromRequestError {
+    #[error(transparent)]
+    Url(#[from] CredentialsFromUrlError),
+    #[error(transparent)]
+    InvalidCredentials(#[from] InvalidCredentialsError),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Ord, PartialOrd, Hash, Default, Serialize, Deserialize)]
@@ -256,10 +278,12 @@ impl Credentials {
             })
             .transpose()?;
 
-        Ok(Some(Self::Basic {
+        let credentials = Self::Basic {
             username: username.into(),
             password,
-        }))
+        };
+        credentials.validate()?;
+        Ok(Some(credentials))
     }
 
     /// Extract the [`Credentials`] from the environment, given a named source.
@@ -279,17 +303,23 @@ impl Credentials {
     /// Parse [`Credentials`] from an HTTP request, if any.
     ///
     /// Only HTTP Basic Authentication is supported.
-    pub(crate) fn from_request(request: &Request) -> Result<Option<Self>, CredentialsFromUrlError> {
+    pub(crate) fn from_request(
+        request: &Request,
+    ) -> Result<Option<Self>, CredentialsFromRequestError> {
         // First, attempt to retrieve the credentials from the URL
         if let Some(credentials) = Self::from_url(request.url())? {
             return Ok(Some(credentials));
         }
 
         // Then, attempt to pull the credentials from the headers
-        Ok(request
+        let credentials = request
             .headers()
             .get(reqwest::header::AUTHORIZATION)
-            .and_then(Self::from_header_value))
+            .and_then(Self::from_header_value);
+        if let Some(credentials) = credentials.as_ref() {
+            credentials.validate()?;
+        }
+        Ok(credentials)
     }
 
     /// Parse [`Credentials`] from an authorization header, if any.
@@ -337,10 +367,37 @@ impl Credentials {
         None
     }
 
-    /// Create an HTTP authorization header for the credentials.
-    ///
-    /// Returns an error if the bearer token contains invalid header characters.
-    pub fn to_header_value(&self) -> Result<HeaderValue, InvalidHeaderValue> {
+    pub(crate) fn validate(&self) -> Result<(), InvalidCredentialsError> {
+        let Self::Basic { username, password } = self else {
+            return Ok(());
+        };
+        if username
+            .as_deref()
+            .is_some_and(|username| username.contains(':'))
+        {
+            return Err(InvalidCredentialsError::BasicUsernameContainsColon);
+        }
+        if username
+            .as_deref()
+            .is_some_and(|username| username.as_bytes().iter().any(u8::is_ascii_control))
+        {
+            return Err(InvalidCredentialsError::BasicUsernameContainsControlCharacter);
+        }
+        if password.as_ref().is_some_and(|password| {
+            password
+                .as_str()
+                .as_bytes()
+                .iter()
+                .any(u8::is_ascii_control)
+        }) {
+            return Err(InvalidCredentialsError::BasicPasswordContainsControlCharacter);
+        }
+        Ok(())
+    }
+
+    /// Create an HTTP Authentication header for the credentials.
+    pub fn to_header_value(&self) -> Result<HeaderValue, InvalidCredentialsError> {
+        self.validate()?;
         let header_bytes = match self {
             Self::Basic { .. } => {
                 // See: <https://github.com/seanmonstar/reqwest/blob/2c11ef000b151c2eebeed2c18a7b81042220c6b0/src/util.rs#L3>
@@ -380,10 +437,10 @@ impl Credentials {
     /// Attach the credentials to the given request.
     ///
     /// Any existing credentials will be overridden.
-    fn authenticate(&self, mut request: Request) -> Result<Request, InvalidHeaderValue> {
+    fn authenticate(&self, mut request: Request) -> Result<Request, InvalidCredentialsError> {
         request
             .headers_mut()
-            .insert(reqwest::header::AUTHORIZATION, Self::to_header_value(self)?);
+            .insert(reqwest::header::AUTHORIZATION, self.to_header_value()?);
         Ok(request)
     }
 }
@@ -405,8 +462,8 @@ pub(crate) enum Authentication {
 
 #[derive(Debug, Error)]
 pub(crate) enum AuthenticationError {
-    #[error("Invalid authorization header")]
-    InvalidHeaderValue(#[from] InvalidHeaderValue),
+    #[error(transparent)]
+    InvalidCredentials(#[from] InvalidCredentialsError),
 
     #[error("Failed to convert request URL to URI")]
     InvalidUri(#[from] http::uri::InvalidUri),
@@ -693,6 +750,59 @@ mod tests {
         let url = Url::parse("https://user:%FF@example.com/simple/first/").unwrap();
         let error = Credentials::from_url(&url).unwrap_err();
         assert_snapshot!(error, @"URL password contains invalid UTF-8");
+    }
+
+    #[test]
+    fn from_url_username_with_colon() {
+        let url = Url::parse("https://user%3Aname:password@example.com/simple/first/").unwrap();
+        let error = Credentials::from_url(&url).unwrap_err();
+        assert_snapshot!(error, @"HTTP Basic Authentication username cannot contain a colon");
+    }
+
+    #[test]
+    fn basic_auth_username_with_control_character() {
+        let errors = ['\0', '\u{1f}', '\u{7f}'].map(|control| {
+            Credentials::basic(
+                Some(format!("user{control}name")),
+                Some("password".to_string()),
+            )
+            .to_header_value()
+            .unwrap_err()
+            .to_string()
+        });
+        assert_debug_snapshot!(errors, @r#"
+        [
+            "HTTP Basic Authentication username cannot contain control characters",
+            "HTTP Basic Authentication username cannot contain control characters",
+            "HTTP Basic Authentication username cannot contain control characters",
+        ]
+        "#);
+    }
+
+    #[test]
+    fn basic_auth_password_with_control_character() {
+        let errors = ['\0', '\u{1f}', '\u{7f}'].map(|control| {
+            Credentials::basic(Some("user".to_string()), Some(format!("pass{control}word")))
+                .to_header_value()
+                .unwrap_err()
+                .to_string()
+        });
+        assert_debug_snapshot!(errors, @r#"
+        [
+            "HTTP Basic Authentication password cannot contain control characters",
+            "HTTP Basic Authentication password cannot contain control characters",
+            "HTTP Basic Authentication password cannot contain control characters",
+        ]
+        "#);
+    }
+
+    #[test]
+    fn basic_auth_password_with_colon() {
+        let credentials =
+            Credentials::basic(Some("user".to_string()), Some("pass:word".to_string()));
+        let mut header = credentials.to_header_value().unwrap();
+        header.set_sensitive(false);
+        assert_debug_snapshot!(header, @r#""Basic dXNlcjpwYXNzOndvcmQ=""#);
     }
 
     #[test]
