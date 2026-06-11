@@ -9,7 +9,7 @@ use fs_err::tokio::File;
 use futures::TryStreamExt;
 use glob::{GlobError, PatternError, glob};
 use itertools::Itertools;
-use reqwest::header::{AUTHORIZATION, InvalidHeaderValue, LOCATION, ToStrError};
+use reqwest::header::{AUTHORIZATION, LOCATION, ToStrError};
 use reqwest::multipart::Part;
 use reqwest::{Body, Response, StatusCode};
 use reqwest_retry::RetryError;
@@ -24,7 +24,7 @@ use tokio_util::io::ReaderStream;
 use tracing::{Level, debug, enabled, trace, warn};
 use url::Url;
 
-use uv_auth::{Credentials, Realm};
+use uv_auth::{Credentials, InvalidCredentialsError, Realm};
 use uv_cache::{Cache, Refresh};
 use uv_client::{
     BaseClient, ClientBuildError, DEFAULT_MAX_REDIRECTS, MetadataFormat, OwnedArchive,
@@ -48,6 +48,8 @@ use crate::trusted_publishing::{
 
 #[derive(Error, Debug)]
 pub enum PublishError {
+    #[error(transparent)]
+    InvalidCredentials(#[from] InvalidCredentialsError),
     #[error("The publish path is not a valid glob pattern: `{0}`")]
     Pattern(String, #[source] PatternError),
     /// [`GlobError`] is a wrapped io error.
@@ -95,9 +97,9 @@ pub enum PublishError {
 #[derive(Error, Debug)]
 pub enum PublishPrepareError {
     #[error(transparent)]
+    InvalidCredentials(#[from] InvalidCredentialsError),
+    #[error(transparent)]
     Io(#[from] io::Error),
-    #[error("Invalid authorization header")]
-    InvalidHeaderValue(#[from] InvalidHeaderValue),
     #[error("Failed to read metadata")]
     Metadata(#[from] uv_metadata::Error),
     #[error("Failed to read metadata")]
