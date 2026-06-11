@@ -3031,6 +3031,33 @@ async fn install_git_public_rejects_mismatched_github_api_commit() -> Result<()>
 
 #[tokio::test]
 #[cfg(feature = "test-git")]
+async fn install_git_public_github_fast_path_percent_encoded_ref() {
+    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION);
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(
+            "/astral-test/uv-public-pypackage/commits/feature/foo%23bar%25baz",
+        ))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string("b270df1a2fb5d012294e9aaf05e7e0bab1e6a389"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    context
+        .pip_install()
+        .arg("--no-build")
+        .arg("uv-public-pypackage @ git+https://github.com/astral-test/uv-public-pypackage@feature/foo%23bar%25baz")
+        .env(EnvVars::UV_GITHUB_FAST_PATH_URL, server.uri())
+        .assert()
+        .failure();
+    server.verify().await;
+}
+
+#[tokio::test]
+#[cfg(feature = "test-git")]
 async fn install_git_public_rate_limited_by_github_rest_api_403_response() {
     let context = uv_test::test_context!("3.12");
 
