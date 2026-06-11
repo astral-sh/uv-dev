@@ -6051,6 +6051,7 @@ dependencies = [
  "uv-static",
  "uv-warnings",
  "wiremock",
+ "zeroize",
 ]
 
 [[package]]
