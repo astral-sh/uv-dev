@@ -1,6 +1,6 @@
 //! Installation workflows used by uv commands.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -17,8 +17,9 @@ use uv_dispatch::BuildDispatch;
 use uv_distribution::DistributionDatabase;
 use uv_distribution_types::{
     CachedDist, ConfigSettings, DependencyMetadata, Diagnostic, Dist, DistributionMetadata,
-    ExtraBuildRequires, ExtraBuildVariables, IndexLocations, InstalledDist, InstalledMetadata,
-    InstalledVersion, LocalDist, Name, PackageConfigSettings, Resolution, VersionOrUrlRef,
+    ExtraBuildRequires, ExtraBuildVariables, IndexLocations, InstalledDist, InstalledDistKind,
+    InstalledMetadata, InstalledVersion, LocalDist, Name, PackageConfigSettings, Resolution,
+    VersionOrUrlRef,
 };
 use uv_fs::{CWD, Simplified, normalize_path_under};
 use uv_install_wheel::{LinkMode, installed_dist_info_path, read_record_into_iter};
@@ -732,6 +733,32 @@ async fn execute_plan(
     // Remove any upgraded or extraneous installations.
     let uninstalls = extraneous.into_iter().chain(reinstalls).collect::<Vec<_>>();
     if !uninstalls.is_empty() {
+        let replacement_versions = wheels
+            .iter()
+            .chain(&cached)
+            .map(|dist| (dist.name(), dist.installed_version().version()))
+            .collect::<BTreeMap<_, _>>();
+
+        // Ensure every version-changing wheel replacement can be uninstalled before modifying the
+        // environment. A same-version reinstall can still repair an incomplete installation.
+        for dist_info in &uninstalls {
+            if matches!(
+                &dist_info.kind,
+                InstalledDistKind::Registry(_) | InstalledDistKind::Url(_)
+            ) && replacement_versions
+                .get(dist_info.name())
+                .is_some_and(|version| *version != dist_info.version())
+            {
+                let record_path = dist_info.install_path().join("RECORD");
+                if !record_path.try_exists()? {
+                    return Err(uv_installer::UninstallError::Uninstall(
+                        uv_install_wheel::Error::MissingRecord(record_path),
+                    )
+                    .into());
+                }
+            }
+        }
+
         let start = std::time::Instant::now();
 
         let layout = venv.interpreter().layout();
