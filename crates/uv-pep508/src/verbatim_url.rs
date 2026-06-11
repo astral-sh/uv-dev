@@ -681,11 +681,12 @@ pub enum Scheme {
 
 impl Scheme {
     /// Determine the [`Scheme`] from the given string, if possible.
-    pub fn parse(s: &str) -> Option<Self> {
-        if let Some(("git", transport)) = s.split_once('+') {
+    pub fn parse(scheme: &str) -> Option<Self> {
+        let scheme = scheme.to_ascii_lowercase();
+        if let Some(("git", transport)) = scheme.split_once('+') {
             return Some(Self::Git(transport.into()));
         }
-        match s {
+        match scheme.as_str() {
             "file" => Some(Self::File),
             "bzr+http" => Some(Self::BzrHttp),
             "bzr+https" => Some(Self::BzrHttps),
@@ -765,6 +766,22 @@ mod tests {
             Some(("https", "//example.com"))
         );
         assert_eq!(split_scheme("https:"), Some(("https", "")));
+    }
+
+    #[test]
+    fn parse_scheme() {
+        let cases = [
+            ("https", Scheme::Https),
+            ("HTTPS", Scheme::Https),
+            ("file", Scheme::File),
+            ("FiLe", Scheme::File),
+            ("git+https", Scheme::Git("https".to_string())),
+            ("GIT+HTTPS", Scheme::Git("https".to_string())),
+        ];
+
+        for (input, expected) in cases {
+            assert_eq!(Scheme::parse(input), Some(expected));
+        }
     }
 
     #[test]
