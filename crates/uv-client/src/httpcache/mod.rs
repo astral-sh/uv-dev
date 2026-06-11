@@ -1204,6 +1204,20 @@ struct ResponseHeaders {
 
 impl<'a> From<&'a http::HeaderMap> for ResponseHeaders {
     fn from(from: &'a http::HeaderMap) -> Self {
+        let expires = from.get_all("expires");
+        let mut expires = expires.iter();
+        let expires_unix_timestamp = expires.next().map(|header| {
+            if expires.next().is_some() {
+                0
+            } else {
+                header
+                    .to_str()
+                    .ok()
+                    .and_then(rfc2822_to_unix_timestamp)
+                    .unwrap_or(0)
+            }
+        });
+
         Self {
             cc: from.get_all("cache-control").iter().collect(),
             age_seconds: from
@@ -1213,10 +1227,7 @@ impl<'a> From<&'a http::HeaderMap> for ResponseHeaders {
                 .get("date")
                 .and_then(|header| header.to_str().ok())
                 .and_then(rfc2822_to_unix_timestamp),
-            expires_unix_timestamp: from
-                .get("expires")
-                .and_then(|header| header.to_str().ok())
-                .and_then(rfc2822_to_unix_timestamp),
+            expires_unix_timestamp,
             last_modified_unix_timestamp: from
                 .get("last-modified")
                 .and_then(|header| header.to_str().ok())
@@ -1418,6 +1429,9 @@ fn parse_seconds(value: &[u8]) -> Option<u64> {
 mod tests {
     use std::time::Duration;
 
+    use http::HeaderMap;
+    use http::header::{EXPIRES, LAST_MODIFIED};
+
     use super::*;
 
     fn http_request(method: http::Method, uri: &str) -> reqwest::Request {
@@ -1515,5 +1529,100 @@ mod tests {
                 .header(http::header::CACHE_CONTROL, "no-store"),
         );
         assert!(!unstorable.matches_stale_request(&original));
+    }
+
+    #[test]
+    fn invalid_expires_is_in_the_past() {
+        let headers = HeaderMap::from_iter([
+            (EXPIRES, "invalid".parse().expect("valid header value")),
+            (
+                LAST_MODIFIED,
+                "Wed, 21 Oct 2015 07:28:00 GMT"
+                    .parse()
+                    .expect("valid header value"),
+            ),
+        ]);
+
+        let response_headers = ResponseHeaders::from(&headers);
+
+        assert_eq!(response_headers.expires_unix_timestamp, Some(0));
+        assert!(response_headers.last_modified_unix_timestamp.is_some());
+    }
+
+    #[test]
+    fn absent_expires_remains_absent() {
+        let response_headers = ResponseHeaders::from(&HeaderMap::new());
+
+        assert_eq!(response_headers.expires_unix_timestamp, None);
+    }
+
+    #[test]
+    fn duplicate_expires_is_in_the_past() {
+        let headers = HeaderMap::from_iter([
+            (
+                EXPIRES,
+                "Wed, 21 Oct 2099 07:28:00 GMT"
+                    .parse()
+                    .expect("valid header value"),
+            ),
+            (
+                EXPIRES,
+                "Wed, 21 Oct 2099 08:28:00 GMT"
+                    .parse()
+                    .expect("valid header value"),
+            ),
+        ]);
+
+        let response_headers = ResponseHeaders::from(&headers);
+
+        assert_eq!(response_headers.expires_unix_timestamp, Some(0));
+    }
+
+    #[test]
+    fn invalid_expires_does_not_use_heuristic_freshness() {
+        let request =
+            reqwest::Request::new(http::Method::GET, "https://example.com/".parse().unwrap());
+        let response = reqwest::Response::from(
+            http::Response::builder()
+                .status(http::StatusCode::OK)
+                .header(http::header::EXPIRES, "invalid")
+                .header(http::header::LAST_MODIFIED, "Wed, 21 Oct 2015 07:28:00 GMT")
+                .body(Vec::new())
+                .unwrap(),
+        );
+        let policy = CachePolicyBuilder::new(&request)
+            .build(&response)
+            .to_archived();
+
+        assert_eq!(policy.freshness_lifetime(), Duration::ZERO);
+        assert!(!policy.is_fresh(SystemTime::now(), &request));
+    }
+
+    #[test]
+    fn invalid_max_age_does_not_use_heuristic_freshness() {
+        let request =
+            reqwest::Request::new(http::Method::GET, "https://example.com/".parse().unwrap());
+
+        for (cache_control, shared) in [
+            ("max-age=invalid", false),
+            ("max-age=", false),
+            (r#"max-age="60"#, false),
+            ("s-maxage=", true),
+        ] {
+            let response = reqwest::Response::from(
+                http::Response::builder()
+                    .status(http::StatusCode::OK)
+                    .header(http::header::CACHE_CONTROL, cache_control)
+                    .header(http::header::LAST_MODIFIED, "Wed, 21 Oct 2015 07:28:00 GMT")
+                    .body(Vec::new())
+                    .unwrap(),
+            );
+            let mut policy = CachePolicyBuilder::new(&request).build(&response);
+            policy.config.shared = shared;
+            let policy = policy.to_archived();
+
+            assert_eq!(policy.freshness_lifetime(), Duration::ZERO);
+            assert!(!policy.is_fresh(SystemTime::now(), &request));
+        }
     }
 }
