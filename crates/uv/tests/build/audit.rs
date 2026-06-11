@@ -2,9 +2,9 @@ use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use indoc::{formatdoc, indoc};
-use serde_json::json;
+use serde_json::{Value, json};
 use wiremock::matchers::{method, path};
-use wiremock::{Mock, MockServer, ResponseTemplate};
+use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
 use uv_static::EnvVars;
 use uv_test::packse::PackseServer;
@@ -73,6 +73,18 @@ fn audit_reuses_settings_workspace_discovery() -> Result<()> {
     ");
 
     Ok(())
+}
+
+fn empty_osv_batch_response(request: &Request) -> ResponseTemplate {
+    let queries = serde_json::from_slice::<Value>(&request.body)
+        .expect("OSV batch request should contain valid JSON")["queries"]
+        .as_array()
+        .expect("OSV batch request should contain a queries array")
+        .len();
+
+    ResponseTemplate::new(200).set_body_json(json!({
+        "results": vec![json!({"vulns": []}); queries]
+    }))
 }
 
 fn write_audit_output_project(project_dir: &impl PathChild, index_url: &str) {
@@ -726,9 +738,7 @@ async fn audit_no_dev() {
 
     Mock::given(method("POST"))
         .and(path("/v1/querybatch"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "results": [{"vulns": []}]
-        })))
+        .respond_with(empty_osv_batch_response)
         .mount(&server)
         .await;
 
@@ -791,9 +801,7 @@ async fn audit_extras() {
 
     Mock::given(method("POST"))
         .and(path("/v1/querybatch"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "results": [{"vulns": []}]
-        })))
+        .respond_with(empty_osv_batch_response)
         .mount(&server)
         .await;
 
@@ -859,9 +867,7 @@ async fn audit_dependency_groups() {
 
     Mock::given(method("POST"))
         .and(path("/v1/querybatch"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "results": [{"vulns": []}]
-        })))
+        .respond_with(empty_osv_batch_response)
         .mount(&server)
         .await;
 
