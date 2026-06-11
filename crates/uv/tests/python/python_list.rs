@@ -110,8 +110,12 @@ fn python_list_unknown_managed_implementation() -> Result<()> {
     fs_err::create_dir_all(&installation)?;
 
     uv_snapshot!(context.filters(), context.python_list()
-        .arg("--only-installed"), @"
+        .arg("--only-installed")
+        .env(EnvVars::RUST_LOG, "warn"), @"
     exit_code: 0 (success)
+    ----- stderr -----
+    WARN Ignoring malformed managed Python entry:
+        Unknown Python implementation `unknown`
     ");
 
     uv_snapshot!(context.filters(), context.python_upgrade().arg("--offline"), @"
