@@ -1391,6 +1391,33 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn test_redirect_removes_sensitive_headers_on_scheme_change_for_all_statuses() -> Result<()> {
+        for status in &[301, 302, 303, 307, 308] {
+            let request = Client::new()
+                .get("http://example.com:8080/wheel")
+                .header(AUTHORIZATION, "Bearer source-token")
+                .header(COOKIE, "session=secret")
+                .header(PROXY_AUTHORIZATION, "Basic secret")
+                .header(WWW_AUTHENTICATE, "Basic realm=\"secret\"")
+                .build()?;
+            let response = Response::from(
+                http::Response::builder()
+                    .status(*status)
+                    .header(LOCATION, "https://example.com:8080/wheel")
+                    .body("")?,
+            );
+            let redirected =
+                request_into_redirect(request, &response, CrossOriginCredentialsPolicy::Secure)?
+                    .context("expected a redirect request")?;
+            for header in [AUTHORIZATION, COOKIE, PROXY_AUTHORIZATION, WWW_AUTHENTICATE] {
+                assert!(!redirected.headers().contains_key(header));
+            }
+        }
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_redirect_303_changes_post_to_get() -> Result<()> {
         let server = MockServer::start().await;
