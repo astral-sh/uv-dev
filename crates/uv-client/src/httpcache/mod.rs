@@ -347,18 +347,23 @@ impl ArchivedCachePolicy {
             );
             return BeforeRequest::NoMatch;
         }
+        if matches!(self.request.method, ArchivedMethod::Head)
+            && request.method() == http::Method::GET
+        {
+            tracing::trace!(
+                "Cached HEAD response for {} cannot be used for a GET request",
+                request.url(),
+            );
+            return BeforeRequest::NoMatch;
+        }
         // "Request header fields nominated by the stored response (if any)
         // match those presented, and..."
-        //
-        // We don't support the `Vary` header, so if it was set, we
-        // conservatively require revalidation.
         if !self.vary.matches(request.headers()) {
             tracing::trace!(
                 "Request {} does not match cached request because of the 'Vary' header",
                 request.url(),
             );
-            self.set_revalidation_headers(request);
-            return BeforeRequest::Stale(self.new_cache_policy_builder(request));
+            return BeforeRequest::NoMatch;
         }
         // "the stored response does not contain the no-cache directive, unless
         // it is successfully validated, and..."
@@ -1320,10 +1325,7 @@ impl Vary {
                 if header_name == "*" {
                     return Self::always_fails_to_match();
                 }
-                let value = request
-                    .get(&header_name)
-                    .map(|header| header.as_bytes().to_vec())
-                    .unwrap_or_default();
+                let value = normalized_header_value(request, &header_name);
                 fields.push(VaryField {
                     name: header_name,
                     value,
@@ -1345,10 +1347,9 @@ impl ArchivedVary {
             if field.name == "*" {
                 return false;
             }
-            let request_header_value = request_headers
-                .get(field.name.as_str())
-                .map_or(&b""[..], |header| header.as_bytes());
-            if field.value.as_slice() != request_header_value {
+            let request_header_value =
+                normalized_header_value(request_headers, field.name.as_str());
+            if field.value.as_slice() != request_header_value.as_slice() {
                 return false;
             }
         }
@@ -1371,6 +1372,93 @@ impl ArchivedVary {
 struct VaryField {
     name: String,
     value: Vec<u8>,
+}
+
+fn normalized_header_value(headers: &http::HeaderMap, name: &str) -> Vec<u8> {
+    let mut values = headers.get_all(name).iter();
+    let Some(first) = values.next() else {
+        // NUL is not permitted in an HTTP header value. Keep the archived
+        // representation as `Vec<u8>` while distinguishing absent from empty.
+        return vec![b'\0'];
+    };
+    let mut normalized = normalize_header_field_line(first.as_bytes());
+    for value in values {
+        normalized.push(b',');
+        normalized.extend(normalize_header_field_line(value.as_bytes()));
+    }
+    normalized
+}
+
+fn normalize_header_field_line(value: &[u8]) -> Vec<u8> {
+    let start = value
+        .iter()
+        .position(|byte| !matches!(byte, b' ' | b'\t'))
+        .unwrap_or(value.len());
+    let end = value
+        .iter()
+        .rposition(|byte| !matches!(byte, b' ' | b'\t'))
+        .map_or(start, |index| index + 1);
+    let value = &value[start..end];
+    let mut normalized = Vec::with_capacity(value.len());
+    let mut quoted = false;
+    let mut escaped = false;
+    let mut comment_depth = 0_u32;
+    let mut skip_whitespace = false;
+
+    for &byte in value {
+        if escaped {
+            normalized.push(byte);
+            escaped = false;
+            continue;
+        }
+        if quoted {
+            normalized.push(byte);
+            match byte {
+                b'\\' => escaped = true,
+                b'"' => quoted = false,
+                _ => {}
+            }
+            continue;
+        }
+        if comment_depth > 0 {
+            normalized.push(byte);
+            match byte {
+                b'\\' => escaped = true,
+                b'(' => comment_depth += 1,
+                b')' => comment_depth -= 1,
+                _ => {}
+            }
+            continue;
+        }
+        match byte {
+            b'"' => {
+                normalized.push(byte);
+                quoted = true;
+                skip_whitespace = false;
+            }
+            b'(' => {
+                normalized.push(byte);
+                comment_depth = 1;
+                skip_whitespace = false;
+            }
+            b',' => {
+                while normalized
+                    .last()
+                    .is_some_and(|byte| matches!(byte, b' ' | b'\t'))
+                {
+                    normalized.pop();
+                }
+                normalized.push(byte);
+                skip_whitespace = true;
+            }
+            b' ' | b'\t' if skip_whitespace => {}
+            _ => {
+                normalized.push(byte);
+                skip_whitespace = false;
+            }
+        }
+    }
+    normalized
 }
 
 fn unix_timestamp(time: SystemTime) -> u64 {
@@ -1417,6 +1505,13 @@ fn parse_seconds(value: &[u8]) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
+
+    use http::{
+        HeaderMap,
+        header::{HeaderValue, VARY},
+    };
+
+    use crate::rkyvutil::OwnedArchive;
 
     use super::*;
 
@@ -1515,5 +1610,155 @@ mod tests {
                 .header(http::header::CACHE_CONTROL, "no-store"),
         );
         assert!(!unstorable.matches_stale_request(&original));
+    }
+
+    fn archived_vary(request_headers: &HeaderMap) -> OwnedArchive<Vary> {
+        let mut response_headers = HeaderMap::new();
+        response_headers.insert(VARY, HeaderValue::from_static("x-variant"));
+        let vary = Vary::from_request_response_headers(request_headers, &response_headers);
+        OwnedArchive::from_unarchived(&vary).expect("all possible values can be archived")
+    }
+
+    #[test]
+    fn vary_matches_combined_field_lines() {
+        let mut stored_headers = HeaderMap::new();
+        stored_headers.append("x-variant", HeaderValue::from_static("gzip"));
+        stored_headers.append("x-variant", HeaderValue::from_static("br"));
+        let vary = archived_vary(&stored_headers);
+
+        let mut request_headers = HeaderMap::new();
+        request_headers.insert("x-variant", HeaderValue::from_static("gzip, br"));
+        assert!(vary.matches(&request_headers));
+    }
+
+    #[test]
+    fn vary_compares_all_field_lines() {
+        let mut stored_headers = HeaderMap::new();
+        stored_headers.append("x-variant", HeaderValue::from_static("gzip"));
+        stored_headers.append("x-variant", HeaderValue::from_static("br"));
+        let vary = archived_vary(&stored_headers);
+
+        let mut request_headers = HeaderMap::new();
+        request_headers.append("x-variant", HeaderValue::from_static("gzip"));
+        request_headers.append("x-variant", HeaderValue::from_static("deflate"));
+        assert!(!vary.matches(&request_headers));
+    }
+
+    #[test]
+    fn vary_normalizes_optional_whitespace() {
+        let mut stored_headers = HeaderMap::new();
+        stored_headers.insert("x-variant", HeaderValue::from_static("gzip, br"));
+        let vary = archived_vary(&stored_headers);
+
+        let mut request_headers = HeaderMap::new();
+        request_headers.insert("x-variant", HeaderValue::from_static("gzip ,\tbr"));
+        assert!(vary.matches(&request_headers));
+    }
+
+    #[test]
+    fn vary_distinguishes_absent_and_empty_fields() {
+        let absent_headers = HeaderMap::new();
+        let absent_vary = archived_vary(&absent_headers);
+        let mut empty_headers = HeaderMap::new();
+        empty_headers.insert("x-variant", HeaderValue::from_static(""));
+        assert!(!absent_vary.matches(&empty_headers));
+
+        let empty_vary = archived_vary(&empty_headers);
+        assert!(!empty_vary.matches(&absent_headers));
+    }
+
+    #[test]
+    fn vary_preserves_legacy_archive_layout() {
+        #[derive(rkyv::Archive, rkyv::Serialize)]
+        struct LegacyVary {
+            fields: Vec<LegacyVaryField>,
+        }
+
+        #[derive(rkyv::Archive, rkyv::Serialize)]
+        struct LegacyVaryField {
+            name: String,
+            value: Vec<u8>,
+        }
+
+        let legacy = LegacyVary {
+            fields: vec![LegacyVaryField {
+                name: "x-variant".to_string(),
+                value: vec![],
+            }],
+        };
+        let bytes =
+            rkyv::to_bytes::<rkyv::rancor::Error>(&legacy).expect("legacy vary can be archived");
+        let vary = OwnedArchive::<Vary>::new(bytes).expect("legacy vary archive remains valid");
+
+        let mut empty_headers = HeaderMap::new();
+        empty_headers.insert("x-variant", HeaderValue::from_static(""));
+        assert!(vary.matches(&empty_headers));
+        assert!(!vary.matches(&HeaderMap::new()));
+    }
+
+    #[test]
+    fn vary_preserves_commas_in_quoted_strings() {
+        let mut stored_headers = HeaderMap::new();
+        stored_headers.insert("x-variant", HeaderValue::from_static(r#""gzip, br""#));
+        let vary = archived_vary(&stored_headers);
+
+        let mut request_headers = HeaderMap::new();
+        request_headers.insert("x-variant", HeaderValue::from_static(r#""gzip,br""#));
+        assert!(!vary.matches(&request_headers));
+    }
+
+    #[test]
+    fn vary_mismatch_is_not_revalidated() {
+        let mut stored_request =
+            reqwest::Request::new(http::Method::GET, "https://example.com/".parse().unwrap());
+        stored_request
+            .headers_mut()
+            .insert("x-variant", HeaderValue::from_static("first"));
+        let response = reqwest::Response::from(
+            http::Response::builder()
+                .status(http::StatusCode::OK)
+                .header(http::header::ETAG, r#""first""#)
+                .header(http::header::VARY, "x-variant")
+                .body(Vec::new())
+                .unwrap(),
+        );
+        let policy = CachePolicyBuilder::new(&stored_request)
+            .build(&response)
+            .to_archived();
+
+        let mut request =
+            reqwest::Request::new(http::Method::GET, "https://example.com/".parse().unwrap());
+        request
+            .headers_mut()
+            .insert("x-variant", HeaderValue::from_static("second"));
+
+        assert!(matches!(
+            policy.before_request(&mut request),
+            BeforeRequest::NoMatch
+        ));
+        assert!(!request.headers().contains_key(http::header::IF_NONE_MATCH));
+    }
+
+    #[test]
+    fn head_response_does_not_satisfy_get() {
+        let stored_request =
+            reqwest::Request::new(http::Method::HEAD, "https://example.com/".parse().unwrap());
+        let response = reqwest::Response::from(
+            http::Response::builder()
+                .status(http::StatusCode::OK)
+                .header(http::header::CACHE_CONTROL, "max-age=3600")
+                .body(Vec::new())
+                .unwrap(),
+        );
+        let policy = CachePolicyBuilder::new(&stored_request)
+            .build(&response)
+            .to_archived();
+        let mut request =
+            reqwest::Request::new(http::Method::GET, "https://example.com/".parse().unwrap());
+
+        assert!(matches!(
+            policy.before_request(&mut request),
+            BeforeRequest::NoMatch
+        ));
     }
 }
