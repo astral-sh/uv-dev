@@ -26,6 +26,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 use serde_json::json;
+use wiremock::Request;
 
 const PYX_TEST_TOKEN: &str = "pyx-test-token";
 
@@ -357,6 +358,14 @@ impl PypiProxy {
     pub fn url(&self, path: &str) -> String {
         format!("{}{path}", self.uri())
     }
+
+    /// Return the requests received by the mock server.
+    pub async fn received_requests(&self) -> Vec<Request> {
+        self.server
+            .received_requests()
+            .await
+            .expect("mock server should record requests")
+    }
 }
 
 /// Start a mock PyPI proxy that replicates `pypi-proxy.fly.dev`.
@@ -374,7 +383,7 @@ impl PypiProxy {
 /// - `/basic-auth-heron/files/…` — authenticated file redirect (public:heron)
 /// - `/basic-auth-eagle/files/…` — authenticated file redirect (public:eagle)
 pub async fn start() -> PypiProxy {
-    use wiremock::{Mock, MockServer, Request, ResponseTemplate};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     let server = MockServer::start().await;
     let db = package_database();
