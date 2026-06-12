@@ -6798,10 +6798,7 @@ fn install_package_basic_auth_username_with_colon() {
         .arg("--index-url")
         .arg("https://user%3Aname:password@example.com/simple")
         .arg("--strict"), @"
-    success: false
-    exit_code: 2
-    ----- stdout -----
-
+    exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to parse credentials in index URL: https://user%3Aname:****@example.com/simple
       Caused by: HTTP Basic Authentication username cannot contain a colon
