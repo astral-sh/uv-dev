@@ -2,6 +2,7 @@ use std::sync::{Arc, LazyLock};
 
 use anyhow::{anyhow, format_err};
 use http::{Extensions, StatusCode};
+use reqwest::header::WWW_AUTHENTICATE;
 use reqwest::{Request, Response};
 use reqwest_middleware::{Error, Middleware, Next};
 use tokio::sync::Mutex;
@@ -22,7 +23,7 @@ use crate::{
         Authentication, AuthenticationError, Credentials, CredentialsFromUrlError, Username,
     },
     index::{AuthPolicy, Indexes},
-    realm::Realm,
+    realm::{ProtectionSpace, Realm},
 };
 use crate::{Index, TextCredentialStore};
 
@@ -373,14 +374,27 @@ impl Middleware for AuthMiddleware {
                 .cache()
                 .get_url(DisplaySafeUrl::ref_cast(request.url()), &Username::none());
             if let Some(credentials) = credentials.as_ref() {
-                request = credentials.authenticate(request).await?;
+                // A parent path can belong to a different HTTP Basic protection space. Wait for
+                // the child endpoint to identify its realm before sending those credentials.
+                let is_basic = matches!(
+                    credentials.as_ref(),
+                    Authentication::Credentials(Credentials::Basic { .. })
+                );
+                if !is_basic
+                    || credentials.password().is_none()
+                    || self
+                        .cache()
+                        .has_exact_url(DisplaySafeUrl::ref_cast(request.url()))
+                {
+                    request = credentials.authenticate(request).await?;
 
-                // If it's fully authenticated, finish the request
-                if credentials.is_authenticated() {
-                    trace!("Request for {url} is fully authenticated");
-                    return self
-                        .complete_request(None, request, extensions, next, auth_policy)
-                        .await;
+                    // If it's fully authenticated, finish the request.
+                    if credentials.is_authenticated() {
+                        trace!("Request for {url} is fully authenticated");
+                        return self
+                            .complete_request(None, request, extensions, next, auth_policy)
+                            .await;
+                    }
                 }
 
                 // If we just found a username, we'll make the request then look for password elsewhere
@@ -442,13 +456,21 @@ impl Middleware for AuthMiddleware {
             trace!("Checking for credentials for {url}");
             (request, None)
         };
+        let protection_space = response
+            .as_ref()
+            .and_then(|response| basic_protection_space(retry_request.url(), response));
         let retry_request_url = DisplaySafeUrl::ref_cast(retry_request.url());
 
         let username = credentials
             .as_ref()
             .map(|credentials| credentials.to_username())
             .unwrap_or(Username::none());
-        let credentials = if let Some(index) = index {
+        let credential_hint = credentials.clone();
+        let credentials = if let Some(protection_space) = protection_space.as_ref() {
+            self.cache()
+                .get_protection_space(protection_space.clone(), &username)
+                .or_else(|| index.and_then(|index| self.cache().get_url(&index.url, &username)))
+        } else if let Some(index) = index {
             self.cache().get_url(&index.url, &username).or_else(|| {
                 self.cache()
                     .get_realm(Realm::from(&**retry_request_url), username)
@@ -459,7 +481,7 @@ impl Middleware for AuthMiddleware {
             self.cache()
                 .get_realm(Realm::from(&**retry_request_url), username)
         }
-        .or(credentials);
+        .or_else(|| protection_space.is_none().then_some(credentials).flatten());
 
         if let Some(credentials) = credentials.as_ref() {
             if credentials.is_authenticated() {
@@ -475,22 +497,24 @@ impl Middleware for AuthMiddleware {
         // Here, we use the username from the cache if present.
         if let Some(credentials) = self
             .fetch_credentials(
-                credentials.as_deref(),
+                credentials.as_deref().or(credential_hint.as_deref()),
                 retry_request_url,
                 index,
                 auth_policy,
+                protection_space.clone(),
             )
             .await?
         {
             retry_request = credentials.authenticate(retry_request).await?;
             trace!("Retrying request for {url} with {credentials:?}");
             return self
-                .complete_request(
+                .complete_request_in_protection_space(
                     Some(credentials),
                     retry_request,
                     extensions,
                     next,
                     auth_policy,
+                    protection_space,
                 )
                 .await;
         }
@@ -527,6 +551,26 @@ impl AuthMiddleware {
         next: Next<'_>,
         auth_policy: AuthPolicy,
     ) -> reqwest_middleware::Result<Response> {
+        self.complete_request_in_protection_space(
+            credentials,
+            request,
+            extensions,
+            next,
+            auth_policy,
+            None,
+        )
+        .await
+    }
+
+    async fn complete_request_in_protection_space(
+        &self,
+        credentials: Option<Arc<Authentication>>,
+        request: Request,
+        extensions: &mut Extensions,
+        next: Next<'_>,
+        auth_policy: AuthPolicy,
+        protection_space: Option<ProtectionSpace>,
+    ) -> reqwest_middleware::Result<Response> {
         let Some(credentials) = credentials else {
             // Nothing to insert into the cache if we don't have credentials
             return next.run(request, extensions).await;
@@ -546,7 +590,12 @@ impl AuthMiddleware {
         {
             // TODO(zanieb): Consider also updating the system keyring after successful use
             trace!("Updating cached credentials for {url} to {credentials:?}");
-            self.cache().insert(&url, credentials);
+            if let Some(protection_space) = protection_space {
+                self.cache()
+                    .insert_for_protection_space(&url, credentials, protection_space);
+            } else {
+                self.cache().insert(&url, credentials);
+            }
         }
 
         result
@@ -611,6 +660,7 @@ impl AuthMiddleware {
                 DisplaySafeUrl::ref_cast(request.url()),
                 index,
                 auth_policy,
+                None,
             )
             .await?
         {
@@ -645,6 +695,7 @@ impl AuthMiddleware {
         url: &DisplaySafeUrl,
         index: Option<&Index>,
         auth_policy: AuthPolicy,
+        protection_space: Option<ProtectionSpace>,
     ) -> reqwest_middleware::Result<Option<Arc<Authentication>>> {
         let is_s3_endpoint =
             S3EndpointProvider::is_s3_endpoint(url, self.preview).map_err(Error::Middleware)?;
@@ -656,10 +707,13 @@ impl AuthMiddleware {
             credentials.map(|credentials| credentials.username().unwrap_or_default().to_string()),
         );
 
-        // Fetches can be expensive, so we will only run them _once_ per realm or index URL and username combination
-        // All other requests for the same realm or index URL will wait until the first one completes
+        // Fetches can be expensive, so we will only run them once per index URL or protection
+        // space and username combination. Prefer the index URL since external stores use it for
+        // both the initial lookup and subsequent challenged requests.
         let key = if let Some(index) = index {
             (FetchUrl::Index(index.url.clone()), username)
+        } else if let Some(protection_space) = protection_space {
+            (FetchUrl::ProtectionSpace(protection_space), username)
         } else {
             (FetchUrl::Realm(Realm::from(&**url)), username)
         };
@@ -876,6 +930,114 @@ impl AuthMiddleware {
     }
 }
 
+fn basic_protection_space(url: &url::Url, response: &Response) -> Option<ProtectionSpace> {
+    response
+        .headers()
+        .get_all(WWW_AUTHENTICATE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .find_map(basic_authentication_realm)
+        .map(|realm| ProtectionSpace::basic(url, &realm))
+}
+
+fn basic_authentication_realm(challenge: &str) -> Option<String> {
+    let parameters = basic_challenge_parameters(challenge)?;
+
+    let bytes = parameters.as_bytes();
+    let mut offset = 0;
+    while offset < bytes.len() {
+        while bytes
+            .get(offset)
+            .is_some_and(|byte| byte.is_ascii_whitespace() || *byte == b',')
+        {
+            offset += 1;
+        }
+
+        let name_start = offset;
+        while bytes
+            .get(offset)
+            .is_some_and(|byte| !byte.is_ascii_whitespace() && !matches!(*byte, b'=' | b','))
+        {
+            offset += 1;
+        }
+        let name = std::str::from_utf8(bytes.get(name_start..offset)?).ok()?;
+        while bytes.get(offset).is_some_and(u8::is_ascii_whitespace) {
+            offset += 1;
+        }
+        if bytes.get(offset) != Some(&b'=') {
+            return None;
+        }
+        offset += 1;
+        while bytes.get(offset).is_some_and(u8::is_ascii_whitespace) {
+            offset += 1;
+        }
+
+        let value = if bytes.get(offset) == Some(&b'"') {
+            offset += 1;
+            let mut value = Vec::new();
+            loop {
+                let byte = *bytes.get(offset)?;
+                offset += 1;
+                match byte {
+                    b'"' => break,
+                    b'\\' => {
+                        value.push(*bytes.get(offset)?);
+                        offset += 1;
+                    }
+                    byte => value.push(byte),
+                }
+            }
+            String::from_utf8(value).ok()?
+        } else {
+            let value_start = offset;
+            while bytes.get(offset).is_some_and(|byte| *byte != b',') {
+                offset += 1;
+            }
+            std::str::from_utf8(bytes.get(value_start..offset)?)
+                .ok()?
+                .trim()
+                .to_string()
+        };
+
+        if name.eq_ignore_ascii_case("realm") {
+            return Some(value);
+        }
+    }
+
+    None
+}
+
+fn basic_challenge_parameters(mut challenge: &str) -> Option<&str> {
+    loop {
+        let candidate = challenge.trim_start();
+        if let Some((scheme, parameters)) = candidate.split_once(char::is_whitespace)
+            && scheme.eq_ignore_ascii_case("basic")
+        {
+            return Some(parameters);
+        }
+
+        let mut quoted = false;
+        let mut escaped = false;
+        let mut delimiter = None;
+        for (offset, byte) in candidate.bytes().enumerate() {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            match byte {
+                b'\\' if quoted => escaped = true,
+                b'"' => quoted = !quoted,
+                b',' if !quoted => {
+                    delimiter = Some(offset);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        challenge = candidate.get(delimiter? + 1..)?;
+    }
+}
+
 fn tracing_url(request: &Request, credentials: Option<&Authentication>) -> DisplaySafeUrl {
     let mut url = DisplaySafeUrl::from_url(request.url().clone());
     if let Some(Authentication::Credentials(creds)) = credentials {
@@ -925,6 +1087,263 @@ mod tests {
             .await;
 
         server
+    }
+
+    #[test]
+    fn test_basic_authentication_realm() {
+        assert_eq!(
+            basic_authentication_realm(r#"Basic charset="UTF-8", realm="tenant-a""#),
+            Some("tenant-a".to_string())
+        );
+        assert_eq!(
+            basic_authentication_realm(r#"bAsIc realm="tenant-\"a,one""#),
+            Some("tenant-\"a,one".to_string())
+        );
+        assert_eq!(
+            basic_authentication_realm(
+                r#"Bearer realm="api,one", Basic charset="UTF-8", realm="tenant-a""#
+            ),
+            Some("tenant-a".to_string())
+        );
+        assert_eq!(basic_authentication_realm("Bearer token"), None);
+    }
+
+    #[test(tokio::test)]
+    async fn test_basic_credentials_are_isolated_by_protection_space() -> Result<(), Error> {
+        let username = "user";
+        let first_password = "password-a";
+        let second_password = "password-b";
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path_regex("^/a$"))
+            .and(basic_auth(username, first_password))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path_regex("^/a$"))
+            .respond_with(
+                ResponseTemplate::new(401)
+                    .insert_header("WWW-Authenticate", r#"Basic realm="tenant-a""#),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path_regex("^/a/private$"))
+            .and(basic_auth(username, second_password))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path_regex("^/a/private$"))
+            .respond_with(ResponseTemplate::new(401).insert_header(
+                "WWW-Authenticate",
+                r#"Bearer realm="api", Basic realm="tenant-b""#,
+            ))
+            .mount(&server)
+            .await;
+
+        let base_url = Url::parse(&server.uri())?;
+        let first_url = base_url.join("a")?;
+        let second_url = base_url.join("a/private")?;
+        let mut store = TextCredentialStore::default();
+        store.insert(
+            crate::Service::try_from(first_url.to_string())?,
+            Credentials::basic(Some(username.to_string()), Some(first_password.to_string())),
+        );
+        store.insert(
+            crate::Service::try_from(second_url.to_string())?,
+            Credentials::basic(
+                Some(username.to_string()),
+                Some(second_password.to_string()),
+            ),
+        );
+        let client = test_client_builder()
+            .with(
+                AuthMiddleware::new()
+                    .with_cache(CredentialsCache::new())
+                    .with_netrc(None)
+                    .with_text_store(Some(store)),
+            )
+            .build();
+
+        assert_eq!(client.get(first_url).send().await?.status(), 200);
+        assert_eq!(client.get(second_url).send().await?.status(), 200);
+
+        let leaked_authorization =
+            Credentials::basic(Some(username.to_string()), Some(first_password.to_string()))
+                .to_header_value()
+                .map_err(AuthenticationError::from)?;
+        assert!(
+            server
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .filter(|request| request.url.path() == "/a/private")
+                .all(
+                    |request| request.headers.get(reqwest::header::AUTHORIZATION)
+                        != Some(&leaked_authorization)
+                )
+        );
+
+        Ok(())
+    }
+
+    #[test(tokio::test)]
+    async fn test_basic_challenge_does_not_reuse_parent_credentials() -> Result<(), Error> {
+        let username = "user";
+        let first_password = "password-a";
+        let second_password = "password-b";
+
+        for explicit in [false, true] {
+            let server = MockServer::start().await;
+
+            Mock::given(method("GET"))
+                .and(path_regex("^/a$"))
+                .and(basic_auth(username, first_password))
+                .respond_with(ResponseTemplate::new(200))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path_regex("^/a$"))
+                .respond_with(ResponseTemplate::new(401))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path_regex("^/a/private(?:/package)?$"))
+                .and(basic_auth(username, second_password))
+                .respond_with(ResponseTemplate::new(200))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path_regex("^/a/private(?:/package)?$"))
+                .respond_with(
+                    ResponseTemplate::new(401)
+                        .insert_header("WWW-Authenticate", r#"Basic realm="tenant-b""#),
+                )
+                .mount(&server)
+                .await;
+
+            let base_url = Url::parse(&server.uri())?;
+            let first_url = base_url.join("a")?;
+            let second_url = base_url.join("a/private")?;
+            let mut store = TextCredentialStore::default();
+            store.insert(
+                crate::Service::try_from(first_url.to_string())?,
+                Credentials::basic(Some(username.to_string()), Some(first_password.to_string())),
+            );
+            store.insert(
+                crate::Service::try_from(second_url.to_string())?,
+                Credentials::basic(
+                    Some(username.to_string()),
+                    Some(second_password.to_string()),
+                ),
+            );
+            let client = test_client_builder()
+                .with(
+                    AuthMiddleware::new()
+                        .with_cache(CredentialsCache::new())
+                        .with_netrc(None)
+                        .with_text_store(Some(store)),
+                )
+                .build();
+
+            let mut first_request = first_url;
+            if explicit {
+                first_request.set_username(username).unwrap();
+                first_request.set_password(Some(first_password)).unwrap();
+            }
+            assert_eq!(client.get(first_request).send().await?.status(), 200);
+            assert_eq!(client.get(second_url).send().await?.status(), 200);
+            assert_eq!(
+                client
+                    .get(base_url.join("a/private/package")?)
+                    .send()
+                    .await?
+                    .status(),
+                200
+            );
+
+            let leaked_authorization =
+                Credentials::basic(Some(username.to_string()), Some(first_password.to_string()))
+                    .to_header_value()
+                    .map_err(AuthenticationError::from)?;
+            assert!(
+                server
+                    .received_requests()
+                    .await
+                    .unwrap()
+                    .iter()
+                    .filter(|request| request.url.path().starts_with("/a/private"))
+                    .all(|request| {
+                        request.headers.get(reqwest::header::AUTHORIZATION)
+                            != Some(&leaked_authorization)
+                    })
+            );
+        }
+
+        Ok(())
+    }
+
+    #[test(tokio::test)]
+    async fn test_basic_challenge_reuses_index_credentials_for_files() -> Result<(), Error> {
+        let username = "user";
+        let password = "password";
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path_regex("^/basic-auth/files/package$"))
+            .and(basic_auth(username, password))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path_regex("^/basic-auth/files/package$"))
+            .respond_with(
+                ResponseTemplate::new(401)
+                    .insert_header("WWW-Authenticate", r#"Basic realm="authenticated""#),
+            )
+            .mount(&server)
+            .await;
+
+        let base_url = Url::parse(&server.uri())?;
+        let index_url = base_url.join("basic-auth/simple")?;
+        let root_url = base_url.join("basic-auth")?;
+        let cache = CredentialsCache::new();
+        cache.store_credentials(
+            DisplaySafeUrl::ref_cast(&root_url),
+            Credentials::basic(Some(username.to_string()), Some(password.to_string())),
+        );
+        cache.store_credentials(
+            DisplaySafeUrl::ref_cast(&root_url),
+            Credentials::basic(Some(username.to_string()), None),
+        );
+        let indexes = Indexes::from_indexes([Index {
+            url: DisplaySafeUrl::from_url(index_url),
+            root_url: DisplaySafeUrl::from_url(root_url),
+            auth_policy: AuthPolicy::Auto,
+        }]);
+        let client = test_client_builder()
+            .with(
+                AuthMiddleware::new()
+                    .with_cache(cache)
+                    .with_indexes(indexes),
+            )
+            .build();
+
+        assert_eq!(
+            client
+                .get(base_url.join("basic-auth/files/package")?)
+                .send()
+                .await?
+                .status(),
+            200,
+            "Credentials scoped to an index should be reused for its file URLs after a challenge"
+        );
+
+        Ok(())
     }
 
     fn test_client_builder() -> reqwest_middleware::ClientBuilder {
