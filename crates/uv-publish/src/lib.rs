@@ -43,7 +43,7 @@ use uv_redacted::{DisplaySafeUrl, DisplaySafeUrlError};
 use uv_warnings::warn_user;
 
 pub use crate::trusted_publishing::TrustedPublishingToken;
-use crate::trusted_publishing::pypi::PyPIPublishingService;
+use crate::trusted_publishing::pypi::{PyPIPublishingService, is_official_registry};
 use crate::trusted_publishing::{TrustedPublishingError, TrustedPublishingService};
 
 #[derive(Error, Debug)]
@@ -426,9 +426,15 @@ pub async fn check_trusted_publishing(
             debug!("Attempting to get a token for trusted publishing");
 
             // Attempt to get a token for trusted publishing.
-            let token = PyPIPublishingService::new(registry, client)
-                .get_token()
-                .await;
+            let token = if is_official_registry(registry) {
+                debug!("Using trusted publishing flow for PyPI");
+                PyPIPublishingService::new(registry, client)
+                    .get_token()
+                    .await
+            } else {
+                debug!("Skipping automatic trusted publishing for an unrecognized registry");
+                return Ok(TrustedPublishResult::Skipped);
+            };
 
             match token {
                 // Success: we have a token for trusted publishing.

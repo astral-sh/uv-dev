@@ -693,6 +693,42 @@ async fn gitlab_trusted_publishing_pypi_id_token() {
     );
 }
 
+/// Automatic trusted publishing must not send an ambient OIDC token to an unrecognized registry.
+#[tokio::test]
+async fn automatic_trusted_publishing_skips_custom_registry() {
+    let context = uv_test::test_context!("3.12");
+
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/_/oidc/audience"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw("{\"audience\":\"pypi\"}", "application/json"),
+        )
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    uv_snapshot!(context.filters(), context.publish()
+        .arg("--dry-run")
+        .arg("--publish-url")
+        .arg(format!("{}/upload", server.uri()))
+        .arg(dummy_wheel())
+        .env(EnvVars::GITLAB_CI, "true")
+        .env(EnvVars::PYPI_ID_TOKEN, "ambient-oidc-token"), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Checking 1 file against http://[LOCALHOST]/upload
+    Checking ok-1.0.0-py3-none-any.whl ([SIZE])
+    Uploading ok-1.0.0-py3-none-any.whl ([SIZE])
+    ");
+
+    server.verify().await;
+}
+
 /// Native GitLab CI trusted publishing using `TESTPYPI_ID_TOKEN`
 #[tokio::test]
 async fn gitlab_trusted_publishing_testpypi_id_token() {
