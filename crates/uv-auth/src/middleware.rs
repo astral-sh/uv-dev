@@ -19,7 +19,8 @@ use crate::{
     CredentialsCache, KeyringProvider,
     cache::FetchUrl,
     credentials::{
-        Authentication, AuthenticationError, Credentials, CredentialsFromRequestError, Username,
+        Authentication, AuthenticationError, Credentials, CredentialsFromRequestError,
+        InvalidCredentialsError, Username,
     },
     index::{AuthPolicy, Indexes},
     realm::Realm,
@@ -38,6 +39,12 @@ impl From<AuthenticationError> for Error {
 
 impl From<CredentialsFromRequestError> for Error {
     fn from(err: CredentialsFromRequestError) -> Self {
+        Self::middleware(err)
+    }
+}
+
+impl From<InvalidCredentialsError> for Error {
+    fn from(err: InvalidCredentialsError) -> Self {
         Self::middleware(err)
     }
 }
@@ -753,16 +760,24 @@ impl AuthMiddleware {
         }
 
         // Netrc support based on: <https://github.com/gribouille/netrc>.
-        let credentials = if let Some(credentials) = self.netrc.get().and_then(|netrc| {
+        let credentials = if let Some(credentials) = if let Some(netrc) = self.netrc.get() {
             debug!("Checking netrc for credentials for {url}");
-            Credentials::from_netrc(
+            match Credentials::from_netrc(
                 netrc,
                 url,
                 credentials
                     .as_ref()
                     .and_then(|credentials| credentials.username()),
-            )
-        }) {
+            ) {
+                Ok(credentials) => credentials,
+                Err(err) => {
+                    self.cache().fetches.done(key, None);
+                    return Err(err.into());
+                }
+            }
+        } else {
+            None
+        } {
             debug!("Found credentials in netrc file for {url}");
             Some(credentials)
 
@@ -904,7 +919,6 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use crate::Index;
-    use crate::credentials::Password;
 
     use super::*;
 
@@ -1020,10 +1034,9 @@ mod tests {
         let cache = CredentialsCache::new();
         cache.insert(
             DisplaySafeUrl::ref_cast(&base_url),
-            Arc::new(Authentication::from(Credentials::basic(
-                Some(username.to_string()),
-                Some(password.to_string()),
-            ))),
+            Arc::new(Authentication::from(
+                Credentials::basic(Some(username.to_string()), Some(password.to_string())).unwrap(),
+            )),
         );
 
         let client = test_client_builder()
@@ -1074,10 +1087,9 @@ mod tests {
         let cache = CredentialsCache::new();
         cache.insert(
             DisplaySafeUrl::ref_cast(&base_url),
-            Arc::new(Authentication::from(Credentials::basic(
-                Some(username.to_string()),
-                None,
-            ))),
+            Arc::new(Authentication::from(
+                Credentials::basic(Some(username.to_string()), None).unwrap(),
+            )),
         );
 
         let client = test_client_builder()
@@ -1208,6 +1220,37 @@ mod tests {
             client.get(server.uri()).send().await?.status(),
             200,
             "Subsequent requests should not use the invalid credentials"
+        );
+
+        Ok(())
+    }
+
+    #[test(tokio::test)]
+    async fn test_netrc_file_invalid_credentials() -> Result<(), Error> {
+        let server = start_test_server("user", "password").await;
+        let base_url = Url::parse(&server.uri())?;
+
+        let mut netrc_file = NamedTempFile::new()?;
+        writeln!(
+            netrc_file,
+            r"machine {} login user:name password password",
+            base_url.host_str().unwrap()
+        )?;
+
+        let client = test_client_builder()
+            .with(
+                AuthMiddleware::new()
+                    .with_cache(CredentialsCache::new())
+                    .with_netrc(Some(
+                        Netrc::from_file(netrc_file.path()).expect("Test has valid netrc file"),
+                    )),
+            )
+            .build();
+
+        let error = client.get(server.uri()).send().await.unwrap_err();
+        insta::assert_snapshot!(
+            error,
+            @"HTTP Basic Authentication username cannot contain a colon"
         );
 
         Ok(())
@@ -1468,10 +1511,9 @@ mod tests {
         // URL.
         cache.insert(
             DisplaySafeUrl::ref_cast(&base_url),
-            Arc::new(Authentication::from(Credentials::basic(
-                Some(username.to_string()),
-                None,
-            ))),
+            Arc::new(Authentication::from(
+                Credentials::basic(Some(username.to_string()), None).unwrap(),
+            )),
         );
         let client = test_client_builder()
             .with(AuthMiddleware::new().with_cache(cache).with_keyring(Some(
@@ -1520,17 +1562,17 @@ mod tests {
         // Seed the cache with our credentials
         cache.insert(
             DisplaySafeUrl::ref_cast(&base_url_1),
-            Arc::new(Authentication::from(Credentials::basic(
-                Some(username_1.to_string()),
-                Some(password_1.to_string()),
-            ))),
+            Arc::new(Authentication::from(
+                Credentials::basic(Some(username_1.to_string()), Some(password_1.to_string()))
+                    .unwrap(),
+            )),
         );
         cache.insert(
             DisplaySafeUrl::ref_cast(&base_url_2),
-            Arc::new(Authentication::from(Credentials::basic(
-                Some(username_2.to_string()),
-                Some(password_2.to_string()),
-            ))),
+            Arc::new(Authentication::from(
+                Credentials::basic(Some(username_2.to_string()), Some(password_2.to_string()))
+                    .unwrap(),
+            )),
         );
 
         let client = test_client_builder()
@@ -1715,17 +1757,17 @@ mod tests {
         // Seed the cache with our credentials
         cache.insert(
             DisplaySafeUrl::ref_cast(&base_url_1),
-            Arc::new(Authentication::from(Credentials::basic(
-                Some(username_1.to_string()),
-                Some(password_1.to_string()),
-            ))),
+            Arc::new(Authentication::from(
+                Credentials::basic(Some(username_1.to_string()), Some(password_1.to_string()))
+                    .unwrap(),
+            )),
         );
         cache.insert(
             DisplaySafeUrl::ref_cast(&base_url_2),
-            Arc::new(Authentication::from(Credentials::basic(
-                Some(username_2.to_string()),
-                Some(password_2.to_string()),
-            ))),
+            Arc::new(Authentication::from(
+                Credentials::basic(Some(username_2.to_string()), Some(password_2.to_string()))
+                    .unwrap(),
+            )),
         );
 
         let client = test_client_builder()
@@ -2428,20 +2470,17 @@ mod tests {
             DisplaySafeUrl::parse("https://pypi-proxy.fly.dev/basic-auth/simple").unwrap()
         );
 
-        let creds = Authentication::from(Credentials::Basic {
-            username: Username::new(Some(String::from("user"))),
-            password: None,
-        });
+        let creds =
+            Authentication::from(Credentials::basic(Some("user".to_string()), None).unwrap());
         let req = create_request("https://pypi-proxy.fly.dev/basic-auth/simple");
         assert_eq!(
             tracing_url(&req, Some(&creds)),
             DisplaySafeUrl::parse("https://user@pypi-proxy.fly.dev/basic-auth/simple").unwrap()
         );
 
-        let creds = Authentication::from(Credentials::Basic {
-            username: Username::new(Some(String::from("user"))),
-            password: Some(Password::new(String::from("password"))),
-        });
+        let creds = Authentication::from(
+            Credentials::basic(Some("user".to_string()), Some("password".to_string())).unwrap(),
+        );
         let req = create_request("https://pypi-proxy.fly.dev/basic-auth/simple");
         assert_eq!(
             tracing_url(&req, Some(&creds)),
@@ -2462,7 +2501,7 @@ mod tests {
         let mut store = TextCredentialStore::default();
         let service = crate::Service::try_from(base_url.to_string()).unwrap();
         let credentials =
-            Credentials::basic(Some(username.to_string()), Some(password.to_string()));
+            Credentials::basic(Some(username.to_string()), Some(password.to_string())).unwrap();
         store.insert(service.clone(), credentials);
 
         let client = test_client_builder()
@@ -2517,7 +2556,8 @@ mod tests {
         let mut store = TextCredentialStore::default();
         let service = crate::Service::try_from(base_url.to_string()).unwrap();
         let credentials =
-            crate::Credentials::basic(Some(username.to_string()), Some(password.to_string()));
+            crate::Credentials::basic(Some(username.to_string()), Some(password.to_string()))
+                .unwrap();
         store.insert(service.clone(), credentials);
 
         let client = test_client_builder()

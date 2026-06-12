@@ -21,8 +21,12 @@ use uv_netrc::Netrc;
 use uv_redacted::DisplaySafeUrl;
 use uv_static::EnvVars;
 
+/// Validated authentication credentials.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Credentials(CredentialsKind);
+
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Credentials {
+pub(crate) enum CredentialsKind {
     /// RFC 7617 HTTP Basic Authentication
     Basic {
         /// The username to use for authentication.
@@ -35,6 +39,12 @@ pub enum Credentials {
         /// The token to use for authentication.
         token: Token,
     },
+}
+
+impl fmt::Debug for Credentials {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
 }
 
 #[derive(Debug, Error)]
@@ -111,10 +121,11 @@ impl From<Option<String>> for Username {
 
 #[derive(Clone, PartialEq, Eq, Ord, PartialOrd, Hash, Default, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct Password(String);
+pub(crate) struct Password(String);
 
 impl Password {
-    pub fn new(password: String) -> Self {
+    #[cfg(test)]
+    pub(crate) fn new(password: String) -> Self {
         Self(password)
     }
 
@@ -132,7 +143,7 @@ impl fmt::Debug for Password {
 
 #[derive(Clone, PartialEq, Eq, Ord, PartialOrd, Hash, Default, Deserialize)]
 #[serde(transparent)]
-pub struct Token(Vec<u8>);
+pub(crate) struct Token(Vec<u8>);
 
 impl Token {
     pub(crate) fn new(token: Vec<u8>) -> Self {
@@ -161,65 +172,87 @@ impl fmt::Debug for Token {
     }
 }
 impl Credentials {
+    pub(crate) fn kind(&self) -> &CredentialsKind {
+        &self.0
+    }
+
+    pub(crate) fn into_kind(self) -> CredentialsKind {
+        self.0
+    }
+
     /// Create a set of HTTP Basic Authentication credentials.
-    #[allow(dead_code)]
-    pub fn basic(username: Option<String>, password: Option<String>) -> Self {
-        Self::Basic {
-            username: Username::new(username),
-            password: password.map(Password),
-        }
+    pub fn basic(
+        username: Option<String>,
+        password: Option<String>,
+    ) -> Result<Self, InvalidCredentialsError> {
+        Self::from_basic_parts(Username::new(username), password.map(Password))
+    }
+
+    pub(crate) fn from_basic_parts(
+        username: Username,
+        password: Option<Password>,
+    ) -> Result<Self, InvalidCredentialsError> {
+        let credentials = Self(CredentialsKind::Basic { username, password });
+        credentials.validate()?;
+        Ok(credentials)
     }
 
     /// Create a set of Bearer Authentication credentials.
-    #[allow(dead_code)]
     pub fn bearer(token: Vec<u8>) -> Self {
-        Self::Bearer {
+        Self(CredentialsKind::Bearer {
             token: Token::new(token),
-        }
+        })
     }
 
     pub fn username(&self) -> Option<&str> {
-        match self {
-            Self::Basic { username, .. } => username.as_deref(),
-            Self::Bearer { .. } => None,
+        match &self.0 {
+            CredentialsKind::Basic { username, .. } => username.as_deref(),
+            CredentialsKind::Bearer { .. } => None,
         }
     }
 
     fn to_username(&self) -> Username {
-        match self {
-            Self::Basic { username, .. } => username.clone(),
-            Self::Bearer { .. } => Username::none(),
+        match &self.0 {
+            CredentialsKind::Basic { username, .. } => username.clone(),
+            CredentialsKind::Bearer { .. } => Username::none(),
         }
     }
 
     fn as_username(&self) -> Cow<'_, Username> {
-        match self {
-            Self::Basic { username, .. } => Cow::Borrowed(username),
-            Self::Bearer { .. } => Cow::Owned(Username::none()),
+        match &self.0 {
+            CredentialsKind::Basic { username, .. } => Cow::Borrowed(username),
+            CredentialsKind::Bearer { .. } => Cow::Owned(Username::none()),
         }
     }
 
     pub fn password(&self) -> Option<&str> {
-        match self {
-            Self::Basic { password, .. } => password.as_ref().map(Password::as_str),
-            Self::Bearer { .. } => None,
+        match &self.0 {
+            CredentialsKind::Basic { password, .. } => password.as_ref().map(Password::as_str),
+            CredentialsKind::Bearer { .. } => None,
         }
     }
 
+    /// Return whether these are Bearer credentials.
+    pub fn is_bearer(&self) -> bool {
+        matches!(&self.0, CredentialsKind::Bearer { .. })
+    }
+
     fn is_authenticated(&self) -> bool {
-        match self {
-            Self::Basic {
+        match &self.0 {
+            CredentialsKind::Basic {
                 username: _,
                 password,
             } => password.is_some(),
-            Self::Bearer { token } => !token.is_empty(),
+            CredentialsKind::Bearer { token } => !token.is_empty(),
         }
     }
 
     fn is_empty(&self) -> bool {
-        match self {
-            Self::Basic { username, password } => username.is_none() && password.is_none(),
-            Self::Bearer { token } => token.is_empty(),
+        match &self.0 {
+            CredentialsKind::Basic { username, password } => {
+                username.is_none() && password.is_none()
+            }
+            CredentialsKind::Bearer { token } => token.is_empty(),
         }
     }
 
@@ -230,22 +263,21 @@ impl Credentials {
         netrc: &Netrc,
         url: &DisplaySafeUrl,
         username: Option<&str>,
-    ) -> Option<Self> {
-        let host = url.host_str()?;
-        let entry = netrc
-            .hosts
-            .get(host)
-            .or_else(|| netrc.hosts.get("default"))?;
+    ) -> Result<Option<Self>, InvalidCredentialsError> {
+        let Some(host) = url.host_str() else {
+            return Ok(None);
+        };
+        let entry = netrc.hosts.get(host).or_else(|| netrc.hosts.get("default"));
+        let Some(entry) = entry else {
+            return Ok(None);
+        };
 
         // Ensure the username matches if provided
         if username.is_some_and(|username| username != entry.login) {
-            return None;
+            return Ok(None);
         }
 
-        Some(Self::Basic {
-            username: Username::new(Some(entry.login.clone())),
-            password: Some(Password(entry.password.clone())),
-        })
+        Self::basic(Some(entry.login.clone()), Some(entry.password.clone())).map(Some)
     }
 
     /// Parse [`Credentials`] from a URL, if any.
@@ -273,31 +305,34 @@ impl Credentials {
             .map(|password| {
                 percent_encoding::percent_decode_str(password)
                     .decode_utf8()
-                    .map(|password| Password(password.into_owned()))
+                    .map(Cow::into_owned)
                     .map_err(CredentialsFromUrlError::InvalidPasswordUtf8)
             })
             .transpose()?;
 
-        let credentials = Self::Basic {
-            username: username.into(),
-            password,
-        };
-        credentials.validate()?;
-        Ok(Some(credentials))
+        Self::basic(username, password)
+            .map(Some)
+            .map_err(CredentialsFromUrlError::from)
     }
 
     /// Extract the [`Credentials`] from the environment, given a named source.
     ///
     /// For example, given a name of `"pytorch"`, search for `UV_INDEX_PYTORCH_USERNAME` and
     /// `UV_INDEX_PYTORCH_PASSWORD`.
-    pub fn from_env(name: impl AsRef<str>) -> Option<Self> {
+    pub fn from_env(name: impl AsRef<str>) -> Result<Option<Self>, InvalidCredentialsError> {
         let username = std::env::var(EnvVars::index_username(name.as_ref())).ok();
         let password = std::env::var(EnvVars::index_password(name.as_ref())).ok();
         if username.is_none() && password.is_none() {
-            None
+            Ok(None)
         } else {
-            Some(Self::basic(username, password))
+            Self::basic(username, password).map(Some)
         }
+    }
+
+    /// Return whether environment credentials are configured for the named index.
+    pub fn has_env(name: impl AsRef<str>) -> bool {
+        std::env::var_os(EnvVars::index_username(name.as_ref())).is_some()
+            || std::env::var_os(EnvVars::index_password(name.as_ref())).is_some()
     }
 
     /// Parse [`Credentials`] from an HTTP request, if any.
@@ -315,7 +350,9 @@ impl Credentials {
         let credentials = request
             .headers()
             .get(reqwest::header::AUTHORIZATION)
-            .and_then(Self::from_header_value);
+            .map(Self::from_header_value)
+            .transpose()?
+            .flatten();
         if let Some(credentials) = credentials.as_ref() {
             credentials.validate()?;
         }
@@ -330,7 +367,7 @@ impl Credentials {
     /// Panics if the authentication is not conformant to the HTTP Basic Authentication scheme:
     /// - The contents must be base64 encoded
     /// - There must be a `:` separator
-    fn from_header_value(header: &HeaderValue) -> Option<Self> {
+    fn from_header_value(header: &HeaderValue) -> Result<Option<Self>, InvalidCredentialsError> {
         // Parse a `Basic` authentication header.
         if let Some(mut value) = header.as_bytes().strip_prefix(b"Basic ") {
             let mut decoder = DecoderReader::new(&mut value, &BASE64_STANDARD);
@@ -351,24 +388,19 @@ impl Credentials {
             } else {
                 Some(password.to_string())
             };
-            return Some(Self::Basic {
-                username: Username::new(username),
-                password: password.map(Password),
-            });
+            return Self::basic(username, password).map(Some);
         }
 
         // Parse a `Bearer` authentication header.
         if let Some(token) = header.as_bytes().strip_prefix(b"Bearer ") {
-            return Some(Self::Bearer {
-                token: Token::new(token.to_vec()),
-            });
+            return Ok(Some(Self::bearer(token.to_vec())));
         }
 
-        None
+        Ok(None)
     }
 
     pub(crate) fn validate(&self) -> Result<(), InvalidCredentialsError> {
-        let Self::Basic { username, password } = self else {
+        let CredentialsKind::Basic { username, password } = &self.0 else {
             return Ok(());
         };
         if username
@@ -398,8 +430,8 @@ impl Credentials {
     /// Create an HTTP Authentication header for the credentials.
     pub fn to_header_value(&self) -> Result<HeaderValue, InvalidCredentialsError> {
         self.validate()?;
-        let header_bytes = match self {
-            Self::Basic { .. } => {
+        let header_bytes = match &self.0 {
+            CredentialsKind::Basic { .. } => {
                 // See: <https://github.com/seanmonstar/reqwest/blob/2c11ef000b151c2eebeed2c18a7b81042220c6b0/src/util.rs#L3>
                 let mut buf = b"Basic ".to_vec();
                 {
@@ -413,7 +445,7 @@ impl Credentials {
                 }
                 buf
             }
-            Self::Bearer { token } => [b"Bearer ", token.as_slice()].concat(),
+            CredentialsKind::Bearer { token } => [b"Bearer ", token.as_slice()].concat(),
         };
         let mut header = HeaderValue::from_bytes(&header_bytes)?;
         header.set_sensitive(true);
@@ -766,7 +798,6 @@ mod tests {
                 Some(format!("user{control}name")),
                 Some("password".to_string()),
             )
-            .to_header_value()
             .unwrap_err()
             .to_string()
         });
@@ -783,7 +814,6 @@ mod tests {
     fn basic_auth_password_with_control_character() {
         let errors = ['\0', '\u{1f}', '\u{7f}'].map(|control| {
             Credentials::basic(Some("user".to_string()), Some(format!("pass{control}word")))
-                .to_header_value()
                 .unwrap_err()
                 .to_string()
         });
@@ -799,7 +829,7 @@ mod tests {
     #[test]
     fn basic_auth_password_with_colon() {
         let credentials =
-            Credentials::basic(Some("user".to_string()), Some("pass:word".to_string()));
+            Credentials::basic(Some("user".to_string()), Some("pass:word".to_string())).unwrap();
         let mut header = credentials.to_header_value().unwrap();
         header.set_sensitive(false);
         assert_debug_snapshot!(header, @r#""Basic dXNlcjpwYXNzOndvcmQ=""#);
@@ -861,7 +891,10 @@ mod tests {
         header.set_sensitive(false);
 
         assert_debug_snapshot!(header, @r#""Basic dXNlcjpwYXNzd29yZA==""#);
-        assert_eq!(Credentials::from_header_value(&header), Some(credentials));
+        assert_eq!(
+            Credentials::from_header_value(&header).unwrap(),
+            Some(credentials)
+        );
     }
 
     #[test]
@@ -883,7 +916,10 @@ mod tests {
         header.set_sensitive(false);
 
         assert_debug_snapshot!(header, @r#""Basic dXNlckBkb21haW46cGFzc3dvcmQ=""#);
-        assert_eq!(Credentials::from_header_value(&header), Some(credentials));
+        assert_eq!(
+            Credentials::from_header_value(&header).unwrap(),
+            Some(credentials)
+        );
     }
 
     #[test]
@@ -905,7 +941,10 @@ mod tests {
         header.set_sensitive(false);
 
         assert_debug_snapshot!(header, @r#""Basic dXNlcjpwYXNzd29yZD09""#);
-        assert_eq!(Credentials::from_header_value(&header), Some(credentials));
+        assert_eq!(
+            Credentials::from_header_value(&header).unwrap(),
+            Some(credentials)
+        );
     }
 
     #[tokio::test]
@@ -969,7 +1008,7 @@ mod tests {
     #[test]
     fn test_password_redaction() {
         let credentials =
-            Credentials::basic(Some(String::from("user")), Some(String::from("password")));
+            Credentials::basic(Some(String::from("user")), Some(String::from("password"))).unwrap();
         insta::assert_compact_debug_snapshot!(credentials, @r#"Basic { username: Username(Some("user")), password: Some(****) }"#);
     }
 

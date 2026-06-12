@@ -12,9 +12,7 @@ use fs_err::tokio::File;
 use futures::TryStreamExt;
 use glob::{GlobError, PatternError, glob};
 use itertools::Itertools;
-use reqwest::header::{
-    ACCEPT, AUTHORIZATION, CONTENT_TYPE, InvalidHeaderValue, LOCATION, ToStrError,
-};
+use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, LOCATION, ToStrError};
 use reqwest::multipart::{Form, Part};
 use reqwest::{Body, Response, StatusCode};
 use reqwest_retry::RetryError;
@@ -181,7 +179,10 @@ pub enum PublishingCredentials {
     /// Credentials supplied by the user or resolved by the authentication middleware.
     Supplied(Credentials),
     /// A short-lived token obtained through trusted publishing.
-    TrustedPublishing(TrustedPublishingToken),
+    TrustedPublishing {
+        token: TrustedPublishingToken,
+        credentials: Credentials,
+    },
 }
 
 impl PublishingCredentials {
@@ -189,10 +190,7 @@ impl PublishingCredentials {
     pub fn as_credentials(&self) -> Cow<'_, Credentials> {
         match self {
             Self::Supplied(credentials) => Cow::Borrowed(credentials),
-            Self::TrustedPublishing(token) => Cow::Owned(Credentials::basic(
-                Some("__token__".to_string()),
-                Some(token.to_string()),
-            )),
+            Self::TrustedPublishing { credentials, .. } => Cow::Borrowed(credentials),
         }
     }
 }
@@ -939,7 +937,7 @@ impl<'a> PublishSession<'a> {
         debug!("Finalizing publishing session: {outcome}");
         match self.credentials {
             PublishingCredentials::Supplied(_) => Ok(()),
-            PublishingCredentials::TrustedPublishing(token) => {
+            PublishingCredentials::TrustedPublishing { token, .. } => {
                 PyPIPublishingService::new(&self.publish_url, self.oidc_client)
                     .burn_token(&token)
                     .await
@@ -1334,17 +1332,12 @@ impl PublishSession<'_> {
                 "application/json;q=0.9, text/plain;q=0.8, text/html;q=0.7",
             );
 
-        match credentials.as_ref() {
-            Credentials::Basic { password, .. } => {
-                if password.is_some() {
-                    debug!("Using HTTP Basic authentication");
-                    request = request.header(AUTHORIZATION, credentials.to_header_value()?);
-                }
-            }
-            Credentials::Bearer { .. } => {
-                debug!("Using Bearer token authentication");
-                request = request.header(AUTHORIZATION, credentials.to_header_value()?);
-            }
+        if credentials.password().is_some() {
+            debug!("Using HTTP Basic authentication");
+            request = request.header(AUTHORIZATION, credentials.to_header_value()?);
+        } else if credentials.is_bearer() {
+            debug!("Using Bearer token authentication");
+            request = request.header(AUTHORIZATION, credentials.to_header_value()?);
         }
 
         Ok((request, idx))
@@ -1545,10 +1538,10 @@ mod tests {
     fn test_session(registry: DisplaySafeUrl, client: &BaseClient) -> PublishSession<'_> {
         PublishSession::new(
             registry,
-            PublishingCredentials::Supplied(Credentials::basic(
-                Some("ferris".to_string()),
-                Some("F3RR!S".to_string()),
-            )),
+            PublishingCredentials::Supplied(
+                Credentials::basic(Some("ferris".to_string()), Some("F3RR!S".to_string()))
+                    .expect("Valid credentials"),
+            ),
             client,
             client,
             client.retry_policy(),
