@@ -461,17 +461,10 @@ mod tests {
         ");
     }
 
-    /// Verify that `update_sysconfig_at` reads from `search_root` but replaces
-    /// `/install` prefixes with `install_root`. This is the atomic-publication
-    /// guarantee: the sysconfig file is patched at the staging location with the
-    /// final destination path, so the installation is complete before the rename.
     #[test]
     fn update_sysconfig_at_separate_roots() -> Result<(), Error> {
         let staging = tempfile::tempdir()?;
-        let final_path = tempfile::tempdir()?;
 
-        // Build a fake staging Python installation with a
-        // `_sysconfigdata_` file containing `/install` paths.
         let lib_dir = staging.path().join("lib").join("python3.12");
         fs_err::create_dir_all(&lib_dir)?;
 
@@ -489,36 +482,19 @@ mod tests {
             "#},
         )?;
 
-        let staging_path = staging.path().to_path_buf();
-        let final_root = final_path.path().to_path_buf();
-
-        // Act: patch sysconfig at staging, using the final path for replacements.
-        update_sysconfig_at(&staging_path, &final_root, 3, 12, "")?;
-
-        // Assert: the file was modified in-place at the staging location.
+        update_sysconfig_at(staging.path(), Path::new("/final/path"), 3, 12, "")?;
         let contents = fs_err::read_to_string(&sysconfigdata_path)?;
 
-        // The staging path must NOT appear in the patched data — sysconfig
-        // must reference the final destination, not the temp directory.
-        let staging_str = staging_path.to_str().unwrap();
-        assert!(
-            !contents.contains(staging_str),
-            "sysconfig must not contain staging path: {staging_str}"
-        );
-
-        // The final path must appear as the replacement for /install.
-        let final_str = final_root.to_str().unwrap();
-        assert!(
-            contents.contains(final_str),
-            "sysconfig must contain final path: {final_str}"
-        );
-
-        // Verify the /install prefix was actually replaced (main purpose of
-        // sysconfig patching).
-        assert!(
-            !contents.contains(r#""/install"#),
-            "sysconfig must not contain /install literals after patching"
-        );
+        insta::assert_snapshot!(contents, @r#"
+        # system configuration generated and used by the sysconfig module
+        build_time_vars = {
+            "BINDIR": "/final/path/bin",
+            "BINLIBDEST": "/final/path/lib/python3.12",
+            "INCLUDEPY": "/final/path/include/python3.12",
+            "LIBDIR": "/final/path/lib",
+            "PYTHON_BUILD_STANDALONE": 1
+        }
+        "#);
 
         Ok(())
     }
