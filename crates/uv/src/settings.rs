@@ -69,7 +69,8 @@ use uv_workspace::pyproject_mut::AddBoundsKind;
 
 use crate::commands::pip::operations::Modifications;
 use crate::commands::{
-    InitKind, InitProjectKind, PythonReinstall, PythonUpgrade, PythonUpgradeSource, ToolRunCommand,
+    InitKind, InitProjectKind, PythonInstallForce, PythonReinstall, PythonUpgrade,
+    PythonUpgradeSource, ToolRunCommand,
 };
 
 /// The default publish URL.
@@ -1525,7 +1526,7 @@ pub(crate) struct PythonInstallSettings {
     pub(crate) install_dir: Option<PathBuf>,
     pub(crate) targets: Vec<String>,
     pub(crate) reinstall: PythonReinstall,
-    pub(crate) force: bool,
+    pub(crate) force: PythonInstallForce,
     pub(crate) upgrade: PythonUpgrade,
     pub(crate) bin: Option<bool>,
     pub(crate) registry: Option<bool>,
@@ -1579,7 +1580,7 @@ impl PythonInstallSettings {
             install_dir,
             targets,
             reinstall: reinstall.into(),
-            force,
+            force: force.into(),
             upgrade: if upgrade {
                 PythonUpgrade::Enabled(PythonUpgradeSource::Install)
             } else {
@@ -1616,7 +1617,7 @@ impl PythonInstallSettings {
 pub(crate) struct PythonUpgradeSettings {
     pub(crate) install_dir: Option<PathBuf>,
     pub(crate) targets: Vec<String>,
-    pub(crate) force: bool,
+    pub(crate) force: PythonInstallForce,
     pub(crate) registry: Option<bool>,
     pub(crate) python_install_mirror: Option<String>,
     pub(crate) pypy_install_mirror: Option<String>,
@@ -1673,7 +1674,7 @@ impl PythonUpgradeSettings {
         Ok(Self {
             install_dir,
             targets,
-            force,
+            force: force.into(),
             registry,
             python_install_mirror,
             pypy_install_mirror,
