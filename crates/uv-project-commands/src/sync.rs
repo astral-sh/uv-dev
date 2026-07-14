@@ -205,7 +205,7 @@ pub async fn sync(
             identify_installation_target(&target, workspace.lock(), all_packages, &package);
         install_target.validate_extras(&extras)?;
         install_target.validate_groups(&groups)?;
-        detect_conflicts(&install_target, &extras, &groups)?;
+        detect_conflicts(&install_target, &extras, &groups, None)?;
     }
 
     // Discover or create the virtual environment.

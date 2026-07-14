@@ -1070,7 +1070,7 @@ fn extra_unconditional() -> Result<()> {
     uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Found conflicting extras `proxy1[extra1]` and `proxy1[extra2]` enabled simultaneously
+    error: Extras `extra1` and `extra2` are incompatible with the declared conflicts: {`proxy1[extra1]`, `proxy1[extra2]`}
     ");
 
     root_pyproject_toml.write_str(
@@ -1312,7 +1312,7 @@ fn extra_unconditional_in_optional() -> Result<()> {
         @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Found conflicting extras `proxy1[nested-x1]` and `proxy1[nested-x2]` enabled simultaneously
+    error: Extras `nested-x1` and `nested-x2` are incompatible with the declared conflicts: {`proxy1[nested-x1]`, `proxy1[nested-x2]`}
     ");
 
     Ok(())
@@ -1410,7 +1410,7 @@ fn extra_unconditional_non_local_conflict() -> Result<()> {
     uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Found conflicting extras `c[x1]` and `c[x2]` enabled simultaneously
+    error: Extras `x1` and `x2` are incompatible with the declared conflicts: {`c[x1]`, `c[x2]`}
     ");
 
     Ok(())
@@ -1825,7 +1825,7 @@ fn extra_depends_on_conflicting_extra_transitive() -> Result<()> {
     uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--extra").arg("foo"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Found conflicting extras `example[bar]` and `example[foo]` enabled simultaneously
+    error: Extras `bar` and `foo` are incompatible with the declared conflicts: {`example[bar]`, `example[foo]`}
     ");
 
     // Install the child package
