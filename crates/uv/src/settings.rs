@@ -654,6 +654,22 @@ fn resolve_lock_check(flag: Flag) -> LockCheck {
     }
 }
 
+/// Check dependency-group conflicts after resolving environment variables.
+fn check_dependency_group_conflicts(
+    dev: Flag,
+    no_dev: Flag,
+    only_dev: bool,
+    has_only_group: bool,
+) -> anyhow::Result<()> {
+    if only_dev {
+        check_conflicts(no_dev, Flag::from_cli("only-dev"))?;
+    }
+    if has_only_group {
+        check_conflicts(dev, Flag::from_cli("only-group"))?;
+    }
+    Ok(())
+}
+
 /// The resolved settings to use for a `run` invocation.
 #[derive(Debug, Clone)]
 pub(crate) struct RunSettings {
@@ -765,6 +781,7 @@ impl RunSettings {
             Some(environment.dev),
             Some(environment.no_dev),
         );
+        check_dependency_group_conflicts(dev, no_dev, only_dev, !only_group.is_empty())?;
 
         let (editable, no_editable) = resolve_flag_pair(
             editable,
@@ -1857,6 +1874,7 @@ impl SyncSettings {
             Some(environment.dev),
             Some(environment.no_dev),
         );
+        check_dependency_group_conflicts(dev, no_dev, only_dev, !only_group.is_empty())?;
         let (editable, no_editable) = resolve_flag_pair(
             editable,
             no_editable,
@@ -2231,7 +2249,13 @@ impl AddSettings {
         } = args;
 
         // Resolve flags from CLI and environment variables.
-        let dev = dev || environment.dev.value == Some(true);
+        let dev = resolve_flag(dev, "dev", environment.dev);
+        if optional.is_some() {
+            check_conflicts(dev, Flag::from_cli("optional"))?;
+        }
+        if group.is_some() {
+            check_conflicts(dev, Flag::from_cli("group"))?;
+        }
         let (editable, no_editable) = resolve_flag_pair(
             editable,
             no_editable,
@@ -2273,7 +2297,7 @@ impl AddSettings {
             DependencyType::Optional(extra)
         } else if let Some(group) = group {
             DependencyType::Group(group)
-        } else if dev {
+        } else if dev.is_enabled() {
             DependencyType::Dev
         } else {
             DependencyType::Production
@@ -2478,13 +2502,19 @@ impl RemoveSettings {
         } = args;
 
         // Resolve flags from CLI and environment variables.
-        let dev = dev || environment.dev.value == Some(true);
+        let dev = resolve_flag(dev, "dev", environment.dev);
+        if optional.is_some() {
+            check_conflicts(dev, Flag::from_cli("optional"))?;
+        }
+        if group.is_some() {
+            check_conflicts(dev, Flag::from_cli("group"))?;
+        }
 
         let dependency_type = if let Some(extra) = optional {
             DependencyType::Optional(extra)
         } else if let Some(group) = group {
             DependencyType::Group(group)
-        } else if dev {
+        } else if dev.is_enabled() {
             DependencyType::Dev
         } else {
             DependencyType::Production
@@ -2704,6 +2734,7 @@ impl TreeSettings {
             Some(environment.dev),
             Some(environment.no_dev),
         );
+        check_dependency_group_conflicts(dev, no_dev, only_dev, !only_group.is_empty())?;
 
         Ok(Self {
             groups: DependencyGroups::from_args(
@@ -2845,6 +2876,7 @@ impl ExportSettings {
             Some(environment.dev),
             Some(environment.no_dev),
         );
+        check_dependency_group_conflicts(dev, no_dev, only_dev, !only_group.is_empty())?;
         let (editable, no_editable) = resolve_flag_pair(
             editable,
             no_editable,
@@ -3045,6 +3077,7 @@ impl CheckSettings {
             Some(environment.no_dev),
         );
         let malware_settings = MalwareCheckSettings::resolve(filesystem.as_ref(), &environment);
+        check_dependency_group_conflicts(dev, no_dev, only_dev, !only_group.is_empty())?;
         let settings =
             ResolverInstallerSettings::resolve(installer, build, filesystem, &environment)?;
         Ok(Self {
@@ -3146,7 +3179,10 @@ impl AuditSettings {
             .and_then(|fs| fs.audit.clone())
             .unwrap_or_default();
 
-        let no_dev = no_dev || environment.no_dev.value == Some(true);
+        let no_dev = resolve_flag(no_dev, "no-dev", environment.no_dev);
+        if only_dev {
+            check_conflicts(no_dev, Flag::from_cli("only-dev"))?;
+        }
 
         // Resolve flags from CLI and environment variables.
         let locked = resolve_flag(locked, "locked", environment.locked);
@@ -3166,7 +3202,7 @@ impl AuditSettings {
                 true,
             ),
             groups: DependencyGroups::from_args(
-                DevMode::from_args(only_group.is_empty() && !only_dev, no_dev, only_dev),
+                DevMode::from_args(only_group.is_empty() && !only_dev, no_dev.into(), only_dev),
                 vec![],
                 if no_group.is_empty() {
                     environment.no_group.clone().unwrap_or_default()
