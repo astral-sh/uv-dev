@@ -71,8 +71,8 @@ use uv_workspace::pyproject_mut::AddBoundsKind;
 
 use crate::commands::pip::operations::Modifications;
 use crate::commands::{
-    InitDescription, InitKind, InitMode, InitProjectKind, InitPythonPin, InitReadme, PythonUpgrade,
-    PythonUpgradeSource, ToolRunCommand,
+    InitDescription, InitKind, InitMode, InitProjectKind, InitPythonPin, InitReadme,
+    InitWorkspaceDiscovery, PythonUpgrade, PythonUpgradeSource, ToolRunCommand,
 };
 
 /// The default publish URL.
@@ -470,7 +470,7 @@ pub(crate) struct InitSettings {
     pub(crate) readme: InitReadme,
     pub(crate) author_from: Option<AuthorFrom>,
     pub(crate) pin_python: InitPythonPin,
-    pub(crate) no_workspace: bool,
+    pub(crate) workspace_discovery: InitWorkspaceDiscovery,
     pub(crate) python: Option<String>,
     pub(crate) install_mirrors: PythonInstallMirrors,
 }
@@ -583,7 +583,7 @@ impl InitSettings {
             pin_python: InitPythonPin::from_args(
                 flag(pin_python, no_pin_python, "pin-python")?.unwrap_or(!bare),
             ),
-            no_workspace,
+            workspace_discovery: InitWorkspaceDiscovery::from_args(no_workspace),
             python: python.and_then(Maybe::into_option),
             install_mirrors: environment
                 .install_mirrors

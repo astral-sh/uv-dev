@@ -56,7 +56,7 @@ pub(crate) async fn init(
     pin_python: InitPythonPin,
     python: Option<String>,
     install_mirrors: PythonInstallMirrors,
-    no_workspace: bool,
+    workspace_discovery: InitWorkspaceDiscovery,
     client_builder: &BaseClientBuilder<'_>,
     python_preference: PythonPreference,
     python_downloads: PythonDownloads,
@@ -80,7 +80,7 @@ pub(crate) async fn init(
                 python_downloads,
                 cache,
                 printer,
-                no_workspace,
+                workspace_discovery,
                 readme,
                 author_from,
                 pin_python,
@@ -158,7 +158,7 @@ pub(crate) async fn init(
                 pin_python,
                 python,
                 install_mirrors,
-                no_workspace,
+                workspace_discovery,
                 client_builder,
                 python_preference,
                 python_downloads,
@@ -209,13 +209,13 @@ async fn init_script(
     python_downloads: PythonDownloads,
     cache: &Cache,
     printer: Printer,
-    no_workspace: bool,
+    workspace_discovery: InitWorkspaceDiscovery,
     readme: InitReadme,
     author_from: Option<AuthorFrom>,
     pin_python: InitPythonPin,
     config_discovery: ConfigDiscovery,
 ) -> Result<()> {
-    if no_workspace {
+    if matches!(workspace_discovery, InitWorkspaceDiscovery::Ignore) {
         warn_user_once!("`--no-workspace` is a no-op for Python scripts, which are standalone");
     }
     if matches!(readme, InitReadme::Omit) {
@@ -294,7 +294,7 @@ async fn init_project(
     pin_python: InitPythonPin,
     python: Option<String>,
     install_mirrors: PythonInstallMirrors,
-    no_workspace: bool,
+    workspace_discovery: InitWorkspaceDiscovery,
     client_builder: &BaseClientBuilder<'_>,
     python_preference: PythonPreference,
     python_downloads: PythonDownloads,
@@ -330,7 +330,7 @@ async fn init_project(
         {
             Ok(workspace) => {
                 // Ignore the current workspace if `--no-workspace` was provided.
-                if no_workspace {
+                if matches!(workspace_discovery, InitWorkspaceDiscovery::Ignore) {
                     debug!("Ignoring discovered workspace due to `--no-workspace`");
                     None
                 } else {
@@ -342,13 +342,13 @@ async fn init_project(
                     err.as_ref(),
                     WorkspaceErrorKind::MissingPyprojectToml | WorkspaceErrorKind::NonWorkspace(_)
                 ) {
-                    if no_workspace {
+                    if matches!(workspace_discovery, InitWorkspaceDiscovery::Ignore) {
                         warn!("`--no-workspace` was provided, but no workspace was found");
                     }
                     None
                 } else {
                     // If the user runs with `--no-workspace`, ignore the error.
-                    if no_workspace {
+                    if matches!(workspace_discovery, InitWorkspaceDiscovery::Ignore) {
                         warn!("Ignoring workspace discovery error due to `--no-workspace`: {err}");
                         None
                     } else {
@@ -802,6 +802,26 @@ impl InitPythonPin {
             Self::Pin
         } else {
             Self::DoNotPin
+        }
+    }
+}
+
+/// Whether to discover a parent workspace while initializing a project.
+#[derive(Debug, Copy, Clone)]
+pub(crate) enum InitWorkspaceDiscovery {
+    /// Discover a parent workspace.
+    Discover,
+    /// Ignore any parent workspace.
+    Ignore,
+}
+
+impl InitWorkspaceDiscovery {
+    /// Determine the [`InitWorkspaceDiscovery`] setting based on the command-line arguments.
+    pub(crate) fn from_args(no_workspace: bool) -> Self {
+        if no_workspace {
+            Self::Ignore
+        } else {
+            Self::Discover
         }
     }
 }
