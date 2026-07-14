@@ -668,7 +668,7 @@ fn parse_entry(
     }
 
     let start = s.cursor();
-    Ok(Some(if s.eat_if("-r") || s.eat_if("--requirement") {
+    Ok(Some(if s.eat_if("-r") || eat_option(s, "--requirement") {
         let filename = parse_value("--requirement", content, s, |c: char| !is_terminal(c))?;
         let filename = unquote(filename)
             .ok()
@@ -680,7 +680,7 @@ fn parse_entry(
             start,
             end,
         }
-    } else if s.eat_if("-c") || s.eat_if("--constraint") {
+    } else if s.eat_if("-c") || eat_option(s, "--constraint") {
         let filename = parse_value("--constraint", content, s, |c: char| !is_terminal(c))?;
         let filename = unquote(filename)
             .ok()
@@ -692,7 +692,7 @@ fn parse_entry(
             start,
             end,
         }
-    } else if s.eat_if("-e") || s.eat_if("--editable") {
+    } else if s.eat_if("-e") || eat_option(s, "--editable") {
         if s.eat_if('=') {
             // Explicit equals sign.
         } else if s.eat_if(char::is_whitespace) {
@@ -727,7 +727,7 @@ fn parse_entry(
             requirement,
             hashes,
         })
-    } else if s.eat_if("-i") || s.eat_if("--index-url") {
+    } else if s.eat_if("-i") || eat_option(s, "--index-url") {
         let given = parse_value("--index-url", content, s, |c: char| !is_terminal(c))?;
         let given = unquote(given)
             .ok()
@@ -758,7 +758,7 @@ fn parse_entry(
             })?
         };
         RequirementsTxtStatement::IndexUrl(url.with_given(given))
-    } else if s.eat_if("--extra-index-url") {
+    } else if eat_option(s, "--extra-index-url") {
         let given = parse_value("--extra-index-url", content, s, |c: char| !is_terminal(c))?;
         let given = unquote(given)
             .ok()
@@ -791,9 +791,9 @@ fn parse_entry(
         RequirementsTxtStatement::ExtraIndexUrl(url.with_given(given))
     } else if eat_option(s, "--no-index") {
         RequirementsTxtStatement::NoIndex
-    } else if s.eat_if("--require-hashes") {
+    } else if eat_option(s, "--require-hashes") {
         RequirementsTxtStatement::RequireHashes
-    } else if s.eat_if("--find-links") || s.eat_if("-f") {
+    } else if eat_option(s, "--find-links") || s.eat_if("-f") {
         let given = parse_value("--find-links", content, s, |c: char| !is_terminal(c))?;
         let given = unquote(given)
             .ok()
@@ -852,7 +852,7 @@ fn parse_entry(
             }
         };
         RequirementsTxtStatement::FindLinks(url.with_given(given))
-    } else if s.eat_if("--no-binary") {
+    } else if eat_option(s, "--no-binary") {
         let given = parse_value("--no-binary", content, s, |c: char| !is_terminal(c))?;
         let given = unquote(given)
             .ok()
@@ -868,7 +868,7 @@ fn parse_entry(
             }
         })?;
         RequirementsTxtStatement::NoBinary(NoBinary::from_pip_arg(specifier))
-    } else if s.eat_if("--only-binary") {
+    } else if eat_option(s, "--only-binary") {
         let given = parse_value("--only-binary", content, s, |c: char| !is_terminal(c))?;
         let given = unquote(given)
             .ok()
@@ -2856,6 +2856,40 @@ mod test {
             filters => filters
         }, {
             insta::assert_snapshot!(errors, @"Unexpected '-', expected '-c', '-e', '-r' or the start of a requirement: <REQUIREMENTS_TXT>:2:3");
+        });
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn unknown_option_prefix() -> Result<()> {
+        let temp_dir = assert_fs::TempDir::new()?;
+        let requirements_txt = temp_dir.child("requirements.txt");
+        let mut errors = Vec::new();
+
+        for option in [
+            "--prefixed-option=value",
+            "--no-indexed",
+            "--require-hashes-extra",
+        ] {
+            requirements_txt.write_str(option)?;
+            let error = RequirementsTxt::parse(requirements_txt.path(), temp_dir.path())
+                .await
+                .unwrap_err();
+            errors.push(anyhow::Error::new(error).chain().join("\n"));
+        }
+        let errors = errors.join("\n");
+
+        let requirement_txt = regex::escape(&requirements_txt.path().user_display().to_string());
+        let filters = vec![(requirement_txt.as_str(), "<REQUIREMENTS_TXT>")];
+        insta::with_settings!({
+            filters => filters
+        }, {
+            insta::assert_snapshot!(errors, @"
+            Unexpected '-', expected '-c', '-e', '-r' or the start of a requirement: <REQUIREMENTS_TXT>:1:1
+            Unexpected '-', expected '-c', '-e', '-r' or the start of a requirement: <REQUIREMENTS_TXT>:1:1
+            Unexpected '-', expected '-c', '-e', '-r' or the start of a requirement: <REQUIREMENTS_TXT>:1:1
+            ");
         });
 
         Ok(())
