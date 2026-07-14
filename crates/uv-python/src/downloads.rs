@@ -245,7 +245,7 @@ impl PlatformRequest {
     /// Check if this platform request is satisfied by a platform.
     pub(crate) fn matches(&self, platform: &Platform) -> bool {
         if let Some(os) = self.os
-            && !platform.os.supports(os)
+            && platform.os != os
         {
             return false;
         }
@@ -1956,6 +1956,18 @@ mod tests {
         assert_eq!(request.os, None);
         assert_eq!(request.arch, None);
         assert_eq!(request.libc, None);
+    }
+
+    #[test]
+    fn emscripten_request_does_not_match_native_python() {
+        let request = PythonDownloadRequest::from_str("cpython-3.14-emscripten").unwrap();
+        let native = PythonInstallationKey::from_str("cpython-3.14.0-macos-aarch64-none").unwrap();
+        let emscripten =
+            PythonInstallationKey::from_str("cpython-3.14.0-emscripten-wasm32-musl").unwrap();
+
+        assert!(native.platform().supports(emscripten.platform()));
+        assert!(!request.satisfied_by_key(&native));
+        assert!(request.satisfied_by_key(&emscripten));
     }
 
     /// Parse a request with the OS and architecture specified.
