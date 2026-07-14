@@ -84,6 +84,26 @@ impl InitReadme {
     }
 }
 
+/// Whether to pin the selected Python version in a newly initialized project.
+#[derive(Debug, Copy, Clone)]
+pub enum InitPythonPin {
+    /// Pin the selected Python version.
+    Pin,
+    /// Do not pin the selected Python version.
+    DoNotPin,
+}
+
+impl InitPythonPin {
+    /// Determine the [`InitPythonPin`] setting based on the command-line arguments.
+    pub fn from_args(pin_python: bool) -> Self {
+        if pin_python {
+            Self::Pin
+        } else {
+            Self::DoNotPin
+        }
+    }
+}
+
 /// The kind of Python project to initialize (either an application or a library).
 #[derive(Debug, Copy, Clone, Default)]
 pub enum InitProjectKind {
