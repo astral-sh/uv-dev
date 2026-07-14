@@ -4060,10 +4060,9 @@ pub(crate) struct BuildSettings {
     pub(crate) package: BuildPackageSelection,
     pub(crate) out_dir: Option<PathBuf>,
     pub(crate) output: BuildOutputSelection,
-    pub(crate) list: bool,
+    pub(crate) mode: BuildMode,
     pub(crate) build_logs: bool,
     pub(crate) gitignore: bool,
-    pub(crate) force_pep517: bool,
     pub(crate) clear: bool,
     pub(crate) build_constraints: Vec<PathBuf>,
     pub(crate) build_constraints_from_workspace: Vec<Requirement>,
@@ -4108,6 +4107,25 @@ impl BuildOutputSelection {
             (true, false) => Self::Sdist,
             (false, true) => Self::Wheel,
             (true, true) => Self::SdistAndWheel,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum BuildMode {
+    Build,
+    List,
+    Pep517,
+}
+
+impl BuildMode {
+    fn from_args(list: bool, force_pep517: bool) -> Self {
+        if list {
+            Self::List
+        } else if force_pep517 {
+            Self::Pep517
+        } else {
+            Self::Build
         }
     }
 }
@@ -4166,9 +4184,8 @@ impl BuildSettings {
             package: BuildPackageSelection::from_args(package, all_packages),
             out_dir,
             output: BuildOutputSelection::from_args(sdist, wheel),
-            list,
+            mode: BuildMode::from_args(list, force_pep517),
             build_logs: flag(build_logs, no_build_logs, "build-logs")?.unwrap_or(true),
-            force_pep517,
             clear,
             gitignore: flag(create_gitignore, no_create_gitignore, "create-gitignore")?
                 .unwrap_or(true),
