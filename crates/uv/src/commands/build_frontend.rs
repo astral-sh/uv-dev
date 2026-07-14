@@ -49,7 +49,7 @@ use crate::commands::pip::operations;
 use crate::commands::project::{ProjectError, find_requires_python};
 use crate::commands::reporters::PythonDownloadReporter;
 use crate::printer::Printer;
-use crate::settings::{BuildOutputSelection, ResolverSettings};
+use crate::settings::{BuildOutputSelection, BuildPackageSelection, ResolverSettings};
 
 #[derive(Debug, Error)]
 pub(crate) enum Error {
@@ -141,8 +141,7 @@ impl Hint for Error {
 pub(crate) async fn build_frontend(
     project_dir: &Path,
     src: Option<PathBuf>,
-    package: Option<PackageName>,
-    all_packages: bool,
+    package: BuildPackageSelection,
     output_dir: Option<PathBuf>,
     output: BuildOutputSelection,
     list: bool,
@@ -169,8 +168,7 @@ pub(crate) async fn build_frontend(
     let build_result = build_impl(
         project_dir,
         src.as_deref(),
-        package.as_ref(),
-        all_packages,
+        &package,
         output_dir.as_deref(),
         output,
         list,
@@ -217,8 +215,7 @@ enum BuildResult {
 async fn build_impl(
     project_dir: &Path,
     src: Option<&Path>,
-    package: Option<&PackageName>,
-    all_packages: bool,
+    package: &BuildPackageSelection,
     output_dir: Option<&Path>,
     output: BuildOutputSelection,
     list: bool,
@@ -312,7 +309,7 @@ async fn build_impl(
     );
 
     // If a `--package` or `--all-packages` was provided, adjust the source directory.
-    let packages = if let Some(package) = package {
+    let packages = if let BuildPackageSelection::Package(package) = package {
         if matches!(src, Source::File(_)) {
             return Err(anyhow::anyhow!(
                 "Cannot specify `--package` when building from a file"
@@ -346,7 +343,7 @@ async fn build_impl(
         vec![AnnotatedSource::from(Source::Directory(Cow::Borrowed(
             package.root(),
         )))]
-    } else if all_packages {
+    } else if matches!(package, BuildPackageSelection::AllPackages) {
         if matches!(src, Source::File(_)) {
             return Err(anyhow::anyhow!(
                 "Cannot specify `--all-packages` when building from a file"

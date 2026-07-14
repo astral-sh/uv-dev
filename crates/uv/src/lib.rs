@@ -1314,7 +1314,6 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 &project_dir,
                 args.src,
                 args.package,
-                args.all_packages,
                 args.out_dir,
                 args.output,
                 args.list,

@@ -4057,8 +4057,7 @@ impl PipCheckSettings {
 #[derive(Debug, Clone)]
 pub(crate) struct BuildSettings {
     pub(crate) src: Option<PathBuf>,
-    pub(crate) package: Option<PackageName>,
-    pub(crate) all_packages: bool,
+    pub(crate) package: BuildPackageSelection,
     pub(crate) out_dir: Option<PathBuf>,
     pub(crate) output: BuildOutputSelection,
     pub(crate) list: bool,
@@ -4073,6 +4072,25 @@ pub(crate) struct BuildSettings {
     pub(crate) install_mirrors: PythonInstallMirrors,
     pub(crate) refresh: Refresh,
     pub(crate) settings: ResolverSettings,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum BuildPackageSelection {
+    Source,
+    Package(PackageName),
+    AllPackages,
+}
+
+impl BuildPackageSelection {
+    fn from_args(package: Option<PackageName>, all_packages: bool) -> Self {
+        if let Some(package) = package {
+            Self::Package(package)
+        } else if all_packages {
+            Self::AllPackages
+        } else {
+            Self::Source
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -4145,8 +4163,7 @@ impl BuildSettings {
 
         Ok(Self {
             src,
-            package,
-            all_packages,
+            package: BuildPackageSelection::from_args(package, all_packages),
             out_dir,
             output: BuildOutputSelection::from_args(sdist, wheel),
             list,
