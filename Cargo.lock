@@ -6841,6 +6841,7 @@ version = "0.0.80"
 dependencies = [
  "anyhow",
  "assert_fs",
+ "blake2",
  "configparser",
  "csv",
  "data-encoding",
@@ -6858,6 +6859,7 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "thiserror",
+ "tiny-keccak",
  "tracing",
  "uv-distribution-filename",
  "uv-flags",
