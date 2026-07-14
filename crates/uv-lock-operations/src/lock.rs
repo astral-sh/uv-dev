@@ -1001,6 +1001,7 @@ async fn do_lock(
                 preview.is_enabled(PreviewFeature::LockWithoutMetadata),
             )?
             .with_conflicts(conflicts)
+            .with_index_locations(index_locations, target.install_path())?
             .with_required_environments(lock_required_environments.into_markers())
             .with_member_default_groups(
                 packages

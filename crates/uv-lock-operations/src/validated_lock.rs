@@ -91,6 +91,14 @@ impl ValidatedLock {
             );
             return Ok(Self::Unusable(lock));
         }
+        if !lock.satisfies_index_locations(index_locations, install_path)? {
+            let _ = writeln!(
+                printer.stderr(),
+                "Ignoring existing lockfile due to change in index configuration"
+            );
+            return Ok(Self::Unusable(lock));
+        }
+
         // Stored cutoffs can belong to packages considered during backtracking. New cutoffs for
         // packages outside the lock take effect when another change triggers resolution.
         let exclude_newer = lock.filter_exclude_newer(options.exclude_newer.clone());
