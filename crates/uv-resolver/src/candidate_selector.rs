@@ -149,6 +149,19 @@ impl CandidateSelector {
         // from the version maps, use the installed version.
         if let Some(installed) = installed
             && compatible.as_ref().is_none_or(|compatible| {
+                // A local wheel can be rebuilt without changing its version or filename. Keep it
+                // as an installable candidate so the planner can compare its cache metadata.
+                if upgrade
+                    && installed.version() == compatible.version()
+                    && matches!(
+                        compatible.compatible(),
+                        Some(CompatibleDist::CompatibleWheel { wheel, .. })
+                            if matches!(wheel.index, IndexUrl::Path(_))
+                    )
+                {
+                    return false;
+                }
+
                 let highest = self.use_highest_version(package_name, env);
                 if highest {
                     installed.version() >= compatible.version()
