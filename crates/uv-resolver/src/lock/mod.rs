@@ -34,10 +34,10 @@ use uv_distribution_filename::{
 use uv_distribution_types::{
     BuiltDist, DependencyMetadata, DirectUrlBuiltDist, DirectUrlSourceDist, DirectorySourceDist,
     Dist, FileLocation, FirstParty, GitDirectorySourceDist, GitPathBuiltDist, GitPathSourceDist,
-    Identifier, IndexLocations, IndexMetadata, IndexUrl, Name, PYPI_URL, PathBuiltDist,
-    PathSourceDist, RegistryBuiltDist, RegistryBuiltWheel, RegistrySourceDist, RemoteSource,
-    Requirement, RequirementSource, RequiresPython, ResolvedDist, SimplifiedMarkerTree,
-    StaticMetadata, ToUrlError, UrlString,
+    Identifier, IndexFormat, IndexLocations, IndexMetadata, IndexUrl, Name, PYPI_URL,
+    PathBuiltDist, PathSourceDist, RegistryBuiltDist, RegistryBuiltWheel, RegistrySourceDist,
+    RemoteSource, Requirement, RequirementSource, RequiresPython, ResolvedDist,
+    SerializableStatusCode, SimplifiedMarkerTree, StaticMetadata, ToUrlError, UrlString,
 };
 use uv_fs::{PortablePath, PortablePathBuf, Simplified, normalize_path, try_relative_to_if};
 use uv_git::{RepositoryReference, ResolvedRepositoryReference};
@@ -1117,6 +1117,7 @@ impl Lock {
             prerelease: resolution.options.prerelease.clone(),
             fork_strategy: resolution.options.fork_strategy,
             exclude_newer: resolution.options.exclude_newer.clone(),
+            indexes: Vec::new(),
         };
         // Canonicalize the top-level fork markers to match what is persisted in
         // `uv.lock`. In particular, conflict-only fork markers can serialize to
@@ -1325,6 +1326,16 @@ impl Lock {
         self
     }
 
+    /// Record the ordered index policy that was used to generate this lock.
+    pub fn with_index_locations(
+        mut self,
+        index_locations: &IndexLocations,
+        root: &Path,
+    ) -> Result<Self, LockError> {
+        self.options.indexes = ResolverIndex::from_locations(index_locations, root)?;
+        Ok(self)
+    }
+
     /// Returns `true` if this [`Lock`] includes `provides-extra` metadata.
     pub fn supports_provides_extra(&self) -> bool {
         // `provides-extra` was added in Version 1 Revision 1.
@@ -1428,6 +1439,15 @@ impl Lock {
     /// Returns the exclude newer setting used to generate this lock.
     pub fn exclude_newer(&self) -> &ExcludeNewer {
         &self.options.exclude_newer
+    }
+
+    /// Return whether the ordered index policy matches the one used to generate this lock.
+    pub fn satisfies_index_locations(
+        &self,
+        index_locations: &IndexLocations,
+        root: &Path,
+    ) -> Result<bool, LockError> {
+        Ok(self.options.indexes == ResolverIndex::from_locations(index_locations, root)?)
     }
 
     /// Returns the conflicting groups that were used to generate this lock.
@@ -3476,6 +3496,8 @@ struct ResolverOptions {
     fork_strategy: ForkStrategy,
     /// The [`ExcludeNewer`] setting used to generate this lock.
     exclude_newer: ExcludeNewer,
+    /// The ordered index policy used to generate this lock.
+    indexes: Vec<ResolverIndex>,
 }
 
 /// The serialized resolver options in the lockfile.
@@ -3494,6 +3516,89 @@ struct ResolverOptionsWire {
     /// The [`ExcludeNewer`] setting used to generate this lock.
     #[serde(flatten)]
     exclude_newer: ExcludeNewerWire,
+    /// The ordered index policy used to generate this lock.
+    #[serde(default)]
+    indexes: Vec<ResolverIndexWire>,
+}
+
+/// The policy-relevant settings for an index used during resolution.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ResolverIndex {
+    url: RegistrySource,
+    explicit: bool,
+    default: bool,
+    format: IndexFormat,
+    ignore_error_codes: Option<Vec<SerializableStatusCode>>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+struct ResolverIndexWire {
+    url: RegistrySourceWire,
+    #[serde(default)]
+    explicit: bool,
+    #[serde(default)]
+    default: bool,
+    #[serde(default)]
+    format: IndexFormat,
+    #[serde(default)]
+    ignore_error_codes: Option<Vec<SerializableStatusCode>>,
+}
+
+impl ResolverIndex {
+    fn from_locations(
+        index_locations: &IndexLocations,
+        root: &Path,
+    ) -> Result<Vec<Self>, LockError> {
+        if index_locations.is_none() {
+            return Ok(Vec::new());
+        }
+
+        // The built-in PyPI fallback is implied whenever no other default is configured. Avoid
+        // writing it to every lockfile that defines an additional index.
+        let default_locations = IndexLocations::default();
+        let default_index = default_locations.default_index();
+
+        index_locations
+            .allowed_indexes()
+            .into_iter()
+            .filter(|index| Some(*index) != default_index)
+            .map(|index| {
+                let url = match index.url() {
+                    IndexUrl::Pypi(_) | IndexUrl::Url(_) => {
+                        // Index URLs can contain short-lived or provider-specific query
+                        // credentials (e.g., presigned URLs). Queries and fragments are not
+                        // part of the index policy identity and must not enter the lockfile.
+                        let mut url = index.url().without_credentials().into_owned();
+                        url.set_query(None);
+                        url.set_fragment(None);
+                        RegistrySource::Url(UrlString::from(url))
+                    }
+                    IndexUrl::Path(_) => RegistrySource::from_index_url(index.url(), root)?,
+                };
+
+                Ok(Self {
+                    url,
+                    explicit: index.explicit,
+                    default: index.default,
+                    format: index.format,
+                    ignore_error_codes: index.ignore_error_codes.clone(),
+                })
+            })
+            .collect()
+    }
+}
+
+impl From<ResolverIndexWire> for ResolverIndex {
+    fn from(wire: ResolverIndexWire) -> Self {
+        Self {
+            url: wire.url.into(),
+            explicit: wire.explicit,
+            default: wire.default,
+            format: wire.format,
+            ignore_error_codes: wire.ignore_error_codes,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, serde::Deserialize)]
@@ -3770,6 +3875,7 @@ impl TryFrom<LockWire> for Lock {
             prerelease: options_wire.prerelease.into(),
             fork_strategy: options_wire.fork_strategy,
             exclude_newer: options_wire.exclude_newer.into(),
+            indexes: options_wire.indexes.into_iter().map(Into::into).collect(),
         };
         let lock = Self::new(
             wire.version,
@@ -4975,23 +5081,7 @@ impl Source {
     }
 
     fn from_index_url(index_url: &IndexUrl, root: &Path) -> Result<Self, LockError> {
-        match index_url {
-            IndexUrl::Pypi(_) | IndexUrl::Url(_) => {
-                // Remove any sensitive credentials from the index URL.
-                let redacted = index_url.without_credentials();
-                let source = RegistrySource::Url(UrlString::from(redacted.as_ref()));
-                Ok(Self::Registry(source))
-            }
-            IndexUrl::Path(url) => {
-                let path = url
-                    .to_file_path()
-                    .map_err(|()| LockErrorKind::UrlToPath { url: url.to_url() })?;
-                let path = try_relative_to_if(&path, root, !url.was_given_absolute())
-                    .map_err(LockErrorKind::IndexRelativePath)?;
-                let source = RegistrySource::Path(path.into_boxed_path());
-                Ok(Self::Registry(source))
-            }
-        }
+        RegistrySource::from_index_url(index_url, root).map(Self::Registry)
     }
 
     fn from_git_path_built_dist(git_dist: &GitPathBuiltDist) -> Self {
@@ -5350,6 +5440,25 @@ enum RegistrySource {
     Url(UrlString),
     /// Ex) `../path/to/local/index`
     Path(Box<Path>),
+}
+
+impl RegistrySource {
+    fn from_index_url(index_url: &IndexUrl, root: &Path) -> Result<Self, LockError> {
+        match index_url {
+            IndexUrl::Pypi(_) | IndexUrl::Url(_) => {
+                let redacted = index_url.without_credentials();
+                Ok(Self::Url(UrlString::from(redacted.as_ref())))
+            }
+            IndexUrl::Path(url) => {
+                let path = url
+                    .to_file_path()
+                    .map_err(|()| LockErrorKind::UrlToPath { url: url.to_url() })?;
+                let path = try_relative_to_if(&path, root, !url.was_given_absolute())
+                    .map_err(LockErrorKind::IndexRelativePath)?;
+                Ok(Self::Path(path.into_boxed_path()))
+            }
+        }
+    }
 }
 
 impl Display for RegistrySource {
