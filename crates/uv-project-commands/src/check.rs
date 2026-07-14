@@ -21,6 +21,7 @@ use uv_environment_operations::{
 };
 use uv_fs::normalize_path;
 use uv_install_operations::loggers::SummaryInstallLogger;
+use uv_install_wheel::InstallerMetadata;
 use uv_lock_operations::{LockMode, LockOperation, LockTarget};
 use uv_normalize::{DEV_DEPENDENCIES, DefaultExtras, PackageName};
 use uv_preview::{Preview, PreviewFeature};
@@ -71,7 +72,7 @@ pub async fn check(
     python_preference: PythonPreference,
     python_arch: Option<PythonArchitecture>,
     python_downloads: PythonDownloads,
-    installer_metadata: bool,
+    installer_metadata: InstallerMetadata,
     concurrency: Concurrency,
     cache: &Cache,
     workspace_cache: &WorkspaceCache,

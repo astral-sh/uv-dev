@@ -38,6 +38,7 @@ use uv_environment_operations::{
     EnvironmentResolution, EnvironmentUpdate, resolve_environment, sync_environment,
     update_environment,
 };
+use uv_install_operations::InstallerMetadata;
 use uv_install_operations::loggers::{DefaultInstallLogger, UpgradeInstallLogger};
 use uv_python_discovery::PythonDownloadReporter;
 use uv_resolve_operations::loggers::SummaryResolveLogger;
@@ -56,7 +57,7 @@ pub async fn upgrade(
     python_preference: PythonPreference,
     python_arch: Option<PythonArchitecture>,
     python_downloads: PythonDownloads,
-    installer_metadata: bool,
+    installer_metadata: InstallerMetadata,
     concurrency: Concurrency,
     cache: &Cache,
     workspace_cache: &WorkspaceCache,
@@ -280,7 +281,7 @@ async fn upgrade_tool(
     cache: &Cache,
     workspace_cache: &WorkspaceCache,
     filesystem: &ResolverInstallerOptions,
-    installer_metadata: bool,
+    installer_metadata: InstallerMetadata,
     concurrency: &Concurrency,
     preview: Preview,
 ) -> Result<UpgradeReport> {

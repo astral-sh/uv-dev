@@ -52,6 +52,7 @@ use uv_environment_operations::{
     EnvironmentError, EnvironmentResolution, EnvironmentSpecification, resolve_environment,
     sync_environment, update_environment,
 };
+use uv_install_operations::InstallerMetadata;
 use uv_install_operations::loggers::DefaultInstallLogger;
 use uv_resolve_operations as operations;
 use uv_resolve_operations::latest::LatestClient;
@@ -81,7 +82,7 @@ pub async fn install(
     python_preference: PythonPreference,
     python_arch: Option<PythonArchitecture>,
     python_downloads: PythonDownloads,
-    installer_metadata: bool,
+    installer_metadata: InstallerMetadata,
     concurrency: Concurrency,
     config_discovery: ConfigDiscovery,
     cache: Cache,

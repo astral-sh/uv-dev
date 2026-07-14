@@ -15,6 +15,7 @@ use uv_environment_operations::install_target::InstallTarget;
 use uv_environment_operations::malware::MalwareCheckContext;
 use uv_environment_operations::sync_from_lock;
 use uv_fs::PortablePathBuf;
+use uv_install_operations::InstallerMetadata;
 use uv_install_operations::loggers::DefaultInstallLogger;
 use uv_installer::SitePackages;
 use uv_lock::{Installable, Metadata};
@@ -84,7 +85,7 @@ pub(super) async fn collect_module_owners(
             client_builder,
             &state.fork(),
             Box::new(DefaultInstallLogger),
-            false,
+            InstallerMetadata::Disabled,
             concurrency,
             cache,
             workspace_cache,
