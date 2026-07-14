@@ -14,7 +14,7 @@ use uv_normalize::DefaultGroups;
 use uv_normalize::PackageName;
 use uv_preview::{Preview, PreviewFeature};
 use uv_python::{ConfigDiscovery, PythonDownloads, PythonPreference, PythonRequest, PythonVersion};
-use uv_resolver::{PackageMap, TreeDisplay, TreeJsonTarget};
+use uv_resolver::{PackageMap, TreeDedupe, TreeDisplay, TreeJsonTarget};
 use uv_scripts::Pep723Script;
 use uv_settings::PythonInstallMirrors;
 use uv_warnings::warn_user;
@@ -48,7 +48,7 @@ pub(crate) async fn tree(
     depth: u8,
     prune: Vec<PackageName>,
     package: Vec<PackageName>,
-    no_dedupe: bool,
+    dedupe: TreeDedupe,
     invert: bool,
     outdated: bool,
     show_sizes: bool,
@@ -308,7 +308,7 @@ pub(crate) async fn tree(
         &prune,
         &package,
         &groups,
-        no_dedupe,
+        dedupe,
         invert,
         show_sizes,
     );

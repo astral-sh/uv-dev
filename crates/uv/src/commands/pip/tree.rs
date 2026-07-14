@@ -23,7 +23,7 @@ use uv_pep440::{Operator, Version, VersionSpecifier, VersionSpecifiers};
 use uv_pep508::{Requirement, VersionOrUrl};
 use uv_pypi_types::{ResolutionMetadata, ResolverMarkerEnvironment, VerbatimParsedUrl};
 use uv_python::{EnvironmentPreference, PythonEnvironment, PythonPreference, PythonRequest};
-use uv_resolver::{ExcludeNewer, Prerelease};
+use uv_resolver::{ExcludeNewer, Prerelease, TreeDedupe};
 
 use crate::commands::ExitStatus;
 use crate::commands::pip::latest::LatestClient;
@@ -38,7 +38,7 @@ pub(crate) async fn pip_tree(
     depth: u8,
     prune: &[PackageName],
     package: &[PackageName],
-    no_dedupe: bool,
+    dedupe: TreeDedupe,
     invert: bool,
     outdated: bool,
     prerelease: Prerelease,
@@ -154,7 +154,7 @@ pub(crate) async fn pip_tree(
         depth.into(),
         prune,
         package,
-        no_dedupe,
+        dedupe,
         invert,
         show_version_specifiers,
         &markers,
@@ -169,7 +169,7 @@ pub(crate) async fn pip_tree(
     }
 
     if rendered_tree.contains("(*)") {
-        let message = if no_dedupe {
+        let message = if dedupe == TreeDedupe::Disabled {
             "(*) Package tree is a cycle and cannot be shown".italic()
         } else {
             "(*) Package tree already displayed".italic()
@@ -208,7 +208,7 @@ pub(crate) struct DisplayDependencyGraph<'env> {
     /// Maximum display depth of the dependency tree
     depth: usize,
     /// Whether to de-duplicate the displayed dependencies.
-    no_dedupe: bool,
+    dedupe: TreeDedupe,
     /// Whether to invert the dependency tree.
     invert: bool,
     /// Whether to include the version specifiers in the tree.
@@ -221,7 +221,7 @@ impl<'env> DisplayDependencyGraph<'env> {
         depth: usize,
         prune: &[PackageName],
         package: &[PackageName],
-        no_dedupe: bool,
+        dedupe: TreeDedupe,
         invert: bool,
         show_version_specifiers: bool,
         markers: &ResolverMarkerEnvironment,
@@ -354,7 +354,7 @@ impl<'env> DisplayDependencyGraph<'env> {
             roots,
             latest,
             depth,
-            no_dedupe,
+            dedupe,
             invert,
             show_version_specifiers,
         }
@@ -411,7 +411,7 @@ impl<'env> DisplayDependencyGraph<'env> {
         // 1. The package is in the current traversal path (i.e., a dependency cycle).
         // 2. The package has been visited and de-duplication is enabled (default).
         if let Some(requirements) = visited.get(package_name) {
-            if !self.no_dedupe || path.contains(&package_name) {
+            if self.dedupe == TreeDedupe::Enabled || path.contains(&package_name) {
                 return if requirements.is_empty() {
                     vec![line]
                 } else {

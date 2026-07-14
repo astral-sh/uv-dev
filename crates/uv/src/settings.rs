@@ -54,7 +54,7 @@ use uv_python::{Prefix, PythonDownloads, PythonPreference, PythonVersion, Target
 use uv_redacted::DisplaySafeUrl;
 use uv_resolver::{
     AnnotationStyle, DependencyMode, ExcludeNewer, ExcludeNewerOverride, ExcludeNewerPackage,
-    ForkStrategy, Prerelease, PrereleaseMode, PrereleasePackage, ResolutionMode,
+    ForkStrategy, Prerelease, PrereleaseMode, PrereleasePackage, ResolutionMode, TreeDedupe,
 };
 use uv_settings::{
     Combine, EnvFlag, EnvironmentOptions, FilesystemOptions, IndexOptions, MalwareCheckSettings,
@@ -2832,7 +2832,7 @@ pub(crate) struct TreeSettings {
     pub(super) depth: u8,
     pub(super) prune: Vec<PackageName>,
     pub(super) package: Vec<PackageName>,
-    pub(super) no_dedupe: bool,
+    pub(super) dedupe: TreeDedupe,
     pub(super) invert: bool,
     pub(super) outdated: bool,
     pub(super) show_sizes: bool,
@@ -2919,7 +2919,7 @@ impl TreeSettings {
             depth: tree.depth,
             prune: tree.prune,
             package: tree.package,
-            no_dedupe: tree.no_dedupe,
+            dedupe: TreeDedupe::from_args(tree.no_dedupe),
             invert: tree.invert,
             outdated: tree.outdated,
             show_sizes: tree.show_sizes,
@@ -4180,7 +4180,7 @@ pub(crate) struct PipTreeSettings {
     pub(crate) depth: u8,
     pub(crate) prune: Vec<PackageName>,
     pub(crate) package: Vec<PackageName>,
-    pub(crate) no_dedupe: bool,
+    pub(crate) dedupe: TreeDedupe,
     pub(crate) invert: bool,
     pub(crate) outdated: bool,
     pub(crate) settings: PipSettings,
@@ -4209,7 +4209,7 @@ impl PipTreeSettings {
             show_version_specifiers,
             depth: tree.depth,
             prune: tree.prune,
-            no_dedupe: tree.no_dedupe,
+            dedupe: TreeDedupe::from_args(tree.no_dedupe),
             invert: tree.invert,
             package: tree.package,
             outdated: tree.outdated,

@@ -43,6 +43,22 @@ impl<'a> TreeJsonTarget<'a> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TreeDedupe {
+    Enabled,
+    Disabled,
+}
+
+impl TreeDedupe {
+    pub const fn from_args(no_dedupe: bool) -> Self {
+        if no_dedupe {
+            Self::Disabled
+        } else {
+            Self::Enabled
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct TreeDisplay<'env> {
     /// The constructed dependency graph.
@@ -54,7 +70,7 @@ pub struct TreeDisplay<'env> {
     /// Maximum display depth of the dependency tree.
     depth: usize,
     /// Whether to de-duplicate the displayed dependencies.
-    no_dedupe: bool,
+    dedupe: TreeDedupe,
     /// Whether the graph edges have been reversed (i.e., `--invert` mode).
     invert: bool,
     /// Whether production dependencies are included in the tree.
@@ -79,7 +95,7 @@ impl<'env> TreeDisplay<'env> {
         prune: &[PackageName],
         packages: &[PackageName],
         groups: &DependencyGroupsWithDefaults,
-        no_dedupe: bool,
+        dedupe: TreeDedupe,
         invert: bool,
         show_sizes: bool,
     ) -> Self {
@@ -516,7 +532,7 @@ impl<'env> TreeDisplay<'env> {
             roots,
             latest,
             depth,
-            no_dedupe,
+            dedupe,
             invert,
             prod: groups.prod(),
             groups: groups.clone(),
@@ -600,7 +616,7 @@ impl<'env> TreeDisplay<'env> {
         if path.contains(&visited_node) {
             return vec![format!("{line} (*)")];
         }
-        if !self.no_dedupe
+        if self.dedupe == TreeDedupe::Enabled
             && let Some(requirements) = visited.get(&visited_node)
         {
             return if requirements.is_empty() {
@@ -1643,7 +1659,7 @@ impl std::fmt::Display for TreeDisplay<'_> {
         }
 
         if deduped {
-            let message = if self.no_dedupe {
+            let message = if self.dedupe == TreeDedupe::Disabled {
                 "(*) Package tree is a cycle and cannot be shown".italic()
             } else {
                 "(*) Package tree already displayed".italic()
