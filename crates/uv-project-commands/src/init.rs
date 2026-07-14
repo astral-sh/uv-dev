@@ -14,8 +14,8 @@ use uv_client::BaseClientBuilder;
 use uv_command_support::{ExitStatus, Printer};
 use uv_configuration::{
     AuthorFrom, DependencyGroupsWithDefaults, InitDescription, InitKind, InitMode,
-    InitProjectKind, InitPythonPin, InitReadme, ProjectBuildBackend, VersionControlError,
-    VersionControlSystem,
+    InitProjectKind, InitPythonPin, InitReadme, InitWorkspaceDiscovery, ProjectBuildBackend,
+    VersionControlError, VersionControlSystem,
 };
 use uv_distribution_types::RequiresPython;
 use uv_fs::{CWD, Simplified};
@@ -60,7 +60,7 @@ pub async fn init(
     pin_python: InitPythonPin,
     python: Option<String>,
     install_mirrors: PythonInstallMirrors,
-    no_workspace: bool,
+    workspace_discovery: InitWorkspaceDiscovery,
     client_builder: &BaseClientBuilder<'_>,
     python_preference: PythonPreference,
     python_arch: Option<PythonArchitecture>,
@@ -86,7 +86,7 @@ pub async fn init(
                 python_downloads,
                 cache,
                 printer,
-                no_workspace,
+                workspace_discovery,
                 readme,
                 author_from,
                 pin_python,
@@ -164,7 +164,7 @@ pub async fn init(
                 pin_python,
                 python,
                 install_mirrors,
-                no_workspace,
+                workspace_discovery,
                 client_builder,
                 python_preference,
                 python_arch,
@@ -217,13 +217,13 @@ async fn init_script(
     python_downloads: PythonDownloads,
     cache: &Cache,
     printer: Printer,
-    no_workspace: bool,
+    workspace_discovery: InitWorkspaceDiscovery,
     readme: InitReadme,
     author_from: Option<AuthorFrom>,
     pin_python: InitPythonPin,
     config_discovery: ConfigDiscovery,
 ) -> Result<()> {
-    if no_workspace {
+    if matches!(workspace_discovery, InitWorkspaceDiscovery::Ignore) {
         warn_user_once!("`--no-workspace` is a no-op for Python scripts, which are standalone");
     }
     if matches!(readme, InitReadme::Omit) {
@@ -303,7 +303,7 @@ async fn init_project(
     pin_python: InitPythonPin,
     python: Option<String>,
     install_mirrors: PythonInstallMirrors,
-    no_workspace: bool,
+    workspace_discovery: InitWorkspaceDiscovery,
     client_builder: &BaseClientBuilder<'_>,
     python_preference: PythonPreference,
     python_arch: Option<PythonArchitecture>,
@@ -340,7 +340,7 @@ async fn init_project(
         {
             Ok(workspace) => {
                 // Ignore the current workspace if `--no-workspace` was provided.
-                if no_workspace {
+                if matches!(workspace_discovery, InitWorkspaceDiscovery::Ignore) {
                     debug!("Ignoring discovered workspace due to `--no-workspace`");
                     None
                 } else {
@@ -352,13 +352,13 @@ async fn init_project(
                     err.as_ref(),
                     WorkspaceErrorKind::MissingPyprojectToml | WorkspaceErrorKind::NonWorkspace(_)
                 ) {
-                    if no_workspace {
+                    if matches!(workspace_discovery, InitWorkspaceDiscovery::Ignore) {
                         warn!("`--no-workspace` was provided, but no workspace was found");
                     }
                     None
                 } else {
                     // If the user runs with `--no-workspace`, ignore the error.
-                    if no_workspace {
+                    if matches!(workspace_discovery, InitWorkspaceDiscovery::Ignore) {
                         warn!("Ignoring workspace discovery error due to `--no-workspace`: {err}");
                         None
                     } else {

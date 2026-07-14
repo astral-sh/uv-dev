@@ -104,6 +104,26 @@ impl InitPythonPin {
     }
 }
 
+/// Whether to discover a parent workspace while initializing a project.
+#[derive(Debug, Copy, Clone)]
+pub enum InitWorkspaceDiscovery {
+    /// Discover a parent workspace.
+    Discover,
+    /// Ignore any parent workspace.
+    Ignore,
+}
+
+impl InitWorkspaceDiscovery {
+    /// Determine the [`InitWorkspaceDiscovery`] setting based on the command-line arguments.
+    pub fn from_args(no_workspace: bool) -> Self {
+        if no_workspace {
+            Self::Ignore
+        } else {
+            Self::Discover
+        }
+    }
+}
+
 /// The kind of Python project to initialize (either an application or a library).
 #[derive(Debug, Copy, Clone, Default)]
 pub enum InitProjectKind {
