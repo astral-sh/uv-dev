@@ -73,6 +73,45 @@ pub(crate) struct EntryPoints {
     pub(crate) gui_scripts: Vec<Script>,
 }
 
+/// Console and GUI script names declared by an `entry_points.txt` metadata file.
+#[derive(Default)]
+pub(crate) struct EntryPointNames {
+    pub(crate) console_scripts: Vec<String>,
+    pub(crate) gui_scripts: Vec<String>,
+}
+
+impl EntryPointNames {
+    pub(crate) fn read(path: impl AsRef<Path>) -> Result<Self, Error> {
+        let ini = match fs_err::read_to_string(path) {
+            Ok(ini) => ini,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Self::default()),
+            Err(err) => return Err(err.into()),
+        };
+
+        Self::parse(ini)
+    }
+
+    fn parse(ini: String) -> Result<Self, Error> {
+        let mut ini_options = IniDefault::default();
+        ini_options.case_sensitive = true;
+        ini_options.delimiters = vec!['='];
+
+        let mut parser = Ini::new_from_defaults(ini_options);
+        let entry_points = parser
+            .read(ini)
+            .map_err(|err| Error::InvalidWheel(format!("entry_points.txt is invalid: {err}")))?;
+
+        Ok(Self {
+            console_scripts: entry_points
+                .get("console_scripts")
+                .map_or_else(Vec::new, |scripts| scripts.keys().cloned().collect()),
+            gui_scripts: entry_points
+                .get("gui_scripts")
+                .map_or_else(Vec::new, |scripts| scripts.keys().cloned().collect()),
+        })
+    }
+}
+
 impl EntryPoints {
     pub(crate) fn read(
         path: impl AsRef<Path>,
@@ -144,7 +183,21 @@ impl EntryPoints {
 
 #[cfg(test)]
 mod test {
-    use crate::script::{EntryPoints, Script};
+    use crate::script::{EntryPointNames, EntryPoints, Script};
+
+    #[test]
+    fn test_entry_point_names_ignore_targets() {
+        let mut entry_points = EntryPointNames::parse(
+            "[console_scripts]\nrunner = invalid-entry-point\n[gui_scripts]\nviewer = :also-invalid\n"
+                .to_string(),
+        )
+        .unwrap();
+        entry_points.console_scripts.sort();
+        entry_points.gui_scripts.sort();
+
+        assert_eq!(entry_points.console_scripts, ["runner"]);
+        assert_eq!(entry_points.gui_scripts, ["viewer"]);
+    }
 
     #[test]
     fn test_valid_script_names() {
