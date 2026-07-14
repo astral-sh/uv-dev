@@ -5929,7 +5929,7 @@ fn cyclonedx_export_direct_url() -> Result<()> {
           "bom-ref": "idna-2@3.6",
           "name": "idna",
           "version": "3.6",
-          "purl": "pkg:pypi/idna@3.6?download_url=https://files.pythonhosted.org/packages/c2/e7/a82b05cf63a603df6e68d59ae6a68bf5064484a0718ea5033660af4b54a9/idna-3.6-py3-none-any.whl"
+          "purl": "pkg:pypi/idna@3.6?download_url=https:%2F%2Ffiles.pythonhosted.org%2Fpackages%2Fc2%2Fe7%2Fa82b05cf63a603df6e68d59ae6a68bf5064484a0718ea5033660af4b54a9%2Fidna-3.6-py3-none-any.whl"
         }
       ],
       "dependencies": [
@@ -5946,6 +5946,104 @@ fn cyclonedx_export_direct_url() -> Result<()> {
     }
     ----- stderr -----
     Resolved 2 packages in [TIME]
+    warning: `uv export --format=cyclonedx1.5` is experimental and may change without warning. Pass `--preview-features sbom-export` to disable this warning.
+    "#);
+
+    Ok(())
+}
+
+#[cfg(feature = "test-universal")]
+#[test]
+fn cyclonedx_export_redacts_and_encodes_direct_url() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_cyclonedx_filters();
+
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig"]
+        "#,
+    )?;
+    context.temp_dir.child("uv.lock").write_str(
+        r#"
+        version = 1
+        revision = 3
+        requires-python = ">=3.12"
+
+        [[package]]
+        name = "iniconfig"
+        version = "2.0.0"
+        source = { url = "https://user:secret@example.invalid/iniconfig-2.0.0-py3-none-any.whl?download=1&token=generic-secret&sig=azure-secret&X-Goog-Signature=gcs-signature" }
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [{ name = "iniconfig" }]
+
+        [package.metadata]
+        requires-dist = [{ name = "iniconfig" }]
+        "#,
+    )?;
+
+    uv_snapshot!(context.filters(), context.export()
+        .arg("--format")
+        .arg("cyclonedx1.5")
+        .arg("--frozen")
+        .arg("--no-hashes"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {
+      "bomFormat": "CycloneDX",
+      "specVersion": "1.5",
+      "version": 1,
+      "serialNumber": "[SERIAL_NUMBER]",
+      "metadata": {
+        "timestamp": "[TIMESTAMP]",
+        "tools": [
+          {
+            "vendor": "Astral Software Inc.",
+            "name": "uv",
+            "version": "[VERSION]"
+          }
+        ],
+        "component": {
+          "type": "library",
+          "bom-ref": "project-1@0.1.0",
+          "name": "project",
+          "version": "0.1.0",
+          "properties": [
+            {
+              "name": "uv:package:is_project_root",
+              "value": "true"
+            }
+          ]
+        }
+      },
+      "components": [
+        {
+          "type": "library",
+          "bom-ref": "iniconfig-2@2.0.0",
+          "name": "iniconfig",
+          "version": "2.0.0",
+          "purl": "pkg:pypi/iniconfig@2.0.0?download_url=https:%2F%2Fexample.invalid%2Finiconfig-2.0.0-py3-none-any.whl%3Fdownload%3D1%26token%3D%2A%2A%2A%2A%26sig%3D%2A%2A%2A%2A%26X-Goog-Signature%3D%2A%2A%2A%2A"
+        }
+      ],
+      "dependencies": [
+        {
+          "ref": "iniconfig-2@2.0.0"
+        },
+        {
+          "ref": "project-1@0.1.0",
+          "dependsOn": [
+            "iniconfig-2@2.0.0"
+          ]
+        }
+      ]
+    }
+    ----- stderr -----
     warning: `uv export --format=cyclonedx1.5` is experimental and may change without warning. Pass `--preview-features sbom-export` to disable this warning.
     "#);
 
@@ -6010,7 +6108,7 @@ fn cyclonedx_export_git_dependency() -> Result<()> {
           "bom-ref": "urllib3-2@2.2.0",
           "name": "urllib3",
           "version": "2.2.0",
-          "purl": "pkg:pypi/urllib3@2.2.0?vcs_url=https://github.com/urllib3/urllib3.git%3Frev%3D2.2.0%2304df048cf4b1c3790c56e26c659db764aad62d6f"
+          "purl": "pkg:pypi/urllib3@2.2.0?vcs_url=https:%2F%2Fgithub.com%2Furllib3%2Furllib3.git%3Frev%3D2.2.0%2304df048cf4b1c3790c56e26c659db764aad62d6f"
         }
       ],
       "dependencies": [
@@ -6162,7 +6260,7 @@ fn cyclonedx_export_mixed_source_types() -> Result<()> {
           "bom-ref": "idna-2@3.6",
           "name": "idna",
           "version": "3.6",
-          "purl": "pkg:pypi/idna@3.6?download_url=https://files.pythonhosted.org/packages/c2/e7/a82b05cf63a603df6e68d59ae6a68bf5064484a0718ea5033660af4b54a9/idna-3.6-py3-none-any.whl"
+          "purl": "pkg:pypi/idna@3.6?download_url=https:%2F%2Ffiles.pythonhosted.org%2Fpackages%2Fc2%2Fe7%2Fa82b05cf63a603df6e68d59ae6a68bf5064484a0718ea5033660af4b54a9%2Fidna-3.6-py3-none-any.whl"
         },
         {
           "type": "library",
@@ -6176,7 +6274,7 @@ fn cyclonedx_export_mixed_source_types() -> Result<()> {
           "bom-ref": "urllib3-4@2.2.0",
           "name": "urllib3",
           "version": "2.2.0",
-          "purl": "pkg:pypi/urllib3@2.2.0?vcs_url=https://github.com/urllib3/urllib3.git%3Frev%3D2.2.0%2304df048cf4b1c3790c56e26c659db764aad62d6f"
+          "purl": "pkg:pypi/urllib3@2.2.0?vcs_url=https:%2F%2Fgithub.com%2Furllib3%2Furllib3.git%3Frev%3D2.2.0%2304df048cf4b1c3790c56e26c659db764aad62d6f"
         }
       ],
       "dependencies": [
@@ -9770,63 +9868,63 @@ fn cyclonedx_export_alternative_registry() -> Result<()> {
           "bom-ref": "filelock-2@3.13.1",
           "name": "filelock",
           "version": "3.13.1",
-          "purl": "pkg:pypi/filelock@3.13.1?repository_url=https://astral-sh.github.io/pytorch-mirror/whl/cpu"
+          "purl": "pkg:pypi/filelock@3.13.1?repository_url=https:%2F%2Fastral-sh.github.io%2Fpytorch-mirror%2Fwhl%2Fcpu"
         },
         {
           "type": "library",
           "bom-ref": "fsspec-3@2024.6.1",
           "name": "fsspec",
           "version": "2024.6.1",
-          "purl": "pkg:pypi/fsspec@2024.6.1?repository_url=https://astral-sh.github.io/pytorch-mirror/whl/cpu"
+          "purl": "pkg:pypi/fsspec@2024.6.1?repository_url=https:%2F%2Fastral-sh.github.io%2Fpytorch-mirror%2Fwhl%2Fcpu"
         },
         {
           "type": "library",
           "bom-ref": "jinja2-4@3.1.4",
           "name": "jinja2",
           "version": "3.1.4",
-          "purl": "pkg:pypi/jinja2@3.1.4?repository_url=https://astral-sh.github.io/pytorch-mirror/whl/cpu"
+          "purl": "pkg:pypi/jinja2@3.1.4?repository_url=https:%2F%2Fastral-sh.github.io%2Fpytorch-mirror%2Fwhl%2Fcpu"
         },
         {
           "type": "library",
           "bom-ref": "markupsafe-5@3.0.2",
           "name": "markupsafe",
           "version": "3.0.2",
-          "purl": "pkg:pypi/markupsafe@3.0.2?repository_url=https://astral-sh.github.io/pytorch-mirror/whl/cpu"
+          "purl": "pkg:pypi/markupsafe@3.0.2?repository_url=https:%2F%2Fastral-sh.github.io%2Fpytorch-mirror%2Fwhl%2Fcpu"
         },
         {
           "type": "library",
           "bom-ref": "mpmath-6@1.3.0",
           "name": "mpmath",
           "version": "1.3.0",
-          "purl": "pkg:pypi/mpmath@1.3.0?repository_url=https://astral-sh.github.io/pytorch-mirror/whl/cpu"
+          "purl": "pkg:pypi/mpmath@1.3.0?repository_url=https:%2F%2Fastral-sh.github.io%2Fpytorch-mirror%2Fwhl%2Fcpu"
         },
         {
           "type": "library",
           "bom-ref": "networkx-7@3.3",
           "name": "networkx",
           "version": "3.3",
-          "purl": "pkg:pypi/networkx@3.3?repository_url=https://astral-sh.github.io/pytorch-mirror/whl/cpu"
+          "purl": "pkg:pypi/networkx@3.3?repository_url=https:%2F%2Fastral-sh.github.io%2Fpytorch-mirror%2Fwhl%2Fcpu"
         },
         {
           "type": "library",
           "bom-ref": "setuptools-8@70.2.0",
           "name": "setuptools",
           "version": "70.2.0",
-          "purl": "pkg:pypi/setuptools@70.2.0?repository_url=https://astral-sh.github.io/pytorch-mirror/whl/cpu"
+          "purl": "pkg:pypi/setuptools@70.2.0?repository_url=https:%2F%2Fastral-sh.github.io%2Fpytorch-mirror%2Fwhl%2Fcpu"
         },
         {
           "type": "library",
           "bom-ref": "sympy-9@1.13.1",
           "name": "sympy",
           "version": "1.13.1",
-          "purl": "pkg:pypi/sympy@1.13.1?repository_url=https://astral-sh.github.io/pytorch-mirror/whl/cpu"
+          "purl": "pkg:pypi/sympy@1.13.1?repository_url=https:%2F%2Fastral-sh.github.io%2Fpytorch-mirror%2Fwhl%2Fcpu"
         },
         {
           "type": "library",
           "bom-ref": "torch-10@2.6.0",
           "name": "torch",
           "version": "2.6.0",
-          "purl": "pkg:pypi/torch@2.6.0?repository_url=https://astral-sh.github.io/pytorch-mirror/whl/cpu",
+          "purl": "pkg:pypi/torch@2.6.0?repository_url=https:%2F%2Fastral-sh.github.io%2Fpytorch-mirror%2Fwhl%2Fcpu",
           "properties": [
             {
               "name": "uv:package:marker",
@@ -9839,7 +9937,7 @@ fn cyclonedx_export_alternative_registry() -> Result<()> {
           "bom-ref": "torch-11@2.6.0+cpu",
           "name": "torch",
           "version": "2.6.0+cpu",
-          "purl": "pkg:pypi/torch@2.6.0%2Bcpu?repository_url=https://astral-sh.github.io/pytorch-mirror/whl/cpu",
+          "purl": "pkg:pypi/torch@2.6.0%2Bcpu?repository_url=https:%2F%2Fastral-sh.github.io%2Fpytorch-mirror%2Fwhl%2Fcpu",
           "properties": [
             {
               "name": "uv:package:marker",
@@ -9852,7 +9950,7 @@ fn cyclonedx_export_alternative_registry() -> Result<()> {
           "bom-ref": "typing-extensions-12@4.12.2",
           "name": "typing-extensions",
           "version": "4.12.2",
-          "purl": "pkg:pypi/typing-extensions@4.12.2?repository_url=https://astral-sh.github.io/pytorch-mirror/whl/cpu"
+          "purl": "pkg:pypi/typing-extensions@4.12.2?repository_url=https:%2F%2Fastral-sh.github.io%2Fpytorch-mirror%2Fwhl%2Fcpu"
         }
       ],
       "dependencies": [
