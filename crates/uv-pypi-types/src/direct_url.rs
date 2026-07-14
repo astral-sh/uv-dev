@@ -146,7 +146,8 @@ impl TryFrom<&DirectUrl> for DisplaySafeUrl {
                     frags.push("lfs=true".to_string());
                 }
                 if let Some(path) = path {
-                    frags.push(format!("path={}", path.display()));
+                    let path = path.to_string_lossy().replace('\\', "/");
+                    frags.push(format!("path={path}"));
                 }
                 if !frags.is_empty() {
                     url.set_fragment(Some(&frags.join("&")));

@@ -38,6 +38,12 @@ pub enum ParsedUrlError {
     MissingExtensionUrl(String, ExtensionError),
     #[error("Expected path (`{0}`) to end in a supported file extension: {1}")]
     MissingExtensionPath(PathBuf, ExtensionError),
+    #[error("Invalid `{kind}` fragment path `{path}`: path must be relative to the {relative_to}")]
+    InvalidFragmentPath {
+        kind: &'static str,
+        path: String,
+        relative_to: &'static str,
+    },
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, PartialOrd, Eq, Ord)]
@@ -290,7 +296,8 @@ impl TryFrom<DisplaySafeUrl> for ParsedGitDirectoryUrl {
     /// When the URL includes a prefix, it's presumed to come from a PEP 508 requirement; when it's
     /// excluded, it's presumed to come from `tool.uv.sources`.
     fn try_from(url_in: DisplaySafeUrl) -> Result<Self, Self::Error> {
-        let subdirectory = get_subdirectory(&url_in).map(PathBuf::into_boxed_path);
+        let subdirectory =
+            get_subdirectory(&url_in, "Git repository")?.map(PathBuf::into_boxed_path);
 
         let url = url_in
             .as_str()
@@ -335,7 +342,12 @@ impl TryFrom<DisplaySafeUrl> for ParsedGitPathUrl {
     /// When the URL includes a prefix, it's presumed to come from a PEP 508 requirement; when it's
     /// excluded, it's presumed to come from `tool.uv.sources`.
     fn try_from(url_in: DisplaySafeUrl) -> Result<Self, Self::Error> {
-        let install_path = get_install_path(&url_in).unwrap();
+        let install_path =
+            get_install_path(&url_in)?.ok_or_else(|| ParsedUrlError::InvalidFragmentPath {
+                kind: "path",
+                path: String::new(),
+                relative_to: "Git repository",
+            })?;
         let ext = DistExtension::from_path(&install_path)
             .map_err(|err| ParsedUrlError::MissingExtensionPath(install_path.clone(), err))?;
 
@@ -387,7 +399,7 @@ impl TryFrom<DisplaySafeUrl> for ParsedArchiveUrl {
 
     fn try_from(mut url: DisplaySafeUrl) -> Result<Self, Self::Error> {
         // Extract the `#subdirectory` fragment, if present.
-        let subdirectory = get_subdirectory(&url).map(PathBuf::into_boxed_path);
+        let subdirectory = get_subdirectory(&url, "source archive")?.map(PathBuf::into_boxed_path);
         url.set_fragment(None);
 
         // Infer the extension from the path.
@@ -413,23 +425,65 @@ impl TryFrom<DisplaySafeUrl> for ParsedArchiveUrl {
 /// or (direct URL):
 ///   `https://github.com/foo-labs/foo/archive/master.zip#subdirectory=packages/bar`
 ///   `https://github.com/foo-labs/foo/archive/master.zip#egg=pkg&subdirectory=packages/bar`
-fn get_subdirectory(url: &Url) -> Option<PathBuf> {
-    let fragment = url.fragment()?;
-    let subdirectory = fragment
-        .split('&')
-        .find_map(|fragment| fragment.strip_prefix("subdirectory="))?;
-    Some(PathBuf::from(subdirectory))
+fn get_subdirectory(
+    url: &Url,
+    relative_to: &'static str,
+) -> Result<Option<PathBuf>, ParsedUrlError> {
+    get_fragment_path(url, "subdirectory", relative_to)
 }
 
 /// If the URL points to an archive, extract it, as in (Git):
 ///   `git+https://git.example.com/MyProject.git@v1.0#path=path/to/wheel.whl`
 ///   `git+https://git.example.com/MyProject.git@v1.0#egg=pkg&path=path/to/wheel.whl`
-fn get_install_path(url: &Url) -> Option<PathBuf> {
-    let fragment = url.fragment()?;
-    let install_path = fragment
-        .split('&')
-        .find_map(|fragment| fragment.strip_prefix("path="))?;
-    Some(PathBuf::from(install_path))
+fn get_install_path(url: &Url) -> Result<Option<PathBuf>, ParsedUrlError> {
+    get_fragment_path(url, "path", "Git repository")
+}
+
+/// Extract, percent-decode, and normalize a path-valued URL fragment.
+fn get_fragment_path(
+    url: &Url,
+    kind: &'static str,
+    relative_to: &'static str,
+) -> Result<Option<PathBuf>, ParsedUrlError> {
+    let Some(fragment) = url.fragment() else {
+        return Ok(None);
+    };
+    let Some(path) = fragment.split('&').find_map(|fragment| {
+        let (key, value) = fragment.split_once('=')?;
+        (key == kind).then_some(value)
+    }) else {
+        return Ok(None);
+    };
+
+    // Treat both separators as path separators so a URL parsed on Unix cannot bypass the check
+    // with a Windows-style path (or vice versa).
+    let path = percent_encoding::percent_decode_str(path).decode_utf8_lossy();
+    let portable = path.replace('\\', "/");
+    if portable.starts_with('/') || portable.as_bytes().get(1) == Some(&b':') {
+        return Err(ParsedUrlError::InvalidFragmentPath {
+            kind,
+            path: path.into_owned(),
+            relative_to,
+        });
+    }
+
+    let mut normalized = PathBuf::new();
+    for component in portable.split('/') {
+        match component {
+            "" | "." => {}
+            ".." if !normalized.pop() => {
+                return Err(ParsedUrlError::InvalidFragmentPath {
+                    kind,
+                    path: path.into_owned(),
+                    relative_to,
+                });
+            }
+            ".." => {}
+            component => normalized.push(component),
+        }
+    }
+
+    Ok(Some(normalized))
 }
 
 impl TryFrom<DisplaySafeUrl> for ParsedUrl {
@@ -439,7 +493,7 @@ impl TryFrom<DisplaySafeUrl> for ParsedUrl {
         if let Some((prefix, ..)) = url.scheme().split_once('+') {
             match prefix {
                 "git" => {
-                    if get_install_path(&url).is_some() {
+                    if get_install_path(&url)?.is_some() {
                         Ok(Self::GitPath(ParsedGitPathUrl::try_from(url)?))
                     } else {
                         Ok(Self::GitDirectory(ParsedGitDirectoryUrl::try_from(url)?))
@@ -622,7 +676,8 @@ impl From<ParsedGitPathUrl> for DisplaySafeUrl {
         let lfs = value.url.lfs().enabled();
         let mut url = Self::parse(&format!("{}{}", "git+", Self::from(value.url).as_str()))
             .expect("Git URL is invalid");
-        let mut frags = vec![format!("path={}", value.install_path.display())];
+        let install_path = value.install_path.to_string_lossy().replace('\\', "/");
+        let mut frags = vec![format!("path={install_path}")];
         if lfs {
             frags.push("lfs=true".to_string());
         }
@@ -653,6 +708,8 @@ impl From<ParsedGitDirectoryUrl> for DisplaySafeUrl {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use anyhow::Result;
 
     use crate::{DirectUrl, parsed_url::ParsedUrl};
@@ -706,6 +763,60 @@ mod tests {
             let parsed_url = ParsedUrl::try_from(expected.clone())?;
             let actual = DisplaySafeUrl::try_from(&DirectUrl::from(&parsed_url))?;
             assert_eq!(expected, actual);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn git_fragment_paths_cannot_escape_repository() -> Result<()> {
+        for (url, expected) in [
+            (
+                "git+https://github.com/pallets/flask.git#subdirectory=../outside",
+                "Invalid `subdirectory` fragment path `../outside`: path must be relative to the Git repository",
+            ),
+            (
+                "git+https://github.com/pallets/flask.git#subdirectory=%2e%2e%2foutside",
+                "Invalid `subdirectory` fragment path `../outside`: path must be relative to the Git repository",
+            ),
+            (
+                "git+https://github.com/pallets/flask.git#path=/outside/flask-1.0-py3-none-any.whl",
+                "Invalid `path` fragment path `/outside/flask-1.0-py3-none-any.whl`: path must be relative to the Git repository",
+            ),
+            (
+                "git+https://github.com/pallets/flask.git#path=C%3A%5coutside%5cflask-1.0-py3-none-any.whl",
+                "Invalid `path` fragment path `C:\\outside\\flask-1.0-py3-none-any.whl`: path must be relative to the Git repository",
+            ),
+            (
+                "https://github.com/pallets/flask/archive/main.zip#subdirectory=../outside",
+                "Invalid `subdirectory` fragment path `../outside`: path must be relative to the source archive",
+            ),
+        ] {
+            let Err(error) = ParsedUrl::try_from(DisplaySafeUrl::parse(url)?) else {
+                anyhow::bail!("expected invalid Git fragment path");
+            };
+            assert_eq!(error.to_string(), expected);
+        }
+
+        let url = DisplaySafeUrl::parse(
+            "git+https://github.com/pallets/flask.git#subdirectory=packages%2f..%2fsrc",
+        )?;
+        if let ParsedUrl::GitDirectory(parsed) = ParsedUrl::try_from(url)? {
+            assert_eq!(parsed.subdirectory.as_deref(), Some(Path::new("src")));
+        } else {
+            anyhow::bail!("expected a Git directory URL");
+        }
+
+        let url = DisplaySafeUrl::parse(
+            "git+https://github.com/pallets/flask.git#subdirectory=packages+src",
+        )?;
+        if let ParsedUrl::GitDirectory(parsed) = ParsedUrl::try_from(url)? {
+            assert_eq!(
+                parsed.subdirectory.as_deref(),
+                Some(Path::new("packages+src"))
+            );
+        } else {
+            anyhow::bail!("expected a Git directory URL");
         }
 
         Ok(())

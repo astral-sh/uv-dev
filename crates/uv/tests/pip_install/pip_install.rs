@@ -10904,6 +10904,37 @@ fn missing_git_prefix() -> Result<()> {
 }
 
 #[test]
+fn git_fragment_path_escape() {
+    let context = uv_test::test_context!("3.12");
+
+    uv_snapshot!(context.pip_install()
+        .arg("example @ git+https://github.com/example/repository#subdirectory=%2e%2e%2foutside"), @"
+    success: false
+    exit_code: 2
+    ----- stdout -----
+
+    ----- stderr -----
+    error: Failed to parse: `example @ git+https://github.com/example/repository#subdirectory=%2e%2e%2foutside`
+      Caused by: Invalid `subdirectory` fragment path `../outside`: path must be relative to the Git repository
+        example @ git+https://github.com/example/repository#subdirectory=%2e%2e%2foutside
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ");
+
+    uv_snapshot!(context.pip_install()
+        .arg("example @ git+https://github.com/example/repository#path=%2e%2e%2fexample-1.0-py3-none-any.whl"), @"
+    success: false
+    exit_code: 2
+    ----- stdout -----
+
+    ----- stderr -----
+    error: Failed to parse: `example @ git+https://github.com/example/repository#path=%2e%2e%2fexample-1.0-py3-none-any.whl`
+      Caused by: Invalid `path` fragment path `../example-1.0-py3-none-any.whl`: path must be relative to the Git repository
+        example @ git+https://github.com/example/repository#path=%2e%2e%2fexample-1.0-py3-none-any.whl
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ");
+}
+
+#[test]
 #[cfg(feature = "test-git")]
 fn missing_subdirectory_git() -> Result<()> {
     let context = uv_test::test_context!("3.12");

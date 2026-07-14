@@ -609,6 +609,58 @@ fn lock_sdist_git_subdirectory() -> Result<()> {
     Ok(())
 }
 
+/// Git source paths from `tool.uv.sources` and `uv.lock` must stay inside the checkout.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_git_source_path_escape() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["example"]
+
+        [tool.uv.sources]
+        example = { git = "https://example.com/repository", subdirectory = "../outside" }
+        "#,
+    )?;
+
+    let output = context.lock().arg("--offline").output()?;
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains(
+        "Invalid Git `subdirectory` entry `../outside` for source `git+https://example.com/repository#subdirectory=../outside`: path must be relative to the Git repository"
+    ));
+
+    context.temp_dir.child("uv.lock").write_str(
+        r#"
+        version = 1
+        revision = 3
+        requires-python = ">=3.12"
+
+        [[package]]
+        name = "example"
+        version = "1.0.0"
+        source = { git = "https://example.com/repository?subdirectory=..%2Foutside#0123456789abcdef0123456789abcdef01234567" }
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [{ name = "example" }]
+        "#,
+    )?;
+
+    let output = context.sync().arg("--frozen").arg("--offline").output()?;
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains(
+        "Invalid Git `subdirectory` entry `../outside` for source `git+https://example.com/repository@0123456789abcdef0123456789abcdef01234567#subdirectory=../outside`: path must be relative to the Git repository"
+    ));
+
+    Ok(())
+}
+
 /// Lock a Git requirement using PEP 508.
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 #[test]

@@ -132,6 +132,12 @@ pub enum Error {
     MissingPkgInfo,
     #[error("The source distribution `{}` has no subdirectory `{}`", _0, _1.display())]
     MissingSubdirectory(DisplaySafeUrl, PathBuf),
+    #[error("Invalid Git `{kind}` entry `{}` for source `{url}`: path must be relative to the Git repository", path.display())]
+    InvalidGitPath {
+        url: Box<DisplaySafeUrl>,
+        path: PathBuf,
+        kind: &'static str,
+    },
     #[error("The source distribution `{0}` is missing Git LFS artifacts.")]
     MissingSourceDistGitLfsArtifacts(DisplaySafeUrl, #[source] GitError),
     #[error("The wheel `{0}` is missing Git LFS artifacts.")]

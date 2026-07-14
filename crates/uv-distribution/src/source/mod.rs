@@ -10,7 +10,7 @@
 
 use std::borrow::Cow;
 use std::ops::Bound;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -180,14 +180,20 @@ async fn fetch_git_source_tree(
     cache: &Cache,
     reporter: Option<Arc<dyn uv_git::Reporter>>,
 ) -> Result<Fetch, Error> {
+    if let Some(subdirectory) = subdirectory {
+        validate_git_path(None, subdirectory, &url, "subdirectory")?;
+    }
+
     let fetch = git_resolver
         .fetch(git, http_settings, cache.bucket(CacheBucket::Git), reporter)
         .await?;
 
-    if let Some(subdirectory) = subdirectory
-        && !fetch.path().join(subdirectory).is_dir()
-    {
-        return Err(Error::MissingSubdirectory(url, subdirectory.to_path_buf()));
+    if let Some(subdirectory) = subdirectory {
+        let source_tree =
+            validate_git_path(Some(fetch.path()), subdirectory, &url, "subdirectory")?;
+        if !source_tree.is_dir() {
+            return Err(Error::MissingSubdirectory(url, subdirectory.to_path_buf()));
+        }
     }
 
     if git.lfs().enabled() && !fetch.lfs_ready() {
@@ -204,6 +210,55 @@ async fn fetch_git_source_tree(
     }
 
     Ok(fetch)
+}
+
+/// Validate a path within a Git checkout, including symlinks when the checkout is available.
+fn validate_git_path(
+    checkout: Option<&Path>,
+    path: &Path,
+    url: &DisplaySafeUrl,
+    kind: &'static str,
+) -> Result<PathBuf, Error> {
+    let mut depth = 0;
+    for component in path.components() {
+        match component {
+            Component::Normal(_) => depth += 1,
+            Component::ParentDir if depth == 0 => {
+                return Err(Error::InvalidGitPath {
+                    url: Box::new(url.clone()),
+                    path: path.to_path_buf(),
+                    kind,
+                });
+            }
+            Component::ParentDir => depth -= 1,
+            Component::CurDir => {}
+            Component::Prefix(_) | Component::RootDir => {
+                return Err(Error::InvalidGitPath {
+                    url: Box::new(url.clone()),
+                    path: path.to_path_buf(),
+                    kind,
+                });
+            }
+        }
+    }
+
+    let Some(checkout) = checkout else {
+        return Ok(path.to_path_buf());
+    };
+    let resolved = checkout.join(path);
+    if resolved.exists() {
+        let checkout = fs_err::canonicalize(checkout).map_err(Error::CacheRead)?;
+        let canonical = fs_err::canonicalize(&resolved).map_err(Error::CacheRead)?;
+        if !canonical.starts_with(checkout) {
+            return Err(Error::InvalidGitPath {
+                url: Box::new(url.clone()),
+                path: path.to_path_buf(),
+                kind,
+            });
+        }
+    }
+
+    Ok(resolved)
 }
 
 /// Fetch and build a source distribution from a remote source, or from a local cache.
@@ -1793,7 +1848,12 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         }
 
         // Verify that the archive exists.
-        let install_path = fetch.path().join(&resource.path);
+        let install_path = validate_git_path(
+            Some(fetch.path()),
+            &resource.path,
+            &resource.url.to_url(),
+            "path",
+        )?;
         if !install_path.is_file() {
             return Err(Error::NotFound(resource.url.to_url()));
         }
@@ -3724,4 +3784,56 @@ fn read_wheel_metadata(
     let dist_info = read_archive_metadata(filename, reader)
         .map_err(|err| Error::WheelMetadata(wheel.to_path_buf(), Box::new(err)))?;
     Ok(ResolutionMetadata::parse_metadata(&dist_info)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use anyhow::Result;
+    use uv_redacted::DisplaySafeUrl;
+
+    use super::validate_git_path;
+
+    #[test]
+    fn git_paths_must_stay_inside_checkout() -> Result<()> {
+        let checkout = tempfile::tempdir()?;
+        let url = DisplaySafeUrl::parse("https://example.com/repository")?;
+
+        let error = validate_git_path(None, Path::new("../outside"), &url, "subdirectory")
+            .expect_err("parent path should be rejected");
+        assert_eq!(
+            error.to_string(),
+            "Invalid Git `subdirectory` entry `../outside` for source `https://example.com/repository`: path must be relative to the Git repository"
+        );
+
+        let path = validate_git_path(
+            Some(checkout.path()),
+            Path::new("packages/../source"),
+            &url,
+            "subdirectory",
+        )?;
+        assert_eq!(path, checkout.path().join("packages/../source"));
+
+        #[cfg(unix)]
+        {
+            let outside = tempfile::tempdir()?;
+            fs_err::write(outside.path().join("example-1.0-py3-none-any.whl"), [])?;
+            fs_err::os::unix::fs::symlink(outside.path(), checkout.path().join("outside"))?;
+
+            let error = validate_git_path(
+                Some(checkout.path()),
+                Path::new("outside/example-1.0-py3-none-any.whl"),
+                &url,
+                "path",
+            )
+            .expect_err("symlink path should be rejected");
+            assert_eq!(
+                error.to_string(),
+                "Invalid Git `path` entry `outside/example-1.0-py3-none-any.whl` for source `https://example.com/repository`: path must be relative to the Git repository"
+            );
+        }
+
+        Ok(())
+    }
 }
