@@ -16,7 +16,9 @@ use tracing::{debug, trace, warn};
 
 use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
-use uv_configuration::{Concurrency, PythonReinstall, PythonUpgrade, PythonUpgradeSource};
+use uv_configuration::{
+    Concurrency, PythonInstallForce, PythonReinstall, PythonUpgrade, PythonUpgradeSource,
+};
 use uv_errors::{ErrorOptions, Hints, write_error_chain_with_options};
 use uv_fs::Simplified;
 use uv_platform::{Arch, Libc};
@@ -188,7 +190,7 @@ pub async fn install(
     upgrade: PythonUpgrade,
     bin: Option<bool>,
     registry: Option<bool>,
-    force: bool,
+    force: PythonInstallForce,
     install_mirrors: PythonInstallMirrors,
     client_builder: BaseClientBuilder<'_>,
     default: bool,
@@ -292,7 +294,7 @@ async fn perform_install(
     upgrade: PythonUpgrade,
     bin: Option<bool>,
     registry: Option<bool>,
-    force: bool,
+    force: PythonInstallForce,
     install_mirrors: PythonInstallMirrors,
     client_builder: BaseClientBuilder<'_>,
     cache: &Cache,
@@ -965,7 +967,7 @@ fn create_bin_links(
     installation: &ManagedPythonInstallation,
     bin: &Path,
     reinstall: PythonReinstall,
-    force: bool,
+    force: PythonInstallForce,
     default: bool,
     upgradeable: bool,
     upgrade: bool,
@@ -1060,7 +1062,7 @@ fn create_bin_links(
 
                         // There's an existing executable we don't manage, require `--force`
                         if valid_link {
-                            if !force {
+                            if !force.is_enabled() {
                                 if upgrade {
                                     warn_user!(
                                         "Executable already exists at `{}` but is not managed by uv; use `uv python install {}.{}{} --force` to replace it",
@@ -1089,7 +1091,7 @@ fn create_bin_links(
                     Some(existing) if existing == installation => {
                         // The existing link points to the same installation, so we're done unless
                         // they requested we reinstall
-                        if !(reinstall.is_enabled() || force) {
+                        if !(reinstall.is_enabled() || force.is_enabled()) {
                             debug!(
                                 "Executable at `{}` is already for `{}`",
                                 target.simplified_display(),
@@ -1106,7 +1108,7 @@ fn create_bin_links(
                     Some(existing) => {
                         // The existing link points to a different installation, check if it
                         // is reasonable to replace
-                        if force {
+                        if force.is_enabled() {
                             debug!(
                                 "Replacing existing executable for `{}` at `{}` with executable for `{}` due to `--force` flag",
                                 existing.key(),

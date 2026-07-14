@@ -22,9 +22,10 @@ use uv_configuration::{
     ExcludeNewer, ExcludeNewerPackage, ExportFormat, ExtrasSpecification, ForkStrategy,
     GitLfsSetting, HashCheckingMode, IndexStrategy, InitKind, InitProjectKind, InstallOptions,
     KeyringProviderType, Modifications, NoBinary, NoBuild, NoSources, Override, PackageOverride,
-    PipCompileFormat, Prerelease, ProjectBuildBackend, ProxyUrl, PythonReinstall, PythonUpgrade,
-    PythonUpgradeSource, Reinstall, RequiredVersion, RequirementsInput, ResolutionMode, TargetTriple,
-    ToolRunCommand, TrustedHost, TrustedPublishing, Upgrade, VersionControlSystem,
+    PipCompileFormat, Prerelease, ProjectBuildBackend, ProxyUrl, PythonInstallForce,
+    PythonReinstall, PythonUpgrade, PythonUpgradeSource, Reinstall, RequiredVersion,
+    RequirementsInput, ResolutionMode, TargetTriple, ToolRunCommand, TrustedHost, TrustedPublishing,
+    Upgrade, VersionControlSystem,
 };
 use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, ExcludeNewerOverride, ExtraBuildVariables, Index,
@@ -1518,7 +1519,7 @@ pub struct PythonInstallSettings {
     pub install_dir: Option<PathBuf>,
     pub targets: Vec<String>,
     pub reinstall: PythonReinstall,
-    pub force: bool,
+    pub force: PythonInstallForce,
     pub upgrade: PythonUpgrade,
     pub bin: Option<bool>,
     pub registry: Option<bool>,
@@ -1566,7 +1567,7 @@ impl PythonInstallSettings {
             install_dir,
             targets,
             reinstall: reinstall.into(),
-            force,
+            force: force.into(),
             upgrade: if upgrade {
                 PythonUpgrade::Enabled(PythonUpgradeSource::Install)
             } else {
@@ -1601,7 +1602,7 @@ impl PythonInstallSettings {
 pub struct PythonUpgradeSettings {
     pub install_dir: Option<PathBuf>,
     pub targets: Vec<String>,
-    pub force: bool,
+    pub force: PythonInstallForce,
     pub registry: Option<bool>,
     pub install_mirrors: PythonInstallMirrors,
     pub reinstall: PythonReinstall,
@@ -1652,7 +1653,7 @@ impl PythonUpgradeSettings {
         Ok(Self {
             install_dir,
             targets,
-            force,
+            force: force.into(),
             registry,
             install_mirrors,
             reinstall: reinstall.into(),

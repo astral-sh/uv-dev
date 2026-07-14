@@ -48,3 +48,27 @@ impl From<bool> for PythonReinstall {
         if value { Self::Enabled } else { Self::Disabled }
     }
 }
+
+/// Whether to replace existing Python executables.
+#[derive(Debug, Clone, Copy)]
+pub enum PythonInstallForce {
+    /// Replace existing Python executables.
+    Enabled,
+    /// Respect existing Python executables.
+    Disabled,
+}
+
+impl PythonInstallForce {
+    pub fn is_enabled(self) -> bool {
+        match self {
+            Self::Enabled => true,
+            Self::Disabled => false,
+        }
+    }
+}
+
+impl From<bool> for PythonInstallForce {
+    fn from(value: bool) -> Self {
+        if value { Self::Enabled } else { Self::Disabled }
+    }
+}
