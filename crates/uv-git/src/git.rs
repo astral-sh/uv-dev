@@ -256,7 +256,7 @@ impl GitRemote {
 
             if let Ok(rev) = db.repo.resolve(reference) {
                 if with_lfs {
-                    let lfs_ready = fetch_lfs(&mut db.repo, &self.url, &rev, disable_ssl)
+                    let lfs_ready = fetch_lfs(&mut db.repo, &self.url, &rev, disable_ssl, offline)
                         .with_context(|| format!("failed to fetch LFS objects at {rev}"))?;
                     db = db.with_lfs_ready(Some(lfs_ready));
                 }
@@ -280,7 +280,7 @@ impl GitRemote {
         let rev = repo.resolve(reference)?;
         let lfs_ready = with_lfs
             .then(|| {
-                fetch_lfs(&mut repo, &self.url, &rev, disable_ssl)
+                fetch_lfs(&mut repo, &self.url, &rev, disable_ssl, offline)
                     .with_context(|| format!("failed to fetch LFS objects at {rev}"))
             })
             .transpose()?;
@@ -308,7 +308,12 @@ impl GitRemote {
 
 impl GitDatabase {
     /// Checkouts to a revision at `destination` from this database.
-    pub(crate) fn copy_to(&self, rev: GitOid, destination: &Path) -> Result<GitCheckout> {
+    pub(crate) fn copy_to(
+        &self,
+        rev: GitOid,
+        destination: &Path,
+        offline: bool,
+    ) -> Result<GitCheckout> {
         // If the existing checkout exists, and it is fresh, use it.
         // A non-fresh checkout can happen if the checkout operation was
         // interrupted. In that case, the checkout gets deleted and a new
@@ -319,7 +324,7 @@ impl GitDatabase {
             .filter(GitCheckout::is_fresh)
         {
             Some(co) => co.with_lfs_ready(self.lfs_ready),
-            None => GitCheckout::clone_into(destination, self, rev, self.remote.url())?,
+            None => GitCheckout::clone_into(destination, self, rev, self.remote.url(), offline)?,
         };
         Ok(checkout)
     }
@@ -380,6 +385,7 @@ impl GitCheckout {
         database: &GitDatabase,
         revision: GitOid,
         original_remote_url: &SafeUrl,
+        offline: bool,
     ) -> Result<Self> {
         // Invalidate readiness before replacing the checkout, including an interrupted clone.
         match fs_err::remove_file(into.with_extension(CHECKOUT_READY_EXTENSION)) {
@@ -425,7 +431,7 @@ impl GitCheckout {
 
         let repo = GitRepository::open(into)?;
         let checkout = Self::new(revision, repo);
-        let lfs_ready = checkout.reset(database.lfs_ready, original_remote_url)?;
+        let lfs_ready = checkout.reset(database.lfs_ready, original_remote_url, offline)?;
         Ok(checkout.with_lfs_ready(lfs_ready))
     }
 
@@ -471,11 +477,19 @@ impl GitCheckout {
     /// [`.ok` extension]: CHECKOUT_READY_EXTENSION
     /// `git reset --hard [<commit>]` can break relative submodule URLs, so we update submodules
     /// using the original remote URL.
-    fn reset(&self, with_lfs: Option<bool>, original_remote_url: &SafeUrl) -> Result<Option<bool>> {
-        // We want to skip smudge if lfs was disabled for the repository
-        // as smudge filters can trigger on a reset even if lfs artifacts
-        // were not originally "fetched".
-        let lfs_skip_smudge = if with_lfs == Some(true) { "0" } else { "1" };
+    fn reset(
+        &self,
+        with_lfs: Option<bool>,
+        original_remote_url: &SafeUrl,
+        offline: bool,
+    ) -> Result<Option<bool>> {
+        // Skip smudge when LFS is disabled or when offline, since reset and submodule updates can
+        // otherwise fetch missing LFS objects even when Git transports are restricted to `file`.
+        let lfs_skip_smudge = if with_lfs == Some(true) && !offline {
+            "0"
+        } else {
+            "1"
+        };
 
         debug!("Reset `{}` to {}", self.repo.path.display(), self.revision);
 
@@ -501,6 +515,9 @@ impl GitCheckout {
         for config in submodule_update_config(original_remote_url) {
             submodule_update.arg("-c").arg(config);
         }
+        if offline {
+            submodule_update.env(EnvVars::GIT_ALLOW_PROTOCOL, "file");
+        }
 
         submodule_update
             .arg("submodule")
@@ -509,7 +526,14 @@ impl GitCheckout {
             .env(EnvVars::GIT_LFS_SKIP_SMUDGE, lfs_skip_smudge)
             .cwd(&self.repo.path)
             .exec_with_output()
-            .map_err(|err| redact_git_error(err, original_remote_url))
+            .map_err(|err| -> anyhow::Error {
+                let message = err.to_string();
+                if offline && message.contains("transport '") && message.contains("' not allowed") {
+                    GitError::TransportNotAllowed.into()
+                } else {
+                    redact_git_error(err, original_remote_url)
+                }
+            })
             .map(drop)?;
 
         // Recursively update nested submodules without overriding `remote.origin.url`, so each
@@ -518,6 +542,9 @@ impl GitCheckout {
         let mut submodule_update = GIT.as_ref().cloned()?;
         for config in submodule_auth_config(original_remote_url) {
             submodule_update.arg("-c").arg(config);
+        }
+        if offline {
+            submodule_update.env(EnvVars::GIT_ALLOW_PROTOCOL, "file");
         }
 
         submodule_update
@@ -528,7 +555,14 @@ impl GitCheckout {
             .env(EnvVars::GIT_LFS_SKIP_SMUDGE, lfs_skip_smudge)
             .cwd(&self.repo.path)
             .exec_with_output()
-            .map_err(|err| redact_git_error(err, original_remote_url))
+            .map_err(|err| -> anyhow::Error {
+                let message = err.to_string();
+                if offline && message.contains("transport '") && message.contains("' not allowed") {
+                    GitError::TransportNotAllowed.into()
+                } else {
+                    redact_git_error(err, original_remote_url)
+                }
+            })
             .map(drop)?;
 
         // Validate Git LFS objects (if needed) after the reset.
@@ -817,7 +851,16 @@ fn fetch_lfs(
     url: &SafeUrl,
     revision: &GitOid,
     disable_ssl: bool,
+    offline: bool,
 ) -> Result<bool> {
+    if offline {
+        return if repo.lfs_fsck_objects(revision.as_str()) {
+            Ok(true)
+        } else {
+            Err(GitError::TransportNotAllowed.into())
+        };
+    }
+
     let mut cmd = if let Ok(lfs) = GIT_LFS.as_ref() {
         debug!("Fetching Git LFS objects");
         lfs.clone()
@@ -870,7 +913,312 @@ fn redact_git_error(mut error: anyhow::Error, url: &SafeUrl) -> anyhow::Error {
 
 #[cfg(test)]
 mod tests {
+    use std::process::Command;
+
     use super::*;
+
+    fn git(path: &Path, args: &[&str]) -> Result<()> {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(path)
+            .env("GIT_AUTHOR_NAME", "Test")
+            .env("GIT_AUTHOR_EMAIL", "test@example.com")
+            .env("GIT_COMMITTER_NAME", "Test")
+            .env("GIT_COMMITTER_EMAIL", "test@example.com")
+            .output()?;
+        if !output.status.success() {
+            return Err(anyhow!(
+                "Git command failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn fetch_lfs_rejects_missing_objects_offline() -> Result<()> {
+        let mut repository = GitRepository {
+            path: PathBuf::from("."),
+        };
+        let url = SafeUrl::parse("https://example.com/repository.git")?;
+        let revision = "0123456789012345678901234567890123456789".parse()?;
+
+        let Err(error) = fetch_lfs(&mut repository, &url, &revision, false, true) else {
+            return Err(anyhow!("offline Git LFS fetch unexpectedly succeeded"));
+        };
+        assert!(matches!(
+            error.downcast_ref::<GitError>(),
+            Some(GitError::TransportNotAllowed)
+        ));
+
+        Ok(())
+    }
+
+    #[test]
+    fn fetch_lfs_uses_cached_objects_offline() -> Result<()> {
+        if GIT_LFS.is_err() {
+            return Ok(());
+        }
+
+        let context = tempfile::tempdir()?;
+        let repository_path = context.path().join("repository");
+        fs_err::create_dir_all(&repository_path)?;
+        git(&repository_path, &["init"])?;
+        git(&repository_path, &["lfs", "install", "--local"])?;
+        git(&repository_path, &["lfs", "track", "*.bin"])?;
+        fs_err::write(repository_path.join("cached.bin"), "cached LFS content")?;
+        git(&repository_path, &["add", "."])?;
+        git(&repository_path, &["commit", "-m", "Add LFS content"])?;
+
+        let output = Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(&repository_path)
+            .output()?;
+        if !output.status.success() {
+            return Err(anyhow!(
+                "Failed to resolve LFS revision: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+        let revision = String::from_utf8(output.stdout)?.trim().parse()?;
+        let mut repository = GitRepository::open(&repository_path)?;
+        let url = SafeUrl::parse("https://example.com/repository.git")?;
+
+        assert!(fetch_lfs(&mut repository, &url, &revision, false, true)?);
+
+        fs_err::remove_dir_all(repository_path.join(".git/lfs/objects"))?;
+        let Err(error) = fetch_lfs(&mut repository, &url, &revision, false, true) else {
+            return Err(anyhow!("missing Git LFS objects were accepted offline"));
+        };
+        assert!(matches!(
+            error.downcast_ref::<GitError>(),
+            Some(GitError::TransportNotAllowed)
+        ));
+
+        Ok(())
+    }
+
+    #[test]
+    fn submodule_update_uses_local_transport_offline() -> Result<()> {
+        let context = tempfile::tempdir()?;
+        let child = context.path().join("child");
+        fs_err::create_dir_all(&child)?;
+        git(&child, &["init"])?;
+        fs_err::write(child.join("README.md"), "child")?;
+        git(&child, &["add", "."])?;
+        git(&child, &["commit", "-m", "Initial child commit"])?;
+
+        let parent = context.path().join("parent");
+        fs_err::create_dir_all(&parent)?;
+        git(&parent, &["init"])?;
+        git(
+            &parent,
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                child
+                    .to_str()
+                    .ok_or_else(|| anyhow!("invalid child path"))?,
+                "child",
+            ],
+        )?;
+        git(&parent, &["add", "."])?;
+        git(&parent, &["commit", "-m", "Add local submodule"])?;
+
+        let output = Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(&parent)
+            .output()?;
+        if !output.status.success() {
+            return Err(anyhow!(
+                "Failed to resolve parent revision: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+        let revision = String::from_utf8(output.stdout)?.trim().parse()?;
+        let url = SafeUrl::from_file_path(&parent).map_err(|()| anyhow!("invalid parent path"))?;
+        let remote = GitRemote::new(url);
+        let database_path = context.path().join("database");
+        let (database, revision) = remote.checkout(
+            &database_path,
+            None,
+            &GitReference::DefaultBranch,
+            Some(revision),
+            false,
+            true,
+            false,
+        )?;
+
+        let checkout_path = context.path().join("checkout");
+        database.copy_to(revision, &checkout_path, true)?;
+        assert_eq!(
+            fs_err::read_to_string(checkout_path.join("child/README.md"))?,
+            "child"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn submodule_update_rejects_remote_transport_offline() -> Result<()> {
+        let context = tempfile::tempdir()?;
+        let child = context.path().join("child");
+        fs_err::create_dir_all(&child)?;
+        git(&child, &["init"])?;
+        fs_err::write(child.join("README.md"), "child")?;
+        git(&child, &["add", "."])?;
+        git(&child, &["commit", "-m", "Initial child commit"])?;
+
+        let parent = context.path().join("parent");
+        fs_err::create_dir_all(&parent)?;
+        git(&parent, &["init"])?;
+        git(
+            &parent,
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                child
+                    .to_str()
+                    .ok_or_else(|| anyhow!("invalid child path"))?,
+                "child",
+            ],
+        )?;
+        fs_err::write(
+            parent.join(".gitmodules"),
+            "[submodule \"child\"]\n\tpath = child\n\turl = http://127.0.0.1:9/child.git\n",
+        )?;
+        git(&parent, &["add", "."])?;
+        git(&parent, &["commit", "-m", "Add remote submodule"])?;
+
+        let output = Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(&parent)
+            .output()?;
+        if !output.status.success() {
+            return Err(anyhow!(
+                "Failed to resolve parent revision: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+        let revision = String::from_utf8(output.stdout)?.trim().parse()?;
+        let url = SafeUrl::from_file_path(&parent).map_err(|()| anyhow!("invalid parent path"))?;
+        let remote = GitRemote::new(url);
+        let database_path = context.path().join("database");
+        let (database, revision) = remote.checkout(
+            &database_path,
+            None,
+            &GitReference::DefaultBranch,
+            Some(revision),
+            false,
+            true,
+            false,
+        )?;
+
+        let Err(error) = database.copy_to(revision, &context.path().join("checkout"), true) else {
+            return Err(anyhow!("offline submodule update unexpectedly succeeded"));
+        };
+        assert!(matches!(
+            error.downcast_ref::<GitError>(),
+            Some(GitError::TransportNotAllowed)
+        ));
+
+        Ok(())
+    }
+
+    #[test]
+    fn submodule_lfs_smudge_is_disabled_offline() -> Result<()> {
+        if GIT_LFS.is_err() {
+            return Ok(());
+        }
+
+        let context = tempfile::tempdir()?;
+        let git_config = context.path().join("gitconfig");
+        fs_err::write(
+            &git_config,
+            "[filter \"lfs\"]\n\tclean = git-lfs clean -- %f\n\tsmudge = git-lfs smudge -- %f\n\tprocess = git-lfs filter-process\n\trequired = true\n",
+        )?;
+
+        temp_env::with_var(
+            EnvVars::GIT_CONFIG_GLOBAL,
+            Some(git_config.as_os_str()),
+            || -> Result<()> {
+                let child = context.path().join("child");
+                fs_err::create_dir_all(&child)?;
+                git(&child, &["init"])?;
+                git(&child, &["lfs", "track", "*.bin"])?;
+                fs_err::write(
+                    child.join(".lfsconfig"),
+                    "[lfs]\n\turl = http://127.0.0.1:9/lfs\n",
+                )?;
+                fs_err::write(child.join("payload.bin"), "uncached LFS content")?;
+                git(&child, &["add", "."])?;
+                git(&child, &["commit", "-m", "Add LFS content"])?;
+
+                let parent = context.path().join("parent");
+                fs_err::create_dir_all(&parent)?;
+                git(&parent, &["init"])?;
+                let output = Command::new("git")
+                    .args(["-c", "protocol.file.allow=always", "submodule", "add"])
+                    .arg(
+                        child
+                            .to_str()
+                            .ok_or_else(|| anyhow!("invalid child path"))?,
+                    )
+                    .arg("child")
+                    .current_dir(&parent)
+                    .env(EnvVars::GIT_LFS_SKIP_SMUDGE, "1")
+                    .output()?;
+                if !output.status.success() {
+                    return Err(anyhow!(
+                        "Failed to add LFS submodule: {}",
+                        String::from_utf8_lossy(&output.stderr)
+                    ));
+                }
+                git(&parent, &["add", "."])?;
+                git(&parent, &["commit", "-m", "Add LFS submodule"])?;
+
+                fs_err::remove_dir_all(child.join(".git/lfs/objects"))?;
+
+                let output = Command::new("git")
+                    .args(["rev-parse", "HEAD"])
+                    .current_dir(&parent)
+                    .output()?;
+                if !output.status.success() {
+                    return Err(anyhow!(
+                        "Failed to resolve parent revision: {}",
+                        String::from_utf8_lossy(&output.stderr)
+                    ));
+                }
+                let revision = String::from_utf8(output.stdout)?.trim().parse()?;
+                let url = SafeUrl::from_file_path(&parent)
+                    .map_err(|()| anyhow!("invalid parent path"))?;
+                let remote = GitRemote::new(url);
+                let database_path = context.path().join("database");
+                let (database, revision) = remote.checkout(
+                    &database_path,
+                    None,
+                    &GitReference::DefaultBranch,
+                    Some(revision),
+                    true,
+                    true,
+                    false,
+                )?;
+
+                let checkout_path = context.path().join("checkout");
+                database.copy_to(revision, &checkout_path, true)?;
+                assert!(
+                    fs_err::read_to_string(checkout_path.join("child/payload.bin"))?
+                        .starts_with("version https://git-lfs.github.com/spec/v1\n")
+                );
+
+                Ok(())
+            },
+        )
+    }
 
     #[test]
     fn submodule_update_config_strips_credentials_from_origin_override() {
