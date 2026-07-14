@@ -20,9 +20,9 @@
 //! file = (statement | empty ('#' any*)? '\n')*
 //! empty = whitespace*
 //! statement = constraint_include | requirements_include | editable_requirement | requirement
-//! constraint_include = '-c' ('=' | wrappable_whitespaces) filepath
-//! requirements_include = '-r' ('=' | wrappable_whitespaces) filepath
-//! editable_requirement = '-e' ('=' | wrappable_whitespaces) requirement
+//! constraint_include = '-c' ('=' | wrappable_whitespaces)? filepath
+//! requirements_include = '-r' ('=' | wrappable_whitespaces)? filepath
+//! editable_requirement = '-e' ('=' | wrappable_whitespaces)? requirement
 //! # We check whether the line starts with a letter or a number, in that case we assume it's a
 //! # PEP 508 requirement
 //! # https://packaging.python.org/en/latest/specifications/name-normalization/#valid-non-normalized-names
@@ -701,7 +701,12 @@ fn parse_entry(
 
     let start = s.cursor();
     Ok(Some(if s.eat_if("-r") || s.eat_if("--requirement") {
-        let filename = parse_value("--requirement", content, s, |c: char| !is_terminal(c))?;
+        let short = s.from(start) == "-r";
+        let filename = if short {
+            parse_short_value("-r", content, s, |c: char| !is_terminal(c))?
+        } else {
+            parse_value("--requirement", content, s, |c: char| !is_terminal(c))?
+        };
         let filename = unquote(filename)
             .ok()
             .flatten()
@@ -713,7 +718,12 @@ fn parse_entry(
             end,
         }
     } else if s.eat_if("-c") || s.eat_if("--constraint") {
-        let filename = parse_value("--constraint", content, s, |c: char| !is_terminal(c))?;
+        let short = s.from(start) == "-c";
+        let filename = if short {
+            parse_short_value("-c", content, s, |c: char| !is_terminal(c))?
+        } else {
+            parse_value("--constraint", content, s, |c: char| !is_terminal(c))?
+        };
         let filename = unquote(filename)
             .ok()
             .flatten()
@@ -730,6 +740,8 @@ fn parse_entry(
         } else if s.eat_if(char::is_whitespace) {
             // Key and value are separated by whitespace instead.
             s.eat_whitespace();
+        } else if s.from(start) == "-e" {
+            // A short option may be directly attached to its value.
         } else {
             let (line, column) = calculate_row_column(content, s.cursor());
             return Err(RequirementsTxtParserError::Parser {
@@ -760,7 +772,12 @@ fn parse_entry(
             hashes,
         })
     } else if s.eat_if("-i") || s.eat_if("--index-url") {
-        let given = parse_value("--index-url", content, s, |c: char| !is_terminal(c))?;
+        let short = s.from(start) == "-i";
+        let given = if short {
+            parse_short_value("-i", content, s, |c: char| !is_terminal(c))?
+        } else {
+            parse_value("--index-url", content, s, |c: char| !is_terminal(c))?
+        };
         let given = unquote(given)
             .ok()
             .flatten()
@@ -826,7 +843,12 @@ fn parse_entry(
     } else if s.eat_if("--require-hashes") {
         RequirementsTxtStatement::RequireHashes
     } else if s.eat_if("--find-links") || s.eat_if("-f") {
-        let given = parse_value("--find-links", content, s, |c: char| !is_terminal(c))?;
+        let short = s.from(start) == "-f";
+        let given = if short {
+            parse_short_value("-f", content, s, |c: char| !is_terminal(c))?
+        } else {
+            parse_value("--find-links", content, s, |c: char| !is_terminal(c))?
+        };
         let given = unquote(given)
             .ok()
             .flatten()
@@ -1104,6 +1126,29 @@ fn parse_value<'a, T>(
         });
     }
 
+    Ok(value)
+}
+
+/// Parse the value for a short option, which may be directly attached (for example, `-rfile`).
+fn parse_short_value<'a, T>(
+    option: &str,
+    content: &str,
+    s: &mut Scanner<'a>,
+    while_pattern: impl Pattern<T>,
+) -> Result<&'a str, RequirementsTxtParserError> {
+    if s.at('=') || s.at(char::is_whitespace) {
+        return parse_value(option, content, s, while_pattern);
+    }
+
+    let value = s.eat_while(while_pattern).trim_end();
+    if value.is_empty() {
+        let (line, column) = calculate_row_column(content, s.cursor());
+        return Err(RequirementsTxtParserError::Parser {
+            message: format!("`{option}` must be followed by an argument"),
+            line,
+            column,
+        });
+    }
     Ok(value)
 }
 
@@ -2174,6 +2219,36 @@ mod test {
             }
             "#);
         });
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn attached_short_options() -> Result<()> {
+        let temp_dir = assert_fs::TempDir::new()?;
+        temp_dir.child("child.txt").write_str("iniconfig\n")?;
+        temp_dir
+            .child("constraint.txt")
+            .write_str("iniconfig==2.0.0\n")?;
+        temp_dir.child("links").create_dir_all()?;
+        temp_dir.child("editable").create_dir_all()?;
+
+        let requirements_txt = temp_dir.child("requirements.txt");
+        requirements_txt.write_str(
+            "-rchild.txt\n-cconstraint.txt\n-f./links\n-ihttps://example.invalid/simple\n-e./editable\n",
+        )?;
+
+        let requirements = RequirementsTxt::parse(requirements_txt.path(), temp_dir.path()).await?;
+        assert_eq!(requirements.requirements.len(), 1);
+        assert_eq!(requirements.constraints.len(), 1);
+        assert_eq!(requirements.editables.len(), 1);
+        assert_eq!(requirements.find_links.len(), 1);
+        assert!(requirements.index_url.is_some());
+
+        let spaced = temp_dir.child("spaced.txt");
+        spaced.write_str("-f ./links\n")?;
+        let spaced = RequirementsTxt::parse(spaced.path(), temp_dir.path()).await?;
+        assert_eq!(requirements.find_links, spaced.find_links);
 
         Ok(())
     }
