@@ -247,6 +247,100 @@ fn build_sdist_missing_backend_path() -> Result<()> {
     Ok(())
 }
 
+/// A PEP 517 backend can be an object nested below a module attribute or an implicit submodule.
+#[test]
+fn build_dotted_backend_object() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let project = context.temp_dir.child("project");
+
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = []
+        build-backend = "backend:factory.backend"
+        backend-path = ["."]
+    "#})?;
+    project.child("backend.py").write_str(indoc! {r#"
+        import pathlib
+        import types
+        import zipfile
+
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            wheel_name = "project-0.1.0-py3-none-any.whl"
+            wheel_path = pathlib.Path(wheel_directory, wheel_name)
+            with zipfile.ZipFile(wheel_path, "w") as wheel:
+                wheel.writestr("project/__init__.py", "")
+                wheel.writestr(
+                    "project-0.1.0.dist-info/METADATA",
+                    "Metadata-Version: 2.1\nName: project\nVersion: 0.1.0\n",
+                )
+                wheel.writestr(
+                    "project-0.1.0.dist-info/WHEEL",
+                    "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+                )
+                wheel.writestr("project-0.1.0.dist-info/RECORD", "")
+            return wheel_name
+
+
+        factory = types.SimpleNamespace(backend=types.SimpleNamespace(build_wheel=build_wheel))
+        setattr(factory, "async", factory.backend)
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.build().arg("--wheel").current_dir(&project), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Building wheel...
+    Successfully built dist/project-0.1.0-py3-none-any.whl
+    ");
+
+    fs_err::remove_dir_all(project.child("dist"))?;
+    let pyproject_toml = project.child("pyproject.toml");
+    pyproject_toml.write_str(
+        &fs_err::read_to_string(pyproject_toml.path())?
+            .replace("backend:factory.backend", "backend:factory.async"),
+    )?;
+
+    uv_snapshot!(context.filters(), context.build().arg("--wheel").current_dir(&project), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Building wheel...
+    Successfully built dist/project-0.1.0-py3-none-any.whl
+    ");
+
+    fs_err::remove_dir_all(project.child("dist"))?;
+    project.child("backend_package/__init__.py").touch()?;
+    project
+        .child("backend_package/factory.py")
+        .write_str("from backend import build_wheel\n")?;
+    pyproject_toml.write_str(
+        &fs_err::read_to_string(pyproject_toml.path())?
+            .replace("backend:factory.async", "backend_package:factory"),
+    )?;
+
+    uv_snapshot!(context.filters(), context.build().arg("--wheel").current_dir(&project), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Building wheel...
+    Successfully built dist/project-0.1.0-py3-none-any.whl
+    ");
+
+    Ok(())
+}
+
 /// An in-tree build backend must not be able to escape the source tree via `backend-path`.
 #[test]
 fn build_backend_path_outside_source_tree() -> Result<()> {
