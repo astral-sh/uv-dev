@@ -2265,7 +2265,7 @@ async fn run_project(
                 args.description,
                 args.vcs,
                 args.build_backend,
-                args.no_readme,
+                args.readme,
                 args.author_from,
                 args.pin_python,
                 args.python,
