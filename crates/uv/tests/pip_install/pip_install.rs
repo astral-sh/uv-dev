@@ -2960,6 +2960,133 @@ fn update_ref_git_public_https() {
     context.assert_installed("uv_public_pypackage", "0.1.0");
 }
 
+/// Update an ambiguous Git reference when a branch is replaced by a tag of the same name.
+#[test]
+#[cfg(feature = "test-git")]
+fn update_git_branch_replaced_by_tag() -> Result<()> {
+    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION);
+
+    let repository = context.temp_dir.child("repository");
+    repository.child("example").create_dir_all()?;
+    repository
+        .child("example/__init__.py")
+        .write_str("__version__ = \"0.1.0\"\n")?;
+    repository.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "example"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = ["hatchling"]
+        build-backend = "hatchling.build"
+    "#})?;
+
+    Command::new("git")
+        .arg("init")
+        .arg("--initial-branch=main")
+        .arg(repository.path())
+        .assert()
+        .success();
+    Command::new("git")
+        .arg("-C")
+        .arg(repository.path())
+        .arg("add")
+        .arg(".")
+        .assert()
+        .success();
+    Command::new("git")
+        .arg("-C")
+        .arg(repository.path())
+        .arg("-c")
+        .arg("user.name=Example")
+        .arg("-c")
+        .arg("user.email=example@example.com")
+        .arg("commit")
+        .arg("-m")
+        .arg("Initial commit")
+        .env("GIT_AUTHOR_DATE", "2000-01-01T00:00:00Z")
+        .env("GIT_COMMITTER_DATE", "2000-01-01T00:00:00Z")
+        .assert()
+        .success();
+    Command::new("git")
+        .arg("-C")
+        .arg(repository.path())
+        .arg("branch")
+        .arg("release")
+        .assert()
+        .success();
+
+    let repository_url = Url::from_directory_path(repository.path())
+        .map_err(|()| anyhow!("failed to convert repository path to file URL"))?;
+    let requirement = format!(
+        "example @ git+{}@release",
+        repository_url.as_str().trim_end_matches('/')
+    );
+    context.pip_install().arg(&requirement).assert().success();
+    context.assert_installed("example", "0.1.0");
+
+    repository.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "example"
+        version = "0.2.0"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = ["hatchling"]
+        build-backend = "hatchling.build"
+    "#})?;
+    repository
+        .child("example/__init__.py")
+        .write_str("__version__ = \"0.2.0\"\n")?;
+    Command::new("git")
+        .arg("-C")
+        .arg(repository.path())
+        .arg("add")
+        .arg(".")
+        .assert()
+        .success();
+    Command::new("git")
+        .arg("-C")
+        .arg(repository.path())
+        .arg("-c")
+        .arg("user.name=Example")
+        .arg("-c")
+        .arg("user.email=example@example.com")
+        .arg("commit")
+        .arg("-m")
+        .arg("Release 0.2.0")
+        .env("GIT_AUTHOR_DATE", "2000-01-02T00:00:00Z")
+        .env("GIT_COMMITTER_DATE", "2000-01-02T00:00:00Z")
+        .assert()
+        .success();
+    Command::new("git")
+        .arg("-C")
+        .arg(repository.path())
+        .arg("tag")
+        .arg("release")
+        .assert()
+        .success();
+    Command::new("git")
+        .arg("-C")
+        .arg(repository.path())
+        .arg("branch")
+        .arg("--delete")
+        .arg("release")
+        .assert()
+        .success();
+
+    context
+        .pip_install()
+        .arg(&requirement)
+        .arg("--refresh")
+        .assert()
+        .success();
+    context.assert_installed("example", "0.2.0");
+
+    Ok(())
+}
+
 /// Install a package from a public GitHub repository at a ref that does not exist
 #[test]
 #[cfg(feature = "test-git")]
