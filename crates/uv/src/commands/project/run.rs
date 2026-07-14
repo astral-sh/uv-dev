@@ -72,7 +72,7 @@ use crate::commands::project::lock::LockMode;
 use crate::commands::project::lock_target::LockTarget;
 use crate::commands::project::{
     EnvironmentSpecification, LinkErrorReporting, PreferenceLocation, ProjectEnvironment,
-    ProjectError, ScriptEnvironment, ScriptInterpreter, UniversalState, WorkspacePython,
+    ProjectError, ScriptEnvironment, ScriptInterpreter, SyncMode, UniversalState, WorkspacePython,
     default_dependency_groups, script_extra_build_requires, script_specification,
     update_environment, validate_project_requires_python,
 };
@@ -95,7 +95,7 @@ pub(crate) async fn run(
     lock_check: LockCheck,
     frozen: Option<FrozenSource>,
     active: ActiveEnvironment,
-    no_sync: bool,
+    sync: SyncMode,
     isolated: bool,
     all_packages: bool,
     package: Option<PackageName>,
@@ -123,6 +123,8 @@ pub(crate) async fn run(
     malware_settings: MalwareCheckSettings,
     #[cfg(unix)] run_rlimit_nofile: Option<u32>,
 ) -> anyhow::Result<ExitStatus> {
+    let no_sync = sync.no_sync();
+
     // Check if max recursion depth was exceeded. This most commonly happens
     // for scripts with a shebang line like `#!/usr/bin/env -S uv run`, so try
     // to provide guidance for that case.

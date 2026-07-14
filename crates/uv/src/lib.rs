@@ -51,7 +51,8 @@ use uv_warnings::{warn_user, warn_user_once};
 use uv_workspace::{DiscoveryOptions, Workspace, WorkspaceCache};
 
 use crate::commands::{
-    ExitStatus, ParsedRunCommand, ProjectError, RunCommand, ScriptPath, ToolRunCommand, UvError,
+    ExitStatus, ParsedRunCommand, ProjectError, RunCommand, ScriptPath, SyncMode, ToolRunCommand,
+    UvError,
 };
 use crate::printer::Printer;
 use crate::settings::{
@@ -2348,7 +2349,7 @@ async fn run_project(
                 args.lock_check,
                 args.frozen,
                 args.active,
-                args.no_sync,
+                SyncMode::from_no_sync(args.no_sync),
                 args.isolated,
                 args.all_packages,
                 args.package,
@@ -2611,7 +2612,7 @@ async fn run_project(
                 args.lock_check,
                 args.frozen,
                 args.active,
-                args.no_sync,
+                SyncMode::from_no_sync(args.no_sync),
                 args.no_install_project,
                 args.only_install_project,
                 args.no_install_workspace,
@@ -2736,7 +2737,7 @@ async fn run_project(
                 args.lock_check,
                 args.frozen,
                 args.active,
-                args.no_sync,
+                SyncMode::from_no_sync(args.no_sync),
                 args.python,
                 args.install_mirrors,
                 args.settings,
@@ -2906,7 +2907,7 @@ async fn run_project(
                 args.fix,
                 args.lock_check,
                 args.frozen,
-                args.no_sync,
+                SyncMode::from_no_sync(args.no_sync),
                 args.no_install_project,
                 args.isolated,
                 args.all_packages,
