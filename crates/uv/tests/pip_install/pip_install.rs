@@ -45,7 +45,10 @@ fn write_many_files_wheel(path: &Path, source_files: usize) -> Result<()> {
         let name = format!("large_wheel/module_{index:05}.py");
         let entry = ZipEntryBuilder::new(name.clone().into(), Compression::Stored);
         block_on(writer.write_entry_whole(entry, b"VALUE = 1\n"))?;
-        writeln!(record, "{name},,")?;
+        writeln!(
+            record,
+            "{name},sha256=4T34xEr13qHkEkA5ELmcxaSPLMv2imazN01quc75_GU,10"
+        )?;
     }
 
     let metadata = indoc! {"
@@ -65,7 +68,12 @@ fn write_many_files_wheel(path: &Path, source_files: usize) -> Result<()> {
     ] {
         let entry = ZipEntryBuilder::new(name.into(), Compression::Stored);
         block_on(writer.write_entry_whole(entry, contents.as_bytes()))?;
-        writeln!(record, "{name},,")?;
+        let hash = if name.ends_with("METADATA") {
+            "AOskYEnP9FU2A2QOk0GOuNHbSfe1XYzPaKfbxc6JCf8"
+        } else {
+            "ujr00BDMtYYidJ71ulklWmNFpiGqy5NyjK1fX-JwFO4"
+        };
+        writeln!(record, "{name},sha256={hash},{}", contents.len())?;
     }
     record.push_str("large_wheel-1.0.0.dist-info/RECORD,,\n");
     let entry = ZipEntryBuilder::new(
@@ -113,6 +121,42 @@ fn install_http_wheel_hashes_trailing_bytes() -> Result<()> {
     Installed 1 package in [TIME]
      + ok==1.0.0 (from http://[LOCALHOST]/ok-1.0.0-py3-none-any.whl)
     ");
+    Ok(())
+}
+
+fn write_wheel_with_record_entry(path: &Path, record_entry: &str) -> Result<()> {
+    let mut writer = ZipFileWriter::new(Vec::new());
+    let metadata = indoc! {"
+        Metadata-Version: 2.1
+        Name: record-test
+        Version: 1.0.0
+    "};
+    let wheel = indoc! {"
+        Wheel-Version: 1.0
+        Generator: uv-test
+        Root-Is-Purelib: true
+        Tag: py3-none-any
+    "};
+    let record = formatdoc! {"
+        {record_entry}
+        record_test-1.0.0.dist-info/METADATA,sha256=6m-Ql38gpWIjggLAt6oU__sta_5esULzJ3MAAkLN2LA,55
+        record_test-1.0.0.dist-info/WHEEL,sha256=ujr00BDMtYYidJ71ulklWmNFpiGqy5NyjK1fX-JwFO4,78
+        record_test-1.0.0.dist-info/RECORD,,
+    "};
+
+    for (name, contents) in [
+        ("record_test.py", "VALUE = 1\n"),
+        ("record_test-1.0.0.dist-info/METADATA", metadata),
+        ("record_test-1.0.0.dist-info/WHEEL", wheel),
+        ("record_test-1.0.0.dist-info/RECORD", record.as_str()),
+        ("record_test-1.0.0.dist-info/RECORD.jws", "signature"),
+        ("record_test-1.0.0.dist-info/RECORD.p7s", "signature"),
+    ] {
+        let entry = ZipEntryBuilder::new(name.into(), Compression::Stored);
+        block_on(writer.write_entry_whole(entry, contents.as_bytes()))?;
+    }
+
+    fs_err::write(path, block_on(writer.close())?)?;
     Ok(())
 }
 
@@ -13952,6 +13996,94 @@ fn reject_wheel_entrypoint_paths() -> Result<()> {
 }
 
 #[test]
+fn reject_invalid_wheel_record_entries() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let hash_wheel = context.temp_dir.child("record_test-1.0.0-py3-none-any.whl");
+    write_wheel_with_record_entry(
+        hash_wheel.path(),
+        "record_test.py,sha256=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA,10",
+    )?;
+
+    uv_snapshot!(context.filters(), context.pip_install().arg(hash_wheel.path()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+      × Failed to read `record-test @ file://[TEMP_DIR]/record_test-1.0.0-py3-none-any.whl`
+      ╰─▶ The wheel is invalid: Hash mismatch for `record_test.py` in RECORD
+    "
+    );
+
+    write_wheel_with_record_entry(hash_wheel.path(), "record_test.py,,11")?;
+
+    uv_snapshot!(context.filters(), context.pip_install().arg(hash_wheel.path()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+      × Failed to read `record-test @ file://[TEMP_DIR]/record_test-1.0.0-py3-none-any.whl`
+      ╰─▶ The wheel is invalid: Size mismatch for `record_test.py` in RECORD (expected 11, got 10)
+    "
+    );
+
+    write_wheel_with_record_entry(hash_wheel.path(), "record_test.py,,10")?;
+
+    uv_snapshot!(context.filters(), context.pip_install().arg(hash_wheel.path()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+      × Failed to read `record-test @ file://[TEMP_DIR]/record_test-1.0.0-py3-none-any.whl`
+      ╰─▶ The wheel is invalid: Missing hash for `record_test.py` in RECORD
+    "
+    );
+
+    write_wheel_with_record_entry(hash_wheel.path(), "")?;
+
+    uv_snapshot!(context.filters(), context.pip_install().arg(hash_wheel.path()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+      × Failed to read `record-test @ file://[TEMP_DIR]/record_test-1.0.0-py3-none-any.whl`
+      ╰─▶ The wheel is invalid: File `record_test.py` is missing from RECORD
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn accept_wheel_record_hash_algorithms() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    for (build_tag, hash) in [
+        "sha256=4T34xEr13qHkEkA5ELmcxaSPLMv2imazN01quc75_GU",
+        "sha384=RBwKfowK-CmVuLWLFZ1MILiYKxiwX8OczU7_kmVYrqTN5rhTlerPiUdvpvOtAaL2",
+        "sha512=SY--AbR03sEJCfrOCErcyScF8k6ssPymM4ks17M5nhG6FzvNPJd1XlKXMKuRkjSh9XLgZNnRJ39qCqJmBQXDrA",
+        "sha3_256=YHfmOZ9mUzha6fRO9JfEZDYe3tgEkWRyKliBwCU71xk",
+        "sha3_384=AgW5shApsW9F6NiAxTF37ClcRMRqZXWqWVJWHREJbAxsenuiqXwhO8yHizl2u3YR",
+        "sha3_512=XZn71jMNbvFJZh8oLZF4sa7I8gi3c0z2bBm-zkYss0v-Nb8fgCFw6kw4CF5GEEip8ajgGU-7EB9-s2ppUbJyrA",
+        "blake2b=UOF7YLqDF4c3IkrGmHJfgBr4MfSV6WjysgrNTG9S8MZBc2Caz1dI9u4I14Wqkpm1Mdsm3nJBERMwthhEUjSLYw",
+        "blake2s=DTTFx8nnSRcYzGWYWKunXVFqX07NjRQmzUcXoPMniIQ",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let wheel = context.temp_dir.child(format!(
+            "record_test-1.0.0-{}-py3-none-any.whl",
+            build_tag + 1
+        ));
+        write_wheel_with_record_entry(wheel.path(), &format!("record_test.py,{hash},10"))?;
+        context
+            .pip_install()
+            .arg("--reinstall")
+            .arg(wheel.path())
+            .assert()
+            .success();
+    }
+
+    Ok(())
+}
+
+#[test]
 fn reject_normalized_reserved_wheel_entrypoint_name() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let repacked_wheel =
@@ -16421,8 +16553,8 @@ fn handle_record_mismatches() -> Result<()> {
     // Snapshot the current (correct) RECORD.
     let record = unpacked.join("foo-0.1.0.dist-info/RECORD");
     let correct_record = fs_err::read_to_string(&record)?;
-    let correct_record = apply_filters(correct_record, context.filters());
-    assert_snapshot!(correct_record, @"
+    let snapshot = apply_filters(correct_record.clone(), context.filters());
+    assert_snapshot!(snapshot, @"
     foo/__init__.py,sha256=jv2QBpHSNajIRNeADSmtqOWL9QcdUddyMK277kbp06o,49
     foo/py.typed,sha256=47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU,0
     foo-0.1.0.dist-info/WHEEL,sha256=[SHA256],[SIZE]
@@ -16430,15 +16562,10 @@ fn handle_record_mismatches() -> Result<()> {
     foo-0.1.0.dist-info/RECORD,,
     ");
 
-    // Create a broken RECORD: Remove 2 files, and add a bogus one.
+    // Create a broken RECORD by adding a bogus file.
     fs_err::write(
         &record,
-        indoc! {"
-        foo/py.typed,sha256=47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU,0
-        foo-0.1.0.dist-info/WHEEL,sha256=hbX8mDThv1n7VEIpQRy6c2yAFTw4iAQlEC53gDAhHSo,80
-        foo-0.1.0.dist-info/RECORD,,
-        ../../../../etc/passwd,,0
-    "},
+        format!("{correct_record}../../../../etc/passwd,,0\n"),
     )?;
 
     // Repack the wheel.
@@ -16525,12 +16652,12 @@ fn handle_record_mismatches() -> Result<()> {
     // Ensure that all expected files are present.
     assert_snapshot!(&snapshot, @"
     foo-0.1.0.dist-info/INSTALLER,sha256=5hhM4Q4mYTT9z6QB6PGpUAW81PGNFrYrdXMj4oM_6ak,2
-    foo-0.1.0.dist-info/METADATA,,147
+    foo-0.1.0.dist-info/METADATA,sha256=d-PGjuBKXweF5NgWUW5yDnAjBY0lg4uFZBqcnmGtNgY,147
     foo-0.1.0.dist-info/RECORD,,
     foo-0.1.0.dist-info/REQUESTED,sha256=47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU,0
     foo-0.1.0.dist-info/WHEEL,sha256=[SHA256],[SIZE]
     foo-0.1.0.dist-info/uv_cache.json,sha256=[SHA256],[SIZE]
-    foo/__init__.py,,49
+    foo/__init__.py,sha256=jv2QBpHSNajIRNeADSmtqOWL9QcdUddyMK277kbp06o,49
     foo/py.typed,sha256=47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU,0
     ");
 
