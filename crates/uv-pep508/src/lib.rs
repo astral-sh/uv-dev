@@ -30,6 +30,7 @@ use url::Url;
 
 use uv_cache_key::{CacheKey, CacheKeyHasher};
 use uv_normalize::{ExtraName, PackageName};
+use uv_redacted::redact_url_credentials;
 
 use crate::cursor::Cursor;
 pub(crate) use crate::marker::MarkerValue;
@@ -111,7 +112,7 @@ impl<T: Pep508Url> Display for Pep508Error<T> {
             f,
             "{}\n{}\n{}{}",
             self.message,
-            self.input,
+            redact_url_credentials(&self.input),
             " ".repeat(start_offset),
             "^".repeat(underline_len)
         )

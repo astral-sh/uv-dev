@@ -25,6 +25,29 @@ pub enum DisplaySafeUrlError {
     AmbiguousAuthority(String),
 }
 
+/// Redact URL credentials in an input that may not be a valid URL.
+///
+/// The replacement preserves byte offsets so callers can continue to display error spans.
+pub fn redact_url_credentials(input: &str) -> Cow<'_, str> {
+    let Some(scheme) = input.find("://") else {
+        return Cow::Borrowed(input);
+    };
+    let authority_start = scheme + 3;
+    // Do not stop at a path or query delimiter: malformed userinfo can contain unescaped
+    // delimiters and additional `@` characters.
+    let Some(authority_end) = input[authority_start..].rfind('@') else {
+        return Cow::Borrowed(input);
+    };
+    let authority_end = authority_start + authority_end;
+
+    let mut redacted = input.to_string();
+    redacted.replace_range(
+        authority_start..authority_end,
+        &"*".repeat(authority_end - authority_start),
+    );
+    Cow::Owned(redacted)
+}
+
 /// A [`Url`] wrapper that redacts credentials and sensitive query parameters when displaying the URL.
 ///
 /// `DisplaySafeUrl` wraps the standard [`url::Url`] type, providing functionality to mask
@@ -380,6 +403,32 @@ fn display_with_redacted_credentials(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn redact_credentials_in_invalid_url() {
+        let input = "package @ https://user:hunter2@[invalid-host/file.whl";
+        let redacted = super::redact_url_credentials(input);
+
+        assert_eq!(redacted.len(), input.len());
+        assert!(!redacted.contains("hunter2"));
+        assert!(redacted.contains("https://************@[invalid-host"));
+
+        let input = "package @ https://user:hunter2@credential-suffix@[invalid-host/file.whl";
+        let redacted = super::redact_url_credentials(input);
+
+        assert_eq!(redacted.len(), input.len());
+        assert!(!redacted.contains("hunter2"));
+        assert!(!redacted.contains("credential-suffix"));
+        assert!(redacted.ends_with("@[invalid-host/file.whl"));
+
+        let input = "package @ https://user/name:hunter2@credential-suffix@[invalid-host/file.whl";
+        let redacted = super::redact_url_credentials(input);
+
+        assert_eq!(redacted.len(), input.len());
+        assert!(!redacted.contains("hunter2"));
+        assert!(!redacted.contains("credential-suffix"));
+        assert!(redacted.ends_with("@[invalid-host/file.whl"));
+    }
 
     #[test]
     fn from_url_no_credentials() {

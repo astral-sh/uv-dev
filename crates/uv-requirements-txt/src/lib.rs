@@ -57,7 +57,7 @@ use uv_pep508::{Pep508Error, RequirementOrigin, VerbatimUrl, expand_env_vars};
 use uv_pypi_types::VerbatimParsedUrl;
 #[cfg(feature = "http")]
 use uv_redacted::DisplaySafeUrl;
-use uv_redacted::DisplaySafeUrlError;
+use uv_redacted::{DisplaySafeUrlError, redact_url_credentials};
 
 use crate::requirement::EditableError;
 pub use crate::requirement::RequirementsTxtRequirement;
@@ -1217,13 +1217,25 @@ impl Display for RequirementsTxtParserError {
         match self {
             Self::Io(err) => err.fmt(f),
             Self::Url { url, start, .. } => {
-                write!(f, "Invalid URL at position {start}: `{url}`")
+                write!(
+                    f,
+                    "Invalid URL at position {start}: `{}`",
+                    redact_url_credentials(url)
+                )
             }
             Self::FileUrl { url, start, .. } => {
-                write!(f, "Invalid file URL at position {start}: `{url}`")
+                write!(
+                    f,
+                    "Invalid file URL at position {start}: `{}`",
+                    redact_url_credentials(url)
+                )
             }
             Self::VerbatimUrl { url, start, .. } => {
-                write!(f, "Invalid URL at position {start}: `{url}`")
+                write!(
+                    f,
+                    "Invalid URL at position {start}: `{}`",
+                    redact_url_credentials(url)
+                )
             }
             Self::UrlConversion(given) => {
                 write!(f, "Unable to convert URL to path: {given}")
@@ -1286,7 +1298,11 @@ impl Display for RequirementsTxtParserError {
             #[cfg(feature = "http")]
             Self::InvalidUrl(url, err) => {
                 match err {
-                    DisplaySafeUrlError::Url(err) => write!(f, "Not a valid URL, {err}: `{url}`"),
+                    DisplaySafeUrlError::Url(err) => write!(
+                        f,
+                        "Not a valid URL, {err}: `{}`",
+                        redact_url_credentials(url)
+                    ),
                     DisplaySafeUrlError::AmbiguousAuthority(_) => {
                         // Intentionally avoid leaking the URL here, since we suspect that the user
                         // has given us an ambiguous URL that contains sensitive information.
@@ -1338,6 +1354,7 @@ impl Display for RequirementsTxtFileError {
                     f,
                     "Invalid URL in `{}` at position {start}: `{url}`",
                     self.file.user_display(),
+                    url = redact_url_credentials(url),
                 )
             }
             RequirementsTxtParserError::FileUrl { url, start, .. } => {
@@ -1345,6 +1362,7 @@ impl Display for RequirementsTxtFileError {
                     f,
                     "Invalid file URL in `{}` at position {start}: `{url}`",
                     self.file.user_display(),
+                    url = redact_url_credentials(url),
                 )
             }
             RequirementsTxtParserError::VerbatimUrl { url, start, .. } => {
@@ -1352,6 +1370,7 @@ impl Display for RequirementsTxtFileError {
                     f,
                     "Invalid URL in `{}` at position {start}: `{url}`",
                     self.file.user_display(),
+                    url = redact_url_credentials(url),
                 )
             }
             RequirementsTxtParserError::UrlConversion(given) => {
@@ -1459,7 +1478,11 @@ impl Display for RequirementsTxtFileError {
             }
             #[cfg(feature = "http")]
             RequirementsTxtParserError::InvalidUrl(url, err) => match err {
-                DisplaySafeUrlError::Url(err) => write!(f, "Not a valid URL, {err}: `{url}`"),
+                DisplaySafeUrlError::Url(err) => write!(
+                    f,
+                    "Not a valid URL, {err}: `{}`",
+                    redact_url_credentials(url)
+                ),
                 DisplaySafeUrlError::AmbiguousAuthority(_) => {
                     // Intentionally avoid leaking the URL here, since we suspect that the user
                     // has given us an ambiguous URL that contains sensitive information.
@@ -1971,6 +1994,35 @@ mod test {
             empty host
             ");
         });
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn invalid_urls_redact_credentials() -> Result<()> {
+        let temp_dir = assert_fs::TempDir::new()?;
+        let requirements_txt = temp_dir.child("requirements.txt");
+
+        for requirement in [
+            "--index-url https://user:hunter2@[invalid-host/simple",
+            "--find-links https://user:hunter2@[invalid-host/files",
+            "numpy @ https://user:hunter2@[invalid-host/numpy.whl",
+            "--index-url https://user:hunter2@credential-suffix@[invalid-host/simple",
+            "--index-url https://user/name:hunter2@credential-suffix@[invalid-host/simple",
+        ] {
+            requirements_txt.write_str(requirement)?;
+            let error = RequirementsTxt::parse(requirements_txt.path(), temp_dir.path())
+                .await
+                .unwrap_err();
+            let errors = anyhow::Error::new(error).chain().join("\n");
+
+            assert!(!errors.contains("hunter2"), "credentials leaked: {errors}");
+            assert!(
+                !errors.contains("credential-suffix"),
+                "credentials leaked: {errors}"
+            );
+            assert!(errors.contains("@[invalid-host"));
+        }
 
         Ok(())
     }
