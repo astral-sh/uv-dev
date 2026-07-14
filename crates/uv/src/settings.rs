@@ -74,7 +74,7 @@ use uv_workspace::pyproject_mut::AddBoundsKind;
 
 use crate::commands::pip::operations::Modifications;
 use crate::commands::{
-    InitKind, InitProjectKind, PythonUpgrade, PythonUpgradeSource, ToolRunCommand,
+    InitKind, InitProjectKind, PythonReinstall, PythonUpgrade, PythonUpgradeSource, ToolRunCommand,
 };
 
 /// The default publish URL.
@@ -1635,7 +1635,7 @@ impl PythonDirSettings {
 pub(crate) struct PythonInstallSettings {
     pub(crate) install_dir: Option<PathBuf>,
     pub(crate) targets: Vec<String>,
-    pub(crate) reinstall: bool,
+    pub(crate) reinstall: PythonReinstall,
     pub(crate) force: bool,
     pub(crate) upgrade: PythonUpgrade,
     pub(crate) bin: Option<bool>,
@@ -1689,7 +1689,7 @@ impl PythonInstallSettings {
         Ok(Self {
             install_dir,
             targets,
-            reinstall,
+            reinstall: reinstall.into(),
             force,
             upgrade: if upgrade {
                 PythonUpgrade::Enabled(PythonUpgradeSource::Install)
@@ -1731,7 +1731,7 @@ pub(crate) struct PythonUpgradeSettings {
     pub(crate) registry: Option<bool>,
     pub(crate) python_install_mirror: Option<String>,
     pub(crate) pypy_install_mirror: Option<String>,
-    pub(crate) reinstall: bool,
+    pub(crate) reinstall: PythonReinstall,
     pub(crate) python_downloads_json_url: Option<String>,
     pub(crate) default: bool,
     pub(crate) bin: Option<bool>,
@@ -1788,7 +1788,7 @@ impl PythonUpgradeSettings {
             registry,
             python_install_mirror,
             pypy_install_mirror,
-            reinstall,
+            reinstall: reinstall.into(),
             python_downloads_json_url,
             default,
             bin,
