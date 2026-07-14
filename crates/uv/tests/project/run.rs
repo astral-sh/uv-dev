@@ -135,8 +135,7 @@ fn run_with_python_version() -> Result<()> {
     uv_snapshot!(context.filters(), command_with_args, @"
     exit_code: 2 (failure)
     ----- stderr -----
-    Using CPython 3.9.[X] interpreter at: [PYTHON-3.9]
-    error: The requested interpreter resolved to Python 3.9.[X], which is incompatible with the project's Python requirement: `>=3.11, <4` (from `project.requires-python`)
+    error: The requested interpreter resolved to Python 3.9, which is incompatible with the project's Python requirement: `>=3.11, <4` (from `project.requires-python`)
     ");
 
     Ok(())
@@ -3755,8 +3754,7 @@ fn run_isolated_incompatible_python() -> Result<()> {
     uv_snapshot!(context.filters(), context.run().arg("main.py"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    Using CPython 3.9.[X] interpreter at: [PYTHON-3.9]
-    error: The Python request from `.python-version` resolved to Python 3.9.[X], which is incompatible with the project's Python requirement: `>=3.12` (from `project.requires-python`)
+    error: The Python request from `.python-version` resolved to Python 3.9, which is incompatible with the project's Python requirement: `>=3.12` (from `project.requires-python`)
     Use `uv python pin` to update the `.python-version` file to a compatible version
     ");
 
@@ -5572,8 +5570,7 @@ fn run_groups_requires_python_errors() -> Result<()> {
         .arg("python").arg("--version"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    error: The requested interpreter resolved to Python 3.12.[X], which is incompatible with the project's Python requirement: `>=3.13` (from `tool.uv.dependency-groups.dev.requires-python`).
+    error: The requested interpreter resolved to Python 3.12, which is incompatible with the project's Python requirement: `>=3.13` (from `tool.uv.dependency-groups.dev.requires-python`).
     ");
 
     // An isolated environment must satisfy the selected groups too.
@@ -5678,8 +5675,7 @@ fn run_groups_include_requires_python() -> Result<()> {
         .arg("python").arg("-c").arg("import typing_extensions"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
-    error: The requested interpreter resolved to Python 3.13.[X], which is incompatible with the project's Python requirement: `==3.12.*` (from `tool.uv.dependency-groups.dev.requires-python`).
+    error: The requested interpreter resolved to Python 3.13, which is incompatible with the project's Python requirement: `==3.12.*` (from `tool.uv.dependency-groups.dev.requires-python`).
     ");
     Ok(())
 }
