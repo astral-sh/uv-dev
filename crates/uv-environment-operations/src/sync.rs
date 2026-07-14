@@ -160,15 +160,15 @@ pub async fn sync_from_lock(
         ));
     }
 
+    // Determine the markers to use for resolution.
+    let marker_env = resolution_markers(None, python_platform, venv.interpreter());
+
     // Validate that the set of requested extras and development groups are compatible.
-    detect_conflicts(&target, extras, groups)?;
+    detect_conflicts(&target, extras, groups, Some(&marker_env))?;
 
     // Validate that the set of requested extras and development groups are defined in the lockfile.
     target.validate_extras(extras)?;
     target.validate_groups(groups)?;
-
-    // Determine the markers to use for resolution.
-    let marker_env = resolution_markers(None, python_platform, venv.interpreter());
 
     // Validate that the platform is supported by the lockfile.
     let environments = target.lock().supported_environments();
