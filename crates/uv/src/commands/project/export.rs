@@ -448,6 +448,18 @@ pub(crate) async fn export(
             write!(writer, "{export}")?;
         }
         ExportFormat::PylockToml => {
+            let output_path = output_file
+                .as_deref()
+                .and_then(Path::parent)
+                .map(|parent| {
+                    if parent.as_os_str().is_empty() {
+                        Path::new(".")
+                    } else {
+                        parent
+                    }
+                })
+                .map(std::path::absolute)
+                .transpose()?;
             let mut export = PylockToml::from_lock(
                 &target,
                 &prune,
@@ -456,6 +468,7 @@ pub(crate) async fn export(
                 include_annotations,
                 editable.as_ref(),
                 &install_options,
+                output_path.as_deref().unwrap_or(target.install_path()),
             )?;
 
             // Registries don't always provide hashes, but `packages.*.hashes` is a required
