@@ -4746,7 +4746,8 @@ fn run_gui_script_explicit_stdin_unix() -> Result<()> {
 #[test]
 fn run_remote_pep723_script() {
     let context = uv_test::test_context!("3.12").with_filtered_python_names();
-    uv_snapshot!(context.filters(), context.run().arg("https://raw.githubusercontent.com/astral-sh/uv/df45b9ac2584824309ff29a6a09421055ad730f6/scripts/uv-run-remote-script-test.py").arg(EnvVars::CI), @"
+    // The URL parser accepts a single slash, and schemes are case-insensitive.
+    uv_snapshot!(context.filters(), context.run().arg("HTTPS:/raw.githubusercontent.com/astral-sh/uv/df45b9ac2584824309ff29a6a09421055ad730f6/scripts/uv-run-remote-script-test.py").arg(EnvVars::CI), @"
     exit_code: 0 (success)
     ----- stdout -----
     Hello CI, from uv!
@@ -4840,8 +4841,8 @@ fn run_remote_pep723_requirements_fetch_error_does_not_leak_credentials() -> Res
 fn run_url_like_with_local_file_priority() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
-    let url = "https://example.com/path/to/main.py";
-    let local_path: std::path::PathBuf = ["https:", "", "example.com", "path", "to", "main.py"]
+    let url = "HtTp://example.com/path/to/main.py";
+    let local_path: std::path::PathBuf = ["HtTp:", "", "example.com", "path", "to", "main.py"]
         .iter()
         .collect();
 
