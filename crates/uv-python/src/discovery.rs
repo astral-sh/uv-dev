@@ -2130,15 +2130,10 @@ impl PythonRequest {
                 {
                     return true;
                 }
-                // ... check in `PATH`. The name we find here does not need to be the
-                // name we install, so we can find `foopython` here which got installed as `python`.
-                if which(name)
-                    .ok()
-                    .as_ref()
-                    .and_then(|executable| executable.file_name())
-                    .is_some_and(|file_name| file_name == name.as_str())
-                {
-                    return true;
+                // ... check in `PATH`. The name we find here does not need to be the name we
+                // install, so we can find `foopython` here which got installed as `python`.
+                if let Ok(executable) = which(name) {
+                    return Self::File(executable).satisfied(interpreter, cache);
                 }
                 false
             }
