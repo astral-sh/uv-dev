@@ -965,12 +965,8 @@ impl InterpreterInfo {
         // Sanitize the path by (1) running under isolated mode (`-I`) to ignore any site packages
         // modifications, and then (2) adding the path containing our query script to the front of
         // `sys.path` so that we can import it.
-        // There are user reports that `sitecustomize.py` output breaks worker communication, but
-        // we cannot use `-S` here because interpreter discovery needs the site-initialized
-        // `sys.path`. We may want to fix this in the future if there are more reports. See:
-        // https://github.com/astral-sh/uv/issues/11508.
         let script = format!(
-            r"import sys; sys.path = [{}] + sys.path; from python.get_interpreter_info import main; main()",
+            r#"import sys; sys.path = [{}] + sys.path; from python.get_interpreter_info import main; print("\nUV_INTERPRETER_INFO"); main()"#,
             tempdir.path().escape_for_python()
         );
         let mut command = Command::new(interpreter);
@@ -1053,25 +1049,34 @@ impl InterpreterInfo {
             }));
         }
 
-        let result: InterpreterInfoResult =
-            serde_json::from_slice(&output.stdout).map_err(|err| {
-                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        // `sitecustomize.py` can write to stdout even in isolated mode. Its output can be a
+        // prefix without a trailing newline or be appended at exit, so locate the response
+        // immediately following the marker emitted by the query script.
+        let response = output
+            .stdout
+            .split(|byte| *byte == b'\n')
+            .skip_while(|line| line.strip_suffix(b"\r").unwrap_or(line) != b"UV_INTERPRETER_INFO")
+            .skip(1)
+            .find(|line| !line.is_empty())
+            .unwrap_or(&output.stdout);
+        let result: InterpreterInfoResult = serde_json::from_slice(response).map_err(|err| {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
 
-                // If the Python version is too old, we may not even be able to invoke the query script
-                if stderr.contains("Unknown option: -I") {
-                    Error::QueryScript {
-                        err: InterpreterInfoError::UnsupportedPython,
-                        path: interpreter.to_path_buf(),
-                    }
-                } else {
-                    Error::UnexpectedResponse(UnexpectedResponseError {
-                        err,
-                        stdout: String::from_utf8_lossy(&output.stdout).trim().to_string(),
-                        stderr,
-                        path: interpreter.to_path_buf(),
-                    })
+            // If the Python version is too old, we may not even be able to invoke the query script
+            if stderr.contains("Unknown option: -I") {
+                Error::QueryScript {
+                    err: InterpreterInfoError::UnsupportedPython,
+                    path: interpreter.to_path_buf(),
                 }
-            })?;
+            } else {
+                Error::UnexpectedResponse(UnexpectedResponseError {
+                    err,
+                    stdout: String::from_utf8_lossy(&output.stdout).trim().to_string(),
+                    stderr,
+                    path: interpreter.to_path_buf(),
+                })
+            }
+        })?;
 
         match result {
             InterpreterInfoResult::Error(err) => Err(Error::QueryScript {

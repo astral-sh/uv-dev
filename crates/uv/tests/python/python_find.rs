@@ -793,6 +793,36 @@ fn python_find_venv() {
 
 #[cfg(unix)]
 #[test]
+fn python_find_venv_with_sitecustomize_output() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_python_names()
+        .with_filtered_virtualenv_bin();
+    fs_err::write(
+        context.site_packages().join("sitecustomize.py"),
+        indoc! {r#"
+            import atexit
+            import sys
+
+            sys.stdout.reconfigure(newline="\r\n")
+            sys.stdout.write("sitecustomize prefix without newline")
+            atexit.register(print, "sitecustomize output at exit")
+        "#},
+    )?;
+
+    uv_snapshot!(context.filters(), context.python_find(), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+    [VENV]/[BIN]/[PYTHON]
+
+    ----- stderr -----
+    ");
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
 fn python_find_unsupported_version() {
     let context = uv_test::test_context_with_versions!(&["3.12"]);
 
