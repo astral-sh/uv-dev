@@ -59,6 +59,7 @@ use uv_pep508::{Pep508Error, RequirementOrigin, VerbatimUrl, expand_env_vars};
 use uv_pypi_types::VerbatimParsedUrl;
 #[cfg(feature = "http")]
 use uv_redacted::DisplaySafeUrl;
+use uv_redacted::redact_url_credentials;
 
 pub use crate::requirement::{MakeEditableError, RequirementsTxtRequirement};
 use crate::shquote::unquote;
@@ -1202,10 +1203,18 @@ impl Display for RequirementsTxtParserError {
         match self {
             Self::Io(err) => err.fmt(f),
             Self::Url { url, start, .. } => {
-                write!(f, "Invalid URL at position {start}: `{url}`")
+                write!(
+                    f,
+                    "Invalid URL at position {start}: `{}`",
+                    redact_url_credentials(url)
+                )
             }
             Self::FileUrl { url, start, .. } => {
-                write!(f, "Invalid file URL at position {start}: `{url}`")
+                write!(
+                    f,
+                    "Invalid file URL at position {start}: `{}`",
+                    redact_url_credentials(url)
+                )
             }
             Self::RequirementsInput { source, start, .. } => {
                 write!(
@@ -1214,7 +1223,11 @@ impl Display for RequirementsTxtParserError {
                 )
             }
             Self::VerbatimUrl { url, start, .. } => {
-                write!(f, "Invalid URL at position {start}: `{url}`")
+                write!(
+                    f,
+                    "Invalid URL at position {start}: `{}`",
+                    redact_url_credentials(url)
+                )
             }
             Self::UrlConversion(given) => {
                 write!(f, "Unable to convert URL to path: {given}")
@@ -1310,12 +1323,17 @@ impl Display for RequirementsTxtFileError {
         match &self.error {
             RequirementsTxtParserError::Io(err) => err.fmt(f),
             RequirementsTxtParserError::Url { url, start, .. } => {
-                write!(f, "Invalid URL in `{file}` at position {start}: `{url}`")
+                write!(
+                    f,
+                    "Invalid URL in `{file}` at position {start}: `{url}`",
+                    url = redact_url_credentials(url),
+                )
             }
             RequirementsTxtParserError::FileUrl { url, start, .. } => {
                 write!(
                     f,
                     "Invalid file URL in `{file}` at position {start}: `{url}`",
+                    url = redact_url_credentials(url),
                 )
             }
             RequirementsTxtParserError::RequirementsInput { source, start, .. } => {
@@ -1325,7 +1343,11 @@ impl Display for RequirementsTxtFileError {
                 )
             }
             RequirementsTxtParserError::VerbatimUrl { url, start, .. } => {
-                write!(f, "Invalid URL in `{file}` at position {start}: `{url}`")
+                write!(
+                    f,
+                    "Invalid URL in `{file}` at position {start}: `{url}`",
+                    url = redact_url_credentials(url),
+                )
             }
             RequirementsTxtParserError::UrlConversion(given) => {
                 write!(f, "Unable to convert URL to path `{file}`: {given}")
@@ -1907,6 +1929,34 @@ mod test {
             empty host
             ");
         });
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn invalid_urls_redact_credentials() -> Result<()> {
+        let temp_dir = assert_fs::TempDir::new()?;
+        let requirements_txt = temp_dir.child("requirements.txt");
+
+        for requirement in [
+            "--index-url https://user:hunter2@[invalid-host/simple",
+            "--find-links https://user:hunter2@[invalid-host/files",
+            "numpy @ https://user:hunter2@[invalid-host/numpy.whl",
+            "--index-url https://user:hunter2@credential-suffix@[invalid-host/simple",
+            "--index-url https://user/name:hunter2@credential-suffix@[invalid-host/simple",
+        ] {
+            requirements_txt.write_str(requirement)?;
+            let error = RequirementsTxt::parse(requirements_txt.path(), temp_dir.path())
+                .await
+                .unwrap_err();
+            let errors = anyhow::Error::new(error).chain().join("\n");
+
+            assert!(!errors.contains("hunter2"), "credentials leaked: {errors}");
+            assert!(
+                !errors.contains("credential-suffix"),
+                "credentials leaked: {errors}"
+            );
+        }
 
         Ok(())
     }
