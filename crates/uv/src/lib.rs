@@ -58,7 +58,7 @@ use uv_threads::{RAYON_PARALLELISM, min_stack_size};
 use uv_warnings::{warn_user, warn_user_once};
 use uv_workspace::{DiscoveryOptions, Workspace, WorkspaceCache};
 
-use crate::commands::{ParsedRunCommand, RunCommand, ScriptPath};
+use crate::commands::{ParsedRunCommand, RunCommand, ScriptPath, SyncMode};
 
 mod commands;
 #[cfg(not(feature = "self-update"))]
@@ -2363,7 +2363,7 @@ async fn run_project(
                 args.lock_check,
                 args.frozen,
                 args.active,
-                args.no_sync,
+                SyncMode::from_no_sync(args.no_sync),
                 args.isolated,
                 args.all_packages,
                 args.package,
@@ -2630,7 +2630,7 @@ async fn run_project(
                 args.lock_check,
                 args.frozen,
                 args.active,
-                args.no_sync,
+                SyncMode::from_no_sync(args.no_sync),
                 args.no_install_project,
                 args.only_install_project,
                 args.no_install_workspace,
@@ -2757,7 +2757,7 @@ async fn run_project(
                 args.lock_check,
                 args.frozen,
                 args.active,
-                args.no_sync,
+                SyncMode::from_no_sync(args.no_sync),
                 args.python,
                 args.install_mirrors,
                 args.settings,
@@ -2931,7 +2931,7 @@ async fn run_project(
                 args.fix,
                 args.lock_check,
                 args.frozen,
-                args.no_sync,
+                SyncMode::from_no_sync(args.no_sync),
                 args.no_install_project,
                 args.isolated,
                 args.all_packages,

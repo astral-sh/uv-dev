@@ -62,8 +62,7 @@ use uv_workspace::pyproject::{DependencyType, Source, SourceError, Sources, Tool
 use uv_workspace::pyproject_mut::{AddBoundsKind, ArrayEdit, DependencyTarget, PyProjectTomlMut};
 use uv_workspace::{DiscoveryOptions, VirtualProject, WorkspaceCache};
 
-use crate::ProjectError;
-use crate::ScriptPath;
+use crate::{ProjectError, ScriptPath, SyncMode};
 use crate::edit::{EditTarget, ProjectEdit, PythonTarget};
 use uv_resolve_operations::reporters::ResolverReporter;
 
@@ -99,7 +98,7 @@ pub async fn add(
     lock_check: LockCheck,
     frozen: Option<FrozenSource>,
     active: ActiveEnvironment,
-    no_sync: bool,
+    sync: SyncMode,
     no_install_project: bool,
     only_install_project: bool,
     no_install_workspace: bool,
@@ -139,6 +138,8 @@ pub async fn add(
     preview: Preview,
     malware_settings: &MalwareCheckSettings,
 ) -> Result<ExitStatus> {
+    let no_sync = sync.no_sync();
+
     for source in &requirements {
         match source {
             RequirementsSource::PyprojectToml(_) => {

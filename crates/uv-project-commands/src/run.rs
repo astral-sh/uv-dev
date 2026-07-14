@@ -69,6 +69,8 @@ use uv_types::SourceTreeEditablePolicy;
 use uv_warnings::warn_user;
 use uv_workspace::{DiscoveryOptions, VirtualProject, WorkspaceCache, WorkspaceErrorKind};
 
+use crate::SyncMode;
+
 /// GitHub Gist API response structure
 #[derive(serde::Deserialize)]
 struct GistResponse {
@@ -91,7 +93,7 @@ pub async fn run(
     lock_check: LockCheck,
     frozen: Option<FrozenSource>,
     active: ActiveEnvironment,
-    no_sync: bool,
+    sync: SyncMode,
     isolated: bool,
     all_packages: bool,
     package: Option<PackageName>,
@@ -120,6 +122,8 @@ pub async fn run(
     malware_settings: MalwareCheckSettings,
     #[cfg(unix)] run_rlimit_nofile: Option<u32>,
 ) -> anyhow::Result<ExitStatus> {
+    let no_sync = sync.no_sync();
+
     // Check if max recursion depth was exceeded. This most commonly happens
     // for scripts with a shebang line like `#!/usr/bin/env -S uv run`, so try
     // to provide guidance for that case.

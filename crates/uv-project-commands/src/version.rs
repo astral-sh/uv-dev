@@ -42,7 +42,7 @@ use uv_workspace::{
     pyproject_mut::{DependencyTarget, PyProjectTomlMut},
 };
 
-use crate::ProjectError;
+use crate::{ProjectError, SyncMode};
 use crate::edit::{ProjectEdit, PythonTarget};
 
 /// Version information for a project (`uv version`).
@@ -87,7 +87,7 @@ pub async fn project_version(
     lock_check: LockCheck,
     frozen: Option<FrozenSource>,
     active: ActiveEnvironment,
-    no_sync: bool,
+    sync: SyncMode,
     python: Option<String>,
     install_mirrors: PythonInstallMirrors,
     settings: ResolverInstallerSettings,
@@ -352,7 +352,7 @@ pub async fn project_version(
             lock_check,
             frozen,
             active,
-            no_sync,
+            sync,
             python,
             install_mirrors,
             &settings,
@@ -503,7 +503,7 @@ async fn lock_and_sync(
     lock_check: LockCheck,
     frozen: Option<FrozenSource>,
     active: ActiveEnvironment,
-    no_sync: bool,
+    sync: SyncMode,
     python: Option<String>,
     install_mirrors: PythonInstallMirrors,
     settings: &ResolverInstallerSettings,
@@ -519,6 +519,8 @@ async fn lock_and_sync(
     preview: Preview,
     malware_settings: &MalwareCheckSettings,
 ) -> Result<ExitStatus> {
+    let no_sync = sync.no_sync();
+
     // If frozen, don't touch the lock or sync at all
     if frozen.is_some() {
         return Ok(ExitStatus::Success);

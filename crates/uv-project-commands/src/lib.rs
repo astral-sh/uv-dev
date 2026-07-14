@@ -25,6 +25,32 @@ pub mod version;
 
 mod reporters;
 
+/// Whether to sync the project environment.
+#[derive(Debug, Clone, Copy)]
+pub enum SyncMode {
+    /// Sync the project environment.
+    Enabled,
+    /// Avoid syncing the project environment.
+    Disabled,
+}
+
+impl SyncMode {
+    pub const fn from_no_sync(no_sync: bool) -> Self {
+        if no_sync {
+            Self::Disabled
+        } else {
+            Self::Enabled
+        }
+    }
+
+    const fn no_sync(self) -> bool {
+        match self {
+            Self::Enabled => false,
+            Self::Disabled => true,
+        }
+    }
+}
+
 /// A Python file that may or may not include an existing PEP 723 script tag.
 #[derive(Debug)]
 #[expect(clippy::large_enum_variant)]

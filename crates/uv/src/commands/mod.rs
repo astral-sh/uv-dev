@@ -30,6 +30,7 @@ pub(crate) use project::sync::sync;
 pub(crate) use project::tree::tree;
 pub(crate) use project::upgrade::upgrade;
 pub(crate) use project::version::project_version;
+pub(crate) use project::SyncMode;
 pub(crate) use python::dir::dir as python_dir;
 pub(crate) use python::find::find as python_find;
 pub(crate) use python::find::find_script as python_find_script;
