@@ -1671,7 +1671,9 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
         requests: &'index MetadataRequests,
     ) -> Result<(), ResolveError> {
         let request = if matches!(&**package, PubGrubPackageInner::Package { .. })
-            && self.dependency_mode.is_transitive()
+            && (self.dependency_mode.is_transitive()
+                || (!matches!(dist, CompatibleDist::InstalledDist(_))
+                    && dist.requires_python().is_none()))
         {
             Some(|| {
                 requests.request_metadata(
@@ -1797,8 +1799,10 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                 kind,
                 marker: _,
             } => {
-                // If we're excluding transitive dependencies, short-circuit.
-                if self.dependency_mode.is_direct() {
+                // In direct mode, metadata is only needed for an installable candidate whose
+                // index file did not declare `Requires-Python`.
+                if self.dependency_mode.is_direct() && !pins.requires_python_metadata(name, version)
+                {
                     return Ok(Dependencies::Unforkable(Vec::default()));
                 }
 
@@ -1858,6 +1862,12 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                     if !python_requirement.target().is_contained_by(requires_python) {
                         return Ok(Dependencies::RequiresPython(requires_python.clone()));
                     }
+                }
+
+                // If we're excluding transitive dependencies, the distribution metadata is only
+                // needed to validate a missing `Requires-Python` index attribute.
+                if self.dependency_mode.is_direct() {
+                    return Ok(Dependencies::Unforkable(Vec::default()));
                 }
 
                 // Identify any system dependencies based on the index URL.
