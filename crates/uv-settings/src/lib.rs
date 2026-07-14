@@ -12,7 +12,7 @@ use uv_flags::EnvironmentFlags;
 use uv_fs::Simplified;
 use uv_normalize::{GroupName, PackageName};
 use uv_pep440::Version;
-use uv_python::PythonArchitecture;
+use uv_python::{PythonArchitecture, PythonPreference};
 use uv_redacted::DisplaySafeUrl;
 use uv_static::{EnvVars, InvalidEnvironmentVariable, parse_boolish_environment_variable};
 use uv_torch::AmdGpuArchitecture;
@@ -762,6 +762,7 @@ pub struct EnvironmentOptions {
     pub locked: EnvFlag,
     pub offline: EnvFlag,
     pub no_sync: EnvFlag,
+    pub python_preference: Option<PythonPreference>,
     pub managed_python: EnvFlag,
     pub no_managed_python: EnvFlag,
     pub native_tls: EnvFlag,
@@ -901,6 +902,9 @@ impl EnvironmentOptions {
             locked: EnvFlag::new(EnvVars::UV_LOCKED)?,
             offline: EnvFlag::new(EnvVars::UV_OFFLINE)?,
             no_sync: EnvFlag::new(EnvVars::UV_NO_SYNC)?,
+            python_preference: parse_value_enum_environment_variable(
+                EnvVars::UV_PYTHON_PREFERENCE,
+            )?,
             managed_python: EnvFlag::new(EnvVars::UV_MANAGED_PYTHON)?,
             no_managed_python: EnvFlag::new(EnvVars::UV_NO_MANAGED_PYTHON)?,
             native_tls,
@@ -1045,6 +1049,24 @@ where
             },
         )),
     }
+}
+
+/// Parse an environment variable containing a Clap value enum.
+fn parse_value_enum_environment_variable<T>(name: &'static str) -> Result<Option<T>, Error>
+where
+    T: clap::ValueEnum,
+{
+    let Some(value) = parse_string_environment_variable(name)? else {
+        return Ok(None);
+    };
+
+    T::from_str(&value, false).map(Some).map_err(|err| {
+        Error::InvalidEnvironmentVariable(InvalidEnvironmentVariable {
+            name: name.to_string(),
+            value,
+            err,
+        })
+    })
 }
 
 fn parse_integer_environment_variable<T>(

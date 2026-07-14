@@ -987,6 +987,64 @@ fn python_find_managed() {
     ");
 }
 
+#[test]
+fn python_find_python_preference_environment_precedence() {
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
+        .with_filtered_python_sources()
+        .with_versions_as_managed(&["3.11"]);
+
+    uv_snapshot!(context.filters(), context.python_find()
+        .env(EnvVars::UV_PYTHON_PREFERENCE, "managed")
+        .arg("--no-managed-python"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [PYTHON-3.12]
+    ");
+
+    uv_snapshot!(context.filters(), context.python_find()
+        .env(EnvVars::UV_PYTHON_PREFERENCE, "system")
+        .arg("--managed-python"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [PYTHON-3.11]
+    ");
+
+    uv_snapshot!(context.filters(), context.python_find()
+        .env(EnvVars::UV_MANAGED_PYTHON, "1")
+        .arg("--python-preference")
+        .arg("system"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [PYTHON-3.12]
+    ");
+
+    uv_snapshot!(context.filters(), context.python_find()
+        .env(EnvVars::UV_NO_MANAGED_PYTHON, "1")
+        .arg("--python-preference")
+        .arg("managed"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [PYTHON-3.11]
+    ");
+
+    uv_snapshot!(context.filters(), context.python_find()
+        .arg("--python-preference")
+        .arg("managed")
+        .arg("--no-managed-python"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: the argument `--no-managed-python` cannot be used with `--python-preference`
+    ");
+
+    uv_snapshot!(context.filters(), context.python_find()
+        .env(EnvVars::UV_PYTHON_PREFERENCE, "managed")
+        .env(EnvVars::UV_NO_MANAGED_PYTHON, "1"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: the argument `UV_NO_MANAGED_PYTHON` (environment variable) cannot be used with `UV_PYTHON_PREFERENCE` (environment variable)
+    ");
+}
+
 /// See: <https://github.com/astral-sh/uv/issues/11825>
 ///
 /// This test will not succeed on macOS if using a Homebrew provided interpreter. The interpreter
