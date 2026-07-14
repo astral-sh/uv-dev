@@ -2671,10 +2671,6 @@ impl Lock {
         if !root_requirements.is_empty() {
             for requirement in root_requirements {
                 for package in self.packages_for_name(&requirement.name) {
-                    if !package.id.source.is_source_tree() {
-                        continue;
-                    }
-
                     let marker = if package.fork_markers.is_empty() {
                         requirement.marker
                     } else {
@@ -2686,9 +2682,6 @@ impl Lock {
                         combined
                     };
                     if marker.is_false() {
-                        continue;
-                    }
-                    if !marker.evaluate(markers, &[]) {
                         continue;
                     }
 
@@ -2736,7 +2729,15 @@ impl Lock {
                 }
             }
 
-            // If the package is immutable, we don't need to validate it (or its dependencies).
+            // Recurse before skipping an immutable package, since it may depend on mutable local
+            // or direct URL sources that still need to be validated.
+            for dependency in package.all_dependencies() {
+                if seen.insert(&dependency.package_id) {
+                    queue.push_back(self.find_by_id(&dependency.package_id));
+                }
+            }
+
+            // If the package is immutable, we don't need to validate its metadata.
             if package.id.source.is_immutable() {
                 continue;
             }
@@ -3012,7 +3013,6 @@ impl Lock {
             } else {
                 return Ok(SatisfiesResult::MissingVersion(&package.id.name));
             }
-
             // Revisit an already-validated dependency if another parent activated more extras.
             // Empty extras have no locked edges, so their activation is otherwise order-dependent.
             validated_extras.insert(
