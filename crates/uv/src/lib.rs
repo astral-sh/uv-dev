@@ -50,6 +50,7 @@ use uv_threads::{RAYON_PARALLELISM, min_stack_size};
 use uv_warnings::{warn_user, warn_user_once};
 use uv_workspace::{DiscoveryOptions, Workspace, WorkspaceCache};
 
+use crate::commands::pip::EnvironmentValidation;
 use crate::commands::{
     ExitStatus, ParsedRunCommand, ProjectError, RunCommand, ScriptPath, ToolRunCommand, UvError,
 };
@@ -895,7 +896,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 args.settings.python_platform,
                 globals.python_downloads,
                 args.settings.install_mirrors,
-                args.settings.strict,
+                EnvironmentValidation::from_args(args.settings.strict),
                 args.settings.exclude_newer,
                 args.settings.python,
                 args.settings.environment_preference,
@@ -1060,7 +1061,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 args.settings.python_platform,
                 globals.python_downloads,
                 args.settings.install_mirrors,
-                args.settings.strict,
+                EnvironmentValidation::from_args(args.settings.strict),
                 args.settings.exclude_newer,
                 args.settings.sources,
                 args.settings.python,

@@ -51,7 +51,9 @@ use crate::commands::install_report::write_install_report;
 use crate::commands::pip::loggers::{DefaultInstallLogger, DefaultResolveLogger, InstallLogger};
 use crate::commands::pip::operations::{Changelog, Modifications};
 use crate::commands::pip::operations::{report_interpreter, report_target_environment};
-use crate::commands::pip::{operations, resolution_markers, resolution_tags};
+use crate::commands::pip::{
+    EnvironmentValidation, operations, resolution_markers, resolution_tags,
+};
 use crate::commands::pylock::{read_pylock_toml, resolve_pylock_toml};
 use crate::commands::reporters::PythonDownloadReporter;
 use crate::commands::{ExitStatus, UvError};
@@ -80,7 +82,6 @@ impl Hinted for ExternallyManagedError {
 }
 
 /// Install packages into the current environment.
-#[expect(clippy::fn_params_excessive_bools)]
 pub(crate) async fn pip_install(
     requirements: &[RequirementsSource],
     constraints: &[RequirementsSource],
@@ -122,7 +123,7 @@ pub(crate) async fn pip_install(
     python_platform: Option<TargetTriple>,
     python_downloads: PythonDownloads,
     install_mirrors: PythonInstallMirrors,
-    strict: bool,
+    environment_validation: EnvironmentValidation,
     exclude_newer: ExcludeNewer,
     sources: NoSources,
     python: Option<String>,
@@ -372,7 +373,9 @@ pub(crate) async fn pip_install(
                 }
                 DefaultInstallLogger.on_check(requirements.len(), start, printer, dry_run)?;
 
-                if strict && !dry_run.enabled() {
+                if matches!(environment_validation, EnvironmentValidation::Enabled)
+                    && !dry_run.enabled()
+                {
                     operations::diagnose_environment(
                         recursive_requirements
                             .iter()
@@ -688,7 +691,7 @@ pub(crate) async fn pip_install(
     operations::diagnose_resolution(resolution.diagnostics(), printer)?;
 
     // Notify the user of any environment diagnostics.
-    if strict && !dry_run.enabled() {
+    if matches!(environment_validation, EnvironmentValidation::Enabled) && !dry_run.enabled() {
         operations::diagnose_environment(
             resolution.distributions().map(Name::name),
             &environment,
