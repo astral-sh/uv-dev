@@ -1717,7 +1717,9 @@ impl PythonFindSettings {
             show_version,
             resolve_links,
             no_project,
-            system: flag(system, no_system, "system")?.unwrap_or_default(),
+            system: flag(system, no_system, "system")?
+                .or(environment.system_python.value)
+                .unwrap_or_default(),
             python_downloads_json_url,
         })
     }
@@ -4892,7 +4894,11 @@ impl PipSettings {
                 args.verify_hashes.combine(verify_hashes),
             ),
             python: args.python.combine(python),
-            system: args.system.combine(system).unwrap_or_default(),
+            system: args
+                .system
+                .or(environment.system_python.value)
+                .combine(system)
+                .unwrap_or_default(),
             break_system_packages: args
                 .break_system_packages
                 .combine(break_system_packages)
