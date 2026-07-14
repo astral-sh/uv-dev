@@ -2585,6 +2585,7 @@ impl Lock {
             fork_strategy: resolution.options.fork_strategy,
             minimum_libc_version: resolution.options.minimum_libc_version,
             exclude_newer: resolution.options.exclude_newer.clone(),
+            config_settings_digest: None,
         };
         // Canonicalize the top-level fork markers to match what is persisted in
         // `uv.lock`. In particular, conflict-only fork markers can serialize to
@@ -2988,6 +2989,18 @@ impl Lock {
     /// Returns the exclude newer setting used to generate this lock.
     pub fn exclude_newer(&self) -> &ExcludeNewer {
         &self.options.exclude_newer
+    }
+
+    /// Returns the digest of the build config settings used to generate this lock.
+    pub fn config_settings_digest(&self) -> Option<&str> {
+        self.options.config_settings_digest.as_deref()
+    }
+
+    /// Set the digest of the build config settings used to generate this lock.
+    #[must_use]
+    pub fn with_config_settings_digest(mut self, digest: Option<String>) -> Self {
+        self.options.config_settings_digest = digest;
+        self
     }
 
     /// Returns the conflicting groups that were used to generate this lock.
@@ -5973,6 +5986,8 @@ struct ResolverOptions {
     minimum_libc_version: Option<MinimumLibcVersion>,
     /// The [`ExcludeNewer`] setting used to generate this lock.
     exclude_newer: ExcludeNewer,
+    /// The digest of the build config settings used to generate this lock.
+    config_settings_digest: Option<String>,
 }
 
 /// The serialized resolver options in the lockfile.
@@ -5993,6 +6008,9 @@ struct ResolverOptionsWire {
     /// The [`ExcludeNewer`] setting used to generate this lock.
     #[serde(flatten)]
     exclude_newer: ExcludeNewerWire,
+    /// The digest of the build config settings used to generate this lock.
+    #[serde(default)]
+    config_settings_digest: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, serde::Deserialize)]
@@ -6270,6 +6288,7 @@ impl TryFrom<LockWire> for Lock {
             fork_strategy: options_wire.fork_strategy,
             minimum_libc_version: options_wire.minimum_libc_version,
             exclude_newer: options_wire.exclude_newer.into(),
+            config_settings_digest: options_wire.config_settings_digest,
         };
         let lock = Self::new(
             wire.version,
