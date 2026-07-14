@@ -1,4 +1,5 @@
 use std::ffi::OsString;
+use std::fmt::{self, Formatter};
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -7479,7 +7480,7 @@ pub struct DisplayTreeArgs {
     show_sizes: bool,
 }
 
-#[derive(Args, Debug)]
+#[derive(Args)]
 pub struct PublishArgs {
     // Hide the unsupported global offline option.
     #[arg(long, hide = true, overrides_with("no_offline"))]
@@ -7615,6 +7616,26 @@ pub struct PublishArgs {
     /// that is published.
     #[arg(long, env = EnvVars::UV_PUBLISH_NO_ATTESTATIONS)]
     pub no_attestations: bool,
+}
+
+impl fmt::Debug for PublishArgs {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PublishArgs")
+            .field("offline", &self.offline)
+            .field("files", &self.files)
+            .field("index", &self.index)
+            .field("username", &self.username)
+            .field("password", &self.password.as_ref().map(|_| "****"))
+            .field("token", &self.token.as_ref().map(|_| "****"))
+            .field("trusted_publishing", &self.trusted_publishing)
+            .field("keyring_provider", &self.keyring_provider)
+            .field("publish_url", &self.publish_url)
+            .field("check_url", &self.check_url)
+            .field("skip_existing", &self.skip_existing)
+            .field("dry_run", &self.dry_run)
+            .field("no_attestations", &self.no_attestations)
+            .finish()
+    }
 }
 
 #[derive(Args)]
@@ -7775,7 +7796,28 @@ pub enum BuildBackendCommand {
 mod tests {
     use clap::{CommandFactory, Parser};
 
-    use super::{AuthCommand, Cli, Commands};
+    use super::{AuthCommand, Cli, Commands, PublishArgs};
+
+    #[test]
+    fn publish_args_redacts_credentials() {
+        let args = PublishArgs {
+            offline: false,
+            files: vec![],
+            index: None,
+            username: Some("ferris".to_string()),
+            password: Some("publish-password".to_string()),
+            token: Some("publish-token".to_string()),
+            trusted_publishing: None,
+            keyring_provider: None,
+            publish_url: None,
+            check_url: None,
+            skip_existing: false,
+            dry_run: false,
+            no_attestations: false,
+        };
+
+        insta::assert_compact_debug_snapshot!(args, @r#"PublishArgs { offline: false, files: [], index: None, username: Some("ferris"), password: Some("****"), token: Some("****"), trusted_publishing: None, keyring_provider: None, publish_url: None, check_url: None, skip_existing: false, dry_run: false, no_attestations: false }"#);
+    }
 
     #[test]
     fn auth_keyring_provider_hidden_from_help() {
