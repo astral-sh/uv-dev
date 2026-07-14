@@ -15720,7 +15720,7 @@ fn compile_derivation_chain() -> Result<()> {
     ----- stderr -----
       × Failed to build `wsgiref==0.1.2`
       ├─▶ The build backend returned an error
-      ╰─▶ Call to `setuptools.build_meta:__legacy__.build_wheel` failed (exit status: 1)
+      ╰─▶ Call to `setuptools.build_meta:__legacy__.get_requires_for_build_wheel` failed (exit status: 1)
 
           [stderr]
           Traceback (most recent call last):

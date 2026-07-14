@@ -705,7 +705,7 @@ fn build_fail() -> Result<()> {
     IndentationError: unexpected indent
     error: Failed to build `[TEMP_DIR]/project`
       Caused by: The build backend returned an error
-      Caused by: Call to `setuptools.build_meta.build_sdist` failed (exit status: 1)
+      Caused by: Call to `setuptools.build_meta.get_requires_for_build_sdist` failed (exit status: 1)
 
     hint: Build failures usually indicate a problem with the package or the build environment
     "#);
@@ -1036,7 +1036,7 @@ fn build_all_with_failure() -> Result<()> {
     Successfully built dist/member_a-0.1.0-py3-none-any.whl
     error: Failed to build `member-b @ [TEMP_DIR]/project/packages/member_b`
       Caused by: The build backend returned an error
-      Caused by: Call to `setuptools.build_meta.build_sdist` failed (exit status: 1)
+      Caused by: Call to `setuptools.build_meta.get_requires_for_build_sdist` failed (exit status: 1)
 
     hint: Build failures usually indicate a problem with the package or the build environment
     Successfully built dist/project-0.1.0.tar.gz
@@ -1923,7 +1923,43 @@ fn build_hide_build_output_on_failure() -> Result<()> {
     Building source distribution...
     error: Failed to build `[TEMP_DIR]/project`
       Caused by: The build backend returned an error
-      Caused by: Call to `setuptools.build_meta.build_sdist` failed (exit status: 1)
+      Caused by: Call to `setuptools.build_meta.get_requires_for_build_sdist` failed (exit status: 1)
+
+    hint: Build failures usually indicate a problem with the package or the build environment
+    ");
+
+    Ok(())
+}
+
+/// Report the failing requirements hook instead of incorrectly naming `build_wheel`.
+#[test]
+fn build_requires_hook_failure() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let project = context.temp_dir.child("project");
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    project.child("backend.py").write_str(indoc! {r#"
+        def get_requires_for_build_wheel(config_settings=None):
+            raise RuntimeError("requirements hook failed")
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            raise RuntimeError("build hook must not run")
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.build().arg("--wheel").env(EnvVars::UV_HIDE_BUILD_OUTPUT, "1").current_dir(&project), @"
+    success: false
+    exit_code: 2
+    ----- stdout -----
+
+    ----- stderr -----
+    Building wheel...
+    error: Failed to build `[TEMP_DIR]/project`
+      Caused by: The build backend returned an error
+      Caused by: Call to `backend.get_requires_for_build_wheel` failed (exit status: 1)
 
     hint: Build failures usually indicate a problem with the package or the build environment
     ");
