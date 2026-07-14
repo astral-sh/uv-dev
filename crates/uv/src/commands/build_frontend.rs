@@ -49,7 +49,9 @@ use crate::commands::pip::operations;
 use crate::commands::project::{ProjectError, find_requires_python};
 use crate::commands::reporters::PythonDownloadReporter;
 use crate::printer::Printer;
-use crate::settings::{BuildMode, BuildOutputSelection, BuildPackageSelection, ResolverSettings};
+use crate::settings::{
+    BuildLogs, BuildMode, BuildOutputSelection, BuildPackageSelection, ResolverSettings,
+};
 
 #[derive(Debug, Error)]
 pub(crate) enum Error {
@@ -185,7 +187,6 @@ impl Hinted for Error {
 }
 
 /// Build source distributions and wheels.
-#[expect(clippy::fn_params_excessive_bools)]
 pub(crate) async fn build_frontend(
     project_dir: &Path,
     src: Option<PathBuf>,
@@ -193,7 +194,7 @@ pub(crate) async fn build_frontend(
     output_dir: Option<PathBuf>,
     output: BuildOutputSelection,
     mode: BuildMode,
-    build_logs: bool,
+    build_logs: BuildLogs,
     gitignore: bool,
     clear: bool,
     build_constraints: Vec<RequirementsSource>,
@@ -257,7 +258,6 @@ enum BuildResult {
 
 // https://github.com/rust-lang/rust/issues/147648
 #[allow(unused_assignments)]
-#[expect(clippy::fn_params_excessive_bools)]
 async fn build_impl(
     project_dir: &Path,
     src: Option<&Path>,
@@ -265,7 +265,7 @@ async fn build_impl(
     output_dir: Option<&Path>,
     output: BuildOutputSelection,
     mode: BuildMode,
-    build_logs: bool,
+    build_logs: BuildLogs,
     gitignore: bool,
     clear: bool,
     build_constraints: &[RequirementsSource],
@@ -524,7 +524,6 @@ async fn build_impl(
     }
 }
 
-#[expect(clippy::fn_params_excessive_bools)]
 async fn build_package(
     source: AnnotatedSource<'_>,
     output_dir: Option<&Path>,
@@ -540,7 +539,7 @@ async fn build_package(
     index_locations: &IndexLocations,
     client_builder: BaseClientBuilder<'_>,
     hash_checking: Option<HashCheckingMode>,
-    build_logs: bool,
+    build_logs: BuildLogs,
     gitignore: bool,
     clear: bool,
     build_constraints: &[RequirementsSource],
@@ -765,7 +764,9 @@ async fn build_package(
 
     let build_output = match printer {
         Printer::Default | Printer::NoProgress | Printer::Verbose => {
-            if build_logs && !uv_flags::contains(uv_flags::EnvironmentFlags::HIDE_BUILD_OUTPUT) {
+            if matches!(build_logs, BuildLogs::Show)
+                && !uv_flags::contains(uv_flags::EnvironmentFlags::HIDE_BUILD_OUTPUT)
+            {
                 BuildOutput::Stderr
             } else {
                 BuildOutput::Quiet
