@@ -50,7 +50,7 @@ pub(crate) use python::find::find as python_find;
 pub(crate) use python::find::find_script as python_find_script;
 pub(crate) use python::install::install as python_install;
 pub(crate) use python::install::{
-    PythonInstallForce, PythonReinstall, PythonUpgrade, PythonUpgradeSource,
+    PythonInstallDefault, PythonInstallForce, PythonReinstall, PythonUpgrade, PythonUpgradeSource,
 };
 pub(crate) use python::list::list as python_list;
 pub(crate) use python::pin::pin as python_pin;
