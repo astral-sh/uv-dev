@@ -85,7 +85,7 @@ pub(crate) async fn pip_sync(
     strict: bool,
     exclude_newer: ExcludeNewer,
     python: Option<String>,
-    system: bool,
+    environment_preference: EnvironmentPreference,
     break_system_packages: bool,
     target: Option<Target>,
     prefix: Option<Prefix>,
@@ -173,8 +173,8 @@ pub(crate) async fn pip_sync(
 
         let installation = PythonInstallation::find_or_download(
             python_request.as_ref(),
-            EnvironmentPreference::from_system_flag(system, false),
-            python_preference.with_system_flag(system),
+            environment_preference,
+            python_preference.with_environment_preference(environment_preference),
             python_downloads,
             &client_builder,
             &cache,
@@ -192,8 +192,8 @@ pub(crate) async fn pip_sync(
                 .as_deref()
                 .map(PythonRequest::parse)
                 .unwrap_or_default(),
-            EnvironmentPreference::from_system_flag(system, true),
-            PythonPreference::default().with_system_flag(system),
+            environment_preference.for_mutable(),
+            PythonPreference::default().with_environment_preference(environment_preference),
             &cache,
         )?;
         report_target_environment(&environment, &cache, printer)?;

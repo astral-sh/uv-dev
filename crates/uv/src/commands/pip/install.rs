@@ -61,12 +61,15 @@ use crate::printer::Printer;
 pub(crate) struct ExternallyManagedError {
     message: String,
     root: PathBuf,
-    system: bool,
+    environment_preference: EnvironmentPreference,
 }
 
 impl Hint for ExternallyManagedError {
     fn hints(&self) -> Hints<'_> {
-        if self.system {
+        if matches!(
+            self.environment_preference,
+            EnvironmentPreference::OnlySystem
+        ) {
             Hints::from("Virtual environments were not considered due to the `--system` flag")
         } else {
             Hints::from("Consider creating a virtual environment, e.g., with `uv venv`")
@@ -121,7 +124,7 @@ pub(crate) async fn pip_install(
     exclude_newer: ExcludeNewer,
     sources: NoSources,
     python: Option<String>,
-    system: bool,
+    environment_preference: EnvironmentPreference,
     break_system_packages: bool,
     target: Option<Target>,
     prefix: Option<Prefix>,
@@ -215,8 +218,8 @@ pub(crate) async fn pip_install(
 
         let installation = PythonInstallation::find_or_download(
             python_request.as_ref(),
-            EnvironmentPreference::from_system_flag(system, false),
-            python_preference.with_system_flag(system),
+            environment_preference,
+            python_preference.with_environment_preference(environment_preference),
             python_downloads,
             &client_builder,
             &cache,
@@ -234,8 +237,8 @@ pub(crate) async fn pip_install(
                 .as_deref()
                 .map(PythonRequest::parse)
                 .unwrap_or_default(),
-            EnvironmentPreference::from_system_flag(system, true),
-            PythonPreference::default().with_system_flag(system),
+            environment_preference.for_mutable(),
+            PythonPreference::default().with_environment_preference(environment_preference),
             &cache,
         )?;
         report_target_environment(&environment, &cache, printer)?;
@@ -284,7 +287,7 @@ pub(crate) async fn pip_install(
             return Err(ExternallyManagedError {
                 message: managed_message,
                 root: environment.root().to_path_buf(),
-                system,
+                environment_preference,
             }
             .into());
         }

@@ -50,7 +50,9 @@ use uv_pep440::Version;
 use uv_pep508::{MarkerTree, RequirementOrigin};
 use uv_preview::Preview;
 use uv_pypi_types::SupportedEnvironments;
-use uv_python::{Prefix, PythonDownloads, PythonPreference, PythonVersion, Target};
+use uv_python::{
+    EnvironmentPreference, Prefix, PythonDownloads, PythonPreference, PythonVersion, Target,
+};
 use uv_redacted::DisplaySafeUrl;
 use uv_resolver::{
     AnnotationStyle, DependencyMode, ExcludeNewer, ExcludeNewerOverride, ExcludeNewerPackage,
@@ -1726,7 +1728,7 @@ pub(crate) struct PythonFindSettings {
     pub(crate) show_version: bool,
     pub(crate) resolve_links: bool,
     pub(crate) no_project: bool,
-    pub(crate) system: bool,
+    pub(crate) environment_preference: EnvironmentPreference,
     pub(crate) python_downloads_json_url: Option<String>,
 }
 
@@ -1770,7 +1772,9 @@ impl PythonFindSettings {
             show_version,
             resolve_links,
             no_project,
-            system: flag(system, no_system, "system")?.unwrap_or_default(),
+            environment_preference: EnvironmentPreference::from_system_flag(
+                flag(system, no_system, "system")?.unwrap_or_default(),
+            ),
             python_downloads_json_url,
         })
     }
@@ -4646,7 +4650,7 @@ pub(crate) struct PipSettings {
     pub(crate) index_locations: IndexLocations,
     pub(crate) python: Option<String>,
     pub(crate) install_mirrors: PythonInstallMirrors,
-    pub(crate) system: bool,
+    pub(crate) environment_preference: EnvironmentPreference,
     pub(crate) extras: ExtrasSpecification,
     pub(crate) groups: Vec<PipGroupName>,
     pub(crate) break_system_packages: bool,
@@ -5010,7 +5014,9 @@ impl PipSettings {
                 args.verify_hashes.combine(verify_hashes),
             ),
             python: args.python.combine(python),
-            system: args.system.combine(system).unwrap_or_default(),
+            environment_preference: EnvironmentPreference::from_system_flag(
+                args.system.combine(system).unwrap_or_default(),
+            ),
             break_system_packages: args
                 .break_system_packages
                 .combine(break_system_packages)
