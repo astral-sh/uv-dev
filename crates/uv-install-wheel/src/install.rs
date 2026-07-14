@@ -8,6 +8,7 @@ use fs_err::File;
 use tracing::{instrument, trace};
 
 use uv_distribution_filename::WheelFilename;
+use uv_fs::is_same_file_allow_missing;
 use uv_pep440::Version;
 use uv_pypi_types::{DirectUrl, Metadata10};
 
@@ -79,6 +80,23 @@ pub fn install_wheel<Cache: serde::Serialize, Build: serde::Serialize>(
 
         if version != filename.version && version != filename.version.clone().without_local() {
             return Err(Error::MismatchedVersion(version, filename.version.clone()));
+        }
+    }
+
+    // Wheels may install arbitrary application data, but must not replace the configuration of
+    // the environment they are being installed into.
+    if let Some(venv_root) = layout.sys_executable.parent().and_then(Path::parent) {
+        let pyvenv_cfg = venv_root.join("pyvenv.cfg");
+        let data_root = wheel.join(format!("{dist_info_prefix}.data/data"));
+        if pyvenv_cfg.is_file() && data_root.is_dir() {
+            for entry in fs_err::read_dir(data_root)? {
+                let destination = layout.scheme.data.join(entry?.file_name());
+                if is_same_file_allow_missing(&destination, &pyvenv_cfg) == Some(true) {
+                    return Err(Error::InvalidWheel(
+                        "Wheel data must not overwrite `pyvenv.cfg`".to_string(),
+                    ));
+                }
+            }
         }
     }
 
