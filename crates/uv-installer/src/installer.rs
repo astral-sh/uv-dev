@@ -1,6 +1,9 @@
+use std::collections::hash_map::Entry;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
+use rustc_hash::FxHashMap;
 use tokio::sync::oneshot;
 use tracing::{instrument, warn};
 
@@ -25,6 +28,15 @@ pub enum InstallError {
         wheel: Box<CachedDist>,
         #[source]
         source: uv_install_wheel::Error,
+    },
+    #[error(
+        "Cannot install wheels with conflicting scripts: `{}` is provided by both `{first}` and `{second}`",
+        path.display()
+    )]
+    ConflictingScripts {
+        path: PathBuf,
+        first: String,
+        second: String,
     },
 }
 
@@ -178,6 +190,46 @@ fn install(
     installer_metadata: bool,
     preview: Preview,
 ) -> Result<Vec<CachedDist>, InstallError> {
+    // Scripts are written directly into the shared scripts directory and are not protected by
+    // the site-packages install locks. Reject conflicting destinations before any wheel is linked,
+    // otherwise parallel installation is nondeterministic and uninstalling either owner can remove
+    // the surviving command.
+    let mut scripts = FxHashMap::default();
+    for wheel in &wheels {
+        for path in uv_install_wheel::script_paths(layout, wheel.path()).map_err(|source| {
+            InstallError::Wheel {
+                wheel: Box::new(wheel.clone()),
+                source,
+            }
+        })? {
+            // Treat case variants as a conflict on every platform. Wheels are portable, while
+            // filesystem case-sensitivity is a mount property and cannot be inferred from the OS.
+            let key = path.as_os_str().as_encoded_bytes().to_ascii_lowercase();
+            match scripts.entry(key) {
+                Entry::Vacant(entry) => {
+                    entry.insert((wheel, path));
+                }
+                Entry::Occupied(entry) => {
+                    let (previous, previous_path) = entry.get();
+                    if previous.filename() == wheel.filename() {
+                        continue;
+                    }
+                    let mut providers = [
+                        previous.filename().to_string(),
+                        wheel.filename().to_string(),
+                    ];
+                    providers.sort_unstable();
+                    let path = std::cmp::min(path.as_path(), previous_path.as_path());
+                    return Err(InstallError::ConflictingScripts {
+                        path: path.to_path_buf(),
+                        first: providers[0].clone(),
+                        second: providers[1].clone(),
+                    });
+                }
+            }
+        }
+    }
+
     // Initialize the threadpool with the user settings.
     initialize_rayon_once();
     let state = uv_install_wheel::InstallState::new(preview);
