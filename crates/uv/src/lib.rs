@@ -2301,7 +2301,6 @@ async fn run_project(
                 args.kind,
                 args.bare,
                 args.description,
-                args.no_description,
                 args.vcs,
                 args.build_backend,
                 args.no_readme,
