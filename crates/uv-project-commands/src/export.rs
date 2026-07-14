@@ -15,7 +15,8 @@ use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_command_support::{ExitStatus, OutputWriter, Printer, UvError};
 use uv_configuration::{
     ActiveEnvironment, Concurrency, DependencyGroups, DependencyGroupsWithDefaults, EditableMode,
-    ExportFormat, ExtrasSpecification, ExtrasSpecificationWithDefaults, InstallOptions,
+    ExportFormat, ExportPackageSelection, ExtrasSpecification, ExtrasSpecificationWithDefaults,
+    InstallOptions,
 };
 use uv_dispatch::UniversalState;
 use uv_distribution_types::Verbatim;
@@ -38,7 +39,6 @@ use uv_scripts::Pep723Script;
 use uv_settings::{FrozenSource, LockCheck, PythonInstallMirrors, ResolverSettings};
 use uv_warnings::warn_user;
 use uv_workspace::{DiscoveryOptions, MemberDiscovery, VirtualProject, WorkspaceCache};
-
 #[derive(Debug, Clone)]
 #[expect(clippy::large_enum_variant)]
 enum ExportTarget {
@@ -155,8 +155,7 @@ fn resolve_lockfile_groups(
 pub async fn export(
     project_dir: &Path,
     format: Option<ExportFormat>,
-    all_packages: bool,
-    package: Vec<PackageName>,
+    packages: ExportPackageSelection,
     prune: Vec<PackageName>,
     hashes: bool,
     install_options: InstallOptions,
@@ -187,6 +186,11 @@ pub async fn export(
     printer: Printer,
     preview: Preview,
 ) -> Result<ExitStatus> {
+    let package = match &packages {
+        ExportPackageSelection::All => &[],
+        ExportPackageSelection::Selected(package) => package.as_slice(),
+    };
+
     let batch = if let Some(path) = batch {
         if !preview.is_enabled(PreviewFeature::BatchExport) {
             warn_user!(
@@ -221,7 +225,7 @@ pub async fn export(
         } else {
             DiscoveryOptions::default()
         };
-        let selected_package = if let [name] = package.as_slice() {
+        let selected_package = if let [name] = package {
             Some(name)
         } else {
             None
@@ -239,7 +243,7 @@ pub async fn export(
         {
             DiscoveredProject::Manifest(project) => {
                 if frozen.is_none() {
-                    for name in &package {
+                    for name in package {
                         if !project.workspace().packages().contains_key(name) {
                             return Err(anyhow::anyhow!("Package `{name}` not found in workspace"));
                         }
@@ -370,6 +374,11 @@ pub async fn export(
     if let Some(batch) = &batch {
         let mut writers = Vec::with_capacity(batch.export.len());
         for entry in &batch.export {
+            let packages = if entry.all_packages {
+                ExportPackageSelection::All
+            } else {
+                ExportPackageSelection::Selected(entry.package.clone())
+            };
             let groups = DependencyGroups::from_args(
                 None,
                 entry.group.clone(),
@@ -417,8 +426,7 @@ pub async fn export(
                     &source,
                     lock,
                     format,
-                    entry.all_packages,
-                    &entry.package,
+                    &packages,
                     &prune,
                     hashes,
                     &install_options,
@@ -459,8 +467,8 @@ pub async fn export(
             workspace,
             project_name,
         } => {
-            workspace.validate_packages(&package)?;
-            resolve_lockfile_groups(&groups, workspace, project_name.as_ref(), &package)?
+            workspace.validate_packages(package)?;
+            resolve_lockfile_groups(&groups, workspace, project_name.as_ref(), package)?
         }
     };
     let extras = extras.with_defaults(DefaultExtras::default());
@@ -469,8 +477,7 @@ pub async fn export(
         &source,
         lock,
         format,
-        all_packages,
-        &package,
+        &packages,
         &prune,
         hashes,
         &install_options,
@@ -502,8 +509,7 @@ async fn render_export<'output>(
     source: &ExportSource<'_>,
     lock: &Lock,
     format: Option<ExportFormat>,
-    all_packages: bool,
-    package: &[PackageName],
+    packages: &ExportPackageSelection,
     prune: &[PackageName],
     hashes: bool,
     install_options: &InstallOptions,
@@ -522,6 +528,11 @@ async fn render_export<'output>(
     cache: &Cache,
     preview: Preview,
 ) -> Result<OutputWriter<'output>> {
+    let (all_packages, package) = match packages {
+        ExportPackageSelection::All => (true, &[][..]),
+        ExportPackageSelection::Selected(package) => (false, package.as_slice()),
+    };
+
     // Identify the installation target.
     let target = match source {
         ExportSource::Manifest(ExportTarget::Project(project)) => InstallTarget::from_project(

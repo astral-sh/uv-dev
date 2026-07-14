@@ -19,10 +19,10 @@ use uv_client::{Certificates, Connectivity, MetadataRangeRequest};
 use uv_configuration::{
     ActiveEnvironment, AnnotationStyle, BuildIsolation, BuildOptions, Concurrency,
     DependencyGroups, DependencyMode, DevMode, DryRun, EditableMode, EnvFile, ExcludeDependency,
-    ExcludeNewer, ExcludeNewerPackage, ExportFormat, ExtrasSpecification, ForkStrategy,
-    GitLfsSetting, HashCheckingMode, IndexStrategy, InitKind, InitProjectKind, InstallOptions,
-    KeyringProviderType, Modifications, NoBinary, NoBuild, NoSources, Override, PackageOverride,
-    PipCompileFormat, Prerelease, ProjectBuildBackend, ProxyUrl, PythonUpgrade,
+    ExcludeNewer, ExcludeNewerPackage, ExportFormat, ExportPackageSelection, ExtrasSpecification,
+    ForkStrategy, GitLfsSetting, HashCheckingMode, IndexStrategy, InitKind, InitProjectKind,
+    InstallOptions, KeyringProviderType, Modifications, NoBinary, NoBuild, NoSources, Override,
+    PackageOverride, PipCompileFormat, Prerelease, ProjectBuildBackend, ProxyUrl, PythonUpgrade,
     PythonUpgradeSource, Reinstall, RequiredVersion, RequirementsInput, ResolutionMode,
     TargetTriple, ToolRunCommand, TrustedHost, TrustedPublishing, Upgrade, VersionControlSystem,
 };
@@ -2806,8 +2806,7 @@ impl TreeSettings {
 #[derive(Debug, Clone)]
 pub struct ExportSettings {
     pub format: Option<ExportFormat>,
-    pub all_packages: bool,
-    pub package: Vec<PackageName>,
+    pub packages: ExportPackageSelection,
     pub prune: Vec<PackageName>,
     pub extras: ExtrasSpecification,
     pub groups: DependencyGroups,
@@ -2924,8 +2923,7 @@ impl ExportSettings {
 
         Ok(Self {
             format,
-            all_packages,
-            package,
+            packages: ExportPackageSelection::from_args(all_packages, package),
             prune,
             extras: ExtrasSpecification::from_args(
                 extra.unwrap_or_default(),
