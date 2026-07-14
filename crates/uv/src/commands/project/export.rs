@@ -42,7 +42,7 @@ use crate::commands::project::{
 };
 use crate::commands::{ExitStatus, OutputWriter, UvError};
 use crate::printer::Printer;
-use crate::settings::{FrozenSource, LockCheck, ResolverSettings};
+use crate::settings::{ExportPackageSelection, FrozenSource, LockCheck, ResolverSettings};
 
 #[derive(Debug, Clone)]
 #[expect(clippy::large_enum_variant)]
@@ -160,8 +160,7 @@ fn resolve_lockfile_groups(
 pub(crate) async fn export(
     project_dir: &Path,
     format: Option<ExportFormat>,
-    all_packages: bool,
-    package: Vec<PackageName>,
+    packages: ExportPackageSelection,
     prune: Vec<PackageName>,
     hashes: bool,
     install_options: InstallOptions,
@@ -192,6 +191,11 @@ pub(crate) async fn export(
     printer: Printer,
     preview: Preview,
 ) -> Result<ExitStatus> {
+    let package = match &packages {
+        ExportPackageSelection::All => &[],
+        ExportPackageSelection::Selected(package) => package.as_slice(),
+    };
+
     let batch = if let Some(path) = batch {
         if !preview.is_enabled(PreviewFeature::BatchExport) {
             warn_user!(
@@ -226,7 +230,7 @@ pub(crate) async fn export(
         } else {
             DiscoveryOptions::default()
         };
-        let selected_package = if let [name] = package.as_slice() {
+        let selected_package = if let [name] = package {
             Some(name)
         } else {
             None
@@ -244,7 +248,7 @@ pub(crate) async fn export(
         {
             DiscoveredProject::Manifest(project) => {
                 if frozen.is_none() {
-                    for name in &package {
+                    for name in package {
                         if !project.workspace().packages().contains_key(name) {
                             return Err(anyhow::anyhow!("Package `{name}` not found in workspace"));
                         }
@@ -376,6 +380,11 @@ pub(crate) async fn export(
     if let Some(batch) = &batch {
         let mut writers = Vec::with_capacity(batch.export.len());
         for entry in &batch.export {
+            let packages = if entry.all_packages {
+                ExportPackageSelection::All
+            } else {
+                ExportPackageSelection::Selected(entry.package.clone())
+            };
             let groups = DependencyGroups::from_args(
                 None,
                 entry.group.clone(),
@@ -423,8 +432,7 @@ pub(crate) async fn export(
                     &source,
                     lock,
                     format,
-                    entry.all_packages,
-                    &entry.package,
+                    &packages,
                     &prune,
                     hashes,
                     &install_options,
@@ -465,8 +473,8 @@ pub(crate) async fn export(
             workspace,
             project_name,
         } => {
-            workspace.validate_packages(&package)?;
-            resolve_lockfile_groups(&groups, workspace, project_name.as_ref(), &package)?
+            workspace.validate_packages(package)?;
+            resolve_lockfile_groups(&groups, workspace, project_name.as_ref(), package)?
         }
     };
     let extras = extras.with_defaults(DefaultExtras::default());
@@ -475,8 +483,7 @@ pub(crate) async fn export(
         &source,
         lock,
         format,
-        all_packages,
-        &package,
+        &packages,
         &prune,
         hashes,
         &install_options,
@@ -508,8 +515,7 @@ async fn render_export<'output>(
     source: &ExportSource<'_>,
     lock: &Lock,
     format: Option<ExportFormat>,
-    all_packages: bool,
-    package: &[PackageName],
+    packages: &ExportPackageSelection,
     prune: &[PackageName],
     hashes: bool,
     install_options: &InstallOptions,
@@ -528,6 +534,11 @@ async fn render_export<'output>(
     cache: &Cache,
     preview: Preview,
 ) -> Result<OutputWriter<'output>> {
+    let (all_packages, package) = match packages {
+        ExportPackageSelection::All => (true, &[][..]),
+        ExportPackageSelection::Selected(package) => (false, package.as_slice()),
+    };
+
     // Identify the installation target.
     let target = match source {
         ExportSource::Manifest(ExportTarget::Project(VirtualProject::Project(project))) => {
