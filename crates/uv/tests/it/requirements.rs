@@ -4,10 +4,13 @@ use indoc::indoc;
 use std::path::Path;
 use url::Url;
 
+use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
 use uv_configuration::RequirementsInput;
+use uv_distribution::LoweringContext;
 use uv_redacted::DisplaySafeUrl;
 use uv_requirements::{RequirementsSource, RequirementsSpecification};
+use uv_workspace::WorkspaceCache;
 
 #[test]
 fn parse_requirements_input() -> Result<()> {
@@ -100,6 +103,12 @@ async fn constraint_specifications_preserve_hashes() -> Result<()> {
             --hash=sha256:3333333333333333333333333333333333333333333333333333333333333333
     "})?;
 
+    let cache = Cache::temp()?;
+    let workspace_cache = WorkspaceCache::default();
+    let client_builder = BaseClientBuilder::default();
+    let lowering_context =
+        LoweringContext::new(&cache, &workspace_cache, client_builder.credentials_cache());
+
     let specification = RequirementsSpecification::from_sources(
         &[],
         &[RequirementsSource::RequirementsTxt(
@@ -108,7 +117,8 @@ async fn constraint_specifications_preserve_hashes() -> Result<()> {
         &[],
         &[],
         None,
-        &BaseClientBuilder::default(),
+        &client_builder,
+        lowering_context,
     )
     .await?;
 
