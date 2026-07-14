@@ -20,6 +20,22 @@ pub enum InitKind {
     Script,
 }
 
+/// Whether to initialize a bare or full project.
+#[derive(Debug, Copy, Clone)]
+pub enum InitMode {
+    /// Initialize only the required project files.
+    Bare,
+    /// Initialize the full project scaffold.
+    Full,
+}
+
+impl InitMode {
+    /// Determine the [`InitMode`] setting based on the command-line arguments.
+    pub fn from_args(bare: bool) -> Self {
+        if bare { Self::Bare } else { Self::Full }
+    }
+}
+
 /// The kind of Python project to initialize (either an application or a library).
 #[derive(Debug, Copy, Clone, Default)]
 pub enum InitProjectKind {

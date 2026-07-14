@@ -13,8 +13,8 @@ use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
 use uv_command_support::{ExitStatus, Printer};
 use uv_configuration::{
-    AuthorFrom, DependencyGroupsWithDefaults, InitKind, InitProjectKind, ProjectBuildBackend,
-    VersionControlError, VersionControlSystem,
+    AuthorFrom, DependencyGroupsWithDefaults, InitKind, InitMode, InitProjectKind,
+    ProjectBuildBackend, VersionControlError, VersionControlSystem,
 };
 use uv_distribution_types::RequiresPython;
 use uv_fs::{CWD, Simplified};
@@ -50,7 +50,7 @@ pub async fn init(
     explicit_path: Option<PathBuf>,
     name: Option<PackageName>,
     init_kind: InitKind,
-    bare: bool,
+    bare: InitMode,
     description: Option<String>,
     no_description: bool,
     vcs: Option<VersionControlSystem>,
@@ -177,7 +177,7 @@ pub async fn init(
             .await?;
 
             // Create the `README.md` if it does not already exist.
-            if !no_readme && !bare {
+            if !no_readme && matches!(bare, InitMode::Full) {
                 let readme = path.join("README.md");
                 if !readme.exists() {
                     fs_err::write(readme, String::new())?;
@@ -210,7 +210,7 @@ pub async fn init(
 #[expect(clippy::fn_params_excessive_bools)]
 async fn init_script(
     script_path: &Path,
-    bare: bool,
+    bare: InitMode,
     python: Option<String>,
     install_mirrors: PythonInstallMirrors,
     client_builder: &BaseClientBuilder<'_>,
@@ -280,7 +280,13 @@ async fn init_script(
         fs_err::tokio::create_dir_all(parent).await?;
     }
 
-    Pep723Script::create(script_path, requires_python.specifiers(), content, bare).await?;
+    Pep723Script::create(
+        script_path,
+        requires_python.specifiers(),
+        content,
+        matches!(bare, InitMode::Bare),
+    )
+    .await?;
 
     Ok(())
 }
@@ -291,7 +297,7 @@ async fn init_project(
     path: &Path,
     name: &PackageName,
     project_kind: InitProjectKind,
-    bare: bool,
+    bare: InitMode,
     description: Option<String>,
     no_description: bool,
     vcs: Option<VersionControlSystem>,
@@ -733,7 +739,7 @@ fn init_project_kind(
     requires_python: &RequiresPython,
     description: Option<&str>,
     no_description: bool,
-    bare: bool,
+    bare: InitMode,
     vcs: Option<VersionControlSystem>,
     build_backend: Option<ProjectBuildBackend>,
     author_from: Option<AuthorFrom>,
@@ -761,7 +767,7 @@ fn init_project_kind(
         author.as_ref(),
         description,
         no_description,
-        no_readme || bare,
+        no_readme || matches!(bare, InitMode::Bare),
     );
 
     match project_kind {
@@ -802,7 +808,7 @@ fn init_project_kind(
             // (This isn't intended to be a particularly special or magical filename, just nice)
             // TODO(zanieb): Only create `main.py` if there are no other Python files?
             let main_py = path.join("main.py");
-            if !main_py.try_exists()? && !bare {
+            if !main_py.try_exists()? && matches!(bare, InitMode::Full) {
                 fs_err::write(path.join("main.py"), main_contents)?;
             }
         }
