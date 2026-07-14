@@ -18,7 +18,8 @@ use uv_cache::{Cache, CacheBucket, CacheEntry, CachedByTimestamp, Freshness};
 use uv_cache_info::Timestamp;
 use uv_cache_key::cache_digest;
 use uv_fs::{
-    LockedFile, LockedFileError, LockedFileMode, PythonExt, Simplified, write_atomic_sync,
+    LockedFile, LockedFileError, LockedFileMode, PythonExt, Simplified, is_same_file_allow_missing,
+    write_atomic_sync,
 };
 use uv_install_wheel::Layout;
 use uv_pep440::Version;
@@ -169,7 +170,7 @@ impl Interpreter {
 
     /// Return a new [`Interpreter`] to install into the given `--prefix` directory.
     pub(crate) fn with_prefix(self, prefix: Prefix) -> io::Result<Self> {
-        fs::create_dir_all(prefix.root().join(&self.virtualenv.purelib))?;
+        init_prefix(&prefix, &self.virtualenv)?;
         Ok(Self {
             prefix: Some(prefix),
             ..self
@@ -620,7 +621,7 @@ impl Interpreter {
 
         let prefix = self
             .prefix()
-            .map(|prefix| prefix.root().join(&self.virtualenv.purelib));
+            .map(|prefix| prefix_site_packages(prefix, &self.virtualenv));
 
         let interpreter = if target.is_none() && prefix.is_none() {
             let purelib = self.purelib();
@@ -639,7 +640,7 @@ impl Interpreter {
         target
             .into_iter()
             .map(Cow::Borrowed)
-            .chain(prefix.into_iter().map(Cow::Owned))
+            .chain(prefix.into_iter().flatten().map(Cow::Owned))
             .chain(interpreter.into_iter().flatten().map(Cow::Borrowed))
     }
 
@@ -1520,6 +1521,73 @@ impl InterpreterInfo {
         }
 
         Ok(info)
+    }
+}
+
+fn prefix_site_packages<'a>(
+    prefix: &'a Prefix,
+    virtualenv: &'a Scheme,
+) -> impl Iterator<Item = PathBuf> + 'a {
+    let purelib = prefix.root().join(&virtualenv.purelib);
+    let platlib = prefix.root().join(&virtualenv.platlib);
+    let distinct = !is_same_file_allow_missing(&purelib, &platlib).unwrap_or(false);
+    std::iter::once(purelib).chain(distinct.then_some(platlib))
+}
+
+fn init_prefix(prefix: &Prefix, virtualenv: &Scheme) -> io::Result<()> {
+    for site_packages in prefix_site_packages(prefix, virtualenv) {
+        fs::create_dir_all(site_packages)?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod prefix_tests {
+    use std::path::PathBuf;
+
+    use anyhow::Result;
+    use tempfile::tempdir;
+
+    use uv_pypi_types::Scheme;
+    use uv_python_types::Prefix;
+
+    use super::{init_prefix, prefix_site_packages};
+
+    #[test]
+    fn split_prefix_site_packages() -> Result<()> {
+        let temp_dir = tempdir()?;
+        let root = temp_dir.path().join("prefix");
+        let prefix = Prefix::from(root.clone());
+        let virtualenv = Scheme {
+            purelib: "lib/python3.12/site-packages".into(),
+            platlib: "lib64/python3.12/site-packages".into(),
+            scripts: "bin".into(),
+            data: PathBuf::new(),
+            include: "include".into(),
+        };
+
+        assert_eq!(
+            prefix_site_packages(&prefix, &virtualenv).collect::<Vec<_>>(),
+            [
+                root.join("lib/python3.12/site-packages"),
+                root.join("lib64/python3.12/site-packages")
+            ]
+        );
+
+        init_prefix(&prefix, &virtualenv)?;
+        assert!(root.join("lib/python3.12/site-packages").is_dir());
+        assert!(root.join("lib64/python3.12/site-packages").is_dir());
+
+        let combined = Scheme {
+            platlib: virtualenv.purelib.clone(),
+            ..virtualenv
+        };
+        assert_eq!(
+            prefix_site_packages(&prefix, &combined).collect::<Vec<_>>(),
+            [root.join("lib/python3.12/site-packages")]
+        );
+
+        Ok(())
     }
 }
 
