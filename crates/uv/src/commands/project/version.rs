@@ -37,7 +37,7 @@ use crate::commands::project::lock::LockMode;
 use crate::commands::project::lock_target::LockTarget;
 use crate::commands::project::{
     LinkErrorReporting, ProjectEnvironment, ProjectEnvironmentPolicy, ProjectError,
-    ProjectInterpreter, UniversalState, WorkspacePython, default_dependency_groups,
+    ProjectInterpreter, SyncMode, UniversalState, WorkspacePython, default_dependency_groups,
 };
 use crate::commands::{ExitStatus, UvError, project};
 use crate::printer::Printer;
@@ -81,7 +81,7 @@ pub(crate) async fn project_version(
     lock_check: LockCheck,
     frozen: Option<FrozenSource>,
     active: ActiveEnvironment,
-    no_sync: bool,
+    sync: SyncMode,
     python: Option<String>,
     install_mirrors: PythonInstallMirrors,
     settings: ResolverInstallerSettings,
@@ -344,7 +344,7 @@ pub(crate) async fn project_version(
             lock_check,
             frozen,
             active,
-            no_sync,
+            sync,
             python,
             install_mirrors,
             &settings,
@@ -535,7 +535,7 @@ async fn lock_and_sync(
     lock_check: LockCheck,
     frozen: Option<FrozenSource>,
     active: ActiveEnvironment,
-    no_sync: bool,
+    sync: SyncMode,
     python: Option<String>,
     install_mirrors: PythonInstallMirrors,
     settings: &ResolverInstallerSettings,
@@ -550,6 +550,8 @@ async fn lock_and_sync(
     preview: Preview,
     malware_settings: &MalwareCheckSettings,
 ) -> Result<ExitStatus> {
+    let no_sync = sync.no_sync();
+
     // If frozen, don't touch the lock or sync at all
     if frozen.is_some() {
         return Ok(ExitStatus::Success);
