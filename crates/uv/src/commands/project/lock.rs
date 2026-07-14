@@ -1525,6 +1525,18 @@ impl ValidatedLock {
                 }
                 Ok(Self::Preferable(lock))
             }
+            SatisfiesResult::MismatchedPackageDependencySource(name, version, dependency) => {
+                if let Some(version) = version {
+                    debug!(
+                        "Resolving despite existing lockfile due to mismatched source for dependency `{dependency}` of `{name}=={version}`"
+                    );
+                } else {
+                    debug!(
+                        "Resolving despite existing lockfile due to mismatched source for dependency `{dependency}` of `{name}`"
+                    );
+                }
+                Ok(Self::Preferable(lock))
+            }
             SatisfiesResult::MismatchedPackageDependencyGroups(name, version, expected, actual) => {
                 if let Some(version) = version {
                     debug!(

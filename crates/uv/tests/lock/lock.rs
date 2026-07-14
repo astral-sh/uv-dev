@@ -1307,6 +1307,163 @@ fn lock_wheel_url() -> Result<()> {
     Ok(())
 }
 
+/// Reject a lockfile that redirects a direct path dependency to a different archive.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_wheel_path_rejects_mismatched_source() -> Result<()> {
+    let context = uv_test::test_context!("3.13");
+
+    let safe = context
+        .temp_dir
+        .child("safe/basic_package-0.1.0-py3-none-any.whl");
+    let replacement = context
+        .temp_dir
+        .child("replacement/basic_package-0.1.0-py3-none-any.whl");
+    fs_err::create_dir_all(safe.parent().expect("safe parent"))?;
+    fs_err::create_dir_all(replacement.parent().expect("replacement parent"))?;
+    let fixture = context
+        .workspace_root
+        .join("test/links/basic_package-0.1.0-py3-none-any.whl");
+    fs_err::copy(&fixture, &safe)?;
+    fs_err::copy(&fixture, &replacement)?;
+
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        dependencies = ["basic-package"]
+
+        [tool.uv.sources]
+        basic-package = { path = "safe/basic_package-0.1.0-py3-none-any.whl" }
+        "#,
+    )?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--no-index"), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    let lock = context.read("uv.lock");
+    let lock = lock.replace(
+        r#"source = { path = "safe/basic_package-0.1.0-py3-none-any.whl" }"#,
+        r#"source = { path = "replacement/basic_package-0.1.0-py3-none-any.whl" }"#,
+    );
+    context.temp_dir.child("uv.lock").write_str(&lock)?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--no-index"), @"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+
+    Ok(())
+}
+
+/// Optional and group dependencies can resolve the same package name from different archives.
+/// Validate each edge set independently, while still rejecting a replaced source in either set.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_wheel_path_rejects_mismatched_optional_and_group_sources() -> Result<()> {
+    let context = uv_test::test_context!("3.13");
+    let fixture = context
+        .workspace_root
+        .join("test/links/basic_package-0.1.0-py3-none-any.whl");
+
+    for directory in ["optional", "group", "replacement"] {
+        let wheel = context
+            .temp_dir
+            .child(directory)
+            .child("basic_package-0.1.0-py3-none-any.whl");
+        fs_err::create_dir_all(wheel.parent().expect("wheel parent"))?;
+        fs_err::copy(&fixture, &wheel)?;
+    }
+
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        dependencies = []
+
+        [project.optional-dependencies]
+        test = ["basic-package"]
+
+        [dependency-groups]
+        dev = ["basic-package"]
+
+        [tool.uv]
+        conflicts = [[{ extra = "test" }, { group = "dev" }]]
+
+        [tool.uv.sources]
+        basic-package = [
+            { path = "optional/basic_package-0.1.0-py3-none-any.whl", extra = "test" },
+            { path = "group/basic_package-0.1.0-py3-none-any.whl", group = "dev" },
+        ]
+        "#,
+    )?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--no-index"), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+
+    // The two same-name sources belong to different edge sets, so the unchanged lock is valid.
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--no-index"), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+
+    let lockfile = context.temp_dir.child("uv.lock");
+    let lock = context.read("uv.lock");
+    insta::allow_duplicates! {
+        for directory in ["optional", "group"] {
+            let mismatched = lock.replace(
+                &format!(r#"source = {{ path = "{directory}/basic_package-0.1.0-py3-none-any.whl" }}"#),
+                r#"source = { path = "replacement/basic_package-0.1.0-py3-none-any.whl" }"#,
+            );
+            assert_ne!(lock, mismatched);
+            lockfile
+                .write_str(&mismatched)
+                .expect("write mismatched lockfile");
+
+            uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--no-index"), @"
+            success: false
+            exit_code: 1
+            ----- stdout -----
+
+            ----- stderr -----
+            Resolved 3 packages in [TIME]
+            error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+            hint: To update the lockfile, run `uv lock`.
+            ");
+        }
+    }
+
+    Ok(())
+}
+
 /// Lock a requirement from a direct URL to a source distribution.
 #[cfg(feature = "test-universal")]
 #[test]
