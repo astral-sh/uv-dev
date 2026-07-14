@@ -194,25 +194,33 @@ fn resolve_python_preference(
     workspace: Option<&FilesystemOptions>,
     environment: &EnvironmentOptions,
 ) -> anyhow::Result<PythonPreference> {
-    // Resolve flags from CLI and environment variables.
+    // An explicit preference takes precedence over environment-managed flags.
+    let environment_flags = args.python_preference.is_none();
     let (managed_python, no_managed_python) = resolve_flag_pair(
         args.managed_python,
         args.no_managed_python,
         "managed-python",
         "no-managed-python",
-        Some(environment.managed_python),
-        Some(environment.no_managed_python),
+        environment_flags.then_some(environment.managed_python),
+        environment_flags.then_some(environment.no_managed_python),
     );
 
-    // Check for conflicts between managed_python and python_preference.
-    if managed_python.is_enabled() && args.python_preference.is_some() {
-        check_conflicts(managed_python, Flag::from_cli("python-preference"))?;
-    }
+    let python_preference = if args.python_preference.is_some() {
+        Flag::from_cli("python-preference")
+    } else if environment.python_preference.is_some()
+        && !args.managed_python
+        && !args.no_managed_python
+    {
+        Flag::Enabled {
+            source: FlagSource::Env(EnvVars::UV_PYTHON_PREFERENCE),
+            name: "python-preference",
+        }
+    } else {
+        Flag::disabled()
+    };
 
-    // Check for conflicts between no_managed_python and python_preference.
-    if no_managed_python.is_enabled() && args.python_preference.is_some() {
-        check_conflicts(no_managed_python, Flag::from_cli("python-preference"))?;
-    }
+    check_conflicts(managed_python, python_preference)?;
+    check_conflicts(no_managed_python, python_preference)?;
 
     Ok(if managed_python.is_enabled() {
         PythonPreference::OnlyManaged
@@ -220,6 +228,7 @@ fn resolve_python_preference(
         PythonPreference::OnlySystem
     } else {
         args.python_preference
+            .or(environment.python_preference)
             .combine(workspace.and_then(|workspace| workspace.globals.python_preference))
             .unwrap_or_default()
     })
