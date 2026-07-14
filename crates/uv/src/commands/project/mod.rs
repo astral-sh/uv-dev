@@ -611,7 +611,23 @@ pub(crate) fn validate_project_requires_python(
     requires_python: &RequiresPython,
     source: &PythonRequestSource,
 ) -> Result<(), ProjectError> {
-    if requires_python.contains(interpreter.python_version()) {
+    validate_project_requires_python_version(
+        interpreter.python_version(),
+        workspace,
+        groups,
+        requires_python,
+        source,
+    )
+}
+
+fn validate_project_requires_python_version(
+    version: &Version,
+    workspace: Option<&Workspace>,
+    groups: &DependencyGroupsWithDefaults,
+    requires_python: &RequiresPython,
+    source: &PythonRequestSource,
+) -> Result<(), ProjectError> {
+    if requires_python.contains(version) {
         return Ok(());
     }
 
@@ -620,14 +636,14 @@ pub(crate) fn validate_project_requires_python(
         .and_then(|workspace| workspace.requires_python(groups).ok())
         .into_iter()
         .flatten()
-        .filter(|(.., requires)| !requires.contains(interpreter.python_version()))
+        .filter(|(.., requires)| !requires.contains(version))
         .collect::<RequiresPythonSources>();
     let workspace_non_trivial = workspace.is_some_and(|workspace| workspace.packages().len() > 1);
 
     match source {
         PythonRequestSource::UserRequest => {
             Err(ProjectError::RequestedPythonProjectIncompatibility(
-                interpreter.python_version().clone(),
+                version.clone(),
                 requires_python.clone(),
                 conflicting_requires,
                 workspace_non_trivial,
@@ -636,7 +652,7 @@ pub(crate) fn validate_project_requires_python(
         PythonRequestSource::DotPythonVersion(file) => {
             Err(ProjectError::DotPythonVersionProjectIncompatibility {
                 python_request: file.path().user_display().to_string(),
-                version: interpreter.python_version().clone(),
+                version: version.clone(),
                 requires_python: requires_python.clone(),
                 requires_python_sources: Box::new(conflicting_requires),
                 workspace: workspace_non_trivial,
@@ -644,7 +660,7 @@ pub(crate) fn validate_project_requires_python(
         }
         PythonRequestSource::RequiresPython => {
             Err(ProjectError::RequiresPythonProjectIncompatibility(
-                interpreter.python_version().clone(),
+                version.clone(),
                 requires_python.clone(),
                 conflicting_requires,
                 workspace_non_trivial,
@@ -1322,6 +1338,22 @@ impl ProjectInterpreter {
         }
 
         let reporter = PythonDownloadReporter::single(printer);
+
+        // Avoid downloading a pinned interpreter when its version range cannot satisfy the
+        // project's Python requirement.
+        if let Some(python_request) = python_request.as_ref()
+            && let Some(requires_python) = requires_python.as_ref()
+            && !python_request.intersects_requires_python(requires_python)
+            && let Some(version) = python_request.as_pep440_version()
+        {
+            validate_project_requires_python_version(
+                &version,
+                Some(workspace),
+                groups,
+                requires_python,
+                &source,
+            )?;
+        }
 
         // Locate the Python interpreter to use in the environment.
         let python = PythonInstallation::find_or_download(

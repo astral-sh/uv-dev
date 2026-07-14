@@ -141,8 +141,7 @@ fn run_with_python_version() -> Result<()> {
     ----- stdout -----
 
     ----- stderr -----
-    Using CPython 3.9.[X] interpreter at: [PYTHON-3.9]
-    error: The requested interpreter resolved to Python 3.9.[X], which is incompatible with the project's Python requirement: `>=3.11, <4` (from `project.requires-python`)
+    error: The requested interpreter resolved to Python 3.9, which is incompatible with the project's Python requirement: `>=3.11, <4` (from `project.requires-python`)
     ");
 
     Ok(())
@@ -3894,8 +3893,7 @@ fn run_isolated_incompatible_python() -> Result<()> {
     ----- stdout -----
 
     ----- stderr -----
-    Using CPython 3.9.[X] interpreter at: [PYTHON-3.9]
-    error: The Python request from `.python-version` resolved to Python 3.9.[X], which is incompatible with the project's Python requirement: `>=3.12` (from `project.requires-python`)
+    error: The Python request from `.python-version` resolved to Python 3.9, which is incompatible with the project's Python requirement: `>=3.12` (from `project.requires-python`)
     Use `uv python pin` to update the `.python-version` file to a compatible version
     ");
 
@@ -5802,8 +5800,7 @@ fn run_groups_requires_python_errors() -> Result<()> {
     ----- stdout -----
 
     ----- stderr -----
-    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    error: The requested interpreter resolved to Python 3.12.[X], which is incompatible with the project's Python requirement: `>=3.13` (from `tool.uv.dependency-groups.dev.requires-python`).
+    error: The requested interpreter resolved to Python 3.12, which is incompatible with the project's Python requirement: `>=3.13` (from `tool.uv.dependency-groups.dev.requires-python`).
     ");
 
     // Enabling foo we can't find an interpreter
@@ -5913,8 +5910,7 @@ fn run_groups_include_requires_python() -> Result<()> {
     ----- stdout -----
 
     ----- stderr -----
-    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
-    error: The requested interpreter resolved to Python 3.13.[X], which is incompatible with the project's Python requirement: `==3.12.*` (from `tool.uv.dependency-groups.dev.requires-python`).
+    error: The requested interpreter resolved to Python 3.13, which is incompatible with the project's Python requirement: `==3.12.*` (from `tool.uv.dependency-groups.dev.requires-python`).
     ");
     Ok(())
 }

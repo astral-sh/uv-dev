@@ -1018,8 +1018,7 @@ fn mixed_requires_python() -> Result<()> {
     ----- stdout -----
 
     ----- stderr -----
-    Using CPython 3.9.[X] interpreter at: [PYTHON-3.9]
-    error: The requested interpreter resolved to Python 3.9.[X], which is incompatible with the project's Python requirement: `>=3.12` (from workspace member `albatross`'s `project.requires-python`).
+    error: The requested interpreter resolved to Python 3.9, which is incompatible with the project's Python requirement: `>=3.12` (from workspace member `albatross`'s `project.requires-python`).
     ");
 
     Ok(())
@@ -9893,8 +9892,7 @@ fn sync_python_version() -> Result<()> {
     ----- stdout -----
 
     ----- stderr -----
-    Using CPython 3.10.[X] interpreter at: [PYTHON-3.10]
-    error: The requested interpreter resolved to Python 3.10.[X], which is incompatible with the project's Python requirement: `>=3.11` (from `project.requires-python`)
+    error: The requested interpreter resolved to Python 3.10, which is incompatible with the project's Python requirement: `>=3.11` (from `project.requires-python`)
     ");
 
     // But a pin should take precedence
@@ -9940,8 +9938,7 @@ fn sync_python_version() -> Result<()> {
     ----- stdout -----
 
     ----- stderr -----
-    Using CPython 3.10.[X] interpreter at: [PYTHON-3.10]
-    error: The Python request from `.python-version` resolved to Python 3.10.[X], which is incompatible with the project's Python requirement: `>=3.11` (from `project.requires-python`)
+    error: The Python request from `.python-version` resolved to Python 3.10, which is incompatible with the project's Python requirement: `>=3.11` (from `project.requires-python`)
     Use `uv python pin` to update the `.python-version` file to a compatible version
     ");
 
@@ -9974,6 +9971,47 @@ fn sync_python_version() -> Result<()> {
      + idna==3.6
      + sniffio==1.3.1
     ");
+
+    Ok(())
+}
+
+#[cfg(feature = "test-python-managed")]
+#[test]
+fn sync_does_not_download_incompatible_python_pin() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.13"])
+        .with_managed_python_dirs()
+        .with_python_download_cache()
+        .with_empty_python_install_mirror();
+
+    context
+        .temp_dir
+        .child(".python-version")
+        .write_str("3.12")?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.14"
+        dependencies = []
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.sync(), @"
+    success: false
+    exit_code: 2
+    ----- stdout -----
+
+    ----- stderr -----
+    error: The Python request from `.python-version` resolved to Python 3.12, which is incompatible with the project's Python requirement: `>=3.14` (from `project.requires-python`)
+    Use `uv python pin` to update the `.python-version` file to a compatible version
+    ");
+
+    context
+        .temp_dir
+        .child("managed")
+        .assert(predicate::path::missing());
 
     Ok(())
 }
