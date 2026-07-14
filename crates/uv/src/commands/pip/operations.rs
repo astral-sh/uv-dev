@@ -18,7 +18,7 @@ use uv_configuration::{
     ExtrasSpecification, Override, Overrides, Reinstall, Upgrade,
 };
 use uv_dispatch::BuildDispatch;
-use uv_distribution::{DistributionDatabase, SourcedDependencyGroups};
+use uv_distribution::{DistributionDatabase, LoweringContext, SourcedDependencyGroups};
 use uv_distribution_types::{
     CachedDist, ConfigSettings, DependencyMetadata, Diagnostic, Dist, ExtraBuildRequires,
     ExtraBuildVariables, IndexLocations, InstalledDist, InstalledVersion, LocalDist,
@@ -63,6 +63,7 @@ pub(crate) async fn read_requirements(
     extras: &ExtrasSpecification,
     groups: Option<&GroupsSpecification>,
     client_builder: &BaseClientBuilder<'_>,
+    lowering_context: LoweringContext<'_>,
 ) -> Result<RequirementsSpecification, Error> {
     // If the user requests `extras` but does not provide a valid source (e.g., a `pyproject.toml`),
     // return an error.
@@ -81,6 +82,7 @@ pub(crate) async fn read_requirements(
         excludes,
         groups,
         client_builder,
+        lowering_context,
     )
     .await?)
 }
@@ -89,12 +91,19 @@ pub(crate) async fn read_requirements(
 pub(crate) async fn read_constraints(
     constraints: &[RequirementsSource],
     client_builder: &BaseClientBuilder<'_>,
+    lowering_context: LoweringContext<'_>,
 ) -> Result<Vec<NameRequirementSpecification>, Error> {
-    Ok(
-        RequirementsSpecification::from_sources(&[], constraints, &[], &[], None, client_builder)
-            .await?
-            .constraints,
+    Ok(RequirementsSpecification::from_sources(
+        &[],
+        constraints,
+        &[],
+        &[],
+        None,
+        client_builder,
+        lowering_context,
     )
+    .await?
+    .constraints)
 }
 
 /// Resolve a set of requirements, similar to running `pip compile`.

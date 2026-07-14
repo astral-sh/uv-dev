@@ -16,7 +16,7 @@ use uv_cache_info::Timestamp;
 use uv_cli::ExternalCommand;
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_configuration::{Concurrency, Constraints, GitLfsSetting, TargetTriple};
-use uv_distribution::LoweredExtraBuildDependencies;
+use uv_distribution::{LoweredExtraBuildDependencies, LoweringContext};
 use uv_distribution_types::InstalledDist;
 use uv_distribution_types::{
     IndexCapabilities, IndexUrl, Name, NameRequirementSpecification, Requirement,
@@ -962,6 +962,7 @@ async fn get_or_create_environment(
         &[],
         None,
         client_builder,
+        LoweringContext::new(cache, workspace_cache, client_builder.credentials_cache()),
     )
     .await?;
     let exclusions = uv_configuration::Excludes::from_entries(spec.excludes.iter().cloned());
@@ -1107,10 +1108,14 @@ async fn get_or_create_environment(
 
     // Read the `--build-constraints` requirements.
     let build_constraints = Constraints::from_requirements(
-        operations::read_constraints(build_constraints, client_builder)
-            .await?
-            .into_iter()
-            .map(|constraint| constraint.requirement),
+        operations::read_constraints(
+            build_constraints,
+            client_builder,
+            LoweringContext::new(cache, workspace_cache, client_builder.credentials_cache()),
+        )
+        .await?
+        .into_iter()
+        .map(|constraint| constraint.requirement),
     );
 
     // TODO(zanieb): When implementing project-level tools, discover the project and check if it has the tool.

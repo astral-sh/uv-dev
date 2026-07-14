@@ -12,7 +12,7 @@ use uv_configuration::{
     Concurrency, Constraints, DryRun, Excludes, GitLfsSetting, HashCheckingMode, Overrides,
     Reinstall, TargetTriple, Upgrade,
 };
-use uv_distribution::LoweredExtraBuildDependencies;
+use uv_distribution::{LoweredExtraBuildDependencies, LoweringContext};
 use uv_distribution_types::{
     ExtraBuildRequires, IndexCapabilities, NameRequirementSpecification, Requirement,
     RequirementSource, UnresolvedRequirementSpecification,
@@ -109,9 +109,17 @@ pub(crate) async fn install(
                 RequirementsSource::from_package(requirement)?
             };
             Some(
-                RequirementsSpecification::from_source(&source, &client_builder)
-                    .await?
-                    .requirements,
+                RequirementsSpecification::from_source(
+                    &source,
+                    &client_builder,
+                    LoweringContext::new(
+                        &cache,
+                        workspace_cache,
+                        client_builder.credentials_cache(),
+                    ),
+                )
+                .await?
+                .requirements,
             )
         }
         _ => None,
@@ -364,6 +372,7 @@ pub(crate) async fn install(
         excludes,
         None,
         &client_builder,
+        LoweringContext::new(&cache, workspace_cache, client_builder.credentials_cache()),
     )
     .await?;
 
@@ -447,12 +456,15 @@ pub(crate) async fn install(
     let receipt_excludes = spec.excludes.clone();
 
     // Resolve the build constraints.
-    let receipt_build_constraints =
-        operations::read_constraints(build_constraints, &client_builder)
-            .await?
-            .into_iter()
-            .map(|constraint| constraint.requirement)
-            .collect::<Vec<_>>();
+    let receipt_build_constraints = operations::read_constraints(
+        build_constraints,
+        &client_builder,
+        LoweringContext::new(&cache, workspace_cache, client_builder.credentials_cache()),
+    )
+    .await?
+    .into_iter()
+    .map(|constraint| constraint.requirement)
+    .collect::<Vec<_>>();
 
     // Convert to tool options.
     let options = ToolOptions::from(options);

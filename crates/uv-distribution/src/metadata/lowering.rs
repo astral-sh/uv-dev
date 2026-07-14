@@ -31,6 +31,40 @@ use crate::metadata::GitWorkspaceMember;
 #[derive(Debug, Clone)]
 pub struct LoweredRequirement(Requirement);
 
+/// Shared state used when lowering non-workspace requirements.
+#[derive(Debug, Clone, Copy)]
+pub struct LoweringContext<'a> {
+    cache: &'a Cache,
+    workspace_cache: &'a WorkspaceCache,
+    credentials_cache: &'a CredentialsCache,
+}
+
+impl<'a> LoweringContext<'a> {
+    pub fn new(
+        cache: &'a Cache,
+        workspace_cache: &'a WorkspaceCache,
+        credentials_cache: &'a CredentialsCache,
+    ) -> Self {
+        Self {
+            cache,
+            workspace_cache,
+            credentials_cache,
+        }
+    }
+
+    pub fn cache(self) -> &'a Cache {
+        self.cache
+    }
+
+    pub fn workspace_cache(self) -> &'a WorkspaceCache {
+        self.workspace_cache
+    }
+
+    pub fn credentials_cache(self) -> &'a CredentialsCache {
+        self.credentials_cache
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 enum RequirementOrigin {
     /// The `tool.uv.sources` were read from the project.
