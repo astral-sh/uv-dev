@@ -73,6 +73,26 @@ fn create_venv() {
     context.venv.assert(predicates::path::is_dir());
 }
 
+#[test]
+fn create_venv_rejects_prompt_newlines() {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+
+    uv_snapshot!(context.filters(), context.venv()
+        .arg("--python")
+        .arg("3.12")
+        .arg("--prompt")
+        .arg("safe\ninclude-system-site-packages = true"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Creating virtual environment at: .venv
+    error: Failed to create virtual environment
+      cause: invalid `prompt` value in `pyvenv.cfg`: newlines are not supported
+    ");
+
+    assert!(!context.venv.exists());
+}
+
 /// Creating a venv caches the same interpreter metadata that Python would report.
 #[test]
 fn create_venv_caches_interpreter() -> Result<()> {
@@ -1871,7 +1891,7 @@ fn verify_pyvenv_cfg() {
 #[test]
 fn verify_pyvenv_cfg_relocatable() {
     let context = uv_test::test_context!("3.12");
-    let prompt = "résumé \"quoted\"\\path\n";
+    let prompt = "résumé \"quoted\"\\path";
 
     // Create a virtual environment at `.venv`.
     context
@@ -1944,7 +1964,7 @@ fn verify_pyvenv_cfg_relocatable() {
         r"dirname(dirname(realpath(__file__)))",
     ));
     activate_xsh.assert(predicates::str::contains(
-        r#"self.embedded_virtual_prompt = b"r\xc3\xa9sum\xc3\xa9 \"quoted\"\\path\n".decode("utf-8")"#,
+        r#"self.embedded_virtual_prompt = b"r\xc3\xa9sum\xc3\xa9 \"quoted\"\\path".decode("utf-8")"#,
     ));
 }
 
