@@ -2308,7 +2308,7 @@ async fn run_project(
                 args.pin_python,
                 args.python,
                 args.install_mirrors,
-                args.no_workspace,
+                args.workspace_discovery,
                 &client_builder.subcommand(vec!["init".to_owned()]),
                 globals.python_preference,
                 globals.python_arch,
