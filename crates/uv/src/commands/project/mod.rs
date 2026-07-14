@@ -59,6 +59,7 @@ use uv_workspace::{ProjectEnvironmentSelection, RequiresPythonSources, Workspace
 
 use crate::commands::pip::loggers::{InstallLogger, ResolveLogger};
 use crate::commands::pip::operations::{Changelog, Modifications};
+use crate::commands::project::init::InitPythonPin;
 use crate::commands::project::install_target::InstallTarget;
 use crate::commands::reporters::{PythonDownloadReporter, ResolverReporter};
 use crate::commands::{capitalize, conjunction, pip};
@@ -3146,7 +3147,7 @@ pub(crate) async fn init_script_python_requirement(
     python: Option<&str>,
     install_mirrors: &PythonInstallMirrors,
     directory: &Path,
-    no_pin_python: bool,
+    pin_python: InitPythonPin,
     python_preference: PythonPreference,
     python_downloads: PythonDownloads,
     config_discovery: ConfigDiscovery,
@@ -3157,8 +3158,8 @@ pub(crate) async fn init_script_python_requirement(
     let python_request = if let Some(request) = python {
         // (1) Explicit request from user
         Some(PythonRequest::parse(request))
-    } else if let (false, Some(request)) = (
-        no_pin_python,
+    } else if let (InitPythonPin::Pin, Some(request)) = (
+        pin_python,
         PythonVersionFile::discover(
             directory,
             &VersionFileDiscoveryOptions::default().with_config_discovery(config_discovery),
