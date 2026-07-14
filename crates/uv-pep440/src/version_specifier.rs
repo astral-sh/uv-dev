@@ -1171,6 +1171,28 @@ mod tests {
         Ok(())
     }
 
+    /// Test that `>V` only excludes post-releases of the exact specified version.
+    #[test]
+    fn test_greater_than_pre_release() {
+        for (specifier, candidate, expected) in [
+            (">1.0a1", "1.0.post1", true),
+            (">1.0a1", "1.0.post1+local", true),
+            (">1.0a1", "1.0a1.post1", false),
+            (">1.0a1", "1.0a2.post1", true),
+            (">1.0.dev1", "1.0a1.post1", true),
+            (">1.0.dev1", "1.0.post1.dev1", true),
+            (">1.0", "1.0.post1", false),
+        ] {
+            assert_eq!(
+                VersionSpecifier::from_str(specifier)
+                    .unwrap()
+                    .contains(&Version::from_str(candidate).unwrap()),
+                expected,
+                "expected `{specifier}` to contain `{candidate}`: {expected}"
+            );
+        }
+    }
+
     const VERSIONS_ALL: &[&str] = &[
         // Implicit epoch of 0
         "1.0.dev456",
