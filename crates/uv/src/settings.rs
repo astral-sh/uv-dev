@@ -4060,8 +4060,7 @@ pub(crate) struct BuildSettings {
     pub(crate) package: Option<PackageName>,
     pub(crate) all_packages: bool,
     pub(crate) out_dir: Option<PathBuf>,
-    pub(crate) sdist: bool,
-    pub(crate) wheel: bool,
+    pub(crate) output: BuildOutputSelection,
     pub(crate) list: bool,
     pub(crate) build_logs: bool,
     pub(crate) gitignore: bool,
@@ -4074,6 +4073,25 @@ pub(crate) struct BuildSettings {
     pub(crate) install_mirrors: PythonInstallMirrors,
     pub(crate) refresh: Refresh,
     pub(crate) settings: ResolverSettings,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum BuildOutputSelection {
+    Default,
+    Sdist,
+    Wheel,
+    SdistAndWheel,
+}
+
+impl BuildOutputSelection {
+    fn from_args(sdist: bool, wheel: bool) -> Self {
+        match (sdist, wheel) {
+            (false, false) => Self::Default,
+            (true, false) => Self::Sdist,
+            (false, true) => Self::Wheel,
+            (true, true) => Self::SdistAndWheel,
+        }
+    }
 }
 
 impl BuildSettings {
@@ -4130,8 +4148,7 @@ impl BuildSettings {
             package,
             all_packages,
             out_dir,
-            sdist,
-            wheel,
+            output: BuildOutputSelection::from_args(sdist, wheel),
             list,
             build_logs: flag(build_logs, no_build_logs, "build-logs")?.unwrap_or(true),
             force_pep517,
