@@ -51,7 +51,7 @@ use std::ops::Bound;
 use std::sync::{LazyLock, Mutex, MutexGuard};
 
 use arcstr::ArcStr;
-use itertools::{Either, Itertools};
+use itertools::Either;
 use rustc_hash::FxHashMap;
 use version_ranges::Ranges;
 
@@ -183,32 +183,28 @@ impl InternerGuard<'_> {
                     }
                 }
             },
-            // A variable representing the output of a version key. Edges correspond
-            // to disjoint version ranges.
+            // Version membership is a substring comparison, so retain the original string value.
             MarkerExpression::VersionIn {
                 key,
-                versions,
+                value,
                 operator,
-            } => match key {
-                MarkerValueVersion::ImplementationVersion => (
-                    Variable::Version(CanonicalMarkerValueVersion::ImplementationVersion),
-                    Edges::from_versions(versions, operator),
-                ),
-                MarkerValueVersion::PythonFullVersion => (
-                    Variable::Version(CanonicalMarkerValueVersion::PythonFullVersion),
-                    Edges::from_versions(versions, operator),
-                ),
-                // Normalize `python_version` markers to `python_full_version` nodes.
-                MarkerValueVersion::PythonVersion => {
-                    match Edges::from_python_versions(versions, operator) {
-                        Ok(edges) => (
-                            Variable::Version(CanonicalMarkerValueVersion::PythonFullVersion),
-                            edges,
-                        ),
-                        Err(node) => return node,
-                    }
-                }
-            },
+            } => (
+                Variable::In {
+                    key: match key {
+                        MarkerValueVersion::ImplementationVersion => {
+                            CanonicalMarkerValueString::ImplementationVersion
+                        }
+                        MarkerValueVersion::PythonFullVersion => {
+                            CanonicalMarkerValueString::PythonFullVersion
+                        }
+                        MarkerValueVersion::PythonVersion => {
+                            CanonicalMarkerValueString::PythonVersion
+                        }
+                    },
+                    value,
+                },
+                Edges::from_bool(operator == ContainerOperator::In),
+            ),
             // The `in` and `contains` operators are a bit different than other operators.
             // In particular, they do not represent a particular value for the corresponding
             // variable, and can overlap. For example, `'nux' in os_name` and `os_name == 'Linux'`
@@ -1396,48 +1392,6 @@ impl Edges {
         let specifier = release_specifier_to_range(specifier.only_release(), true);
         Self::Version {
             edges: Self::from_range(&specifier),
-        }
-    }
-
-    /// Returns an [`Edges`] where values in the given range are `true`.
-    ///
-    /// Only for use when the `key` is a `PythonVersion`. Normalizes to `PythonFullVersion`.
-    fn from_python_versions(
-        versions: Vec<Version>,
-        operator: ContainerOperator,
-    ) -> Result<Self, NodeId> {
-        let mut range: Ranges<Version> = versions
-            .into_iter()
-            .map(|version| {
-                let specifier = VersionSpecifier::equals_version(version.only_release());
-                let specifier = python_version_to_full_version(specifier)?;
-                Ok(release_specifier_to_range(specifier, true))
-            })
-            .flatten_ok()
-            .collect::<Result<Ranges<_>, NodeId>>()?;
-
-        if operator == ContainerOperator::NotIn {
-            range = range.complement();
-        }
-
-        Ok(Self::Version {
-            edges: Self::from_range(&range),
-        })
-    }
-
-    /// Returns an [`Edges`] where values in the given range are `true`.
-    fn from_versions(versions: Vec<Version>, operator: ContainerOperator) -> Self {
-        let mut range: Ranges<Version> = versions
-            .into_iter()
-            .map(|version| (Bound::Included(version.clone()), Bound::Included(version)))
-            .collect();
-
-        if operator == ContainerOperator::NotIn {
-            range = range.complement();
-        }
-
-        Self::Version {
-            edges: Self::from_range(&range),
         }
     }
 

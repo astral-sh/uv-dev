@@ -201,7 +201,7 @@ pub(crate) fn parse_marker_key_op_value<T: Pep508Url>(
             };
 
             // Check for `in` and `not in` expressions
-            if let Some(expr) = parse_version_in_expr(key, operator, &value, reporter) {
+            if let Some(expr) = parse_version_in_expr(key, operator, &value) {
                 return Ok(Some(expr));
             }
 
@@ -370,67 +370,19 @@ pub(crate) fn parse_marker_key_op_value<T: Pep508Url>(
     Ok(expr)
 }
 
-/// Creates an instance of [`MarkerExpression::VersionIn`] with the given values.
-///
-/// Some important caveats apply here.
-///
-/// While the specification defines this operation as a substring search, for versions, we use a
-/// version-aware match so we can perform algebra on the expressions. This means that some markers
-/// will not be evaluated according to the specification, but these marker expressions are
-/// relatively rare so the trade-off is acceptable.
-///
-/// The following limited expression is supported:
-///
-/// ```text
-/// [not] in '<version> [additional versions]'
-/// ```
-///
-/// where the version is PEP 440 compliant. Arbitrary whitespace is allowed between versions.
+/// Creates an instance of [`MarkerExpression::VersionIn`] with the given value.
 ///
 /// Returns `None` if the [`MarkerOperator`] is not relevant.
-/// Reports a warning if an invalid version is encountered, and returns `None`.
 fn parse_version_in_expr(
     key: MarkerValueVersion,
     operator: MarkerOperator,
     value: &str,
-    reporter: &mut impl Reporter,
 ) -> Option<MarkerExpression> {
     let operator = ContainerOperator::from_marker_operator(operator)?;
 
-    let mut cursor = Cursor::new(value);
-    let mut versions = Vec::new();
-
-    // Parse all of the values in the list as versions
-    loop {
-        // Allow arbitrary whitespace between versions
-        cursor.eat_whitespace();
-
-        let (start, len) = cursor.take_while(|c| !c.is_whitespace());
-        if len == 0 {
-            break;
-        }
-
-        let version = match Version::from_str(cursor.slice(start, len)) {
-            Ok(version) => version,
-            Err(err) => {
-                reporter.report(
-                    MarkerWarningKind::Pep440Error,
-                    format!(
-                        "Expected PEP 440 versions to compare with {key}, found {value},
-                        will be ignored: {err}"
-                    ),
-                );
-
-                return None;
-            }
-        };
-
-        versions.push(version);
-    }
-
     Some(MarkerExpression::VersionIn {
         key,
-        versions,
+        value: value.into(),
         operator,
     })
 }
