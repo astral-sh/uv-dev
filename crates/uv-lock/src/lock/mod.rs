@@ -19,7 +19,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::{debug, instrument, trace};
 use url::Url;
 
-use uv_cache_key::RepositoryUrl;
+use uv_cache_key::{RepositoryUrl, cache_digest};
 use uv_configuration::{
     BuildOptions, Constraints, DependencyGroupsWithDefaults, DependencyModifierScope,
     DependencyModifiers, ExcludeDependency, ExcludeNewer, ExcludeNewerPackage, Excludes,
@@ -35,14 +35,14 @@ use uv_distribution_filename::{
     BuildTag, DistExtension, ExtensionError, SourceDistExtension, WheelFilename,
 };
 use uv_distribution_types::{
-    ArchiveHashPolicy, BuiltDist, DependencyMetadata, DirectUrlBuiltDist, DirectUrlSourceDist,
-    DirectorySourceDist, Dist, ExcludeNewerOverride, ExcludeNewerSpan, ExcludeNewerValue,
-    FileLocation, FirstParty, GitDirectorySourceDist, GitPathBuiltDist, GitPathSourceDist,
-    HashValidation, Identifier, IndexLocations, IndexMetadata, IndexUrl, MetadataHashPolicy,
-    MinimumLibcVersion, Name, NameRequirementSpecification, PYPI_URL, PathBuiltDist,
-    PathSourceDist, RegistryBuiltDist, RegistryBuiltWheel, RegistrySourceDist, RemoteSource,
-    Requirement, RequirementSource, RequiresPython, ResolvedDist, SimplifiedMarkerTree,
-    StaticMetadata, ToUrlError, UrlString, VersionId,
+    ArchiveHashPolicy, BuiltDist, ConfigSettings, DependencyMetadata, DirectUrlBuiltDist,
+    DirectUrlSourceDist, DirectorySourceDist, Dist, ExcludeNewerOverride, ExcludeNewerSpan,
+    ExcludeNewerValue, FileLocation, FirstParty, GitDirectorySourceDist, GitPathBuiltDist,
+    GitPathSourceDist, HashValidation, Identifier, IndexLocations, IndexMetadata, IndexUrl,
+    MetadataHashPolicy, MinimumLibcVersion, Name, NameRequirementSpecification, PYPI_URL,
+    PackageConfigSettings, PathBuiltDist, PathSourceDist, RegistryBuiltDist, RegistryBuiltWheel,
+    RegistrySourceDist, RemoteSource, Requirement, RequirementSource, RequiresPython, ResolvedDist,
+    SimplifiedMarkerTree, StaticMetadata, ToUrlError, UrlString, VersionId,
 };
 use uv_fs::{PortablePath, PortablePathBuf, Simplified, normalize_path, try_relative_to_if};
 use uv_git::{RepositoryReference, ResolvedRepositoryReference};
@@ -96,6 +96,16 @@ mod windows_emulation_tests;
 
 /// The current version of the lockfile format.
 const VERSION: u32 = 1;
+
+/// Return a stable digest for non-empty PEP 517 build config settings.
+pub fn config_settings_digest(
+    config_setting: &ConfigSettings,
+    config_settings_package: &PackageConfigSettings,
+) -> Option<String> {
+    (config_setting != &ConfigSettings::default()
+        || config_settings_package != &PackageConfigSettings::default())
+        .then(|| cache_digest(&(config_setting, config_settings_package)))
+}
 
 /// An error returned when parsing a lockfile.
 #[derive(Debug, thiserror::Error)]
@@ -2629,6 +2639,7 @@ impl Lock {
             fork_strategy: resolution.options.fork_strategy,
             minimum_libc_version: resolution.options.minimum_libc_version,
             exclude_newer: resolution.options.exclude_newer.clone(),
+            config_settings_digest: None,
         };
         // Canonicalize the top-level fork markers to match what is persisted in
         // `uv.lock`. In particular, conflict-only fork markers can serialize to
@@ -3138,6 +3149,18 @@ impl Lock {
     /// Returns the exclude newer setting used to generate this lock.
     pub fn exclude_newer(&self) -> &ExcludeNewer {
         &self.options.exclude_newer
+    }
+
+    /// Returns the digest of the build config settings used to generate this lock.
+    pub fn config_settings_digest(&self) -> Option<&str> {
+        self.options.config_settings_digest.as_deref()
+    }
+
+    /// Set the digest of the build config settings used to generate this lock.
+    #[must_use]
+    pub fn with_config_settings_digest(mut self, digest: Option<String>) -> Self {
+        self.options.config_settings_digest = digest;
+        self
     }
 
     /// Returns the conflicting groups that were used to generate this lock.
@@ -6209,6 +6232,8 @@ struct ResolverOptions {
     minimum_libc_version: Option<MinimumLibcVersion>,
     /// The [`ExcludeNewer`] setting used to generate this lock.
     exclude_newer: ExcludeNewer,
+    /// The digest of the build config settings used to generate this lock.
+    config_settings_digest: Option<String>,
 }
 
 /// The serialized resolver options in the lockfile.
@@ -6229,6 +6254,9 @@ struct ResolverOptionsWire {
     /// The [`ExcludeNewer`] setting used to generate this lock.
     #[serde(flatten)]
     exclude_newer: ExcludeNewerWire,
+    /// The digest of the build config settings used to generate this lock.
+    #[serde(default)]
+    config_settings_digest: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, serde::Deserialize)]
@@ -6578,6 +6606,7 @@ impl TryFrom<LockWire> for Lock {
             fork_strategy: options_wire.fork_strategy,
             minimum_libc_version: options_wire.minimum_libc_version,
             exclude_newer: options_wire.exclude_newer.into(),
+            config_settings_digest: options_wire.config_settings_digest,
         };
         let lock = Self::new(
             wire.version,
