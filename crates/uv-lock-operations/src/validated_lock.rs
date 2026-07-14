@@ -63,6 +63,7 @@ impl ValidatedLock {
         upgrade: &Upgrade,
         refresh: Option<&Refresh>,
         options: &Options,
+        config_settings_digest: Option<&String>,
         hasher: &HashStrategy,
         index: &InMemoryIndex,
         database: &DistributionDatabase<'_, BuildDispatch<'_>>,
@@ -148,6 +149,11 @@ impl ValidatedLock {
                     .unwrap_or("true".to_string()),
             );
             return Ok(Self::Versions(lock));
+        }
+
+        if lock.config_settings_digest() != config_settings_digest.map(String::as_str) {
+            debug!("Resolving despite existing lockfile due to change in build config settings");
+            return Ok(Self::Preferable(lock));
         }
 
         // If the set of supported environments has changed, we have to perform a clean resolution.
