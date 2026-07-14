@@ -69,8 +69,8 @@ use uv_workspace::pyproject_mut::AddBoundsKind;
 
 use crate::commands::pip::operations::Modifications;
 use crate::commands::{
-    InitKind, InitProjectKind, PythonInstallForce, PythonReinstall, PythonUpgrade,
-    PythonUpgradeSource, ToolRunCommand,
+    InitKind, InitProjectKind, PythonInstallDefault, PythonInstallForce, PythonReinstall,
+    PythonUpgrade, PythonUpgradeSource, ToolRunCommand,
 };
 
 /// The default publish URL.
@@ -1533,7 +1533,7 @@ pub(crate) struct PythonInstallSettings {
     pub(crate) python_install_mirror: Option<String>,
     pub(crate) pypy_install_mirror: Option<String>,
     pub(crate) python_downloads_json_url: Option<String>,
-    pub(crate) default: bool,
+    pub(crate) default: PythonInstallDefault,
     pub(crate) compile_bytecode: bool,
 }
 
@@ -1600,7 +1600,7 @@ impl PythonInstallSettings {
             python_install_mirror,
             pypy_install_mirror,
             python_downloads_json_url,
-            default,
+            default: default.into(),
             compile_bytecode: flag(
                 compile_bytecode.compile_bytecode,
                 compile_bytecode.no_compile_bytecode,
@@ -1612,7 +1612,6 @@ impl PythonInstallSettings {
 }
 
 /// The resolved settings to use for a `python upgrade` invocation.
-#[expect(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone)]
 pub(crate) struct PythonUpgradeSettings {
     pub(crate) install_dir: Option<PathBuf>,
@@ -1623,7 +1622,7 @@ pub(crate) struct PythonUpgradeSettings {
     pub(crate) pypy_install_mirror: Option<String>,
     pub(crate) reinstall: PythonReinstall,
     pub(crate) python_downloads_json_url: Option<String>,
-    pub(crate) default: bool,
+    pub(crate) default: PythonInstallDefault,
     pub(crate) bin: Option<bool>,
     pub(crate) compile_bytecode: bool,
 }
@@ -1680,7 +1679,7 @@ impl PythonUpgradeSettings {
             pypy_install_mirror,
             reinstall: reinstall.into(),
             python_downloads_json_url,
-            default,
+            default: default.into(),
             bin,
             compile_bytecode: flag(
                 compile_bytecode.compile_bytecode,
