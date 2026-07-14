@@ -43,6 +43,7 @@ use uv_command_support::{ExitStatus, Printer, UvError};
 use uv_configuration::{PythonUpgrade, PythonUpgradeSource, ToolRunCommand};
 use uv_flags::EnvironmentFlags;
 use uv_fs::{CWD, Simplified, normalize_path};
+use uv_lock::{TreeDedupe, TreeDirection, TreeOptions};
 #[cfg(feature = "self-update")]
 use uv_pep440::release_specifiers_to_ranges;
 use uv_pep508::VersionOrUrl;
@@ -1225,12 +1226,15 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
 
             commands::pip_tree(
                 globals.python_arch,
-                args.show_version_specifiers,
-                args.depth,
                 &args.prune,
                 &args.package,
-                args.dedupe,
-                args.direction,
+                TreeOptions {
+                    depth: args.depth.into(),
+                    dedupe: TreeDedupe::from_args(args.no_dedupe),
+                    direction: TreeDirection::from_args(args.invert),
+                    show_version_specifiers: args.show_version_specifiers,
+                    show_sizes: false,
+                },
                 args.outdated,
                 args.settings.prerelease,
                 args.settings.index_locations,
@@ -2798,13 +2802,16 @@ async fn run_project(
                 args.frozen,
                 args.universal,
                 args.format,
-                args.depth,
                 args.prune,
                 args.package,
-                args.dedupe,
-                args.direction,
+                TreeOptions {
+                    depth: args.depth.into(),
+                    dedupe: TreeDedupe::from_args(args.no_dedupe),
+                    direction: TreeDirection::from_args(args.invert),
+                    show_version_specifiers: false,
+                    show_sizes: args.show_sizes,
+                },
                 args.outdated,
-                args.show_sizes,
                 args.python_version,
                 args.python_platform,
                 args.python,

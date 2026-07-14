@@ -18,7 +18,7 @@ use uv_environment_operations::install_target::{InstallTarget, PackageSelection}
 use uv_environment_operations::{
     EnvironmentError, ProjectEnvironmentPolicy, ProjectEnvironmentTarget, ProjectInterpreter,
 };
-use uv_lock::{PackageMap, TreeDedupe, TreeDirection, TreeDisplay, TreeJsonTarget};
+use uv_lock::{PackageMap, TreeDisplay, TreeJsonTarget, TreeOptions};
 use uv_lock_operations::{DiscoveredProject, FrozenWorkspace, LockMode, LockOperation, LockTarget};
 use uv_normalize::{DefaultGroups, PackageName};
 use uv_preview::{Preview, PreviewFeature};
@@ -45,7 +45,6 @@ enum TreeSource<'a> {
 }
 
 /// Display the dependency tree for a project, script, or frozen workspace.
-#[expect(clippy::fn_params_excessive_bools)]
 pub async fn tree(
     project_dir: &Path,
     groups: DependencyGroups,
@@ -53,13 +52,10 @@ pub async fn tree(
     frozen: Option<FrozenSource>,
     universal: bool,
     format: TreeFormat,
-    depth: u8,
     prune: Vec<PackageName>,
     package: Vec<PackageName>,
-    dedupe: TreeDedupe,
-    direction: TreeDirection,
+    tree: TreeOptions,
     outdated: bool,
-    show_sizes: bool,
     python_version: Option<PythonVersion>,
     python_platform: Option<TargetTriple>,
     python: Option<String>,
@@ -374,13 +370,10 @@ pub async fn tree(
         lock,
         markers.as_ref(),
         &latest,
-        depth.into(),
+        tree,
         &prune,
         &package,
         &groups,
-        dedupe,
-        direction,
-        show_sizes,
     );
 
     match format {

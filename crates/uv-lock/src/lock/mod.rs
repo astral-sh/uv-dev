@@ -79,7 +79,7 @@ pub use crate::lock::export::{
 use crate::lock::inputs::ManifestFilter;
 pub use crate::lock::installable::{Installable, InstallableRootKind};
 pub use crate::lock::map::PackageMap;
-pub use crate::lock::tree::{TreeDedupe, TreeDirection, TreeDisplay, TreeJsonTarget};
+pub use crate::lock::tree::{TreeDedupe, TreeDirection, TreeDisplay, TreeJsonTarget, TreeOptions};
 
 use self::requirements::{RequirementNormalizer, normalize_collection, normalize_requirement};
 
