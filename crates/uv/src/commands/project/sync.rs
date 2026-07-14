@@ -24,6 +24,7 @@ use uv_distribution_types::{
     Dist, Index, IndexUrl, Name, Requirement, Resolution, ResolvedDist, SourceDist,
 };
 use uv_fs::{PortablePathBuf, Simplified};
+use uv_install_wheel::InstallerMetadata;
 use uv_installer::{InstallationStrategy, SitePackages};
 use uv_normalize::{DefaultExtras, DefaultGroups, PackageName};
 use uv_pep508::{MarkerTree, VersionOrUrl};
@@ -85,7 +86,7 @@ pub(crate) async fn sync(
     settings: ResolverInstallerSettings,
     client_builder: BaseClientBuilder<'_>,
     script: Option<Pep723Script>,
-    installer_metadata: bool,
+    installer_metadata: InstallerMetadata,
     concurrency: Concurrency,
     config_discovery: ConfigDiscovery,
     cache: &Cache,
@@ -649,7 +650,7 @@ pub(crate) async fn do_sync<'a>(
     client_builder: &BaseClientBuilder<'_>,
     state: &PlatformState,
     logger: Box<dyn InstallLogger>,
-    installer_metadata: bool,
+    installer_metadata: InstallerMetadata,
     concurrency: &Concurrency,
     cache: &Cache,
     workspace_cache: &WorkspaceCache,

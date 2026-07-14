@@ -23,7 +23,7 @@ use uv_distribution_types::{
     NameRequirementSpecification, Origin, PackageConfigSettings, Requirement, Resolution,
 };
 use uv_fs::Simplified;
-use uv_install_wheel::LinkMode;
+use uv_install_wheel::{InstallerMetadata, LinkMode};
 use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
 use uv_normalize::{DefaultExtras, DefaultGroups};
 use uv_pep440::Version;
@@ -105,7 +105,7 @@ pub(crate) async fn pip_install(
     link_mode: LinkMode,
     compile: bool,
     hash_checking: Option<HashCheckingMode>,
-    installer_metadata: bool,
+    installer_metadata: InstallerMetadata,
     config_settings: &ConfigSettings,
     config_settings_package: &PackageConfigSettings,
     build_isolation: BuildIsolation,

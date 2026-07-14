@@ -44,7 +44,7 @@ use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, ExtraBuildVariables, Index, IndexLocations, IndexUrl,
     PackageConfigSettings, Requirement,
 };
-use uv_install_wheel::LinkMode;
+use uv_install_wheel::{InstallerMetadata, LinkMode};
 use uv_normalize::{ExtraName, PackageName, PipGroupName};
 use uv_pep440::Version;
 use uv_pep508::{MarkerTree, RequirementOrigin};
@@ -89,7 +89,7 @@ pub(crate) struct GlobalSettings {
     pub(crate) python_preference: PythonPreference,
     pub(crate) python_downloads: PythonDownloads,
     pub(crate) no_progress: bool,
-    pub(crate) installer_metadata: bool,
+    pub(crate) installer_metadata: InstallerMetadata,
 }
 
 impl GlobalSettings {
@@ -153,12 +153,14 @@ impl GlobalSettings {
             no_progress: resolve_flag(args.no_progress, "no-progress", environment.no_progress)
                 .is_enabled()
                 || std::env::var_os(EnvVars::RUST_LOG).is_some(),
-            installer_metadata: !resolve_flag(
-                args.no_installer_metadata,
-                "no-installer-metadata",
-                environment.no_installer_metadata,
-            )
-            .is_enabled(),
+            installer_metadata: InstallerMetadata::from_args(
+                !resolve_flag(
+                    args.no_installer_metadata,
+                    "no-installer-metadata",
+                    environment.no_installer_metadata,
+                )
+                .is_enabled(),
+            ),
         })
     }
 }
