@@ -1099,6 +1099,73 @@ fn add_git_implicit() -> Result<()> {
     Ok(())
 }
 
+/// A raw requirement must replace an existing unscoped source override.
+#[test]
+fn add_raw_replaces_existing_source() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["dep"]
+
+        [tool.uv.sources]
+        dep = { path = "old", marker = "sys_platform == 'win32' or sys_platform != 'win32'" }
+    "#})?;
+
+    for (directory, version) in [("old", "0.1.0"), ("new", "0.2.0")] {
+        context
+            .temp_dir
+            .child(directory)
+            .child("pyproject.toml")
+            .write_str(&formatdoc! {r#"
+            [project]
+            name = "dep"
+            version = "{version}"
+            requires-python = ">=3.12"
+            dependencies = []
+        "#})?;
+    }
+    let new_url = Url::from_file_path(context.temp_dir.child("new").path())
+        .map_err(|()| anyhow::anyhow!("Failed to create file URL"))?;
+
+    uv_snapshot!(context.filters(), context.add().arg(format!("dep @ {new_url}")).arg("--raw-sources").arg("--no-workspace").arg("--frozen"), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    ");
+
+    insta::with_settings!({filters => context.filters()}, {
+        assert_snapshot!(context.read("pyproject.toml"), @r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = [
+            "dep @ file://[TEMP_DIR]/new",
+        ]
+        "#);
+    });
+
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    Ok(())
+}
+
 /// `--raw-sources` should be considered conflicting with sources-specific arguments, like `--tag`.
 #[test]
 #[cfg(feature = "test-git")]
