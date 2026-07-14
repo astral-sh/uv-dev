@@ -1407,6 +1407,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_redirect_applies_password_only_credentials() -> Result<()> {
+        for status in &[301, 302, 303, 307, 308] {
+            let server = MockServer::start().await;
+            let location = server.uri().replacen("http://", "http://:token@", 1) + "/redirect";
+            Mock::given(method("GET"))
+                .respond_with(ResponseTemplate::new(*status).insert_header("location", location))
+                .mount(&server)
+                .await;
+
+            let request = Client::new().get(server.uri()).build().unwrap();
+            let response = Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .unwrap()
+                .execute(request.try_clone().unwrap())
+                .await
+                .unwrap();
+
+            let redirect_request =
+                request_into_redirect(request, &response, CrossOriginCredentialsPolicy::Secure)?
+                    .unwrap();
+            assert_eq!(
+                redirect_request.headers().get(AUTHORIZATION),
+                Some(&HeaderValue::from_static("Basic OnRva2Vu"))
+            );
+            assert!(redirect_request.url().username().is_empty());
+            assert!(redirect_request.url().password().is_none());
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_redirect_303_changes_post_to_get() -> Result<()> {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
