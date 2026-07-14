@@ -294,6 +294,7 @@ tempfile = { version = "3.14.0", default-features = false, features = ["getrando
 terminal_size = { version = "0.4.2", default-features = false }
 textwrap = { version = "0.16.1", default-features = false, features = ["smawk", "unicode-width"] }
 thiserror = { version = "2.0.0", default-features = false, features = ["std"] }
+tiny-keccak = { version = "2.0.2", default-features = false, features = ["sha3"] }
 astral-tl = { version = "0.8.0", default-features = false }
 tokio = { version = "1.40.0", default-features = false, features = [
   "fs",
