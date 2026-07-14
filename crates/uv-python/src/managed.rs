@@ -157,8 +157,10 @@ impl ManagedPythonInstallations {
     pub fn init(self) -> Result<Self, Error> {
         let root = &self.root;
 
-        // Support `toolchains` -> `python` migration transparently.
-        if !root.exists()
+        // Support `toolchains` -> `python` migration transparently in the default state directory.
+        let default = StateStore::from_settings(None)?.bucket(StateBucket::ManagedPython);
+        if root == &default
+            && !root.exists()
             && root
                 .parent()
                 .is_some_and(|parent| parent.join("toolchains").exists())
