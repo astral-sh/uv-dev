@@ -3591,7 +3591,7 @@ pub struct RunArgs {
     /// The same environment semantics as `--with` apply.
     ///
     /// Using `pyproject.toml`, `setup.py`, or `setup.cfg` files is not allowed.
-    #[arg(long, value_delimiter = ',', value_hint = ValueHint::FilePath)]
+    #[arg(long, value_hint = ValueHint::FilePath)]
     pub with_requirements: Vec<Maybe<RequirementsInput>>,
 
     /// Run the command in an isolated virtual environment [env: UV_ISOLATED=]
@@ -5537,7 +5537,6 @@ pub struct ToolRunArgs {
     /// and `pylock.toml`.
     #[arg(
         long,
-        value_delimiter = ',',
         value_hint = ValueHint::FilePath,
     )]
     pub with_requirements: Vec<Maybe<RequirementsInput>>,
@@ -5714,7 +5713,7 @@ pub struct ToolInstallArgs {
     ///
     /// The following formats are supported: `requirements.txt`, `.py` files with inline metadata,
     /// and `pylock.toml`.
-    #[arg(long, value_delimiter = ',', value_hint = ValueHint::FilePath)]
+    #[arg(long, value_hint = ValueHint::FilePath)]
     pub with_requirements: Vec<Maybe<RequirementsInput>>,
 
     /// Install the target package in editable mode, such that changes in the package's source
