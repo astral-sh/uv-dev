@@ -18,7 +18,7 @@ use uv_environment_operations::install_target::{InstallTarget, PackageSelection}
 use uv_environment_operations::{
     EnvironmentError, ProjectEnvironmentPolicy, ProjectEnvironmentTarget, ProjectInterpreter,
 };
-use uv_lock::{PackageMap, TreeDisplay, TreeJsonTarget};
+use uv_lock::{PackageMap, TreeDedupe, TreeDisplay, TreeJsonTarget};
 use uv_lock_operations::{DiscoveredProject, FrozenWorkspace, LockMode, LockOperation, LockTarget};
 use uv_normalize::{DefaultGroups, PackageName};
 use uv_preview::{Preview, PreviewFeature};
@@ -56,7 +56,7 @@ pub async fn tree(
     depth: u8,
     prune: Vec<PackageName>,
     package: Vec<PackageName>,
-    no_dedupe: bool,
+    dedupe: TreeDedupe,
     invert: bool,
     outdated: bool,
     show_sizes: bool,
@@ -378,7 +378,7 @@ pub async fn tree(
         &prune,
         &package,
         &groups,
-        no_dedupe,
+        dedupe,
         invert,
         show_sizes,
     );
