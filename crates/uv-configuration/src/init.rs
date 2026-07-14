@@ -36,6 +36,30 @@ impl InitMode {
     }
 }
 
+/// The description to include in a newly initialized project.
+#[derive(Debug, Clone)]
+pub enum InitDescription {
+    /// Include the default project description.
+    Default,
+    /// Include a user-provided project description.
+    Custom(String),
+    /// Omit the project description.
+    None,
+}
+
+impl InitDescription {
+    /// Determine the [`InitDescription`] setting based on the command-line arguments.
+    pub fn from_args(description: Option<String>, no_description: bool) -> Self {
+        if no_description {
+            Self::None
+        } else if let Some(description) = description {
+            Self::Custom(description)
+        } else {
+            Self::Default
+        }
+    }
+}
+
 /// The kind of Python project to initialize (either an application or a library).
 #[derive(Debug, Copy, Clone, Default)]
 pub enum InitProjectKind {

@@ -13,8 +13,8 @@ use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
 use uv_command_support::{ExitStatus, Printer};
 use uv_configuration::{
-    AuthorFrom, DependencyGroupsWithDefaults, InitKind, InitMode, InitProjectKind,
-    ProjectBuildBackend, VersionControlError, VersionControlSystem,
+    AuthorFrom, DependencyGroupsWithDefaults, InitDescription, InitKind, InitMode,
+    InitProjectKind, ProjectBuildBackend, VersionControlError, VersionControlSystem,
 };
 use uv_distribution_types::RequiresPython;
 use uv_fs::{CWD, Simplified};
@@ -51,8 +51,7 @@ pub async fn init(
     name: Option<PackageName>,
     init_kind: InitKind,
     bare: InitMode,
-    description: Option<String>,
-    no_description: bool,
+    description: InitDescription,
     vcs: Option<VersionControlSystem>,
     build_backend: Option<ProjectBuildBackend>,
     no_readme: bool,
@@ -157,7 +156,6 @@ pub async fn init(
                 project_kind,
                 bare,
                 description,
-                no_description,
                 vcs,
                 build_backend,
                 no_readme,
@@ -298,8 +296,7 @@ async fn init_project(
     name: &PackageName,
     project_kind: InitProjectKind,
     bare: InitMode,
-    description: Option<String>,
-    no_description: bool,
+    description: InitDescription,
     vcs: Option<VersionControlSystem>,
     build_backend: Option<ProjectBuildBackend>,
     no_readme: bool,
@@ -423,8 +420,7 @@ async fn init_project(
         name,
         path,
         &requires_python,
-        description.as_deref(),
-        no_description,
+        &description,
         bare,
         vcs,
         build_backend,
@@ -737,8 +733,7 @@ fn init_project_kind(
     name: &PackageName,
     path: &Path,
     requires_python: &RequiresPython,
-    description: Option<&str>,
-    no_description: bool,
+    description: &InitDescription,
     bare: InitMode,
     vcs: Option<VersionControlSystem>,
     build_backend: Option<ProjectBuildBackend>,
@@ -766,7 +761,6 @@ fn init_project_kind(
         requires_python,
         author.as_ref(),
         description,
-        no_description,
         no_readme || matches!(bare, InitMode::Bare),
     );
 
@@ -859,8 +853,7 @@ fn pyproject_project(
     name: &PackageName,
     requires_python: &RequiresPython,
     author: Option<&Author>,
-    description: Option<&str>,
-    no_description: bool,
+    description: &InitDescription,
     no_readme: bool,
 ) -> String {
     indoc::formatdoc! {r#"
@@ -871,10 +864,10 @@ fn pyproject_project(
         dependencies = []
     "#,
         readme = if no_readme { "" } else { "\nreadme = \"README.md\"" },
-        description = if no_description {
-            String::new()
-        } else {
-            format!("\ndescription = \"{description}\"", description = description.unwrap_or("Add your description here"))
+        description = match description {
+            InitDescription::Default => "\ndescription = \"Add your description here\"".to_string(),
+            InitDescription::Custom(description) => format!("\ndescription = \"{description}\""),
+            InitDescription::None => String::new(),
         },
         authors = author.map_or_else(String::new, |author| format!("\nauthors = [\n    {}\n]", author.to_toml_string())),
         requires_python = requires_python.specifiers(),

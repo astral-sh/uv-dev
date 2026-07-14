@@ -20,8 +20,8 @@ use uv_configuration::{
     ActiveEnvironment, AddBoundsKind, AnnotationStyle, BuildIsolation, BuildOptions, Concurrency,
     DependencyGroups, DependencyMode, DevMode, DryRun, EditableMode, EnvFile, ExcludeDependency,
     ExcludeNewer, ExcludeNewerPackage, ExportFormat, ExtrasSpecification, ForkStrategy,
-    GitLfsSetting, HashCheckingMode, IndexStrategy, InitKind, InitMode, InitProjectKind,
-    InstallOptions,
+    GitLfsSetting, HashCheckingMode, IndexStrategy, InitDescription, InitKind, InitMode,
+    InitProjectKind, InstallOptions,
     KeyringProviderType, Modifications, NoBinary, NoBuild, NoSources, Override, PackageOverride,
     PipCompileFormat, Prerelease, ProjectBuildBackend, ProxyUrl, PythonUpgrade,
     PythonUpgradeSource, Reinstall, RequiredVersion, RequirementsInput, ResolutionMode,
@@ -473,8 +473,7 @@ pub struct InitSettings {
     pub name: Option<PackageName>,
     pub kind: InitKind,
     pub bare: InitMode,
-    pub description: Option<String>,
-    pub no_description: bool,
+    pub description: InitDescription,
     pub vcs: Option<VersionControlSystem>,
     pub build_backend: Option<ProjectBuildBackend>,
     pub no_readme: bool,
@@ -522,6 +521,7 @@ impl InitSettings {
             .unwrap_or_default();
 
         let no_description = no_description || (bare && description.is_none());
+        let description = InitDescription::from_args(description, no_description);
 
         if r#virtual && lib {
             bail!("`--virtual` and `--lib` are mutually exclusive");
@@ -586,7 +586,6 @@ impl InitSettings {
             kind,
             bare: InitMode::from_args(bare),
             description,
-            no_description,
             vcs: vcs.or(bare.then_some(VersionControlSystem::None)),
             build_backend,
             no_readme,
