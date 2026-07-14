@@ -566,21 +566,32 @@ impl<'a> BaseClientBuilder<'a> {
             client_builder = client_builder.proxy(p.clone());
         }
 
-        let no_proxy = self
-            .no_proxy
-            .as_ref()
-            .and_then(|no_proxy| NoProxy::from_string(&no_proxy.join(",")));
+        // Adding a proxy disables reqwest's environment-proxy discovery, so preserve any
+        // unconfigured scheme and apply both configured and environment exclusions.
+        if self.http_proxy.is_some() || self.https_proxy.is_some() || self.no_proxy.is_some() {
+            let mut no_proxy = self.no_proxy.clone().unwrap_or_default();
+            if let Some(value) = proxy_env_var(EnvVars::NO_PROXY) {
+                no_proxy.push(value);
+            }
+            let no_proxy = NoProxy::from_string(&no_proxy.join(","));
 
-        if let Some(http_proxy) = &self.http_proxy {
-            let proxy = http_proxy
-                .as_proxy(ProxyUrlKind::Http)
-                .no_proxy(no_proxy.clone());
-            client_builder = client_builder.proxy(proxy);
-        }
+            let http_proxy = self
+                .http_proxy
+                .as_ref()
+                .map(|proxy| proxy.as_proxy(ProxyUrlKind::Http))
+                .or_else(|| proxy_from_env(ProxyUrlKind::Http));
+            if let Some(proxy) = http_proxy {
+                client_builder = client_builder.proxy(proxy.no_proxy(no_proxy.clone()));
+            }
 
-        if let Some(https_proxy) = &self.https_proxy {
-            let proxy = https_proxy.as_proxy(ProxyUrlKind::Https).no_proxy(no_proxy);
-            client_builder = client_builder.proxy(proxy);
+            let https_proxy = self
+                .https_proxy
+                .as_ref()
+                .map(|proxy| proxy.as_proxy(ProxyUrlKind::Https))
+                .or_else(|| proxy_from_env(ProxyUrlKind::Https));
+            if let Some(proxy) = https_proxy {
+                client_builder = client_builder.proxy(proxy.no_proxy(no_proxy));
+            }
         }
 
         client_builder.build().map_err(Into::into)
@@ -671,6 +682,31 @@ impl<'a> BaseClientBuilder<'a> {
                 .build(),
         }
     }
+}
+
+fn proxy_env_var(name: &str) -> Option<String> {
+    if env::var_os("REQUEST_METHOD").is_some() {
+        return None;
+    }
+
+    env::var(name)
+        .or_else(|_| env::var(name.to_ascii_lowercase()))
+        .ok()
+}
+
+fn proxy_from_env(kind: ProxyUrlKind) -> Option<Proxy> {
+    let variable = match kind {
+        ProxyUrlKind::Http => EnvVars::HTTP_PROXY,
+        ProxyUrlKind::Https => EnvVars::HTTPS_PROXY,
+    };
+    let as_proxy = |value: String| match kind {
+        ProxyUrlKind::Http => Proxy::http(value).ok(),
+        ProxyUrlKind::Https => Proxy::https(value).ok(),
+    };
+
+    proxy_env_var(variable)
+        .and_then(as_proxy)
+        .or_else(|| proxy_env_var(EnvVars::ALL_PROXY).and_then(as_proxy))
 }
 
 /// A base client for HTTP requests
