@@ -50,6 +50,7 @@ use uv_static::EnvVars;
 use uv_warnings::{warn_user, warn_user_once};
 use uv_workspace::{DiscoveryOptions, Workspace, WorkspaceCache};
 
+use crate::commands::pip::EnvironmentValidation;
 use crate::commands::{
     ExitStatus, ParsedRunCommand, ProjectError, RunCommand, ScriptPath, ToolRunCommand, UvError,
 };
@@ -929,7 +930,7 @@ async fn run_with_workspace_cache(
                 args.settings.python_platform,
                 globals.python_downloads,
                 args.settings.install_mirrors,
-                args.settings.strict,
+                EnvironmentValidation::from_args(args.settings.strict),
                 args.settings.exclude_newer,
                 args.settings.python,
                 args.settings.environment_preference,
@@ -1092,7 +1093,7 @@ async fn run_with_workspace_cache(
                 args.settings.python_platform,
                 globals.python_downloads,
                 args.settings.install_mirrors,
-                args.settings.strict,
+                EnvironmentValidation::from_args(args.settings.strict),
                 args.settings.exclude_newer,
                 args.settings.sources,
                 args.settings.python,

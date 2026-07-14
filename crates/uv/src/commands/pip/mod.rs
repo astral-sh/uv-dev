@@ -18,6 +18,22 @@ pub(crate) mod sync;
 pub(crate) mod tree;
 pub(crate) mod uninstall;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EnvironmentValidation {
+    Enabled,
+    Disabled,
+}
+
+impl EnvironmentValidation {
+    pub(crate) const fn from_args(strict: bool) -> Self {
+        if strict {
+            Self::Enabled
+        } else {
+            Self::Disabled
+        }
+    }
+}
+
 pub(crate) fn resolution_markers(
     python_version: Option<&PythonVersion>,
     python_platform: Option<&TargetTriple>,

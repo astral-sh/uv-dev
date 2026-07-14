@@ -23,7 +23,6 @@ use crate::commands::{
 use crate::printer::Printer;
 
 /// Find a Python interpreter.
-#[expect(clippy::fn_params_excessive_bools)]
 pub(crate) async fn find(
     project_dir: &Path,
     request: Option<String>,

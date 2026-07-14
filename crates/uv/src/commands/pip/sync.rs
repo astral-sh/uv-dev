@@ -44,7 +44,9 @@ use uv_workspace::pyproject::ExtraBuildDependencies;
 use crate::commands::pip::loggers::{DefaultInstallLogger, DefaultResolveLogger};
 use crate::commands::pip::operations::Modifications;
 use crate::commands::pip::operations::{report_interpreter, report_target_environment};
-use crate::commands::pip::{operations, resolution_markers, resolution_tags};
+use crate::commands::pip::{
+    EnvironmentValidation, operations, resolution_markers, resolution_tags,
+};
 use crate::commands::pylock::{read_pylock_toml, resolve_pylock_toml};
 use crate::commands::reporters::PythonDownloadReporter;
 use crate::commands::{ExitStatus, diagnostics};
@@ -82,7 +84,7 @@ pub(crate) async fn pip_sync(
     python_platform: Option<TargetTriple>,
     python_downloads: PythonDownloads,
     install_mirrors: PythonInstallMirrors,
-    strict: bool,
+    environment_validation: EnvironmentValidation,
     exclude_newer: ExcludeNewer,
     python: Option<String>,
     environment_preference: EnvironmentPreference,
@@ -566,7 +568,7 @@ pub(crate) async fn pip_sync(
     operations::diagnose_resolution(resolution.diagnostics(), printer)?;
 
     // Notify the user of any environment diagnostics.
-    if strict && !dry_run.enabled() {
+    if matches!(environment_validation, EnvironmentValidation::Enabled) && !dry_run.enabled() {
         operations::diagnose_environment(
             resolution.distributions().map(Name::name),
             &environment,
