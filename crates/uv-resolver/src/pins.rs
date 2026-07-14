@@ -11,6 +11,8 @@ struct FilePin {
     dist: ResolvedDist,
     /// The concrete distribution whose metadata was used during resolution.
     metadata_id: DistributionId,
+    /// Whether distribution metadata is needed to validate `Requires-Python` in direct mode.
+    requires_python_metadata: bool,
 }
 
 /// A set of package versions pinned to specific files.
@@ -34,6 +36,8 @@ impl FilePins {
             .or_insert_with(|| FilePin {
                 dist: dist.for_installation().to_owned(),
                 metadata_id: dist.for_resolution().distribution_id(),
+                requires_python_metadata: !matches!(dist, CompatibleDist::InstalledDist(_))
+                    && dist.requires_python().is_none(),
             });
     }
 
@@ -57,5 +61,16 @@ impl FilePins {
         self.0
             .get(&(name.clone(), version.clone()))
             .map(|pin| (&pin.dist, &pin.metadata_id))
+    }
+
+    /// Return whether distribution metadata is needed to validate `Requires-Python`.
+    pub(crate) fn requires_python_metadata(
+        &self,
+        name: &PackageName,
+        version: &uv_pep440::Version,
+    ) -> bool {
+        self.0
+            .get(&(name.clone(), version.clone()))
+            .is_some_and(|pin| pin.requires_python_metadata)
     }
 }
