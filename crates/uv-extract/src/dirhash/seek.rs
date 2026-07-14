@@ -10,7 +10,7 @@ use async_zip::StoredZipEntry;
 use async_zip::base::read::seek::ZipFileReader;
 use async_zip::error::ZipError;
 use futures::executor::block_on;
-use futures::io::{AllowStdIo, AsyncReadExt, AsyncWriteExt};
+use futures::io::{AllowStdIo, AsyncReadExt, AsyncSeekExt, AsyncWriteExt, SeekFrom};
 use rayon::prelude::*;
 use rustc_hash::FxHashSet;
 use tokio_util::compat::{FuturesAsyncReadCompatExt, FuturesAsyncWriteCompatExt};
@@ -71,12 +71,15 @@ fn unzip_inner(
     let archive = block_on(ZipFileReader::new(AllowStdIo::new(
         CloneableSeekableReader::new(reader),
     )))?;
+    let skip_validation = insecure_no_validate();
+    if !skip_validation {
+        validate_archive(&archive)?;
+    }
     if hash_contents {
         validate_unique_output_paths(archive.file().entries())?;
     }
 
     let directories = Mutex::new(FxHashSet::default());
-    let skip_validation = insecure_no_validate();
     // Initialize the threadpool with the user settings.
     initialize_rayon_once();
     let extract = |file_number| {
@@ -139,6 +142,220 @@ fn unzip_inner(
     })
 }
 
+/// Validate the end-of-central-directory record and any trailing contents.
+fn validate_archive<R>(archive: &ZipFileReader<AllowStdIo<R>>) -> Result<(), Error>
+where
+    R: std::io::BufRead + std::io::Seek + Clone + Unpin,
+{
+    // Reject comments that appear to contain an embedded ZIP file, as in the streaming extractor.
+    let comment = archive.file().comment().as_bytes();
+    if comment.iter().any(|&byte| (1..=8).contains(&byte)) {
+        return Err(Error::ZipInZip);
+    }
+
+    // The seekable reader searches backwards for the end-of-central-directory record and otherwise
+    // ignores bytes following it. Find the first structurally valid record so an appended
+    // central-directory chain cannot hide trailing contents, while ignoring record signatures that
+    // happen to occur in a comment.
+    let mut scan_archive = archive.clone();
+    let mut validation_archive = archive.clone();
+    block_on(async {
+        const EOCD_SIGNATURE: &[u8; 4] = b"PK\x05\x06";
+        const EOCD_LENGTH: usize = 22;
+        const CHUNK_LENGTH: usize = 64 * 1024;
+
+        fn u16_at(bytes: &[u8], offset: usize) -> u16 {
+            u16::from_le_bytes([bytes[offset], bytes[offset + 1]])
+        }
+
+        fn u32_at(bytes: &[u8], offset: usize) -> u32 {
+            u32::from_le_bytes([
+                bytes[offset],
+                bytes[offset + 1],
+                bytes[offset + 2],
+                bytes[offset + 3],
+            ])
+        }
+
+        fn u64_at(bytes: &[u8], offset: usize) -> u64 {
+            u64::from_le_bytes([
+                bytes[offset],
+                bytes[offset + 1],
+                bytes[offset + 2],
+                bytes[offset + 3],
+                bytes[offset + 4],
+                bytes[offset + 5],
+                bytes[offset + 6],
+                bytes[offset + 7],
+            ])
+        }
+
+        let scan_reader = scan_archive.inner_mut();
+        let validation_reader = validation_archive.inner_mut();
+        let length = scan_reader
+            .seek(SeekFrom::End(0))
+            .await
+            .map_err(Error::Io)?;
+        scan_reader
+            .seek(SeekFrom::Start(0))
+            .await
+            .map_err(Error::Io)?;
+
+        // Search the complete archive in bounded chunks. Limiting this search to the maximum
+        // comment length lets padding hide an earlier, independently valid EOCD.
+        let mut buffer = vec![0; CHUNK_LENGTH + EOCD_LENGTH - 1];
+        let mut carry = 0;
+        let mut start = 0_u64;
+        let mut record = None;
+        'scan: loop {
+            let read = scan_reader
+                .read(&mut buffer[carry..])
+                .await
+                .map_err(Error::Io)?;
+            let available = carry + read;
+
+            for offset in 0..available.saturating_sub(EOCD_LENGTH - 1) {
+                let candidate = &buffer[offset..offset + EOCD_LENGTH];
+                if &candidate[..EOCD_SIGNATURE.len()] != EOCD_SIGNATURE {
+                    continue;
+                }
+
+                let Some(record_offset) = u64::try_from(offset)
+                    .ok()
+                    .and_then(|offset| start.checked_add(offset))
+                else {
+                    continue;
+                };
+                let central_directory_size = u32_at(candidate, 12);
+                let central_directory_offset = u32_at(candidate, 16);
+
+                let standard_directory_end = u64::from(central_directory_offset)
+                    .checked_add(u64::from(central_directory_size));
+                let valid = if standard_directory_end == Some(record_offset) {
+                    true
+                } else {
+                    const ZIP64_EOCD_SIGNATURE: &[u8; 4] = b"PK\x06\x06";
+                    const ZIP64_LOCATOR_SIGNATURE: &[u8; 4] = b"PK\x06\x07";
+
+                    let Some(locator_offset) = record_offset.checked_sub(20) else {
+                        continue;
+                    };
+                    validation_reader
+                        .seek(SeekFrom::Start(locator_offset))
+                        .await
+                        .map_err(Error::Io)?;
+                    let mut locator = [0; 20];
+                    validation_reader
+                        .read_exact(&mut locator)
+                        .await
+                        .map_err(Error::Io)?;
+                    if &locator[..ZIP64_LOCATOR_SIGNATURE.len()] != ZIP64_LOCATOR_SIGNATURE {
+                        continue;
+                    }
+
+                    let zip64_offset = u64_at(&locator, 8);
+                    if zip64_offset
+                        .checked_add(56)
+                        .is_none_or(|record_end| record_end > length)
+                    {
+                        continue;
+                    }
+                    validation_reader
+                        .seek(SeekFrom::Start(zip64_offset))
+                        .await
+                        .map_err(Error::Io)?;
+                    let mut zip64_record = [0; 56];
+                    validation_reader
+                        .read_exact(&mut zip64_record)
+                        .await
+                        .map_err(Error::Io)?;
+                    if &zip64_record[..ZIP64_EOCD_SIGNATURE.len()] != ZIP64_EOCD_SIGNATURE {
+                        continue;
+                    }
+
+                    let zip64_size = u64_at(&zip64_record, 4);
+                    let directory_size = u64_at(&zip64_record, 40);
+                    let directory_offset = u64_at(&zip64_record, 48);
+
+                    directory_offset.checked_add(directory_size) == Some(zip64_offset)
+                        && zip64_offset
+                            .checked_add(12)
+                            .and_then(|offset| offset.checked_add(zip64_size))
+                            == Some(locator_offset)
+                };
+                if !valid {
+                    continue;
+                }
+
+                let comment_length = u16_at(candidate, 20);
+                let Some(end) = record_offset
+                    .checked_add(22)
+                    .and_then(|offset| offset.checked_add(u64::from(comment_length)))
+                else {
+                    continue;
+                };
+                if end <= length {
+                    record = Some((record_offset, end));
+                    break 'scan;
+                }
+            }
+
+            if read == 0 {
+                break;
+            }
+            carry = available.min(EOCD_LENGTH - 1);
+            buffer.copy_within(available - carry..available, 0);
+            let advanced =
+                u64::try_from(available - carry).map_err(|_| ZipError::InvalidEntryDataRange)?;
+            start = start
+                .checked_add(advanced)
+                .ok_or(ZipError::InvalidEntryDataRange)?;
+        }
+
+        let Some((record_offset, end)) = record else {
+            return Err(Error::TrailingContents);
+        };
+        let comment_length = usize::try_from(end - record_offset - 22)
+            .map_err(|_| ZipError::InvalidEntryDataRange)?;
+        let mut comment = vec![0; comment_length];
+        validation_reader
+            .seek(SeekFrom::Start(record_offset + 22))
+            .await
+            .map_err(Error::Io)?;
+        validation_reader
+            .read_exact(&mut comment)
+            .await
+            .map_err(Error::Io)?;
+        if comment.iter().any(|&byte| (1..=8).contains(&byte)) {
+            return Err(Error::ZipInZip);
+        }
+
+        validation_reader
+            .seek(SeekFrom::Start(end))
+            .await
+            .map_err(Error::Io)?;
+        let mut has_trailing = false;
+        loop {
+            let read = validation_reader
+                .read(&mut buffer[..CHUNK_LENGTH])
+                .await
+                .map_err(Error::Io)?;
+            if read == 0 {
+                break;
+            }
+            if buffer[..read].iter().any(|&byte| byte != 0) {
+                return Err(Error::TrailingContents);
+            }
+            has_trailing = true;
+        }
+        if has_trailing {
+            warn!("Ignoring trailing null bytes in ZIP archive");
+        }
+
+        Ok::<(), Error>(())
+    })
+}
+
 /// Reject entries that would write to the same sanitized output path.
 ///
 /// Duplicate paths can otherwise race to determine which contents are persisted or hashed.
@@ -181,6 +398,9 @@ where
         warn!("Skipping unsafe file name: {file_name}");
         return Ok(None);
     };
+    if !skip_validation {
+        validate_local_crc32(archive, &entry, enclosed_name.as_path())?;
+    }
 
     let path = target.join(enclosed_name.as_path());
     if entry.dir()? {
@@ -216,6 +436,76 @@ fn entry_file_name(entry: &StoredZipEntry, file_number: usize) -> Result<&str, E
         }),
         Err(err) => Err(err.into()),
     }
+}
+
+/// Validate that the local header or data descriptor CRC agrees with the central directory.
+fn validate_local_crc32<R>(
+    archive: &mut ZipFileReader<AllowStdIo<R>>,
+    entry: &StoredZipEntry,
+    path: &Path,
+) -> Result<(), Error>
+where
+    R: std::io::BufRead + std::io::Seek + Unpin,
+{
+    let local_crc32 = block_on(async {
+        let reader = archive.inner_mut();
+        if entry.data_descriptor() {
+            reader
+                .seek(SeekFrom::Start(
+                    entry
+                        .file_offset()
+                        .checked_add(26)
+                        .ok_or(ZipError::InvalidEntryDataRange)?,
+                ))
+                .await
+                .map_err(Error::Io)?;
+            let mut lengths = [0; 4];
+            reader.read_exact(&mut lengths).await.map_err(Error::Io)?;
+            let filename_length = u16::from_le_bytes([lengths[0], lengths[1]]);
+            let extra_length = u16::from_le_bytes([lengths[2], lengths[3]]);
+            let descriptor_offset = entry
+                .file_offset()
+                .checked_add(30)
+                .and_then(|offset| offset.checked_add(u64::from(filename_length)))
+                .and_then(|offset| offset.checked_add(u64::from(extra_length)))
+                .and_then(|offset| offset.checked_add(entry.compressed_size()))
+                .ok_or(ZipError::InvalidEntryDataRange)?;
+            reader
+                .seek(SeekFrom::Start(descriptor_offset))
+                .await
+                .map_err(Error::Io)?;
+            let mut checksum = [0; 4];
+            reader.read_exact(&mut checksum).await.map_err(Error::Io)?;
+            if checksum == *b"PK\x07\x08" {
+                reader.read_exact(&mut checksum).await.map_err(Error::Io)?;
+            }
+            Ok::<_, Error>(u32::from_le_bytes(checksum))
+        } else {
+            reader
+                .seek(SeekFrom::Start(
+                    entry
+                        .file_offset()
+                        .checked_add(14)
+                        .ok_or(ZipError::InvalidEntryDataRange)?,
+                ))
+                .await
+                .map_err(Error::Io)?;
+            let mut checksum = [0; 4];
+            reader.read_exact(&mut checksum).await.map_err(Error::Io)?;
+            Ok::<_, Error>(u32::from_le_bytes(checksum))
+        }
+    })?;
+
+    if local_crc32 != entry.crc32() {
+        return Err(Error::ConflictingChecksums {
+            path: path.to_path_buf(),
+            offset: entry.file_offset(),
+            local_crc32,
+            central_directory_crc32: entry.crc32(),
+        });
+    }
+
+    Ok(())
 }
 
 /// Create a directory once across parallel extraction workers.
