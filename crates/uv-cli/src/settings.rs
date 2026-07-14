@@ -46,7 +46,7 @@ use uv_settings::{
     IndexOptions, LockCheck, LockedFlag, LockedSource, MalwareCheckSettings, Options, PipOptions,
     PreviewFeaturesOption, PreviewOption, PublishOptions, PythonInstallMirrors, PythonListKinds,
     ResolverInstallerOptions, ResolverInstallerSchema, ResolverInstallerSettings, ResolverOptions,
-    ResolverSettings, resolve_prerelease,
+    BuildOutputSelection, ResolverSettings, resolve_prerelease,
 };
 use uv_static::EnvVars;
 use uv_torch::{AmdGpuArchitecture, TorchMode};
@@ -4179,8 +4179,7 @@ pub struct BuildSettings {
     pub package: Option<PackageName>,
     pub all_packages: bool,
     pub out_dir: Option<PathBuf>,
-    pub sdist: bool,
-    pub wheel: bool,
+    pub output: BuildOutputSelection,
     pub list: bool,
     pub build_logs: bool,
     pub gitignore: bool,
@@ -4260,8 +4259,7 @@ impl BuildSettings {
             package,
             all_packages,
             out_dir,
-            sdist,
-            wheel,
+            output: BuildOutputSelection::from_args(sdist, wheel),
             list,
             build_logs: flag(build_logs, no_build_logs, "build-logs")?.unwrap_or(true),
             force_pep517,

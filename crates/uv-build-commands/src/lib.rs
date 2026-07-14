@@ -59,7 +59,7 @@ use uv_workspace::{DiscoveryOptions, Workspace, WorkspaceCache, WorkspaceError};
 use uv_python_discovery::PythonDownloadReporter;
 use uv_python_discovery::PythonSelectionError;
 use uv_python_discovery::find_requires_python;
-use uv_settings::ResolverSettings;
+use uv_settings::{BuildOutputSelection, ResolverSettings};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -213,8 +213,7 @@ pub async fn build_frontend(
     package: Option<PackageName>,
     all_packages: bool,
     output_dir: Option<PathBuf>,
-    sdist: bool,
-    wheel: bool,
+    output: BuildOutputSelection,
     list: bool,
     build_logs: bool,
     gitignore: bool,
@@ -437,8 +436,7 @@ pub async fn build_frontend(
             sources.clone(),
             &concurrency,
             build_options,
-            sdist,
-            wheel,
+            output,
             list,
             dependency_metadata,
             *link_mode,
@@ -510,8 +508,7 @@ async fn build_package(
     sources: NoSources,
     concurrency: &Concurrency,
     build_options: &BuildOptions,
-    sdist: bool,
-    wheel: bool,
+    output: BuildOutputSelection,
     list: bool,
     dependency_metadata: &DependencyMetadata,
     link_mode: LinkMode,
@@ -683,7 +680,7 @@ async fn build_package(
     prepare_output_directory(&output_dir, gitignore).await?;
 
     // Determine the build plan.
-    let plan = BuildPlan::determine(&source, sdist, wheel)?;
+    let plan = BuildPlan::determine(&source, output)?;
 
     // Check if the build backend is matching uv version that allows calling in the uv build backend
     // directly.
@@ -1501,27 +1498,27 @@ enum BuildPlan {
 }
 
 impl BuildPlan {
-    fn determine(source: &AnnotatedSource, sdist: bool, wheel: bool) -> Result<Self, Error> {
+    fn determine(source: &AnnotatedSource, output: BuildOutputSelection) -> Result<Self, Error> {
         Ok(match &source.source {
             Source::File(_) => {
                 // We're building from a file, which must be a source distribution.
-                match (sdist, wheel) {
-                    (false, true) => Self::WheelFromSdist,
-                    (false, false) => {
+                match output {
+                    BuildOutputSelection::Wheel => Self::WheelFromSdist,
+                    BuildOutputSelection::Default => {
                         return Err(Error::WheelFromSdistRequiresFlag);
                     }
-                    (true, _) => {
+                    BuildOutputSelection::Sdist | BuildOutputSelection::SdistAndWheel => {
                         return Err(Error::SdistFromSdist);
                     }
                 }
             }
             Source::Directory(_) => {
                 // We're building from a directory.
-                match (sdist, wheel) {
-                    (false, false) => Self::SdistToWheel,
-                    (false, true) => Self::Wheel,
-                    (true, false) => Self::Sdist,
-                    (true, true) => Self::SdistAndWheel,
+                match output {
+                    BuildOutputSelection::Default => Self::SdistToWheel,
+                    BuildOutputSelection::Wheel => Self::Wheel,
+                    BuildOutputSelection::Sdist => Self::Sdist,
+                    BuildOutputSelection::SdistAndWheel => Self::SdistAndWheel,
                 }
             }
         })

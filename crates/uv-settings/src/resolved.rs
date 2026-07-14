@@ -166,6 +166,25 @@ pub struct ResolverSettings {
     pub upgrade: Upgrade,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum BuildOutputSelection {
+    Default,
+    Sdist,
+    Wheel,
+    SdistAndWheel,
+}
+
+impl BuildOutputSelection {
+    pub fn from_args(sdist: bool, wheel: bool) -> Self {
+        match (sdist, wheel) {
+            (false, false) => Self::Default,
+            (true, false) => Self::Sdist,
+            (false, true) => Self::Wheel,
+            (true, true) => Self::SdistAndWheel,
+        }
+    }
+}
+
 /// Normalize a deprecated prerelease mode and emit its warning.
 #[expect(deprecated)]
 fn warn_if_deprecated_prerelease_mode(prerelease: PrereleaseMode) -> PrereleaseMode {
