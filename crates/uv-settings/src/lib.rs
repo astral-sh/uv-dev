@@ -761,6 +761,10 @@ pub struct EnvironmentOptions {
     pub only_install_local: EnvFlag,
     pub no_env_file: EnvFlag,
     pub no_group: Option<Vec<GroupName>>,
+    pub constraints: Option<Vec<PathBuf>>,
+    pub overrides: Option<Vec<PathBuf>>,
+    pub excludes: Option<Vec<PathBuf>>,
+    pub build_constraints: Option<Vec<PathBuf>>,
     pub no_binary_package: Option<Vec<PackageName>>,
     pub no_build_package: Option<Vec<PackageName>>,
     pub no_sources_package: Option<Vec<PackageName>>,
@@ -879,6 +883,10 @@ impl EnvironmentOptions {
             only_install_local: EnvFlag::new(EnvVars::UV_ONLY_INSTALL_LOCAL)?,
             no_env_file: EnvFlag::new(EnvVars::UV_NO_ENV_FILE)?,
             no_group: parse_name_list_environment_variable(EnvVars::UV_NO_GROUP)?,
+            constraints: parse_path_list_environment_variable(EnvVars::UV_CONSTRAINT)?,
+            overrides: parse_path_list_environment_variable(EnvVars::UV_OVERRIDE)?,
+            excludes: parse_path_list_environment_variable(EnvVars::UV_EXCLUDE)?,
+            build_constraints: parse_path_list_environment_variable(EnvVars::UV_BUILD_CONSTRAINT)?,
             no_binary_package: parse_name_list_environment_variable(EnvVars::UV_NO_BINARY_PACKAGE)?,
             no_build_package: parse_name_list_environment_variable(EnvVars::UV_NO_BUILD_PACKAGE)?,
             no_sources_package: parse_name_list_environment_variable(
@@ -954,6 +962,43 @@ where
         Ok(None)
     } else {
         Ok(Some(names))
+    }
+}
+
+/// Parse an environment variable containing a whitespace-delimited list of paths.
+fn parse_path_list_environment_variable(name: &'static str) -> Result<Option<Vec<PathBuf>>, Error> {
+    let Some(value) = parse_string_environment_variable(name)? else {
+        return Ok(None);
+    };
+
+    let paths = value
+        .split_whitespace()
+        .map(|entry| {
+            if entry.starts_with("file://") {
+                let url = url::Url::from_str(entry).map_err(|err| {
+                    Error::InvalidEnvironmentVariable(InvalidEnvironmentVariable {
+                        name: name.to_string(),
+                        value: value.clone(),
+                        err: err.to_string(),
+                    })
+                })?;
+                url.to_file_path().map_err(|()| {
+                    Error::InvalidEnvironmentVariable(InvalidEnvironmentVariable {
+                        name: name.to_string(),
+                        value: value.clone(),
+                        err: "invalid file URL".to_string(),
+                    })
+                })
+            } else {
+                Ok(PathBuf::from(entry))
+            }
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    if paths.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(paths))
     }
 }
 

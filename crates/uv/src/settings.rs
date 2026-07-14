@@ -986,18 +986,12 @@ impl ToolRunSettings {
                 .into_iter()
                 .filter_map(Maybe::into_option)
                 .collect(),
-            constraints: constraints
-                .into_iter()
-                .filter_map(Maybe::into_option)
-                .collect(),
-            overrides: overrides
-                .into_iter()
-                .filter_map(Maybe::into_option)
-                .collect(),
-            build_constraints: build_constraints
-                .into_iter()
-                .filter_map(Maybe::into_option)
-                .collect(),
+            constraints: requirement_files(constraints, environment.constraints.clone()),
+            overrides: requirement_files(overrides, environment.overrides.clone()),
+            build_constraints: requirement_files(
+                build_constraints,
+                environment.build_constraints.clone(),
+            ),
             isolated,
             show_resolution,
             lfs,
@@ -1110,22 +1104,13 @@ impl ToolInstallSettings {
                 .into_iter()
                 .flat_map(CommaSeparatedRequirements::into_iter)
                 .collect(),
-            constraints: constraints
-                .into_iter()
-                .filter_map(Maybe::into_option)
-                .collect(),
-            overrides: overrides
-                .into_iter()
-                .filter_map(Maybe::into_option)
-                .collect(),
-            excludes: excludes
-                .into_iter()
-                .filter_map(Maybe::into_option)
-                .collect(),
-            build_constraints: build_constraints
-                .into_iter()
-                .filter_map(Maybe::into_option)
-                .collect(),
+            constraints: requirement_files(constraints, environment.constraints.clone()),
+            overrides: requirement_files(overrides, environment.overrides.clone()),
+            excludes: requirement_files(excludes, environment.excludes.clone()),
+            build_constraints: requirement_files(
+                build_constraints,
+                environment.build_constraints.clone(),
+            ),
             lfs,
             python: python.and_then(Maybe::into_option),
             python_platform,
@@ -2405,10 +2390,7 @@ impl AddSettings {
             no_sync: no_sync.is_enabled(),
             packages,
             requirements,
-            constraints: constraints
-                .into_iter()
-                .filter_map(Maybe::into_option)
-                .collect(),
+            constraints: requirement_files(constraints, environment.constraints.clone()),
             marker,
             dependency_type,
             raw,
@@ -3258,6 +3240,22 @@ fn workspace_overrides(filesystem: Option<&FilesystemOptions>) -> Vec<Override<R
     overrides
 }
 
+/// Resolve requirements-file arguments, using environment values only when the CLI did not
+/// provide the corresponding option.
+fn requirement_files(
+    arguments: Vec<Maybe<PathBuf>>,
+    environment: Option<Vec<PathBuf>>,
+) -> Vec<PathBuf> {
+    if arguments.is_empty() {
+        environment.unwrap_or_default()
+    } else {
+        arguments
+            .into_iter()
+            .filter_map(Maybe::into_option)
+            .collect()
+    }
+}
+
 /// The resolved settings to use for a `pip compile` invocation.
 #[derive(Debug, Clone)]
 pub(crate) struct PipCompileSettings {
@@ -3395,22 +3393,13 @@ impl PipCompileSettings {
         Self {
             format,
             src_file,
-            constraints: constraints
-                .into_iter()
-                .filter_map(Maybe::into_option)
-                .collect(),
-            build_constraints: build_constraints
-                .into_iter()
-                .filter_map(Maybe::into_option)
-                .collect(),
-            overrides: overrides
-                .into_iter()
-                .filter_map(Maybe::into_option)
-                .collect(),
-            excludes: excludes
-                .into_iter()
-                .filter_map(Maybe::into_option)
-                .collect(),
+            constraints: requirement_files(constraints, environment.constraints.clone()),
+            build_constraints: requirement_files(
+                build_constraints,
+                environment.build_constraints.clone(),
+            ),
+            overrides: requirement_files(overrides, environment.overrides.clone()),
+            excludes: requirement_files(excludes, environment.excludes.clone()),
             constraints_from_workspace,
             overrides_from_workspace,
             excludes_from_workspace,
@@ -3524,14 +3513,11 @@ impl PipSyncSettings {
 
         Self {
             src_file,
-            constraints: constraints
-                .into_iter()
-                .filter_map(Maybe::into_option)
-                .collect(),
-            build_constraints: build_constraints
-                .into_iter()
-                .filter_map(Maybe::into_option)
-                .collect(),
+            constraints: requirement_files(constraints, environment.constraints.clone()),
+            build_constraints: requirement_files(
+                build_constraints,
+                environment.build_constraints.clone(),
+            ),
             dry_run: DryRun::from_args(dry_run),
             refresh: Refresh::from(refresh),
             settings: PipSettings::combine(
@@ -3686,22 +3672,13 @@ impl PipInstallSettings {
             package,
             requirements,
             editables: editable,
-            constraints: constraints
-                .into_iter()
-                .filter_map(Maybe::into_option)
-                .collect(),
-            overrides: overrides
-                .into_iter()
-                .filter_map(Maybe::into_option)
-                .collect(),
-            excludes: excludes
-                .into_iter()
-                .filter_map(Maybe::into_option)
-                .collect(),
-            build_constraints: build_constraints
-                .into_iter()
-                .filter_map(Maybe::into_option)
-                .collect(),
+            constraints: requirement_files(constraints, environment.constraints.clone()),
+            overrides: requirement_files(overrides, environment.overrides.clone()),
+            excludes: requirement_files(excludes, environment.excludes.clone()),
+            build_constraints: requirement_files(
+                build_constraints,
+                environment.build_constraints.clone(),
+            ),
             dry_run: DryRun::from_args(dry_run),
             constraints_from_workspace,
             overrides_from_workspace,
@@ -4139,10 +4116,10 @@ impl BuildSettings {
             clear,
             gitignore: flag(create_gitignore, no_create_gitignore, "create-gitignore")
                 .unwrap_or(true),
-            build_constraints: build_constraints
-                .into_iter()
-                .filter_map(Maybe::into_option)
-                .collect(),
+            build_constraints: requirement_files(
+                build_constraints,
+                environment.build_constraints.clone(),
+            ),
             build_constraints_from_workspace,
             hash_checking: HashCheckingMode::from_args(
                 flag(require_hashes, no_require_hashes, "require-hashes"),
