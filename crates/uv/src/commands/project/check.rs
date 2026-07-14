@@ -9,7 +9,7 @@ use uv_cli::ColorChoice;
 use uv_client::BaseClientBuilder;
 use uv_configuration::{
     ActiveEnvironment, Concurrency, DependencyGroups, DependencyGroupsWithDefaults, DryRun,
-    ExtrasSpecification, InstallOptions,
+    ExtrasSpecification, InstallOptions, ProjectDiscovery,
 };
 use uv_fs::normalize_path;
 use uv_normalize::{DEV_DEPENDENCIES, DefaultExtras, PackageName};
@@ -73,7 +73,7 @@ pub(crate) async fn check(
     color: ColorChoice,
     printer: Printer,
     preview: Preview,
-    no_project: bool,
+    project_discovery: ProjectDiscovery,
     config_discovery: ConfigDiscovery,
     malware_settings: MalwareCheckSettings,
 ) -> Result<ExitStatus> {
@@ -85,7 +85,7 @@ pub(crate) async fn check(
     }
 
     // Discover the project.
-    let project = if no_project || script.is_some() {
+    let project = if !project_discovery.enabled() || script.is_some() {
         None
     } else {
         let discovery = if let [name] = package.as_slice() {
@@ -137,7 +137,7 @@ pub(crate) async fn check(
         }
     };
 
-    if no_project {
+    if !project_discovery.enabled() {
         for flag in extras.history().as_flags_pretty() {
             warn_user!("`{flag}` has no effect when used alongside `--no-project`");
         }
