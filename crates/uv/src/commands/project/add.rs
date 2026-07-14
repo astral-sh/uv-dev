@@ -55,6 +55,7 @@ use crate::commands::pip::loggers::{
 };
 use crate::commands::pip::operations::Modifications;
 use crate::commands::project::edit::ProjectEdit;
+use crate::commands::project::init::InitPythonPin;
 use crate::commands::project::install_target::InstallTarget;
 use crate::commands::project::lock::LockMode;
 use crate::commands::project::lock_target::LockTarget;
@@ -226,7 +227,7 @@ pub(crate) async fn add(
                     python.as_deref(),
                     &install_mirrors,
                     project_dir,
-                    false,
+                    InitPythonPin::Pin,
                     python_preference,
                     python_downloads,
                     config_discovery,
