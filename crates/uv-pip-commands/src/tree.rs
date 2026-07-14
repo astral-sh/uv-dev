@@ -18,7 +18,7 @@ use uv_distribution_types::{
     DependencyMetadata, Diagnostic, IndexCapabilities, IndexLocations, Name, RequiresPython,
 };
 use uv_installer::SitePackages;
-use uv_lock::TreeDedupe;
+use uv_lock::{TreeDedupe, TreeDirection};
 use uv_normalize::PackageName;
 use uv_pep440::{Operator, Version, VersionSpecifier, VersionSpecifiers};
 use uv_pep508::{Requirement, VersionOrUrl};
@@ -43,7 +43,7 @@ pub async fn pip_tree(
     prune: &[PackageName],
     package: &[PackageName],
     dedupe: TreeDedupe,
-    invert: bool,
+    direction: TreeDirection,
     outdated: bool,
     prerelease: Prerelease,
     index_locations: IndexLocations,
@@ -160,7 +160,7 @@ pub async fn pip_tree(
         prune,
         package,
         dedupe,
-        invert,
+        direction,
         show_version_specifiers,
         &markers,
         &packages,
@@ -214,8 +214,8 @@ struct DisplayDependencyGraph<'env> {
     depth: usize,
     /// Whether to de-duplicate the displayed dependencies.
     dedupe: TreeDedupe,
-    /// Whether to invert the dependency tree.
-    invert: bool,
+    /// The direction in which to display the dependency tree.
+    direction: TreeDirection,
     /// Whether to include the version specifiers in the tree.
     show_version_specifiers: bool,
 }
@@ -227,7 +227,7 @@ impl<'env> DisplayDependencyGraph<'env> {
         prune: &[PackageName],
         package: &[PackageName],
         dedupe: TreeDedupe,
-        invert: bool,
+        direction: TreeDirection,
         show_version_specifiers: bool,
         markers: &ResolverMarkerEnvironment,
         packages: &'env FxHashMap<&PackageName, Vec<&ResolutionMetadata>>,
@@ -289,7 +289,7 @@ impl<'env> DisplayDependencyGraph<'env> {
         }
 
         // Step 2: Reverse the graph.
-        if invert {
+        if direction.is_inverted() {
             graph.reverse();
         }
 
@@ -360,7 +360,7 @@ impl<'env> DisplayDependencyGraph<'env> {
             latest,
             depth,
             dedupe,
-            invert,
+            direction,
             show_version_specifiers,
         }
     }
@@ -387,7 +387,7 @@ impl<'env> DisplayDependencyGraph<'env> {
 
             let requirement = self.aggregate_requirement(cursor);
 
-            if self.invert {
+            if self.direction.is_inverted() {
                 let parent = self.graph.edge_endpoints(cursor.edge().unwrap()).unwrap().0;
 
                 let parent = &self.graph[parent].name;

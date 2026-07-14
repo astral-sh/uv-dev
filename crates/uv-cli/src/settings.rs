@@ -32,7 +32,7 @@ use uv_distribution_types::{
     PackageConfigSettings, Requirement,
 };
 use uv_install_wheel::LinkMode;
-use uv_lock::TreeDedupe;
+use uv_lock::{TreeDedupe, TreeDirection};
 use uv_normalize::{ExtraName, PackageName, PipGroupName};
 use uv_pep440::Version;
 use uv_pep508::{MarkerTree, RequirementOrigin};
@@ -2701,7 +2701,7 @@ pub struct TreeSettings {
     pub prune: Vec<PackageName>,
     pub package: Vec<PackageName>,
     pub dedupe: TreeDedupe,
-    pub invert: bool,
+    pub direction: TreeDirection,
     pub outdated: bool,
     pub show_sizes: bool,
     pub script: Option<PathBuf>,
@@ -2787,7 +2787,7 @@ impl TreeSettings {
             prune: tree.prune,
             package: tree.package,
             dedupe: TreeDedupe::from_args(tree.no_dedupe),
-            invert: tree.invert,
+            direction: TreeDirection::from_args(tree.invert),
             outdated: tree.outdated,
             show_sizes: tree.show_sizes,
             script,
@@ -4090,7 +4090,7 @@ pub struct PipTreeSettings {
     pub prune: Vec<PackageName>,
     pub package: Vec<PackageName>,
     pub dedupe: TreeDedupe,
-    pub invert: bool,
+    pub direction: TreeDirection,
     pub outdated: bool,
     pub settings: PipSettings,
 }
@@ -4119,7 +4119,7 @@ impl PipTreeSettings {
             depth: tree.depth,
             prune: tree.prune,
             dedupe: TreeDedupe::from_args(tree.no_dedupe),
-            invert: tree.invert,
+            direction: TreeDirection::from_args(tree.invert),
             package: tree.package,
             outdated: tree.outdated,
             settings: PipSettings::combine(
