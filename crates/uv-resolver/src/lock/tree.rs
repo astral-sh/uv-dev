@@ -79,6 +79,15 @@ impl TreeDirection {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TreeOptions {
+    pub depth: usize,
+    pub dedupe: TreeDedupe,
+    pub direction: TreeDirection,
+    pub show_version_specifiers: bool,
+    pub show_sizes: bool,
+}
+
 #[derive(Debug)]
 pub struct TreeDisplay<'env> {
     /// The constructed dependency graph.
@@ -87,20 +96,14 @@ pub struct TreeDisplay<'env> {
     roots: Vec<NodeIndex>,
     /// The latest known version of each package.
     latest: &'env PackageMap<Version>,
-    /// Maximum display depth of the dependency tree.
-    depth: usize,
-    /// Whether to de-duplicate the displayed dependencies.
-    dedupe: TreeDedupe,
-    /// The direction in which to display the dependency tree.
-    direction: TreeDirection,
+    /// Options controlling how the dependency tree is displayed.
+    options: TreeOptions,
     /// Whether production dependencies are included in the tree.
     prod: bool,
     /// The dependency groups included in the tree.
     groups: DependencyGroupsWithDefaults,
     /// Reference to the lock to look up additional metadata (e.g., wheel sizes).
     lock: &'env Lock,
-    /// Whether to show sizes in the rendered output.
-    show_sizes: bool,
     /// The marker constraints imposed by declared conflicting extras and groups.
     conflict_marker: UniversalMarker,
 }
@@ -111,13 +114,10 @@ impl<'env> TreeDisplay<'env> {
         lock: &'env Lock,
         markers: Option<&'env ResolverMarkerEnvironment>,
         latest: &'env PackageMap<Version>,
-        depth: usize,
+        options: TreeOptions,
         prune: &[PackageName],
         packages: &[PackageName],
         groups: &DependencyGroupsWithDefaults,
-        dedupe: TreeDedupe,
-        direction: TreeDirection,
-        show_sizes: bool,
     ) -> Self {
         // Identify any workspace members.
         //
@@ -452,7 +452,7 @@ impl<'env> TreeDisplay<'env> {
         }
 
         // Reverse the graph.
-        if direction.is_inverted() {
+        if options.direction.is_inverted() {
             graph.reverse();
         }
 
@@ -499,7 +499,7 @@ impl<'env> TreeDisplay<'env> {
 
                 roots
             } else {
-                let mut roots = if direction.is_inverted() {
+                let mut roots = if options.direction.is_inverted() {
                     // A leaf cycle has no package without incoming edges, so choose one
                     // deterministic package from each strongly connected component
                     // without incoming edges from another component.
@@ -551,13 +551,10 @@ impl<'env> TreeDisplay<'env> {
             graph,
             roots,
             latest,
-            depth,
-            dedupe,
-            direction,
+            options,
             prod: groups.prod(),
             groups: groups.clone(),
             lock,
-            show_sizes,
             conflict_marker,
         }
     }
@@ -570,7 +567,7 @@ impl<'env> TreeDisplay<'env> {
         path: &mut Vec<VisitedNode<'env>>,
     ) -> Vec<String> {
         // Short-circuit if the current path is longer than the provided depth.
-        if path.len() > self.depth {
+        if path.len() > self.options.depth {
             return Vec::new();
         }
 
@@ -585,7 +582,11 @@ impl<'env> TreeDisplay<'env> {
         let visited_node = VisitedNode {
             package_index,
             expanded_extras: expanded_extras.clone(),
-            marker: self.direction.is_inverted().then_some(cursor.marker()),
+            marker: self
+                .options
+                .direction
+                .is_inverted()
+                .then_some(cursor.marker()),
         };
 
         let line = {
@@ -619,7 +620,7 @@ impl<'env> TreeDisplay<'env> {
 
             // Append compressed wheel size, if available in the lockfile.
             // Keep it simple: use the first wheel entry that includes a size.
-            if self.show_sizes {
+            if self.options.show_sizes {
                 if let Some(size_bytes) = package.wheels.iter().find_map(|wheel| wheel.size) {
                     let bytes = human_readable_bytes(size_bytes);
                     line.push(' ');
@@ -636,7 +637,7 @@ impl<'env> TreeDisplay<'env> {
         if path.contains(&visited_node) {
             return vec![format!("{line} (*)")];
         }
-        if self.dedupe == TreeDedupe::Enabled
+        if self.options.dedupe == TreeDedupe::Enabled
             && let Some(requirements) = visited.get(&visited_node)
         {
             return if requirements.is_empty() {
@@ -653,51 +654,52 @@ impl<'env> TreeDisplay<'env> {
             line
         };
 
-        let mut dependencies = if self.direction.is_inverted() && edge.is_some_and(Edge::is_dev) {
-            // A member's dependency group is activated for the root member. It is not part of the
-            // member when that member is installed as another package's dependency.
-            Vec::new()
-        } else {
-            self.graph
-                .edges_directed(cursor.node(), Direction::Outgoing)
-                .filter_map(|edge| match self.graph[edge.target()] {
-                    Node::Root => None,
-                    Node::Package(_) => {
-                        let edge_kind = &self.graph[edge.id()];
+        let mut dependencies =
+            if self.options.direction.is_inverted() && edge.is_some_and(Edge::is_dev) {
+                // A member's dependency group is activated for the root member. It is not part of the
+                // member when that member is installed as another package's dependency.
+                Vec::new()
+            } else {
+                self.graph
+                    .edges_directed(cursor.node(), Direction::Outgoing)
+                    .filter_map(|edge| match self.graph[edge.target()] {
+                        Node::Root => None,
+                        Node::Package(_) => {
+                            let edge_kind = &self.graph[edge.id()];
 
-                        if self.direction.is_inverted() {
-                            // If the path to the target requires an extra on this package, only
-                            // follow consumers that activate that extra.
-                            if !expanded_extras.is_empty()
-                                && edge_kind.extras().is_none_or(|extras| {
-                                    !expanded_extras.iter().all(|extra| extras.contains(extra))
-                                })
-                            {
-                                return None;
-                            }
+                            if self.options.direction.is_inverted() {
+                                // If the path to the target requires an extra on this package, only
+                                // follow consumers that activate that extra.
+                                if !expanded_extras.is_empty()
+                                    && edge_kind.extras().is_none_or(|extras| {
+                                        !expanded_extras.iter().all(|extra| extras.contains(extra))
+                                    })
+                                {
+                                    return None;
+                                }
 
-                            // A package node can appear in several universal marker branches. Do
-                            // not join incoming and outgoing edges that cannot coexist.
-                            let mut marker = cursor.marker();
-                            marker.and(edge_kind.marker());
-                            if marker.is_false() {
-                                return None;
+                                // A package node can appear in several universal marker branches. Do
+                                // not join incoming and outgoing edges that cannot coexist.
+                                let mut marker = cursor.marker();
+                                marker.and(edge_kind.marker());
+                                if marker.is_false() {
+                                    return None;
+                                }
+                                Some(Cursor::new(edge.target(), edge.id(), marker))
+                            } else {
+                                // Only include extra-conditional dependencies if the activating extra
+                                // is enabled in the current context.
+                                if let Edge::Optional(required_extra, ..) = edge_kind
+                                    && !expanded_extras.contains(required_extra)
+                                {
+                                    return None;
+                                }
+                                Some(Cursor::new(edge.target(), edge.id(), UniversalMarker::TRUE))
                             }
-                            Some(Cursor::new(edge.target(), edge.id(), marker))
-                        } else {
-                            // Only include extra-conditional dependencies if the activating extra
-                            // is enabled in the current context.
-                            if let Edge::Optional(required_extra, ..) = edge_kind
-                                && !expanded_extras.contains(required_extra)
-                            {
-                                return None;
-                            }
-                            Some(Cursor::new(edge.target(), edge.id(), UniversalMarker::TRUE))
                         }
-                    }
-                })
-                .collect::<Vec<_>>()
-        };
+                    })
+                    .collect::<Vec<_>>()
+            };
         dependencies.sort_by_key(|cursor| {
             let node = self.graph[cursor.node()].sort_key(self.lock);
             let edge = cursor
@@ -711,7 +713,7 @@ impl<'env> TreeDisplay<'env> {
 
         // Keep track of the dependency path to avoid cycles.
         // Only mark as visited if we're going to expand children (not at depth limit).
-        if path.len() < self.depth {
+        if path.len() < self.options.depth {
             visited.insert(
                 visited_node.clone(),
                 dependencies
@@ -806,7 +808,7 @@ impl<'env> TreeDisplay<'env> {
         package: &'env Package,
         edge: Option<&Edge<'env>>,
     ) -> BTreeSet<&'env ExtraName> {
-        if self.direction.is_inverted() {
+        if self.options.direction.is_inverted() {
             // In inverted mode, an optional edge records the extra that must have been activated
             // on this package for the path to exist.
             return edge.and_then(Edge::required_extra).into_iter().collect();
@@ -870,7 +872,7 @@ impl<'env> TreeDisplay<'env> {
                         index: *root,
                         expanded_extras: self
                             .expanded_extras(self.lock.package(package_index), None),
-                        marker: if self.direction.is_inverted() {
+                        marker: if self.options.direction.is_inverted() {
                             self.conflict_marker
                         } else {
                             UniversalMarker::TRUE
@@ -887,15 +889,15 @@ impl<'env> TreeDisplay<'env> {
 
         while let Some(source) = queue.pop_front() {
             let distance = distances[&source];
-            if distance >= self.depth
-                || self.direction.is_inverted() && source.reached_via_dependency_group
+            if distance >= self.options.depth
+                || self.options.direction.is_inverted() && source.reached_via_dependency_group
             {
                 continue;
             }
 
             for edge in self.graph.edges_directed(source.index, Direction::Outgoing) {
                 let edge_kind = edge.weight();
-                let marker = if self.direction.is_inverted() {
+                let marker = if self.options.direction.is_inverted() {
                     // If the path to the target requires an extra on this package, only follow
                     // consumers that activate that extra.
                     if !source.expanded_extras.is_empty()
@@ -941,7 +943,7 @@ impl<'env> TreeDisplay<'env> {
                     expanded_extras: self
                         .expanded_extras(self.lock.package(package_index), Some(edge.weight())),
                     marker,
-                    reached_via_dependency_group: self.direction.is_inverted()
+                    reached_via_dependency_group: self.options.direction.is_inverted()
                         && edge_kind.is_dev(),
                 };
                 nodes.insert(state.index);
@@ -1130,7 +1132,7 @@ impl JsonGraph {
             script,
             workspace,
             roots,
-            inverted: tree.direction.is_inverted(),
+            inverted: tree.options.direction.is_inverted(),
             members,
             resolution,
         }
@@ -1229,7 +1231,7 @@ impl<'tree, 'env> JsonGraphBuilder<'tree, 'env> {
     }
 
     fn add_package_edge(&mut self, source: NodeIndex, target: NodeIndex, edge: &Edge<'env>) {
-        let (source, target) = if self.tree.direction.is_inverted() {
+        let (source, target) = if self.tree.options.direction.is_inverted() {
             (target, source)
         } else {
             (source, target)
@@ -1261,7 +1263,7 @@ impl<'tree, 'env> JsonGraphBuilder<'tree, 'env> {
             .graph
             .edge_references()
             .filter(|edge| {
-                !self.tree.direction.is_inverted() || traversal.edges.contains(&edge.id())
+                !self.tree.options.direction.is_inverted() || traversal.edges.contains(&edge.id())
             })
             .filter_map(|edge| {
                 let package = match (
@@ -1318,12 +1320,13 @@ impl<'tree, 'env> JsonGraphBuilder<'tree, 'env> {
         // `optional_dependencies` and `dependency_groups` advertise related nodes; they are not
         // dependency edges. Keep those relationships attached to their owner when inverting the
         // graph, and reverse only actual dependencies.
-        let (source, target) =
-            if self.tree.direction.is_inverted() && matches!(&link, JsonLink::Dependency(_)) {
-                (target, source)
-            } else {
-                (source, target)
-            };
+        let (source, target) = if self.tree.options.direction.is_inverted()
+            && matches!(&link, JsonLink::Dependency(_))
+        {
+            (target, source)
+        } else {
+            (source, target)
+        };
         let Some(node) = self.resolution.get_mut(&source) else {
             return;
         };
@@ -1390,7 +1393,7 @@ impl<'tree, 'env> JsonGraphBuilder<'tree, 'env> {
         for root in &self.tree.roots {
             match self.tree.graph[*root] {
                 Node::Package(package_index) => {
-                    if self.tree.direction.is_inverted() {
+                    if self.tree.options.direction.is_inverted() {
                         roots.push(JsonRoot {
                             id: self.ensure_package(package_index, MetadataNodeKind::Package),
                         });
@@ -1685,7 +1688,7 @@ impl std::fmt::Display for TreeDisplay<'_> {
         }
 
         if deduped {
-            let message = if self.dedupe == TreeDedupe::Disabled {
+            let message = if self.options.dedupe == TreeDedupe::Disabled {
                 "(*) Package tree is a cycle and cannot be shown".italic()
             } else {
                 "(*) Package tree already displayed".italic()
