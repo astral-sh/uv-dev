@@ -568,7 +568,9 @@ async fn upgrade_tool(
 
     if matches!(
         outcome,
-        UpgradeOutcome::UpgradeEnvironment | UpgradeOutcome::UpgradeTool
+        UpgradeOutcome::UpgradeEnvironment
+            | UpgradeOutcome::UpgradeTool
+            | UpgradeOutcome::UpgradeDependencies
     ) {
         // At this point, we updated the existing environment, so we should remove any of its
         // existing executables.
@@ -580,7 +582,8 @@ async fn upgrade_tool(
             .filter_map(|entry| PackageName::from_str(entry.from.as_ref()?).ok())
             .collect();
 
-        // If we modified the target tool, reinstall the entrypoints.
+        // If we modified the target tool or one of its executable providers, reinstall the
+        // entrypoints.
         finalize_tool_install(
             &environment,
             name,
