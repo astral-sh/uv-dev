@@ -178,13 +178,34 @@ pub(crate) enum PythonUpgrade {
     Disabled,
 }
 
+/// Whether to reinstall matching Python versions.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum PythonReinstall {
+    /// Reinstall matching Python versions.
+    Enabled,
+    /// Respect existing Python installations.
+    Disabled,
+}
+
+impl PythonReinstall {
+    fn is_enabled(self) -> bool {
+        matches!(self, Self::Enabled)
+    }
+}
+
+impl From<bool> for PythonReinstall {
+    fn from(value: bool) -> Self {
+        if value { Self::Enabled } else { Self::Disabled }
+    }
+}
+
 /// Download and install Python versions.
 #[expect(clippy::fn_params_excessive_bools)]
 pub(crate) async fn install(
     project_dir: &Path,
     install_dir: Option<PathBuf>,
     targets: Vec<String>,
-    reinstall: bool,
+    reinstall: PythonReinstall,
     upgrade: PythonUpgrade,
     bin: Option<bool>,
     registry: Option<bool>,
@@ -290,7 +311,7 @@ async fn perform_install(
     project_dir: &Path,
     install_dir: Option<PathBuf>,
     targets: Vec<String>,
-    reinstall: bool,
+    reinstall: PythonReinstall,
     upgrade: PythonUpgrade,
     bin: Option<bool>,
     registry: Option<bool>,
@@ -391,7 +412,7 @@ async fn perform_install(
                 // TODO(zanieb): We should consider differentiating between a global Python version
                 // file here, allowing a request from there to enable `is_default_install`.
                 is_default_install = true;
-                vec![if reinstall {
+                vec![if reinstall.is_enabled() {
                     // On bare `--reinstall`, reinstall all Python versions
                     PythonRequest::Any
                 } else {
@@ -467,7 +488,7 @@ async fn perform_install(
 
     // Find requests that are already satisfied
     let mut changelog = Changelog::default();
-    let (satisfied, unsatisfied): (Vec<_>, Vec<_>) = if reinstall {
+    let (satisfied, unsatisfied): (Vec<_>, Vec<_>) = if reinstall.is_enabled() {
         // In the reinstall case, we want to iterate over all matching installations instead of
         // stopping at the first match.
 
@@ -611,7 +632,7 @@ async fn perform_install(
                         &retry_policy,
                         installations_dir,
                         &scratch_dir,
-                        reinstall || replacements.contains(download.key()),
+                        reinstall.is_enabled() || replacements.contains(download.key()),
                         python_install_mirror.as_deref(),
                         pypy_install_mirror.as_deref(),
                         Some(&reporter),
@@ -974,7 +995,7 @@ async fn perform_install(
 fn create_bin_links(
     installation: &ManagedPythonInstallation,
     bin: &Path,
-    reinstall: bool,
+    reinstall: PythonReinstall,
     force: bool,
     default: bool,
     upgradeable: bool,
@@ -1098,7 +1119,7 @@ fn create_bin_links(
                     Some(existing) if existing == installation => {
                         // The existing link points to the same installation, so we're done unless
                         // they requested we reinstall
-                        if !(reinstall || force) {
+                        if !(reinstall.is_enabled() || force) {
                             debug!(
                                 "Executable at `{}` is already for `{}`",
                                 target.simplified_display(),
