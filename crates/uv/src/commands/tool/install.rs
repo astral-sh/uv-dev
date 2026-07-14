@@ -739,6 +739,8 @@ pub(crate) async fn install(
                     &resolution,
                     &lock_manifest,
                     &settings.resolver.index_locations,
+                    &settings.resolver.config_setting,
+                    &settings.resolver.config_settings_package,
                 )?;
                 let resolution = tool_lock.to_resolution(
                     Some(package_name),
@@ -1006,6 +1008,8 @@ pub(crate) async fn install(
                     &resolution,
                     &lock_manifest,
                     &settings.resolver.index_locations,
+                    &settings.resolver.config_setting,
+                    &settings.resolver.config_settings_package,
                 )?;
                 let resolution = tool_lock.to_resolution(
                     Some(package_name),
