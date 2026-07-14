@@ -1810,7 +1810,11 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 args.all_versions,
                 args.all_platforms,
                 args.all_arches,
-                args.show_urls,
+                if args.show_urls {
+                    commands::PythonListUrlDisplay::Show
+                } else {
+                    commands::PythonListUrlDisplay::Hide
+                },
                 args.output_format,
                 args.python_downloads_json_url,
                 args.python_install_mirror,
