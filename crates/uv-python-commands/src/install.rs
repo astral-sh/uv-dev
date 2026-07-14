@@ -16,7 +16,7 @@ use tracing::{debug, trace, warn};
 
 use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
-use uv_configuration::{Concurrency, PythonUpgrade, PythonUpgradeSource};
+use uv_configuration::{Concurrency, PythonReinstall, PythonUpgrade, PythonUpgradeSource};
 use uv_errors::{ErrorOptions, Hints, write_error_chain_with_options};
 use uv_fs::Simplified;
 use uv_platform::{Arch, Libc};
@@ -184,7 +184,7 @@ pub async fn install(
     project_dir: &Path,
     install_dir: Option<PathBuf>,
     targets: Vec<String>,
-    reinstall: bool,
+    reinstall: PythonReinstall,
     upgrade: PythonUpgrade,
     bin: Option<bool>,
     registry: Option<bool>,
@@ -288,7 +288,7 @@ async fn perform_install(
     project_dir: &Path,
     install_dir: Option<PathBuf>,
     targets: Vec<String>,
-    reinstall: bool,
+    reinstall: PythonReinstall,
     upgrade: PythonUpgrade,
     bin: Option<bool>,
     registry: Option<bool>,
@@ -388,7 +388,7 @@ async fn perform_install(
                 // TODO(zanieb): We should consider differentiating between a global Python version
                 // file here, allowing a request from there to enable `is_default_install`.
                 is_default_install = true;
-                vec![if reinstall {
+                vec![if reinstall.is_enabled() {
                     // On bare `--reinstall`, reinstall all Python versions
                     PythonRequest::Any
                 } else {
@@ -454,7 +454,7 @@ async fn perform_install(
 
     // Find requests that are already satisfied
     let mut changelog = Changelog::default();
-    let (satisfied, unsatisfied): (Vec<_>, Vec<_>) = if reinstall {
+    let (satisfied, unsatisfied): (Vec<_>, Vec<_>) = if reinstall.is_enabled() {
         // In the reinstall case, we want to iterate over all matching installations instead of
         // stopping at the first match.
 
@@ -602,7 +602,7 @@ async fn perform_install(
                         &retry_policy,
                         installations_dir,
                         &scratch_dir,
-                        reinstall || replacements.contains(download.key()),
+                        reinstall.is_enabled() || replacements.contains(download.key()),
                         install_mirrors.mirrors(),
                         Some(&reporter),
                     )
@@ -964,7 +964,7 @@ async fn perform_install(
 fn create_bin_links(
     installation: &ManagedPythonInstallation,
     bin: &Path,
-    reinstall: bool,
+    reinstall: PythonReinstall,
     force: bool,
     default: bool,
     upgradeable: bool,
@@ -1089,7 +1089,7 @@ fn create_bin_links(
                     Some(existing) if existing == installation => {
                         // The existing link points to the same installation, so we're done unless
                         // they requested we reinstall
-                        if !(reinstall || force) {
+                        if !(reinstall.is_enabled() || force) {
                             debug!(
                                 "Executable at `{}` is already for `{}`",
                                 target.simplified_display(),

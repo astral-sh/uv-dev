@@ -22,9 +22,9 @@ use uv_configuration::{
     ExcludeNewer, ExcludeNewerPackage, ExportFormat, ExtrasSpecification, ForkStrategy,
     GitLfsSetting, HashCheckingMode, IndexStrategy, InitKind, InitProjectKind, InstallOptions,
     KeyringProviderType, Modifications, NoBinary, NoBuild, NoSources, Override, PackageOverride,
-    PipCompileFormat, Prerelease, ProjectBuildBackend, ProxyUrl, PythonUpgrade,
-    PythonUpgradeSource, Reinstall, RequiredVersion, RequirementsInput, ResolutionMode,
-    TargetTriple, ToolRunCommand, TrustedHost, TrustedPublishing, Upgrade, VersionControlSystem,
+    PipCompileFormat, Prerelease, ProjectBuildBackend, ProxyUrl, PythonReinstall, PythonUpgrade,
+    PythonUpgradeSource, Reinstall, RequiredVersion, RequirementsInput, ResolutionMode, TargetTriple,
+    ToolRunCommand, TrustedHost, TrustedPublishing, Upgrade, VersionControlSystem,
 };
 use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, ExcludeNewerOverride, ExtraBuildVariables, Index,
@@ -1517,7 +1517,7 @@ impl PythonDirSettings {
 pub struct PythonInstallSettings {
     pub install_dir: Option<PathBuf>,
     pub targets: Vec<String>,
-    pub reinstall: bool,
+    pub reinstall: PythonReinstall,
     pub force: bool,
     pub upgrade: PythonUpgrade,
     pub bin: Option<bool>,
@@ -1565,7 +1565,7 @@ impl PythonInstallSettings {
         Ok(Self {
             install_dir,
             targets,
-            reinstall,
+            reinstall: reinstall.into(),
             force,
             upgrade: if upgrade {
                 PythonUpgrade::Enabled(PythonUpgradeSource::Install)
@@ -1604,7 +1604,7 @@ pub struct PythonUpgradeSettings {
     pub force: bool,
     pub registry: Option<bool>,
     pub install_mirrors: PythonInstallMirrors,
-    pub reinstall: bool,
+    pub reinstall: PythonReinstall,
     pub default: bool,
     pub bin: Option<bool>,
     pub compile_bytecode: bool,
@@ -1655,7 +1655,7 @@ impl PythonUpgradeSettings {
             force,
             registry,
             install_mirrors,
-            reinstall,
+            reinstall: reinstall.into(),
             default,
             bin,
             compile_bytecode: flag(

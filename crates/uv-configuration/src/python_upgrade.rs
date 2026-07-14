@@ -24,3 +24,27 @@ pub enum PythonUpgrade {
     /// Python upgrades are disabled.
     Disabled,
 }
+
+/// Whether to reinstall matching Python versions.
+#[derive(Debug, Clone, Copy)]
+pub enum PythonReinstall {
+    /// Reinstall matching Python versions.
+    Enabled,
+    /// Respect existing Python installations.
+    Disabled,
+}
+
+impl PythonReinstall {
+    pub fn is_enabled(self) -> bool {
+        match self {
+            Self::Enabled => true,
+            Self::Disabled => false,
+        }
+    }
+}
+
+impl From<bool> for PythonReinstall {
+    fn from(value: bool) -> Self {
+        if value { Self::Enabled } else { Self::Disabled }
+    }
+}
