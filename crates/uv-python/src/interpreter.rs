@@ -993,7 +993,9 @@ impl InterpreterInfo {
             .arg("-I") // Isolated mode.
             .arg("-B") // Don't write bytecode.
             .arg("-c")
-            .arg(script);
+            .arg(script)
+            // Ignore a cross-compilation override when determining the host interpreter tags.
+            .env_remove("_PYTHON_HOST_PLATFORM");
 
         // Disable Apple's SYSTEM_VERSION_COMPAT shim so that `platform.mac_ver()` reports
         // the real macOS version instead of "10.16" for interpreters built against older SDKs
