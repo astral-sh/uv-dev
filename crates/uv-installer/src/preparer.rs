@@ -2,16 +2,18 @@ use std::cmp::Reverse;
 use std::sync::Arc;
 
 use futures::{FutureExt, Stream, TryFutureExt, TryStreamExt, stream::FuturesUnordered};
+use rustc_hash::FxHashMap;
 use tracing::{debug, instrument};
 
 use uv_cache::Cache;
 use uv_configuration::BuildOptions;
 use uv_distribution::{DistributionDatabase, LocalWheel};
 use uv_distribution_types::{
-    BuildableSource, CachedDist, DerivationChain, Dist, DistErrorKind, Hashed, Identifier, Name,
-    RemoteSource, Resolution,
+    BuildableSource, CachedDist, DerivationChain, Dist, DistErrorKind, DistributionId, Hashed,
+    Identifier, Name, RemoteSource, Resolution, ResolvedDist,
 };
 use uv_normalize::PackageName;
+use uv_pep440::Version;
 use uv_platform_tags::Tags;
 use uv_redacted::DisplaySafeUrl;
 use uv_types::{BuildContext, HashStrategy, InFlight};
@@ -68,17 +70,33 @@ impl<'a, Context: BuildContext> Preparer<'a, Context> {
         in_flight: &'stream InFlight,
         resolution: &'stream Resolution,
     ) -> impl Stream<Item = Result<CachedDist, Error>> + 'stream {
+        let expected_versions: FxHashMap<DistributionId, &Version> = resolution
+            .distributions()
+            .filter_map(|resolved| {
+                let ResolvedDist::Installable { dist, version } = resolved else {
+                    return None;
+                };
+                version
+                    .as_ref()
+                    .map(|version| (dist.distribution_id(), version))
+            })
+            .collect();
+
         distributions
             .into_iter()
-            .map(async |dist| {
-                let wheel = self
-                    .get_wheel((*dist).clone(), in_flight, resolution)
-                    .boxed_local()
-                    .await?;
-                if let Some(reporter) = self.reporter.as_ref() {
-                    reporter.on_progress(&wheel);
+            .map(|dist| {
+                let expected_version = expected_versions.get(&dist.distribution_id()).copied();
+                async move {
+                    let expected_version = expected_version.or_else(|| dist.version());
+                    let wheel = self
+                        .get_wheel((*dist).clone(), expected_version, in_flight, resolution)
+                        .boxed_local()
+                        .await?;
+                    if let Some(reporter) = self.reporter.as_ref() {
+                        reporter.on_progress(&wheel);
+                    }
+                    Ok::<CachedDist, Error>(wheel)
                 }
-                Ok::<CachedDist, Error>(wheel)
             })
             .collect::<FuturesUnordered<_>>()
     }
@@ -111,6 +129,7 @@ impl<'a, Context: BuildContext> Preparer<'a, Context> {
     async fn get_wheel(
         &self,
         dist: Dist,
+        expected_version: Option<&Version>,
         in_flight: &InFlight,
         resolution: &Resolution,
     ) -> Result<CachedDist, Error> {
@@ -153,7 +172,7 @@ impl<'a, Context: BuildContext> Preparer<'a, Context> {
                         };
                         return Err(Error::from_dist(dist, err, resolution));
                     }
-                    if let Some(version) = dist.version() {
+                    if let Some(version) = expected_version {
                         if *version != cached.filename().version
                             && *version != cached.filename().version.clone().without_local()
                         {
@@ -186,10 +205,23 @@ impl<'a, Context: BuildContext> Preparer<'a, Context> {
                             policy.digests(),
                             wheel.hashes(),
                         );
-                        Err(Error::from_dist(dist, err, resolution))
+                        Err(Error::from_dist(dist.clone(), err, resolution))
                     }
                 })
-                .map(CachedDist::from);
+                .map(CachedDist::from)
+                .and_then(|cached| {
+                    if let Some(version) = expected_version
+                        && *version != cached.filename().version
+                        && *version != cached.filename().version.clone().without_local()
+                    {
+                        let err = uv_distribution::Error::WheelMetadataVersionMismatch {
+                            given: version.clone(),
+                            metadata: cached.filename().version.clone(),
+                        };
+                        return Err(Error::from_dist(dist, err, resolution));
+                    }
+                    Ok(cached)
+                });
             match result {
                 Ok(cached) => {
                     in_flight.downloads.done(id, Ok(cached.clone()));
