@@ -187,12 +187,7 @@ impl Pep517Backend {
             .backend_path
             .iter()
             .flat_map(BackendPath::iter)
-            .map(|path| {
-                // Turn into properly escaped python string
-                '"'.to_string()
-                    + &path.replace('\\', "\\\\").replace('"', "\\\"")
-                    + &'"'.to_string()
-            })
+            .map(|path| serde_json::Value::String(path.to_string()).to_string())
             .join(", ");
 
         // > Projects can specify that their backend code is hosted in-tree by including the
