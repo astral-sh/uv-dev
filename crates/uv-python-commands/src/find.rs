@@ -23,7 +23,6 @@ use uv_python_discovery::ProjectPythonRequest;
 use uv_python_discovery::ScriptInterpreter;
 
 /// Find a Python interpreter.
-#[expect(clippy::fn_params_excessive_bools)]
 pub async fn find(
     project_dir: &Path,
     request: Option<String>,

@@ -46,6 +46,7 @@ use uv_fs::{CWD, Simplified, normalize_path};
 #[cfg(feature = "self-update")]
 use uv_pep440::release_specifiers_to_ranges;
 use uv_pep508::VersionOrUrl;
+use uv_pip_commands::EnvironmentValidation;
 use uv_preview::PreviewFeature;
 use uv_pypi_types::{ParsedDirectoryUrl, ParsedUrl};
 use uv_python_discovery::ConfigDiscovery;
@@ -901,7 +902,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 args.settings.python_platform,
                 globals.python_downloads,
                 args.settings.install_mirrors,
-                args.settings.strict,
+                EnvironmentValidation::from_args(args.settings.strict),
                 args.settings.exclude_newer,
                 args.settings.python,
                 args.settings.environment_preference,
@@ -1066,7 +1067,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 args.settings.python_platform,
                 globals.python_downloads,
                 args.settings.install_mirrors,
-                args.settings.strict,
+                EnvironmentValidation::from_args(args.settings.strict),
                 args.settings.exclude_newer,
                 args.settings.sources,
                 args.settings.python,

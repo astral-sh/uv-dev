@@ -47,6 +47,7 @@ use uv_warnings::warn_user;
 use uv_workspace::WorkspaceCache;
 use uv_workspace::pyproject::ExtraBuildDependencies;
 
+use crate::EnvironmentValidation;
 use crate::install_report::write_install_report;
 use crate::pylock::{read_pylock_toml, resolve_pylock_toml};
 use crate::reporters::report_target_environment;
@@ -82,7 +83,6 @@ impl Hinted for ExternallyManagedError {
 }
 
 /// Install packages into the current environment.
-#[expect(clippy::fn_params_excessive_bools)]
 pub async fn pip_install(
     requirements: &[RequirementsSource],
     constraints: &[RequirementsSource],
@@ -124,7 +124,7 @@ pub async fn pip_install(
     python_platform: Option<TargetTriple>,
     python_downloads: PythonDownloads,
     install_mirrors: PythonInstallMirrors,
-    strict: bool,
+    environment_validation: EnvironmentValidation,
     exclude_newer: ExcludeNewer,
     sources: NoSources,
     python: Option<String>,
@@ -373,7 +373,9 @@ pub async fn pip_install(
                 }
                 DefaultInstallLogger.on_check(requirements.len(), start, printer, dry_run)?;
 
-                if strict && !dry_run.enabled() {
+                if matches!(environment_validation, EnvironmentValidation::Enabled)
+                    && !dry_run.enabled()
+                {
                     uv_install_operations::diagnose_environment(
                         recursive_requirements
                             .iter()
@@ -689,7 +691,7 @@ pub async fn pip_install(
     uv_resolve_operations::diagnose_resolution(resolution.diagnostics(), printer)?;
 
     // Notify the user of any environment diagnostics.
-    if strict && !dry_run.enabled() {
+    if matches!(environment_validation, EnvironmentValidation::Enabled) && !dry_run.enabled() {
         uv_install_operations::diagnose_environment(
             resolution.distributions().map(Name::name),
             &environment,
