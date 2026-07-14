@@ -2209,7 +2209,6 @@ impl MetadataSettings {
 }
 
 /// The resolved settings to use for a `add` invocation.
-#[expect(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone)]
 pub struct AddSettings {
     pub lock_check: LockCheck,
@@ -2233,12 +2232,9 @@ pub struct AddSettings {
     pub script: Option<PathBuf>,
     pub python: Option<String>,
     pub workspace: Option<bool>,
-    pub no_install_project: bool,
-    pub only_install_project: bool,
-    pub no_install_workspace: bool,
-    pub only_install_workspace: bool,
-    pub no_install_local: bool,
-    pub only_install_local: bool,
+    pub install_project: InstallSelection,
+    pub install_workspace: InstallSelection,
+    pub install_local: InstallSelection,
     pub no_install_package: Vec<PackageName>,
     pub only_install_package: Vec<PackageName>,
     pub install_mirrors: PythonInstallMirrors,
@@ -2425,12 +2421,18 @@ impl AddSettings {
             check_conflicts(install_flag, no_sync)?;
         }
 
-        let no_install_project = no_install_project.is_enabled();
-        let only_install_project = only_install_project.is_enabled();
-        let no_install_workspace = no_install_workspace.is_enabled();
-        let only_install_workspace = only_install_workspace.is_enabled();
-        let no_install_local = no_install_local.is_enabled();
-        let only_install_local = only_install_local.is_enabled();
+        let install_project = InstallSelection::from_args(
+            no_install_project.is_enabled(),
+            only_install_project.is_enabled(),
+        );
+        let install_workspace = InstallSelection::from_args(
+            no_install_workspace.is_enabled(),
+            only_install_workspace.is_enabled(),
+        );
+        let install_local = InstallSelection::from_args(
+            no_install_local.is_enabled(),
+            only_install_local.is_enabled(),
+        );
 
         let malware_settings = MalwareCheckSettings::resolve(filesystem.as_ref(), &environment);
         let active = flag(active, no_active, "active")?.into();
@@ -2467,12 +2469,9 @@ impl AddSettings {
             script,
             python: python.and_then(Maybe::into_option),
             workspace,
-            no_install_project,
-            only_install_project,
-            no_install_workspace,
-            only_install_workspace,
-            no_install_local,
-            only_install_local,
+            install_project,
+            install_workspace,
+            install_local,
             no_install_package,
             only_install_package,
             editable,
