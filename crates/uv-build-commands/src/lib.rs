@@ -50,7 +50,6 @@ use uv_python_types::{
 use uv_requirements::RequirementsSource;
 use uv_resolve_operations as operations;
 use uv_resolver::{ExcludeNewer, FlatIndex};
-use uv_settings::PythonInstallMirrors;
 use uv_types::{AnyErrorBuild, BuildContext, BuildStack, HashStrategy, SourceTreeEditablePolicy};
 use uv_warnings::warn_user;
 use uv_workspace::pyproject::ExtraBuildDependencies;
@@ -59,7 +58,10 @@ use uv_workspace::{DiscoveryOptions, Workspace, WorkspaceCache, WorkspaceError};
 use uv_python_discovery::PythonDownloadReporter;
 use uv_python_discovery::PythonSelectionError;
 use uv_python_discovery::find_requires_python;
-use uv_settings::{BuildMode, BuildOutputSelection, BuildPackageSelection, ResolverSettings};
+use uv_settings::{
+    BuildLogs, BuildMode, BuildOutputSelection, BuildPackageSelection, PythonInstallMirrors,
+    ResolverSettings,
+};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -203,7 +205,6 @@ impl Hinted for Error {
 /// Build source distributions and wheels.
 // https://github.com/rust-lang/rust/issues/147648
 #[allow(unused_assignments)]
-#[expect(clippy::fn_params_excessive_bools)]
 pub async fn build_frontend(
     project_dir: &Path,
     skip_dependency_check: bool,
@@ -212,7 +213,7 @@ pub async fn build_frontend(
     output_dir: Option<PathBuf>,
     output: BuildOutputSelection,
     mode: BuildMode,
-    build_logs: bool,
+    build_logs: BuildLogs,
     gitignore: bool,
     clear: bool,
     build_constraints: Vec<RequirementsSource>,
@@ -470,7 +471,6 @@ pub async fn build_frontend(
     }
 }
 
-#[expect(clippy::fn_params_excessive_bools)]
 async fn build_package(
     source: AnnotatedSource<'_>,
     skip_dependency_check: bool,
@@ -488,7 +488,7 @@ async fn build_package(
     index_locations: &IndexLocations,
     client_builder: BaseClientBuilder<'_>,
     hash_checking: Option<HashCheckingMode>,
-    build_logs: bool,
+    build_logs: BuildLogs,
     gitignore: bool,
     clear: bool,
     build_constraints: &[RequirementsSource],
@@ -727,7 +727,9 @@ async fn build_package(
 
     let build_output = match printer {
         Printer::Default | Printer::NoProgress | Printer::Verbose => {
-            if build_logs && !uv_flags::contains(uv_flags::EnvironmentFlags::HIDE_BUILD_OUTPUT) {
+            if let BuildLogs::Show = build_logs
+                && !uv_flags::contains(uv_flags::EnvironmentFlags::HIDE_BUILD_OUTPUT)
+            {
                 BuildOutput::Stderr
             } else {
                 BuildOutput::Quiet

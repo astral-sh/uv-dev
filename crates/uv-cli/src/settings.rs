@@ -42,11 +42,12 @@ use uv_python_types::{
 };
 use uv_redacted::DisplaySafeUrl;
 use uv_settings::{
-    Combine, EnvFlag, EnvironmentOptions, FilesystemOptions, FrozenFlag, FrozenSource,
-    IndexOptions, LockCheck, LockedFlag, LockedSource, MalwareCheckSettings, Options, PipOptions,
-    PreviewFeaturesOption, PreviewOption, PublishOptions, PythonInstallMirrors, PythonListKinds,
-    ResolverInstallerOptions, ResolverInstallerSchema, ResolverInstallerSettings, ResolverOptions,
-    BuildMode, BuildOutputSelection, BuildPackageSelection, ResolverSettings, resolve_prerelease,
+    BuildLogs, BuildMode, BuildOutputSelection, BuildPackageSelection, Combine, EnvFlag,
+    EnvironmentOptions, FilesystemOptions, FrozenFlag, FrozenSource, IndexOptions, LockCheck,
+    LockedFlag, LockedSource, MalwareCheckSettings, Options, PipOptions, PreviewFeaturesOption,
+    PreviewOption, PublishOptions, PythonInstallMirrors, PythonListKinds, ResolverInstallerOptions,
+    ResolverInstallerSchema, ResolverInstallerSettings, ResolverOptions, ResolverSettings,
+    resolve_prerelease,
 };
 use uv_static::EnvVars;
 use uv_torch::{AmdGpuArchitecture, TorchMode};
@@ -4180,7 +4181,7 @@ pub struct BuildSettings {
     pub out_dir: Option<PathBuf>,
     pub output: BuildOutputSelection,
     pub mode: BuildMode,
-    pub build_logs: bool,
+    pub build_logs: BuildLogs,
     pub gitignore: bool,
     pub clear: bool,
     pub build_constraints: Vec<RequirementsInput>,
@@ -4258,7 +4259,9 @@ impl BuildSettings {
             out_dir,
             output: BuildOutputSelection::from_args(sdist, wheel),
             mode: BuildMode::from_args(list, force_pep517),
-            build_logs: flag(build_logs, no_build_logs, "build-logs")?.unwrap_or(true),
+            build_logs: BuildLogs::from_args(
+                flag(build_logs, no_build_logs, "build-logs")?.unwrap_or(true),
+            ),
             clear,
             gitignore: flag(create_gitignore, no_create_gitignore, "create-gitignore")?
                 .unwrap_or(true),

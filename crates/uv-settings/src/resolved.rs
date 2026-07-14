@@ -224,6 +224,18 @@ impl BuildMode {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum BuildLogs {
+    Show,
+    Hide,
+}
+
+impl BuildLogs {
+    pub fn from_args(build_logs: bool) -> Self {
+        if build_logs { Self::Show } else { Self::Hide }
+    }
+}
+
 /// Normalize a deprecated prerelease mode and emit its warning.
 #[expect(deprecated)]
 fn warn_if_deprecated_prerelease_mode(prerelease: PrereleaseMode) -> PrereleaseMode {
