@@ -3574,72 +3574,150 @@ fn install_no_binary_comma_separated() {
     context.assert_command("import anyio").success();
 }
 
-/// Disable binaries with an environment variable
-/// TODO(zanieb): This is not yet implemented
+/// Disable binaries with an environment variable.
 #[test]
 fn install_no_binary_env() {
     let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("wheels/only-wheels.toml");
 
-    let mut command = context.pip_install();
-    command.arg("anyio").env(EnvVars::UV_NO_BINARY, "1");
-    uv_snapshot!(
-        command,
-        @"
-    exit_code: 0 (success)
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--index-url")
+        .arg(server.index_url())
+        .arg("a")
+        .env(EnvVars::UV_NO_BINARY, "1"), @"
+    exit_code: 1
     ----- stderr -----
-    Resolved 3 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     + anyio==4.3.0
-     + idna==3.6
-     + sniffio==1.3.1
-    "
-    );
+      × No solution found when resolving dependencies:
+      ╰─▶ Because only a==1.0.0 is available and a==1.0.0 has no source distribution, we can conclude that all versions of a cannot be used.
+          And because you require a, we can conclude that your requirements are unsatisfiable.
 
-    let mut command = context.pip_install();
-    command
-        .arg("anyio")
-        .arg("--reinstall")
-        .env(EnvVars::UV_NO_BINARY, "anyio");
-    uv_snapshot!(
-        command,
-        @"
-    exit_code: 0 (success)
+    hint: A source distribution is required for `a` because using pre-built wheels is disabled for all packages (i.e., with `--no-binary`)
+    ");
+
+    context.assert_not_installed("a");
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--index-url")
+        .arg(server.index_url())
+        .arg("a")
+        .env(EnvVars::UV_NO_BINARY_PACKAGE, "a"), @"
+    exit_code: 1
     ----- stderr -----
-    Resolved 3 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Uninstalled 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     ~ anyio==4.3.0
-     ~ idna==3.6
-     ~ sniffio==1.3.1
-    "
-    );
+      × No solution found when resolving dependencies:
+      ╰─▶ Because only a==1.0.0 is available and a==1.0.0 has no source distribution, we can conclude that all versions of a cannot be used.
+          And because you require a, we can conclude that your requirements are unsatisfiable.
 
-    context.assert_command("import anyio").success();
+    hint: A source distribution is required for `a` because using pre-built wheels is disabled for `a` (i.e., with `--no-binary-package a`)
+    ");
 
-    let mut command = context.pip_install();
-    command
-        .arg("anyio")
-        .arg("--reinstall")
-        .arg("idna")
-        .env(EnvVars::UV_NO_BINARY_PACKAGE, "idna");
-    uv_snapshot!(
-        command,
-        @"
-    exit_code: 0 (success)
+    context.assert_not_installed("a");
+}
+
+/// Disable builds with an environment variable.
+#[test]
+fn install_no_build_env() {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("wheels/no-wheels.toml");
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--index-url")
+        .arg(server.index_url())
+        .arg("a")
+        .env(EnvVars::UV_NO_BUILD, "1"), @"
+    exit_code: 1
     ----- stderr -----
-    Resolved 3 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Uninstalled 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     ~ anyio==4.3.0
-     ~ idna==3.6
-     ~ sniffio==1.3.1
-    "
-    );
+      × No solution found when resolving dependencies:
+      ╰─▶ Because only a==1.0.0 is available and a==1.0.0 has no usable wheels, we can conclude that all versions of a cannot be used.
+          And because you require a, we can conclude that your requirements are unsatisfiable.
 
-    context.assert_command("import idna").success();
+    hint: Wheels are required for `a` because building from source is disabled for all packages (i.e., with `--no-build`)
+    ");
+
+    context.assert_not_installed("a");
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--index-url")
+        .arg(server.index_url())
+        .arg("a")
+        .env(EnvVars::UV_NO_BUILD_PACKAGE, "a"), @"
+    exit_code: 1
+    ----- stderr -----
+      × No solution found when resolving dependencies:
+      ╰─▶ Because only a==1.0.0 is available and a==1.0.0 has no usable wheels, we can conclude that all versions of a cannot be used.
+          And because you require a, we can conclude that your requirements are unsatisfiable.
+
+    hint: Wheels are required for `a` because building from source is disabled for `a` (i.e., with `--no-build-package a`)
+    ");
+
+    context.assert_not_installed("a");
+}
+
+/// Clear restrictive binary policies from the environment with `--no-binary :none:`.
+#[test]
+fn install_no_binary_env_reset() {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("wheels/only-wheels.toml");
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--index-url")
+        .arg(server.index_url())
+        .arg("--no-binary")
+        .arg(":none:")
+        .arg("a")
+        .env(EnvVars::UV_NO_BINARY, "1")
+        .env(EnvVars::UV_NO_BINARY_PACKAGE, "a"), @"
+    exit_code: 0
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + a==1.0.0
+    ");
+}
+
+/// Clear restrictive build policies from the environment with `--build`.
+#[test]
+fn install_no_build_env_reset() {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("wheels/no-wheels.toml");
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--index-url")
+        .arg(server.index_url())
+        .arg("--build")
+        .arg("a")
+        .env(EnvVars::UV_NO_BUILD, "1")
+        .env(EnvVars::UV_NO_BUILD_PACKAGE, "a"), @"
+    exit_code: 0
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + a==1.0.0
+    ");
+}
+
+/// Clear restrictive build policies from the environment with `--only-binary :none:`.
+#[test]
+fn install_only_binary_env_reset() {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("wheels/no-wheels.toml");
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--index-url")
+        .arg(server.index_url())
+        .arg("--only-binary")
+        .arg(":none:")
+        .arg("a")
+        .env(EnvVars::UV_NO_BUILD, "1")
+        .env(EnvVars::UV_NO_BUILD_PACKAGE, "a"), @"
+    exit_code: 0
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + a==1.0.0
+    ");
 }
 
 /// Overlapping usage of `--no-binary` and `--only-binary`
