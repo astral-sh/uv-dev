@@ -13899,7 +13899,8 @@ fn lock_find_links_explicit_index() -> Result<()> {
         );
     });
 
-    // Re-run with `--locked`.
+    // Re-run with `--locked`. The timestamp-less `--find-links` artifact remains valid under the
+    // global `exclude-newer` setting captured in the lockfile.
     uv_snapshot!(context.filters(), context.lock().arg("--locked").current_dir(&workspace), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -36614,6 +36615,200 @@ async fn lock_exclude_newer_index_value() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
+    ");
+
+    Ok(())
+}
+
+/// Tightening an index-specific cutoff must invalidate artifacts captured by an existing lock.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_exclude_newer_index_locked() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+
+    pyproject_toml.write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["idna"]
+
+        [tool.uv.sources]
+        idna = { index = "internal" }
+
+        [[tool.uv.index]]
+        name = "internal"
+        url = "https://pypi.org/simple"
+        explicit = true
+        exclude-newer = false
+        "#,
+    )?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--preview-features").arg("index-exclude-newer"), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    pyproject_toml.write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["idna"]
+
+        [tool.uv.sources]
+        idna = { index = "internal" }
+
+        [[tool.uv.index]]
+        name = "internal"
+        url = "https://pypi.org/simple"
+        explicit = true
+        exclude-newer = "2022-01-01T00:00:00Z"
+        "#,
+    )?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--preview-features").arg("index-exclude-newer"), @"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+
+    Ok(())
+}
+
+/// An index cutoff also applies to transitive artifacts, and excludes an artifact uploaded at
+/// exactly the cutoff.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_exclude_newer_index_locked_transitive_boundary() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+
+    pyproject_toml.write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["anyio==3.7.0"]
+
+        [tool.uv]
+        override-dependencies = ["idna==3.6"]
+
+        [tool.uv.sources]
+        anyio = { index = "internal" }
+        idna = { index = "internal" }
+
+        [[tool.uv.index]]
+        name = "internal"
+        url = "https://pypi.org/simple"
+        explicit = true
+        exclude-newer = false
+        "#,
+    )?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--preview-features").arg("index-exclude-newer"), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+
+    pyproject_toml.write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["anyio==3.7.0"]
+
+        [tool.uv]
+        override-dependencies = ["idna==3.6"]
+
+        [tool.uv.sources]
+        anyio = { index = "internal" }
+        idna = { index = "internal" }
+
+        [[tool.uv.index]]
+        name = "internal"
+        url = "https://pypi.org/simple"
+        explicit = true
+        exclude-newer = "2024-03-01T00:00:00Z"
+        "#,
+    )?;
+
+    let lockfile = context.temp_dir.child("uv.lock");
+    let lock = context.read("uv.lock");
+
+    // A newer or missing upload time must not invalidate the package while another locked
+    // artifact remains usable.
+    let at_cutoff_with_usable = lock.replace(
+        r#"upload-time = "2023-11-25T15:40:54.902Z""#,
+        r#"upload-time = "2024-03-01T00:00:00Z""#,
+    );
+    assert_ne!(lock, at_cutoff_with_usable);
+    lockfile.write_str(&at_cutoff_with_usable)?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--preview-features").arg("index-exclude-newer"), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+
+    let missing_upload_time_with_usable =
+        lock.replace(r#", upload-time = "2023-11-25T15:40:54.902Z""#, "");
+    assert_ne!(lock, missing_upload_time_with_usable);
+    lockfile.write_str(&missing_upload_time_with_usable)?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--preview-features").arg("index-exclude-newer"), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+
+    let at_cutoff = lock
+        .replace(
+            r#"upload-time = "2023-11-25T15:40:54.902Z""#,
+            r#"upload-time = "2024-03-01T00:00:00Z""#,
+        )
+        .replace(
+            r#"upload-time = "2023-11-25T15:40:52.604Z""#,
+            r#"upload-time = "2024-03-01T00:00:00Z""#,
+        );
+    assert_ne!(lock, at_cutoff);
+    lockfile.write_str(&at_cutoff)?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--preview-features").arg("index-exclude-newer"), @"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     Ok(())
