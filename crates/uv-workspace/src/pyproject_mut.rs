@@ -7,7 +7,8 @@ use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use toml_edit::{
-    Array, ArrayOfTables, DocumentMut, Formatted, Item, RawString, Table, TomlError, Value,
+    Array, ArrayOfTables, DocumentMut, Formatted, InlineTable, Item, RawString, Table, TomlError,
+    Value,
 };
 
 use uv_cache_key::CanonicalUrl;
@@ -496,6 +497,11 @@ impl PyProjectTomlMut {
             .cloned()
             .unwrap_or_default();
 
+        let previous_name = table
+            .get("name")
+            .and_then(Item::as_str)
+            .map(ToString::to_string);
+
         // If necessary, update the name.
         if let Some(index) = index.name.as_deref()
             && table
@@ -635,6 +641,30 @@ impl PyProjectTomlMut {
 
         // Push the item to the table.
         existing.push(table);
+
+        // Keep source references valid when an equivalent index is renamed.
+        if let Some(previous_name) = previous_name
+            && let Some(name) = index.name.as_deref()
+            && previous_name != name
+            && let Some(sources) = self
+                .doc
+                .get_mut("tool")
+                .and_then(Item::as_table_mut)
+                .and_then(|tool| tool.get_mut("uv"))
+                .and_then(Item::as_table_mut)
+                .and_then(|uv| uv.get_mut("sources"))
+                .and_then(Item::as_table_mut)
+        {
+            for (_, source) in sources.iter_mut() {
+                if let Some(source) = source.as_inline_table_mut() {
+                    rename_index_source(source, &previous_name, name);
+                } else if let Some(source) = source.as_array_mut() {
+                    for source in source.iter_mut().filter_map(Value::as_inline_table_mut) {
+                        rename_index_source(source, &previous_name, name);
+                    }
+                }
+            }
+        }
 
         Ok(())
     }
@@ -1704,6 +1734,19 @@ fn find_source(name: &PackageName, sources: &Table) -> Option<String> {
         }
     }
     None
+}
+
+fn rename_index_source(source: &mut InlineTable, previous_name: &str, name: &str) {
+    let Some(index) = source.get_mut("index") else {
+        return;
+    };
+    if index.as_str() != Some(previous_name) {
+        return;
+    }
+
+    let decor = index.decor().clone();
+    *index = Value::from(name);
+    *index.decor_mut() = decor;
 }
 
 // Add a source to `tool.uv.sources`.
