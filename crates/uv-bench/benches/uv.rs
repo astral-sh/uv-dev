@@ -32,7 +32,7 @@ use uv_distribution_filename::{SourceDistExtension, WheelFilename};
 use uv_distribution_types::Requirement;
 use uv_extract::dirhash::UnhashedFile;
 use uv_extract::hash::{HashReader, Hasher};
-use uv_install_wheel::{InstallState, Layout, LinkMode};
+use uv_install_wheel::{InstallState, InstallerMetadata, Layout, LinkMode};
 use uv_preview::{MaybePreviewFeature, Preview, PreviewFeature};
 use uv_pypi_types::{HashAlgorithm, Scheme};
 use uv_python::PythonEnvironment;
@@ -353,7 +353,7 @@ fn install_wheel_many_files(c: &mut Criterion<WallTime>) {
                     None::<&()>,
                     None::<&()>,
                     Some("uv"),
-                    true,
+                    InstallerMetadata::Enabled,
                     LinkMode::default(),
                     &state,
                 )
