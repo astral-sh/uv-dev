@@ -33,7 +33,7 @@ use uv_cli::{
     TopLevelArgs, WorkspaceCommand, WorkspaceNamespace, compat::CompatArgs, options::ArgumentError,
 };
 use uv_client::BaseClientBuilder;
-use uv_configuration::min_stack_size;
+use uv_configuration::{InstallSelection, min_stack_size};
 use uv_flags::EnvironmentFlags;
 use uv_fs::{CWD, Simplified, normalize_path};
 #[cfg(feature = "self-update")]
@@ -2612,12 +2612,9 @@ async fn run_project(
                 args.frozen,
                 args.active,
                 args.no_sync,
-                args.no_install_project,
-                args.only_install_project,
-                args.no_install_workspace,
-                args.only_install_workspace,
-                args.no_install_local,
-                args.only_install_local,
+                InstallSelection::from_args(args.no_install_project, args.only_install_project),
+                InstallSelection::from_args(args.no_install_workspace, args.only_install_workspace),
+                InstallSelection::from_args(args.no_install_local, args.only_install_local),
                 args.no_install_package,
                 args.only_install_package,
                 requirements,
