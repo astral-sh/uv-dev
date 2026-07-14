@@ -161,6 +161,32 @@ fn install_wheel_cache_incompatible_with_older_uv() -> Result<()> {
     Ok(())
 }
 
+fn write_talkative_wheel(path: &Path) -> Result<()> {
+    let mut writer = ZipFileWriter::new(Vec::new());
+    for (name, contents) in [
+        ("sitecustomize.py", "print('sitecustomize was imported')\n"),
+        ("talkative/__init__.py", "VALUE = 1\n"),
+        (
+            "talkative-1.0.0.dist-info/METADATA",
+            "Metadata-Version: 2.1\nName: talkative\nVersion: 1.0.0\n",
+        ),
+        (
+            "talkative-1.0.0.dist-info/WHEEL",
+            "Wheel-Version: 1.0\nGenerator: uv-test\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+        ),
+        (
+            "talkative-1.0.0.dist-info/RECORD",
+            "sitecustomize.py,,\ntalkative/__init__.py,,\ntalkative-1.0.0.dist-info/METADATA,,\ntalkative-1.0.0.dist-info/WHEEL,,\ntalkative-1.0.0.dist-info/RECORD,,\n",
+        ),
+    ] {
+        let entry = ZipEntryBuilder::new(name.into(), Compression::Stored);
+        block_on(writer.write_entry_whole(entry, contents.as_bytes()))?;
+    }
+
+    fs_err::write(path, block_on(writer.close())?)?;
+    Ok(())
+}
+
 #[test]
 fn missing_requirements_txt() {
     let context = uv_test::test_context!("3.12");
@@ -315,6 +341,36 @@ fn compile_bytecode_for_installed_distributions() -> Result<()> {
             .join("sniffio")
             .join("__pycache__")
             .join("__init__.cpython-312.pyc")
+            .exists()
+    );
+
+    Ok(())
+}
+
+/// A newly installed `sitecustomize.py` must not interfere with the bytecode-worker protocol.
+#[test]
+fn compile_bytecode_with_sitecustomize() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheel = context.temp_dir.join("talkative-1.0.0-py3-none-any.whl");
+    write_talkative_wheel(&wheel)?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg(&wheel)
+        .arg("--compile-bytecode")
+        .env(EnvVars::UV_CONCURRENT_INSTALLS, "1"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+    Bytecode compiled 2 files in [TIME]
+     + talkative==1.0.0 (from file://[TEMP_DIR]/talkative-1.0.0-py3-none-any.whl)
+    ");
+
+    assert!(
+        context
+            .site_packages()
+            .join("talkative/__pycache__/__init__.cpython-312.pyc")
             .exists()
     );
 

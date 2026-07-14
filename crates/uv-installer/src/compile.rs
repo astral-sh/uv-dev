@@ -413,6 +413,7 @@ async fn launch_bytecode_compiler(
 > {
     // We input the paths through stdin and get the successful paths returned through stdout.
     let mut bytecode_compiler = Command::new(interpreter)
+        .arg("-S")
         .arg(pip_compileall_py)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
