@@ -381,6 +381,12 @@ impl Middleware for AuthMiddleware {
         let auth_policy = self.indexes.auth_policy_for(request.url());
         trace!("Handling request for {url} with authentication policy {auth_policy}");
 
+        if matches!(auth_policy, AuthPolicy::Never) && request_credentials.is_some() {
+            return Err(Error::Middleware(format_err!(
+                "Credentials were provided for {url}, but authentication is disabled for this index"
+            )));
+        }
+
         let credentials: Option<Arc<Authentication>> = if matches!(auth_policy, AuthPolicy::Never) {
             None
         } else {
@@ -2460,19 +2466,15 @@ mod tests {
             )
             .build();
 
-        let mut url = base_url.clone();
+        let mut url = base_url.join("foo")?;
         url.set_username(username).unwrap();
         url.set_password(Some(password)).unwrap();
 
-        assert_eq!(
-            client
-                .get(format!("{}/foo", server.uri()))
-                .send()
-                .await?
-                .status(),
-            401,
-            "Requests should not be completed if credentials are required"
-        );
+        assert!(matches!(
+            client.get(url).send().await,
+            Err(reqwest_middleware::Error::Middleware(_))
+        ));
+        assert!(server.received_requests().await.unwrap().is_empty());
 
         Ok(())
     }
@@ -2510,6 +2512,120 @@ mod tests {
             200,
             "Requests should succeed if unauthenticated requests can succeed"
         );
+
+        Ok(())
+    }
+
+    /// A nested index with `authenticate = never` must not receive credentials cached for a
+    /// broader index root.
+    #[test(tokio::test)]
+    async fn test_auth_policy_never_with_overlapping_index_roots() -> Result<(), Error> {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path_regex("/public/.*"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let broad_url = DisplaySafeUrl::parse(&server.uri())?;
+        let nested_url = DisplaySafeUrl::parse(&format!("{}/public", server.uri()))?;
+        let indexes = Indexes::from_indexes([
+            Index {
+                url: broad_url.clone(),
+                root_url: broad_url.clone(),
+                auth_policy: AuthPolicy::Auto,
+            },
+            Index {
+                url: nested_url.clone(),
+                root_url: nested_url,
+                auth_policy: AuthPolicy::Never,
+            },
+        ]);
+        let cache = CredentialsCache::new();
+        cache.store_credentials(
+            &broad_url,
+            Credentials::Basic {
+                username: Username::new(Some("user".to_string())),
+                password: Some(Password::new("password".to_string())),
+            },
+        );
+        let client = test_client_builder()
+            .with(
+                AuthMiddleware::new()
+                    .with_cache(cache)
+                    .with_indexes(indexes),
+            )
+            .build();
+
+        assert_eq!(
+            client
+                .get(format!("{}/public/simple/anyio", server.uri()))
+                .send()
+                .await?
+                .status(),
+            200
+        );
+
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1);
+        assert!(!requests[0].headers.contains_key("authorization"));
+
+        Ok(())
+    }
+
+    /// Equivalent index roots with and without a trailing slash must not let a broader policy
+    /// send cached credentials when the other root disables authentication.
+    #[test(tokio::test)]
+    async fn test_auth_policy_never_with_trailing_slash_index_roots() -> Result<(), Error> {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path_regex("/public/.*"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let authenticated_url = DisplaySafeUrl::parse(&format!("{}/public/", server.uri()))?;
+        let unauthenticated_url = DisplaySafeUrl::parse(&format!("{}/public", server.uri()))?;
+        let indexes = Indexes::from_indexes([
+            Index {
+                url: authenticated_url.clone(),
+                root_url: authenticated_url.clone(),
+                auth_policy: AuthPolicy::Auto,
+            },
+            Index {
+                url: unauthenticated_url.clone(),
+                root_url: unauthenticated_url,
+                auth_policy: AuthPolicy::Never,
+            },
+        ]);
+        let cache = CredentialsCache::new();
+        cache.store_credentials(
+            &authenticated_url,
+            Credentials::Basic {
+                username: Username::new(Some("user".to_string())),
+                password: Some(Password::new("password".to_string())),
+            },
+        );
+        let client = test_client_builder()
+            .with(
+                AuthMiddleware::new()
+                    .with_cache(cache)
+                    .with_indexes(indexes),
+            )
+            .build();
+
+        assert_eq!(
+            client
+                .get(format!("{}/public/simple/anyio", server.uri()))
+                .send()
+                .await?
+                .status(),
+            200
+        );
+
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1);
+        assert!(!requests[0].headers.contains_key("authorization"));
 
         Ok(())
     }
