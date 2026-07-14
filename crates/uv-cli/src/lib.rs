@@ -6686,17 +6686,25 @@ pub struct IndexArgs {
     /// source distributions (e.g., `.tar.gz` or `.zip`) at the top level.
     ///
     /// If a URL, the page must contain a flat list of links to package files adhering to the
-    /// formats described above.
+    /// formats described above. [env: `UV_FIND_LINKS`=]
     #[arg(
         long,
         short,
-        env = EnvVars::UV_FIND_LINKS,
-        hide_env_values = true,
-        value_delimiter = ',',
         value_parser = parse_find_links,
         help_heading = "Index options"
     )]
     pub find_links: Option<Vec<Maybe<PipFindLinks>>>,
+
+    #[arg(
+        long = "find-links-env",
+        env = EnvVars::UV_FIND_LINKS,
+        hide_env_values = true,
+        hide = true,
+        value_delimiter = ',',
+        value_parser = parse_find_links,
+        help_heading = "Index options"
+    )]
+    pub find_links_env: Option<Vec<Maybe<PipFindLinks>>>,
 
     /// Ignore the registry index (e.g., PyPI), instead relying on direct URL dependencies and those
     /// provided via `--find-links`.

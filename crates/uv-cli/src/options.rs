@@ -542,6 +542,7 @@ impl IndexArgs {
             extra_index_url,
             no_index,
             find_links,
+            find_links_env,
         } = self;
 
         let default_index = default_index
@@ -562,6 +563,7 @@ impl IndexArgs {
                 .map(|indexes| indexes.into_iter().filter_map(Maybe::into_option).collect()),
             no_index: no_index.then_some(true),
             find_links: find_links
+                .or(find_links_env)
                 .map(|links| links.into_iter().filter_map(Maybe::into_option).collect()),
         }
     }

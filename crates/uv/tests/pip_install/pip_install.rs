@@ -7837,6 +7837,54 @@ fn find_links_relative_to_working_directory() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn find_links_comma_path() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let links = context.temp_dir.child("has,comma");
+    links.create_dir_all()?;
+    fs::copy(
+        context
+            .workspace_root
+            .join("test/links/ok-1.0.0-py3-none-any.whl"),
+        links.child("ok-1.0.0-py3-none-any.whl").path(),
+    )?;
+
+    context
+        .pip_install()
+        .arg("ok")
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg(links.path())
+        .env(EnvVars::UV_FIND_LINKS, "missing-first,missing-second")
+        .assert()
+        .success();
+
+    let first = context.temp_dir.child("first-links");
+    first.create_dir_all()?;
+    let second = context.temp_dir.child("second-links");
+    second.create_dir_all()?;
+    fs::copy(
+        context
+            .workspace_root
+            .join("test/links/ok-1.0.0-py3-none-any.whl"),
+        second.child("ok-1.0.0-py3-none-any.whl").path(),
+    )?;
+
+    context
+        .pip_install()
+        .arg("ok")
+        .arg("--no-index")
+        .arg("--reinstall")
+        .env(
+            EnvVars::UV_FIND_LINKS,
+            format!("{},{}", first.path().display(), second.path().display()),
+        )
+        .assert()
+        .success();
+
+    Ok(())
+}
+
 /// Install the latest version across multiple `--find-links` directories.
 #[test]
 fn find_links_multiple() -> Result<()> {
