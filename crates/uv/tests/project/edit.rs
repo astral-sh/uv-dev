@@ -8566,6 +8566,49 @@ fn remove_dev_script_conflict() -> Result<()> {
     Ok(())
 }
 
+/// Removing a dependency from a PEP 723 script preserves its CRLF line endings.
+#[test]
+fn remove_script_preserves_crlf() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let script = context.temp_dir.child("script.py");
+    let contents = concat!(
+        "# /// script\r\n",
+        "# requires-python = \">=3.11\"\r\n",
+        "# dependencies = [\r\n",
+        "#   \"requests<3\",\r\n",
+        "#   \"anyio\",\r\n",
+        "# ]\r\n",
+        "# ///\r\n",
+        "\r\n",
+        "print(\"Hello, world!\")\r\n",
+    );
+    fs_err::write(&script, contents)?;
+
+    uv_snapshot!(context.filters(), context.remove().arg("anyio").arg("--script").arg("script.py"), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Updated `script.py`
+    ");
+
+    let expected = concat!(
+        "# /// script\r\n",
+        "# requires-python = \">=3.11\"\r\n",
+        "# dependencies = [\r\n",
+        "#   \"requests<3\",\r\n",
+        "# ]\r\n",
+        "# ///\r\n",
+        "\r\n",
+        "print(\"Hello, world!\")\r\n",
+    );
+    assert_eq!(fs_err::read(&script)?, expected.as_bytes());
+
+    Ok(())
+}
+
 /// Remove last dependency PEP 723 script
 #[test]
 fn remove_last_dep_script() -> Result<()> {

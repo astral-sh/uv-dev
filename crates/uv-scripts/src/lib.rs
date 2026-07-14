@@ -159,9 +159,11 @@ pub struct Pep723Script {
     /// The parsed [`Pep723Metadata`] table from the script.
     pub metadata: Pep723Metadata,
     /// The content of the script before the metadata table.
-    pub prelude: String,
+    prelude: String,
     /// The content of the script after the metadata table.
-    pub postlude: String,
+    postlude: String,
+    /// The line ending used by the script.
+    line_ending: &'static str,
 }
 
 impl Pep723Script {
@@ -172,6 +174,7 @@ impl Pep723Script {
     /// See: <https://peps.python.org/pep-0723/>
     pub async fn read(file: impl AsRef<Path>) -> Result<Option<Self>, Pep723Error> {
         let contents = fs_err::tokio::read(&file).await?;
+        let line_ending = detect_line_ending(&contents);
 
         // Extract the `script` tag.
         let ScriptTag {
@@ -191,7 +194,8 @@ impl Pep723Script {
             path: std::path::absolute(file)?,
             metadata,
             prelude,
-            postlude,
+            postlude: postlude.replace('\n', line_ending),
+            line_ending,
         }))
     }
 
@@ -203,12 +207,14 @@ impl Pep723Script {
         requires_python: &VersionSpecifiers,
     ) -> Result<Self, Pep723Error> {
         let contents = fs_err::tokio::read(&file).await?;
+        let line_ending = detect_line_ending(&contents);
         let (prelude, metadata, postlude) = Self::init_metadata(&contents, requires_python)?;
         Ok(Self {
             path: std::path::absolute(file)?,
             metadata,
-            prelude,
+            prelude: prelude.replace('\n', line_ending),
             postlude,
+            line_ending,
         })
     }
 
@@ -328,7 +334,7 @@ impl Pep723Script {
         let content = format!(
             "{}{}{}",
             self.prelude,
-            serialize_metadata(metadata),
+            serialize_metadata_with_line_ending(metadata, self.line_ending),
             self.postlude
         );
 
@@ -680,12 +686,30 @@ fn extract_shebang(contents: &[u8]) -> Result<(String, String), Pep723Error> {
     }
 }
 
+/// Detect the line ending used by the given contents.
+fn detect_line_ending(contents: &[u8]) -> &'static str {
+    let Some(index) = contents.iter().position(|byte| *byte == b'\n') else {
+        return "\n";
+    };
+
+    if index > 0 && contents[index - 1] == b'\r' {
+        "\r\n"
+    } else {
+        "\n"
+    }
+}
+
 /// Formats the provided metadata by prefixing each line with `#` and wrapping it with script markers.
 fn serialize_metadata(metadata: &str) -> String {
+    serialize_metadata_with_line_ending(metadata, "\n")
+}
+
+/// Formats metadata with the given line ending.
+fn serialize_metadata_with_line_ending(metadata: &str, line_ending: &str) -> String {
     let mut output = String::with_capacity(metadata.len() + 32);
 
     output.push_str("# /// script");
-    output.push('\n');
+    output.push_str(line_ending);
 
     for line in metadata.lines() {
         output.push('#');
@@ -693,11 +717,11 @@ fn serialize_metadata(metadata: &str) -> String {
             output.push(' ');
             output.push_str(line);
         }
-        output.push('\n');
+        output.push_str(line_ending);
     }
 
     output.push_str("# ///");
-    output.push('\n');
+    output.push_str(line_ending);
 
     output
 }
