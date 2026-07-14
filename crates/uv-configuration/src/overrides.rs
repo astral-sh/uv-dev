@@ -7,7 +7,6 @@ use serde::de::IntoDeserializer;
 use uv_distribution_types::{Requirement, RequirementSource};
 use uv_normalize::PackageName;
 use uv_pep440::Version;
-use uv_pep508::MarkerTree;
 
 /// An override that applies to the dependencies of a specific package version.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
@@ -342,12 +341,11 @@ impl Overrides {
             return Either::Left(std::iter::once(Cow::Borrowed(requirement)));
         };
 
-        // ASSUMPTION: There is one `extra = "..."`, and it's either the only marker or part
-        // of the main conjunction.
-        let Some(extra_expression) = requirement.marker.top_level_extra() else {
+        let extra_marker = requirement.marker.only_extras();
+        if extra_marker.is_true() {
             // Case 2: A non-optional dependency with override(s).
             return Either::Right(Either::Right(overrides.iter().map(Cow::Borrowed)));
-        };
+        }
 
         // Case 3: An optional dependency with override(s).
         //
@@ -356,8 +354,7 @@ impl Overrides {
         Either::Right(Either::Left(overrides.iter().map(
             move |override_requirement| {
                 // Add the extra to the override marker.
-                let joint_marker = MarkerTree::expression(extra_expression.clone())
-                    .and(override_requirement.marker);
+                let joint_marker = extra_marker.and(override_requirement.marker);
                 Cow::Owned(Requirement {
                     marker: joint_marker,
                     ..override_requirement.clone()
