@@ -8,7 +8,7 @@ use uv_python::downloads::ManagedPythonDownloadList;
 
 use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
-use uv_configuration::DependencyGroupsWithDefaults;
+use uv_configuration::{DependencyGroupsWithDefaults, ProjectDiscovery};
 use uv_fs::Simplified;
 use uv_python::{
     EnvironmentPreference, PYTHON_VERSION_FILENAME, PythonArchitecture, PythonDownloads,
@@ -24,7 +24,6 @@ use uv_command_support::Printer;
 use uv_python_context::{PythonDownloadReporter, find_requires_python};
 
 /// Pin to a specific Python version.
-#[expect(clippy::fn_params_excessive_bools)]
 pub async fn pin(
     project_dir: &Path,
     request: Option<String>,
@@ -32,7 +31,7 @@ pub async fn pin(
     python_preference: PythonPreference,
     python_arch: Option<PythonArchitecture>,
     python_downloads: PythonDownloads,
-    no_project: bool,
+    project_discovery: ProjectDiscovery,
     global: bool,
     rm: bool,
     install_mirrors: PythonInstallMirrors,
@@ -41,9 +40,7 @@ pub async fn pin(
     workspace_cache: &WorkspaceCache,
     printer: Printer,
 ) -> Result<ExitStatus> {
-    let virtual_project = if no_project {
-        None
-    } else {
+    let virtual_project = if project_discovery.enabled() {
         match VirtualProject::discover(
             project_dir,
             &DiscoveryOptions::default(),
@@ -58,6 +55,8 @@ pub async fn pin(
                 None
             }
         }
+    } else {
+        None
     };
 
     // Search for an existing file, we won't necessarily write to this, we'll construct a target

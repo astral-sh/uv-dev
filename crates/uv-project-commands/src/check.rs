@@ -9,7 +9,7 @@ use uv_client::BaseClientBuilder;
 use uv_command_support::{ExitStatus, Printer, UvError};
 use uv_configuration::{
     ActiveEnvironment, ColorChoice, Concurrency, DependencyGroups, DependencyGroupsWithDefaults,
-    DryRun, ExtrasSpecification, InstallOptions, Modifications,
+    DryRun, ExtrasSpecification, InstallOptions, Modifications, ProjectDiscovery,
 };
 use uv_dispatch::UniversalState;
 use uv_environment_operations::environment::CachedEnvironment;
@@ -74,7 +74,7 @@ pub async fn check(
     color: ColorChoice,
     printer: Printer,
     preview: Preview,
-    no_project: bool,
+    project_discovery: ProjectDiscovery,
     config_discovery: ConfigDiscovery,
     malware_settings: MalwareCheckSettings,
 ) -> Result<ExitStatus> {
@@ -86,7 +86,7 @@ pub async fn check(
     }
 
     // Discover the project.
-    let project = if no_project || script.is_some() {
+    let project = if !project_discovery.enabled() || script.is_some() {
         None
     } else {
         let discovery = if let [name] = package.as_slice() {
@@ -138,7 +138,7 @@ pub async fn check(
         }
     };
 
-    if no_project {
+    if !project_discovery.enabled() {
         for flag in extras.history().as_flags_pretty() {
             warn_user!("`{flag}` has no effect when used alongside `--no-project`");
         }

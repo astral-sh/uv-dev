@@ -122,7 +122,7 @@ fn show_settings_returns_before_running_commands() {
     +        "3.12",
     +    ),
     +    resolved: false,
-    +    no_project: true,
+    +    project_discovery: Disabled,
     +    global: false,
     +    rm: false,
     +    install_mirrors: PythonInstallMirrors {
