@@ -23,7 +23,7 @@ use uv_pep440::{Operator, Version, VersionSpecifier, VersionSpecifiers};
 use uv_pep508::{Requirement, VersionOrUrl};
 use uv_pypi_types::{ResolutionMetadata, ResolverMarkerEnvironment, VerbatimParsedUrl};
 use uv_python::{EnvironmentPreference, PythonEnvironment, PythonPreference, PythonRequest};
-use uv_resolver::{ExcludeNewer, Prerelease, TreeDedupe};
+use uv_resolver::{ExcludeNewer, Prerelease, TreeDedupe, TreeDirection};
 
 use crate::commands::ExitStatus;
 use crate::commands::pip::latest::LatestClient;
@@ -39,7 +39,7 @@ pub(crate) async fn pip_tree(
     prune: &[PackageName],
     package: &[PackageName],
     dedupe: TreeDedupe,
-    invert: bool,
+    direction: TreeDirection,
     outdated: bool,
     prerelease: Prerelease,
     index_locations: IndexLocations,
@@ -155,7 +155,7 @@ pub(crate) async fn pip_tree(
         prune,
         package,
         dedupe,
-        invert,
+        direction,
         show_version_specifiers,
         &markers,
         &packages,
@@ -209,8 +209,8 @@ pub(crate) struct DisplayDependencyGraph<'env> {
     depth: usize,
     /// Whether to de-duplicate the displayed dependencies.
     dedupe: TreeDedupe,
-    /// Whether to invert the dependency tree.
-    invert: bool,
+    /// The direction in which to display the dependency tree.
+    direction: TreeDirection,
     /// Whether to include the version specifiers in the tree.
     show_version_specifiers: bool,
 }
@@ -222,7 +222,7 @@ impl<'env> DisplayDependencyGraph<'env> {
         prune: &[PackageName],
         package: &[PackageName],
         dedupe: TreeDedupe,
-        invert: bool,
+        direction: TreeDirection,
         show_version_specifiers: bool,
         markers: &ResolverMarkerEnvironment,
         packages: &'env FxHashMap<&PackageName, Vec<&ResolutionMetadata>>,
@@ -284,7 +284,7 @@ impl<'env> DisplayDependencyGraph<'env> {
         }
 
         // Step 2: Reverse the graph.
-        if invert {
+        if direction.is_inverted() {
             graph.reverse();
         }
 
@@ -355,7 +355,7 @@ impl<'env> DisplayDependencyGraph<'env> {
             latest,
             depth,
             dedupe,
-            invert,
+            direction,
             show_version_specifiers,
         }
     }
@@ -382,7 +382,7 @@ impl<'env> DisplayDependencyGraph<'env> {
 
             let requirement = self.aggregate_requirement(cursor);
 
-            if self.invert {
+            if self.direction.is_inverted() {
                 let parent = self.graph.edge_endpoints(cursor.edge().unwrap()).unwrap().0;
 
                 let parent = &self.graph[parent].name;
