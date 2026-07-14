@@ -419,21 +419,6 @@ impl RequirementsTxt {
                         end,
                     })?;
 
-                    // Disallow conflicting `--index-url` in nested `requirements` files.
-                    if sub_requirements.index_url.is_some()
-                        && data.index_url.is_some()
-                        && sub_requirements.index_url != data.index_url
-                    {
-                        let (line, column) = calculate_row_column(content, s.cursor());
-                        return Err(RequirementsTxtParserError::Parser {
-                            message:
-                                "Nested `requirements` file contains conflicting `--index-url`"
-                                    .to_string(),
-                            line,
-                            column,
-                        });
-                    }
-
                     // Add each to the correct category.
                     data.update_from(sub_requirements);
                 }
@@ -523,14 +508,6 @@ impl RequirementsTxt {
                     data.editables.push(editable);
                 }
                 RequirementsTxtStatement::IndexUrl(url) => {
-                    if data.index_url.is_some() {
-                        let (line, column) = calculate_row_column(content, s.cursor());
-                        return Err(RequirementsTxtParserError::Parser {
-                            message: "Multiple `--index-url` values provided".to_string(),
-                            line,
-                            column,
-                        });
-                    }
                     data.index_url = Some(url);
                 }
                 RequirementsTxtStatement::ExtraIndexUrl(url) => {
@@ -598,8 +575,8 @@ impl RequirementsTxt {
         self.requirements.extend(requirements);
         self.constraints.extend(constraints);
         self.editables.extend(editables);
-        if self.index_url.is_none() {
-            self.index_url = index_url;
+        if let Some(index_url) = index_url {
+            self.index_url = Some(index_url);
         }
         self.extra_index_urls.extend(extra_index_urls);
         self.find_links.extend(find_links);
@@ -2263,7 +2240,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn nested_conflicting_index_url() -> Result<()> {
+    async fn nested_index_url_last_wins() -> Result<()> {
         let temp_dir = assert_fs::TempDir::new()?;
 
         let requirements_txt = temp_dir.child("requirements.txt");
@@ -2282,18 +2259,29 @@ mod test {
             --index-url https://fake.pypi.org/simple
         "})?;
 
-        let error = RequirementsTxt::parse(requirements_txt.path(), temp_dir.path())
-            .await
-            .unwrap_err();
-        let errors = anyhow::Error::new(error).chain().join("\n");
+        let requirements = RequirementsTxt::parse(requirements_txt.path(), temp_dir.path()).await?;
+        assert_eq!(
+            requirements.index_url.as_ref().and_then(|url| url.given()),
+            Some("https://fake.pypi.org/simple")
+        );
 
-        let requirement_txt = regex::escape(&requirements_txt.path().user_display().to_string());
-        let filters = vec![(requirement_txt.as_str(), "<REQUIREMENTS_TXT>")];
-        insta::with_settings!({
-            filters => filters
-        }, {
-            insta::assert_snapshot!(errors, @"Nested `requirements` file contains conflicting `--index-url` at <REQUIREMENTS_TXT>:2:13");
-        });
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn repeated_index_url_last_wins() -> Result<()> {
+        let temp_dir = assert_fs::TempDir::new()?;
+        let requirements_txt = temp_dir.child("requirements.txt");
+        requirements_txt.write_str(indoc! {"
+            --index-url https://test.pypi.org/simple
+            --index-url https://fake.pypi.org/simple
+        "})?;
+
+        let requirements = RequirementsTxt::parse(requirements_txt.path(), temp_dir.path()).await?;
+        assert_eq!(
+            requirements.index_url.as_ref().and_then(|url| url.given()),
+            Some("https://fake.pypi.org/simple")
+        );
 
         Ok(())
     }

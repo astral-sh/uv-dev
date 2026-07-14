@@ -35,7 +35,6 @@ use rustc_hash::FxHashSet;
 use tracing::instrument;
 use url::Url;
 
-use uv_cache_key::CanonicalUrl;
 use uv_client::BaseClientBuilder;
 use uv_configuration::{
     DependencyGroups, ExcludeDependency, NoBinary, NoBuild, Override, PackageOverride,
@@ -569,14 +568,6 @@ impl RequirementsSpecification {
             }
 
             if let Some(index_url) = source.index_url {
-                if let Some(existing) = spec.index_url
-                    && CanonicalUrl::new(index_url.url().clone())
-                        != CanonicalUrl::new(existing.url().clone())
-                {
-                    return Err(anyhow::anyhow!(
-                        "Multiple index URLs specified: `{existing}` vs. `{index_url}`",
-                    ));
-                }
                 spec.index_url = Some(index_url);
             }
             spec.no_index |= source.no_index;
@@ -608,14 +599,6 @@ impl RequirementsSpecification {
             spec.constraints.extend(source.constraints);
 
             if let Some(index_url) = source.index_url {
-                if let Some(existing) = spec.index_url
-                    && CanonicalUrl::new(index_url.url().clone())
-                        != CanonicalUrl::new(existing.url().clone())
-                {
-                    return Err(anyhow::anyhow!(
-                        "Multiple index URLs specified: `{existing}` vs. `{index_url}`",
-                    ));
-                }
                 spec.index_url = Some(index_url);
             }
             spec.no_index |= source.no_index;
@@ -635,14 +618,6 @@ impl RequirementsSpecification {
                 .extend(source.override_dependencies);
 
             if let Some(index_url) = source.index_url {
-                if let Some(existing) = spec.index_url
-                    && CanonicalUrl::new(index_url.url().clone())
-                        != CanonicalUrl::new(existing.url().clone())
-                {
-                    return Err(anyhow::anyhow!(
-                        "Multiple index URLs specified: `{existing}` vs. `{index_url}`",
-                    ));
-                }
                 spec.index_url = Some(index_url);
             }
             spec.no_index |= source.no_index;
