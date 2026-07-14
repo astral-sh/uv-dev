@@ -6315,6 +6315,49 @@ fn no_install_env_var_conflicts() -> Result<()> {
     Ok(())
 }
 
+/// Dependency-group environment variables should conflict with `--script`, just like the
+/// equivalent command-line arguments.
+#[test]
+fn script_group_env_var_conflicts() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let script = context.temp_dir.child("script.py");
+    script.write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # ///
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.sync().arg("--script").arg("script.py").env(EnvVars::UV_DEV, "1"), @"
+    success: false
+    exit_code: 2
+    ----- stdout -----
+
+    ----- stderr -----
+    error: the argument `UV_DEV` (environment variable) cannot be used with `--script`
+    ");
+
+    uv_snapshot!(context.filters(), context.sync().arg("--script").arg("script.py").env(EnvVars::UV_NO_DEV, "1"), @"
+    success: false
+    exit_code: 2
+    ----- stdout -----
+
+    ----- stderr -----
+    error: the argument `UV_NO_DEV` (environment variable) cannot be used with `--script`
+    ");
+
+    uv_snapshot!(context.filters(), context.sync().arg("--script").arg("script.py").env(EnvVars::UV_NO_GROUP, "docs"), @"
+    success: false
+    exit_code: 2
+    ----- stdout -----
+
+    ----- stderr -----
+    error: the argument `UV_NO_GROUP` (environment variable) cannot be used with `--script`
+    ");
+
+    Ok(())
+}
+
 /// Avoid syncing the target package when `--no-install-package` is provided.
 #[test]
 fn no_install_package() -> Result<()> {

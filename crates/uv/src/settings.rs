@@ -1923,6 +1923,22 @@ impl SyncSettings {
             check_conflicts(no_install_project, script)?;
             check_conflicts(no_install_workspace, script)?;
             check_conflicts(no_install_local, script)?;
+            check_conflicts(dev, script)?;
+            check_conflicts(no_dev, script)?;
+            if no_group.is_empty()
+                && environment
+                    .no_group
+                    .as_ref()
+                    .is_some_and(|groups| !groups.is_empty())
+            {
+                check_conflicts(
+                    Flag::Enabled {
+                        source: FlagSource::Env(EnvVars::UV_NO_GROUP),
+                        name: "no-group",
+                    },
+                    script,
+                )?;
+            }
         }
         let no_install_project = no_install_project.is_enabled();
         let only_install_project = only_install_project.is_enabled();
