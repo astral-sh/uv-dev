@@ -6,7 +6,7 @@ pub use first_party::FirstPartyPackages;
 pub use index::{BuiltWheelIndex, RegistryWheelIndex};
 pub use metadata::{
     ArchiveMetadata, BuildRequires, FlatRequiresDist, LoweredExtraBuildDependencies,
-    LoweredRequirement, LoweringError, Metadata, MetadataError, RequiresDist,
+    LoweredRequirement, LoweringContext, LoweringError, Metadata, MetadataError, RequiresDist,
     SourcedDependencyGroups,
 };
 pub use reporter::Reporter;

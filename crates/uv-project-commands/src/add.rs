@@ -20,7 +20,7 @@ use uv_configuration::{
     InstallOptions, Modifications, NoSources,
 };
 use uv_dispatch::{BuildDispatch, PlatformState, UniversalState};
-use uv_distribution::{DistributionDatabase, LoweredExtraBuildDependencies};
+use uv_distribution::{DistributionDatabase, LoweredExtraBuildDependencies, LoweringContext};
 use uv_distribution_types::{
     Identifier, Index, IndexLocations, IndexName, IndexUrl, NameRequirementSpecification,
     Requirement, RequirementSource, UnresolvedRequirement,
@@ -384,6 +384,9 @@ pub async fn add(
     let client_builder = client_builder
         .clone()
         .keyring(settings.resolver.keyring_provider);
+    let workspace_cache = WorkspaceCache::default();
+    let lowering_context =
+        LoweringContext::new(cache, &workspace_cache, client_builder.credentials_cache());
 
     // Read the requirements.
     let RequirementsSpecification {
@@ -397,6 +400,7 @@ pub async fn add(
         &[],
         None,
         &client_builder,
+        lowering_context,
     )
     .await?;
 

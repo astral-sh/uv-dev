@@ -27,7 +27,7 @@ use uv_configuration::{
     ExtrasSpecification, InstallOptions, Modifications, RequirementsInput, TargetTriple,
 };
 use uv_dispatch::UniversalState;
-use uv_distribution::LoweredExtraBuildDependencies;
+use uv_distribution::{LoweredExtraBuildDependencies, LoweringContext};
 use uv_distribution_types::NameRequirementSpecification;
 use uv_environment_operations::environment::CachedEnvironment;
 use uv_environment_operations::install_target::{InstallTarget, PackageSelection};
@@ -906,8 +906,12 @@ pub async fn run(
     let spec = if requirements.is_empty() {
         None
     } else {
-        let spec =
-            RequirementsSpecification::from_simple_sources(&requirements, &client_builder).await?;
+        let spec = RequirementsSpecification::from_simple_sources(
+            &requirements,
+            &client_builder,
+            LoweringContext::new(&cache, workspace_cache, client_builder.credentials_cache()),
+        )
+        .await?;
 
         Some(spec)
     };
