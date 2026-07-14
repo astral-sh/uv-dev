@@ -59,7 +59,7 @@ use uv_workspace::{DiscoveryOptions, Workspace, WorkspaceCache, WorkspaceError};
 use uv_python_discovery::PythonDownloadReporter;
 use uv_python_discovery::PythonSelectionError;
 use uv_python_discovery::find_requires_python;
-use uv_settings::{BuildOutputSelection, ResolverSettings};
+use uv_settings::{BuildOutputSelection, BuildPackageSelection, ResolverSettings};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -210,8 +210,7 @@ pub async fn build_frontend(
     project_dir: &Path,
     skip_dependency_check: bool,
     src: Option<PathBuf>,
-    package: Option<PackageName>,
-    all_packages: bool,
+    package: BuildPackageSelection,
     output_dir: Option<PathBuf>,
     output: BuildOutputSelection,
     list: bool,
@@ -307,7 +306,7 @@ pub async fn build_frontend(
     );
 
     // If a `--package` or `--all-packages` was provided, adjust the source directory.
-    let packages = if let Some(package) = package.as_ref() {
+    let packages = if let BuildPackageSelection::Package(package) = &package {
         if matches!(src, Source::File(_)) {
             return Err(anyhow::anyhow!(
                 "Cannot specify `--package` when building from a file"
@@ -341,7 +340,7 @@ pub async fn build_frontend(
         vec![AnnotatedSource::from(Source::Directory(Cow::Borrowed(
             package.root(),
         )))]
-    } else if all_packages {
+    } else if let BuildPackageSelection::AllPackages = package {
         if matches!(src, Source::File(_)) {
             return Err(anyhow::anyhow!(
                 "Cannot specify `--all-packages` when building from a file"

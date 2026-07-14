@@ -1335,7 +1335,6 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 args.skip_dependency_check,
                 args.src,
                 args.package,
-                args.all_packages,
                 args.out_dir,
                 args.output,
                 args.list,

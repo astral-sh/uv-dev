@@ -7,6 +7,7 @@ use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, ExtraBuildVariables, IndexLocations, PackageConfigSettings,
 };
 use uv_install_wheel::LinkMode;
+use uv_normalize::PackageName;
 use uv_pep440::Version;
 use uv_torch::{AmdGpuArchitecture, TorchMode};
 use uv_warnings::warn_user_once;
@@ -181,6 +182,25 @@ impl BuildOutputSelection {
             (true, false) => Self::Sdist,
             (false, true) => Self::Wheel,
             (true, true) => Self::SdistAndWheel,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum BuildPackageSelection {
+    Source,
+    Package(PackageName),
+    AllPackages,
+}
+
+impl BuildPackageSelection {
+    pub fn from_args(package: Option<PackageName>, all_packages: bool) -> Self {
+        if let Some(package) = package {
+            Self::Package(package)
+        } else if all_packages {
+            Self::AllPackages
+        } else {
+            Self::Source
         }
     }
 }

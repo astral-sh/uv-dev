@@ -46,7 +46,7 @@ use uv_settings::{
     IndexOptions, LockCheck, LockedFlag, LockedSource, MalwareCheckSettings, Options, PipOptions,
     PreviewFeaturesOption, PreviewOption, PublishOptions, PythonInstallMirrors, PythonListKinds,
     ResolverInstallerOptions, ResolverInstallerSchema, ResolverInstallerSettings, ResolverOptions,
-    BuildOutputSelection, ResolverSettings, resolve_prerelease,
+    BuildOutputSelection, BuildPackageSelection, ResolverSettings, resolve_prerelease,
 };
 use uv_static::EnvVars;
 use uv_torch::{AmdGpuArchitecture, TorchMode};
@@ -4176,8 +4176,7 @@ impl PipCheckSettings {
 pub struct BuildSettings {
     pub skip_dependency_check: bool,
     pub src: Option<PathBuf>,
-    pub package: Option<PackageName>,
-    pub all_packages: bool,
+    pub package: BuildPackageSelection,
     pub out_dir: Option<PathBuf>,
     pub output: BuildOutputSelection,
     pub list: bool,
@@ -4256,8 +4255,7 @@ impl BuildSettings {
         Ok(Self {
             skip_dependency_check,
             src,
-            package,
-            all_packages,
+            package: BuildPackageSelection::from_args(package, all_packages),
             out_dir,
             output: BuildOutputSelection::from_args(sdist, wheel),
             list,
