@@ -59,7 +59,7 @@ use uv_workspace::{DiscoveryOptions, Workspace, WorkspaceCache, WorkspaceError};
 use uv_python_discovery::PythonDownloadReporter;
 use uv_python_discovery::PythonSelectionError;
 use uv_python_discovery::find_requires_python;
-use uv_settings::{BuildOutputSelection, BuildPackageSelection, ResolverSettings};
+use uv_settings::{BuildMode, BuildOutputSelection, BuildPackageSelection, ResolverSettings};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -97,8 +97,6 @@ pub enum Error {
     PythonContext(#[from] Box<PythonSelectionError>),
     #[error("Failed to write message")]
     Fmt(#[from] fmt::Error),
-    #[error("Can't use `--force-pep517` with `--list`")]
-    ListForcePep517,
     #[error(
         "Can only use `--list` with a compatible uv build backend, but `{name}` is not compatible because {reason}"
     )]
@@ -213,10 +211,9 @@ pub async fn build_frontend(
     package: BuildPackageSelection,
     output_dir: Option<PathBuf>,
     output: BuildOutputSelection,
-    list: bool,
+    mode: BuildMode,
     build_logs: bool,
     gitignore: bool,
-    force_pep517: bool,
     clear: bool,
     build_constraints: Vec<RequirementsSource>,
     build_constraints_from_workspace: Vec<NameRequirementSpecification>,
@@ -422,7 +419,6 @@ pub async fn build_frontend(
             hash_checking,
             build_logs,
             gitignore,
-            force_pep517,
             clear,
             &build_constraints,
             &build_constraints_from_workspace,
@@ -436,7 +432,7 @@ pub async fn build_frontend(
             &concurrency,
             build_options,
             output,
-            list,
+            mode,
             dependency_metadata,
             *link_mode,
             config_setting,
@@ -494,7 +490,6 @@ async fn build_package(
     hash_checking: Option<HashCheckingMode>,
     build_logs: bool,
     gitignore: bool,
-    force_pep517: bool,
     clear: bool,
     build_constraints: &[RequirementsSource],
     build_constraints_from_workspace: &[NameRequirementSpecification],
@@ -508,7 +503,7 @@ async fn build_package(
     concurrency: &Concurrency,
     build_options: &BuildOptions,
     output: BuildOutputSelection,
-    list: bool,
+    mode: BuildMode,
     dependency_metadata: &DependencyMetadata,
     link_mode: LinkMode,
     config_setting: &ConfigSettings,
@@ -683,28 +678,24 @@ async fn build_package(
 
     // Check if the build backend is matching uv version that allows calling in the uv build backend
     // directly.
-    let build_action = if list {
-        if force_pep517 {
-            return Err(Error::ListForcePep517);
-        }
+    let build_action = match mode {
+        BuildMode::List => {
+            if let Err(reason) = check_direct_build(
+                source.path(),
+                uv_version::version(),
+                &interpreter.to_resolver_marker_environment(),
+                build_constraints.requirements().cloned().map(Into::into),
+            ) {
+                return Err(Error::ListNonUv {
+                    name: source.path().user_display().to_string(),
+                    reason: reason.to_string(),
+                });
+            }
 
-        if let Err(reason) = check_direct_build(
-            source.path(),
-            uv_version::version(),
-            &interpreter.to_resolver_marker_environment(),
-            build_constraints.requirements().cloned().map(Into::into),
-        ) {
-            return Err(Error::ListNonUv {
-                name: source.path().user_display().to_string(),
-                reason: reason.to_string(),
-            });
+            BuildAction::List
         }
-
-        BuildAction::List
-    } else if force_pep517 {
-        BuildAction::Pep517
-    } else {
-        match check_direct_build(
+        BuildMode::Pep517 => BuildAction::Pep517,
+        BuildMode::Build => match check_direct_build(
             source.path(),
             uv_version::version(),
             &interpreter.to_resolver_marker_environment(),
@@ -719,7 +710,7 @@ async fn build_package(
                 );
                 BuildAction::Pep517
             }
-        }
+        },
     };
 
     if matches!(build_action, BuildAction::DirectBuild | BuildAction::List) {
@@ -750,7 +741,7 @@ async fn build_package(
         BuildPlan::SdistToWheel => {
             // Even when listing files, we still need to build the source distribution for the wheel
             // build.
-            if list {
+            if let BuildMode::List = mode {
                 let sdist_list = build_sdist(
                     source.path(),
                     &output_dir,

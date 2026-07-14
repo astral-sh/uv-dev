@@ -205,6 +205,25 @@ impl BuildPackageSelection {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum BuildMode {
+    Build,
+    List,
+    Pep517,
+}
+
+impl BuildMode {
+    pub fn from_args(list: bool, force_pep517: bool) -> Self {
+        if list {
+            Self::List
+        } else if force_pep517 {
+            Self::Pep517
+        } else {
+            Self::Build
+        }
+    }
+}
+
 /// Normalize a deprecated prerelease mode and emit its warning.
 #[expect(deprecated)]
 fn warn_if_deprecated_prerelease_mode(prerelease: PrereleaseMode) -> PrereleaseMode {

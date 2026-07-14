@@ -46,7 +46,7 @@ use uv_settings::{
     IndexOptions, LockCheck, LockedFlag, LockedSource, MalwareCheckSettings, Options, PipOptions,
     PreviewFeaturesOption, PreviewOption, PublishOptions, PythonInstallMirrors, PythonListKinds,
     ResolverInstallerOptions, ResolverInstallerSchema, ResolverInstallerSettings, ResolverOptions,
-    BuildOutputSelection, BuildPackageSelection, ResolverSettings, resolve_prerelease,
+    BuildMode, BuildOutputSelection, BuildPackageSelection, ResolverSettings, resolve_prerelease,
 };
 use uv_static::EnvVars;
 use uv_torch::{AmdGpuArchitecture, TorchMode};
@@ -4179,10 +4179,9 @@ pub struct BuildSettings {
     pub package: BuildPackageSelection,
     pub out_dir: Option<PathBuf>,
     pub output: BuildOutputSelection,
-    pub list: bool,
+    pub mode: BuildMode,
     pub build_logs: bool,
     pub gitignore: bool,
-    pub force_pep517: bool,
     pub clear: bool,
     pub build_constraints: Vec<RequirementsInput>,
     pub build_constraints_from_workspace: Vec<NameRequirementSpecification>,
@@ -4258,9 +4257,8 @@ impl BuildSettings {
             package: BuildPackageSelection::from_args(package, all_packages),
             out_dir,
             output: BuildOutputSelection::from_args(sdist, wheel),
-            list,
+            mode: BuildMode::from_args(list, force_pep517),
             build_logs: flag(build_logs, no_build_logs, "build-logs")?.unwrap_or(true),
-            force_pep517,
             clear,
             gitignore: flag(create_gitignore, no_create_gitignore, "create-gitignore")?
                 .unwrap_or(true),
