@@ -476,11 +476,6 @@ impl ManagedPythonInstallation {
         self.key.version()
     }
 
-    /// Return the implementation in the key without interpreting Emscripten as Pyodide.
-    fn key_implementation(&self) -> ImplementationName {
-        self.implementation
-    }
-
     pub fn implementation(&self) -> ImplementationName {
         if self.key.os().is_emscripten() {
             ImplementationName::Pyodide
@@ -1036,12 +1031,13 @@ impl From<&ManagedPythonInstallation> for PythonDownloadRequest {
         let key = installation.key();
         Self::new(
             Some(VersionRequest::from(&key.version())),
-            Some(installation.key_implementation()),
+            None,
             Some(ArchRequest::Explicit(*key.arch())),
             Some(*key.os()),
             Some(*key.libc()),
             Some(key.prerelease.is_some()),
         )
+        .with_implementation(installation.implementation())
     }
 }
 
