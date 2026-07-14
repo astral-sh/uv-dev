@@ -14,7 +14,7 @@ use uv_client::BaseClientBuilder;
 use uv_command_support::{ExitStatus, Printer};
 use uv_configuration::{
     AuthorFrom, DependencyGroupsWithDefaults, InitDescription, InitKind, InitMode,
-    InitProjectKind, ProjectBuildBackend, VersionControlError, VersionControlSystem,
+    InitProjectKind, InitReadme, ProjectBuildBackend, VersionControlError, VersionControlSystem,
 };
 use uv_distribution_types::RequiresPython;
 use uv_fs::{CWD, Simplified};
@@ -44,7 +44,7 @@ use uv_workspace::{
 };
 
 /// Add one or more packages to the project requirements.
-#[expect(clippy::single_match_else, clippy::fn_params_excessive_bools)]
+#[expect(clippy::single_match_else)]
 pub async fn init(
     project_dir: &Path,
     explicit_path: Option<PathBuf>,
@@ -54,7 +54,7 @@ pub async fn init(
     description: InitDescription,
     vcs: Option<VersionControlSystem>,
     build_backend: Option<ProjectBuildBackend>,
-    no_readme: bool,
+    readme: InitReadme,
     author_from: Option<AuthorFrom>,
     pin_python: bool,
     python: Option<String>,
@@ -86,7 +86,7 @@ pub async fn init(
                 cache,
                 printer,
                 no_workspace,
-                no_readme,
+                readme,
                 author_from,
                 pin_python,
                 config_discovery,
@@ -158,7 +158,7 @@ pub async fn init(
                 description,
                 vcs,
                 build_backend,
-                no_readme,
+                readme,
                 author_from,
                 pin_python,
                 python,
@@ -175,7 +175,7 @@ pub async fn init(
             .await?;
 
             // Create the `README.md` if it does not already exist.
-            if !no_readme && matches!(bare, InitMode::Full) {
+            if matches!(readme, InitReadme::Include) && matches!(bare, InitMode::Full) {
                 let readme = path.join("README.md");
                 if !readme.exists() {
                     fs_err::write(readme, String::new())?;
@@ -205,7 +205,6 @@ pub async fn init(
     Ok(ExitStatus::Success)
 }
 
-#[expect(clippy::fn_params_excessive_bools)]
 async fn init_script(
     script_path: &Path,
     bare: InitMode,
@@ -218,7 +217,7 @@ async fn init_script(
     cache: &Cache,
     printer: Printer,
     no_workspace: bool,
-    no_readme: bool,
+    readme: InitReadme,
     author_from: Option<AuthorFrom>,
     pin_python: bool,
     config_discovery: ConfigDiscovery,
@@ -226,7 +225,7 @@ async fn init_script(
     if no_workspace {
         warn_user_once!("`--no-workspace` is a no-op for Python scripts, which are standalone");
     }
-    if no_readme {
+    if matches!(readme, InitReadme::Omit) {
         warn_user_once!("`--no-readme` is a no-op for Python scripts, which are standalone");
     }
     if author_from.is_some() {
@@ -290,7 +289,6 @@ async fn init_script(
 }
 
 /// Initialize a project (and, implicitly, a workspace root) at the given path.
-#[expect(clippy::fn_params_excessive_bools)]
 async fn init_project(
     path: &Path,
     name: &PackageName,
@@ -299,7 +297,7 @@ async fn init_project(
     description: InitDescription,
     vcs: Option<VersionControlSystem>,
     build_backend: Option<ProjectBuildBackend>,
-    no_readme: bool,
+    readme: InitReadme,
     author_from: Option<AuthorFrom>,
     pin_python: bool,
     python: Option<String>,
@@ -425,7 +423,7 @@ async fn init_project(
         vcs,
         build_backend,
         author_from,
-        no_readme,
+        readme,
     )?;
 
     if let Some(workspace) = workspace {
@@ -738,7 +736,7 @@ fn init_project_kind(
     vcs: Option<VersionControlSystem>,
     build_backend: Option<ProjectBuildBackend>,
     author_from: Option<AuthorFrom>,
-    no_readme: bool,
+    readme: InitReadme,
 ) -> Result<()> {
     fs_err::create_dir_all(path)?;
 
@@ -761,7 +759,7 @@ fn init_project_kind(
         requires_python,
         author.as_ref(),
         description,
-        no_readme || matches!(bare, InitMode::Bare),
+        readme.for_mode(bare),
     );
 
     match project_kind {
@@ -854,7 +852,7 @@ fn pyproject_project(
     requires_python: &RequiresPython,
     author: Option<&Author>,
     description: &InitDescription,
-    no_readme: bool,
+    readme: InitReadme,
 ) -> String {
     indoc::formatdoc! {r#"
         [project]
@@ -863,7 +861,10 @@ fn pyproject_project(
         requires-python = "{requires_python}"
         dependencies = []
     "#,
-        readme = if no_readme { "" } else { "\nreadme = \"README.md\"" },
+        readme = match readme {
+            InitReadme::Include => "\nreadme = \"README.md\"",
+            InitReadme::Omit => "",
+        },
         description = match description {
             InitDescription::Default => "\ndescription = \"Add your description here\"".to_string(),
             InitDescription::Custom(description) => format!("\ndescription = \"{description}\""),

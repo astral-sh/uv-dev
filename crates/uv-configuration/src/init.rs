@@ -60,6 +60,30 @@ impl InitDescription {
     }
 }
 
+/// Whether to include a README in a newly initialized project.
+#[derive(Debug, Copy, Clone)]
+pub enum InitReadme {
+    /// Include a README.
+    Include,
+    /// Omit the README.
+    Omit,
+}
+
+impl InitReadme {
+    /// Determine the [`InitReadme`] setting based on the command-line arguments.
+    pub fn from_args(no_readme: bool) -> Self {
+        if no_readme { Self::Omit } else { Self::Include }
+    }
+
+    /// Omit the README for bare projects.
+    pub fn for_mode(self, mode: InitMode) -> Self {
+        match mode {
+            InitMode::Bare => Self::Omit,
+            InitMode::Full => self,
+        }
+    }
+}
+
 /// The kind of Python project to initialize (either an application or a library).
 #[derive(Debug, Copy, Clone, Default)]
 pub enum InitProjectKind {
