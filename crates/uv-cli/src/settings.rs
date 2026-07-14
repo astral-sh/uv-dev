@@ -21,10 +21,11 @@ use uv_configuration::{
     DependencyGroups, DependencyMode, DevMode, DryRun, EditableMode, EnvFile, ExcludeDependency,
     ExcludeNewer, ExcludeNewerPackage, ExportFormat, ExtrasSpecification, ForkStrategy,
     GitLfsSetting, HashCheckingMode, IndexStrategy, InitKind, InitProjectKind, InstallOptions,
-    KeyringProviderType, Modifications, NoBinary, NoBuild, NoSources, Override, PackageOverride,
-    PipCompileFormat, Prerelease, ProjectBuildBackend, ProxyUrl, PythonUpgrade,
-    PythonUpgradeSource, Reinstall, RequiredVersion, RequirementsInput, ResolutionMode,
-    TargetTriple, ToolRunCommand, TrustedHost, TrustedPublishing, Upgrade, VersionControlSystem,
+    KeyringProviderType, Modifications, NoBinary, NoBuild, NoSources, Override,
+    PackageNameSpecifier, PackageOverride, PipCompileFormat, Prerelease, ProjectBuildBackend,
+    ProxyUrl, PythonUpgrade, PythonUpgradeSource, Reinstall, RequiredVersion, RequirementsInput,
+    ResolutionMode, TargetTriple, ToolRunCommand, TrustedHost, TrustedPublishing, Upgrade,
+    VersionControlSystem,
 };
 use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, ExcludeNewerOverride, ExtraBuildVariables, Index,
@@ -4730,6 +4731,33 @@ impl PipSettings {
         let args_no_sources_package = args
             .no_sources_package
             .or(environment.no_sources_package.clone());
+        let reset_no_binary = args.no_binary.as_ref().is_some_and(|specifiers| {
+            specifiers
+                .iter()
+                .any(|specifier| matches!(specifier, PackageNameSpecifier::None))
+        });
+        let reset_no_build = args.no_build == Some(false)
+            || args.only_binary.as_ref().is_some_and(|specifiers| {
+                specifiers
+                    .iter()
+                    .any(|specifier| matches!(specifier, PackageNameSpecifier::None))
+            });
+        let (environment_no_binary, environment_no_binary_package) = if reset_no_binary {
+            (None, None)
+        } else {
+            (
+                environment.no_binary.value,
+                environment.no_binary_package.clone(),
+            )
+        };
+        let (environment_no_build, environment_no_build_package) = if reset_no_build {
+            (None, None)
+        } else {
+            (
+                environment.no_build.value,
+                environment.no_build_package.clone(),
+            )
+        };
 
         Self {
             index_locations: IndexLocations::new(
@@ -4926,16 +4954,20 @@ impl PipSettings {
             build_options: BuildOptions::new(
                 NoBinary::from_pip_args(args.no_binary.combine(no_binary).unwrap_or_default())
                     .combine(NoBinary::from_args(
-                        top_level_no_binary,
-                        top_level_no_binary_package.unwrap_or_default(),
+                        environment_no_binary.combine(top_level_no_binary),
+                        environment_no_binary_package
+                            .combine(top_level_no_binary_package)
+                            .unwrap_or_default(),
                     )),
                 NoBuild::from_pip_args(
                     args.only_binary.combine(only_binary).unwrap_or_default(),
                     args.no_build.combine(no_build).unwrap_or_default(),
                 )
                 .combine(NoBuild::from_args(
-                    top_level_no_build,
-                    top_level_no_build_package.unwrap_or_default(),
+                    environment_no_build.combine(top_level_no_build),
+                    environment_no_build_package
+                        .combine(top_level_no_build_package)
+                        .unwrap_or_default(),
                 )),
             ),
             install_mirrors: environment
