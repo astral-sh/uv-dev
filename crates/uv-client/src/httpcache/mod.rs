@@ -808,7 +808,7 @@ impl ArchivedCachePolicy {
             //
             // [RFC 9111 S5.2.1.3]: https://www.rfc-editor.org/rfc/rfc9111.html#section-5.2.1.3
             if let Some(&min_fresh) = reqcc.min_fresh_seconds.as_ref() {
-                let time_to_live = freshness_lifetime.saturating_sub(unix_timestamp(now));
+                let time_to_live = freshness_lifetime.saturating_sub(age);
                 if time_to_live < min_fresh {
                     tracing::trace!(
                         "Request to {} does not have a fresh cache entry because \
@@ -830,7 +830,7 @@ impl ArchivedCachePolicy {
         //
         // [RFC 9111 S4.2]: https://www.rfc-editor.org/rfc/rfc9111.html#section-4.2
         if age >= freshness_lifetime {
-            let allows_stale = self.allows_stale(now);
+            let allows_stale = self.allows_stale(now, request);
             if !allows_stale {
                 tracing::trace!(
                     "Request to {} does not have a fresh cache entry because \
@@ -851,7 +851,7 @@ impl ArchivedCachePolicy {
     /// 9111 S4.2.4].
     ///
     /// [RFC 9111 S4.2.4]: https://www.rfc-editor.org/rfc/rfc9111.html#section-4.2.4
-    fn allows_stale(&self, now: SystemTime) -> bool {
+    fn allows_stale(&self, now: SystemTime, request: &reqwest::Request) -> bool {
         // As per [RFC 9111 S5.2.2.2], if `must-revalidate` is present, then
         // caches cannot reuse a stale response without talking to the server
         // first. Note that RFC 9111 doesn't seem to say anything about the
@@ -868,7 +868,12 @@ impl ArchivedCachePolicy {
             );
             return false;
         }
-        if let Some(&max_stale) = self.request.headers.cc.max_stale_seconds.as_ref() {
+        let reqcc = request
+            .headers()
+            .get_all("cache-control")
+            .iter()
+            .collect::<CacheControl>();
+        if let Some(&max_stale) = reqcc.max_stale_seconds.as_ref() {
             // As per [RFC 9111 S5.2.1.2], if the client has max-stale set,
             // then stale responses are allowed, but only if they are stale
             // within a given threshold.
@@ -878,11 +883,11 @@ impl ArchivedCachePolicy {
                 .age(now)
                 .as_secs()
                 .saturating_sub(self.freshness_lifetime().as_secs());
-            if stale_amount <= max_stale.into() {
+            if stale_amount <= max_stale {
                 tracing::trace!(
                     "Request to {} has a cached response that allows staleness \
                      in this case because the stale amount is {} seconds and the \
-                     'max-stale' cache-control directive set by the cached request \
+                     'max-stale' cache-control directive set by the request \
                      is {} seconds",
                     self.request.uri,
                     stale_amount,
@@ -1515,5 +1520,65 @@ mod tests {
                 .header(http::header::CACHE_CONTROL, "no-store"),
         );
         assert!(!unstorable.matches_stale_request(&original));
+    }
+
+    #[test]
+    fn min_fresh_uses_the_cached_responses_age() {
+        let original_request =
+            reqwest::Request::new(http::Method::GET, "https://example.com/".parse().unwrap());
+        let response = reqwest::Response::from(
+            http::Response::builder()
+                .status(http::StatusCode::OK)
+                .header(http::header::CACHE_CONTROL, "max-age=120")
+                .body(Vec::new())
+                .unwrap(),
+        );
+        let policy = CachePolicyBuilder::new(&original_request).build(&response);
+        let archived = policy.to_archived();
+        let now = SystemTime::now() + Duration::from_secs(30);
+
+        let fresh_request = reqwest::Client::new()
+            .get("https://example.com/")
+            .header(http::header::CACHE_CONTROL, "min-fresh=60")
+            .build()
+            .unwrap();
+        assert!(archived.is_fresh(now, &fresh_request));
+
+        let stale_request = reqwest::Client::new()
+            .get("https://example.com/")
+            .header(http::header::CACHE_CONTROL, "min-fresh=120")
+            .build()
+            .unwrap();
+        assert!(!archived.is_fresh(now, &stale_request));
+    }
+
+    #[test]
+    fn max_stale_uses_the_presented_request() {
+        let original_request = reqwest::Client::new()
+            .get("https://example.com/")
+            .header(http::header::CACHE_CONTROL, "max-stale=120")
+            .build()
+            .unwrap();
+        let response = reqwest::Response::from(
+            http::Response::builder()
+                .status(http::StatusCode::OK)
+                .header(http::header::CACHE_CONTROL, "max-age=10")
+                .body(Vec::new())
+                .unwrap(),
+        );
+        let policy = CachePolicyBuilder::new(&original_request).build(&response);
+        let archived = policy.to_archived();
+        let now = SystemTime::now() + Duration::from_secs(30);
+
+        let request_without_max_stale =
+            reqwest::Request::new(http::Method::GET, "https://example.com/".parse().unwrap());
+        assert!(!archived.is_fresh(now, &request_without_max_stale));
+
+        let request_with_max_stale = reqwest::Client::new()
+            .get("https://example.com/")
+            .header(http::header::CACHE_CONTROL, "max-stale=120")
+            .build()
+            .unwrap();
+        assert!(archived.is_fresh(now, &request_with_max_stale));
     }
 }
