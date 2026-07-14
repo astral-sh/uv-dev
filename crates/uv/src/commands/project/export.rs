@@ -19,7 +19,7 @@ use uv_normalize::{DefaultExtras, DefaultGroups, PackageName};
 use uv_preview::Preview;
 use uv_python::{ConfigDiscovery, PythonDownloads, PythonPreference, PythonRequest};
 use uv_requirements::is_pylock_toml;
-use uv_resolver::{PylockToml, RequirementsTxtExport, cyclonedx_json};
+use uv_resolver::{Installable, PylockToml, RequirementsTxtExport, cyclonedx_json};
 use uv_scripts::Pep723Script;
 use uv_settings::PythonInstallMirrors;
 use uv_warnings::warn_user;
@@ -436,6 +436,18 @@ pub(crate) async fn export(
             write!(writer, "{export}")?;
         }
         ExportFormat::PylockToml => {
+            let output_path = output_file
+                .as_deref()
+                .and_then(Path::parent)
+                .map(|parent| {
+                    if parent.as_os_str().is_empty() {
+                        Path::new(".")
+                    } else {
+                        parent
+                    }
+                })
+                .map(std::path::absolute)
+                .transpose()?;
             let export = PylockToml::from_lock(
                 &target,
                 &prune,
@@ -444,6 +456,7 @@ pub(crate) async fn export(
                 include_annotations,
                 editable.as_ref(),
                 &install_options,
+                output_path.as_deref().unwrap_or(target.install_path()),
             )?;
 
             if include_header {
