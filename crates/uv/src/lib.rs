@@ -40,7 +40,7 @@ use uv_cli::{
 };
 use uv_client::BaseClientBuilder;
 use uv_command_support::{ExitStatus, Printer, UvError};
-use uv_configuration::{PythonUpgrade, PythonUpgradeSource, ToolRunCommand};
+use uv_configuration::{DryRun, PythonUpgrade, PythonUpgradeSource, ToolRunCommand};
 use uv_flags::EnvironmentFlags;
 use uv_fs::{CWD, Simplified, normalize_path};
 #[cfg(feature = "self-update")]
@@ -58,9 +58,7 @@ use uv_threads::{RAYON_PARALLELISM, min_stack_size};
 use uv_warnings::{warn_user, warn_user_once};
 use uv_workspace::{DiscoveryOptions, Workspace, WorkspaceCache};
 
-use crate::commands::{
-    ParsedRunCommand, ResolutionDisplay, RunCommand, ScriptPath, SyncMode,
-};
+use crate::commands::{ParsedRunCommand, ResolutionDisplay, RunCommand, ScriptPath, SyncMode};
 
 mod commands;
 #[cfg(not(feature = "self-update"))]
@@ -2757,7 +2755,7 @@ async fn run_project(
                 project_dir,
                 args.package,
                 explicit_project,
-                args.dry_run,
+                DryRun::from_args(args.dry_run),
                 args.lock_check,
                 args.frozen,
                 args.active,

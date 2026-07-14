@@ -42,8 +42,8 @@ use uv_workspace::{
     pyproject_mut::{DependencyTarget, PyProjectTomlMut},
 };
 
-use crate::{ProjectError, SyncMode};
 use crate::edit::{ProjectEdit, PythonTarget};
+use crate::{ProjectError, SyncMode};
 
 /// Version information for a project (`uv version`).
 #[derive(serde::Serialize)]
@@ -74,7 +74,6 @@ impl std::fmt::Display for ProjectVersionInfo {
 }
 
 /// Read or update project version (`uv version`)
-#[expect(clippy::fn_params_excessive_bools)]
 pub async fn project_version(
     value: Option<String>,
     mut bump: Vec<VersionBumpSpec>,
@@ -83,7 +82,7 @@ pub async fn project_version(
     project_dir: &Path,
     package: Option<PackageName>,
     explicit_project: bool,
-    dry_run: bool,
+    dry_run: DryRun,
     lock_check: LockCheck,
     frozen: Option<FrozenSource>,
     active: ActiveEnvironment,
@@ -329,7 +328,7 @@ pub async fn project_version(
     };
 
     // Update the toml and lock
-    let status = if dry_run {
+    let status = if dry_run.enabled() {
         ExitStatus::Success
     } else if let Some(new_version) = &new_version {
         let edit = ProjectEdit::new(
