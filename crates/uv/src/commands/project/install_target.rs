@@ -467,9 +467,16 @@ impl<'lock> InstallTarget<'lock> {
         &self,
         extras: &ExtrasSpecification,
         groups: &DependencyGroupsWithDefaults,
-    ) -> BTreeSet<&PackageName> {
+        marker_env: Option<&ResolverMarkerEnvironment>,
+    ) -> (
+        BTreeSet<&PackageName>,
+        FxHashSet<(&PackageName, &ExtraName)>,
+    ) {
         match self {
-            Self::Project { lock, .. } | Self::Projects { lock, .. } => {
+            Self::Project { lock, .. }
+            | Self::Projects { lock, .. }
+            | Self::Workspace { lock, .. }
+            | Self::NonProjectWorkspace { lock, .. } => {
                 let roots = self.roots().collect::<FxHashSet<_>>();
 
                 // Collect the packages by name for efficient lookup.
@@ -488,6 +495,7 @@ impl<'lock> InstallTarget<'lock> {
                 // Find all workspace member dependencies recursively for all specified packages
                 let mut queue: VecDeque<(&PackageName, Option<&ExtraName>)> = VecDeque::new();
                 let mut seen: FxHashSet<(&PackageName, Option<&ExtraName>)> = FxHashSet::default();
+                let mut activated_extras = FxHashSet::default();
 
                 for name in roots {
                     let Some(root_package) = packages.get(name) else {
@@ -515,11 +523,27 @@ impl<'lock> InstallTarget<'lock> {
                             continue;
                         }
                         for dependency in dependencies {
+                            if marker_env.is_some_and(|marker_env| {
+                                !root_package.dependency_applies_to_environment(
+                                    dependency,
+                                    marker_env,
+                                    None,
+                                    Some(group_name),
+                                )
+                            }) {
+                                continue;
+                            }
                             let dep_name = dependency.package_name();
                             if seen.insert((dep_name, None)) {
                                 queue.push_back((dep_name, None));
                             }
-                            for extra in dependency.extra() {
+                            for extra in root_package.dependency_extras(
+                                dependency,
+                                marker_env.map(ResolverMarkerEnvironment::markers),
+                                None,
+                                Some(group_name),
+                            ) {
+                                activated_extras.insert((dep_name, extra));
                                 if seen.insert((dep_name, Some(extra))) {
                                     queue.push_back((dep_name, Some(extra)));
                                 }
@@ -550,11 +574,24 @@ impl<'lock> InstallTarget<'lock> {
                     };
 
                     for dependency in dependencies {
+                        if marker_env.is_some_and(|marker_env| {
+                            !package.dependency_applies_to_environment(
+                                dependency, marker_env, extra, None,
+                            )
+                        }) {
+                            continue;
+                        }
                         let name = dependency.package_name();
                         if seen.insert((name, None)) {
                             queue.push_back((name, None));
                         }
-                        for extra in dependency.extra() {
+                        for extra in package.dependency_extras(
+                            dependency,
+                            marker_env.map(ResolverMarkerEnvironment::markers),
+                            extra,
+                            None,
+                        ) {
+                            activated_extras.insert((name, extra));
                             if seen.insert((name, Some(extra))) {
                                 queue.push_back((name, Some(extra)));
                             }
@@ -562,15 +599,11 @@ impl<'lock> InstallTarget<'lock> {
                     }
                 }
 
-                required_members
-            }
-            Self::Workspace { lock, .. } | Self::NonProjectWorkspace { lock, .. } => {
-                // Return all workspace members
-                lock.members().iter().collect()
+                (required_members, activated_extras)
             }
             Self::Script { .. } => {
                 // Scripts don't have workspace members
-                BTreeSet::new()
+                (BTreeSet::new(), FxHashSet::default())
             }
         }
     }

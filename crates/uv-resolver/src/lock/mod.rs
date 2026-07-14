@@ -4,6 +4,7 @@ use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use std::io;
 use std::path::{Path, PathBuf};
+use std::slice;
 use std::str::FromStr;
 use std::sync::{Arc, LazyLock};
 
@@ -4108,6 +4109,78 @@ impl Package {
     /// Returns the resolved PEP 735 dependency groups of the package.
     pub fn resolved_dependency_groups(&self) -> &BTreeMap<GroupName, Vec<Dependency>> {
         &self.dependency_groups
+    }
+
+    /// Returns whether a resolved dependency applies to an environment using the original
+    /// requirement marker, when available.
+    pub fn dependency_applies_to_environment(
+        &self,
+        dependency: &Dependency,
+        marker_environment: &MarkerEnvironment,
+        extra: Option<&ExtraName>,
+        group: Option<&GroupName>,
+    ) -> bool {
+        let requirements = group.map_or(Some(&self.metadata.requires_dist), |group| {
+            self.metadata.dependency_groups.get(group)
+        });
+        let Some(requirements) = requirements.filter(|requirements| !requirements.is_empty())
+        else {
+            return dependency
+                .complexified_marker
+                .pep508()
+                .evaluate(marker_environment, &[]);
+        };
+
+        let mut requirements = requirements
+            .iter()
+            .filter(|requirement| requirement.name == *dependency.package_name());
+        let Some(requirement) = requirements.next() else {
+            return dependency
+                .complexified_marker
+                .pep508()
+                .evaluate(marker_environment, &[]);
+        };
+
+        let extras: &[ExtraName] = extra.map_or(&[], slice::from_ref);
+        requirement.marker.evaluate(marker_environment, extras)
+            || requirements
+                .any(|requirement| requirement.marker.evaluate(marker_environment, extras))
+    }
+
+    /// Returns the extras activated by a resolved dependency using the original requirement,
+    /// when available.
+    pub fn dependency_extras<'a>(
+        &'a self,
+        dependency: &'a Dependency,
+        marker_environment: Option<&MarkerEnvironment>,
+        extra: Option<&ExtraName>,
+        group: Option<&GroupName>,
+    ) -> BTreeSet<&'a ExtraName> {
+        let requirements = group.map_or(Some(&self.metadata.requires_dist), |group| {
+            self.metadata.dependency_groups.get(group)
+        });
+        let Some(requirements) = requirements.filter(|requirements| !requirements.is_empty())
+        else {
+            return dependency.extra.iter().collect();
+        };
+
+        let mut requirements = requirements
+            .iter()
+            .filter(|requirement| requirement.name == *dependency.package_name());
+        let Some(requirement) = requirements.next() else {
+            return dependency.extra.iter().collect();
+        };
+
+        let selected_extras: &[ExtraName] = extra.map_or(&[], slice::from_ref);
+        std::iter::once(requirement)
+            .chain(requirements)
+            .filter(|requirement| {
+                requirement
+                    .marker
+                    .evaluate_optional_environment(marker_environment, selected_extras)
+            })
+            .flat_map(|requirement| requirement.extras.iter())
+            .collect()
     }
 
     /// Returns an [`InstallTarget`] view for filtering decisions.

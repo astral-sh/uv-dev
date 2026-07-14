@@ -8412,6 +8412,84 @@ fn no_binary_error() -> Result<()> {
     Ok(())
 }
 
+/// Dependency-activated extras must only participate in conflicts on an applicable platform.
+#[test]
+fn sync_transitive_extra_conflict_platform() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let active_platform = if cfg!(windows) {
+        "win32"
+    } else if cfg!(target_os = "macos") {
+        "darwin"
+    } else {
+        "linux"
+    };
+    let inactive_platform = if cfg!(windows) { "darwin" } else { "win32" };
+
+    let write_pyproject = |platform| {
+        context
+            .temp_dir
+            .child("pyproject.toml")
+            .write_str(&formatdoc! {r#"
+            [project]
+            name = "project"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = ["child[feature]; sys_platform == '{platform}'"]
+
+            [dependency-groups]
+            dev = ["child"]
+
+            [tool.uv]
+            conflicts = [[
+                {{ group = "dev" }},
+                {{ package = "child", extra = "feature" }},
+            ]]
+
+            [tool.uv.workspace]
+            members = ["child"]
+
+            [tool.uv.sources]
+            child = {{ workspace = true }}
+            "#})
+    };
+    write_pyproject(inactive_platform)?;
+    context.temp_dir.child("child/pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+
+        [project.optional-dependencies]
+        feature = []
+        "#,
+    )?;
+
+    uv_snapshot!(context.filters(), context.sync().arg("--group").arg("dev").arg("--no-install-workspace"), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Checked in [TIME]
+    ");
+
+    write_pyproject(active_platform)?;
+    uv_snapshot!(context.filters(), context.sync().arg("--group").arg("dev").arg("--no-install-workspace"), @"
+    success: false
+    exit_code: 2
+    ----- stdout -----
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: Extra `feature` and group `dev` are incompatible with the declared conflicts: {`child[feature]`, `project:dev`}
+    ");
+
+    Ok(())
+}
+
 #[test]
 fn no_build() -> Result<()> {
     let context = uv_test::test_context!("3.12");

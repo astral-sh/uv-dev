@@ -9408,6 +9408,77 @@ fn requirements_txt_conflicting_workspace_member_package() -> Result<()> {
     Ok(())
 }
 
+/// A dependency-activated extra must participate in cross-kind conflict validation.
+#[cfg(feature = "test-universal")]
+#[test]
+fn requirements_txt_transitive_extra_conflict() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["child[feature]"]
+
+        [dependency-groups]
+        dev = ["child"]
+
+        [tool.uv]
+        conflicts = [[
+            { group = "dev" },
+            { package = "child", extra = "feature" },
+        ]]
+
+        [tool.uv.workspace]
+        members = ["child"]
+
+        [tool.uv.sources]
+        child = { workspace = true }
+        "#,
+    )?;
+    context.temp_dir.child("child/pyproject.toml").write_str(
+        r#"
+            [project]
+            name = "child"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = []
+
+            [project.optional-dependencies]
+            feature = []
+            "#,
+    )?;
+
+    context.lock().assert().success();
+
+    uv_snapshot!(context.filters(), context.export().arg("--group").arg("dev"), @"
+    success: false
+    exit_code: 2
+    ----- stdout -----
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: Extra `feature` and group `dev` are incompatible with the declared conflicts: {`child[feature]`, `project:dev`}
+    ");
+
+    uv_snapshot!(context.filters(), context.export()
+        .arg("--all-packages")
+        .arg("--group")
+        .arg("dev"), @"
+    success: false
+    exit_code: 2
+    ----- stdout -----
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: Extra `feature` and group `dev` are incompatible with the declared conflicts: {`child[feature]`, `project:dev`}
+    ");
+
+    Ok(())
+}
+
 /// Exporting the workspace root package should continue to include its dependencies
 /// even when it conflicts with another workspace member.
 #[cfg(feature = "test-universal")]
