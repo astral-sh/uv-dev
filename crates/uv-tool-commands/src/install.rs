@@ -40,7 +40,7 @@ use uv_lock_operations::LockValidationError;
 
 use crate::common::{
     ToolLock, ToolPython, finalize_tool_install, refine_interpreter, remove_entrypoints,
-    tool_environment_spec,
+    tool_entrypoints_are_fresh, tool_environment_spec,
 };
 use crate::error::ToolLockError;
 use crate::requirements::resolve_names;
@@ -648,7 +648,7 @@ pub async fn install(
                     ),
                     Ok(SatisfiesResult::Fresh { .. })
                 );
-                if already_installed {
+                if already_installed && tool_entrypoints_are_fresh(tool_receipt) {
                     // Then we're done! Though we might need to update the receipt.
                     if *tool_receipt.options() != options {
                         installed_tools.add_tool_receipt(
@@ -801,6 +801,9 @@ pub async fn install(
                 && !request.is_latest()
                 && settings.reinstall.is_none()
                 && settings.resolver.upgrade.is_none()
+                && existing_tool_receipt
+                    .as_ref()
+                    .is_some_and(tool_entrypoints_are_fresh)
             {
                 let Some(existing_tool_receipt) = existing_tool_receipt.as_ref() else {
                     bail!("Expected an existing tool receipt");
