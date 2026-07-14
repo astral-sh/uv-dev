@@ -2996,6 +2996,7 @@ fn run_empty_requirements_txt() -> Result<()> {
     ----- stdout -----
 
     ----- stderr -----
+    warning: Requirements file `requirements.txt` does not contain any dependencies
     Resolved 6 packages in [TIME]
     Prepared 4 packages in [TIME]
     Installed 4 packages in [TIME]
@@ -3003,7 +3004,6 @@ fn run_empty_requirements_txt() -> Result<()> {
      + foo==1.0.0 (from file://[TEMP_DIR]/)
      + idna==3.6
      + sniffio==1.3.1
-    warning: Requirements file `requirements.txt` does not contain any dependencies
     ");
 
     // Then reused in subsequent invocations
@@ -3013,9 +3013,9 @@ fn run_empty_requirements_txt() -> Result<()> {
     ----- stdout -----
 
     ----- stderr -----
+    warning: Requirements file `requirements.txt` does not contain any dependencies
     Resolved 6 packages in [TIME]
     Checked 4 packages in [TIME]
-    warning: Requirements file `requirements.txt` does not contain any dependencies
     ");
 
     Ok(())
@@ -3231,6 +3231,40 @@ fn run_requirements_txt_arguments() -> Result<()> {
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
      + idna==3.6
+    ");
+
+    Ok(())
+}
+
+#[test]
+fn run_pep723_requirements_respects_requires_python() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
+    let requirements = context.temp_dir.child("requirements.py");
+    requirements.write_str(indoc! {r#"
+        # /// script
+        # requires-python = "<3.12"
+        # dependencies = []
+        # ///
+    "#})?;
+
+    // An incompatible `.python-version` must not override the script requirement.
+    context
+        .temp_dir
+        .child(PYTHON_VERSION_FILENAME)
+        .write_str("3.12")?;
+
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--with-requirements")
+        .arg(requirements.path())
+        .arg("python")
+        .arg("-c")
+        .arg("import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+    3.11
+
+    ----- stderr -----
     ");
 
     Ok(())

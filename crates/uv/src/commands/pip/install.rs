@@ -140,6 +140,7 @@ pub(crate) async fn pip_install(
     // Read all requirements from the provided sources.
     let RequirementsSpecification {
         project,
+        requires_python,
         requirements,
         constraints,
         overrides,
@@ -297,6 +298,14 @@ pub(crate) async fn pip_install(
 
     // Determine the markers and tags to use for the resolution.
     let interpreter = environment.interpreter();
+    if let Some(requires_python) = requires_python.as_ref()
+        && !requires_python.contains(interpreter.python_version())
+    {
+        return Err(anyhow::anyhow!(
+            "Python {} is incompatible with the PEP 723 `requires-python` value: `{requires_python}`",
+            interpreter.python_version()
+        ));
+    }
     let marker_env = resolution_markers(
         python_version.as_ref(),
         python_platform.as_ref(),

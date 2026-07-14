@@ -368,6 +368,15 @@ pub(crate) async fn install(
     )
     .await?;
 
+    if let Some(requires_python) = spec.requires_python.as_ref()
+        && !requires_python.contains(interpreter.python_version())
+    {
+        bail!(
+            "Python {} is incompatible with the PEP 723 `requires-python` value from `--with-requirements`: `{requires_python}`",
+            interpreter.python_version()
+        );
+    }
+
     // Resolve the `--from` and `--with` requirements.
     let requirements = {
         let mut requirements = Vec::with_capacity(1 + with.len());

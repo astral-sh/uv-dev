@@ -947,6 +947,16 @@ async fn get_or_create_environment(
         client_builder,
     )
     .await?;
+
+    if let Some(requires_python) = spec.requires_python.as_ref()
+        && !requires_python.contains(interpreter.python_version())
+    {
+        return Err(anyhow::anyhow!(
+            "Python {} is incompatible with the PEP 723 `requires-python` value from `--with-requirements`: `{requires_python}`",
+            interpreter.python_version()
+        )
+        .into());
+    }
     let exclusions = uv_configuration::Excludes::from_entries(spec.excludes.iter().cloned());
 
     // Resolve the `--from` and `--with` requirements.

@@ -47,6 +47,7 @@ use uv_distribution_types::{
 };
 use uv_fs::{CWD, Simplified};
 use uv_normalize::{ExtraName, PackageName, PipGroupName};
+use uv_pep508::uv_pep440::VersionSpecifiers;
 use uv_pypi_types::PyProjectToml;
 use uv_redacted::DisplaySafeUrl;
 use uv_requirements_txt::{RequirementsTxt, RequirementsTxtRequirement, SourceCache};
@@ -59,6 +60,8 @@ use crate::{RequirementsSource, SourceTree};
 pub struct RequirementsSpecification {
     /// The name of the project specifying requirements.
     pub project: Option<PackageName>,
+    /// The Python requirement from PEP 723 script metadata, if any.
+    pub requires_python: Option<VersionSpecifiers>,
     /// The requirements for the project.
     pub requirements: Vec<UnresolvedRequirementSpecification>,
     /// The constraints for the project.
@@ -157,6 +160,7 @@ impl RequirementsSpecification {
 
             Self {
                 requirements,
+                requires_python: metadata.requires_python.clone(),
                 constraints,
                 override_dependencies,
                 excludes: tool_uv.exclude_dependencies.clone().unwrap_or_default(),
@@ -201,6 +205,7 @@ impl RequirementsSpecification {
         } else {
             Self {
                 requirements,
+                requires_python: metadata.requires_python.clone(),
                 ..Self::default()
             }
         }
@@ -552,6 +557,15 @@ impl RequirementsSpecification {
         // A `requirements.txt` can contain a `-c constraints.txt` directive within it, so reading
         // a requirements file can also add constraints.
         for source in requirement_sources {
+            if let Some(requires_python) = source.requires_python {
+                spec.requires_python = Some(
+                    spec.requires_python
+                        .into_iter()
+                        .flatten()
+                        .chain(requires_python)
+                        .collect(),
+                );
+            }
             spec.requirements.extend(source.requirements);
             spec.constraints.extend(source.constraints);
             spec.overrides.extend(source.overrides);

@@ -201,6 +201,7 @@ pub(crate) async fn pip_compile(
     // Read all requirements from the provided sources.
     let RequirementsSpecification {
         project,
+        requires_python,
         requirements,
         constraints,
         overrides,
@@ -305,6 +306,8 @@ pub(crate) async fn pip_compile(
         let request = if let Some(version) = python_version.as_ref() {
             // TODO(zanieb): We should consolidate `VersionRequest` and `PythonVersion`
             PythonRequest::Version(VersionRequest::from(version))
+        } else if let Some(requires_python) = requires_python.as_ref() {
+            PythonRequest::parse(&requires_python.to_string())
         } else {
             PythonRequest::default()
         };
@@ -329,6 +332,15 @@ pub(crate) async fn pip_compile(
         interpreter.python_version(),
         interpreter.sys_executable().user_display().cyan()
     );
+
+    if let Some(requires_python) = requires_python.as_ref()
+        && !requires_python.contains(interpreter.python_version())
+    {
+        return Err(anyhow!(
+            "Python {} is incompatible with the PEP 723 `requires-python` value: `{requires_python}`",
+            interpreter.python_version()
+        ));
+    }
 
     if let Some(python_version) = python_version.as_ref() {
         // If the requested version does not match the version we're using warn the user
@@ -367,6 +379,8 @@ pub(crate) async fn pip_compile(
     let python_requirement = if universal {
         let requires_python = if let Some(python_version) = python_version.as_ref() {
             RequiresPython::greater_than_equal_version(&python_version.version)
+        } else if let Some(requires_python) = requires_python.as_ref() {
+            RequiresPython::from_specifiers(requires_python.clone())
         } else {
             let version = interpreter.python_minor_version();
             RequiresPython::greater_than_equal_version(&version)

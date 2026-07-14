@@ -25,7 +25,7 @@ use uv_configuration::{
     InstallOptions, TargetTriple,
 };
 use uv_distribution::LoweredExtraBuildDependencies;
-use uv_distribution_types::Requirement;
+use uv_distribution_types::{Requirement, RequiresPython};
 use uv_fs::which::is_executable;
 use uv_fs::{PythonExt, Simplified, create_symlink};
 use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
@@ -162,6 +162,14 @@ pub(crate) async fn run(
     {
         bail!("Cannot read both requirements file and script from stdin");
     }
+
+    // Read the requirements before interpreter discovery so PEP 723 `requires-python` can
+    // participate in selecting the base interpreter.
+    let spec = if requirements.is_empty() {
+        None
+    } else {
+        Some(RequirementsSpecification::from_simple_sources(&requirements, &client_builder).await?)
+    };
 
     // Initialize any shared state.
     let lock_state = UniversalState::default();
@@ -879,14 +887,33 @@ pub(crate) async fn run(
                 // (1) Explicit request from user
                 let python_request = if let Some(request) = python.as_deref() {
                     Some(PythonRequest::parse(request))
-                // (2) Request from `.python-version`
+                // (2) A compatible request from `.python-version`, falling back to the Python
+                // requirement from PEP 723 `--with-requirements` metadata.
                 } else {
+                    let requires_python = spec
+                        .as_ref()
+                        .and_then(|spec| spec.requires_python.as_ref())
+                        .cloned()
+                        .map(RequiresPython::from_specifiers);
                     PythonVersionFile::discover(
                         &project_dir,
                         &VersionFileDiscoveryOptions::default().with_no_config(no_config),
                     )
                     .await?
+                    .filter(|file| match (file.version(), requires_python.as_ref()) {
+                        (Some(request), Some(requires_python)) => {
+                            request.intersects_requires_python(requires_python)
+                        }
+                        _ => true,
+                    })
                     .and_then(PythonVersionFile::into_version)
+                    .or_else(|| {
+                        spec.as_ref()
+                            .and_then(|spec| spec.requires_python.as_ref())
+                            .map(|requires_python| {
+                                PythonRequest::parse(&requires_python.to_string())
+                            })
+                    })
                 };
 
                 let python = PythonInstallation::find_or_download(
@@ -937,15 +964,14 @@ pub(crate) async fn run(
         base_interpreter.sys_executable().display()
     );
 
-    // Read the requirements.
-    let spec = if requirements.is_empty() {
-        None
-    } else {
-        let spec =
-            RequirementsSpecification::from_simple_sources(&requirements, &client_builder).await?;
-
-        Some(spec)
-    };
+    if let Some(requires_python) = spec.as_ref().and_then(|spec| spec.requires_python.as_ref())
+        && !requires_python.contains(base_interpreter.python_version())
+    {
+        bail!(
+            "Python {} is incompatible with the `requires-python` value from `--with-requirements`: `{requires_python}`",
+            base_interpreter.python_version()
+        );
+    }
 
     // If necessary, create an environment for the ephemeral requirements or command.
     let base_site_packages = SitePackages::from_interpreter(&base_interpreter)?;
