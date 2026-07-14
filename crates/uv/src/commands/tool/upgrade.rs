@@ -388,6 +388,8 @@ async fn upgrade_tool(
             &universal_resolution,
             &lock_manifest,
             &settings.resolver.index_locations,
+            &settings.resolver.config_setting,
+            &settings.resolver.config_settings_package,
         )?;
         let resolution = tool_lock.to_resolution(
             Some(name),

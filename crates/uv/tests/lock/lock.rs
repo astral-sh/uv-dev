@@ -286,6 +286,70 @@ fn lock_sdist_registry() -> Result<()> {
     Ok(())
 }
 
+/// Build config settings can change the requirements emitted by an sdist backend and must
+/// invalidate the existing lock, even when the locked package is an immutable registry source.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_config_settings_registry_sdist() -> Result<()> {
+    let server = PackseServer::new("simple/single-package.toml");
+    let context = uv_test::test_context!("3.12");
+
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a==1.0.0"]
+        "#,
+    )?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()).arg("--no-binary-package").arg("a"), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--index-url").arg(server.index_url()).arg("--no-binary-package").arg("a").arg("-C").arg("feature=enabled"), @"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()).arg("--no-binary-package").arg("a").arg("-C").arg("feature=enabled"), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    // Removing the build config settings must also invalidate the lock.
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--index-url").arg(server.index_url()).arg("--no-binary-package").arg("a"), @"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+
+    Ok(())
+}
+
 /// Reject a locked Git source when its exact revision differs from the pinned commit.
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 #[test]
@@ -35071,6 +35135,55 @@ fn lock_invalid_fork_markers() -> Result<()> {
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    Ok(())
+}
+
+/// A config-settings change cannot make disjoint fork markers reusable when `requires-python`
+/// also changed.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_invalid_requires_python_fork_markers_with_config_settings() -> Result<()> {
+    let server = PackseServer::new("simple/single-package.toml");
+    let context = uv_test::test_context!("3.12");
+
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = "==3.12.*"
+        dependencies = ["a==1.0.0"]
+        "#,
+    )?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    let lock = context.read("uv.lock");
+    let stale = lock.replacen(
+        r#"requires-python = "==3.12.*""#,
+        "requires-python = \"==3.11.*\"\nresolution-markers = [\"python_full_version == '3.11.*'\"]",
+        1,
+    );
+    assert_ne!(lock, stale);
+    context.temp_dir.child("uv.lock").write_str(&stale)?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()).arg("-C").arg("feature=enabled"), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    warning: Resolving despite existing lockfile due to fork markers being disjoint with `requires-python`: `python_full_version == '3.11.*'` vs `python_full_version == '3.12.*'`
     Resolved 2 packages in [TIME]
     ");
 

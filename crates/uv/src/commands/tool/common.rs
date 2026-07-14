@@ -22,8 +22,8 @@ use uv_distribution::{
     DistributionDatabase, LoweredExtraBuildDependencies, StaticMetadataDatabase,
 };
 use uv_distribution_types::{
-    DependencyMetadata, HashGeneration, Index, IndexLocations, InstalledDist, Name, Requirement,
-    RequiresPython, Resolution, UnresolvedRequirement,
+    ConfigSettings, DependencyMetadata, HashGeneration, Index, IndexLocations, InstalledDist, Name,
+    PackageConfigSettings, Requirement, RequiresPython, Resolution, UnresolvedRequirement,
 };
 use uv_errors::{ErrorWithHints, Hint, Hints};
 #[cfg(unix)]
@@ -52,6 +52,7 @@ use uv_warnings::warn_user_once;
 use uv_workspace::WorkspaceCache;
 
 use crate::commands::pip;
+use crate::commands::project::lock::config_settings_digest;
 
 /// An error raised when a tool package provides no executables.
 #[derive(Debug, Error)]
@@ -337,12 +338,17 @@ impl ToolLock {
         resolution: &ResolverOutput,
         manifest: &ResolverManifest,
         index_locations: &IndexLocations,
+        config_setting: &ConfigSettings,
+        config_settings_package: &PackageConfigSettings,
     ) -> anyhow::Result<Self> {
         let manifest = manifest.clone().relative_to(root)?;
         let lock = Lock::from_resolution(resolution, manifest, root, Vec::new(), index_locations)?;
         Ok(Self {
             root: root.to_path_buf(),
-            lock,
+            lock: lock.with_config_settings_digest(config_settings_digest(
+                config_setting,
+                config_settings_package,
+            )),
         })
     }
 
@@ -518,6 +524,8 @@ impl ToolLock {
             .map(Override::Requirement)
             .collect::<Vec<_>>();
         let Self { root, lock } = self;
+        let config_settings_digest =
+            config_settings_digest(config_setting, config_settings_package);
         let validated = ValidatedLock::validate(
             lock,
             &root,
@@ -540,6 +548,7 @@ impl ToolLock {
             upgrade,
             Some(refresh),
             &options,
+            config_settings_digest.as_ref(),
             &hasher,
             state.index(),
             &database,
