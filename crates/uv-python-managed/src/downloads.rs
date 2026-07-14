@@ -1258,6 +1258,19 @@ mod tests {
         "#);
     }
 
+    #[test]
+    fn gil_request_selects_default_python_download() {
+        let request = PythonDownloadRequest::from_str("cpython-3.14+gil-linux-x86_64-gnu")
+            .expect("GIL request should parse");
+        let downloads = ManagedPythonDownloadList::new_only_embedded()
+            .expect("embedded download metadata should load");
+
+        let download = downloads
+            .find(&request)
+            .expect("GIL request should select a download");
+        assert_eq!(download.key().variant, PythonVariant::Default);
+    }
+
     /// Test that build filtering works correctly
     #[tokio::test]
     async fn test_python_download_request_build_filtering() {
