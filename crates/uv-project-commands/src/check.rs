@@ -9,7 +9,7 @@ use uv_client::BaseClientBuilder;
 use uv_command_support::{ExitStatus, Printer, UvError};
 use uv_configuration::{
     ActiveEnvironment, ColorChoice, Concurrency, DependencyGroups, DependencyGroupsWithDefaults,
-    DryRun, ExtrasSpecification, InstallOptions, Modifications,
+    DryRun, ExtrasSpecification, InstallOptions, InstallSelection, Modifications,
 };
 use uv_dispatch::UniversalState;
 use uv_environment_operations::environment::CachedEnvironment;
@@ -486,12 +486,9 @@ pub async fn check(
         let extras = extras.with_defaults(DefaultExtras::default());
         let mut malware_context = MalwareCheckContext::from(&malware_settings);
         let install_options = InstallOptions::new(
-            no_install_project,
-            false,
-            false,
-            false,
-            false,
-            false,
+            InstallSelection::from_args(no_install_project, false),
+            InstallSelection::All,
+            InstallSelection::All,
             Vec::new(),
             Vec::new(),
         );

@@ -17,7 +17,7 @@ use uv_command_support::{ExitStatus, Printer, UvError};
 use uv_configuration::{
     ActiveEnvironment, AddBoundsKind, Concurrency, DependencyGroups, DependencyGroupsWithDefaults,
     DevMode, DryRun, EditableMode, ExtrasSpecification, ExtrasSpecificationWithDefaults,
-    GitLfsSetting, InstallOptions, Modifications, NoSources,
+    GitLfsSetting, InstallOptions, InstallSelection, Modifications, NoSources,
 };
 use uv_dispatch::{BuildDispatch, PlatformState, UniversalState};
 use uv_distribution::{DistributionDatabase, LoweredExtraBuildDependencies};
@@ -100,12 +100,9 @@ pub async fn add(
     frozen: Option<FrozenSource>,
     active: ActiveEnvironment,
     no_sync: bool,
-    no_install_project: bool,
-    only_install_project: bool,
-    no_install_workspace: bool,
-    only_install_workspace: bool,
-    no_install_local: bool,
-    only_install_local: bool,
+    install_project: InstallSelection,
+    install_workspace: InstallSelection,
+    install_local: InstallSelection,
     no_install_package: Vec<PackageName>,
     only_install_package: Vec<PackageName>,
     requirements: Vec<RequirementsSource>,
@@ -796,12 +793,9 @@ pub async fn add(
         lock_state,
         sync_state,
         lock_check,
-        no_install_project,
-        only_install_project,
-        no_install_workspace,
-        only_install_workspace,
-        no_install_local,
-        only_install_local,
+        install_project,
+        install_workspace,
+        install_local,
         no_install_package.clone(),
         only_install_package.clone(),
         &defaulted_extras,
@@ -1074,7 +1068,6 @@ fn edits(
 }
 
 /// Re-lock and re-sync the project after a series of edits.
-#[expect(clippy::fn_params_excessive_bools)]
 async fn lock_and_sync(
     mut target: EditTarget,
     python_target: &PythonTarget,
@@ -1083,12 +1076,9 @@ async fn lock_and_sync(
     mut lock_state: UniversalState,
     sync_state: PlatformState,
     lock_check: LockCheck,
-    no_install_project: bool,
-    only_install_project: bool,
-    no_install_workspace: bool,
-    only_install_workspace: bool,
-    no_install_local: bool,
-    only_install_local: bool,
+    install_project: InstallSelection,
+    install_workspace: InstallSelection,
+    install_local: InstallSelection,
     no_install_package: Vec<PackageName>,
     only_install_package: Vec<PackageName>,
     extras: &ExtrasSpecificationWithDefaults,
@@ -1107,12 +1097,9 @@ async fn lock_and_sync(
     malware_settings: &MalwareCheckSettings,
 ) -> Result<(), ProjectError> {
     let install_options = InstallOptions::new(
-        no_install_project,
-        only_install_project,
-        no_install_workspace,
-        only_install_workspace,
-        no_install_local,
-        only_install_local,
+        install_project,
+        install_workspace,
+        install_local,
         no_install_package,
         only_install_package,
     );
