@@ -47,8 +47,7 @@ pub(crate) async fn init(
     name: Option<PackageName>,
     init_kind: InitKind,
     bare: InitMode,
-    description: Option<String>,
-    no_description: bool,
+    description: InitDescription,
     vcs: Option<VersionControlSystem>,
     build_backend: Option<ProjectBuildBackend>,
     no_readme: bool,
@@ -145,7 +144,6 @@ pub(crate) async fn init(
                 project_kind,
                 bare,
                 description,
-                no_description,
                 vcs,
                 build_backend,
                 no_readme,
@@ -283,8 +281,7 @@ async fn init_project(
     name: &PackageName,
     project_kind: InitProjectKind,
     bare: InitMode,
-    description: Option<String>,
-    no_description: bool,
+    description: InitDescription,
     vcs: Option<VersionControlSystem>,
     build_backend: Option<ProjectBuildBackend>,
     no_readme: bool,
@@ -405,8 +402,7 @@ async fn init_project(
         name,
         path,
         &requires_python,
-        description.as_deref(),
-        no_description,
+        &description,
         bare,
         vcs,
         build_backend,
@@ -737,6 +733,30 @@ impl InitMode {
     }
 }
 
+/// The description to include in a newly initialized project.
+#[derive(Debug, Clone)]
+pub(crate) enum InitDescription {
+    /// Include the default project description.
+    Default,
+    /// Include a user-provided project description.
+    Custom(String),
+    /// Omit the project description.
+    None,
+}
+
+impl InitDescription {
+    /// Determine the [`InitDescription`] setting based on the command-line arguments.
+    pub(crate) fn from_args(description: Option<String>, no_description: bool) -> Self {
+        if no_description {
+            Self::None
+        } else if let Some(description) = description {
+            Self::Custom(description)
+        } else {
+            Self::Default
+        }
+    }
+}
+
 /// The kind of Python project to initialize (either an application or a library).
 #[derive(Debug, Copy, Clone, Default)]
 pub(crate) enum InitProjectKind {
@@ -762,8 +782,7 @@ impl InitProjectKind {
         name: &PackageName,
         path: &Path,
         requires_python: &RequiresPython,
-        description: Option<&str>,
-        no_description: bool,
+        description: &InitDescription,
         bare: InitMode,
         vcs: Option<VersionControlSystem>,
         build_backend: Option<ProjectBuildBackend>,
@@ -791,7 +810,6 @@ impl InitProjectKind {
             requires_python,
             author.as_ref(),
             description,
-            no_description,
             no_readme || matches!(bare, InitMode::Bare),
         );
 
@@ -885,8 +903,7 @@ fn pyproject_project(
     name: &PackageName,
     requires_python: &RequiresPython,
     author: Option<&Author>,
-    description: Option<&str>,
-    no_description: bool,
+    description: &InitDescription,
     no_readme: bool,
 ) -> String {
     indoc::formatdoc! {r#"
@@ -897,10 +914,10 @@ fn pyproject_project(
         dependencies = []
     "#,
         readme = if no_readme { "" } else { "\nreadme = \"README.md\"" },
-        description = if no_description {
-            String::new()
-        } else {
-            format!("\ndescription = \"{description}\"", description = description.unwrap_or("Add your description here"))
+        description = match description {
+            InitDescription::Default => "\ndescription = \"Add your description here\"".to_string(),
+            InitDescription::Custom(description) => format!("\ndescription = \"{description}\""),
+            InitDescription::None => String::new(),
         },
         authors = author.map_or_else(String::new, |author| format!("\nauthors = [\n    {}\n]", author.to_toml_string())),
         requires_python = requires_python.specifiers(),

@@ -69,7 +69,8 @@ use uv_workspace::pyproject_mut::AddBoundsKind;
 
 use crate::commands::pip::operations::Modifications;
 use crate::commands::{
-    InitKind, InitMode, InitProjectKind, PythonUpgrade, PythonUpgradeSource, ToolRunCommand,
+    InitDescription, InitKind, InitMode, InitProjectKind, PythonUpgrade, PythonUpgradeSource,
+    ToolRunCommand,
 };
 
 /// The default publish URL.
@@ -456,8 +457,7 @@ pub(crate) struct InitSettings {
     pub(crate) name: Option<PackageName>,
     pub(crate) kind: InitKind,
     pub(crate) bare: InitMode,
-    pub(crate) description: Option<String>,
-    pub(crate) no_description: bool,
+    pub(crate) description: InitDescription,
     pub(crate) vcs: Option<VersionControlSystem>,
     pub(crate) build_backend: Option<ProjectBuildBackend>,
     pub(crate) no_readme: bool,
@@ -485,8 +485,7 @@ impl InitSettings {
             app,
             lib,
             script,
-            description,
-            no_description,
+            description: InitDescription::from_args(description, no_description),
             vcs,
             build_backend,
             no_readme,
