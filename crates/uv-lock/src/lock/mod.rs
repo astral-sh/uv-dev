@@ -75,7 +75,7 @@ pub use crate::lock::export::{
 };
 pub use crate::lock::installable::{Installable, InstallableRootKind};
 pub use crate::lock::map::PackageMap;
-pub use crate::lock::tree::{TreeDedupe, TreeDisplay, TreeJsonTarget};
+pub use crate::lock::tree::{TreeDedupe, TreeDirection, TreeDisplay, TreeJsonTarget};
 
 mod deserialize;
 pub(crate) mod export;
