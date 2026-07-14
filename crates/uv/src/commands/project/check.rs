@@ -9,7 +9,7 @@ use uv_cli::ColorChoice;
 use uv_client::BaseClientBuilder;
 use uv_configuration::{
     ActiveEnvironment, Concurrency, DependencyGroups, DependencyGroupsWithDefaults, DryRun,
-    ExtrasSpecification, InstallOptions,
+    ExtrasSpecification, InstallOptions, InstallSelection,
 };
 use uv_fs::normalize_path;
 use uv_normalize::{DEV_DEPENDENCIES, DefaultExtras, PackageName};
@@ -495,12 +495,9 @@ pub(crate) async fn check(
         let extras = extras.with_defaults(DefaultExtras::default());
         let mut malware_context = project::sync::MalwareCheckContext::from(&malware_settings);
         let install_options = InstallOptions::new(
-            no_install_project,
-            false,
-            false,
-            false,
-            false,
-            false,
+            InstallSelection::from_args(no_install_project, false),
+            InstallSelection::All,
+            InstallSelection::All,
             Vec::new(),
             Vec::new(),
         );
