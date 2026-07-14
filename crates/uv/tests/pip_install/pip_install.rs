@@ -747,6 +747,34 @@ fn invalid_uv_toml_option_disallowed_command_line() -> Result<()> {
     Ok(())
 }
 
+/// `UV_PROJECT` must not redirect configuration discovery for the pip interface.
+#[test]
+fn pip_install_ignores_project_environment() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let project = context.temp_dir.child("other-project");
+    project.create_dir_all()?;
+    project.child("uv.toml").write_str(indoc! {r"
+        [pip]
+        no-index = true
+    "})?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("iniconfig")
+        .env(EnvVars::UV_PROJECT, project.path()), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + iniconfig==2.0.0
+    ");
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn cache_uv_toml_credentials() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -11769,7 +11797,8 @@ fn project_and_group() -> Result<()> {
     context = new_context()?;
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("--project").arg("subdir")
-        .arg("--group").arg("foo"), @"
+        .arg("--group").arg("foo")
+        .env(EnvVars::UV_PROJECT, context.temp_dir.path()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
