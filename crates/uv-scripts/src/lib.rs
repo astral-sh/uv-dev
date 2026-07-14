@@ -23,6 +23,7 @@ pub use uv_configuration::ExcludeDependency;
 pub use uv_workspace::pyproject::OverrideDependency;
 
 static FINDER: LazyLock<Finder> = LazyLock::new(|| Finder::new(b"# /// script"));
+const UTF8_BYTE_ORDER_MARK: &str = "\u{feff}";
 
 /// A PEP 723 item, either read from a script on disk or provided via `stdin`.
 #[derive(Debug)]
@@ -226,7 +227,7 @@ impl Pep723Script {
         let metadata = Pep723Metadata::from_str(&default_metadata)?;
 
         // Extract the shebang and script content.
-        let (shebang, postlude) = extract_shebang(contents)?;
+        let (byte_order_mark, shebang, postlude) = extract_shebang(contents)?;
 
         // Add a newline to the beginning if it starts with a valid metadata comment line.
         let postlude = if postlude.strip_prefix('#').is_some_and(|postlude| {
@@ -242,8 +243,13 @@ impl Pep723Script {
 
         Ok((
             if shebang.is_empty() {
-                String::new()
+                if byte_order_mark.is_empty() {
+                    String::new()
+                } else {
+                    format!("{byte_order_mark}\n")
+                }
             } else {
+                // The shebang must start at byte zero for direct execution to work.
                 format!("{shebang}\n")
             },
             metadata,
@@ -273,7 +279,13 @@ impl Pep723Script {
         let metadata = serialize_metadata(&default_metadata);
 
         let script = if let Some(existing_contents) = existing_contents {
-            let (mut shebang, contents) = extract_shebang(&existing_contents)?;
+            let (byte_order_mark, mut shebang, contents) = extract_shebang(&existing_contents)?;
+            let byte_order_mark = if shebang.is_empty() && !byte_order_mark.is_empty() {
+                format!("{byte_order_mark}\n")
+            } else {
+                // The shebang must start at byte zero for direct execution to work.
+                String::new()
+            };
             if !shebang.is_empty() {
                 shebang.push_str("\n#\n");
                 // If the shebang doesn't contain `uv`, it's probably something like
@@ -290,7 +302,7 @@ impl Pep723Script {
                 }
             }
             indoc::formatdoc! {r"
-            {shebang}{metadata}
+            {byte_order_mark}{shebang}{metadata}
             {contents}" }
         } else if bare {
             metadata
@@ -636,8 +648,11 @@ impl ScriptTag {
 
 /// Extracts the shebang line from the given file contents and returns it along with the remaining
 /// content.
-fn extract_shebang(contents: &[u8]) -> Result<(String, String), Pep723Error> {
+fn extract_shebang(contents: &[u8]) -> Result<(String, String, String), Pep723Error> {
     let contents = std::str::from_utf8(contents)?;
+    let (byte_order_mark, contents) = contents
+        .strip_prefix(UTF8_BYTE_ORDER_MARK)
+        .map_or(("", contents), |contents| (UTF8_BYTE_ORDER_MARK, contents));
 
     if contents.starts_with("#!") {
         // Find the first newline.
@@ -664,9 +679,13 @@ fn extract_shebang(contents: &[u8]) -> Result<(String, String), Pep723Error> {
         let shebang = contents[..index].to_string();
         let script = contents[index + width..].to_string();
 
-        Ok((shebang, script))
+        Ok((byte_order_mark.to_string(), shebang, script))
     } else {
-        Ok((String::new(), contents.to_string()))
+        Ok((
+            byte_order_mark.to_string(),
+            String::new(),
+            contents.to_string(),
+        ))
     }
 }
 
