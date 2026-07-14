@@ -12,9 +12,9 @@ use uv_pep508::MarkerTree;
 use uv_pypi_types::ConflictKind;
 
 use super::{
-    Dependency, DirectSource, ExcludeNewerOverride, ExcludeNewerValue, ForkStrategy, Lock, Package,
-    PackageId, PrereleaseMode, RegistrySource, ResolutionMode, ResolverManifest, ResolverOptions,
-    Source, SourceDist, Wheel, WheelWireSource, simplified_universal_markers,
+    Dependency, DirectSource, ExcludeNewerOverride, ExcludeNewerValue, ForkStrategy, IndexStrategy,
+    Lock, Package, PackageId, PrereleaseMode, RegistrySource, ResolutionMode, ResolverManifest,
+    ResolverOptions, Source, SourceDist, Wheel, WheelWireSource, simplified_universal_markers,
 };
 
 /// Serializes a lockfile directly while preserving the canonical `uv.lock` layout.
@@ -141,6 +141,7 @@ fn write_options(writer: &mut LockWriter, options: &ResolverOptions) -> Result<(
         || !options.prerelease.package.is_empty()
         || options.fork_strategy != ForkStrategy::default()
         || options.minimum_libc_version.is_some()
+        || options.index_strategy != IndexStrategy::default()
         || !options.exclude_newer.is_empty();
     if !has_options {
         return Ok(());
@@ -158,6 +159,9 @@ fn write_options(writer: &mut LockWriter, options: &ResolverOptions) -> Result<(
     }
     if let Some(version) = options.minimum_libc_version {
         writer.key_value("minimum-libc-version", serialize_value(&version)?)?;
+    }
+    if options.index_strategy != IndexStrategy::default() {
+        writer.key_value("index-strategy", options.index_strategy.to_string())?;
     }
 
     let exclude_newer = &options.exclude_newer;
