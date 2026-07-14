@@ -3758,18 +3758,19 @@ impl Lock {
         };
 
         let expected_requirements = normalizer.requirements(requires_dist)?;
-        let actual = normalizer.requirements(package.metadata.requires_dist.iter().cloned())?;
+        let actual_requirements =
+            normalizer.requirements(package.metadata.requires_dist.iter().cloned())?;
         if !missing_metadata
-            && expected_requirements != actual
+            && expected_requirements != actual_requirements
             && flattened
                 .as_ref()
-                .is_none_or(|expected| expected != &actual)
+                .is_none_or(|expected| expected != &actual_requirements)
         {
             return Ok(SatisfiesResult::MismatchedPackageRequirements(
                 &package.id.name,
                 package.id.version.as_ref(),
                 expected_requirements.into_iter().collect(),
-                actual.into_iter().collect(),
+                actual_requirements.into_iter().collect(),
             ));
         }
 
@@ -3778,7 +3779,7 @@ impl Lock {
             .filter(|(_, requirements)| self.includes_empty_groups() || !requirements.is_empty())
             .map(|(group, requirements)| Ok((group, normalizer.requirements(requirements)?)))
             .collect::<Result<BTreeMap<_, _>, LockError>>()?;
-        let actual = package
+        let actual_groups = package
             .metadata
             .dependency_groups
             .iter()
@@ -3790,7 +3791,7 @@ impl Lock {
                 ))
             })
             .collect::<Result<BTreeMap<_, _>, LockError>>()?;
-        if !missing_metadata && expected_groups != actual {
+        if !missing_metadata && expected_groups != actual_groups {
             return Ok(SatisfiesResult::MismatchedPackageDependencyGroups(
                 &package.id.name,
                 package.id.version.as_ref(),
@@ -3798,11 +3799,56 @@ impl Lock {
                     .into_iter()
                     .map(|(group, requirements)| (group, requirements.into_iter().collect()))
                     .collect(),
-                actual
+                actual_groups
                     .into_iter()
                     .map(|(group, requirements)| (group, requirements.into_iter().collect()))
                     .collect(),
             ));
+        }
+
+        // Validate that direct requirements still resolve to the archive they requested. Keep
+        // production, optional, and group edges separate so same-name sources cannot be matched
+        // against an unrelated edge set.
+        if let Some(dependency) =
+            mismatched_dependency_source(&actual_requirements, &package.dependencies, None, root)
+        {
+            return Ok(SatisfiesResult::MismatchedPackageDependencySource(
+                &package.id.name,
+                package.id.version.as_ref(),
+                dependency,
+            ));
+        }
+
+        for extra in &package.metadata.provides_extra {
+            let dependencies = package
+                .optional_dependencies
+                .get(extra)
+                .map_or(&[][..], Vec::as_slice);
+            if let Some(dependency) =
+                mismatched_dependency_source(&actual_requirements, dependencies, Some(extra), root)
+            {
+                return Ok(SatisfiesResult::MismatchedPackageDependencySource(
+                    &package.id.name,
+                    package.id.version.as_ref(),
+                    dependency,
+                ));
+            }
+        }
+
+        for (group, requirements) in &actual_groups {
+            let dependencies = package
+                .dependency_groups
+                .get(group)
+                .map_or(&[][..], Vec::as_slice);
+            if let Some(dependency) =
+                mismatched_dependency_source(requirements, dependencies, None, root)
+            {
+                return Ok(SatisfiesResult::MismatchedPackageDependencySource(
+                    &package.id.name,
+                    package.id.version.as_ref(),
+                    dependency,
+                ));
+            }
         }
         if allow_missing_package_metadata {
             let expected_requirements = expected_requirements.into_iter().collect();
@@ -5775,6 +5821,61 @@ impl Lock {
     }
 }
 
+/// Return the first direct requirement that resolves to a different archive in an edge set.
+fn mismatched_dependency_source(
+    requirements: &[Requirement],
+    dependencies: &[Dependency],
+    extra: Option<&ExtraName>,
+    root: &Path,
+) -> Option<PackageName> {
+    for requirement in requirements {
+        if !matches!(
+            &requirement.source,
+            RequirementSource::Path { .. } | RequirementSource::Url { .. }
+        ) {
+            continue;
+        }
+
+        let marker = requirement
+            .marker
+            .simplify_extras_with(|candidate| extra.is_some_and(|extra| extra == candidate));
+        if marker.is_false() {
+            continue;
+        }
+
+        for dependency in dependencies {
+            if dependency.package_id.name != requirement.name
+                || dependency.complexified_marker.pep508().is_disjoint(marker)
+            {
+                continue;
+            }
+
+            let source_matches = match (&requirement.source, &dependency.package_id.source) {
+                (RequirementSource::Path { install_path, .. }, Source::Path(path)) => {
+                    normalize_path(root.join(path)).as_ref() == install_path.as_ref()
+                }
+                (
+                    RequirementSource::Url {
+                        location,
+                        subdirectory,
+                        ..
+                    },
+                    Source::Direct(url, direct),
+                ) => {
+                    &normalize_url(location.clone()) == url && subdirectory == &direct.subdirectory
+                }
+                _ => false,
+            };
+
+            if !source_matches {
+                return Some(requirement.name.clone());
+            }
+        }
+    }
+
+    None
+}
+
 /// The set of lockfile packages that should be audited, materialized from a
 /// single traversal of the dependency graph.
 ///
@@ -5906,6 +6007,8 @@ pub enum SatisfiesResult<'lock> {
         Vec<Dependency>,
         &'lock [Dependency],
     ),
+    /// A package in the lockfile contains a dependency resolved from a different direct source.
+    MismatchedPackageDependencySource(&'lock PackageName, Option<&'lock Version>, PackageName),
     /// A package in the lockfile contains different `provides-extra` metadata than expected.
     MismatchedPackageProvidesExtra(
         &'lock PackageName,
