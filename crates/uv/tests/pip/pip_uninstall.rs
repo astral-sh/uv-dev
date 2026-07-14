@@ -583,6 +583,109 @@ fn uninstall_record_path_traversal() -> Result<()> {
     Ok(())
 }
 
+/// Uninstall must not remove the virtual environment interpreter or configuration.
+#[test]
+fn uninstall_record_core_virtualenv_files() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_filter((
+        r"(\.\./)+(bin/python|Scripts/python)",
+        "[..]/[SCRIPTS]/python",
+    ));
+
+    context
+        .init()
+        .arg("--lib")
+        .arg("evilpkg")
+        .assert()
+        .success();
+    context.pip_install().arg("./evilpkg").assert().success();
+
+    let venv_python = if cfg!(windows) {
+        context.venv.child("Scripts/python.exe")
+    } else {
+        context.venv.child("bin/python")
+    };
+    let pyvenv_cfg = context.venv.child("pyvenv.cfg");
+    let depth = context
+        .site_packages()
+        .strip_prefix(context.venv.path())?
+        .components()
+        .count();
+    let traversal = "../".repeat(depth);
+    let scripts = if cfg!(windows) { "Scripts" } else { "bin" };
+    let scripts_link = context.venv.child("binlink");
+    uv_fs::create_symlink(context.venv.child(scripts).path(), scripts_link.path())?;
+    let root_link = context.venv.child("rootlink");
+    uv_fs::create_symlink(context.venv.path(), root_link.path())?;
+    let core_paths = [
+        format!("{traversal}{scripts}/python"),
+        format!("{traversal}{scripts}/PYTHON.EXE"),
+        format!("{traversal}{scripts}/python3"),
+        format!("{traversal}{scripts}/Python3.12"),
+        format!("{traversal}{scripts}/pythonw"),
+        format!("{traversal}{scripts}/PyPy"),
+        format!("{traversal}{scripts}/pypy3.12"),
+        format!("{traversal}pyvenv.cfg"),
+        format!("{traversal}PYVENV.CFG"),
+        format!("{traversal}binlink/python"),
+        format!("{traversal}rootlink/pyvenv.cfg"),
+    ];
+    for path in &core_paths {
+        let path = context.site_packages().join(path);
+        if !path.exists() {
+            fs_err::write(path, "protected")?;
+        }
+    }
+
+    let record_file = context
+        .site_packages()
+        .join("evilpkg-0.1.0.dist-info/RECORD");
+    let record = fs_err::read_to_string(&record_file)?;
+    fs_err::write(
+        record_file,
+        format!(
+            "{}\n{}\n",
+            record.trim(),
+            core_paths
+                .iter()
+                .map(|path| format!("{path},,0"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ),
+    )?;
+
+    let init_py = context.site_packages().join("evilpkg/__init__.py");
+    assert!(venv_python.exists());
+    assert!(pyvenv_cfg.exists());
+    assert!(init_py.exists());
+    assert!(
+        core_paths
+            .iter()
+            .all(|path| context.site_packages().join(path).exists())
+    );
+
+    uv_snapshot!(context.filters(), context.pip_uninstall().arg("evilpkg"), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    warning: Invalid RECORD entry in evilpkg==0.1.0 (from file://[TEMP_DIR]/evilpkg) that targets a core Python environment file, skipping: [..]/[SCRIPTS]/python
+    Uninstalled 1 package in [TIME]
+     - evilpkg==0.1.0 (from file://[TEMP_DIR]/evilpkg)
+    ");
+
+    assert!(venv_python.exists());
+    assert!(pyvenv_cfg.exists());
+    assert!(!init_py.exists());
+    assert!(
+        core_paths
+            .iter()
+            .all(|path| context.site_packages().join(path).exists())
+    );
+
+    Ok(())
+}
+
 /// Egg `top_level.txt` entries must be top-level names, not paths.
 #[test]
 fn uninstall_egg_info_top_level_path_traversal() -> Result<()> {
