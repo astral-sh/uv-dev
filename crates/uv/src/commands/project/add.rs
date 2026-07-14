@@ -93,7 +93,6 @@ impl uv_errors::Hinted for AddDependencyError {
 }
 
 /// Add one or more packages to the project requirements.
-#[expect(clippy::fn_params_excessive_bools)]
 pub(crate) async fn add(
     project_dir: &Path,
     lock_check: LockCheck,
