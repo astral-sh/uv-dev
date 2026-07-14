@@ -3504,12 +3504,12 @@ pub struct RunArgs {
     #[arg(long, overrides_with("inexact"))]
     pub exact: bool,
 
-    /// Load environment variables from a `.env` file.
+    /// Load environment variables from a `.env` file [env: `UV_ENV_FILE`=]
     ///
     /// Can be provided multiple times, with subsequent files overriding values defined in previous
     /// files.
-    #[arg(long, env = EnvVars::UV_ENV_FILE, value_hint = ValueHint::FilePath)]
-    pub env_file: Vec<String>,
+    #[arg(long, value_hint = ValueHint::FilePath)]
+    pub env_file: Vec<PathBuf>,
 
     /// Avoid reading environment variables from a `.env` file [env: UV_NO_ENV_FILE=]
     #[arg(long, value_parser = clap::builder::BoolishValueParser::new())]
@@ -5677,11 +5677,11 @@ pub struct ToolRunArgs {
     #[arg(long, value_parser = clap::builder::BoolishValueParser::new())]
     pub isolated: bool,
 
-    /// Load environment variables from a `.env` file.
+    /// Load environment variables from a `.env` file [env: `UV_ENV_FILE`=]
     ///
     /// Can be provided multiple times, with subsequent files overriding values defined in previous
     /// files.
-    #[arg(long, value_delimiter = ' ', env = EnvVars::UV_ENV_FILE, value_hint = ValueHint::FilePath)]
+    #[arg(long, value_hint = ValueHint::FilePath)]
     pub env_file: Vec<PathBuf>,
 
     /// Avoid reading environment variables from a `.env` file [env: UV_NO_ENV_FILE=]

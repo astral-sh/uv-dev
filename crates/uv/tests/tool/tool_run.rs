@@ -2766,6 +2766,29 @@ fn run_with_env_file() -> anyhow::Result<()> {
     Resolved [N] packages in [TIME]
     ");
 
+    let env_file_directory = context.temp_dir.child("path with spaces");
+    env_file_directory.create_dir_all()?;
+    let env_file = env_file_directory.child(".file");
+    env_file.write_str("THE_EMPIRE_VARIABLE=palpatine\n")?;
+
+    uv_snapshot!(context.filters(), context.tool_run()
+        .arg("--env-file").arg(env_file.path())
+        .arg("--from")
+        .arg("./foo")
+        .arg("script")
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    palpatine
+    None
+    None
+    None
+
+    ----- stderr -----
+    Resolved [N] packages in [TIME]
+    ");
+
     let evil_tools = context.temp_dir.child(".evil-tools");
     let evil_tool = evil_tools.child("foo");
     let evil_python = if cfg!(windows) {
