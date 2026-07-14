@@ -488,6 +488,7 @@ impl SourceBuild {
                     .requirements
                     .iter()
                     .cloned()
+                    .chain(extra_build_dependencies.iter().cloned())
                     .chain(extra_requires)
                     .collect();
                 let resolution = build_context
