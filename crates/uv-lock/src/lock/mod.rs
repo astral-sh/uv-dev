@@ -23,9 +23,9 @@ use url::Url;
 use uv_cache_key::RepositoryUrl;
 use uv_configuration::{
     BuildOptions, Constraints, DependencyGroupsWithDefaults, ExcludeDependency, ExcludeNewer,
-    ExcludeNewerPackage, Excludes, ExtrasSpecificationWithDefaults, ForkStrategy, InstallTarget,
-    Override, Overrides, PackageOverride, Prerelease, PrereleaseMode, PrereleasePackage,
-    ResolutionMode, ScopedOverrideSourceError,
+    ExcludeNewerPackage, Excludes, ExtrasSpecificationWithDefaults, ForkStrategy, IndexStrategy,
+    InstallTarget, Override, Overrides, PackageOverride, Prerelease, PrereleaseMode,
+    PrereleasePackage, ResolutionMode, ScopedOverrideSourceError,
 };
 use uv_distribution::{
     DistributionDatabase, FlatRequiresDist, Metadata as DistributionMetadata, RequiresDist,
@@ -2585,6 +2585,7 @@ impl Lock {
             fork_strategy: resolution.options.fork_strategy,
             minimum_libc_version: resolution.options.minimum_libc_version,
             exclude_newer: resolution.options.exclude_newer.clone(),
+            index_strategy: resolution.options.index_strategy,
         };
         // Canonicalize the top-level fork markers to match what is persisted in
         // `uv.lock`. In particular, conflict-only fork markers can serialize to
@@ -2988,6 +2989,11 @@ impl Lock {
     /// Returns the exclude newer setting used to generate this lock.
     pub fn exclude_newer(&self) -> &ExcludeNewer {
         &self.options.exclude_newer
+    }
+
+    /// Returns the index strategy used to generate this lock.
+    pub fn index_strategy(&self) -> IndexStrategy {
+        self.options.index_strategy
     }
 
     /// Returns the conflicting groups that were used to generate this lock.
@@ -5973,6 +5979,8 @@ struct ResolverOptions {
     minimum_libc_version: Option<MinimumLibcVersion>,
     /// The [`ExcludeNewer`] setting used to generate this lock.
     exclude_newer: ExcludeNewer,
+    /// The [`IndexStrategy`] used to generate this lock.
+    index_strategy: IndexStrategy,
 }
 
 /// The serialized resolver options in the lockfile.
@@ -5990,6 +5998,9 @@ struct ResolverOptionsWire {
     fork_strategy: ForkStrategy,
     /// The selected libc implementation and minimum version.
     minimum_libc_version: Option<MinimumLibcVersion>,
+    /// The [`IndexStrategy`] used to generate this lock.
+    #[serde(default)]
+    index_strategy: IndexStrategy,
     /// The [`ExcludeNewer`] setting used to generate this lock.
     #[serde(flatten)]
     exclude_newer: ExcludeNewerWire,
@@ -6270,6 +6281,7 @@ impl TryFrom<LockWire> for Lock {
             fork_strategy: options_wire.fork_strategy,
             minimum_libc_version: options_wire.minimum_libc_version,
             exclude_newer: options_wire.exclude_newer.into(),
+            index_strategy: options_wire.index_strategy,
         };
         let lock = Self::new(
             wire.version,
