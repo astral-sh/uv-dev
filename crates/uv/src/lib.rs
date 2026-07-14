@@ -58,7 +58,9 @@ use uv_threads::{RAYON_PARALLELISM, min_stack_size};
 use uv_warnings::{warn_user, warn_user_once};
 use uv_workspace::{DiscoveryOptions, Workspace, WorkspaceCache};
 
-use crate::commands::{ParsedRunCommand, RunCommand, ScriptPath, SyncMode};
+use crate::commands::{
+    ParsedRunCommand, ResolutionDisplay, RunCommand, ScriptPath, SyncMode,
+};
 
 mod commands;
 #[cfg(not(feature = "self-update"))]
@@ -2359,7 +2361,9 @@ async fn run_project(
                 script,
                 command,
                 requirements,
-                args.show_resolution || globals.verbose > 0,
+                ResolutionDisplay::from_show_resolution(
+                    args.show_resolution || globals.verbose > 0,
+                ),
                 args.lock_check,
                 args.frozen,
                 args.active,
