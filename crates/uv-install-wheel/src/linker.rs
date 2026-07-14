@@ -10,10 +10,11 @@ use rustc_hash::FxHashMap;
 use tracing::{debug, instrument};
 
 use uv_distribution_filename::WheelFilename;
-use uv_fs::Simplified;
 use uv_fs::link::{CopyLocks, LinkOptions, OnExistingDirectory, link_dir};
+use uv_fs::{Simplified, normalize_path_under, relative_to};
 use uv_preview::{Preview, PreviewFeature};
 use uv_warnings::warn_user;
+use walkdir::WalkDir;
 
 use crate::Error;
 use crate::wheel::ValidatedWheel;
@@ -261,6 +262,8 @@ pub(crate) fn link_wheel_files(
     let site_packages = site_packages.as_ref();
     register_installed_paths(wheel, state, filename)?;
 
+    validate_wheel_destination(wheel, site_packages)?;
+
     // The `RECORD` file is modified during installation, so it needs a real
     // copy rather than a link back to the cache.
     let options = LinkOptions::new(link_mode)
@@ -277,6 +280,43 @@ pub(crate) fn link_wheel_files(
         //
         // <https://github.com/python/cpython/blob/8336cb2b6f428246803b02a4e97fce49d0bb1e09/Lib/importlib/_bootstrap_external.py#L1601>
         update_site_packages_mtime(site_packages);
+    }
+
+    Ok(())
+}
+
+/// Check that merging a wheel directory into its destination cannot follow a directory symlink.
+pub(crate) fn validate_wheel_destination(source: &Path, destination: &Path) -> Result<(), Error> {
+    if !source.is_dir() {
+        return Ok(());
+    }
+
+    // Merging through a pre-existing directory symlink would write wheel files outside the
+    // environment. Check every package directory before linking or moving any files.
+    for entry in WalkDir::new(source).min_depth(1) {
+        let entry = entry?;
+        if !entry.file_type().is_dir() {
+            continue;
+        }
+
+        let relative = relative_to(entry.path(), source)?;
+        let Some(target) = normalize_path_under(destination.join(&relative), destination) else {
+            return Err(Error::InvalidWheel(format!(
+                "Wheel directory entry escapes its destination: {}",
+                relative.simplified_display()
+            )));
+        };
+        match fs::symlink_metadata(&target) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(Error::InvalidWheel(format!(
+                    "Cannot install into symlinked directory: {}",
+                    target.simplified_display()
+                )));
+            }
+            Ok(_) => {}
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err.into()),
+        }
     }
 
     Ok(())
