@@ -779,12 +779,15 @@ impl PythonPreference {
         }
     }
 
-    /// Returns a new preference when the `--system` flag is used.
+    /// Returns a new preference for the given environment preference.
     ///
-    /// This will convert [`PythonPreference::Managed`] to [`PythonPreference::System`] when system
-    /// is set.
+    /// This will convert [`PythonPreference::Managed`] to [`PythonPreference::System`] when the
+    /// environment preference is [`EnvironmentPreference::OnlySystem`].
     #[must_use]
-    pub fn with_system_flag(self, system: bool) -> Self {
+    pub fn with_environment_preference(
+        self,
+        environment_preference: EnvironmentPreference,
+    ) -> Self {
         match self {
             // TODO(zanieb): It's not clear if we want to allow `--system` to override
             // `--managed-python`. We should probably make this `from_system_flag` and refactor
@@ -792,7 +795,7 @@ impl PythonPreference {
             // provided it?
             Self::OnlyManaged => self,
             Self::Managed => {
-                if system {
+                if matches!(environment_preference, EnvironmentPreference::OnlySystem) {
                     Self::System
                 } else {
                     self
@@ -811,14 +814,18 @@ impl PythonDownloads {
 }
 
 impl EnvironmentPreference {
-    pub fn from_system_flag(system: bool, mutable: bool) -> Self {
-        match (system, mutable) {
-            // When the system flag is provided, ignore virtual environments.
-            (true, _) => Self::OnlySystem,
+    /// Returns the environment preference for the `--system` flag.
+    pub fn from_system_flag(system: bool) -> Self {
+        if system { Self::OnlySystem } else { Self::Any }
+    }
+
+    /// Returns the environment preference for a mutable operation.
+    #[must_use]
+    pub fn for_mutable(self) -> Self {
+        match self {
             // For mutable operations, only allow discovery of the system with explicit selection.
-            (false, true) => Self::ExplicitSystem,
-            // For immutable operations, we allow discovery of the system environment
-            (false, false) => Self::Any,
+            Self::Any => Self::ExplicitSystem,
+            preference => preference,
         }
     }
 }
@@ -1857,6 +1864,29 @@ mod tests {
     use target_lexicon::{Aarch64Architecture, Architecture};
     use uv_pep440::PrereleaseKind;
     use uv_platform::{Arch, Libc, Os};
+
+    #[test]
+    fn system_environment_preference() {
+        let system = EnvironmentPreference::from_system_flag(true);
+        assert_eq!(system, EnvironmentPreference::OnlySystem);
+        assert_eq!(system.for_mutable(), EnvironmentPreference::OnlySystem);
+        assert_eq!(
+            PythonPreference::Managed.with_environment_preference(system),
+            PythonPreference::System
+        );
+
+        let environment = EnvironmentPreference::from_system_flag(false);
+        assert_eq!(environment, EnvironmentPreference::Any);
+        assert_eq!(
+            environment.for_mutable(),
+            EnvironmentPreference::ExplicitSystem
+        );
+        assert_eq!(
+            PythonPreference::Managed.with_environment_preference(environment),
+            PythonPreference::Managed
+        );
+    }
+
     #[test]
     fn interpreter_request_from_str() {
         assert_eq!(PythonRequest::parse("any"), PythonRequest::Any);

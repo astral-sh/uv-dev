@@ -65,12 +65,15 @@ use uv_resolve_operations::{resolution_markers, resolution_tags};
 pub struct ExternallyManagedError {
     message: String,
     root: PathBuf,
-    system: bool,
+    environment_preference: EnvironmentPreference,
 }
 
 impl Hinted for ExternallyManagedError {
     fn hints(&self) -> Hints<'_> {
-        if self.system {
+        if matches!(
+            self.environment_preference,
+            EnvironmentPreference::OnlySystem
+        ) {
             Hints::from("Virtual environments were not considered due to the `--system` flag")
         } else {
             Hints::from("Consider creating a virtual environment, e.g., with `uv venv`")
@@ -125,7 +128,7 @@ pub async fn pip_install(
     exclude_newer: ExcludeNewer,
     sources: NoSources,
     python: Option<String>,
-    system: bool,
+    environment_preference: EnvironmentPreference,
     break_system_packages: bool,
     target: Option<Target>,
     prefix: Option<Prefix>,
@@ -217,8 +220,8 @@ pub async fn pip_install(
 
         let installation = PythonInstallation::find_or_download(
             python_request.as_ref(),
-            EnvironmentPreference::from_system_flag(system, false),
-            python_preference.with_system_flag(system),
+            environment_preference,
+            python_preference.with_environment_preference(environment_preference),
             python_arch,
             python_downloads,
             &client_builder,
@@ -236,8 +239,8 @@ pub async fn pip_install(
                 .as_deref()
                 .map(PythonRequest::parse)
                 .unwrap_or_default(),
-            EnvironmentPreference::from_system_flag(system, true),
-            PythonPreference::default().with_system_flag(system),
+            environment_preference.for_mutable(),
+            PythonPreference::default().with_environment_preference(environment_preference),
             python_arch,
             &cache,
         )?;
@@ -287,7 +290,7 @@ pub async fn pip_install(
             return Err(ExternallyManagedError {
                 message: managed_message,
                 root: environment.root().to_path_buf(),
-                system,
+                environment_preference,
             }
             .into());
         }
