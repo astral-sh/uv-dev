@@ -10,7 +10,7 @@ use uv_cli::TreeFormat;
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_configuration::{ActiveEnvironment, Concurrency, DependencyGroups, TargetTriple};
 use uv_distribution_types::IndexCapabilities;
-use uv_lock::{PackageMap, TreeDedupe, TreeDirection, TreeDisplay, TreeJsonTarget};
+use uv_lock::{PackageMap, TreeDisplay, TreeJsonTarget, TreeOptions};
 use uv_normalize::DefaultGroups;
 use uv_normalize::PackageName;
 use uv_preview::{Preview, PreviewFeature};
@@ -37,7 +37,6 @@ use crate::settings::LockCheck;
 use crate::settings::ResolverSettings;
 
 /// Run a command.
-#[expect(clippy::fn_params_excessive_bools)]
 pub(crate) async fn tree(
     project_dir: &Path,
     groups: DependencyGroups,
@@ -45,13 +44,10 @@ pub(crate) async fn tree(
     frozen: Option<FrozenSource>,
     universal: bool,
     format: TreeFormat,
-    depth: u8,
     prune: Vec<PackageName>,
     package: Vec<PackageName>,
-    dedupe: TreeDedupe,
-    direction: TreeDirection,
+    tree: TreeOptions,
     outdated: bool,
-    show_sizes: bool,
     python_version: Option<PythonVersion>,
     python_platform: Option<TargetTriple>,
     python: Option<String>,
@@ -299,13 +295,10 @@ pub(crate) async fn tree(
         &lock,
         markers.as_ref(),
         &latest,
-        depth.into(),
+        tree,
         &prune,
         &package,
         &groups,
-        dedupe,
-        direction,
-        show_sizes,
     );
 
     match format {
