@@ -1202,6 +1202,15 @@ impl ValidatedLock {
             );
             return Ok(Self::Unusable(lock));
         }
+        if lock.index_strategy() != options.index_strategy {
+            let _ = writeln!(
+                printer.stderr(),
+                "Ignoring existing lockfile due to change in index strategy: `{}` vs. `{}`",
+                lock.index_strategy().cyan(),
+                options.index_strategy.cyan()
+            );
+            return Ok(Self::Unusable(lock));
+        }
         // Ignore package-specific settings that cannot affect the existing resolution. If the
         // package is added to the requirements, the requirement checks below will invalidate the
         // lockfile instead.

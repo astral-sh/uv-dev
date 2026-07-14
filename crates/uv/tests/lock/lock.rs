@@ -10758,6 +10758,71 @@ fn lock_resolution_mode() -> Result<()> {
     Ok(())
 }
 
+/// Changing the index strategy must invalidate a lock resolved from a lower-priority index.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_index_strategy() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let first = PackseServer::new("extras/missing-extra.toml");
+    let default = PackseServer::new("simple/single-package.toml");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a"]
+
+        [[tool.uv.index]]
+        name = "test"
+        url = "{index}"
+        "#,
+            index = first.index_url(),
+        })?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--default-index").arg(default.index_url()).arg("--index-strategy").arg("unsafe-best-match"), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    let lock = context.read("uv.lock");
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(lock.lines().take(7).collect::<Vec<_>>().join("\n"), @r#"
+        version = 1
+        revision = 3
+        requires-python = ">=3.12"
+
+        [options]
+        index-strategy = "unsafe-best-match"
+        exclude-newer = "2024-03-25T00:00:00Z"
+        "#);
+    });
+
+    // `first-index` must not reuse the package selected from the lower-priority index.
+    uv_snapshot!(context.filters(), context.lock().arg("--default-index").arg(default.index_url()).arg("--locked"), @"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+
+    ----- stderr -----
+    Ignoring existing lockfile due to change in index strategy: `unsafe-best-match` vs. `first-index`
+    WARN Range requests not supported for a-1.0.0-py3-none-any.whl; streaming wheel
+    Resolved 2 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+
+    Ok(())
+}
+
 /// Accept the `explicit` pre-release mode in lockfiles, configuration, and CLI arguments.
 #[test]
 fn lock_explicit_prerelease_mode() -> Result<()> {
