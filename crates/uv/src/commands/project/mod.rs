@@ -85,6 +85,29 @@ pub(crate) mod tree;
 pub(crate) mod upgrade;
 pub(crate) mod version;
 
+/// Whether to sync the project environment.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum SyncMode {
+    /// Sync the project environment.
+    Enabled,
+    /// Avoid syncing the project environment.
+    Disabled,
+}
+
+impl SyncMode {
+    pub(crate) const fn from_no_sync(no_sync: bool) -> Self {
+        if no_sync {
+            Self::Disabled
+        } else {
+            Self::Enabled
+        }
+    }
+
+    const fn no_sync(self) -> bool {
+        matches!(self, Self::Disabled)
+    }
+}
+
 /// The source of a missing lockfile error.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum MissingLockfileSource {
