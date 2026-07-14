@@ -1,0 +1,17 @@
+name = "transitive-artifacts"
+description = "An immutable parent has transitive wheel-only and source-only dependencies."
+
+[root]
+requires = ["a"]
+
+[expected]
+satisfiable = true
+
+[packages.a.versions."1.0.0"]
+requires = ["b==1.0.0", "c==1.0.0"]
+
+[packages.b.versions."1.0.0"]
+sdist = false
+
+[packages.c.versions."1.0.0"]
+wheel = false
