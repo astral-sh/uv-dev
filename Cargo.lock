@@ -6769,6 +6769,7 @@ dependencies = [
  "clap",
  "dunce",
  "either",
+ "encoding_rs",
  "encoding_rs_io",
  "fs-err",
  "junction",

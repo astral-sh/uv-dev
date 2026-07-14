@@ -9,7 +9,9 @@ use std::time::{Duration, UNIX_EPOCH};
 use std::io::Read;
 
 #[cfg(feature = "tokio")]
-use encoding_rs_io::DecodeReaderBytes;
+use encoding_rs::Encoding;
+#[cfg(feature = "tokio")]
+use encoding_rs_io::DecodeReaderBytesBuilder;
 #[cfg(target_os = "linux")]
 use rustix::fs::{AtFlags, CWD as RUSTIX_CWD, StatxFlags, statx};
 use tempfile::NamedTempFile;
@@ -104,10 +106,10 @@ pub fn is_same_file_allow_missing(left: &Path, right: &Path) -> Option<bool> {
     None
 }
 
-/// Reads data from the path and requires that it be valid UTF-8 or UTF-16.
+/// Reads data from the path and requires that it be valid text.
 ///
-/// This uses BOM sniffing to determine if the data should be transcoded from UTF-16 to Rust's
-/// `String` type (which uses UTF-8).
+/// This uses BOM sniffing and supported Python encoding cookies to determine if the data should be
+/// transcoded to Rust's `String` type (which uses UTF-8).
 ///
 /// This should generally only be used when one specifically wants to support reading UTF-16
 /// transparently.
@@ -123,14 +125,86 @@ pub async fn read_to_string_transcode(path: impl AsRef<Path>) -> std::io::Result
     } else {
         fs_err::tokio::read(path).await?
     };
+
+    let encoding = if raw.starts_with(&[0xEF, 0xBB, 0xBF])
+        || raw.starts_with(&[0xFF, 0xFE])
+        || raw.starts_with(&[0xFE, 0xFF])
+    {
+        None
+    } else {
+        python_encoding_label(&raw)
+    };
+    let encoding = encoding
+        .map(|label| {
+            let label = String::from_utf8_lossy(label).replace('_', "-");
+            let label = if label.eq_ignore_ascii_case("latin-1") {
+                "latin1"
+            } else {
+                label.as_str()
+            };
+            Encoding::for_label_no_replacement(label.as_bytes()).ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("unknown encoding: {label}"),
+                )
+            })
+        })
+        .transpose()?;
+
     let mut buf = String::with_capacity(1024);
-    DecodeReaderBytes::new(&*raw)
+    DecodeReaderBytesBuilder::new()
+        .encoding(encoding)
+        .bom_override(true)
+        .build(&*raw)
         .read_to_string(&mut buf)
         .map_err(|err| {
             let path = path.display();
             std::io::Error::other(format!("failed to decode file {path}: {err}"))
         })?;
     Ok(buf)
+}
+
+/// Find a Python encoding cookie in the first two lines of a file.
+#[cfg(feature = "tokio")]
+fn python_encoding_label(raw: &[u8]) -> Option<&[u8]> {
+    for line in raw.split(|byte| *byte == b'\n').take(2) {
+        let Some(start) = line
+            .iter()
+            .position(|byte| !matches!(byte, b' ' | b'\t' | 0x0C))
+        else {
+            continue;
+        };
+        let Some(line) = line.get(start..) else {
+            continue;
+        };
+        if !line.starts_with(b"#") {
+            continue;
+        }
+
+        for start in 0..line.len() {
+            let Some(mut rest) = line.get(start..)?.strip_prefix(b"coding") else {
+                continue;
+            };
+            if !matches!(rest.first(), Some(b':' | b'=')) {
+                continue;
+            }
+            rest = rest.get(1..)?;
+            while matches!(rest.first(), Some(b' ' | b'\t')) {
+                rest = rest.get(1..)?;
+            }
+            let end = rest
+                .iter()
+                .position(|byte| {
+                    !byte.is_ascii_alphanumeric() && !matches!(byte, b'_' | b'-' | b'.')
+                })
+                .unwrap_or(rest.len());
+            if end > 0 {
+                return rest.get(..end);
+            }
+        }
+    }
+
+    None
 }
 
 /// Create a junction at `path` pointing to `target`.

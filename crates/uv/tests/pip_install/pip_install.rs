@@ -6283,6 +6283,79 @@ fn install_utf16be_requirements() -> Result<()> {
     Ok(())
 }
 
+/// Read a non-UTF-8 requirements file with a PEP 263 encoding declaration.
+#[test]
+fn install_latin1_requirements() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-01T00:00:00Z");
+    let requirements_txt = context.temp_dir.child("requirements.txt");
+    requirements_txt.write_binary(b"# -*- coding: latin-1 -*-\n# comment: \xe9\ntomli<=2.0.1\n")?;
+
+    uv_snapshot!(context.pip_install()
+        .arg("-r")
+        .arg("requirements.txt"), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + tomli==2.0.1
+    "
+    );
+    Ok(())
+}
+
+/// Read a requirements file with a Python codec alias that is not a WHATWG label.
+#[test]
+fn install_python_codec_requirements() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-01T00:00:00Z");
+    let requirements_txt = context.temp_dir.child("requirements.txt");
+    requirements_txt.write_binary(b"  # coding: iso8859_15\n# price: \xa4\ntomli<=2.0.1\n")?;
+
+    uv_snapshot!(context.pip_install()
+        .arg("-r")
+        .arg("requirements.txt"), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + tomli==2.0.1
+    "
+    );
+    Ok(())
+}
+
+/// Prefer a BOM to an invalid encoding declaration on the second line.
+#[test]
+fn install_bom_overrides_invalid_encoding_cookie() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-01T00:00:00Z");
+    let requirements_txt = context.temp_dir.child("requirements.txt");
+    requirements_txt
+        .write_binary(b"\xef\xbb\xbf# requirements\n# coding: not-a-codec\ntomli<=2.0.1\n")?;
+
+    uv_snapshot!(context.pip_install()
+        .arg("-r")
+        .arg("requirements.txt"), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + tomli==2.0.1
+    "
+    );
+    Ok(())
+}
+
 fn utf8_to_utf16_with_bom_le(s: &str) -> Vec<u8> {
     use byteorder::ByteOrder;
 
