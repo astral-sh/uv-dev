@@ -4702,10 +4702,16 @@ fn python_install_compile_bytecode_pyodide() {
     No compatible versions to bytecode compile (skipped 1)
     ");
 
-    // TODO(tk) There's a bug with python_upgrade when pyodide is installed which leads to
-    // `error: No download found for request: pyodide-3.13-emscripten-wasm32-musl`
-    //// Recompilation where pyodide isn't explicitly specified shouldn't warn
-    //uv_snapshot!(context.filters(), context.python_upgrade().arg("--compile-bytecode"), @r"TODO");
+    // Recompilation should skip an existing Pyodide installation without failing the upgrade.
+    uv_snapshot!(context.filters(), context.python_upgrade().arg("--compile-bytecode"), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    All versions already on latest supported patch release
+    No compatible versions to bytecode compile (skipped 1)
+    ");
 }
 
 #[test]

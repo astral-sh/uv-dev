@@ -696,31 +696,34 @@ impl TryFrom<&PythonInstallationKey> for PythonDownloadRequest {
                 key.minor(),
                 *key.variant(),
             )),
-            Some(implementation),
+            None,
             Some(ArchRequest::Explicit(*key.arch())),
             Some(*key.os()),
             Some(*key.libc()),
             Some(key.prerelease().is_some()),
-        ))
+        )
+        .with_implementation(implementation))
     }
 }
 
 impl From<&ManagedPythonInstallation> for PythonDownloadRequest {
     fn from(installation: &ManagedPythonInstallation) -> Self {
         let key = installation.key();
+        let implementation = match &key.implementation {
+            LenientImplementationName::Known(implementation) => *implementation,
+            LenientImplementationName::Unknown(name) => unreachable!(
+                "Managed Python installations are expected to always have known implementation names, found {name}"
+            ),
+        };
         Self::new(
             Some(VersionRequest::from(&key.version())),
-            match &key.implementation {
-                LenientImplementationName::Known(implementation) => Some(*implementation),
-                LenientImplementationName::Unknown(name) => unreachable!(
-                    "Managed Python installations are expected to always have known implementation names, found {name}"
-                ),
-            },
+            None,
             Some(ArchRequest::Explicit(*key.arch())),
             Some(*key.os()),
             Some(*key.libc()),
             Some(key.prerelease.is_some()),
         )
+        .with_implementation(implementation)
     }
 }
 
@@ -2075,6 +2078,16 @@ mod tests {
         let result = PythonDownloadRequest::from_str("any-any-any-any-any-any");
 
         assert!(matches!(result, Err(Error::TooManyParts(_))));
+    }
+
+    #[test]
+    fn pyodide_download_request_from_key() {
+        let key = PythonInstallationKey::from_str("cpython-3.13.2-emscripten-wasm32-musl")
+            .expect("Pyodide key should be valid");
+        let request = PythonDownloadRequest::try_from(&key)
+            .expect("Pyodide key should produce a download request");
+
+        assert!(request.satisfied_by_key(&key));
     }
 
     /// Test that build filtering works correctly
