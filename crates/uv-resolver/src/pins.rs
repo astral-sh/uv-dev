@@ -17,6 +17,8 @@ enum FilePin<'index> {
         dist: ResolvedDist,
         /// The concrete distribution whose metadata is used during resolution.
         metadata: PinMetadata<'index>,
+        /// Whether distribution metadata is needed to validate `Requires-Python` in direct mode.
+        requires_python_metadata: bool,
     },
     Url(RegisteredMetadata<'index>),
 }
@@ -66,6 +68,8 @@ impl<'index> FilePins<'index> {
                 entry.insert(FilePin::Registry {
                     dist: dist.for_installation().to_owned(),
                     metadata,
+                    requires_python_metadata: !matches!(dist, CompatibleDist::InstalledDist(_))
+                        && dist.requires_python().is_none(),
                 });
             }
         }
@@ -118,7 +122,11 @@ impl<'index> FilePins<'index> {
         version: &Version,
     ) -> Option<(&ResolvedDist, &DistributionId)> {
         match self.0.get(&(name.clone(), version.clone()))? {
-            FilePin::Registry { dist, metadata } => Some((
+            FilePin::Registry {
+                dist,
+                metadata,
+                requires_python_metadata: _,
+            } => Some((
                 dist,
                 match metadata {
                     PinMetadata::Unrequested(id) => id,
@@ -126,6 +134,17 @@ impl<'index> FilePins<'index> {
                 },
             )),
             FilePin::Url(_) => None,
+        }
+    }
+
+    /// Return whether distribution metadata is needed to validate `Requires-Python`.
+    pub(crate) fn requires_python_metadata(&self, name: &PackageName, version: &Version) -> bool {
+        match self.0.get(&(name.clone(), version.clone())) {
+            Some(FilePin::Registry {
+                requires_python_metadata,
+                ..
+            }) => *requires_python_metadata,
+            Some(FilePin::Url(_)) | None => false,
         }
     }
 }
