@@ -161,6 +161,242 @@ fn install_wheel_cache_incompatible_with_older_uv() -> Result<()> {
     Ok(())
 }
 
+fn write_data_script_collision_wheel(
+    path: &Path,
+    entrypoint: &str,
+    data_script: &str,
+) -> Result<()> {
+    let mut writer = ZipFileWriter::new(Vec::new());
+    let metadata = indoc! {"
+        Metadata-Version: 2.1
+        Name: collision
+        Version: 1.0.0
+    "};
+    let wheel = indoc! {"
+        Wheel-Version: 1.0
+        Generator: uv-test
+        Root-Is-Purelib: true
+        Tag: py3-none-any
+    "};
+    let entry_points = formatdoc! {"
+        [console_scripts]
+        {entrypoint} = collision:main
+    "};
+    let data_script_path = format!("collision-1.0.0.data/{data_script}");
+    let entries = [
+        (
+            "collision/__init__.py",
+            "def main():\n    print('entrypoint')\n",
+        ),
+        ("collision-1.0.0.dist-info/METADATA", metadata),
+        ("collision-1.0.0.dist-info/WHEEL", wheel),
+        (
+            "collision-1.0.0.dist-info/entry_points.txt",
+            entry_points.as_str(),
+        ),
+        (
+            data_script_path.as_str(),
+            "#!python\nraise RuntimeError('data script overwrote entrypoint')\n",
+        ),
+    ];
+    let mut record = String::new();
+    for (entry_name, contents) in entries {
+        let entry = ZipEntryBuilder::new(entry_name.into(), Compression::Stored);
+        block_on(writer.write_entry_whole(entry, contents.as_bytes()))?;
+        writeln!(record, "{entry_name},,")?;
+    }
+    record.push_str("collision-1.0.0.dist-info/RECORD,,\n");
+    let entry = ZipEntryBuilder::new(
+        "collision-1.0.0.dist-info/RECORD".into(),
+        Compression::Stored,
+    );
+    block_on(writer.write_entry_whole(entry, record.as_bytes()))?;
+    fs_err::write(path, block_on(writer.close())?)?;
+    Ok(())
+}
+
+#[test]
+fn data_script_does_not_overwrite_case_variant_entrypoint() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheel = context.temp_dir.join("collision-1.0.0-py3-none-any.whl");
+    write_data_script_collision_wheel(&wheel, "Tool", "scripts/tool")?;
+
+    uv_snapshot!(context.filters(), context.pip_install().arg(&wheel), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + collision==1.0.0 (from file://[TEMP_DIR]/collision-1.0.0-py3-none-any.whl)
+    ");
+
+    let script_name = if cfg!(windows) { "Tool.exe" } else { "Tool" };
+    uv_snapshot!(Command::new(venv_bin_path(&context.venv).join(script_name)), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    entrypoint
+    ");
+
+    let case_insensitive = cfg!(any(windows, target_os = "macos"));
+    if !case_insensitive {
+        // On case-sensitive Unix filesystems, `Tool` and `tool` are distinct and both must be
+        // installed.
+        let data_script = fs_err::read_to_string(venv_bin_path(&context.venv).join("tool"))?;
+        assert!(data_script.contains("data script overwrote entrypoint"));
+    }
+
+    let record = fs_err::read_to_string(
+        context
+            .site_packages()
+            .join("collision-1.0.0.dist-info/RECORD"),
+    )?;
+    assert_eq!(
+        record
+            .lines()
+            .filter(|line| line.to_ascii_lowercase().contains("/tool"))
+            .count(),
+        if case_insensitive { 1 } else { 2 }
+    );
+    assert!(!record.contains(".data/scripts/tool"));
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn data_script_does_not_collide_with_nested_entrypoint() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheel = context.temp_dir.join("collision-1.0.0-py3-none-any.whl");
+    write_data_script_collision_wheel(&wheel, "nested/Tool", "scripts/tool")?;
+    fs_err::create_dir_all(venv_bin_path(&context.venv).join("nested"))?;
+
+    uv_snapshot!(context.filters(), context.pip_install().arg(&wheel), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + collision==1.0.0 (from file://[TEMP_DIR]/collision-1.0.0-py3-none-any.whl)
+    ");
+
+    uv_snapshot!(Command::new(venv_bin_path(&context.venv).join("nested/Tool")), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    entrypoint
+    ");
+    let data_script = fs_err::read_to_string(venv_bin_path(&context.venv).join("tool"))?;
+    assert!(data_script.contains("data script overwrote entrypoint"));
+
+    let record = fs_err::read_to_string(
+        context
+            .site_packages()
+            .join("collision-1.0.0.dist-info/RECORD"),
+    )?;
+    assert!(record.contains("/nested/Tool,"));
+    assert!(record.contains("/tool,"));
+    assert!(!record.contains(".data/scripts/tool"));
+
+    Ok(())
+}
+
+#[test]
+fn data_root_script_does_not_overwrite_case_variant_entrypoint() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheel = context.temp_dir.join("collision-1.0.0-py3-none-any.whl");
+    let scripts = venv_bin_path(&context.venv);
+    let scripts_relative = scripts.strip_prefix(context.venv.path())?;
+    let script_name = if cfg!(windows) { "tool.exe" } else { "tool" };
+    let data_script = format!(
+        "data/{}/{script_name}",
+        PortablePath::from(scripts_relative)
+    );
+    write_data_script_collision_wheel(&wheel, "Tool", &data_script)?;
+
+    uv_snapshot!(context.filters(), context.pip_install().arg(&wheel), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + collision==1.0.0 (from file://[TEMP_DIR]/collision-1.0.0-py3-none-any.whl)
+    ");
+
+    let entrypoint = if cfg!(windows) { "Tool.exe" } else { "Tool" };
+    uv_snapshot!(Command::new(venv_bin_path(&context.venv).join(entrypoint)), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    entrypoint
+    ");
+
+    let case_insensitive = cfg!(any(windows, target_os = "macos"));
+    if !case_insensitive {
+        let data_script = fs_err::read_to_string(venv_bin_path(&context.venv).join("tool"))?;
+        assert!(data_script.contains("data script overwrote entrypoint"));
+    }
+
+    let record = fs_err::read_to_string(
+        context
+            .site_packages()
+            .join("collision-1.0.0.dist-info/RECORD"),
+    )?;
+    assert_eq!(
+        record
+            .lines()
+            .filter(|line| line.to_ascii_lowercase().contains("/tool"))
+            .count(),
+        if case_insensitive { 1 } else { 2 }
+    );
+    assert!(!record.to_ascii_lowercase().contains(".data/data/"));
+
+    Ok(())
+}
+
+#[cfg(windows)]
+#[test]
+fn data_script_does_not_overwrite_normalized_entrypoint() -> Result<()> {
+    insta::allow_duplicates! {
+        for data_script in ["tool.exe", "tool.EXE"] {
+            let context = uv_test::test_context!("3.12");
+            let wheel = context.temp_dir.join("collision-1.0.0-py3-none-any.whl");
+            let data_script = format!("scripts/{data_script}");
+            write_data_script_collision_wheel(&wheel, "Tool.py", &data_script)?;
+
+            uv_snapshot!(context.filters(), context.pip_install().arg(&wheel), @"
+            exit_code: 0 (success)
+            ----- stderr -----
+            Resolved 1 package in [TIME]
+            Prepared 1 package in [TIME]
+            Installed 1 package in [TIME]
+             + collision==1.0.0 (from file://[TEMP_DIR]/collision-1.0.0-py3-none-any.whl)
+            ");
+
+            uv_snapshot!(Command::new(venv_bin_path(&context.venv).join("Tool.exe")), @"
+            exit_code: 0 (success)
+            ----- stdout -----
+            entrypoint
+            ");
+
+            let record = fs_err::read_to_string(
+                context
+                    .site_packages()
+                    .join("collision-1.0.0.dist-info/RECORD"),
+            )?;
+            assert_eq!(
+                record
+                    .lines()
+                    .filter(|line| line.to_ascii_lowercase().contains("/tool"))
+                    .count(),
+                1
+            );
+            assert!(!record.to_ascii_lowercase().contains(".data/scripts/tool"));
+        }
+
+        Ok::<(), anyhow::Error>(())
+    }?;
+
+    Ok(())
+}
+
 #[test]
 fn missing_requirements_txt() {
     let context = uv_test::test_context!("3.12");

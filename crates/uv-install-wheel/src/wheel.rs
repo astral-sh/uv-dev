@@ -719,8 +719,38 @@ pub(crate) fn install_data(
     dist_name: &PackageName,
     console_scripts: &[Script],
     gui_scripts: &[Script],
-    record: &mut [RecordEntry],
+    record: &mut Vec<RecordEntry>,
 ) -> Result<(), Error> {
+    fn strip_executable_suffix(name: &str) -> &str {
+        let Some(index) = name.len().checked_sub(".exe".len()) else {
+            return name;
+        };
+        let Some(suffix) = name.get(index..) else {
+            return name;
+        };
+        if suffix.eq_ignore_ascii_case(".exe") {
+            name.get(..index).unwrap_or(name)
+        } else {
+            name
+        }
+    }
+
+    fn paths_equal(left: &Path, right: &Path) -> bool {
+        if cfg!(any(windows, target_os = "macos")) {
+            left.as_os_str()
+                .as_encoded_bytes()
+                .eq_ignore_ascii_case(right.as_os_str().as_encoded_bytes())
+        } else {
+            left == right
+        }
+    }
+
+    let entrypoint_paths = console_scripts
+        .iter()
+        .chain(gui_scripts)
+        .map(|script| ValidatedScript::try_from_script(script, layout).map(|script| script.path))
+        .collect::<Result<Vec<_>, _>>()?;
+
     for entry in fs::read_dir(data_dir)? {
         let entry = entry?;
         let path = entry.path();
@@ -732,6 +762,24 @@ pub(crate) fn install_data(
                     "Installing data/data to {}",
                     layout.scheme.data.user_display()
                 );
+                // Data files can target the scripts directory through the environment-root
+                // scheme. Keep a generated entry point when those destinations collide.
+                for entry in WalkDir::new(&path).min_depth(1) {
+                    let entry = entry?;
+                    if entry.file_type().is_dir() {
+                        continue;
+                    }
+                    let relative = relative_to(entry.path(), &path)?;
+                    let target = layout.scheme.data.join(relative);
+                    if entrypoint_paths
+                        .iter()
+                        .any(|entrypoint| paths_equal(entrypoint, &target))
+                    {
+                        let relative = relative_to(entry.path(), site_packages)?;
+                        record.retain(|entry| Path::new(&entry.path) != relative);
+                        fs::remove_file(entry.path())?;
+                    }
+                }
                 // Move the content of the folder to the root of the venv
                 move_folder_recorded(
                     &path,
@@ -755,16 +803,33 @@ pub(crate) fn install_data(
                     // Couldn't find any docs for this, took it directly from
                     // https://github.com/pypa/pip/blob/b5457dfee47dd9e9f6ec45159d9d410ba44e5ea1/src/pip/_internal/operations/install/wheel.py#L565-L583
                     let name = file.file_name().to_string_lossy().to_string();
-                    let match_name = name
-                        .strip_suffix(".exe")
-                        .or_else(|| name.strip_suffix("-script.py"))
-                        .or_else(|| name.strip_suffix(".pya"))
-                        .unwrap_or(&name);
-                    if console_scripts
-                        .iter()
-                        .chain(gui_scripts)
-                        .any(|script| script.name == match_name)
-                    {
+                    let match_name = strip_executable_suffix(&name);
+                    let match_name = match_name
+                        .strip_suffix("-script.py")
+                        .or_else(|| match_name.strip_suffix(".pya"))
+                        .unwrap_or(match_name);
+                    let mut has_entrypoint = false;
+                    for script in &entrypoint_paths {
+                        let Ok(script_name) = script.strip_prefix(&layout.scheme.scripts) else {
+                            continue;
+                        };
+                        let script_name = script_name.to_string_lossy();
+                        let script_name = strip_executable_suffix(&script_name);
+                        if cfg!(any(windows, target_os = "macos")) {
+                            has_entrypoint = script_name.eq_ignore_ascii_case(match_name);
+                        } else {
+                            has_entrypoint = script_name == match_name;
+                        }
+                        if has_entrypoint {
+                            break;
+                        }
+                    }
+                    if has_entrypoint {
+                        // The generated entry point wins. Drop the skipped `.data/scripts`
+                        // source from RECORD, since the data directory is removed after install.
+                        let source = file.path();
+                        let relative = relative_to(&source, site_packages)?;
+                        record.retain(|entry| Path::new(&entry.path) != relative);
                         continue;
                     }
 
