@@ -10,7 +10,7 @@ use uv_cli::TreeFormat;
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_configuration::{ActiveEnvironment, Concurrency, DependencyGroups, TargetTriple};
 use uv_distribution_types::IndexCapabilities;
-use uv_lock::{PackageMap, TreeDedupe, TreeDisplay, TreeJsonTarget};
+use uv_lock::{PackageMap, TreeDedupe, TreeDirection, TreeDisplay, TreeJsonTarget};
 use uv_normalize::DefaultGroups;
 use uv_normalize::PackageName;
 use uv_preview::{Preview, PreviewFeature};
@@ -62,7 +62,7 @@ pub(crate) async fn tree(
     prune: Vec<PackageName>,
     package: Vec<PackageName>,
     dedupe: TreeDedupe,
-    invert: bool,
+    direction: TreeDirection,
     outdated: bool,
     show_sizes: bool,
     python_version: Option<PythonVersion>,
@@ -382,7 +382,7 @@ pub(crate) async fn tree(
         &package,
         &groups,
         dedupe,
-        invert,
+        direction,
         show_sizes,
     );
 
