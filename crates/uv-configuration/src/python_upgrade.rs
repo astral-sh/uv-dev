@@ -72,3 +72,27 @@ impl From<bool> for PythonInstallForce {
         if value { Self::Enabled } else { Self::Disabled }
     }
 }
+
+/// Whether to create default Python executable links.
+#[derive(Debug, Clone, Copy)]
+pub enum PythonInstallDefault {
+    /// Create default Python executable links.
+    Enabled,
+    /// Only create minor-version Python executable links.
+    Disabled,
+}
+
+impl PythonInstallDefault {
+    pub fn is_enabled(self) -> bool {
+        match self {
+            Self::Enabled => true,
+            Self::Disabled => false,
+        }
+    }
+}
+
+impl From<bool> for PythonInstallDefault {
+    fn from(value: bool) -> Self {
+        if value { Self::Enabled } else { Self::Disabled }
+    }
+}

@@ -17,7 +17,8 @@ use tracing::{debug, trace, warn};
 use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
 use uv_configuration::{
-    Concurrency, PythonInstallForce, PythonReinstall, PythonUpgrade, PythonUpgradeSource,
+    Concurrency, PythonInstallDefault, PythonInstallForce, PythonReinstall, PythonUpgrade,
+    PythonUpgradeSource,
 };
 use uv_errors::{ErrorOptions, Hints, write_error_chain_with_options};
 use uv_fs::Simplified;
@@ -181,7 +182,6 @@ impl uv_errors::Hinted for InvalidUpgradeRequestError {
 }
 
 /// Download and install Python versions.
-#[expect(clippy::fn_params_excessive_bools)]
 pub async fn install(
     project_dir: &Path,
     install_dir: Option<PathBuf>,
@@ -193,7 +193,7 @@ pub async fn install(
     force: PythonInstallForce,
     install_mirrors: PythonInstallMirrors,
     client_builder: BaseClientBuilder<'_>,
-    default: bool,
+    default: PythonInstallDefault,
     python_arch: Option<PythonArchitecture>,
     python_downloads: PythonDownloads,
     config_discovery: ConfigDiscovery,
@@ -298,7 +298,7 @@ async fn perform_install(
     install_mirrors: PythonInstallMirrors,
     client_builder: BaseClientBuilder<'_>,
     cache: &Cache,
-    default: bool,
+    default: PythonInstallDefault,
     python_arch: Option<PythonArchitecture>,
     python_downloads: PythonDownloads,
     config_discovery: ConfigDiscovery,
@@ -313,14 +313,14 @@ async fn perform_install(
     // `--default` is used. It's not clear how this overlaps with a global Python pin, but I'd be
     // surprised if `uv python find` returned the "newest" Python version rather than the one I just
     // installed with the `--default` flag.
-    if default && !preview.is_enabled(PreviewFeature::PythonInstallDefault) {
+    if default.is_enabled() && !preview.is_enabled(PreviewFeature::PythonInstallDefault) {
         warn_user!(
             "The `--default` option is experimental and may change without warning. Pass `--preview-features {}` to disable this warning",
             PreviewFeature::PythonInstallDefault
         );
     }
 
-    if default && targets.len() > 1 {
+    if default.is_enabled() && targets.len() > 1 {
         anyhow::bail!("The `--default` flag cannot be used with multiple targets");
     }
 
@@ -675,7 +675,7 @@ async fn perform_install(
             e.warn_user(installation);
         }
 
-        let upgradeable = (default || is_default_install)
+        let upgradeable = (default.is_enabled() || is_default_install)
             || requested_minor_versions.contains(&installation.key().version().python_version());
 
         if let Some(bin_dir) = bin_dir.as_ref() {
@@ -962,13 +962,12 @@ async fn perform_install(
 /// Link the binaries of a managed Python installation to the bin directory.
 ///
 /// This function is fallible, but errors are pushed to `errors` instead of being thrown.
-#[expect(clippy::fn_params_excessive_bools)]
 fn create_bin_links(
     installation: &ManagedPythonInstallation,
     bin: &Path,
     reinstall: PythonReinstall,
     force: PythonInstallForce,
-    default: bool,
+    default: PythonInstallDefault,
     upgradeable: bool,
     upgrade: bool,
     is_default_install: bool,
@@ -981,8 +980,8 @@ fn create_bin_links(
     // TODO(zanieb): We want more feedback on the `is_default_install` behavior before stabilizing
     // it. In particular, it may be confusing because it does not apply when versions are loaded
     // from a `.python-version` file.
-    let should_create_default_links =
-        default || (is_default_install && preview.is_enabled(PreviewFeature::PythonInstallDefault));
+    let should_create_default_links = default.is_enabled()
+        || (is_default_install && preview.is_enabled(PreviewFeature::PythonInstallDefault));
 
     let targets = if should_create_default_links {
         vec![
@@ -1123,7 +1122,7 @@ fn create_bin_links(
                                     target.simplified_display(),
                                     installation.key(),
                                 );
-                            } else if default {
+                            } else if default.is_enabled() {
                                 debug!(
                                     "Replacing existing executable for `{}` at `{}` with executable for `{}` since `--default` was requested`",
                                     existing.key(),

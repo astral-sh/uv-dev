@@ -22,10 +22,10 @@ use uv_configuration::{
     ExcludeNewer, ExcludeNewerPackage, ExportFormat, ExtrasSpecification, ForkStrategy,
     GitLfsSetting, HashCheckingMode, IndexStrategy, InitKind, InitProjectKind, InstallOptions,
     KeyringProviderType, Modifications, NoBinary, NoBuild, NoSources, Override, PackageOverride,
-    PipCompileFormat, Prerelease, ProjectBuildBackend, ProxyUrl, PythonInstallForce,
-    PythonReinstall, PythonUpgrade, PythonUpgradeSource, Reinstall, RequiredVersion,
-    RequirementsInput, ResolutionMode, TargetTriple, ToolRunCommand, TrustedHost, TrustedPublishing,
-    Upgrade, VersionControlSystem,
+    PipCompileFormat, Prerelease, ProjectBuildBackend, ProxyUrl, PythonInstallDefault,
+    PythonInstallForce, PythonReinstall, PythonUpgrade, PythonUpgradeSource, Reinstall,
+    RequiredVersion, RequirementsInput, ResolutionMode, TargetTriple, ToolRunCommand, TrustedHost,
+    TrustedPublishing, Upgrade, VersionControlSystem,
 };
 use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, ExcludeNewerOverride, ExtraBuildVariables, Index,
@@ -1524,7 +1524,7 @@ pub struct PythonInstallSettings {
     pub bin: Option<bool>,
     pub registry: Option<bool>,
     pub install_mirrors: PythonInstallMirrors,
-    pub default: bool,
+    pub default: PythonInstallDefault,
     pub compile_bytecode: bool,
 }
 
@@ -1585,7 +1585,7 @@ impl PythonInstallSettings {
                 ),
             },
             install_mirrors,
-            default,
+            default: default.into(),
             compile_bytecode: flag(
                 compile_bytecode.compile_bytecode,
                 compile_bytecode.no_compile_bytecode,
@@ -1597,7 +1597,6 @@ impl PythonInstallSettings {
 }
 
 /// The resolved settings to use for a `python upgrade` invocation.
-#[expect(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone)]
 pub struct PythonUpgradeSettings {
     pub install_dir: Option<PathBuf>,
@@ -1606,7 +1605,7 @@ pub struct PythonUpgradeSettings {
     pub registry: Option<bool>,
     pub install_mirrors: PythonInstallMirrors,
     pub reinstall: PythonReinstall,
-    pub default: bool,
+    pub default: PythonInstallDefault,
     pub bin: Option<bool>,
     pub compile_bytecode: bool,
 }
@@ -1657,7 +1656,7 @@ impl PythonUpgradeSettings {
             registry,
             install_mirrors,
             reinstall: reinstall.into(),
-            default,
+            default: default.into(),
             bin,
             compile_bytecode: flag(
                 compile_bytecode.compile_bytecode,
