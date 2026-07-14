@@ -849,15 +849,17 @@ fn parse_entry(
             .flatten()
             .map(Cow::Owned)
             .unwrap_or(Cow::Borrowed(given));
-        let specifier = PackageNameSpecifier::from_str(given.as_ref()).map_err(|err| {
-            RequirementsTxtParserError::NoBinary {
+        let specifiers = given
+            .split(',')
+            .map(PackageNameSpecifier::from_str)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|err| RequirementsTxtParserError::NoBinary {
                 source: err,
                 specifier: given.to_string(),
                 start,
                 end: s.cursor(),
-            }
-        })?;
-        RequirementsTxtStatement::NoBinary(NoBinary::from_pip_arg(specifier))
+            })?;
+        RequirementsTxtStatement::NoBinary(NoBinary::from_pip_args(specifiers))
     } else if s.eat_if("--only-binary") {
         let given = parse_value("--only-binary", content, s, |c: char| !is_terminal(c))?;
         let given = unquote(given)
@@ -865,15 +867,17 @@ fn parse_entry(
             .flatten()
             .map(Cow::Owned)
             .unwrap_or(Cow::Borrowed(given));
-        let specifier = PackageNameSpecifier::from_str(given.as_ref()).map_err(|err| {
-            RequirementsTxtParserError::NoBinary {
+        let specifiers = given
+            .split(',')
+            .map(PackageNameSpecifier::from_str)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|err| RequirementsTxtParserError::OnlyBinary {
                 source: err,
                 specifier: given.to_string(),
                 start,
                 end: s.cursor(),
-            }
-        })?;
-        RequirementsTxtStatement::OnlyBinary(NoBuild::from_pip_arg(specifier))
+            })?;
+        RequirementsTxtStatement::OnlyBinary(NoBuild::from_pip_args(specifiers, false))
     } else if s.at(char::is_ascii_alphanumeric) || s.at(|char| matches!(char, '.' | '/' | '$')) {
         let source = if requirements_txt == Path::new("-") {
             None
@@ -1575,6 +1579,7 @@ mod test {
     use test_case::test_case;
     use unscanny::Scanner;
 
+    use uv_configuration::{NoBinary, NoBuild};
     use uv_fs::Simplified;
 
     use crate::{RequirementsTxt, calculate_row_column};
@@ -2158,6 +2163,29 @@ mod test {
             }
             "#);
         });
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn comma_separated_binary_options() -> Result<()> {
+        let temp_dir = assert_fs::TempDir::new()?;
+
+        let no_binary = temp_dir.child("no-binary.txt");
+        no_binary.write_str("--no-binary iniconfig,packaging\niniconfig\n")?;
+        let requirements = RequirementsTxt::parse(no_binary.path(), temp_dir.path()).await?;
+        assert_eq!(
+            requirements.no_binary,
+            NoBinary::Packages(vec!["iniconfig".parse()?, "packaging".parse()?])
+        );
+
+        let only_binary = temp_dir.child("only-binary.txt");
+        only_binary.write_str("--only-binary=iniconfig,packaging\niniconfig\n")?;
+        let requirements = RequirementsTxt::parse(only_binary.path(), temp_dir.path()).await?;
+        assert_eq!(
+            requirements.only_binary,
+            NoBuild::Packages(vec!["iniconfig".parse()?, "packaging".parse()?])
+        );
 
         Ok(())
     }
