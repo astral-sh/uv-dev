@@ -17,7 +17,7 @@ use uv_command_support::{ExitStatus, Printer, UvError};
 use uv_configuration::{
     ActiveEnvironment, AddBoundsKind, Concurrency, DependencyGroups, DependencyGroupsWithDefaults,
     DevMode, DryRun, EditableMode, ExtrasSpecification, ExtrasSpecificationWithDefaults,
-    GitLfsSetting, InstallOptions, Modifications, NoSources,
+    GitLfsSetting, InitPythonPin, InstallOptions, Modifications, NoSources,
 };
 use uv_dispatch::{BuildDispatch, PlatformState, UniversalState};
 use uv_distribution::{DistributionDatabase, LoweredExtraBuildDependencies};
@@ -226,7 +226,7 @@ pub async fn add(
                     python.as_deref(),
                     &install_mirrors,
                     project_dir,
-                    false,
+                    InitPythonPin::Pin,
                     python_preference,
                     python_arch,
                     python_downloads,

@@ -8,7 +8,9 @@ use rustc_hash::{FxBuildHasher, FxHashMap};
 use uv_cache::{Cache, Refresh};
 use uv_client::BaseClientBuilder;
 use uv_command_support::{ExitStatus, Printer, UvError};
-use uv_configuration::{ActiveEnvironment, Concurrency, DependencyGroupsWithDefaults, DryRun};
+use uv_configuration::{
+    ActiveEnvironment, Concurrency, DependencyGroupsWithDefaults, DryRun, InitPythonPin,
+};
 use uv_dispatch::UniversalState;
 use uv_environment_operations::{
     ProjectEnvironmentPolicy, ProjectEnvironmentTarget, ProjectInterpreter,
@@ -65,7 +67,7 @@ pub async fn lock(
                 python.as_deref(),
                 &install_mirrors,
                 project_dir,
-                false,
+                InitPythonPin::Pin,
                 python_preference,
                 python_arch,
                 python_downloads,

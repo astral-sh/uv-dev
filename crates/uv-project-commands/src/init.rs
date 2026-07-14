@@ -263,7 +263,7 @@ async fn init_script(
         python.as_deref(),
         &install_mirrors,
         script_path.parent().unwrap_or(&CWD),
-        matches!(pin_python, InitPythonPin::Pin),
+        pin_python,
         python_preference,
         python_arch,
         python_downloads,
