@@ -33,7 +33,7 @@ use uv_cli::{
     TopLevelArgs, WorkspaceCommand, WorkspaceNamespace, compat::CompatArgs, options::ArgumentError,
 };
 use uv_client::BaseClientBuilder;
-use uv_configuration::min_stack_size;
+use uv_configuration::{DryRun, min_stack_size};
 use uv_flags::EnvironmentFlags;
 use uv_fs::{CWD, Simplified, normalize_path};
 #[cfg(feature = "self-update")]
@@ -51,8 +51,8 @@ use uv_warnings::{warn_user, warn_user_once};
 use uv_workspace::{DiscoveryOptions, Workspace, WorkspaceCache};
 
 use crate::commands::{
-    ExitStatus, ParsedRunCommand, ProjectError, ResolutionDisplay, RunCommand, ScriptPath, SyncMode,
-    ToolRunCommand, UvError,
+    ExitStatus, ParsedRunCommand, ProjectError, ResolutionDisplay, RunCommand, ScriptPath,
+    SyncMode, ToolRunCommand, UvError,
 };
 use crate::printer::Printer;
 use crate::settings::{
@@ -2735,7 +2735,7 @@ async fn run_project(
                 project_dir,
                 args.package,
                 explicit_project,
-                args.dry_run,
+                DryRun::from_args(args.dry_run),
                 args.lock_check,
                 args.frozen,
                 args.active,

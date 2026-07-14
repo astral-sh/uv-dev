@@ -68,7 +68,6 @@ pub(crate) fn self_version(
 }
 
 /// Read or update project version (`uv version`)
-#[expect(clippy::fn_params_excessive_bools)]
 pub(crate) async fn project_version(
     value: Option<String>,
     mut bump: Vec<VersionBumpSpec>,
@@ -77,7 +76,7 @@ pub(crate) async fn project_version(
     project_dir: &Path,
     package: Option<PackageName>,
     explicit_project: bool,
-    dry_run: bool,
+    dry_run: DryRun,
     lock_check: LockCheck,
     frozen: Option<FrozenSource>,
     active: ActiveEnvironment,
@@ -328,7 +327,7 @@ pub(crate) async fn project_version(
     };
 
     // Update the toml and lock
-    let status = if dry_run {
+    let status = if dry_run.enabled() {
         ExitStatus::Success
     } else if let Some(new_version) = &new_version {
         let project = update_project(
