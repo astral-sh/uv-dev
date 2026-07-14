@@ -4061,7 +4061,7 @@ pub(crate) struct BuildSettings {
     pub(crate) out_dir: Option<PathBuf>,
     pub(crate) output: BuildOutputSelection,
     pub(crate) mode: BuildMode,
-    pub(crate) build_logs: bool,
+    pub(crate) build_logs: BuildLogs,
     pub(crate) gitignore: bool,
     pub(crate) clear: bool,
     pub(crate) build_constraints: Vec<PathBuf>,
@@ -4130,6 +4130,18 @@ impl BuildMode {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum BuildLogs {
+    Show,
+    Hide,
+}
+
+impl BuildLogs {
+    fn from_args(build_logs: bool) -> Self {
+        if build_logs { Self::Show } else { Self::Hide }
+    }
+}
+
 impl BuildSettings {
     /// Resolve the [`BuildSettings`] from the CLI and filesystem configuration.
     pub(crate) fn resolve(
@@ -4185,7 +4197,9 @@ impl BuildSettings {
             out_dir,
             output: BuildOutputSelection::from_args(sdist, wheel),
             mode: BuildMode::from_args(list, force_pep517),
-            build_logs: flag(build_logs, no_build_logs, "build-logs")?.unwrap_or(true),
+            build_logs: BuildLogs::from_args(
+                flag(build_logs, no_build_logs, "build-logs")?.unwrap_or(true),
+            ),
             clear,
             gitignore: flag(create_gitignore, no_create_gitignore, "create-gitignore")?
                 .unwrap_or(true),
