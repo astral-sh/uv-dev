@@ -1306,6 +1306,14 @@ impl ValidatedLock {
                 }
                 Ok(Self::Preferable(lock))
             }
+            SatisfiesResult::MismatchedMemberSource(name, expected, actual) => {
+                debug!(
+                    "Resolving despite existing lockfile due to mismatched source path: `{name}` (expected: `{}`, existing: `{:?}`)",
+                    expected.display(),
+                    actual.as_ref().map(|path| path.display()),
+                );
+                Ok(Self::Preferable(lock))
+            }
             SatisfiesResult::MismatchedVirtual(name, expected) => {
                 if expected {
                     debug!(

@@ -1983,6 +1983,20 @@ impl Lock {
                     expected_editable,
                 ));
             }
+
+            // Verify that the locked source still points at the discovered workspace member.
+            let expected_source = absolute_path(root, member.root())?;
+            let actual_source = source
+                .and_then(|package| package.id.source.as_source_tree())
+                .map(|path| absolute_path(root, path))
+                .transpose()?;
+            if actual_source.as_deref() != Some(expected_source.as_path()) {
+                return Ok(SatisfiesResult::MismatchedMemberSource(
+                    name.clone(),
+                    expected_source,
+                    actual_source,
+                ));
+            }
         }
 
         // Validate that the lockfile was generated with the same requirements.
@@ -2756,6 +2770,8 @@ pub enum SatisfiesResult<'lock> {
     MismatchedVirtual(PackageName, bool),
     /// A workspace member switched from editable to non-editable or vice versa.
     MismatchedEditable(PackageName, bool),
+    /// A workspace member source points to a different path.
+    MismatchedMemberSource(PackageName, PathBuf, Option<PathBuf>),
     /// A source tree switched from dynamic to non-dynamic or vice versa.
     MismatchedDynamic(&'lock PackageName, bool),
     /// The lockfile uses a different set of version for its workspace members.
