@@ -82,6 +82,7 @@ jobs:
             *) echo "No Depot project configured for $GITHUB_REPOSITORY" >&2; exit 1 ;;
           esac
 
+          # Use a valid PEP 440 placeholder for non-release builds; metadata-action validates disabled tags.
           {
             echo "depot-project-id=$depot_project_id"
             if [ "${PUSH_DEV}" == "true" ] && { [ "${IS_LOCAL_PR}" == "true" ] || [ "${IS_UV_DEV_PR}" == "true" ]; }; then
@@ -89,7 +90,7 @@ jobs:
               echo "push=true"
               echo "push-version=false"
               echo "save=true"
-              echo "tag=sha"
+              echo "tag=0.0.0"
             elif [ "${DRY_RUN}" == "false" ]; then
               echo "login=true"
               echo "push=true"
@@ -101,7 +102,7 @@ jobs:
               echo "push=false"
               echo "push-version=false"
               echo "save=${RELEASE_BUILD}"
-              echo "tag=dry-run"
+              echo "tag=0.0.0"
             fi
           } >> "$GITHUB_OUTPUT"
 
@@ -211,8 +212,8 @@ jobs:
           # rather than the branch name.
           tags: |
             type=raw,value=dry-run,enable=${{ needs.docker-plan.outputs.push == 'false' }}
-            type=pep440,pattern={{ version }},value=${{ needs.docker-plan.outputs.push-version == 'true' && needs.docker-plan.outputs.tag || '0.0.0' }},enable=${{ needs.docker-plan.outputs.push-version == 'true' }}
-            type=pep440,pattern={{ major }}.{{ minor }},value=${{ needs.docker-plan.outputs.push-version == 'true' && needs.docker-plan.outputs.tag || '0.0.0' }},enable=${{ needs.docker-plan.outputs.push-version == 'true' }}
+            type=pep440,pattern={{ version }},value=${{ needs.docker-plan.outputs.tag }},enable=${{ needs.docker-plan.outputs.push-version == 'true' }}
+            type=pep440,pattern={{ major }}.{{ minor }},value=${{ needs.docker-plan.outputs.tag }},enable=${{ needs.docker-plan.outputs.push-version == 'true' }}
             type=sha,enable=${{ inputs.push-dev }}
 
       - name: Build and save image
