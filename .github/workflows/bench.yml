@@ -95,6 +95,9 @@ jobs:
         with:
           run: cargo codspeed run
           mode: walltime
+          # The CodSpeed macro runner already provides perf, so no instrument
+          # cache is written.
+          cache-instruments: false
 
   benchmarks-simulated:
     name: "simulated"
