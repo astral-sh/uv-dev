@@ -287,6 +287,7 @@ jobs:
     uses: $/.github/workflows/publish-pypi.yml
     with:
       plan: ${{ needs.plan.outputs.val }}
+    secrets: inherit # zizmor: ignore[secrets-inherit] retained for the release publishing environment
     # publish jobs get escalated permissions
     permissions:
       "id-token": "write"
@@ -302,6 +303,7 @@ jobs:
     uses: $/.github/workflows/publish-crates.yml
     with:
       plan: ${{ needs.plan.outputs.val }}
+    secrets: inherit # zizmor: ignore[secrets-inherit] retained for the release publishing environment
     # publish jobs get escalated permissions
     permissions:
       "contents": "read"
