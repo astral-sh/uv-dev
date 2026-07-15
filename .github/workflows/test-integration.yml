@@ -230,7 +230,7 @@ jobs:
     timeout-minutes: 10
     runs-on: windows-latest
     env:
-      UV_LINK_MODE: copy
+      UV_CACHE_DIR: ${{ github.workspace }}/.uv-cache
 
     steps:
       - name: "Download binary"
@@ -504,7 +504,7 @@ jobs:
     timeout-minutes: 10
     runs-on: windows-latest
     env:
-      UV_LINK_MODE: copy
+      UV_CACHE_DIR: ${{ github.workspace }}/.uv-cache
 
     steps:
       - name: "Download binary"
@@ -635,7 +635,7 @@ jobs:
     timeout-minutes: 10
     runs-on: windows-latest
     env:
-      UV_LINK_MODE: copy
+      UV_CACHE_DIR: ${{ github.workspace }}/.uv-cache
 
     steps:
       - name: "Download binary"
