@@ -15,6 +15,7 @@ use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_configuration::{
     ActiveEnvironment, Concurrency, DependencyGroups, DependencyGroupsWithDefaults, EditableMode,
     ExportFormat, ExtrasSpecification, ExtrasSpecificationWithDefaults, InstallOptions,
+    OutputFlags,
 };
 use uv_distribution_types::Verbatim;
 use uv_normalize::{DefaultExtras, DefaultGroups, ExtraName, GroupName, PackageName};
@@ -127,14 +128,13 @@ impl ExportBatch {
 }
 
 /// Export the project's `uv.lock` in an alternate format.
-#[expect(clippy::fn_params_excessive_bools)]
 pub(crate) async fn export(
     project_dir: &Path,
     format: Option<ExportFormat>,
     all_packages: bool,
     package: Vec<PackageName>,
     prune: Vec<PackageName>,
-    hashes: bool,
+    output_flags: OutputFlags,
     install_options: InstallOptions,
     output_file: Option<PathBuf>,
     batch: Option<PathBuf>,
@@ -143,10 +143,6 @@ pub(crate) async fn export(
     editable: Option<EditableMode>,
     lock_check: LockCheck,
     frozen: Option<FrozenSource>,
-    include_annotations: bool,
-    include_header: bool,
-    include_index_url: bool,
-    include_find_links: bool,
     script: Option<Pep723Script>,
     python: Option<String>,
     install_mirrors: PythonInstallMirrors,
@@ -374,16 +370,12 @@ pub(crate) async fn export(
                     entry.all_packages,
                     &entry.package,
                     &prune,
-                    hashes,
+                    output_flags,
                     &install_options,
                     Some(&entry.output_file),
                     &extras,
                     &groups,
                     editable.clone(),
-                    include_annotations,
-                    include_header,
-                    include_index_url,
-                    include_find_links,
                     &settings,
                     &client_builder,
                     &concurrency,
@@ -416,16 +408,12 @@ pub(crate) async fn export(
         all_packages,
         &package,
         &prune,
-        hashes,
+        output_flags,
         &install_options,
         output_file.as_deref(),
         &extras,
         &groups,
         editable,
-        include_annotations,
-        include_header,
-        include_index_url,
-        include_find_links,
         &settings,
         &client_builder,
         &concurrency,
@@ -441,7 +429,6 @@ pub(crate) async fn export(
 }
 
 /// Render one selection from a shared lockfile, deferring its file write until validation completes.
-#[expect(clippy::fn_params_excessive_bools)]
 async fn render_export<'output>(
     target: &ExportTarget,
     lock: &Lock,
@@ -449,16 +436,12 @@ async fn render_export<'output>(
     all_packages: bool,
     package: &[PackageName],
     prune: &[PackageName],
-    hashes: bool,
+    output_flags: OutputFlags,
     install_options: &InstallOptions,
     output_file: Option<&'output Path>,
     extras: &ExtrasSpecificationWithDefaults,
     groups: &DependencyGroupsWithDefaults,
     editable: Option<EditableMode>,
-    include_annotations: bool,
-    include_header: bool,
-    include_index_url: bool,
-    include_find_links: bool,
     settings: &ResolverSettings,
     client_builder: &BaseClientBuilder<'_>,
     concurrency: &Concurrency,
@@ -585,13 +568,13 @@ async fn render_export<'output>(
                 prune,
                 extras,
                 groups,
-                include_annotations,
+                output_flags.contains(OutputFlags::ANNOTATIONS),
                 editable,
-                hashes,
+                output_flags.contains(OutputFlags::HASHES),
                 install_options,
             )?;
 
-            if include_header {
+            if output_flags.contains(OutputFlags::HEADER) {
                 writeln!(
                     writer,
                     "{}",
@@ -603,7 +586,7 @@ async fn render_export<'output>(
             let mut wrote_preamble = false;
 
             // If necessary, include the `--index-url` and `--extra-index-url` locations.
-            if include_index_url {
+            if output_flags.contains(OutputFlags::INDEX_URL) {
                 let mut seen = FxHashSet::default();
                 let mut emitted_explicit_index = false;
 
@@ -633,7 +616,7 @@ async fn render_export<'output>(
             }
 
             // If necessary, include the `--find-links` locations.
-            if include_find_links {
+            if output_flags.contains(OutputFlags::FIND_LINKS) {
                 for flat_index in settings.index_locations.flat_indexes() {
                     writeln!(writer, "--find-links {}", flat_index.url().verbatim())?;
                     wrote_preamble = true;
@@ -652,7 +635,7 @@ async fn render_export<'output>(
                 prune,
                 extras,
                 groups,
-                include_annotations,
+                output_flags.contains(OutputFlags::ANNOTATIONS),
                 editable.as_ref(),
                 install_options,
             )?;
@@ -668,7 +651,7 @@ async fn render_export<'output>(
                     .await?;
             }
 
-            if include_header {
+            if output_flags.contains(OutputFlags::HEADER) {
                 writeln!(
                     writer,
                     "{}",
@@ -684,8 +667,8 @@ async fn render_export<'output>(
                 prune,
                 extras,
                 groups,
-                include_annotations,
-                hashes,
+                output_flags.contains(OutputFlags::ANNOTATIONS),
+                output_flags.contains(OutputFlags::HASHES),
                 install_options,
                 preview,
                 all_packages,

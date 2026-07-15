@@ -29,6 +29,7 @@ uv-pypi-types = { workspace = true }
 uv-redacted = { workspace = true }
 uv-static = { workspace = true }
 
+bitflags = { workspace = true }
 clap = { workspace = true, features = ["derive"], optional = true }
 either = { workspace = true }
 fs-err = { workspace = true }
