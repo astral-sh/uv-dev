@@ -5782,6 +5782,7 @@ dependencies = [
  "async-compression",
  "axoupdater",
  "backon",
+ "bitflags 2.13.0",
  "byteorder",
  "bytes",
  "clap",
