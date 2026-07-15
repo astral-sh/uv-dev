@@ -60,6 +60,7 @@ uv-warnings = { workspace = true }
 uv-workspace = { workspace = true }
 
 anyhow = { workspace = true }
+bitflags = { workspace = true }
 console = { workspace = true }
 fs-err = { workspace = true }
 futures = { workspace = true }

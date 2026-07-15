@@ -1747,13 +1747,19 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
             // Initialize the cache.
             let cache = cache.init().await?;
 
-            commands::tool_list(
-                args.show_paths,
+            let mut output = commands::ToolListOutput::empty();
+            output.set(commands::ToolListOutput::PATHS, args.show_paths);
+            output.set(
+                commands::ToolListOutput::VERSION_SPECIFIERS,
                 args.show_version_specifiers,
-                args.show_with,
-                args.show_extras,
-                args.show_python,
-                args.outdated,
+            );
+            output.set(commands::ToolListOutput::WITH, args.show_with);
+            output.set(commands::ToolListOutput::EXTRAS, args.show_extras);
+            output.set(commands::ToolListOutput::PYTHON, args.show_python);
+
+            commands::tool_list(
+                output,
+                args.outdated.into(),
                 args.args,
                 args.filesystem,
                 client_builder.subcommand(vec!["tool".to_owned(), "list".to_owned()]),

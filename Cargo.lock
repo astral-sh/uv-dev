@@ -8051,6 +8051,7 @@ name = "uv-tool-commands"
 version = "0.0.90"
 dependencies = [
  "anyhow",
+ "bitflags 2.13.1",
  "console",
  "fs-err",
  "futures",
