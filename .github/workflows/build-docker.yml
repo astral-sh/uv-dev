@@ -211,8 +211,8 @@ jobs:
           # rather than the branch name.
           tags: |
             type=raw,value=dry-run,enable=${{ needs.docker-plan.outputs.push == 'false' }}
-            type=pep440,pattern={{ version }},value=${{ needs.docker-plan.outputs.tag }},enable=${{ needs.docker-plan.outputs.push-version == 'true' }}
-            type=pep440,pattern={{ major }}.{{ minor }},value=${{ needs.docker-plan.outputs.tag }},enable=${{ needs.docker-plan.outputs.push-version == 'true' }}
+            type=pep440,pattern={{ version }},value=${{ needs.docker-plan.outputs.push-version == 'true' && needs.docker-plan.outputs.tag || '0.0.0' }},enable=${{ needs.docker-plan.outputs.push-version == 'true' }}
+            type=pep440,pattern={{ major }}.{{ minor }},value=${{ needs.docker-plan.outputs.push-version == 'true' && needs.docker-plan.outputs.tag || '0.0.0' }},enable=${{ needs.docker-plan.outputs.push-version == 'true' }}
             type=sha,enable=${{ inputs.push-dev }}
 
       - name: Build and save image
@@ -297,6 +297,7 @@ jobs:
         env:
           VERSION: ${{ needs.docker-plan.outputs.tag }}
           PUSH_DEV: ${{ inputs.push-dev }}
+          PUSH_VERSION: ${{ needs.docker-plan.outputs.push-version }}
           # When the new base image is not saved, use the registry's `latest` tag.
           UV_BASE_IMAGE: ${{ needs.docker-plan.outputs.save == 'true' && format('registry.depot.dev/{0}@{1}', env.DEPOT_PROJECT_ID, needs.docker-build-base.outputs.image-digest) || format('{0}:latest', env.UV_GHCR_IMAGE) }}
           IMAGE_MAPPING: ${{ matrix.image-mapping }}
@@ -326,8 +327,10 @@ jobs:
             if [ "${PUSH_DEV}" == "true" ]; then
               TAG_PATTERNS="${TAG_PATTERNS}type=sha,suffix=-${TAG}\n"
             else
-              TAG_PATTERNS="${TAG_PATTERNS}type=pep440,pattern={{ version }},suffix=-${TAG},value=${VERSION}\n"
-              TAG_PATTERNS="${TAG_PATTERNS}type=pep440,pattern={{ major }}.{{ minor }},suffix=-${TAG},value=${VERSION}\n"
+              if [ "${PUSH_VERSION}" == "true" ]; then
+                TAG_PATTERNS="${TAG_PATTERNS}type=pep440,pattern={{ version }},suffix=-${TAG},value=${VERSION}\n"
+                TAG_PATTERNS="${TAG_PATTERNS}type=pep440,pattern={{ major }}.{{ minor }},suffix=-${TAG},value=${VERSION}\n"
+              fi
               TAG_PATTERNS="${TAG_PATTERNS}type=raw,value=${TAG}\n"
             fi
           done
