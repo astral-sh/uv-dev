@@ -211,8 +211,8 @@ jobs:
           # rather than the branch name.
           tags: |
             type=raw,value=dry-run,enable=${{ needs.docker-plan.outputs.push == 'false' }}
-            type=pep440,pattern={{ version }},value=${{ needs.docker-plan.outputs.tag }},enable=${{ needs.docker-plan.outputs.push-version == 'true' }}
-            type=pep440,pattern={{ major }}.{{ minor }},value=${{ needs.docker-plan.outputs.tag }},enable=${{ needs.docker-plan.outputs.push-version == 'true' }}
+            type=pep440,pattern={{ version }},value=${{ needs.docker-plan.outputs.push-version == 'true' && needs.docker-plan.outputs.tag || '0.0.0' }},enable=${{ needs.docker-plan.outputs.push-version == 'true' }}
+            type=pep440,pattern={{ major }}.{{ minor }},value=${{ needs.docker-plan.outputs.push-version == 'true' && needs.docker-plan.outputs.tag || '0.0.0' }},enable=${{ needs.docker-plan.outputs.push-version == 'true' }}
             type=sha,enable=${{ inputs.push-dev }}
 
       - name: Build and save image
@@ -327,8 +327,10 @@ jobs:
             if [ "${PUSH_DEV}" == "true" ]; then
               TAG_PATTERNS="${TAG_PATTERNS}type=sha,suffix=-${TAG}\n"
             else
-              TAG_PATTERNS="${TAG_PATTERNS}type=pep440,pattern={{ version }},suffix=-${TAG},value=${VERSION},enable=${PUSH_VERSION}\n"
-              TAG_PATTERNS="${TAG_PATTERNS}type=pep440,pattern={{ major }}.{{ minor }},suffix=-${TAG},value=${VERSION},enable=${PUSH_VERSION}\n"
+              if [ "${PUSH_VERSION}" == "true" ]; then
+                TAG_PATTERNS="${TAG_PATTERNS}type=pep440,pattern={{ version }},suffix=-${TAG},value=${VERSION}\n"
+                TAG_PATTERNS="${TAG_PATTERNS}type=pep440,pattern={{ major }}.{{ minor }},suffix=-${TAG},value=${VERSION}\n"
+              fi
               TAG_PATTERNS="${TAG_PATTERNS}type=raw,value=${TAG}\n"
             fi
           done
