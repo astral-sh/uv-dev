@@ -6408,6 +6408,7 @@ name = "uv-configuration"
 version = "0.0.79"
 dependencies = [
  "anyhow",
+ "bitflags 2.13.1",
  "clap",
  "either",
  "fs-err",
