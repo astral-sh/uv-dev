@@ -1575,7 +1575,7 @@ docs = [
     { name = "mdformat", marker = "python_full_version >= '3.12'", specifier = ">=0.7.17" },
     { name = "mdformat-admon", marker = "python_full_version >= '3.12'", specifier = ">=2.0.2" },
     { name = "mdformat-mkdocs", marker = "python_full_version >= '3.12'", specifier = ">=2.0.4" },
-    { name = "mkdocs", marker = "python_full_version >= '3.12'", specifier = ">=1.5.0" },
+    { name = "mkdocs", marker = "python_full_version >= '3.12'", specifier = ">=1.5.0,<2" },
     { name = "mkdocs-git-revision-date-localized-plugin", marker = "python_full_version >= '3.12'", specifier = ">=1.3.0" },
     { name = "mkdocs-llmstxt", marker = "python_full_version >= '3.12'", specifier = ">=0.2.0" },
     { name = "mkdocs-material", marker = "python_full_version >= '3.12'", specifier = ">=9.1.18" },
