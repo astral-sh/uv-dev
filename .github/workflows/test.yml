@@ -74,7 +74,7 @@ jobs:
             'Acquire::https::Timeout "10";' \
             | sudo tee /etc/apt/apt.conf.d/80-retries > /dev/null
           # Use Ubuntu's Git and matching libcurl to avoid credential failures in private-repository tests.
-          sudo apt install -y --no-install-recommends --allow-downgrades \
+          sudo apt-get install -y --no-install-recommends --allow-downgrades \
             git/noble-updates git-man/noble-updates libcurl3t64-gnutls/noble-updates gnome-keyring
 
       - name: "Start gnome-keyring"
@@ -85,7 +85,7 @@ jobs:
 
       - name: "Create btrfs filesystem"
         run: |
-          sudo apt install -y btrfs-progs
+          sudo apt-get install -y btrfs-progs
           truncate -s 1G /tmp/btrfs.img
           mkfs.btrfs /tmp/btrfs.img
           sudo mkdir /btrfs
