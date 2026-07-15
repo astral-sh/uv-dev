@@ -225,6 +225,8 @@ jobs:
     name: "free-threaded on windows"
     timeout-minutes: 10
     runs-on: windows-latest
+    env:
+      UV_LINK_MODE: copy
 
     steps:
       - name: "Download binary"
@@ -497,6 +499,8 @@ jobs:
     name: "pypy on windows"
     timeout-minutes: 10
     runs-on: windows-latest
+    env:
+      UV_LINK_MODE: copy
 
     steps:
       - name: "Download binary"
@@ -626,6 +630,8 @@ jobs:
     name: "graalpy on windows"
     timeout-minutes: 10
     runs-on: windows-latest
+    env:
+      UV_LINK_MODE: copy
 
     steps:
       - name: "Download binary"
