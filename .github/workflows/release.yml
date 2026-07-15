@@ -333,6 +333,7 @@ jobs:
       uv-build-wheels: ${{ needs.assemble-release-artifacts.outputs.uv-build-wheels }}
       uv-sdist: ${{ needs.assemble-release-artifacts.outputs.uv-sdist }}
       uv-build-sdist: ${{ needs.assemble-release-artifacts.outputs.uv-build-sdist }}
+    secrets: inherit # zizmor: ignore[secrets-inherit] retained for the release publishing environment
     # publish jobs get escalated permissions
     permissions:
       "id-token": "write"
@@ -348,6 +349,7 @@ jobs:
     uses: $/.github/workflows/publish-crates.yml
     with:
       plan: ${{ needs.plan.outputs.val }}
+    secrets: inherit # zizmor: ignore[secrets-inherit] retained for the release publishing environment
     # publish jobs get escalated permissions
     permissions:
       "contents": "read"
