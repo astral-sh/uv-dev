@@ -18,6 +18,9 @@ jobs:
     name: "python on ${{ matrix.image-name }}"
     runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
     container: ${{ matrix.image }}
+    env:
+      PIP_NO_CACHE_DIR: "1"
+      UV_LINK_MODE: copy
     strategy:
       fail-fast: false
       matrix:
@@ -58,6 +61,9 @@ jobs:
     name: "python on fedora"
     runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
     container: fedora:45@sha256:0c1f63ed8fb818fad16cf6ae091598c410a21d2e1a9adf183beb93189299bfba
+    env:
+      PIP_NO_CACHE_DIR: "1"
+      UV_LINK_MODE: copy
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -144,6 +150,9 @@ jobs:
     name: "python3.6 on debian buster"
     runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
     container: python:3.6-buster
+    env:
+      PIP_NO_CACHE_DIR: "1"
+      UV_LINK_MODE: copy
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -168,6 +177,9 @@ jobs:
     name: "python3.7 on debian buster"
     runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
     container: python:3.7-buster
+    env:
+      PIP_NO_CACHE_DIR: "1"
+      UV_LINK_MODE: copy
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -228,6 +240,9 @@ jobs:
     name: "python on rocky linux ${{ matrix.rocky-version }}"
     runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
     container: rockylinux/rockylinux:${{ matrix.rocky-version }}
+    env:
+      PIP_NO_CACHE_DIR: "1"
+      UV_LINK_MODE: copy
     strategy:
       fail-fast: false
       matrix:
@@ -341,6 +356,9 @@ jobs:
     name: "pyston on linux"
     runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
     container: pyston/pyston:2.3.5@sha256:3e8c851140fb52a183b1d7f478e2a534374275516426acfeda5c2b0a032fc6bb
+    env:
+      PIP_NO_CACHE_DIR: "1"
+      UV_LINK_MODE: copy
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -367,6 +385,9 @@ jobs:
     container:
       image: cgr.dev/chainguard/python:latest-dev@sha256:c3898a57639a93cb4356fce37d6312f8e9ad44ced420f530148dbcbc5f6797ef
       options: --user root --entrypoint /bin/sh
+    env:
+      PIP_NO_CACHE_DIR: "1"
+      UV_LINK_MODE: copy
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -419,6 +440,9 @@ jobs:
     name: "python on alpine"
     runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
     container: alpine:latest@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
+    env:
+      PIP_NO_CACHE_DIR: "1"
+      UV_LINK_MODE: copy
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -811,6 +835,9 @@ jobs:
     name: "python on amazonlinux"
     runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
     container: amazonlinux:2023@sha256:32f61af6a24e178e8142fb7b0079f4af3a5cda6816cd53d2c611a921ef029ca0
+    env:
+      PIP_NO_CACHE_DIR: "1"
+      UV_LINK_MODE: copy
     steps:
       - name: "Install base requirements"
         run: |
