@@ -10,7 +10,9 @@ use rustc_hash::FxHashMap;
 use tracing::{debug, trace, warn};
 
 use uv_cache_info::Timestamp;
-use uv_fs::{LockedFile, LockedFileError, LockedFileMode, Simplified, cachedir, directories};
+use uv_fs::{
+    LockedFile, LockedFileError, LockedFileMode, Simplified, cachedir, directories, entries,
+};
 use uv_normalize::PackageName;
 use uv_pypi_types::ResolutionMetadata;
 
@@ -618,29 +620,66 @@ impl Cache {
     ///
     /// Returns the number of entries removed from the cache.
     pub fn remove(&self, name: &PackageName) -> io::Result<Removal> {
-        // Collect the set of referenced archives.
+        self.remove_packages(std::slice::from_ref(name), |_, _| {})
+    }
+
+    /// Remove multiple packages from the cache.
+    ///
+    /// Returns the number of entries removed from the cache, reporting cumulative progress after
+    /// each package is removed.
+    pub fn remove_packages<F>(&self, names: &[PackageName], mut on_clean: F) -> io::Result<Removal>
+    where
+        F: FnMut(&PackageName, &Removal),
+    {
+        if names.is_empty() {
+            return Ok(Removal::default());
+        }
+
+        // Collect the set of referenced archives before removing any cache entries.
         let references = self.find_archive_references()?;
 
-        // Remove any entries for the package from the cache.
-        let mut summary = self.removal();
+        // Inventory the cache once, assigning every matching entry to the first requested package
+        // with that name. In particular, avoid reading source-distribution metadata once per
+        // requested package.
+        let mut names_by_name = FxHashMap::default();
+        for (index, name) in names.iter().enumerate() {
+            names_by_name.entry(name.as_ref()).or_insert(index);
+        }
+        let mut paths = vec![Vec::new(); names.len()];
         for bucket in CacheBucket::iter() {
-            summary += bucket.remove(self, name)?;
+            bucket.removal_paths(self, &names_by_name, &mut paths)?;
         }
 
-        if references.is_empty() {
-            return Ok(summary);
-        }
-
-        // Only remove targets in the archive bucket. Cache entries may contain unexpected links
-        // to paths outside the cache.
-        let archive_root = fs_err::canonicalize(&self.root)?.join(CacheBucket::Archive.to_str());
-
-        // Remove any archives that are no longer referenced.
-        for (target, references) in references {
-            if target.starts_with(&archive_root) && references.iter().all(|path| !path.exists()) {
-                debug!("Removing dangling cache entry: {}", target.display());
-                summary += self.remove_path(target)?;
+        let mut summary = self.removal();
+        for (index, (name, paths)) in names.iter().zip(paths).enumerate() {
+            for path in paths {
+                summary += self.remove_path(path)?;
             }
+
+            // Report the last package after garbage collection, such that its progress includes
+            // the removal of any dangling archives.
+            if index + 1 < names.len() {
+                on_clean(name, &summary);
+            }
+        }
+
+        if !references.is_empty() {
+            // Only remove targets in the archive bucket. Cache entries may contain unexpected
+            // links to paths outside the cache.
+            let archive_root =
+                fs_err::canonicalize(&self.root)?.join(CacheBucket::Archive.to_str());
+
+            for (target, references) in references {
+                if target.starts_with(&archive_root) && references.iter().all(|path| !path.exists())
+                {
+                    debug!("Removing dangling cache entry: {}", target.display());
+                    summary += self.remove_path(target)?;
+                }
+            }
+        }
+
+        if let Some(name) = names.last() {
+            on_clean(name, &summary);
         }
 
         Ok(summary)
@@ -1337,103 +1376,128 @@ impl CacheBucket {
         }
     }
 
-    /// Remove a package from the cache bucket.
-    ///
-    /// Returns the number of entries removed from the cache.
-    fn remove(self, cache: &Cache, name: &PackageName) -> Result<Removal, io::Error> {
-        /// Returns `true` if the [`Path`] represents a built wheel for the given package.
-        fn is_match(path: &Path, name: &PackageName) -> bool {
-            let Ok(metadata) = fs_err::read(path.join("metadata.msgpack")) else {
-                return false;
-            };
-            let Ok(metadata) = rmp_serde::from_slice::<ResolutionMetadata>(&metadata) else {
-                return false;
-            };
-            metadata.name == *name
+    /// Find the cache entries that should be removed for a set of packages.
+    fn removal_paths(
+        self,
+        cache: &Cache,
+        names: &FxHashMap<&str, usize>,
+        paths: &mut [Vec<PathBuf>],
+    ) -> io::Result<()> {
+        /// Add matching, name-indexed cache entries to the removal inventory.
+        fn add_named(
+            root: impl AsRef<Path>,
+            names: &FxHashMap<&str, usize>,
+            paths: &mut [Vec<PathBuf>],
+            suffix: Option<&str>,
+        ) -> io::Result<()> {
+            // Avoid scanning every cached package for the common case of a small number of
+            // requested packages. Large batches can be cheaper to inventory once.
+            if names.len() <= 8 {
+                for (name, index) in names {
+                    let name = if let Some(suffix) = suffix {
+                        format!("{name}{suffix}")
+                    } else {
+                        (*name).to_string()
+                    };
+                    paths[*index].push(root.as_ref().join(name));
+                }
+                return Ok(());
+            }
+
+            for entry in entries(root)? {
+                let Some(name) = entry.file_name().and_then(|name| name.to_str()) else {
+                    continue;
+                };
+                let name = if let Some(suffix) = suffix {
+                    let Some(name) = name.strip_suffix(suffix) else {
+                        continue;
+                    };
+                    name
+                } else {
+                    name
+                };
+                if let Some(index) = names.get(name) {
+                    paths[*index].push(entry);
+                }
+            }
+            Ok(())
         }
 
-        let mut summary = cache.removal();
+        /// Return the first requested package matching a built wheel's metadata.
+        fn match_metadata(path: &Path, names: &FxHashMap<&str, usize>) -> Option<usize> {
+            let metadata = fs_err::read(path.join("metadata.msgpack")).ok()?;
+            let metadata = rmp_serde::from_slice::<ResolutionMetadata>(&metadata).ok()?;
+            names.get(metadata.name.as_ref()).copied()
+        }
+
         match self {
             Self::Wheels => {
-                // For `pypi` wheels, we expect a directory per package (indexed by name).
-                let root = cache.bucket(self).join(WheelCacheKind::Pypi);
-                summary += cache.remove_path(root.join(name.to_string()))?;
+                add_named(
+                    cache.bucket(self).join(WheelCacheKind::Pypi),
+                    names,
+                    paths,
+                    None,
+                )?;
 
-                // For alternate indices, we expect a directory for every index (under an `index`
-                // subdirectory), followed by a directory per package (indexed by name).
-                let root = cache.bucket(self).join(WheelCacheKind::Index);
-                for directory in directories(root)? {
-                    summary += cache.remove_path(directory.join(name.to_string()))?;
-                }
-
-                // For direct URLs, we expect a directory for every URL, followed by a
-                // directory per package (indexed by name).
-                let root = cache.bucket(self).join(WheelCacheKind::Url);
-                for directory in directories(root)? {
-                    summary += cache.remove_path(directory.join(name.to_string()))?;
+                for root in [WheelCacheKind::Index, WheelCacheKind::Url] {
+                    for directory in directories(cache.bucket(self).join(root))? {
+                        add_named(directory, names, paths, None)?;
+                    }
                 }
             }
             Self::SourceDistributions => {
-                // For `pypi` wheels, we expect a directory per package (indexed by name).
-                let root = cache.bucket(self).join(WheelCacheKind::Pypi);
-                summary += cache.remove_path(root.join(name.to_string()))?;
+                add_named(
+                    cache.bucket(self).join(WheelCacheKind::Pypi),
+                    names,
+                    paths,
+                    None,
+                )?;
 
-                // For alternate indices, we expect a directory for every index (under an `index`
-                // subdirectory), followed by a directory per package (indexed by name).
-                let root = cache.bucket(self).join(WheelCacheKind::Index);
-                for directory in directories(root)? {
-                    summary += cache.remove_path(directory.join(name.to_string()))?;
+                for directory in directories(cache.bucket(self).join(WheelCacheKind::Index))? {
+                    add_named(directory, names, paths, None)?;
                 }
 
-                // For direct URLs, we expect a directory for every URL, followed by a
-                // directory per version. To determine whether the URL is relevant, we need to
-                // search for a wheel matching the package name.
-                let root = cache.bucket(self).join(WheelCacheKind::Url);
-                for url in directories(root)? {
-                    if directories(&url)?.any(|version| is_match(&version, name)) {
-                        summary += cache.remove_path(url)?;
+                for root in [WheelCacheKind::Url, WheelCacheKind::Path] {
+                    for entry in directories(cache.bucket(self).join(root))? {
+                        let mut index = None;
+                        for version in directories(&entry)? {
+                            if let Some(candidate) = match_metadata(&version, names) {
+                                index = Some(
+                                    index.map_or(candidate, |index: usize| index.min(candidate)),
+                                );
+                                if candidate == 0 {
+                                    break;
+                                }
+                            }
+                        }
+                        if let Some(index) = index {
+                            paths[index].push(entry);
+                        }
                     }
                 }
 
-                // For local dependencies, we expect a directory for every path, followed by a
-                // directory per version. To determine whether the path is relevant, we need to
-                // search for a wheel matching the package name.
-                let root = cache.bucket(self).join(WheelCacheKind::Path);
-                for path in directories(root)? {
-                    if directories(&path)?.any(|version| is_match(&version, name)) {
-                        summary += cache.remove_path(path)?;
-                    }
-                }
-
-                // For Git dependencies, we expect a directory for every repository, followed by a
-                // directory for every SHA. To determine whether the SHA is relevant, we need to
-                // search for a wheel matching the package name.
-                let root = cache.bucket(self).join(WheelCacheKind::Git);
-                for repository in directories(root)? {
+                for repository in directories(cache.bucket(self).join(WheelCacheKind::Git))? {
                     for sha in directories(repository)? {
-                        if is_match(&sha, name) {
-                            summary += cache.remove_path(sha)?;
+                        if let Some(index) = match_metadata(&sha, names) {
+                            paths[index].push(sha);
                         }
                     }
                 }
             }
             Self::Simple => {
-                // For `pypi` wheels, we expect a rkyv file per package, indexed by name.
-                let root = cache.bucket(self).join(WheelCacheKind::Pypi);
-                summary += cache.remove_path(root.join(format!("{name}.rkyv")))?;
+                add_named(
+                    cache.bucket(self).join(WheelCacheKind::Pypi),
+                    names,
+                    paths,
+                    Some(".rkyv"),
+                )?;
 
-                // For alternate indices, we expect a directory for every index (under an `index`
-                // subdirectory), followed by a directory per package (indexed by name).
-                let root = cache.bucket(self).join(WheelCacheKind::Index);
-                for directory in directories(root)? {
-                    summary += cache.remove_path(directory.join(format!("{name}.rkyv")))?;
+                for directory in directories(cache.bucket(self).join(WheelCacheKind::Index))? {
+                    add_named(directory, names, paths, Some(".rkyv"))?;
                 }
             }
             Self::FlatIndex => {
-                // We can't know if the flat index includes a package, so we just remove the entire
-                // cache entry.
-                let root = cache.bucket(self);
-                summary += cache.remove_path(root)?;
+                paths[0].push(cache.bucket(self));
             }
             Self::Git
             | Self::Interpreter
@@ -1443,11 +1507,10 @@ impl CacheBucket {
             | Self::Environments
             | Self::Python
             | Self::Binaries
-            | Self::Osv => {
-                // Nothing to do.
-            }
+            | Self::Osv => {}
         }
-        Ok(summary)
+
+        Ok(())
     }
 
     /// Return an iterator over all cache buckets.
@@ -1579,6 +1642,188 @@ mod tests {
         assert!(Link::from_str("archive/foo").is_err());
         assert!(Link::from_str("v1/foo").is_err());
         assert!(Link::from_str("archive-v0/").is_err());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn remove_packages_inventories_cache_once_and_preserves_referenced_archives() {
+        use super::{Cache, CacheBucket};
+        use rustc_hash::FxHashMap;
+        use uv_normalize::PackageName;
+        use uv_pypi_types::ResolutionMetadata;
+
+        fn create_entry(path: &std::path::Path) {
+            fs_err::create_dir_all(path).unwrap();
+            fs_err::write(path.join("payload"), "payload").unwrap();
+        }
+
+        fn create_metadata(path: &std::path::Path, name: &str) {
+            fs_err::create_dir_all(path).unwrap();
+            let metadata = ResolutionMetadata::parse_metadata(
+                format!("Metadata-Version: 2.1\nName: {name}\nVersion: 1.0\n").as_bytes(),
+            )
+            .unwrap();
+            fs_err::write(
+                path.join("metadata.msgpack"),
+                rmp_serde::to_vec_named(&metadata).unwrap(),
+            )
+            .unwrap();
+        }
+
+        let cache_root = tempfile::tempdir().unwrap();
+        let victim_root = tempfile::tempdir().unwrap();
+        let root = cache_root.path();
+
+        let remove_one = PackageName::from_str("remove-one").unwrap();
+        let remove_two = PackageName::from_str("remove-two").unwrap();
+        let keep = PackageName::from_str("keep").unwrap();
+
+        let wheels = root.join(CacheBucket::Wheels.to_str());
+        let sdists = root.join(CacheBucket::SourceDistributions.to_str());
+        let simple = root.join(CacheBucket::Simple.to_str());
+        let flat_index = root.join(CacheBucket::FlatIndex.to_str());
+
+        let named_directories = [
+            wheels.join("pypi"),
+            wheels.join("index").join("index"),
+            wheels.join("url").join("url"),
+            sdists.join("pypi"),
+            sdists.join("index").join("index"),
+        ];
+        let simple_directories = [simple.join("pypi"), simple.join("index").join("index")];
+
+        for name in [&remove_one, &remove_two, &keep] {
+            for directory in &named_directories {
+                create_entry(&directory.join(name.as_ref()));
+            }
+            for directory in &simple_directories {
+                fs_err::create_dir_all(directory).unwrap();
+                fs_err::write(directory.join(format!("{name}.rkyv")), "payload").unwrap();
+            }
+        }
+
+        let metadata_entries = [
+            (sdists.join("url").join("one"), &remove_one),
+            (sdists.join("url").join("two"), &remove_two),
+            (sdists.join("url").join("keep"), &keep),
+            (sdists.join("path").join("one"), &remove_one),
+            (sdists.join("path").join("two"), &remove_two),
+            (sdists.join("path").join("keep"), &keep),
+            (
+                sdists.join("git").join("repository").join("one"),
+                &remove_one,
+            ),
+            (
+                sdists.join("git").join("repository").join("two"),
+                &remove_two,
+            ),
+            (sdists.join("git").join("repository").join("keep"), &keep),
+        ];
+        for (entry, name) in &metadata_entries {
+            if entry.starts_with(sdists.join("git")) {
+                create_metadata(entry, name.as_ref());
+            } else {
+                create_metadata(&entry.join("revision"), name.as_ref());
+            }
+        }
+
+        // A URL or path cache entry can contain multiple revisions with different package names.
+        // Preserve the sequential-clean behavior by assigning the whole entry to the earliest
+        // requested package, while allowing metadata traversal to stop as soon as it is found.
+        let mixed_url = sdists.join("url").join("mixed");
+        let mixed_path = sdists.join("path").join("mixed");
+        for entry in [&mixed_url, &mixed_path] {
+            create_metadata(&entry.join("revision-two"), remove_two.as_ref());
+            create_metadata(&entry.join("revision-one"), remove_one.as_ref());
+        }
+
+        let requested = [remove_one.clone(), remove_two.clone()];
+        let names = requested
+            .iter()
+            .enumerate()
+            .map(|(index, name)| (name.as_ref(), index))
+            .collect::<FxHashMap<_, _>>();
+        let mut paths = vec![Vec::new(); requested.len()];
+        CacheBucket::SourceDistributions
+            .removal_paths(&Cache::from_path(root), &names, &mut paths)
+            .unwrap();
+        assert!(paths[0].contains(&mixed_url));
+        assert!(paths[0].contains(&mixed_path));
+        assert!(!paths[1].contains(&mixed_url));
+        assert!(!paths[1].contains(&mixed_path));
+
+        create_entry(&flat_index);
+
+        let archives = root.join(CacheBucket::Archive.to_str());
+        let dangling = archives.join("dangling");
+        let shared = archives.join("shared");
+        let victim = victim_root.path().join("victim");
+        create_entry(&dangling);
+        create_entry(&shared);
+        create_entry(&victim);
+        fs_err::os::unix::fs::symlink(
+            &dangling,
+            wheels
+                .join("pypi")
+                .join(remove_one.as_ref())
+                .join("dangling"),
+        )
+        .unwrap();
+        fs_err::os::unix::fs::symlink(
+            &shared,
+            wheels.join("pypi").join(remove_two.as_ref()).join("shared"),
+        )
+        .unwrap();
+        fs_err::os::unix::fs::symlink(
+            &shared,
+            wheels.join("pypi").join(keep.as_ref()).join("shared"),
+        )
+        .unwrap();
+        fs_err::os::unix::fs::symlink(
+            &victim,
+            wheels.join("pypi").join(remove_one.as_ref()).join("escape"),
+        )
+        .unwrap();
+
+        let mut progress = Vec::new();
+        let summary = Cache::from_path(root)
+            .remove_packages(&requested, |name, summary| {
+                progress.push((name.clone(), summary.num_files, summary.num_dirs));
+            })
+            .unwrap();
+
+        assert_eq!(progress.len(), 2);
+        assert_eq!(progress[0].0, remove_one);
+        assert_eq!(progress[1].0, remove_two);
+        assert!(progress[0].1 <= progress[1].1);
+        assert!(progress[0].2 <= progress[1].2);
+        assert_eq!(progress[1].1, summary.num_files);
+        assert_eq!(progress[1].2, summary.num_dirs);
+
+        for name in [&remove_one, &remove_two] {
+            for directory in &named_directories {
+                assert!(!directory.join(name.as_ref()).exists());
+            }
+            for directory in &simple_directories {
+                assert!(!directory.join(format!("{name}.rkyv")).exists());
+            }
+        }
+
+        for (entry, name) in &metadata_entries {
+            assert_eq!(entry.exists(), *name == &keep);
+        }
+        assert!(!mixed_url.exists());
+        assert!(!mixed_path.exists());
+        assert!(!flat_index.exists());
+        assert!(!dangling.exists());
+        assert!(shared.exists());
+        assert!(victim.exists());
+        for directory in &named_directories {
+            assert!(directory.join(keep.as_ref()).exists());
+        }
+        for directory in &simple_directories {
+            assert!(directory.join("keep.rkyv").exists());
+        }
     }
 
     #[test]
