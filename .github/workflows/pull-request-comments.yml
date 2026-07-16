@@ -1,0 +1,75 @@
+# Collect pull request comments after review activity has settled.
+name: "pull-request-comments"
+
+on:
+  issue_comment:
+    types: [created, edited]
+  pull_request_review_comment:
+    types: [created, edited]
+  pull_request_review:
+    types: [submitted, edited]
+
+permissions: {}
+
+jobs:
+  collect:
+    if: >-
+      (github.event_name != 'issue_comment' || github.event.issue.pull_request) &&
+      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association || github.event.review.author_association) &&
+      !contains(fromJSON('["astral-automations-bot", "astral-automations-bot[bot]"]'), github.event.comment.user.login || github.event.review.user.login)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      issues: read
+      pull-requests: read
+    concurrency:
+      group: pull-request-comments-${{ github.event.issue.number || github.event.pull_request.number }}
+      cancel-in-progress: true
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      PULL_REQUEST_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
+    steps:
+      - name: "Wait for pull request comments to settle"
+        run: sleep 120
+
+      - name: "Collect pull request comments"
+        run: |
+          repository="repos/$GITHUB_REPOSITORY"
+
+          gh api --paginate --slurp \
+            "$repository/issues/$PULL_REQUEST_NUMBER/comments?per_page=100" |
+            jq '[.[][] | select(.user.login != "astral-automations-bot" and .user.login != "astral-automations-bot[bot]")]' \
+            > "$RUNNER_TEMP/conversation-comments.json"
+
+          gh api --paginate --slurp \
+            "$repository/pulls/$PULL_REQUEST_NUMBER/comments?per_page=100" |
+            jq '[.[][] | select(.user.login != "astral-automations-bot" and .user.login != "astral-automations-bot[bot]")]' \
+            > "$RUNNER_TEMP/inline-comments.json"
+
+          gh api --paginate --slurp \
+            "$repository/pulls/$PULL_REQUEST_NUMBER/reviews?per_page=100" |
+            jq '[.[][] | select(.user.login != "astral-automations-bot" and .user.login != "astral-automations-bot[bot]")]' \
+            > "$RUNNER_TEMP/reviews.json"
+
+          jq --null-input \
+            --slurpfile conversation "$RUNNER_TEMP/conversation-comments.json" \
+            --slurpfile inline "$RUNNER_TEMP/inline-comments.json" \
+            --slurpfile reviews "$RUNNER_TEMP/reviews.json" \
+            '{conversation_comments: $conversation[0], inline_comments: $inline[0], reviews: $reviews[0]}' \
+            > "$RUNNER_TEMP/pull-request-comments.json"
+
+          {
+            printf 'Collected comments for pull request #%s.\n\n' "$PULL_REQUEST_NUMBER"
+            jq --raw-output '
+              "- Conversation comments: \(.conversation_comments | length)\n" +
+              "- Inline comments: \(.inline_comments | length)\n" +
+              "- Reviews: \(.reviews | length)"
+            ' "$RUNNER_TEMP/pull-request-comments.json"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: "Upload pull request comments"
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pull-request-comments-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/pull-request-comments.json
+          if-no-files-found: error
