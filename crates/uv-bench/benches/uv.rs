@@ -18,6 +18,7 @@ use tar_codec::{ArchiveBuilder as _, EntryMetadata, TarEncoder};
 use tokio_util::compat::FuturesAsyncWriteCompatExt;
 use uv_cache::Cache;
 use uv_client::{BaseClientBuilder, Connectivity, RegistryClientBuilder};
+use uv_distribution::FlatRequiresDist;
 use uv_distribution_filename::{SourceDistExtension, WheelFilename};
 use uv_distribution_types::Requirement;
 use uv_install_wheel::{InstallState, Layout, LinkMode};
@@ -311,6 +312,36 @@ fn resolve_warm_airflow(c: &mut Criterion<WallTime>) {
     c.bench_function("resolve_warm_airflow", |b| b.iter(&run));
 }
 
+fn flatten_recursive_extras(c: &mut Criterion<WallTime>) {
+    let requirements = (0..1_000)
+        .flat_map(|index| {
+            [
+                Requirement::from(
+                    uv_pep508::Requirement::from_str(&format!(
+                        "dependency-{index}; extra == 'extra-{index}'"
+                    ))
+                    .unwrap(),
+                ),
+                Requirement::from(
+                    uv_pep508::Requirement::from_str(&format!(
+                        "many-extras[extra-{index}]; extra == 'all'"
+                    ))
+                    .unwrap(),
+                ),
+            ]
+        })
+        .collect::<Vec<_>>();
+    let name = requirements[1].name.clone();
+
+    c.bench_function("flatten_recursive_extras", |b| {
+        b.iter_batched(
+            || requirements.clone().into_boxed_slice(),
+            |requirements| black_box(FlatRequiresDist::from_requirements(requirements, &name)),
+            BatchSize::SmallInput,
+        );
+    });
+}
+
 // This takes >5m to run in CodSpeed.
 // fn resolve_warm_airflow_universal(c: &mut Criterion<WallTime>) {
 //     let manifest = Manifest::simple(vec![
@@ -341,7 +372,8 @@ criterion_group! {
         install_wheel_many_files,
         resolve_warm_jupyter,
         resolve_warm_jupyter_universal,
-        resolve_warm_airflow
+        resolve_warm_airflow,
+        flatten_recursive_extras
 }
 criterion_main!(uv);
 
