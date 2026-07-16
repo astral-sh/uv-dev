@@ -4,6 +4,7 @@ use std::fmt::Display;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{LazyLock, Mutex, OnceLock};
 
+use rustc_hash::FxHashSet;
 use tracing::trace;
 
 use uv_fs::{is_same_file_allow_missing, normalize_path_under, write_atomic_sync};
@@ -240,6 +241,32 @@ fn is_valid_top_level_entry(entry: &str, distribution: impl Display) -> bool {
     }
 }
 
+/// Filter the entries in `top_level.txt`, preserving their order and ignoring namespace packages.
+fn filter_egg_top_level(namespace_packages: &str, top_level: &str) -> Vec<String> {
+    let namespace_packages = namespace_packages
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+    let top_level = top_level
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty());
+
+    if namespace_packages.len() <= 64 {
+        top_level
+            .filter(|line| !namespace_packages.contains(line))
+            .map(ToString::to_string)
+            .collect()
+    } else {
+        let namespace_packages = namespace_packages.into_iter().collect::<FxHashSet<_>>();
+        top_level
+            .filter(|line| !namespace_packages.contains(line))
+            .map(ToString::to_string)
+            .collect()
+    }
+}
+
 /// Uninstall the egg represented by the `.egg-info` directory.
 ///
 /// See: <https://github.com/pypa/pip/blob/41587f5e0017bcd849f42b314dc8a34a7db75621/src/pip/_internal/req/req_uninstall.py#L483>
@@ -273,26 +300,15 @@ pub fn uninstall_egg(
         let namespace_packages = {
             let namespace_packages_path = egg_info.join("namespace_packages.txt");
             match fs_err::read_to_string(namespace_packages_path) {
-                Ok(namespace_packages) => namespace_packages
-                    .lines()
-                    .map(str::trim)
-                    .filter(|line| !line.is_empty())
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>(),
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+                Ok(namespace_packages) => namespace_packages,
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
                 Err(err) => return Err(err.into()),
             }
         };
 
         let top_level_path = egg_info.join("top_level.txt");
         match fs_err::read_to_string(&top_level_path) {
-            Ok(top_level) => top_level
-                .lines()
-                .map(str::trim)
-                .filter(|line| !line.is_empty())
-                .filter(|line| !namespace_packages.iter().any(|ns| ns.as_str() == *line))
-                .map(ToString::to_string)
-                .collect::<Vec<_>>(),
+            Ok(top_level) => filter_egg_top_level(&namespace_packages, &top_level),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
                 return Err(Error::MissingTopLevel(top_level_path));
             }
@@ -663,7 +679,9 @@ mod tests {
     use uv_pypi_types::Scheme;
 
     use crate::Layout;
-    use crate::uninstall::{is_valid_top_level_entry, uninstall_egg, uninstall_wheel};
+    use crate::uninstall::{
+        filter_egg_top_level, is_valid_top_level_entry, uninstall_egg, uninstall_wheel,
+    };
 
     fn layout(venv: &Path, site_packages: &Path) -> Layout {
         Layout {
@@ -699,6 +717,33 @@ mod tests {
         assert!(!is_valid("C:target"));
         assert!(!is_valid("C:."));
         assert!(!is_valid("C:.."));
+    }
+
+    #[test]
+    fn test_filter_egg_top_level_preserves_small_entries() {
+        let namespace_packages = "\n shared \r\nnamespace\nshared\n";
+        let top_level = " keep_b \nshared\nkeep_a\nnamespace\nkeep_b\nSHARED\n ../escape \n\n";
+
+        assert_eq!(
+            filter_egg_top_level(namespace_packages, top_level),
+            ["keep_b", "keep_a", "keep_b", "SHARED", "../escape"]
+        );
+    }
+
+    #[test]
+    fn test_filter_egg_top_level_preserves_large_entries() {
+        let namespace_packages = (0..128)
+            .map(|index| format!(" namespace_{index:03} "))
+            .chain(["namespace_127".to_string(), String::new()])
+            .collect::<Vec<_>>()
+            .join("\n");
+        let top_level =
+            "keep_b\nnamespace_127\nkeep_a\nnamespace_000\nkeep_b\nNAMESPACE_127\n../escape\n";
+
+        assert_eq!(
+            filter_egg_top_level(&namespace_packages, top_level),
+            ["keep_b", "keep_a", "keep_b", "NAMESPACE_127", "../escape"]
+        );
     }
 
     /// Uninstall must not remove files outside the install scheme.

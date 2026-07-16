@@ -5991,6 +5991,7 @@ dependencies = [
  "fs-err",
  "futures",
  "jiff",
+ "rustc-hash",
  "tempfile",
  "tokio",
  "tokio-util",
