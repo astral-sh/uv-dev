@@ -152,6 +152,43 @@ pub(crate) fn pip_show(
         }
     }
 
+    // Index the reverse dependencies for the requested distributions once.
+    let mut required_by_map = distributions
+        .iter()
+        .map(|distribution| (distribution.name(), Vec::new()))
+        .collect::<FxHashMap<_, _>>();
+    if required_by_map.len() == 1 {
+        // Preserve the short-circuit for the common case of a single requested package.
+        if let Some(distribution) = distributions.first() {
+            let required_by = required_by_map.entry(distribution.name()).or_default();
+            required_by.extend(
+                requires_map
+                    .iter()
+                    .filter(|(name, requires)| {
+                        **name != distribution.name()
+                            && requires
+                                .iter()
+                                .any(|requirement| *requirement == distribution.name())
+                    })
+                    .map(|(name, _)| *name),
+            );
+        }
+    } else {
+        for (name, requires) in &requires_map {
+            for requirement in requires {
+                if requirement != name
+                    && let Some(required_by) = required_by_map.get_mut(requirement)
+                {
+                    required_by.push(*name);
+                }
+            }
+        }
+    }
+    for required_by in required_by_map.values_mut() {
+        required_by.sort_unstable();
+        required_by.dedup();
+    }
+
     // Print the information for each package.
     for (i, distribution) in distributions.iter().enumerate() {
         if i > 0 {
@@ -191,24 +228,16 @@ pub(crate) fn pip_show(
                 writeln!(printer.stdout(), "Requires: {}", requires.iter().join(", "))?;
             }
 
-            let required_by = requires_map
-                .iter()
-                .filter(|(name, pkgs)| {
-                    **name != distribution.name()
-                        && pkgs.iter().any(|pkg| *pkg == distribution.name())
-                })
-                .map(|(name, _)| name)
-                .sorted_unstable()
-                .dedup()
-                .collect_vec();
-            if required_by.is_empty() {
-                writeln!(printer.stdout(), "Required-by:")?;
-            } else {
+            if let Some(required_by) = required_by_map.get(distribution.name())
+                && !required_by.is_empty()
+            {
                 writeln!(
                     printer.stdout(),
                     "Required-by: {}",
-                    required_by.into_iter().join(", "),
+                    required_by.iter().join(", "),
                 )?;
+            } else {
+                writeln!(printer.stdout(), "Required-by:")?;
             }
         }
 
