@@ -10307,6 +10307,10 @@ fn install_build_isolation_package() -> Result<()> {
     // Running `uv pip install` should fail for iniconfig.
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("--no-build-isolation-package")
+        .arg("unused-package")
+        .arg("--no-build-isolation-package")
+        .arg("INICONFIG")
+        .arg("--no-build-isolation-package")
         .arg("iniconfig")
         .arg(package.path()), @r#"
     exit_code: 1 (failure)
@@ -10349,6 +10353,10 @@ fn install_build_isolation_package() -> Result<()> {
 
     // Running `uv pip install` should succeed.
     uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--no-build-isolation-package")
+        .arg("unused-package")
+        .arg("--no-build-isolation-package")
+        .arg("INICONFIG")
         .arg("--no-build-isolation-package")
         .arg("iniconfig")
         .arg(package.path()), @"
