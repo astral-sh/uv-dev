@@ -20,7 +20,7 @@ use uv_configuration::IndexStrategy;
 use uv_configuration::KeyringProviderType;
 use uv_distribution_filename::{DistFilename, WheelFilename};
 use uv_distribution_types::{
-    BuiltDist, File, FileLocation, IndexCapabilities, IndexFormat, IndexLocations,
+    BuiltDist, File, FileLocation, IndexCapabilities, IndexFormat, IndexLocations, IndexMetadata,
     IndexMetadataRef, IndexStatusCodeDecision, IndexStatusCodeStrategy, IndexUrl, Name,
     RegistryBuiltWheel, Zstd,
 };
@@ -193,8 +193,18 @@ impl<'a> RegistryClientBuilder<'a> {
         // Wrap in the cache middleware.
         let client = CachedClient::new(client);
 
+        let fetch_indexes = self
+            .index_locations
+            .fetch_indexes()
+            .map(|index| IndexMetadata {
+                url: index.url.clone(),
+                format: index.format,
+            })
+            .collect();
+
         Ok(RegistryClient {
             indexes: self.index_locations,
+            fetch_indexes,
             index_strategy: self.index_strategy,
             torch_backend: self.torch_backend,
             cache: self.cache,
@@ -211,6 +221,8 @@ impl<'a> RegistryClientBuilder<'a> {
 pub struct RegistryClient {
     /// The indexes to use for fetching packages.
     indexes: IndexLocations,
+    /// The deduplicated indexes to use for unpinned package requests.
+    fetch_indexes: Arc<[IndexMetadata]>,
     /// The strategy to use when fetching across multiple indexes.
     index_strategy: IndexStrategy,
     /// The strategy to use when selecting a PyTorch backend, if any.
@@ -280,9 +292,7 @@ impl RegistryClient {
                     .map(|indexes| indexes.map(IndexMetadataRef::from))
             })
             .map(Either::Left)
-            .unwrap_or_else(|| {
-                Either::Right(self.indexes.fetch_indexes().map(IndexMetadataRef::from))
-            })
+            .unwrap_or_else(|| Either::Right(self.fetch_indexes.iter().map(IndexMetadataRef::from)))
     }
 
     /// Return the appropriate [`IndexStrategy`] for the given [`PackageName`].
@@ -1768,7 +1778,7 @@ mod tests {
     use uv_cache::Cache;
     use uv_distribution_types::{
         File, FileLocation, Index, IndexCapabilities, IndexFormat, IndexLocations,
-        IndexMetadataRef, IndexUrl, ToUrlError, Zstd,
+        IndexMetadataRef, IndexName, IndexUrl, ToUrlError, Zstd,
     };
     use uv_small_str::SmallString;
     use wiremock::matchers::{basic_auth, method, path_regex};
@@ -1831,6 +1841,112 @@ mod tests {
                 .expect("request recording should be enabled")
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn caches_fetch_indexes_with_existing_precedence() -> Result<(), Error> {
+        let mut shadowing_explicit =
+            Index::from(IndexUrl::from_str("https://explicit.example.com/simple")?);
+        shadowing_explicit.name = Some(IndexName::from_str("shadowed")?);
+        shadowing_explicit.explicit = true;
+
+        let mut shadowed_implicit =
+            Index::from(IndexUrl::from_str("https://shadowed.example.com/simple")?);
+        shadowed_implicit.name = Some(IndexName::from_str("shadowed")?);
+
+        let mut implicit = Index::from(IndexUrl::from_str("https://implicit.example.com/simple")?);
+        implicit.name = Some(IndexName::from_str("implicit")?);
+        implicit.format = IndexFormat::Flat;
+
+        let mut duplicate_url =
+            Index::from(IndexUrl::from_str("https://implicit.example.com/simple")?);
+        duplicate_url.name = Some(IndexName::from_str("duplicate")?);
+
+        let mut default = Index::from(IndexUrl::from_str("https://default.example.com/simple")?);
+        default.name = Some(IndexName::from_str("default")?);
+        default.default = true;
+
+        let client = RegistryClientBuilder::new(BaseClientBuilder::default(), Cache::temp()?)
+            .index_locations(IndexLocations::new(
+                vec![
+                    shadowing_explicit,
+                    shadowed_implicit,
+                    implicit,
+                    duplicate_url,
+                    default,
+                ],
+                Vec::new(),
+                false,
+            ))
+            .build()?;
+
+        let indexes: Vec<_> = client
+            .index_urls_for(&PackageName::from_str("anyio")?)
+            .map(|index| (index.url.to_string(), index.format))
+            .collect();
+        assert_eq!(
+            indexes,
+            vec![
+                (
+                    "https://implicit.example.com/simple".to_string(),
+                    IndexFormat::Flat,
+                ),
+                (
+                    "https://default.example.com/simple".to_string(),
+                    IndexFormat::Simple,
+                ),
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn caches_pypi_fallback_and_preserves_torch_override() -> Result<(), Error> {
+        let implicit = Index::from(IndexUrl::from_str("https://implicit.example.com/simple")?);
+        let client = RegistryClientBuilder::new(BaseClientBuilder::default(), Cache::temp()?)
+            .index_locations(IndexLocations::new(vec![implicit], Vec::new(), false))
+            .torch_backend(Some(TorchStrategy::Backend {
+                backend: TorchBackend::Cpu,
+            }))
+            .build()?;
+
+        let indexes: Vec<_> = client
+            .index_urls_for(&PackageName::from_str("anyio")?)
+            .map(|index| index.url.to_string())
+            .collect();
+        assert_eq!(
+            indexes,
+            vec![
+                "https://implicit.example.com/simple".to_string(),
+                "https://pypi.org/simple".to_string(),
+            ]
+        );
+
+        let torch_indexes: Vec<_> = client
+            .index_urls_for(&PackageName::from_str("torch")?)
+            .map(|index| index.url.to_string())
+            .collect();
+        assert_eq!(
+            torch_indexes,
+            vec!["https://download.pytorch.org/whl/cpu".to_string()]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn caches_no_fetch_indexes_when_disabled() -> Result<(), Error> {
+        let implicit = Index::from(IndexUrl::from_str("https://implicit.example.com/simple")?);
+        let client = RegistryClientBuilder::new(BaseClientBuilder::default(), Cache::temp()?)
+            .index_locations(IndexLocations::new(vec![implicit], Vec::new(), true))
+            .build()?;
+
+        assert!(
+            client
+                .index_urls_for(&PackageName::from_str("anyio")?)
+                .next()
+                .is_none()
+        );
+        Ok(())
     }
 
     #[tokio::test]
