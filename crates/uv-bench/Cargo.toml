@@ -39,6 +39,11 @@ path = "benches/uv_pypi_types.rs"
 harness = false
 
 [[bench]]
+name = "reinstall_membership"
+path = "benches/reinstall_membership.rs"
+harness = false
+
+[[bench]]
 name = "uv_python"
 path = "benches/uv_python.rs"
 harness = false
@@ -55,6 +60,7 @@ uv-distribution-filename = { workspace = true }
 uv-distribution-types = { workspace = true }
 uv-extract = { workspace = true }
 uv-install-wheel = { workspace = true }
+uv-normalize = { workspace = true }
 uv-pep440 = { workspace = true }
 uv-pep508 = { workspace = true }
 uv-performance-memory-allocator = { workspace = true }
@@ -75,6 +81,8 @@ flate2 = { workspace = true }
 fs-err = { workspace = true }
 futures = { workspace = true }
 jiff = { workspace = true }
+rmp-serde = { workspace = true }
+rustc-hash = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 tar-codec = { workspace = true }
