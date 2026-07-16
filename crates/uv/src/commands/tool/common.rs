@@ -721,6 +721,65 @@ pub(crate) async fn refine_interpreter(
     Ok(Some(interpreter))
 }
 
+/// Check whether installing a tool would overwrite executables not owned by the existing tool.
+pub(crate) fn check_tool_entrypoint_conflicts(
+    environment: &PythonEnvironment,
+    name: &PackageName,
+    entrypoints: &[PackageName],
+    existing_tool: &Tool,
+) -> anyhow::Result<()> {
+    let executable_directory = uv_tool::tool_executable_dir()?;
+    let site_packages = SitePackages::from_environment(environment)?;
+    let existing_paths = existing_tool
+        .entrypoints()
+        .iter()
+        .map(|entrypoint| entrypoint.install_path.as_path())
+        .collect::<BTreeSet<_>>();
+
+    let conflicts = entrypoints
+        .iter()
+        .filter(|package| *package != name)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .chain(std::iter::once(name))
+        .filter_map(|package| site_packages.get_packages(package).first().copied())
+        .map(|distribution| {
+            entrypoint_paths(&site_packages, distribution.name(), distribution.version())
+        })
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .flatten()
+        .map(|(name, source)| {
+            executable_directory.join(
+                source
+                    .file_name()
+                    .map(std::borrow::ToOwned::to_owned)
+                    .unwrap_or_else(|| OsString::from(name)),
+            )
+        })
+        .filter(|target| target.exists() && !existing_paths.contains(target.as_path()))
+        .filter_map(|target| {
+            target
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        })
+        .collect::<BTreeSet<_>>();
+
+    if !conflicts.is_empty() {
+        let (suffix, exists) = if conflicts.len() == 1 {
+            ("", "exists")
+        } else {
+            ("s", "exist")
+        };
+        bail!(
+            "Executable{suffix} already {exists}: {} (use `--force` to overwrite)",
+            conflicts.iter().map(|name| name.bold()).join(", ")
+        );
+    }
+
+    Ok(())
+}
+
 /// Finalizes a tool installation, after creation of an environment.
 ///
 /// Installs tool executables for a given package, handling any conflicts.

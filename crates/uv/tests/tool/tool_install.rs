@@ -15,6 +15,7 @@ use assert_fs::{
 use indoc::indoc;
 use insta::assert_snapshot;
 use predicates::prelude::predicate;
+use url::Url;
 #[cfg(windows)]
 use uv_fs::Simplified;
 use uv_fs::copy_dir_all;
@@ -3348,6 +3349,143 @@ fn tool_install_failure_removes_additional_entrypoints() -> Result<()> {
     bin_dir
         .child(format!("blackd{}", std::env::consts::EXE_SUFFIX))
         .assert(predicate::path::missing());
+
+    Ok(())
+}
+
+#[test]
+fn tool_install_conflict_preserves_reused_environment() -> Result<()> {
+    let context = uv_test::test_context!("3.13").with_filtered_exe_suffix();
+    let tool_dir = context.temp_dir.child("tools");
+    let bin_dir = context.temp_dir.child("bin");
+    let launcher = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    let app = context
+        .workspace_root
+        .join("test/links/basic_app-0.1.0-py3-none-any.whl");
+    let app_requirement = format!(
+        "basic-app @ {}",
+        Url::from_file_path(&app).expect("Failed to convert app path to file URL")
+    );
+
+    context
+        .tool_install()
+        .arg(&launcher)
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
+        .assert()
+        .success();
+
+    let receipt = fs_err::read_to_string(tool_dir.join("simple-launcher").join("uv-receipt.toml"))?;
+    let external = bin_dir.child(format!("basic-app{}", std::env::consts::EXE_SUFFIX));
+    external.touch()?;
+
+    context
+        .tool_install()
+        .arg(&launcher)
+        .arg("--with-executables-from")
+        .arg(&app_requirement)
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
+        .assert()
+        .failure();
+
+    assert_eq!(
+        receipt,
+        fs_err::read_to_string(tool_dir.join("simple-launcher").join("uv-receipt.toml"))?
+    );
+    let tool_python = tool_dir
+        .child("simple-launcher")
+        .child(if cfg!(windows) { "Scripts" } else { "bin" })
+        .child(format!("python{}", std::env::consts::EXE_SUFFIX));
+    Command::new(tool_python.as_os_str())
+        .args([
+            "-c",
+            "import importlib.util; assert importlib.util.find_spec('basic_app') is None",
+        ])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), Command::new("simple_launcher").env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+    Hi from the simple launcher!
+
+    ----- stderr -----
+    ");
+    external.assert(predicate::path::is_file());
+
+    Ok(())
+}
+
+#[test]
+fn tool_install_conflict_preserves_recreated_environment() -> Result<()> {
+    let context =
+        uv_test::test_context_with_versions!(&["3.12", "3.13"]).with_filtered_exe_suffix();
+    let tool_dir = context.temp_dir.child("tools");
+    let bin_dir = context.temp_dir.child("bin");
+    let launcher = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    let app = context
+        .workspace_root
+        .join("test/links/basic_app-0.1.0-py3-none-any.whl");
+    let app_requirement = format!(
+        "basic-app @ {}",
+        Url::from_file_path(&app).expect("Failed to convert app path to file URL")
+    );
+
+    context
+        .tool_install()
+        .arg(&launcher)
+        .arg("--python")
+        .arg("3.12")
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
+        .assert()
+        .success();
+
+    let receipt = fs_err::read_to_string(tool_dir.join("simple-launcher").join("uv-receipt.toml"))?;
+    let external = bin_dir.child(format!("basic-app{}", std::env::consts::EXE_SUFFIX));
+    external.touch()?;
+
+    context
+        .tool_install()
+        .arg(&launcher)
+        .arg("--python")
+        .arg("3.13")
+        .arg("--with-executables-from")
+        .arg(&app_requirement)
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
+        .assert()
+        .failure();
+
+    assert_eq!(
+        receipt,
+        fs_err::read_to_string(tool_dir.join("simple-launcher").join("uv-receipt.toml"))?
+    );
+    let tool_python = tool_dir
+        .child("simple-launcher")
+        .child(if cfg!(windows) { "Scripts" } else { "bin" })
+        .child(format!("python{}", std::env::consts::EXE_SUFFIX));
+    Command::new(tool_python.as_os_str())
+        .args([
+            "-c",
+            "import importlib.util; assert importlib.util.find_spec('basic_app') is None",
+        ])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), Command::new("simple_launcher").env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+    Hi from the simple launcher!
+
+    ----- stderr -----
+    ");
+    external.assert(predicate::path::is_file());
 
     Ok(())
 }
