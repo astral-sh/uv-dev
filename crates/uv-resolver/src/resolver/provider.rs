@@ -7,8 +7,8 @@ use uv_client::MetadataFormat;
 use uv_configuration::BuildOptions;
 use uv_distribution::{DistributionDatabase, Reporter};
 use uv_distribution_types::{
-    Dist, File, IndexCapabilities, IndexLocations, IndexMetadata, IndexMetadataRef, IndexUrl,
-    InstalledDist, MinimumLibcVersion, RequestedDist, RequiresPython,
+    Dist, File, IndexCapabilities, IndexLocations, IndexLocationsLookup, IndexMetadata,
+    IndexMetadataRef, IndexUrl, InstalledDist, MinimumLibcVersion, RequestedDist, RequiresPython,
 };
 use uv_normalize::PackageName;
 use uv_platform_tags::Tags;
@@ -99,7 +99,7 @@ pub struct DefaultResolverProvider<'a, Context: BuildContext> {
     hasher: &'a HashStrategy,
     exclude_newer: ExcludeNewer,
     available_version_cutoff: Option<jiff::Timestamp>,
-    index_locations: &'a IndexLocations,
+    index_locations: IndexLocationsLookup,
     build_options: &'a BuildOptions,
     capabilities: &'a IndexCapabilities,
     minimum_libc_version: Option<MinimumLibcVersion>,
@@ -133,7 +133,7 @@ impl<'a, Context: BuildContext> DefaultResolverProvider<'a, Context> {
             )
             .ok()
             .and_then(|value| value.parse().ok()),
-            index_locations,
+            index_locations: IndexLocationsLookup::from(index_locations),
             build_options,
             capabilities,
             minimum_libc_version,
