@@ -11,6 +11,7 @@ pub(crate) fn apply_editable_mode(
     let Some(editable) = editable else {
         return resolution;
     };
+    let editable = editable.lookup();
 
     resolution.map(|dist| {
         let ResolvedDist::Installable { dist, version } = dist else {
@@ -28,7 +29,7 @@ pub(crate) fn apply_editable_mode(
             return None;
         };
 
-        let editable = editable.for_package(name)?;
+        let editable = editable(name)?;
         if *current_editable == Some(editable) {
             return None;
         }
