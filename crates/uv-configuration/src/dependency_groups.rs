@@ -1,6 +1,14 @@
-use std::{borrow::Cow, sync::Arc};
+use std::{
+    borrow::Cow,
+    fmt::{Debug, Formatter},
+    sync::Arc,
+};
+
+use rustc_hash::FxHashSet;
 
 use uv_normalize::{DEV_DEPENDENCIES, DefaultGroups, GroupName};
+
+const GROUP_INDEX_THRESHOLD: usize = 8;
 
 /// Manager of all dependency-group decisions and settings history.
 ///
@@ -9,12 +17,16 @@ use uv_normalize::{DEV_DEPENDENCIES, DefaultGroups, GroupName};
 pub struct DependencyGroups(Arc<DependencyGroupsInner>);
 
 /// Manager of all dependency-group decisions and settings history.
-#[derive(Debug, Default, Clone)]
+#[derive(Default, Clone)]
 pub struct DependencyGroupsInner {
     /// Groups to include.
     include: IncludeGroups,
+    /// An optional index for multi-group includes.
+    include_index: Option<FxHashSet<GroupName>>,
     /// Groups to exclude (always wins over include).
     exclude: Vec<GroupName>,
+    /// An optional index for multi-group excludes.
+    exclude_index: Option<FxHashSet<GroupName>>,
     /// Whether an `--only` flag was passed.
     ///
     /// If true, users of this API should refrain from looking at packages
@@ -77,9 +89,23 @@ impl DependencyGroups {
             }
         };
 
+        let include_index = match &include {
+            IncludeGroups::Some(groups) if groups.len() > GROUP_INDEX_THRESHOLD => {
+                Some(groups.iter().cloned().collect())
+            }
+            IncludeGroups::Some(_) | IncludeGroups::All => None,
+        };
+        let exclude_index = if no_group.len() > GROUP_INDEX_THRESHOLD {
+            Some(no_group.iter().cloned().collect())
+        } else {
+            None
+        };
+
         Self(Arc::new(DependencyGroupsInner {
             include,
+            include_index,
             exclude: no_group,
+            exclude_index,
             only_groups,
             history,
         }))
@@ -134,6 +160,13 @@ impl DependencyGroups {
     ///
     /// This is appropriate in projects, where the `dev` group is synced by default.
     pub fn with_defaults(&self, defaults: DefaultGroups) -> DependencyGroupsWithDefaults {
+        if self.0.history.defaults == defaults {
+            return DependencyGroupsWithDefaults {
+                cur: self.clone(),
+                prev: self.clone(),
+            };
+        }
+
         // Explicitly clone the inner history and set the defaults, then remake the result.
         let mut history = self.0.history.clone();
         history.defaults = defaults;
@@ -168,7 +201,18 @@ impl DependencyGroupsInner {
     /// Returns `true` if the specification includes the given group.
     pub fn contains(&self, group: &GroupName) -> bool {
         // exclude always trumps include
-        !self.exclude.contains(group) && self.include.contains(group)
+        let excluded = self.exclude_index.as_ref().map_or_else(
+            || self.exclude.contains(group),
+            |index| index.contains(group),
+        );
+        if excluded {
+            return false;
+        }
+
+        self.include_index.as_ref().map_or_else(
+            || self.include.contains(group),
+            |index| index.contains(group),
+        )
     }
 
     /// Returns an iterator over all groups that are included in the specification,
@@ -208,6 +252,22 @@ impl DependencyGroupsInner {
     /// Get the raw history for diagnostics
     pub fn history(&self) -> &DependencyGroupsHistory {
         &self.history
+    }
+}
+
+#[expect(
+    clippy::missing_fields_in_debug,
+    reason = "lookup indexes are implementation details and must not change diagnostics"
+)]
+impl Debug for DependencyGroupsInner {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DependencyGroupsInner")
+            .field("include", &self.include)
+            .field("exclude", &self.exclude)
+            .field("only_groups", &self.only_groups)
+            .field("history", &self.history)
+            .finish()
     }
 }
 
@@ -367,5 +427,163 @@ impl IncludeGroups {
 impl Default for IncludeGroups {
     fn default() -> Self {
         Self::Some(Vec::new())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use uv_normalize::{DefaultGroups, GroupName};
+
+    use super::{DependencyGroups, DevMode};
+
+    fn group(name: &str) -> GroupName {
+        GroupName::from_str(name).expect("valid group name")
+    }
+
+    #[test]
+    fn indexed_groups_preserve_precedence_and_history() {
+        let groups = DependencyGroups::from_args(
+            None,
+            vec![
+                group("Feature_A"),
+                group("feature-a"),
+                group("feature-b"),
+                group("include-0"),
+                group("include-1"),
+                group("include-2"),
+                group("include-3"),
+                group("include-4"),
+                group("include-5"),
+                group("include-6"),
+            ],
+            vec![
+                group("FEATURE_A"),
+                group("disabled"),
+                group("exclude-0"),
+                group("exclude-1"),
+                group("exclude-2"),
+                group("exclude-3"),
+                group("exclude-4"),
+                group("exclude-5"),
+                group("exclude-6"),
+            ],
+            false,
+            Vec::new(),
+            false,
+        )
+        .with_defaults(DefaultGroups::List(vec![group("default-c")]));
+
+        assert!(groups.cur.0.include_index.is_some());
+        assert!(groups.cur.0.exclude_index.is_some());
+        assert!(!groups.contains(&group("feature-a")));
+        assert!(groups.contains(&group("FEATURE_B")));
+        assert!(groups.contains(&group("default-c")));
+        assert!(!groups.contains(&group("disabled")));
+        assert!(!groups.contains(&group("missing")));
+        assert!(groups.contains_because_default(&group("default-c")));
+        assert!(!groups.contains_because_default(&group("feature-b")));
+        assert_eq!(
+            groups
+                .explicit_names()
+                .map(GroupName::as_str)
+                .collect::<Vec<_>>(),
+            vec![
+                "feature-a",
+                "feature-a",
+                "feature-b",
+                "include-0",
+                "include-1",
+                "include-2",
+                "include-3",
+                "include-4",
+                "include-5",
+                "include-6",
+                "feature-a",
+                "disabled",
+                "exclude-0",
+                "exclude-1",
+                "exclude-2",
+                "exclude-3",
+                "exclude-4",
+                "exclude-5",
+                "exclude-6",
+            ],
+        );
+        assert_eq!(
+            groups.history().as_flags_pretty(),
+            ["--group", "--no-group"],
+        );
+    }
+
+    #[test]
+    fn indexed_groups_preserve_all_only_and_dev_semantics() {
+        let all = DependencyGroups::from_args(
+            None,
+            Vec::new(),
+            vec![group("disabled-a"), group("disabled-b")],
+            false,
+            Vec::new(),
+            true,
+        )
+        .with_defaults(DefaultGroups::default());
+        assert!(all.contains(&group("other")));
+        assert!(!all.contains(&group("DISABLED_A")));
+        assert!(!all.contains_because_default(&group("other")));
+
+        let default_all = DependencyGroups::default().with_defaults(DefaultGroups::All);
+        assert!(default_all.contains(&group("other")));
+        assert!(default_all.contains_because_default(&group("other")));
+        let replaced = default_all.with_defaults(DefaultGroups::default());
+        assert!(!replaced.contains(&group("other")));
+
+        let only = DependencyGroups::from_args(
+            None,
+            Vec::new(),
+            Vec::new(),
+            false,
+            vec![group("only-a"), group("only-b")],
+            false,
+        )
+        .with_defaults(DefaultGroups::List(vec![group("default-c")]));
+        assert!(only.contains(&group("ONLY_A")));
+        assert!(!only.contains(&group("default-c")));
+        assert!(!only.contains_because_default(&group("default-c")));
+
+        let no_dev = DependencyGroups::from_args(
+            Some(DevMode::Exclude),
+            vec![group("dev"), group("feature")],
+            vec![group("other")],
+            false,
+            Vec::new(),
+            false,
+        );
+        assert!(!no_dev.contains(&group("DEV")));
+        assert!(no_dev.contains(&group("feature")));
+    }
+
+    #[test]
+    fn group_index_debug_is_hidden() {
+        let groups = DependencyGroups::from_args(
+            None,
+            (0..9)
+                .map(|index| group(&format!("included-{index}")))
+                .collect(),
+            (0..9)
+                .map(|index| group(&format!("excluded-{index}")))
+                .collect(),
+            false,
+            Vec::new(),
+            false,
+        );
+        let debug = format!("{groups:?}");
+
+        assert!(debug.contains("include: Some([GroupName(\"included-0\")"));
+        assert!(debug.contains("GroupName(\"included-8\")])"));
+        assert!(debug.contains("exclude: [GroupName(\"excluded-0\")"));
+        assert!(debug.contains("GroupName(\"excluded-8\")]"));
+        assert!(!debug.contains("include_index"));
+        assert!(!debug.contains("exclude_index"));
     }
 }
