@@ -182,12 +182,57 @@ impl From<VersionSpecifiers> for Ranges<Version> {
     /// Convert [`VersionSpecifiers`] to a PubGrub-compatible version range, using PEP 440
     /// semantics.
     fn from(specifiers: VersionSpecifiers) -> Self {
-        let mut range = Self::full();
-        for specifier in specifiers {
-            range = range.intersection(&Self::from(specifier));
-        }
-        range
+        specifiers_to_ranges(specifiers, Self::from)
     }
+}
+
+/// Convert and intersect the specifiers, batching exclusions to avoid repeatedly splitting an
+/// increasingly fragmented range.
+fn specifiers_to_ranges(
+    specifiers: VersionSpecifiers,
+    mut convert: impl FnMut(VersionSpecifier) -> Ranges<Version>,
+) -> Ranges<Version> {
+    if specifiers.len() <= 1 {
+        return specifiers
+            .into_iter()
+            .next()
+            .map_or_else(Ranges::full, convert);
+    }
+
+    let mut range = Ranges::full();
+    let mut exclusions = Vec::new();
+
+    for mut specifier in specifiers {
+        match specifier.operator {
+            Operator::NotEqual => {
+                specifier.operator = Operator::Equal;
+                exclusions.extend(convert(specifier));
+            }
+            Operator::NotEqualStar => {
+                specifier.operator = Operator::EqualStar;
+                exclusions.extend(convert(specifier));
+            }
+            _ => range = range.intersection(&convert(specifier)),
+        }
+    }
+
+    if exclusions.is_empty() {
+        return range;
+    }
+
+    // `Ranges::from_iter` inserts segments in order and can take quadratic time when the input
+    // is descending. Equal lower bounds necessarily overlap, so comparing the version is enough.
+    exclusions.sort_unstable_by(|(left, _), (right, _)| match (left, right) {
+        (Bound::Unbounded, Bound::Unbounded) => Ordering::Equal,
+        (Bound::Unbounded, _) => Ordering::Less,
+        (_, Bound::Unbounded) => Ordering::Greater,
+        (
+            Bound::Included(left) | Bound::Excluded(left),
+            Bound::Included(right) | Bound::Excluded(right),
+        ) => left.cmp(right),
+    });
+
+    range.intersection(&exclusions.into_iter().collect::<Ranges<_>>().complement())
 }
 
 impl From<VersionSpecifier> for Ranges<Version> {
@@ -305,11 +350,9 @@ impl From<VersionSpecifier> for Ranges<Version> {
 ///
 /// See: <https://github.com/pypa/pip/blob/a432c7f4170b9ef798a15f035f5dfdb4cc939f35/src/pip/_internal/resolution/resolvelib/candidates.py#L540>
 pub fn release_specifiers_to_ranges(specifiers: VersionSpecifiers) -> Ranges<Version> {
-    let mut range = Ranges::full();
-    for specifier in specifiers {
-        range = range.intersection(&release_specifier_to_range(specifier, false));
-    }
-    range
+    specifiers_to_ranges(specifiers, |specifier| {
+        release_specifier_to_range(specifier, false)
+    })
 }
 
 /// Convert the [`VersionSpecifier`] to a PubGrub-compatible version range, using release-only
@@ -662,6 +705,91 @@ mod tests {
 
     fn version(version: &str) -> Version {
         version.parse().unwrap()
+    }
+
+    #[test]
+    fn batches_exclusions_with_pep440_semantics() {
+        let specifiers = ">=1,<4,!=1.0,!=2.0+local,!=3.*"
+            .parse::<VersionSpecifiers>()
+            .unwrap();
+        let range = Ranges::from(specifiers);
+
+        for (candidate, expected) in [
+            ("1.0", false),
+            ("1.0+local", false),
+            ("1.0.post0", true),
+            ("2.0", true),
+            ("2.0+local", false),
+            ("2.0+other", true),
+            ("3.0.dev0", false),
+            ("3.1", false),
+        ] {
+            assert_eq!(range.contains(&version(candidate)), expected, "{candidate}");
+        }
+    }
+
+    #[test]
+    fn batches_exclusions_with_release_only_semantics() {
+        let specifiers = ">=1,<6,!=1.0a1,!=2.0+local,!=3.*,!=4.0.post1"
+            .parse::<VersionSpecifiers>()
+            .unwrap();
+        let range = release_specifiers_to_ranges(specifiers);
+
+        for (candidate, expected) in [
+            ("1.0", false),
+            ("1.0.1", true),
+            ("2.0", false),
+            ("2.0.1", true),
+            ("3.0", false),
+            ("3.1", false),
+            ("4.0", false),
+            ("4.0.1", true),
+            ("5.0", true),
+        ] {
+            assert_eq!(range.contains(&version(candidate)), expected, "{candidate}");
+        }
+    }
+
+    #[test]
+    fn batched_exclusions_match_sequential_intersection() {
+        let distinct = (0..256).map(|version| format!("!={version}.0"));
+        let duplicate =
+            (0..128).flat_map(|version| [format!("!={version}.0"), format!("!={version}.0")]);
+        let wildcard = (0..256).map(|version| format!("!={version}.*"));
+        let local = (0..256).map(|version| format!("!={version}.0+local"));
+        let mixed = (0..256).map(|version| match version % 3 {
+            0 => format!("!={version}.0"),
+            1 => format!("!={version}.0+local"),
+            _ => format!("!={version}.*"),
+        });
+
+        for exclusions in [
+            distinct.collect::<Vec<_>>(),
+            duplicate.collect(),
+            wildcard.collect(),
+            local.collect(),
+            mixed.collect(),
+        ] {
+            let specifiers = format!(">=0.dev0,<300,{}", exclusions.join(","))
+                .parse::<VersionSpecifiers>()
+                .unwrap();
+
+            let expected = specifiers
+                .iter()
+                .cloned()
+                .fold(Ranges::full(), |range, specifier| {
+                    range.intersection(&Ranges::from(specifier))
+                });
+            assert_eq!(Ranges::from(specifiers.clone()), expected);
+
+            let expected = specifiers
+                .iter()
+                .cloned()
+                .fold(Ranges::full(), |range, specifier| {
+                    range.intersection(&release_specifier_to_range(specifier, false))
+                });
+            assert_eq!(release_specifiers_to_ranges(specifiers), expected);
+        }
     }
 
     #[test]
