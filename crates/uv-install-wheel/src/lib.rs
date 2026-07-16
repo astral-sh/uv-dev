@@ -18,6 +18,7 @@ pub use uninstall::{Uninstall, uninstall_egg, uninstall_legacy_editable, uninsta
 pub use wheel::{WheelFile, read_record, read_record_into_iter, validate_and_heal_record};
 
 mod install;
+mod installed_files;
 mod linker;
 mod record;
 mod script;
