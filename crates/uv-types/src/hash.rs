@@ -136,9 +136,7 @@ impl HashStrategy {
         match &mut self.verification {
             HashVerification::None => {}
             HashVerification::IfPresent(existing) | HashVerification::Required(existing) => {
-                if let Some(hashes) = Self::augment_hashes(existing, requirements)? {
-                    *existing = Arc::new(hashes);
-                }
+                Self::augment_hashes(existing, requirements)?;
             }
         }
         Ok(self)
@@ -339,19 +337,15 @@ impl HashStrategy {
     /// the same underlying archive but differ only in hash fragments are merged onto the same
     /// digest set.
     ///
-    /// Returns `Ok(None)` if no new hashes were added or updated.
     fn augment_hashes<'a>(
-        existing: &FxHashMap<VersionId, Vec<HashDigest>>,
+        existing: &mut Arc<FxHashMap<VersionId, Vec<HashDigest>>>,
         requirements: impl Iterator<Item = &'a Requirement>,
-    ) -> Result<Option<FxHashMap<VersionId, Vec<HashDigest>>>, HashStrategyError> {
-        let mut hashes = None;
-
+    ) -> Result<(), HashStrategyError> {
         for requirement in requirements {
             let Some((id, digests)) = Self::requirement_hashes(requirement) else {
                 continue;
             };
-            let current = hashes.as_ref().unwrap_or(existing);
-            let current_digests = current.get(&id);
+            let current_digests = existing.get(&id);
             let mut merged = current_digests.cloned().unwrap_or_default();
             merge_digests(&mut merged, &digests, requirement)?;
 
@@ -359,12 +353,10 @@ impl HashStrategy {
                 continue;
             }
 
-            hashes
-                .get_or_insert_with(|| existing.clone())
-                .insert(id, merged);
+            Arc::make_mut(existing).insert(id, merged);
         }
 
-        Ok(hashes)
+        Ok(())
     }
 
     /// Extract the archive URL hash target and digests for a requirement, if any.
@@ -642,6 +634,73 @@ mod tests {
         assert_eq!(strategy.get_package(&name, &version), HashPolicy::Any(&[]));
         assert!(!strategy.allows_url(&url));
         assert!(!strategy.allows_package(&name, &version));
+        Ok(())
+    }
+
+    #[test]
+    fn augment_with_requirements_reuses_unique_hash_map() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let first = requirement(
+            "https://files.pythonhosted.org/packages/36/55/ad4de788d84a630656ece71059665e01ca793c04294c463fd84132f40fe6/anyio-4.0.0-py3-none-any.whl#sha256=cfdb2b588b9fc25ede96d8db56ed50848b0b649dca3dd1df0b11f683bb9e0b5f",
+        );
+        let second = requirement(
+            "https://files.pythonhosted.org/packages/36/55/ad4de788d84a630656ece71059665e01ca793c04294c463fd84132f40fe6/anyio-4.0.0-py3-none-any.whl#sha512=f30761c1e8725b49c498273b90dba4b05c0fd157811994c806183062cb6647e773364ce45f0e1ff0b10e32fe6d0232ea5ad39476ccf37109d6b49603a09c11c2",
+        );
+        let conflict = requirement(
+            "https://files.pythonhosted.org/packages/36/55/ad4de788d84a630656ece71059665e01ca793c04294c463fd84132f40fe6/anyio-4.0.0-py3-none-any.whl#sha256=f7ed51751b2c2add651e5747c891b47e26d2a21be5d32d9311dfe9692f3e5d7a",
+        );
+
+        let initial = HashStrategy::require(Arc::default());
+        let in_flight = initial.clone();
+        let hasher = initial.augment_with_requirements(std::iter::once(&first))?;
+        let HashVerification::Required(in_flight) = in_flight.verification() else {
+            return Err("expected required hashes".into());
+        };
+        let HashVerification::Required(after_first) = hasher.verification() else {
+            return Err("expected required hashes".into());
+        };
+        assert!(!Arc::ptr_eq(in_flight, after_first));
+        assert!(in_flight.is_empty());
+        let first_pointer = Arc::as_ptr(after_first);
+
+        let hasher = hasher.augment_with_requirements(std::iter::once(&second))?;
+        let HashVerification::Required(after_second) = hasher.verification() else {
+            return Err("expected required hashes".into());
+        };
+        assert_eq!(Arc::as_ptr(after_second), first_pointer);
+
+        let unchanged = hasher
+            .clone()
+            .augment_with_requirements(std::iter::once(&first))?;
+        let HashVerification::Required(unchanged) = unchanged.verification() else {
+            return Err("expected required hashes".into());
+        };
+        assert!(Arc::ptr_eq(after_second, unchanged));
+
+        let Err(error) = hasher
+            .clone()
+            .augment_with_requirements(std::iter::once(&conflict))
+        else {
+            return Err("expected conflicting archive URL hashes".into());
+        };
+        assert_eq!(
+            error.to_string(),
+            "Conflicting archive URL hashes for `anyio @ https://files.pythonhosted.org/packages/36/55/ad4de788d84a630656ece71059665e01ca793c04294c463fd84132f40fe6/anyio-4.0.0-py3-none-any.whl#sha256=f7ed51751b2c2add651e5747c891b47e26d2a21be5d32d9311dfe9692f3e5d7a ; python_full_version >= '3.8'`: `sha256:cfdb2b588b9fc25ede96d8db56ed50848b0b649dca3dd1df0b11f683bb9e0b5f` conflicts with `sha256:f7ed51751b2c2add651e5747c891b47e26d2a21be5d32d9311dfe9692f3e5d7a`"
+        );
+
+        let mut expected = vec![
+            HashDigest::from_str(
+                "sha256:cfdb2b588b9fc25ede96d8db56ed50848b0b649dca3dd1df0b11f683bb9e0b5f",
+            )?,
+            HashDigest::from_str(
+                "sha512:f30761c1e8725b49c498273b90dba4b05c0fd157811994c806183062cb6647e773364ce45f0e1ff0b10e32fe6d0232ea5ad39476ccf37109d6b49603a09c11c2",
+            )?,
+        ];
+        expected.sort_unstable();
+        let RequirementSource::Url { url, .. } = &first.source else {
+            return Err("expected direct URL requirement".into());
+        };
+        assert_eq!(hasher.get_url(url), HashPolicy::All(expected.as_slice()));
         Ok(())
     }
 }
