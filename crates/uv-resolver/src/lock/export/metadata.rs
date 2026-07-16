@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::fmt::Display;
 use std::path::Path;
 
+use rustc_hash::FxHashSet;
 use uv_distribution_filename::WheelFilename;
 use uv_distribution_types::{Name, Requirement, RequiresPython, ResolvedDist, UrlString};
 use uv_fs::PortablePathBuf;
@@ -13,8 +14,8 @@ use uv_python::{Interpreter, LenientImplementationName, PythonEnvironment};
 use uv_workspace::Workspace;
 
 use crate::lock::{
-    Dependency, DirectSource, Package, PackageId, RegistrySource, Source, SourceDist,
-    SourceDistMetadata, Wheel, WheelWireSource,
+    Dependency, DirectSource, Package, PackageId, RegistrySource, RootPackagesByName, Source,
+    SourceDist, SourceDistMetadata, Wheel, WheelWireSource,
 };
 use crate::{Lock, LockError};
 
@@ -476,6 +477,7 @@ enum MetadataScriptNodeKind {
 fn root_dependencies<'lock>(
     workspace_root: &PortablePathBuf,
     lock: &'lock Lock,
+    root_packages: &RootPackagesByName<'lock>,
     requirements: impl IntoIterator<Item = &'lock Requirement>,
 ) -> Vec<MetadataDependency> {
     let mut dependencies = Vec::new();
@@ -483,12 +485,11 @@ fn root_dependencies<'lock>(
     // Root requirements retain names, extras, and markers rather than resolved package IDs. Match
     // them to the locked packages using the same name and fork-marker logic as lock export.
     for requirement in requirements {
-        for package in lock
-            .packages()
-            .iter()
-            .filter(|package| package.name() == &requirement.name)
+        for (package_index, fork_marker) in
+            root_packages.get(&requirement.name).into_iter().flatten()
         {
-            let Some(marker) = lock.root_requirement_marker(requirement, package) else {
+            let package = lock.package(*package_index);
+            let Some(marker) = lock.root_requirement_marker(requirement, *fork_marker) else {
                 continue;
             };
 
@@ -533,10 +534,11 @@ fn root_dependencies<'lock>(
 /// Dependency markers in the lock are simplified under the conditions required to reach their
 /// parent. Metadata consumers evaluate each edge marker independently, so restore those conditions
 /// by propagating markers from the metadata graph's entry points.
-fn metadata_reachability(
+fn metadata_reachability<'lock>(
     workspace_root: &PortablePathBuf,
     workspace: Option<&Workspace>,
-    lock: &Lock,
+    lock: &'lock Lock,
+    root_packages: &RootPackagesByName<'lock>,
 ) -> BTreeMap<MetadataNodeIdFlat, MarkerTree> {
     let mut reachability = BTreeMap::new();
     let mut queue = VecDeque::new();
@@ -584,12 +586,11 @@ fn metadata_reachability(
         .iter()
         .chain(lock.dependency_groups().values().flatten())
     {
-        for package in lock
-            .packages()
-            .iter()
-            .filter(|package| package.name() == &requirement.name)
+        for (package_index, fork_marker) in
+            root_packages.get(&requirement.name).into_iter().flatten()
         {
-            let Some(marker) = lock.root_requirement_marker(requirement, package) else {
+            let package = lock.package(*package_index);
+            let Some(marker) = lock.root_requirement_marker(requirement, *fork_marker) else {
                 continue;
             };
             let mut has_extra_node = false;
@@ -1287,7 +1288,14 @@ impl Metadata {
         let mut resolve = BTreeMap::new();
         let mut members = Vec::new();
         let workspace_root = PortablePathBuf::from(workspace_root);
-        let reachability = metadata_reachability(&workspace_root, workspace, lock);
+        let names = lock
+            .requirements()
+            .iter()
+            .chain(lock.dependency_groups().values().flatten())
+            .map(|requirement| &requirement.name)
+            .collect::<FxHashSet<_>>();
+        let root_packages = lock.root_packages_by_name(&names, |_| true);
+        let reachability = metadata_reachability(&workspace_root, workspace, lock, &root_packages);
 
         for lock_package in lock.packages() {
             let mut meta_package = MetadataNode::from_package_id(
@@ -1386,7 +1394,7 @@ impl Metadata {
             let path = PortablePathBuf::from(path);
             let node = MetadataNode::from_script(
                 path.clone(),
-                root_dependencies(&workspace_root, lock, lock.requirements()),
+                root_dependencies(&workspace_root, lock, &root_packages, lock.requirements()),
             );
             let id = node.id.to_flat();
             resolve.insert(id.clone(), node);
@@ -1399,7 +1407,7 @@ impl Metadata {
                 let node = MetadataNode::from_workspace_group(
                     workspace_root.clone(),
                     group.clone(),
-                    root_dependencies(&workspace_root, lock, requirements),
+                    root_dependencies(&workspace_root, lock, &root_packages, requirements),
                 );
                 let id = node.id.to_flat();
                 resolve.insert(id.clone(), node);
