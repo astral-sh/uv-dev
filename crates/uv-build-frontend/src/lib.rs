@@ -372,7 +372,8 @@ impl SourceBuild {
             .collect::<Result<Vec<_>, _>>()?;
 
         // Create a virtual environment, or install into the shared environment if requested.
-        let venv = if let Some(venv) = build_isolation.shared_environment(package_name.as_ref()) {
+        let shared_environment = build_isolation.shared_environment(package_name.as_ref());
+        let venv = if let Some(venv) = shared_environment {
             venv.clone()
         } else {
             uv_virtualenv::create_venv(
@@ -391,7 +392,7 @@ impl SourceBuild {
 
         // Set up the build environment. If build isolation is disabled, we assume the build
         // environment is already set up.
-        let resolved_requirements = if build_isolation.is_isolated(package_name.as_ref()) {
+        let resolved_requirements = if shared_environment.is_none() {
             debug!("Resolving build requirements");
 
             let dependency_sources = if extra_build_dependencies.is_empty() {
