@@ -711,10 +711,12 @@ impl Display for MarkerExpression {
 }
 
 /// The extra and dependency group names to use when evaluating a marker tree.
-#[derive(Debug, Copy, Clone)]
+#[derive(Copy, Clone)]
 enum ExtrasEnvironment<'a> {
     /// E.g., `extra == '...'`
     Extras(&'a [ExtraName]),
+    /// E.g., `extra == '...'`, evaluated with an indexed set of extra names.
+    ExtraPredicate(&'a dyn Fn(&ExtraName) -> bool),
     /// E.g., `'...' in extras` or `'...' in dependency_groups`
     Pep751(&'a [ExtraName], &'a [GroupName]),
 }
@@ -725,23 +727,29 @@ impl<'a> ExtrasEnvironment<'a> {
         Self::Extras(extras)
     }
 
+    /// Creates a new [`ExtrasEnvironment`] with a predicate for the given `extra` names.
+    fn from_extra_predicate(predicate: &'a dyn Fn(&ExtraName) -> bool) -> Self {
+        Self::ExtraPredicate(predicate)
+    }
+
     /// Creates a new [`ExtrasEnvironment`] for the given PEP 751 `extras` and `dependency_groups`.
     fn from_pep751(extras: &'a [ExtraName], dependency_groups: &'a [GroupName]) -> Self {
         Self::Pep751(extras, dependency_groups)
     }
 
     /// Returns the `extra` names in this environment.
-    fn extra(&self) -> &[ExtraName] {
+    fn contains_extra(&self, extra: &ExtraName) -> bool {
         match self {
-            Self::Extras(extra) => extra,
-            Self::Pep751(..) => &[],
+            Self::Extras(extras) => extras.contains(extra),
+            Self::ExtraPredicate(predicate) => predicate(extra),
+            Self::Pep751(..) => false,
         }
     }
 
     /// Returns the `extras` names in this environment, as in a PEP 751 lockfile.
     fn extras(&self) -> &[ExtraName] {
         match self {
-            Self::Extras(..) => &[],
+            Self::Extras(..) | Self::ExtraPredicate(..) => &[],
             Self::Pep751(extras, ..) => extras,
         }
     }
@@ -749,7 +757,7 @@ impl<'a> ExtrasEnvironment<'a> {
     /// Returns the `dependency_group` group names in this environment, as in a PEP 751 lockfile.
     fn dependency_groups(&self) -> &[GroupName] {
         match self {
-            Self::Extras(..) => &[],
+            Self::Extras(..) | Self::ExtraPredicate(..) => &[],
             Self::Pep751(.., groups) => groups,
         }
     }
@@ -996,6 +1004,20 @@ impl MarkerTree {
         )
     }
 
+    /// Does this marker apply in the given environment and with the given extra-membership
+    /// predicate?
+    pub fn evaluate_with_extra(
+        self,
+        env: &MarkerEnvironment,
+        is_extra: impl Fn(&ExtraName) -> bool,
+    ) -> bool {
+        self.evaluate_reporter_impl(
+            env,
+            ExtrasEnvironment::from_extra_predicate(&is_extra),
+            &mut TracingReporter,
+        )
+    }
+
     /// Evaluate a marker in the context of a PEP 751 lockfile, which exposes several additional
     /// markers (`extras` and `dependency_groups`) that are not available in any other context,
     /// per the spec.
@@ -1093,7 +1115,7 @@ impl MarkerTree {
             }
             MarkerTreeKind::Extra(marker) => {
                 return marker
-                    .edge(extras.extra().contains(marker.name().extra()))
+                    .edge(extras.contains_extra(marker.name().extra()))
                     .evaluate_reporter_impl(env, extras, reporter);
             }
             MarkerTreeKind::List(marker) => {
@@ -1832,6 +1854,7 @@ impl schemars::JsonSchema for MarkerTree {
 
 #[cfg(test)]
 mod test {
+    use std::collections::HashSet;
     use std::ops::Bound;
     use std::str::FromStr;
 
@@ -1842,6 +1865,8 @@ mod test {
 
     use crate::marker::{MarkerEnvironment, MarkerEnvironmentBuilder};
     use crate::{MarkerExpression, MarkerOperator, MarkerTree, MarkerValueString};
+
+    use super::ExtrasEnvironment;
 
     fn parse_err(input: &str) -> String {
         MarkerTree::from_str(input).unwrap_err().to_string()
@@ -3685,5 +3710,65 @@ mod test {
         assert!(!marker.evaluate_only_extras(std::slice::from_ref(&a)));
         assert!(!marker.evaluate_only_extras(std::slice::from_ref(&b)));
         assert!(marker.evaluate_only_extras(&[a.clone(), b.clone()]));
+    }
+
+    #[test]
+    fn evaluate_with_extra() {
+        let foo = ExtraName::from_str("foo").unwrap();
+        let scoped = ExtraName::from_str("extra-3-pkg-bar").unwrap();
+        let inactive = ExtraName::from_str("inactive").unwrap();
+        let env = env37();
+
+        for marker in [
+            m("extra == 'foo'"),
+            m("extra != 'foo'"),
+            m("sys_platform == 'linux' and extra == 'extra-3-pkg-bar'"),
+            m("python_full_version < '3.8' or extra == 'foo'"),
+            m("sys_platform in 'linux,win32' and extra == 'foo'"),
+            m("'lin' in sys_platform and extra != 'foo'"),
+            m("'dev' in extras or extra == 'foo'"),
+            m("'dev' not in dependency_groups and extra != 'foo'"),
+        ] {
+            for extras in [
+                vec![],
+                vec![foo.clone()],
+                vec![scoped.clone()],
+                vec![foo.clone(), scoped.clone(), foo.clone(), inactive.clone()],
+            ] {
+                let indexed = extras.iter().collect::<HashSet<_>>();
+                assert_eq!(
+                    marker.evaluate_with_extra(&env, |extra| indexed.contains(extra)),
+                    marker.evaluate(&env, &extras),
+                    "marker: {marker:?}, extras: {extras:?}",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn evaluate_with_extra_preserves_runtime_warnings() {
+        let foo = ExtraName::from_str("foo").unwrap();
+        let env = env37();
+        let marker = m("platform_release < '2' and extra == 'foo'");
+
+        for extras in [vec![], vec![foo.clone()]] {
+            let mut expected_warnings = vec![];
+            let expected = marker.evaluate_reporter_impl(
+                &env,
+                ExtrasEnvironment::from_extras(&extras),
+                &mut |kind, warning| expected_warnings.push((kind, warning)),
+            );
+            let indexed = extras.iter().collect::<HashSet<_>>();
+            let mut actual_warnings = vec![];
+            let actual = marker.evaluate_reporter_impl(
+                &env,
+                ExtrasEnvironment::from_extra_predicate(&|extra| indexed.contains(extra)),
+                &mut |kind, warning| actual_warnings.push((kind, warning)),
+            );
+
+            assert_eq!(actual, expected);
+            assert_eq!(actual_warnings, expected_warnings);
+            assert!(!actual_warnings.is_empty());
+        }
     }
 }
