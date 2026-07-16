@@ -68,7 +68,7 @@ mod logging;
 pub(crate) mod printer;
 pub(crate) mod settings;
 
-/// Whether to initialize process-global state.
+/// Whether process-global state needs to be initialized before a uv invocation.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 #[doc(hidden)]
 pub enum GlobalInitialization {
