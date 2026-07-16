@@ -133,7 +133,7 @@ impl GitRepository {
         if let Some(commit) = read_ref_file(&self.common_dir.join(git_ref))? {
             return Ok(commit);
         }
-        if let Some(commit) = read_packed_refs(&self.common_dir)?.remove(git_ref) {
+        if let Some(commit) = read_packed_ref(&self.common_dir, git_ref)? {
             return Ok(commit);
         }
         Err(GitInfoError::MissingRef(
@@ -206,6 +206,34 @@ fn read_packed_refs(git_dir: &Path) -> Result<BTreeMap<String, String>, GitInfoE
     Ok(refs)
 }
 
+/// Read a direct ref from `packed-refs`, validating the entire file.
+fn read_packed_ref(git_dir: &Path, target: &str) -> Result<Option<String>, GitInfoError> {
+    let path = git_dir.join("packed-refs");
+    let contents = match fs_err::read_to_string(&path) {
+        Ok(contents) => contents,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err.into()),
+    };
+
+    let mut found = None;
+    for line in contents.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with('^') {
+            continue;
+        }
+
+        let (commit, git_ref) = line
+            .split_once(' ')
+            .ok_or_else(|| GitInfoError::InvalidRef(git_dir.to_path_buf(), line.to_string()))?;
+        validate_commit(commit)?;
+        if git_ref == target {
+            found = Some(commit);
+        }
+    }
+
+    Ok(found.map(ToString::to_string))
+}
+
 fn resolve_relative_path(base: &Path, path: &str) -> PathBuf {
     let path = PathBuf::from(path);
     if path.is_absolute() {
@@ -232,7 +260,7 @@ mod tests {
 
     use anyhow::Result;
 
-    use super::{Commit, Tags};
+    use super::{Commit, GitInfoError, Tags};
 
     const COMMIT_1: &str = "1b6638fdb424e993d8354e75c55a3e524050c857";
     const COMMIT_2: &str = "a1a42cbd10d83bafd8600ba81f72bbef6c579385";
@@ -260,6 +288,7 @@ mod tests {
 {COMMIT_1} refs/heads/main
 {COMMIT_2} refs/tags/v0.1.0
 ^{COMMIT_1}
+{COMMIT_2} refs/heads/main
 "
             ),
         )?;
@@ -269,7 +298,7 @@ mod tests {
 
         assert_eq!(
             Commit::from_repository(&worktree)?,
-            Commit(COMMIT_1.to_string())
+            Commit(COMMIT_2.to_string())
         );
         assert_eq!(
             Tags::from_repository(&worktree)?,
@@ -291,6 +320,78 @@ mod tests {
             Commit(COMMIT_2.to_string())
         );
         assert_eq!(Tags::from_repository(&worktree)?, Tags(expected_tags));
+
+        let worktree_heads_dir = worktree_git_dir.join("refs").join("heads");
+        fs_err::create_dir_all(&worktree_heads_dir)?;
+        fs_err::write(worktree_heads_dir.join("main"), COMMIT_1)?;
+
+        assert_eq!(
+            Commit::from_repository(&worktree)?,
+            Commit(COMMIT_1.to_string())
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn packed_ref_lookup_validates_every_ref() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let repository = temp_dir.path().join("repository");
+        let git_dir = repository.join(".git");
+        fs_err::create_dir_all(&git_dir)?;
+        fs_err::write(git_dir.join("HEAD"), "ref: refs/heads/main\n")?;
+
+        fs_err::write(
+            git_dir.join("packed-refs"),
+            format!("{COMMIT_1} refs/heads/main\nnot-a-ref\n"),
+        )?;
+        assert!(matches!(
+            Commit::from_repository(&repository),
+            Err(GitInfoError::InvalidRef(_, line)) if line == "not-a-ref"
+        ));
+
+        let heads_dir = git_dir.join("refs").join("heads");
+        fs_err::create_dir_all(&heads_dir)?;
+        fs_err::write(heads_dir.join("main"), COMMIT_2)?;
+        assert_eq!(
+            Commit::from_repository(&repository)?,
+            Commit(COMMIT_2.to_string())
+        );
+        fs_err::remove_file(heads_dir.join("main"))?;
+
+        fs_err::write(
+            git_dir.join("packed-refs"),
+            format!("{COMMIT_1} refs/heads/main\nshort refs/heads/other\n"),
+        )?;
+        assert!(matches!(
+            Commit::from_repository(&repository),
+            Err(GitInfoError::WrongLength(commit)) if commit == "short"
+        ));
+
+        let invalid_commit = format!("{}z", &COMMIT_2[..39]);
+        fs_err::write(
+            git_dir.join("packed-refs"),
+            format!("{COMMIT_1} refs/heads/main\n{invalid_commit} refs/heads/other\n"),
+        )?;
+        assert!(matches!(
+            Commit::from_repository(&repository),
+            Err(GitInfoError::WrongDigit(commit)) if commit == invalid_commit
+        ));
+
+        fs_err::write(
+            git_dir.join("packed-refs"),
+            format!("{COMMIT_1} refs/heads/other\n"),
+        )?;
+        assert!(matches!(
+            Commit::from_repository(&repository),
+            Err(GitInfoError::MissingRef(_, git_ref)) if git_ref == "refs/heads/main"
+        ));
+
+        fs_err::remove_file(git_dir.join("packed-refs"))?;
+        assert!(matches!(
+            Commit::from_repository(&repository),
+            Err(GitInfoError::MissingRef(_, git_ref)) if git_ref == "refs/heads/main"
+        ));
 
         Ok(())
     }
