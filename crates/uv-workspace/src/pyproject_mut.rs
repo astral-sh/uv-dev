@@ -4,6 +4,7 @@ use std::str::FromStr;
 use std::{fmt, iter, mem};
 
 use itertools::Itertools;
+use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use toml_edit::{
@@ -13,7 +14,7 @@ use toml_edit::{
 use uv_cache_key::CanonicalUrl;
 use uv_distribution_types::{Index, IndexFormat, IndexUrl};
 use uv_fs::{PortablePath, is_same_file_allow_missing, try_relative_to_if};
-use uv_normalize::{ExtraName, GroupName, PackageName};
+use uv_normalize::{DEV_DEPENDENCIES, ExtraName, GroupName, PackageName};
 use uv_pep440::{Version, VersionParseError, VersionSpecifier, VersionSpecifiers};
 use uv_pep508::{MarkerTree, Requirement, VersionOrUrl};
 
@@ -1105,9 +1106,146 @@ impl PyProjectTomlMut {
         Ok(())
     }
 
+    /// Removes all occurrences of the given dependencies from the requested dependency array.
+    ///
+    /// Returns whether each input dependency was removed. Repeated input names intentionally
+    /// report only the first occurrence as removed.
+    pub fn remove_dependencies(
+        &mut self,
+        names: &[PackageName],
+        dependency_type: &DependencyType,
+    ) -> Result<Vec<bool>, Error> {
+        let positions =
+            names
+                .iter()
+                .enumerate()
+                .fold(FxHashMap::default(), |mut positions, (index, name)| {
+                    positions.entry(name).or_insert(index);
+                    positions
+                });
+        let mut removed = vec![false; names.len()];
+        let mut applicable = false;
+
+        if matches!(dependency_type, DependencyType::Dev)
+            || matches!(dependency_type, DependencyType::Group(group) if group == &*DEV_DEPENDENCIES)
+        {
+            if let Some(dev_dependencies) = self
+                .doc
+                .get_mut("tool")
+                .map(|tool| tool.as_table_mut().ok_or(Error::MalformedDependencies))
+                .transpose()?
+                .and_then(|tool| tool.get_mut("uv"))
+                .map(|tool_uv| tool_uv.as_table_mut().ok_or(Error::MalformedDependencies))
+                .transpose()?
+                .and_then(|tool_uv| tool_uv.get_mut("dev-dependencies"))
+                .map(|dependencies| {
+                    dependencies
+                        .as_array_mut()
+                        .ok_or(Error::MalformedDependencies)
+                })
+                .transpose()?
+            {
+                applicable = true;
+                remove_dependency_batch(&positions, &mut removed, dev_dependencies);
+            }
+        }
+
+        match dependency_type {
+            DependencyType::Production => {
+                if let Some(dependencies) = self
+                    .project_mut()?
+                    .and_then(|project| project.get_mut("dependencies"))
+                    .map(|dependencies| {
+                        dependencies
+                            .as_array_mut()
+                            .ok_or(Error::MalformedDependencies)
+                    })
+                    .transpose()?
+                {
+                    applicable = true;
+                    remove_dependency_batch(&positions, &mut removed, dependencies);
+                }
+            }
+            DependencyType::Optional(extra) => {
+                if let Some(optional_dependencies) = self
+                    .project_mut()?
+                    .and_then(|project| project.get_mut("optional-dependencies"))
+                    .map(|extras| {
+                        extras
+                            .as_table_like_mut()
+                            .ok_or(Error::MalformedDependencies)
+                    })
+                    .transpose()?
+                    .and_then(|extras| {
+                        extras.iter_mut().find_map(|(key, value)| {
+                            if ExtraName::from_str(key.get()).is_ok_and(|group| group == *extra) {
+                                Some(value)
+                            } else {
+                                None
+                            }
+                        })
+                    })
+                    .map(|dependencies| {
+                        dependencies
+                            .as_array_mut()
+                            .ok_or(Error::MalformedDependencies)
+                    })
+                    .transpose()?
+                {
+                    applicable = true;
+                    remove_dependency_batch(&positions, &mut removed, optional_dependencies);
+                }
+            }
+            DependencyType::Dev | DependencyType::Group(_) => {
+                let group = match dependency_type {
+                    DependencyType::Group(group) => group,
+                    DependencyType::Production
+                    | DependencyType::Dev
+                    | DependencyType::Optional(_) => &*DEV_DEPENDENCIES,
+                };
+
+                if let Some(group_dependencies) = self
+                    .doc
+                    .get_mut("dependency-groups")
+                    .map(|groups| {
+                        groups
+                            .as_table_like_mut()
+                            .ok_or(Error::MalformedDependencies)
+                    })
+                    .transpose()?
+                    .and_then(|groups| {
+                        groups.iter_mut().find_map(|(key, value)| {
+                            if GroupName::from_str(key.get())
+                                .is_ok_and(|existing| existing == *group)
+                            {
+                                Some(value)
+                            } else {
+                                None
+                            }
+                        })
+                    })
+                    .map(|dependencies| {
+                        dependencies
+                            .as_array_mut()
+                            .ok_or(Error::MalformedDependencies)
+                    })
+                    .transpose()?
+                {
+                    applicable = true;
+                    remove_dependency_batch(&positions, &mut removed, group_dependencies);
+                }
+            }
+        }
+
+        if applicable {
+            self.remove_sources(names)?;
+        }
+
+        Ok(removed)
+    }
+
     /// Removes all occurrences of dependencies with the given name.
     pub fn remove_dependency(&mut self, name: &PackageName) -> Result<Vec<Requirement>, Error> {
-        // Try to get `project.dependencies`.
         let Some(dependencies) = self
             .project_mut()?
             .and_then(|project| project.get_mut("dependencies"))
@@ -1129,7 +1267,6 @@ impl PyProjectTomlMut {
 
     /// Removes all occurrences of development dependencies with the given name.
     pub fn remove_dev_dependency(&mut self, name: &PackageName) -> Result<Vec<Requirement>, Error> {
-        // Try to get `tool.uv.dev-dependencies`.
         let Some(dev_dependencies) = self
             .doc
             .get_mut("tool")
@@ -1161,7 +1298,6 @@ impl PyProjectTomlMut {
         name: &PackageName,
         group: &ExtraName,
     ) -> Result<Vec<Requirement>, Error> {
-        // Try to get `project.optional-dependencies.<group>`.
         let Some(optional_dependencies) = self
             .project_mut()?
             .and_then(|project| project.get_mut("optional-dependencies"))
@@ -1173,7 +1309,7 @@ impl PyProjectTomlMut {
             .transpose()?
             .and_then(|extras| {
                 extras.iter_mut().find_map(|(key, value)| {
-                    if ExtraName::from_str(key.get()).is_ok_and(|g| g == *group) {
+                    if ExtraName::from_str(key.get()).is_ok_and(|existing| existing == *group) {
                         Some(value)
                     } else {
                         None
@@ -1202,7 +1338,6 @@ impl PyProjectTomlMut {
         name: &PackageName,
         group: &GroupName,
     ) -> Result<Vec<Requirement>, Error> {
-        // Try to get `project.optional-dependencies.<group>`.
         let Some(group_dependencies) = self
             .doc
             .get_mut("dependency-groups")
@@ -1214,7 +1349,7 @@ impl PyProjectTomlMut {
             .transpose()?
             .and_then(|groups| {
                 groups.iter_mut().find_map(|(key, value)| {
-                    if GroupName::from_str(key.get()).is_ok_and(|g| g == *group) {
+                    if GroupName::from_str(key.get()).is_ok_and(|existing| existing == *group) {
                         Some(value)
                     } else {
                         None
@@ -1237,9 +1372,8 @@ impl PyProjectTomlMut {
         Ok(requirements)
     }
 
-    /// Remove a matching source from `tool.uv.sources`, if it exists.
+    /// Remove a matching source from `tool.uv.sources`, if it is no longer referenced.
     fn remove_source(&mut self, name: &PackageName) -> Result<(), Error> {
-        // If the dependency is still in use, don't remove the source.
         if !self.find_dependency(name, None).is_empty() {
             return Ok(());
         }
@@ -1259,7 +1393,6 @@ impl PyProjectTomlMut {
             if let Some(key) = find_source(name, sources) {
                 sources.remove(&key);
 
-                // Remove the `tool.uv.sources` table if it is empty.
                 if sources.is_empty() {
                     self.doc
                         .entry("tool")
@@ -1272,6 +1405,109 @@ impl PyProjectTomlMut {
                         .ok_or(Error::MalformedSources)?
                         .remove("sources");
                 }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Remove matching sources from `tool.uv.sources`, if they are no longer referenced.
+    fn remove_sources(&mut self, names: &[PackageName]) -> Result<(), Error> {
+        let mut unused = names.iter().cloned().collect::<FxHashSet<_>>();
+
+        let mut retain_used = |dependencies: &Array| {
+            for requirement in dependencies
+                .iter()
+                .filter_map(Value::as_str)
+                .filter_map(try_parse_requirement)
+            {
+                unused.remove(&requirement.name);
+            }
+        };
+
+        if let Some(project) = self.doc.get("project").and_then(Item::as_table) {
+            if let Some(dependencies) = project.get("dependencies").and_then(Item::as_array) {
+                retain_used(dependencies);
+            }
+            if let Some(extras) = project
+                .get("optional-dependencies")
+                .and_then(Item::as_table)
+            {
+                for (extra, dependencies) in extras {
+                    if ExtraName::from_str(extra).is_ok()
+                        && let Some(dependencies) = dependencies.as_array()
+                    {
+                        retain_used(dependencies);
+                    }
+                }
+            }
+        }
+        if let Some(groups) = self.doc.get("dependency-groups").and_then(Item::as_table) {
+            for (group, dependencies) in groups {
+                if GroupName::from_str(group).is_ok()
+                    && let Some(dependencies) = dependencies.as_array()
+                {
+                    retain_used(dependencies);
+                }
+            }
+        }
+        if let Some(dev_dependencies) = self
+            .doc
+            .get("tool")
+            .and_then(Item::as_table)
+            .and_then(|tool| tool.get("uv"))
+            .and_then(Item::as_table)
+            .and_then(|uv| uv.get("dev-dependencies"))
+            .and_then(Item::as_array)
+        {
+            retain_used(dev_dependencies);
+        }
+
+        if unused.is_empty() {
+            return Ok(());
+        }
+
+        if let Some(sources) = self
+            .doc
+            .get_mut("tool")
+            .map(|tool| tool.as_table_mut().ok_or(Error::MalformedSources))
+            .transpose()?
+            .and_then(|tool| tool.get_mut("uv"))
+            .map(|tool_uv| tool_uv.as_table_mut().ok_or(Error::MalformedSources))
+            .transpose()?
+            .and_then(|tool_uv| tool_uv.get_mut("sources"))
+            .map(|sources| sources.as_table_mut().ok_or(Error::MalformedSources))
+            .transpose()?
+        {
+            let mut removed_names = FxHashSet::default();
+            let keys = sources
+                .iter()
+                .filter_map(|(key, _)| {
+                    PackageName::from_str(key)
+                        .ok()
+                        .filter(|name| unused.contains(name))
+                        .filter(|name| removed_names.insert(name.clone()))
+                        .map(|_| key.to_string())
+                })
+                .collect::<Vec<_>>();
+
+            let removed_source = !keys.is_empty();
+            for key in keys {
+                sources.remove(&key);
+            }
+
+            // Remove the `tool.uv.sources` table if it is empty.
+            if removed_source && sources.is_empty() {
+                self.doc
+                    .entry("tool")
+                    .or_insert(implicit())
+                    .as_table_mut()
+                    .ok_or(Error::MalformedSources)?
+                    .entry("uv")
+                    .or_insert(implicit())
+                    .as_table_mut()
+                    .ok_or(Error::MalformedSources)?
+                    .remove("sources");
             }
         }
 
@@ -1593,7 +1829,6 @@ fn add_dependency(
             // the new dependency.
             if deps.len() > 1 && index == 0 {
                 let prefix = deps
-                    .clone()
                     .get(index + 1)
                     .unwrap()
                     .decor()
@@ -1781,6 +2016,55 @@ fn remove_dependency_at(index: usize, deps: &mut Array) -> Option<Requirement> {
     deps.remove(index)
         .as_str()
         .and_then(|req| Requirement::from_str(req).ok())
+}
+
+/// Removes all occurrences of a set of dependencies from the given `deps` array in one pass.
+fn remove_dependency_batch(
+    names: &FxHashMap<&PackageName, usize>,
+    removed: &mut [bool],
+    deps: &mut Array,
+) {
+    let matches = deps
+        .iter()
+        .map(|dependency| {
+            dependency
+                .as_str()
+                .and_then(try_parse_requirement)
+                .and_then(|requirement| names.get(&requirement.name).copied())
+        })
+        .collect::<Vec<_>>();
+
+    if matches.iter().all(Option::is_none) {
+        return;
+    }
+
+    // Comments belonging to a removed item are stored in its prefix. Accumulate those prefixes
+    // and move them onto the next retained item (or the array trailing) before filtering.
+    let mut prefix = String::new();
+    for (dependency, matched) in deps.iter_mut().zip(&matches) {
+        if let Some(index) = matched {
+            removed[*index] = true;
+            if let Some(existing) = dependency.decor().prefix().and_then(|raw| raw.as_str()) {
+                prefix.push_str(existing);
+            }
+        } else if !prefix.is_empty() {
+            if let Some(existing) = dependency.decor().prefix().and_then(|raw| raw.as_str()) {
+                prefix.push_str(existing);
+            }
+            dependency.decor_mut().set_prefix(mem::take(&mut prefix));
+        }
+    }
+
+    if !prefix.is_empty() {
+        if let Some(existing) = deps.trailing().as_str() {
+            prefix.push_str(existing);
+        }
+        deps.set_trailing(prefix);
+    }
+
+    let mut matches = matches.into_iter();
+    deps.retain(|_| matches.next().is_some_and(|matched| matched.is_none()));
+    reformat_array_multiline(deps);
 }
 
 /// Returns a `Vec` containing the all dependencies with the given name, along with their positions
