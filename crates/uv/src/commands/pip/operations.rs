@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, anyhow};
 use itertools::Itertools;
 use owo_colors::OwoColorize;
+use rustc_hash::FxHashSet;
 use tracing::debug;
 
 use uv_cache::Cache;
@@ -189,14 +190,31 @@ pub(crate) async fn resolve<InstalledPackages: InstalledPackagesProvider>(
             });
 
             // If any of the extras were unused, surface a warning.
-            let mut unused_extras = extras
-                .explicit_names()
-                .filter(|extra| {
-                    !resolutions
+            let mut explicit_extras = extras.explicit_names();
+            let mut unused_extras = match (explicit_extras.next(), explicit_extras.next()) {
+                (None, _) => Vec::new(),
+                (Some(extra), None) => {
+                    if resolutions
                         .iter()
                         .any(|resolution| resolution.extras().contains(extra))
-                })
-                .collect::<Vec<_>>();
+                    {
+                        Vec::new()
+                    } else {
+                        vec![extra]
+                    }
+                }
+                (Some(first), Some(second)) => {
+                    let provided_extras = resolutions
+                        .iter()
+                        .flat_map(SourceTreeResolution::extras)
+                        .collect::<FxHashSet<_>>();
+                    [first, second]
+                        .into_iter()
+                        .chain(explicit_extras)
+                        .filter(|extra| !provided_extras.contains(extra))
+                        .collect()
+                }
+            };
             if !unused_extras.is_empty() {
                 unused_extras.sort_unstable();
                 unused_extras.dedup();
