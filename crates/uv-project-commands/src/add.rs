@@ -752,11 +752,8 @@ pub async fn add(
             EditTarget::Project(project) => project.root(),
         };
         let locations = IndexLocations::new(indexes, Vec::new(), false);
-        let mut indexes = locations.defined_indexes().collect::<Vec<_>>();
-        indexes.reverse();
-        for index in indexes {
-            toml.add_index(index, root_dir)?;
-        }
+        let indexes = locations.defined_indexes().collect::<Vec<_>>();
+        toml.add_indexes(&indexes, root_dir)?;
     }
 
     let content = toml.to_string();
