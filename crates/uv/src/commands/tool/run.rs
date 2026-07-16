@@ -1009,7 +1009,7 @@ async fn get_or_create_environment(
     };
 
     // Read the `--with` requirements.
-    let spec = RequirementsSpecification::from_sources(
+    let spec = crate::commands::pylock::read_requirements_with_pylock_constraints(
         with,
         constraints,
         overrides,

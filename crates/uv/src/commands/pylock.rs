@@ -8,13 +8,64 @@ use tracing::info_span;
 
 use uv_client::BaseClientBuilder;
 use uv_configuration::{BuildOptions, HashCheckingMode, RequirementsInput, TargetTriple};
-use uv_distribution_types::Resolution;
+use uv_distribution_types::{NameRequirementSpecification, Resolution};
 use uv_lock::PylockToml;
 use uv_normalize::{ExtraName, GroupName};
 use uv_python::{Interpreter, PythonVersion};
+use uv_requirements::{GroupsSpecification, RequirementsSource, RequirementsSpecification};
 use uv_types::HashStrategy;
 
 use crate::commands::pip::{resolution_markers, resolution_tags};
+
+/// Read requirement sources, converting any `pylock.toml` constraints in the application layer.
+pub(crate) async fn read_requirements_with_pylock_constraints(
+    requirements: &[RequirementsSource],
+    constraints: &[RequirementsSource],
+    overrides: &[RequirementsSource],
+    excludes: &[RequirementsSource],
+    groups: Option<&GroupsSpecification>,
+    client_builder: &BaseClientBuilder<'_>,
+) -> anyhow::Result<RequirementsSpecification> {
+    if requirements
+        .iter()
+        .any(|source| matches!(source, RequirementsSource::PylockToml(_)))
+        && !constraints.is_empty()
+    {
+        return Err(anyhow::anyhow!(
+            "Cannot specify constraints with a `pylock.toml` file"
+        ));
+    }
+
+    let requirements_txt_constraints = constraints
+        .iter()
+        .filter(|source| !matches!(source, RequirementsSource::PylockToml(_)))
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut spec = RequirementsSpecification::from_sources(
+        requirements,
+        &requirements_txt_constraints,
+        overrides,
+        excludes,
+        groups,
+        client_builder,
+    )
+    .await?;
+
+    for source in constraints {
+        let RequirementsSource::PylockToml(input) = source else {
+            continue;
+        };
+        let (_, pylock) = read_pylock_toml(input, client_builder).await?;
+        spec.constraints.extend(
+            pylock
+                .to_constraints()
+                .into_iter()
+                .map(NameRequirementSpecification::from),
+        );
+    }
+
+    Ok(spec)
+}
 
 /// Read a `pylock.toml` from a local path or remote URL and parse it.
 ///
