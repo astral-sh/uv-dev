@@ -161,6 +161,8 @@ impl<'a> RegistryWheelIndex<'a> {
     /// Return an iterator over available wheels for a given package.
     ///
     /// If the package is not yet indexed, this will index the package by reading from the cache.
+    ///
+    /// This is also used by Pixi to inspect cached registry wheels.
     pub fn get(&mut self, name: &'a PackageName) -> impl Iterator<Item = &IndexEntry<'_>> {
         self.get_impl(name).iter().rev()
     }
@@ -198,6 +200,7 @@ impl<'a> RegistryWheelIndex<'a> {
         let mut entries = vec![];
 
         let mut seen = FxHashSet::default();
+        let mut build_info = None;
         for index in index_locations.allowed_indexes() {
             if !seen.insert(index.url()) {
                 continue;
@@ -307,22 +310,26 @@ impl<'a> RegistryWheelIndex<'a> {
                     let cache_shard = cache_shard.shard(revision.id());
 
                     // If there are build settings, we need to scope to a cache shard.
-                    let extra_build_deps =
-                        Self::extra_build_requires_for(package, extra_build_requires);
-                    let extra_build_vars =
-                        Self::extra_build_variables_for(package, extra_build_variables);
-                    let config_settings = Self::config_settings_for(
-                        package,
-                        config_settings,
-                        config_settings_package,
-                    );
-                    let build_info = BuildInfo::from_settings(
-                        config_settings.into_owned(),
-                        extra_build_deps.to_vec(),
-                        extra_build_vars.cloned(),
-                    );
-                    let cache_shard = build_info
-                        .cache_shard()
+                    let (build_info, build_info_shard) = build_info.get_or_insert_with(|| {
+                        let extra_build_deps =
+                            Self::extra_build_requires_for(package, extra_build_requires);
+                        let extra_build_vars =
+                            Self::extra_build_variables_for(package, extra_build_variables);
+                        let config_settings = Self::config_settings_for(
+                            package,
+                            config_settings,
+                            config_settings_package,
+                        );
+                        let build_info = BuildInfo::from_settings(
+                            config_settings.into_owned(),
+                            extra_build_deps.to_vec(),
+                            extra_build_vars.cloned(),
+                        );
+                        let build_info_shard = build_info.cache_shard();
+                        (build_info, build_info_shard)
+                    });
+                    let cache_shard = build_info_shard
+                        .as_deref()
                         .map(|digest| cache_shard.shard(digest))
                         .unwrap_or(cache_shard);
 
@@ -411,5 +418,220 @@ impl<'a> RegistryWheelIndex<'a> {
         extra_build_variables: &'settings ExtraBuildVariables,
     ) -> Option<&'settings BuildVariables> {
         extra_build_variables.get(name)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::str::FromStr;
+
+    use uv_cache::{Cache, CacheBucket, WheelCache};
+    use uv_cache_info::CacheInfo;
+    use uv_distribution_types::{
+        BuildInfo, ConfigSettingEntry, ConfigSettingPackageEntry, ConfigSettings,
+        ExtraBuildRequirement, ExtraBuildRequires, ExtraBuildVariables, Index, IndexLocations,
+        IndexUrl, PackageConfigSettings,
+    };
+    use uv_normalize::PackageName;
+    use uv_platform_tags::{Arch, Os, Platform, Tags, TagsOptions};
+    use uv_types::HashStrategy;
+
+    use super::RegistryWheelIndex;
+    use crate::source::LOCAL_REVISION;
+
+    #[tokio::test]
+    async fn registry_built_wheels_share_package_build_settings() -> anyhow::Result<()> {
+        let cache = Cache::temp()?;
+        let package = PackageName::from_str("demo")?;
+        let index_url = IndexUrl::parse("./local-index", None)?;
+        let index_locations = IndexLocations::new(
+            vec![],
+            vec![Index::from_find_links(index_url.clone())],
+            true,
+        );
+        let tags = Tags::from_env(
+            Platform::new(
+                Os::Manylinux {
+                    major: 2,
+                    minor: 17,
+                },
+                Arch::X86_64,
+            ),
+            (3, 12),
+            "cpython",
+            (3, 12),
+            TagsOptions::default(),
+        )?;
+        let hasher = HashStrategy::None;
+
+        let config_settings = ["global=enabled", "shared=global"]
+            .into_iter()
+            .map(ConfigSettingEntry::from_str)
+            .collect::<Result<ConfigSettings, _>>()
+            .map_err(anyhow::Error::msg)?;
+        let config_settings_package = ["demo:package=enabled", "demo:shared=package"]
+            .into_iter()
+            .map(ConfigSettingPackageEntry::from_str)
+            .collect::<Result<PackageConfigSettings, _>>()
+            .map_err(anyhow::Error::msg)?;
+        let extra_build_requirements = vec![ExtraBuildRequirement {
+            requirement: uv_pep508::Requirement::from_str("setuptools>=1")?.into(),
+            match_runtime: false,
+        }];
+        let extra_build_requires =
+            ExtraBuildRequires::from_iter([(package.clone(), extra_build_requirements.clone())]);
+        let build_variables = BTreeMap::from([("DEMO_BUILD".to_string(), "enabled".to_string())]);
+        let extra_build_variables =
+            ExtraBuildVariables::from_iter([(package.clone(), build_variables.clone())]);
+
+        let merged_settings = config_settings_package
+            .get(&package)
+            .expect("package settings")
+            .clone()
+            .merge(config_settings.clone());
+        insta::assert_snapshot!(merged_settings.escape_for_python(), @r###"{"global":"enabled","package":"enabled","shared":["package","global"]}"###);
+        let expected_build_info = BuildInfo::from_settings(
+            merged_settings,
+            extra_build_requirements,
+            Some(build_variables),
+        );
+        let digest = expected_build_info.cache_shard().expect("build shard");
+
+        let package_shard = cache.shard(
+            CacheBucket::SourceDistributions,
+            WheelCache::Index(&index_url).wheel_dir(package.as_ref()),
+        );
+        for version in ["2.0", "10.0", "1.0"] {
+            let revision_id = format!("revision-{version}");
+            let version_shard = package_shard.shard(version);
+            fs_err::create_dir_all(version_shard.as_ref())?;
+            let revision = (CacheInfo::default(), (&revision_id, Vec::<String>::new()));
+            fs_err::write(
+                version_shard.entry(LOCAL_REVISION),
+                rmp_serde::to_vec(&revision)?,
+            )?;
+            let wheel = version_shard
+                .shard(&revision_id)
+                .shard(&digest)
+                .shard(format!("demo-{version}-py3-none-any"));
+            cache
+                .persist(cache.build_dir()?.keep(), wheel.as_ref())
+                .await?;
+        }
+
+        let mut index = RegistryWheelIndex::new(
+            &cache,
+            &tags,
+            &index_locations,
+            &hasher,
+            &config_settings,
+            &config_settings_package,
+            &extra_build_requires,
+            &extra_build_variables,
+        );
+        let entries = index.get(&package).collect::<Vec<_>>();
+
+        insta::assert_debug_snapshot!(
+            entries
+                .iter()
+                .map(|entry| entry.dist().filename.to_string())
+                .collect::<Vec<_>>(),
+            @r###"
+        [
+            "demo-10.0-py3-none-any.whl",
+            "demo-2.0-py3-none-any.whl",
+            "demo-1.0-py3-none-any.whl",
+        ]
+        "###
+        );
+        assert!(entries.iter().all(|entry| entry.is_built()));
+        assert!(
+            entries
+                .iter()
+                .all(|entry| { entry.dist().build_info.as_ref() == Some(&expected_build_info) })
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn registry_built_wheels_without_build_settings_skip_empty_cache_shard()
+    -> anyhow::Result<()> {
+        let cache = Cache::temp()?;
+        let package = PackageName::from_str("demo")?;
+        let index_url = IndexUrl::parse("./local-index-empty", None)?;
+        let index_locations = IndexLocations::new(
+            vec![],
+            vec![Index::from_find_links(index_url.clone())],
+            true,
+        );
+        let tags = Tags::from_env(
+            Platform::new(
+                Os::Manylinux {
+                    major: 2,
+                    minor: 17,
+                },
+                Arch::X86_64,
+            ),
+            (3, 12),
+            "cpython",
+            (3, 12),
+            TagsOptions::default(),
+        )?;
+        let hasher = HashStrategy::None;
+        let config_settings = ConfigSettings::default();
+        let config_settings_package = PackageConfigSettings::default();
+        let extra_build_requires = ExtraBuildRequires::default();
+        let extra_build_variables = ExtraBuildVariables::default();
+
+        let package_shard = cache.shard(
+            CacheBucket::SourceDistributions,
+            WheelCache::Index(&index_url).wheel_dir(package.as_ref()),
+        );
+        let valid = package_shard.shard("1.0");
+        fs_err::create_dir_all(valid.as_ref())?;
+        let revision_id = "revision-1.0";
+        let revision = (CacheInfo::default(), (revision_id, Vec::<String>::new()));
+        fs_err::write(valid.entry(LOCAL_REVISION), rmp_serde::to_vec(&revision)?)?;
+        let wheel = valid.shard(revision_id).shard("demo-1.0-py3-none-any");
+        cache
+            .persist(cache.build_dir()?.keep(), wheel.as_ref())
+            .await?;
+
+        let invalid = package_shard.shard("2.0");
+        fs_err::create_dir_all(invalid.as_ref())?;
+        fs_err::write(invalid.entry(LOCAL_REVISION), b"invalid revision")?;
+
+        let mut index = RegistryWheelIndex::new(
+            &cache,
+            &tags,
+            &index_locations,
+            &hasher,
+            &config_settings,
+            &config_settings_package,
+            &extra_build_requires,
+            &extra_build_variables,
+        );
+        let entries = index.get(&package).collect::<Vec<_>>();
+
+        insta::assert_debug_snapshot!(
+            entries
+                .iter()
+                .map(|entry| entry.dist().filename.to_string())
+                .collect::<Vec<_>>(),
+            @r###"
+        [
+            "demo-1.0-py3-none-any.whl",
+        ]
+        "###
+        );
+        assert!(
+            entries
+                .iter()
+                .all(|entry| { entry.dist().build_info.as_ref() == Some(&BuildInfo::default()) })
+        );
+
+        Ok(())
     }
 }
