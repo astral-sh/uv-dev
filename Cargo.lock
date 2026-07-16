@@ -5886,6 +5886,7 @@ dependencies = [
  "toml",
  "uv",
  "uv-cache",
+ "uv-cache-info",
  "uv-cli",
  "uv-client",
  "uv-command-support",
