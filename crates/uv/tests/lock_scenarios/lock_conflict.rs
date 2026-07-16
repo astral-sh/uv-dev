@@ -16120,9 +16120,9 @@ fn many_pairwise_conflicts_shared_extra() -> Result<()> {
 
     // A project with:
     // - `pinned`: pins sortedcontainers==2.3.0 (old version for CI testing)
-    // - `a` through `e`: each uses sortedcontainers>=2.4
+    // - `a` through `j`: each uses sortedcontainers>=2.4
     // - Each task extra conflicts with `pinned` pairwise
-    // - The task extras do NOT conflict with each other
+    // - `e` and `f` also conflict with each other, so their shared conflict remains live
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
         r#"
@@ -16139,6 +16139,11 @@ fn many_pairwise_conflicts_shared_extra() -> Result<()> {
         c = ["sortedcontainers>=2.4"]
         d = ["sortedcontainers>=2.4"]
         e = ["sortedcontainers>=2.4"]
+        f = ["sortedcontainers>=2.4"]
+        g = ["sortedcontainers>=2.4"]
+        h = ["sortedcontainers>=2.4"]
+        i = ["sortedcontainers>=2.4"]
+        j = ["sortedcontainers>=2.4"]
 
         [tool.uv]
         conflicts = [
@@ -16161,6 +16166,30 @@ fn many_pairwise_conflicts_shared_extra() -> Result<()> {
             [
               { extra = "pinned" },
               { extra = "e" },
+            ],
+            [
+              { extra = "pinned" },
+              { extra = "f" },
+            ],
+            [
+              { extra = "pinned" },
+              { extra = "g" },
+            ],
+            [
+              { extra = "pinned" },
+              { extra = "h" },
+            ],
+            [
+              { extra = "pinned" },
+              { extra = "i" },
+            ],
+            [
+              { extra = "pinned" },
+              { extra = "j" },
+            ],
+            [
+              { extra = "e" },
+              { extra = "f" },
             ],
         ]
         "#,
@@ -16203,6 +16232,24 @@ fn many_pairwise_conflicts_shared_extra() -> Result<()> {
         ], [
             { package = "project", extra = "e" },
             { package = "project", extra = "pinned" },
+        ], [
+            { package = "project", extra = "f" },
+            { package = "project", extra = "pinned" },
+        ], [
+            { package = "project", extra = "g" },
+            { package = "project", extra = "pinned" },
+        ], [
+            { package = "project", extra = "h" },
+            { package = "project", extra = "pinned" },
+        ], [
+            { package = "project", extra = "i" },
+            { package = "project", extra = "pinned" },
+        ], [
+            { package = "project", extra = "j" },
+            { package = "project", extra = "pinned" },
+        ], [
+            { package = "project", extra = "e" },
+            { package = "project", extra = "f" },
         ]]
 
         [options]
@@ -16229,6 +16276,21 @@ fn many_pairwise_conflicts_shared_extra() -> Result<()> {
         e = [
             { name = "sortedcontainers", version = "2.4.0", source = { registry = "https://pypi.org/simple" } },
         ]
+        f = [
+            { name = "sortedcontainers", version = "2.4.0", source = { registry = "https://pypi.org/simple" } },
+        ]
+        g = [
+            { name = "sortedcontainers", version = "2.4.0", source = { registry = "https://pypi.org/simple" } },
+        ]
+        h = [
+            { name = "sortedcontainers", version = "2.4.0", source = { registry = "https://pypi.org/simple" } },
+        ]
+        i = [
+            { name = "sortedcontainers", version = "2.4.0", source = { registry = "https://pypi.org/simple" } },
+        ]
+        j = [
+            { name = "sortedcontainers", version = "2.4.0", source = { registry = "https://pypi.org/simple" } },
+        ]
         pinned = [
             { name = "sortedcontainers", version = "2.3.0", source = { registry = "https://pypi.org/simple" } },
         ]
@@ -16240,9 +16302,14 @@ fn many_pairwise_conflicts_shared_extra() -> Result<()> {
             { name = "sortedcontainers", marker = "extra == 'c'", specifier = ">=2.4" },
             { name = "sortedcontainers", marker = "extra == 'd'", specifier = ">=2.4" },
             { name = "sortedcontainers", marker = "extra == 'e'", specifier = ">=2.4" },
+            { name = "sortedcontainers", marker = "extra == 'f'", specifier = ">=2.4" },
+            { name = "sortedcontainers", marker = "extra == 'g'", specifier = ">=2.4" },
+            { name = "sortedcontainers", marker = "extra == 'h'", specifier = ">=2.4" },
+            { name = "sortedcontainers", marker = "extra == 'i'", specifier = ">=2.4" },
+            { name = "sortedcontainers", marker = "extra == 'j'", specifier = ">=2.4" },
             { name = "sortedcontainers", marker = "extra == 'pinned'", specifier = "==2.3.0" },
         ]
-        provides-extras = ["pinned", "a", "b", "c", "d", "e"]
+        provides-extras = ["pinned", "a", "b", "c", "d", "e", "f", "g", "h", "i", "j"]
 
         [[package]]
         name = "sortedcontainers"
