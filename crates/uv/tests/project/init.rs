@@ -2554,7 +2554,7 @@ fn init_requires_python_version_file() -> Result<()> {
 /// Run `uv init --script`, respecting `--pin-python` when discovering `.python-version`.
 #[test]
 fn init_script_requires_python_version_file() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.9", "3.12"]);
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.9"]);
 
     context.temp_dir.child(".python-version").write_str("3.9")?;
 
