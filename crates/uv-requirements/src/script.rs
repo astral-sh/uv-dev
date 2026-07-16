@@ -3,7 +3,9 @@ use std::collections::BTreeMap;
 use uv_auth::CredentialsCache;
 use uv_cache::Cache;
 use uv_configuration::{NoSources, Override, PackageOverride};
-use uv_distribution::{LoweredExtraBuildDependencies, LoweredRequirement, LoweringError};
+use uv_distribution::{
+    IndexLookup, LoweredExtraBuildDependencies, LoweredRequirement, LoweringError,
+};
 use uv_distribution_types::{
     ExtraBuildRequirement, ExtraBuildRequires, IndexLocations, IndexUrlError,
 };
@@ -53,6 +55,7 @@ pub async fn script_specification(
         .map(|index| index.relative_to(&script_dir))
         .collect::<Result<Vec<_>, _>>()?;
     let script_sources = script.sources(sources);
+    let indexes = IndexLookup::new(index_locations, &script_indexes, &[]);
 
     let mut requirements = Vec::new();
     for requirement in dependencies.iter().cloned() {
@@ -61,8 +64,7 @@ pub async fn script_specification(
                 requirement,
                 script_dir.as_ref(),
                 script_sources.as_ref(),
-                &script_indexes,
-                index_locations,
+                &indexes,
                 cache,
                 workspace_cache,
                 credentials_cache,
@@ -88,8 +90,7 @@ pub async fn script_specification(
                 requirement,
                 script_dir.as_ref(),
                 script_sources.as_ref(),
-                &script_indexes,
-                index_locations,
+                &indexes,
                 cache,
                 workspace_cache,
                 credentials_cache,
@@ -118,8 +119,7 @@ pub async fn script_specification(
                             requirement,
                             script_dir.as_ref(),
                             script_sources.as_ref(),
-                            &script_indexes,
-                            index_locations,
+                            &indexes,
                             cache,
                             workspace_cache,
                             credentials_cache,
@@ -140,8 +140,7 @@ pub async fn script_specification(
                                 requirement,
                                 script_dir.as_ref(),
                                 script_sources.as_ref(),
-                                &script_indexes,
-                                index_locations,
+                                &indexes,
                                 cache,
                                 workspace_cache,
                                 credentials_cache,
@@ -195,6 +194,7 @@ pub async fn script_extra_build_requires(
         .map(|index| index.relative_to(&script_dir))
         .collect::<Result<Vec<_>, _>>()?;
     let script_sources = script.sources(sources);
+    let indexes = IndexLookup::new(index_locations, &script_indexes, &[]);
 
     // Collect any `tool.uv.extra-build-dependencies` from the script.
     let empty = BTreeMap::default();
@@ -220,8 +220,7 @@ pub async fn script_extra_build_requires(
                     requirement,
                     script_dir.as_ref(),
                     script_sources.as_ref(),
-                    &script_indexes,
-                    index_locations,
+                    &indexes,
                     cache,
                     workspace_cache,
                     credentials_cache,
