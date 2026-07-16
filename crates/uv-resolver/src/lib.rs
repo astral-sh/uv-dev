@@ -29,8 +29,8 @@ pub use resolver::{
     Reporter as ResolverReporter, Resolver, ResolverEnvironment, ResolverProvider,
     VersionsResponse, WheelMetadataResult,
 };
-pub(crate) use universal_marker::ConflictMarker;
 pub use universal_marker::UniversalMarker;
+pub(crate) use universal_marker::{ActivatedMarkers, ConflictMarker};
 pub use upgrade::UpgradePackages;
 pub use uv_distribution_types::{ExcludeNewerOverride, ExcludeNewerSpan, ExcludeNewerValue};
 pub use version_map::VersionMap;

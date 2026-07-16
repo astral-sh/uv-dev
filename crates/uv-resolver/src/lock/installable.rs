@@ -22,12 +22,11 @@ use crate::lock::{
     Dependency, DependencySelectionContext, HashedDist, LockErrorKind, Package, PackageIndex,
     SelectedDependency, TagPolicy,
 };
-use crate::universal_marker::ActivatedConflictItems;
-use crate::{Lock, LockError, UniversalMarker};
+use crate::{ActivatedMarkers, Lock, LockError, UniversalMarker};
 
 fn newly_activated_extras<'lock>(
     dep: &'lock Dependency,
-    activated_extras: &[(&'lock PackageName, &'lock ExtraName)],
+    activated_extras: &BTreeSet<(&'lock PackageName, &'lock ExtraName)>,
 ) -> Vec<(&'lock PackageName, &'lock ExtraName)> {
     dep.extra
         .iter()
@@ -333,6 +332,13 @@ trait InstallableExt<'lock>: Installable<'lock> {
             }
         }
 
+        let mut activated_extras_set = activated_extras.iter().copied().collect();
+        let mut activated_markers = ActivatedMarkers::new(
+            activated_projects.iter().copied(),
+            activated_extras.iter().copied(),
+            activated_groups.iter().copied(),
+        );
+
         // Initialize the workspace roots.
         let mut initialized_roots = vec![];
         for (dist, root_kind) in roots
@@ -395,15 +401,12 @@ trait InstallableExt<'lock>: Installable<'lock> {
                 if validate_conflicts && dep.complexified_marker.has_conflict_marker() {
                     dependencies_for_conflict_validation.push((dist, dep));
                 }
-                let additional_activated_extras = newly_activated_extras(dep, &activated_extras);
-                if !dep.complexified_marker.evaluate(
+                let additional_activated_extras =
+                    newly_activated_extras(dep, &activated_extras_set);
+                if !dep.complexified_marker.evaluate_activated_with_extras(
                     marker_env,
-                    activated_projects.iter().copied(),
-                    activated_extras
-                        .iter()
-                        .chain(additional_activated_extras.iter())
-                        .copied(),
-                    activated_groups.iter().copied(),
+                    &activated_markers,
+                    additional_activated_extras.iter().copied(),
                 ) {
                     continue;
                 }
@@ -660,8 +663,6 @@ trait InstallableExt<'lock>: Installable<'lock> {
         // conflicts. In which case, we skip all of this and just do the one
         // traversal below.
         if has_conflicts {
-            let mut activated_extras_set: BTreeSet<(&PackageName, &ExtraName)> =
-                activated_extras.iter().copied().collect();
             let mut queue = queue.clone();
             let mut reachability = conflict_reachability;
             while let Some((package_index, extra)) = queue.pop_front() {
@@ -674,15 +675,11 @@ trait InstallableExt<'lock>: Installable<'lock> {
                     let mut dep_reachability = dep.complexified_marker;
                     dep_reachability.and(parent_reachability);
                     let additional_activated_extras =
-                        newly_activated_extras(dep, &activated_extras);
-                    if !dep_reachability.evaluate(
+                        newly_activated_extras(dep, &activated_extras_set);
+                    if !dep_reachability.evaluate_activated_with_extras(
                         marker_env,
-                        activated_projects.iter().copied(),
-                        activated_extras
-                            .iter()
-                            .chain(additional_activated_extras.iter())
-                            .copied(),
-                        activated_groups.iter().copied(),
+                        &activated_markers,
+                        additional_activated_extras.iter().copied(),
                     ) {
                         continue;
                     }
@@ -697,6 +694,7 @@ trait InstallableExt<'lock>: Installable<'lock> {
                     for key in additional_activated_extras {
                         activated_extras_set.insert(key);
                         activated_extras.push(key);
+                        activated_markers.insert_extra(key.0, key.1);
                     }
                     // Push its dependencies on the queue.
                     if add_reachability(&mut reachability, (dep.index, None), dep_reachability) {
@@ -741,14 +739,6 @@ trait InstallableExt<'lock>: Installable<'lock> {
             }
         }
 
-        // Unlike the traversals above, this one never activates an extra, so the activated set is
-        // fixed for its duration and can be encoded once instead of once per dependency.
-        let activated = ActivatedConflictItems::new(
-            activated_projects.iter().copied(),
-            activated_extras.iter().copied(),
-            activated_groups.iter().copied(),
-        );
-
         while let Some((package_index, extra)) = queue.pop_front() {
             let package = &self.lock().packages[package_index.0];
             for dep in package_dependencies(package, extra) {
@@ -757,7 +747,7 @@ trait InstallableExt<'lock>: Installable<'lock> {
                 }
                 if !dep
                     .complexified_marker
-                    .evaluate_activated(marker_env, &activated)
+                    .evaluate_activated(marker_env, &activated_markers)
                 {
                     continue;
                 }
