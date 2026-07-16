@@ -12,7 +12,7 @@ use uv_cache::Cache;
 use uv_configuration::{
     Constraints, DependencyGroupsWithDefaults, ExcludeDependency, NoSources, Upgrade,
 };
-use uv_distribution::LoweredRequirement;
+use uv_distribution::{IndexLookup, LoweredRequirement};
 use uv_distribution_types::{
     Index, IndexLocations, NameRequirementSpecification, Requirement, RequiresPython,
 };
@@ -501,6 +501,8 @@ impl<'lock> LockTarget<'lock> {
                     .and_then(|uv| uv.sources.as_ref())
                     .unwrap_or(&empty);
 
+                let index_lookup = IndexLookup::new(locations, indexes, &[]);
+
                 let mut lowered = Vec::new();
                 for requirement in requirements {
                     if sources.for_package(&requirement.name) {
@@ -514,8 +516,7 @@ impl<'lock> LockTarget<'lock> {
                             requirement,
                             script.path.parent().unwrap(),
                             sources_map,
-                            indexes,
-                            locations,
+                            &index_lookup,
                             cache,
                             workspace_cache,
                             credentials_cache,
