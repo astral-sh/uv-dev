@@ -63,6 +63,8 @@ impl<'lock> RequirementsTxtExport<'lock> {
 
 impl std::fmt::Display for RequirementsTxtExport<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let editable = self.editable.as_ref().map(EditableMode::lookup);
+
         // Write out each package.
         for ExportableRequirement {
             package,
@@ -139,10 +141,9 @@ impl std::fmt::Display for RequirementsTxtExport<'_> {
                         write!(f, "{}", anchor(path).portable_display())?;
                     }
                 }
-                Source::Editable(path) => match self
-                    .editable
+                Source::Editable(path) => match editable
                     .as_ref()
-                    .and_then(|editable| editable.for_package(&package.id.name))
+                    .and_then(|editable| editable(&package.id.name))
                 {
                     None | Some(true) => {
                         write!(f, "-e {}", anchor(path).portable_display())?;

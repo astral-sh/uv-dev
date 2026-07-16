@@ -855,8 +855,11 @@ fn edits(
     toml: &mut PyProjectTomlMut,
 ) -> Result<Vec<DependencyEdit>> {
     let mut edits = Vec::<DependencyEdit>::with_capacity(requirements.len());
+    let editable = editable.map(EditableMode::lookup);
     for mut requirement in requirements {
-        let editable = editable.and_then(|editable| editable.for_package(&requirement.name));
+        let editable = editable
+            .as_ref()
+            .and_then(|editable| editable(&requirement.name));
 
         // Add the specified extras.
         let mut ex = requirement.extras.to_vec();

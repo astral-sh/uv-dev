@@ -1882,6 +1882,10 @@ fn install_no_editable_package() {
         .arg("-e")
         .arg(&black)
         .arg("--no-editable-package")
+        .arg("executable-file")
+        .arg("--no-editable-package")
+        .arg("unused")
+        .arg("--no-editable-package")
         .arg("executable-file"), @"
     exit_code: 0 (success)
     ----- stderr -----
