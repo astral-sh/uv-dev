@@ -5,13 +5,15 @@ use std::fmt::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use anyhow::Context;
 use itertools::Itertools;
 use owo_colors::OwoColorize;
+use tracing::info_span;
 use uv_client::{BaseClientBuilder, RegistryClient};
 use uv_command_support::Printer;
 use uv_configuration::{
     Concurrency, Constraints, DependencyGroups, DependencyModifiers, ExcludeDependency, Excludes,
-    ExtrasSpecification, Override, Overrides, Reinstall, Upgrade,
+    ExtrasSpecification, Override, Overrides, Reinstall, RequirementsInput, Upgrade,
 };
 use uv_dispatch::BuildDispatch;
 use uv_distribution::{DistributionDatabase, SourcedDependencyGroups};
@@ -21,6 +23,7 @@ use uv_distribution_types::{
     UnresolvedRequirementSpecification,
 };
 use uv_installer::SitePackages;
+use uv_lock::PylockToml;
 use uv_normalize::PackageName;
 use uv_pep508::{MarkerEnvironment, RequirementOrigin};
 use uv_platform_tags::Tags;
@@ -68,7 +71,7 @@ pub async fn read_requirements(
     }
 
     // Read all requirements from the provided sources.
-    Ok(RequirementsSpecification::from_sources(
+    Ok(read_requirements_with_pylock_constraints(
         requirements,
         constraints,
         overrides,
@@ -79,13 +82,86 @@ pub async fn read_requirements(
     .await?)
 }
 
+/// Read requirement sources, converting any `pylock.toml` constraints in the application layer.
+pub async fn read_requirements_with_pylock_constraints(
+    requirements: &[RequirementsSource],
+    constraints: &[RequirementsSource],
+    overrides: &[RequirementsSource],
+    excludes: &[RequirementsSource],
+    groups: Option<&GroupsSpecification>,
+    client_builder: &BaseClientBuilder<'_>,
+) -> anyhow::Result<RequirementsSpecification> {
+    if requirements
+        .iter()
+        .any(|source| matches!(source, RequirementsSource::PylockToml(_)))
+        && !constraints.is_empty()
+    {
+        return Err(anyhow::anyhow!(
+            "Cannot specify constraints with a `pylock.toml` file"
+        ));
+    }
+
+    let requirements_txt_constraints = constraints
+        .iter()
+        .filter(|source| !matches!(source, RequirementsSource::PylockToml(_)))
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut specification = RequirementsSpecification::from_sources(
+        requirements,
+        &requirements_txt_constraints,
+        overrides,
+        excludes,
+        groups,
+        client_builder,
+    )
+    .await?;
+
+    for source in constraints {
+        let RequirementsSource::PylockToml(input) = source else {
+            continue;
+        };
+        let pylock = read_pylock_toml_constraint(input, client_builder).await?;
+        specification.constraints.extend(
+            pylock
+                .to_constraints()
+                .into_iter()
+                .map(NameRequirementSpecification::from),
+        );
+    }
+
+    Ok(specification)
+}
+
+async fn read_pylock_toml_constraint(
+    input: &RequirementsInput,
+    client_builder: &BaseClientBuilder<'_>,
+) -> anyhow::Result<PylockToml> {
+    let content = match input {
+        RequirementsInput::Stdin => uv_fs::read_stdin_to_string_transcode()?,
+        RequirementsInput::Remote(url) => {
+            let client = client_builder.build()?;
+            let response = client.for_host(url).get(url.as_str()).send().await?;
+            response.error_for_status_ref()?;
+            response.text().await?
+        }
+        RequirementsInput::Local(path) => uv_fs::read_to_string_transcode(path).await?,
+    };
+
+    let path = input.user_display();
+    let lock = info_span!("toml::from_str pylock.toml", path = %path)
+        .in_scope(|| toml::from_str::<PylockToml>(&content))
+        .with_context(|| format!("Not a valid `pylock.toml` file: {path}"))?;
+
+    Ok(lock)
+}
+
 /// Resolve a set of constraints.
 pub async fn read_constraints(
     constraints: &[RequirementsSource],
     client_builder: &BaseClientBuilder<'_>,
 ) -> Result<Vec<NameRequirementSpecification>, Error> {
     Ok(
-        RequirementsSpecification::from_sources(&[], constraints, &[], &[], None, client_builder)
+        read_requirements_with_pylock_constraints(&[], constraints, &[], &[], None, client_builder)
             .await?
             .constraints,
     )

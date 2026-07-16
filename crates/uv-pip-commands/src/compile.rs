@@ -224,7 +224,7 @@ pub async fn pip_compile(
         find_links,
         no_binary,
         no_build,
-    } = RequirementsSpecification::from_sources(
+    } = uv_resolve_operations::read_requirements_with_pylock_constraints(
         requirements,
         constraints,
         overrides,
