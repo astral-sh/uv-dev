@@ -82,6 +82,22 @@ impl<'env> TreeDisplay<'env> {
         invert: bool,
         show_sizes: bool,
     ) -> Self {
+        let prune_index =
+            (prune.len() > 1).then(|| prune.iter().collect::<FxHashSet<&PackageName>>());
+        let is_pruned = |name: &PackageName| {
+            prune_index
+                .as_ref()
+                .map_or_else(|| prune.contains(name), |prune| prune.contains(name))
+        };
+        let package_index =
+            (packages.len() > 1).then(|| packages.iter().collect::<FxHashSet<&PackageName>>());
+        let is_selected = |name: &PackageName| {
+            package_index.as_ref().map_or_else(
+                || packages.contains(name),
+                |packages| packages.contains(name),
+            )
+        };
+
         // Identify any workspace members.
         //
         // These include:
@@ -123,7 +139,7 @@ impl<'env> TreeDisplay<'env> {
 
         // Add the root packages to the graph.
         for id in members.iter().copied() {
-            if prune.contains(&id.name) {
+            if is_pruned(&id.name) {
                 continue;
             }
 
@@ -166,7 +182,7 @@ impl<'env> TreeDisplay<'env> {
                 })
                 .flatten()
             {
-                if prune.contains(&dep.package_id.name) {
+                if is_pruned(&dep.package_id.name) {
                     continue;
                 }
 
@@ -346,7 +362,7 @@ impl<'env> TreeDisplay<'env> {
             };
 
             for dep in deps {
-                if prune.contains(&dep.package_id.name) {
+                if is_pruned(&dep.package_id.name) {
                     continue;
                 }
 
@@ -427,7 +443,7 @@ impl<'env> TreeDisplay<'env> {
                     let Node::Package(package_index) = graph[*index] else {
                         return false;
                     };
-                    packages.contains(&lock.package(package_index).id.name)
+                    is_selected(&lock.package(package_index).id.name)
                 })
                 .collect::<FxHashSet<_>>();
             let mut stack = reachable.iter().copied().collect::<VecDeque<_>>();
@@ -453,7 +469,7 @@ impl<'env> TreeDisplay<'env> {
                         let Node::Package(package_index) = graph[*index] else {
                             return false;
                         };
-                        packages.contains(&lock.package(package_index).id.name)
+                        is_selected(&lock.package(package_index).id.name)
                     })
                     .collect::<Vec<_>>();
 
