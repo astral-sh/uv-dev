@@ -25,13 +25,14 @@ use uv_distribution_types::{
     BuiltDist, DirectUrlBuiltDist, DirectUrlSourceDist, DirectorySourceDist, Dist, Edge,
     FileLocation, FirstParty, GitDirectorySourceDist, IndexUrl, Name, Node, PathBuiltDist,
     PathSourceDist, RegistryBuiltDist, RegistryBuiltWheel, RegistrySourceDist, RemoteSource,
-    RequiresPython, Resolution, ResolvedDist, SourceDist, ToUrlError, UrlString,
+    Requirement, RequirementSource, RequiresPython, Resolution, ResolvedDist, SourceDist,
+    ToUrlError, UrlString,
 };
 use uv_fs::{PortablePathBuf, normalize_path, try_relative_to_if};
 use uv_git::{RepositoryReference, ResolvedRepositoryReference};
 use uv_git_types::{GitLfs, GitOid, GitReference, GitUrl, GitUrlParseError};
 use uv_normalize::{ExtraName, GroupName, PackageName};
-use uv_pep440::Version;
+use uv_pep440::{Version, VersionSpecifier, VersionSpecifiers};
 use uv_pep508::{MarkerEnvironment, MarkerTree, VerbatimUrl};
 use uv_platform_tags::{TagCompatibility, TagPriority, Tags};
 use uv_pypi_types::{HashDigests, Hashes, ParsedGitDirectoryUrl, VcsKind};
@@ -1291,6 +1292,34 @@ impl<'lock> PylockToml {
         }
 
         Ok(Resolution::new(graph))
+    }
+
+    /// Convert the [`PylockToml`] to a list of constraint [`Requirement`]s.
+    ///
+    /// Each package with a pinned version becomes a `name == version` requirement, retaining the
+    /// package's environment marker. Packages without a version (e.g., from a directory, VCS, or
+    /// archive source) are skipped, since they cannot be expressed as a registry constraint.
+    pub fn to_constraints(&self) -> Vec<Requirement> {
+        self.packages
+            .iter()
+            .filter_map(|package| {
+                let version = package.version.as_ref()?;
+                Some(Requirement {
+                    name: package.name.clone(),
+                    extras: Box::new([]),
+                    groups: Box::new([]),
+                    marker: package.marker,
+                    source: RequirementSource::Registry {
+                        specifier: VersionSpecifiers::from(VersionSpecifier::equals_version(
+                            version.clone(),
+                        )),
+                        index: None,
+                        conflict: None,
+                    },
+                    origin: None,
+                })
+            })
+            .collect()
     }
 }
 
