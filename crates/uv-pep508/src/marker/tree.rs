@@ -1367,6 +1367,15 @@ impl MarkerTree {
         Self(INTERNER.lock().only_extras(self.0))
     }
 
+    /// Returns a new [`MarkerTree`] with all environment expressions evaluated for `env`, while
+    /// preserving `extra` expressions.
+    ///
+    /// PEP 751 `extras` and `dependency_groups` expressions are evaluated as empty lists.
+    #[must_use]
+    pub fn only_extras_for_environment(self, env: &MarkerEnvironment) -> Self {
+        Self(INTERNER.lock().only_extras_for_environment(self.0, env))
+    }
+
     /// Calls the provided function on every `extra` in this tree.
     ///
     /// The operator provided to the function is guaranteed to be
@@ -2236,6 +2245,19 @@ mod test {
         let env = env37().with_platform_release("10");
         let marker = MarkerTree::from_str("platform_release < '2'").unwrap();
         assert!(marker.evaluate(&env, &[]));
+        logs_contain("Comparing 10 and 2 lexicographically");
+    }
+
+    #[test]
+    #[cfg(feature = "tracing")]
+    #[tracing_test::traced_test]
+    fn only_extras_for_environment_warns_for_lexicographic_comparison() {
+        let env = env37().with_platform_release("10");
+        let marker = m("platform_release < '2' and extra == 'foo'");
+        assert_eq!(
+            marker.only_extras_for_environment(&env),
+            m("extra == 'foo'")
+        );
         logs_contain("Comparing 10 and 2 lexicographically");
     }
 
@@ -3578,6 +3600,86 @@ mod test {
                 or (os_name == 'nt' and sys_platform == 'win32')")
             .only_extras(),
             m("os_name == 'Linux' or os_name != 'Linux'"),
+        );
+    }
+
+    #[test]
+    fn only_extras_for_environment() {
+        fn from_dnf(marker: MarkerTree, env: &MarkerEnvironment) -> MarkerTree {
+            let mut remaining = MarkerTree::FALSE;
+            'conjunctions: for conjunction in marker.to_dnf() {
+                let mut extras = MarkerTree::TRUE;
+                for expression in conjunction {
+                    match expression {
+                        expression @ MarkerExpression::Extra { .. } => {
+                            extras = extras.and(MarkerTree::expression(expression));
+                        }
+                        expression => {
+                            if !MarkerTree::expression(expression).evaluate(env, &[]) {
+                                continue 'conjunctions;
+                            }
+                        }
+                    }
+                }
+                remaining = remaining.or(extras);
+            }
+            remaining
+        }
+
+        let env = env37()
+            .with_platform_release("10")
+            .with_platform_version("10");
+        let foo = ExtraName::from_str("foo").unwrap();
+        let bar = ExtraName::from_str("bar").unwrap();
+        let scoped = ExtraName::from_str("extra-3-pkg-foo").unwrap();
+
+        for input in [
+            "python_version >= '3.7' and extra == 'foo'",
+            "python_version < '3.7' or extra != 'extra-3-pkg-foo'",
+            "python_version in '3.6 3.7' and extra == 'foo'",
+            "python_full_version not in '3.7 3.8' or extra != 'bar'",
+            "sys_platform in 'linux win32' and extra == 'foo'",
+            "sys_platform not in 'linux win32' or extra != 'bar'",
+            "'lin' in sys_platform and extra == 'foo'",
+            "'win' not in sys_platform or extra != 'bar'",
+            "'foo' in extras and extra == 'bar'",
+            "'foo' not in extras or extra != 'bar'",
+            "'test' in dependency_groups and extra == 'foo'",
+            "'test' not in dependency_groups or extra != 'foo'",
+            "'invalid@' in extras and extra == 'foo'",
+            "'invalid@' not in extras or extra == 'foo'",
+            "'invalid@' in dependency_groups and extra == 'foo'",
+            "'invalid@' not in dependency_groups or extra == 'foo'",
+            "(sys_platform == 'linux' and extra == 'foo') or \
+             (sys_platform != 'linux' and extra == 'bar')",
+            "(python_version >= '3.7' and extra != 'foo' and extra == 'bar') or \
+             (python_version < '3.7' and extra == 'foo')",
+            "platform_release < '2' and extra == 'foo'",
+            "platform_version >= '2' or extra != 'foo'",
+        ] {
+            let marker = m(input);
+            for marker in [marker, marker.negate()] {
+                let expected = from_dnf(marker, &env);
+                let actual = marker.only_extras_for_environment(&env);
+                assert_eq!(actual, expected, "{input}");
+
+                for extras in [
+                    &[][..],
+                    std::slice::from_ref(&foo),
+                    std::slice::from_ref(&bar),
+                    std::slice::from_ref(&scoped),
+                    &[foo.clone(), bar.clone(), scoped.clone()][..],
+                ] {
+                    assert_eq!(actual.evaluate(&env, extras), marker.evaluate(&env, extras));
+                }
+            }
+        }
+
+        assert!(MarkerTree::TRUE.only_extras_for_environment(&env).is_true());
+        assert!(
+            MarkerTree::FALSE
+                .only_extras_for_environment(&env)
+                .is_false()
         );
     }
 
