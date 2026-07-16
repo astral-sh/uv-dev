@@ -1,4 +1,4 @@
-use std::fmt::{Display, Formatter};
+use std::fmt::{Debug, Display, Formatter};
 use std::io;
 use std::io::Write;
 use std::ops::Deref;
@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::{debug, trace, warn};
 
 use uv_cache_info::Timestamp;
@@ -165,7 +165,7 @@ pub struct Cache {
     /// The cache directory.
     root: PathBuf,
     /// The refresh strategy to use when reading from the cache.
-    refresh: Refresh,
+    refresh: CachedRefresh,
     /// A temporary cache directory, if the user requested `--no-cache`.
     ///
     /// Included to ensure that the temporary directory exists for the length of the operation, but
@@ -183,7 +183,7 @@ impl Cache {
     pub fn from_path(root: impl Into<PathBuf>) -> Self {
         Self {
             root: root.into(),
-            refresh: Refresh::None(Timestamp::now()),
+            refresh: CachedRefresh::new(Refresh::None(Timestamp::now())),
             temp_dir: None,
             lock_file: None,
             removal_mode: RemovalMode::Logical,
@@ -195,7 +195,7 @@ impl Cache {
         let temp_dir = tempfile::tempdir()?;
         Ok(Self {
             root: temp_dir.path().to_path_buf(),
-            refresh: Refresh::None(Timestamp::now()),
+            refresh: CachedRefresh::new(Refresh::None(Timestamp::now())),
             temp_dir: Some(Arc::new(temp_dir)),
             lock_file: None,
             removal_mode: RemovalMode::Logical,
@@ -205,7 +205,10 @@ impl Cache {
     /// Set the [`Refresh`] policy for the cache.
     #[must_use]
     pub fn with_refresh(self, refresh: Refresh) -> Self {
-        Self { refresh, ..self }
+        Self {
+            refresh: CachedRefresh::new(refresh),
+            ..self
+        }
     }
 
     /// Set the storage accounting used when removing cache entries.
@@ -340,16 +343,16 @@ impl Cache {
 
     /// Returns `true` if a cache entry must be revalidated given the [`Refresh`] policy.
     pub fn must_revalidate_package(&self, package: &PackageName) -> bool {
-        match &self.refresh {
+        match &self.refresh.refresh {
             Refresh::None(_) => false,
             Refresh::All(_) => true,
-            Refresh::Packages(packages, _, _) => packages.contains(package),
+            Refresh::Packages(..) => self.refresh.contains_package(package),
         }
     }
 
     /// Returns `true` if a cache entry must be revalidated given the [`Refresh`] policy.
     pub fn must_revalidate_path(&self, path: &Path) -> bool {
-        match &self.refresh {
+        match &self.refresh.refresh {
             Refresh::None(_) => false,
             Refresh::All(_) => true,
             Refresh::Packages(_, paths, _) => paths
@@ -369,11 +372,11 @@ impl Cache {
         path: Option<&Path>,
     ) -> io::Result<Freshness> {
         // Grab the cutoff timestamp, if it's relevant.
-        let timestamp = match &self.refresh {
+        let timestamp = match &self.refresh.refresh {
             Refresh::None(_) => return Ok(Freshness::Fresh),
             Refresh::All(timestamp) => timestamp,
-            Refresh::Packages(packages, paths, timestamp) => {
-                if package.is_none_or(|package| packages.contains(package))
+            Refresh::Packages(_, paths, timestamp) => {
+                if package.is_none_or(|package| self.refresh.contains_package(package))
                     || path.is_some_and(|path| {
                         paths
                             .iter()
@@ -1422,6 +1425,41 @@ pub enum Refresh {
     All(Timestamp),
 }
 
+#[derive(Clone)]
+struct CachedRefresh {
+    refresh: Refresh,
+    packages: Option<Arc<FxHashSet<PackageName>>>,
+}
+
+impl Debug for CachedRefresh {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        self.refresh.fmt(formatter)
+    }
+}
+
+impl CachedRefresh {
+    fn new(refresh: Refresh) -> Self {
+        let packages = match &refresh {
+            Refresh::Packages(packages, _, _) if packages.len() > 1 => {
+                Some(Arc::new(packages.iter().cloned().collect()))
+            }
+            _ => None,
+        };
+
+        Self { refresh, packages }
+    }
+
+    fn contains_package(&self, package: &PackageName) -> bool {
+        if let Some(packages) = &self.packages {
+            packages.contains(package)
+        } else if let Refresh::Packages(packages, _, _) = &self.refresh {
+            packages.contains(package)
+        } else {
+            false
+        }
+    }
+}
+
 impl Refresh {
     /// Determine the refresh strategy to use based on the command-line arguments.
     pub fn from_args(refresh: Option<bool>, refresh_package: Vec<PackageName>) -> Self {
@@ -1476,9 +1514,119 @@ impl Refresh {
 mod tests {
     use std::str::FromStr;
 
+    use uv_cache_info::Timestamp;
+    use uv_normalize::PackageName;
+
     use crate::ArchiveId;
 
-    use super::Link;
+    use super::{Cache, CacheEntry, Freshness, Link, Refresh};
+
+    #[test]
+    fn refresh_package_lookup() {
+        let selected = PackageName::from_str("Selected_Package").expect("valid package name");
+        let other = PackageName::from_str("other-package").expect("valid package name");
+        let equivalent = PackageName::from_str("selected-package").expect("valid package name");
+        let refresh = Refresh::Packages(
+            vec![selected.clone(), other.clone(), equivalent],
+            Vec::new(),
+            Timestamp::now(),
+        );
+        let refresh_debug = format!("{refresh:?}");
+        let cache = Cache::from_path("unused-cache").with_refresh(refresh);
+
+        assert!(cache.must_revalidate_package(&selected));
+        assert!(cache.must_revalidate_package(&other));
+        assert!(!cache.must_revalidate_package(
+            &PackageName::from_str("unselected-package").expect("valid package name")
+        ));
+        assert_eq!(format!("{:?}", cache.refresh), refresh_debug);
+
+        let replacement = cache.clone().with_refresh(Refresh::Packages(
+            vec![other.clone()],
+            Vec::new(),
+            Timestamp::now(),
+        ));
+        assert!(!replacement.must_revalidate_package(&selected));
+        assert!(replacement.must_revalidate_package(&other));
+        assert!(cache.must_revalidate_package(&selected));
+
+        let none = cache.clone().with_refresh(Refresh::None(Timestamp::now()));
+        assert!(!none.must_revalidate_package(&selected));
+        let all = cache.with_refresh(Refresh::All(Timestamp::now()));
+        assert!(all.must_revalidate_package(&selected));
+    }
+
+    #[test]
+    fn refresh_package_freshness_preserves_path_matching() {
+        let temporary = tempfile::tempdir().expect("create temporary directory");
+        let source = temporary.path().join("source");
+        let alias = temporary.path().join("source-alias");
+        let other_path = temporary.path().join("other");
+        fs_err::write(&source, "source").expect("write source");
+        fs_err::hard_link(&source, &alias).expect("create source alias");
+        fs_err::write(&other_path, "other").expect("write other source");
+
+        let selected = PackageName::from_str("selected-package").expect("valid package name");
+        let other = PackageName::from_str("other-package").expect("valid package name");
+        let cache = Cache::from_path(temporary.path()).with_refresh(Refresh::Packages(
+            vec![selected.clone(), other.clone()],
+            vec![source.clone().into_boxed_path()],
+            Timestamp::now(),
+        ));
+        let missing = CacheEntry::from_path(temporary.path().join("missing"));
+        let unselected = PackageName::from_str("unselected-package").expect("valid package name");
+
+        assert_eq!(
+            cache
+                .freshness(&missing, Some(&selected), None)
+                .expect("check selected package"),
+            Freshness::Missing
+        );
+        assert_eq!(
+            cache
+                .freshness(&missing, Some(&unselected), None)
+                .expect("check unselected package"),
+            Freshness::Fresh
+        );
+        assert_eq!(
+            cache
+                .freshness(&missing, Some(&unselected), Some(&alias))
+                .expect("check source alias"),
+            Freshness::Missing
+        );
+        assert_eq!(
+            cache
+                .freshness(&missing, Some(&unselected), Some(&other_path))
+                .expect("check other source"),
+            Freshness::Fresh
+        );
+        assert_eq!(
+            cache
+                .freshness(&missing, None, None)
+                .expect("check unknown package"),
+            Freshness::Missing
+        );
+        assert!(cache.must_revalidate_path(&alias));
+        assert!(!cache.must_revalidate_path(&other_path));
+
+        let paths_only = Cache::from_path(temporary.path()).with_refresh(Refresh::Packages(
+            Vec::new(),
+            vec![alias.into_boxed_path()],
+            Timestamp::now(),
+        ));
+        assert_eq!(
+            paths_only
+                .freshness(&missing, Some(&unselected), Some(&other_path))
+                .expect("check unmatched source"),
+            Freshness::Fresh
+        );
+        assert_eq!(
+            paths_only
+                .freshness(&missing, Some(&unselected), Some(&source))
+                .expect("check matched source"),
+            Freshness::Missing
+        );
+    }
 
     #[test]
     fn test_link_round_trip() {
