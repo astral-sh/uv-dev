@@ -11,7 +11,6 @@ use petgraph::{
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 
 use uv_configuration::{BuildOptions, Constraints, Overrides};
-use uv_distribution::Metadata;
 use uv_distribution_types::{
     BuiltDist, Dist, DistributionId, Edge, Identifier, IndexUrl, Name, Node, Requirement,
     RequiresPython, ResolutionDiagnostic, ResolvedDist, SourceDist,
@@ -58,7 +57,6 @@ pub struct ResolverOutput {
 }
 
 #[derive(Debug, Clone)]
-#[expect(clippy::large_enum_variant)]
 pub(crate) enum ResolutionGraphNode {
     Root,
     Dist(AnnotatedDist),
@@ -140,6 +138,7 @@ impl ResolverOutput {
         let mut inverse: FxHashMap<PackageRef, NodeIndex<u32>> =
             FxHashMap::with_capacity_and_hasher(size_guess, FxBuildHasher);
         let mut diagnostics = Vec::new();
+        let mut extras = FxHashMap::default();
 
         // Add the root node.
         let root_index = graph.add_node(ResolutionGraphNode::Root);
@@ -156,6 +155,7 @@ impl ResolverOutput {
                     &mut graph,
                     &mut inverse,
                     &mut diagnostics,
+                    &mut extras,
                     preferences,
                     &resolution.pins,
                     index,
@@ -324,6 +324,7 @@ impl ResolverOutput {
         graph: &mut Graph<ResolutionGraphNode, UniversalMarker>,
         inverse: &mut FxHashMap<PackageRef<'a>, NodeIndex>,
         diagnostics: &mut Vec<ResolutionDiagnostic>,
+        extras: &mut FxHashMap<*const MetadataResponse, FxHashSet<ExtraName>>,
         preferences: &Preferences,
         pins: &FilePins,
         in_memory: &InMemoryIndex,
@@ -351,10 +352,14 @@ impl ResolverOutput {
             git,
         )?;
 
-        if let Some(metadata) = metadata.as_ref() {
+        if let Some(response) = metadata.as_ref()
+            && let MetadataResponse::Found(archive) = response.as_ref()
+        {
+            let metadata = &archive.metadata;
+
             // Validate the extra.
             if let Some(extra) = extra {
-                if !metadata.provides_extra.contains(extra) {
+                if !Self::provides_extra(response, extra, extras) {
                     diagnostics.push(ResolutionDiagnostic::MissingExtra {
                         dist: dist.clone(),
                         extra: extra.clone(),
@@ -398,6 +403,26 @@ impl ResolverOutput {
         Ok(())
     }
 
+    /// Returns whether the resolved distribution provides the requested extra.
+    fn provides_extra(
+        response: &Arc<MetadataResponse>,
+        extra: &ExtraName,
+        extras: &mut FxHashMap<*const MetadataResponse, FxHashSet<ExtraName>>,
+    ) -> bool {
+        let MetadataResponse::Found(archive) = response.as_ref() else {
+            return false;
+        };
+
+        if archive.metadata.provides_extra.len() <= 8 {
+            return archive.metadata.provides_extra.contains(extra);
+        }
+
+        extras
+            .entry(Arc::as_ptr(response))
+            .or_insert_with(|| archive.metadata.provides_extra.iter().cloned().collect())
+            .contains(extra)
+    }
+
     fn parse_dist(
         name: &PackageName,
         index: Option<&IndexUrl>,
@@ -408,7 +433,7 @@ impl ResolverOutput {
         preferences: &Preferences,
         in_memory: &InMemoryIndex,
         git: &GitResolver,
-    ) -> Result<(ResolvedDist, HashDigests, Option<Metadata>), ResolveError> {
+    ) -> Result<(ResolvedDist, HashDigests, Option<Arc<MetadataResponse>>), ResolveError> {
         Ok(if let Some(url) = url {
             // Create the locked distribution and recover the metadata using the original URL that
             // was requested during resolution.
@@ -435,11 +460,11 @@ impl ResolverOutput {
                         panic!("Every URL distribution should have metadata: {metadata_id:?}")
                     });
 
-                let MetadataResponse::Found(archive) = &*response else {
+                let MetadataResponse::Found(_) = &*response else {
                     panic!("Every URL distribution should have metadata: {metadata_id:?}")
                 };
 
-                archive.metadata.clone()
+                response
             };
 
             (
@@ -490,13 +515,7 @@ impl ResolverOutput {
                 in_memory
                     .distributions()
                     .get(metadata_id)
-                    .and_then(|response| {
-                        if let MetadataResponse::Found(archive) = &*response {
-                            Some(archive.metadata.clone())
-                        } else {
-                            None
-                        }
-                    })
+                    .filter(|response| matches!(response.as_ref(), MetadataResponse::Found(_)))
             };
 
             (dist, hashes, metadata)
@@ -1017,7 +1036,7 @@ fn has_lower_bound(
             return true;
         }
 
-        let Some(metadata) = neighbor_dist.metadata.as_ref() else {
+        let Some(metadata) = neighbor_dist.metadata() else {
             // We can't check for lower bounds if we lack metadata.
             return true;
         };
@@ -1047,4 +1066,94 @@ fn has_lower_bound(
         }
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::str::FromStr;
+    use std::sync::Arc;
+
+    use rustc_hash::FxHashMap;
+
+    use uv_distribution::{ArchiveMetadata, Metadata};
+    use uv_normalize::{ExtraName, PackageName};
+    use uv_pep440::Version;
+    use uv_pep508::Requirement;
+
+    use crate::MetadataResponse;
+    use crate::resolution::ResolverOutput;
+
+    fn metadata(extra_start: usize, extra_count: usize) -> Arc<MetadataResponse> {
+        let provides_extra = (extra_start..extra_start + extra_count)
+            .map(|extra| ExtraName::from_str(&format!("extra-{extra}")).expect("valid extra"))
+            .collect();
+        let requires_dist = (0..128)
+            .map(|requirement| {
+                Requirement::from_str(&format!(
+                    "dependency-{requirement}>=1; python_version >= '3.8'"
+                ))
+                .expect("valid requirement")
+                .into()
+            })
+            .collect();
+        Arc::new(MetadataResponse::Found(ArchiveMetadata::from(Metadata {
+            name: PackageName::from_str("package").expect("valid name"),
+            version: Version::from_str("1.0.0").expect("valid version"),
+            requires_dist,
+            requires_python: None,
+            provides_extra,
+            dependency_groups: BTreeMap::default(),
+            dynamic: false,
+        })))
+    }
+
+    #[test]
+    fn small_extra_lookup_avoids_cache() {
+        let metadata = metadata(0, 8);
+        let mut extras = FxHashMap::default();
+
+        assert!(ResolverOutput::provides_extra(
+            &metadata,
+            &ExtraName::from_str("extra-7").expect("valid extra"),
+            &mut extras,
+        ));
+        assert!(!ResolverOutput::provides_extra(
+            &metadata,
+            &ExtraName::from_str("missing").expect("valid extra"),
+            &mut extras,
+        ));
+        assert!(extras.is_empty());
+    }
+
+    #[test]
+    fn large_extra_lookup_is_scoped_to_distribution() {
+        let first = metadata(0, 128);
+        let second = metadata(64, 128);
+        let mut extras = FxHashMap::default();
+
+        for extra in 0..128 {
+            assert!(ResolverOutput::provides_extra(
+                &first,
+                &ExtraName::from_str(&format!("extra-{extra}")).expect("valid extra"),
+                &mut extras,
+            ));
+        }
+        assert!(!ResolverOutput::provides_extra(
+            &first,
+            &ExtraName::from_str("extra-191").expect("valid extra"),
+            &mut extras,
+        ));
+        assert!(!ResolverOutput::provides_extra(
+            &second,
+            &ExtraName::from_str("extra-0").expect("valid extra"),
+            &mut extras,
+        ));
+        assert!(ResolverOutput::provides_extra(
+            &second,
+            &ExtraName::from_str("extra-191").expect("valid extra"),
+            &mut extras,
+        ));
+        assert_eq!(extras.len(), 2);
+    }
 }
