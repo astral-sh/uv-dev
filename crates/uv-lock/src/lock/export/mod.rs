@@ -202,27 +202,22 @@ impl<'lock> ExportableRequirements<'lock> {
 
         // Index the lockfile by package name, to avoid making multiple passes over the lockfile.
         if !root_requirements.is_empty() {
-            let by_name: FxHashMap<_, Vec<_>> = {
-                let names = root_requirements
-                    .iter()
-                    .map(|dep| &dep.name)
-                    .collect::<FxHashSet<_>>();
-                target.lock().packages().iter().fold(
-                    FxHashMap::with_capacity_and_hasher(size_guess, FxBuildHasher),
-                    |mut map, package| {
-                        if names.contains(&package.id.name) {
-                            map.entry(&package.id.name).or_default().push(package);
-                        }
-                        map
-                    },
-                )
-            };
+            let names = root_requirements
+                .iter()
+                .map(|dep| &dep.name)
+                .collect::<FxHashSet<_>>();
+            let by_name = target.lock().root_packages_by_name(&names, |_| true);
 
             for requirement in root_requirements {
-                for dist in by_name.get(&requirement.name).into_iter().flatten() {
+                for (package_index, fork_marker) in
+                    by_name.get(&requirement.name).into_iter().flatten()
+                {
+                    let dist = target.lock().package(*package_index);
                     // Determine whether this entry is relevant for the requirement by
                     // intersecting and simplifying the markers.
-                    let Some(marker) = target.lock().root_requirement_marker(requirement, dist)
+                    let Some(marker) = target
+                        .lock()
+                        .root_requirement_marker(requirement, *fork_marker)
                     else {
                         continue;
                     };
