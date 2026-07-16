@@ -76,6 +76,7 @@ impl InitReadme {
     }
 
     /// Omit the README for bare projects.
+    #[must_use]
     pub fn for_mode(self, mode: InitMode) -> Self {
         match mode {
             InitMode::Bare => Self::Omit,

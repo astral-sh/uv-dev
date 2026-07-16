@@ -13,9 +13,9 @@ use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
 use uv_command_support::{ExitStatus, Printer};
 use uv_configuration::{
-    AuthorFrom, DependencyGroupsWithDefaults, InitDescription, InitKind, InitMode,
-    InitProjectKind, InitPythonPin, InitReadme, InitWorkspaceDiscovery, ProjectBuildBackend,
-    VersionControlError, VersionControlSystem,
+    AuthorFrom, DependencyGroupsWithDefaults, InitDescription, InitKind, InitMode, InitProjectKind,
+    InitPythonPin, InitReadme, InitWorkspaceDiscovery, ProjectBuildBackend, VersionControlError,
+    VersionControlSystem,
 };
 use uv_distribution_types::RequiresPython;
 use uv_fs::{CWD, Simplified};
