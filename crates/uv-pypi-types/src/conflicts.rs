@@ -178,25 +178,37 @@ impl Conflicts {
         }
 
         // Create new conflict sets for all possible replacements of canonical
-        // items by substitution items.
-        // Note that new sets are (potentially) added to transitive_conflict_sets
-        // at the end of each iteration.
-        for (canonical_item, subs) in substitutions {
-            let mut new_conflict_sets = FxHashSet::default();
-            for conflict_set in conflict_sets
+        // items by substitution items. Expand each original set independently so
+        // unrelated substitutions do not repeatedly scan every inferred set.
+        let mut expanded_original_sets = FxHashSet::default();
+        for conflict_set in &self.0 {
+            if !conflict_set
                 .iter()
-                .filter(|set| set.contains_item(&canonical_item))
+                .any(|item| substitutions.contains_key(item))
+                || !expanded_original_sets.insert(conflict_set)
             {
-                for sub in &subs {
-                    let new_set = conflict_set
-                        .replaced_item(&canonical_item, (**sub).clone())
-                        .expect("`ConflictItem` should be in `ConflictSet`");
-                    if !conflict_sets.contains(&new_set) {
-                        new_conflict_sets.insert(new_set);
+                continue;
+            }
+            let mut expanded_conflict_sets = FxHashSet::default();
+            expanded_conflict_sets.insert(conflict_set.clone());
+            for canonical_item in conflict_set.iter() {
+                let Some(subs) = substitutions.get(canonical_item) else {
+                    continue;
+                };
+                let mut new_conflict_sets = FxHashSet::default();
+                for expanded_conflict_set in &expanded_conflict_sets {
+                    for sub in subs {
+                        let new_set = expanded_conflict_set
+                            .replaced_item(canonical_item, (**sub).clone())
+                            .expect("`ConflictItem` should be in `ConflictSet`");
+                        if !expanded_conflict_sets.contains(&new_set) {
+                            new_conflict_sets.insert(new_set);
+                        }
                     }
                 }
+                expanded_conflict_sets.extend(new_conflict_sets);
             }
-            conflict_sets.extend(new_conflict_sets);
+            conflict_sets.extend(expanded_conflict_sets);
         }
 
         // Add all newly discovered conflict sets (excluding the originals already in self.0)
@@ -237,12 +249,6 @@ impl ConflictSet {
         let kind = kind.into();
         self.iter()
             .any(|set| set.package() == package && *set.kind() == kind)
-    }
-
-    /// Returns true if these conflicts contain any set that contains the given
-    /// [`ConflictItem`].
-    fn contains_item(&self, conflict_item: &ConflictItem) -> bool {
-        self.set.contains(conflict_item)
     }
 
     /// Replace an old [`ConflictItem`] with a new one.
@@ -838,11 +844,11 @@ pub struct Inference {
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
+    use std::{collections::BTreeSet, str::FromStr};
 
     use anyhow::Result;
     use rustc_hash::FxHashSet;
-    use uv_normalize::{GroupName, PackageName};
+    use uv_normalize::{ExtraName, GroupName, PackageName};
 
     use super::{ConflictItem, ConflictSet, Conflicts};
     use crate::DependencyGroups;
@@ -884,6 +890,190 @@ mod tests {
             .into_iter()
             .collect::<FxHashSet<_>>(),
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn expand_transitive_group_includes_expands_each_original_set() -> Result<()> {
+        let package = PackageName::from_str("project")?;
+        let original_set = conflict_set(&package, "inner-a", "inner-b")?;
+        let groups: DependencyGroups = serde_json::from_value(serde_json::json!({
+            "inner-a": [],
+            "left-a": [{ "include-group": "inner-a" }],
+            "right-a": [{ "include-group": "inner-a" }],
+            "outer-a": [
+                { "include-group": "left-a" },
+                { "include-group": "right-a" },
+            ],
+            "inner-b": [],
+            "middle-b": [{ "include-group": "inner-b" }],
+            "outer-b": [{ "include-group": "middle-b" }],
+        }))?;
+        let mut conflicts = Conflicts(vec![original_set.clone()]);
+
+        conflicts.expand_transitive_group_includes(&package, &groups);
+
+        let mut expected = FxHashSet::default();
+        for left in ["inner-a", "left-a", "right-a", "outer-a"] {
+            for right in ["inner-b", "middle-b", "outer-b"] {
+                expected.insert(conflict_set(&package, left, right)?);
+            }
+        }
+        assert_eq!(conflicts.0.first(), Some(&original_set));
+        assert_eq!(conflicts.0.len(), expected.len());
+        assert_eq!(conflicts.0.into_iter().collect::<FxHashSet<_>>(), expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn expand_transitive_group_includes_handles_independent_sets() -> Result<()> {
+        const CONFLICTS: usize = 64;
+
+        let package = PackageName::from_str("project")?;
+        let mut group_values = serde_json::Map::new();
+        let mut original_sets = Vec::with_capacity(CONFLICTS);
+        let mut expected = FxHashSet::default();
+        for index in 0..CONFLICTS {
+            let inner = format!("inner-{index}");
+            let outer = format!("outer-{index}");
+            let other = format!("other-{index}");
+            group_values.insert(inner.clone(), serde_json::json!([]));
+            group_values.insert(
+                outer.clone(),
+                serde_json::json!([{ "include-group": inner }]),
+            );
+            group_values.insert(other.clone(), serde_json::json!([]));
+            original_sets.push(conflict_set(&package, &format!("inner-{index}"), &other)?);
+            expected.insert(conflict_set(&package, &format!("inner-{index}"), &other)?);
+            expected.insert(conflict_set(&package, &outer, &other)?);
+        }
+        let groups: DependencyGroups = serde_json::from_value(group_values.into())?;
+        let mut conflicts = Conflicts(original_sets.clone());
+
+        conflicts.expand_transitive_group_includes(&package, &groups);
+
+        assert_eq!(&conflicts.0[..original_sets.len()], original_sets);
+        assert_eq!(conflicts.0.len(), CONFLICTS * 2);
+        assert_eq!(conflicts.0.into_iter().collect::<FxHashSet<_>>(), expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn expand_transitive_group_includes_preserves_collapsed_and_mixed_sets() -> Result<()> {
+        let package = PackageName::from_str("project")?;
+        let extra = ConflictItem::from((package.clone(), ExtraName::from_str("feature")?));
+        let project = ConflictItem::from(PackageName::from_str("member")?);
+        let inner = ConflictItem::from((package.clone(), GroupName::from_str("inner")?));
+        let outer = ConflictItem::from((package.clone(), GroupName::from_str("outer")?));
+        let parent = ConflictItem::from((package.clone(), GroupName::from_str("parent")?));
+        let original_set = ConflictSet::try_from(vec![
+            inner.clone(),
+            outer.clone(),
+            extra.clone(),
+            project.clone(),
+        ])?;
+        let groups: DependencyGroups = serde_json::from_value(serde_json::json!({
+            "inner": [],
+            "outer": [{ "include-group": "inner" }],
+            "parent": [{ "include-group": "outer" }],
+        }))?;
+        let mut conflicts = Conflicts(vec![original_set.clone()]);
+
+        conflicts.expand_transitive_group_includes(&package, &groups);
+
+        let expected = [
+            vec![inner.clone(), outer.clone()],
+            vec![inner, parent.clone()],
+            vec![outer.clone()],
+            vec![outer, parent.clone()],
+            vec![parent],
+        ]
+        .into_iter()
+        .map(|mut groups| {
+            groups.push(extra.clone());
+            groups.push(project.clone());
+            ConflictSet {
+                set: BTreeSet::from_iter(groups),
+            }
+        })
+        .collect::<FxHashSet<_>>();
+        assert_eq!(conflicts.0.first(), Some(&original_set));
+        assert_eq!(conflicts.0.len(), expected.len());
+        assert_eq!(conflicts.0.into_iter().collect::<FxHashSet<_>>(), expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn expand_transitive_group_includes_preserves_duplicate_and_one_item_sets() -> Result<()> {
+        let package = PackageName::from_str("project")?;
+        let original_set = conflict_set(&package, "inner", "outer")?;
+        let outer = ConflictItem::from((package.clone(), GroupName::from_str("outer")?));
+        let groups: DependencyGroups = serde_json::from_value(serde_json::json!({
+            "inner": [],
+            "outer": [{ "include-group": "inner" }],
+        }))?;
+        let mut conflicts = Conflicts(vec![original_set.clone(), original_set.clone()]);
+
+        conflicts.expand_transitive_group_includes(&package, &groups);
+
+        assert_eq!(
+            &conflicts.0[..2],
+            &[original_set.clone(), original_set.clone()]
+        );
+        assert_eq!(conflicts.0.len(), 3);
+        assert_eq!(
+            conflicts.0.into_iter().collect::<FxHashSet<_>>(),
+            [
+                original_set,
+                ConflictSet {
+                    set: BTreeSet::from([outer]),
+                },
+            ]
+            .into_iter()
+            .collect::<FxHashSet<_>>()
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn expand_transitive_group_includes_leaves_unsubstituted_sets_unchanged() -> Result<()> {
+        let package = PackageName::from_str("project")?;
+        let original_sets = vec![ConflictSet::try_from(vec![
+            ConflictItem::from((package.clone(), ExtraName::from_str("feature")?)),
+            ConflictItem::from(PackageName::from_str("member")?),
+        ])?];
+        let groups: DependencyGroups = serde_json::from_value(serde_json::json!({
+            "inner": [],
+            "outer": [{ "include-group": "inner" }],
+        }))?;
+        let mut conflicts = Conflicts(original_sets.clone());
+
+        conflicts.expand_transitive_group_includes(&package, &groups);
+
+        assert_eq!(conflicts.0, original_sets);
+
+        Ok(())
+    }
+
+    #[test]
+    fn expand_transitive_group_includes_leaves_cycles_unchanged() -> Result<()> {
+        let package = PackageName::from_str("project")?;
+        let original_sets = vec![conflict_set(&package, "inner", "other")?];
+        let groups: DependencyGroups = serde_json::from_value(serde_json::json!({
+            "inner": [{ "include-group": "outer" }],
+            "outer": [{ "include-group": "inner" }],
+            "other": [],
+        }))?;
+        let mut conflicts = Conflicts(original_sets.clone());
+
+        conflicts.expand_transitive_group_includes(&package, &groups);
+
+        assert_eq!(conflicts.0, original_sets);
 
         Ok(())
     }
