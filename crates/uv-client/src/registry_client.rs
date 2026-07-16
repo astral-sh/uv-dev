@@ -21,8 +21,8 @@ use uv_configuration::KeyringProviderType;
 use uv_distribution_filename::{DistFilename, WheelFilename};
 use uv_distribution_types::{
     BuiltDist, File, FileLocation, IndexCapabilities, IndexFormat, IndexLocations,
-    IndexMetadataRef, IndexStatusCodeDecision, IndexStatusCodeStrategy, IndexUrl, Name,
-    RegistryBuiltWheel,
+    IndexLocationsLookup, IndexMetadataRef, IndexStatusCodeDecision, IndexStatusCodeStrategy,
+    IndexUrl, Name, RegistryBuiltWheel,
 };
 use uv_extract::hash::Hasher;
 use uv_git::{GIT_LFS, GitError, GitHttpSettings, GitResolver, Reporter};
@@ -196,9 +196,11 @@ impl<'a> RegistryClientBuilder<'a> {
 
         // Wrap in the cache middleware.
         let client = CachedClient::new(client);
+        let index_lookup = IndexLocationsLookup::from(&self.index_locations);
 
         Ok(RegistryClient {
             indexes: self.index_locations,
+            index_lookup,
             index_strategy: self.index_strategy,
             torch_backend: self.torch_backend,
             cache: self.cache,
@@ -216,6 +218,8 @@ impl<'a> RegistryClientBuilder<'a> {
 pub struct RegistryClient {
     /// The indexes to use for fetching packages.
     indexes: IndexLocations,
+    /// A lookup for settings on configured indexes.
+    index_lookup: IndexLocationsLookup,
     /// The strategy to use when fetching across multiple indexes.
     index_strategy: IndexStrategy,
     /// The strategy to use when selecting a PyTorch backend, if any.
@@ -267,6 +271,11 @@ impl RegistryClient {
     /// Return the [`CachedClient`] used by this client.
     pub fn cached_client(&self) -> &CachedClient {
         &self.client
+    }
+
+    /// Return the precomputed lookup for configured index settings.
+    pub fn index_lookup(&self) -> &IndexLocationsLookup {
+        &self.index_lookup
     }
 
     /// Return the [`BaseClient`] used by this client.
@@ -361,7 +370,7 @@ impl RegistryClient {
                     match index.format {
                         IndexFormat::Simple => {
                             let status_code_strategy =
-                                self.indexes.status_code_strategy_for(index.url);
+                                self.index_lookup.status_code_strategy_for(index.url);
                             match self
                                 .simple_detail_single_index(
                                     package_name,
@@ -549,7 +558,7 @@ impl RegistryClient {
         );
         let cache_control = match self.connectivity {
             Connectivity::Online
-                if let Some(header) = self.indexes.simple_api_cache_control_for(index) =>
+                if let Some(header) = self.index_lookup.simple_api_cache_control_for(index) =>
             {
                 CacheControl::Override(header)
             }
@@ -758,7 +767,7 @@ impl RegistryClient {
         );
         let cache_control = match self.connectivity {
             Connectivity::Online
-                if let Some(header) = self.indexes.simple_api_cache_control_for(index) =>
+                if let Some(header) = self.index_lookup.simple_api_cache_control_for(index) =>
             {
                 CacheControl::Override(header)
             }
@@ -1038,7 +1047,7 @@ impl RegistryClient {
             );
             let cache_control = match self.connectivity {
                 Connectivity::Online
-                    if let Some(header) = self.indexes.artifact_cache_control_for(index) =>
+                    if let Some(header) = self.index_lookup.artifact_cache_control_for(index) =>
                 {
                     CacheControl::Override(header)
                 }
@@ -1129,7 +1138,7 @@ impl RegistryClient {
         let cache_control = match self.connectivity {
             Connectivity::Online
                 if let Some(index) = index
-                    && let Some(header) = self.indexes.artifact_cache_control_for(index) =>
+                    && let Some(header) = self.index_lookup.artifact_cache_control_for(index) =>
             {
                 CacheControl::Override(header)
             }
