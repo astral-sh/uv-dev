@@ -56,6 +56,10 @@ harness = false
 [[bench]]
 name = "macos_dylib"
 path = "benches/macos_dylib.rs"
+
+[[bench]]
+name = "index_lookup"
+path = "benches/index_lookup.rs"
 harness = false
 
 [dev-dependencies]

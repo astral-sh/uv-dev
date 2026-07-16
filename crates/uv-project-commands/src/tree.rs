@@ -329,7 +329,6 @@ pub async fn tree(
                 capabilities: &capabilities,
                 prerelease: lock.prerelease(),
                 exclude_newer,
-                index_locations,
                 requires_python: Some(lock.requires_python()),
                 tags: None,
             };
