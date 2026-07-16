@@ -6,6 +6,7 @@ use std::str::FromStr;
 
 use arcstr::ArcStr;
 use itertools::Itertools;
+use rustc_hash::FxHashSet;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use version_ranges::Ranges;
 
@@ -1165,6 +1166,79 @@ impl MarkerTree {
     /// ASSUMPTION: There is one `extra = "..."`, and it's either the only marker or part of the
     /// main conjunction.
     pub fn top_level_extra(self) -> Option<MarkerExpression> {
+        if let Some(extra) = self.top_level_extra_fast() {
+            return Some(MarkerExpression::Extra {
+                operator: ExtraOperator::Equal,
+                name: MarkerValueExtra::Extra(extra.clone()),
+            });
+        }
+
+        self.top_level_extra_dnf()
+    }
+
+    /// Find a top level extra without expanding the marker into DNF.
+    fn top_level_extra_fast(self) -> Option<&'static ExtraName> {
+        let extras = self.only_extras();
+        let mut tree = extras;
+        let extra = loop {
+            let MarkerTreeKind::Extra(marker) = tree.kind() else {
+                return None;
+            };
+            if marker.edge(true).is_false() {
+                tree = marker.edge(false);
+                continue;
+            }
+            let CanonicalMarkerValueExtra::Extra(extra) = marker.name;
+            break extra;
+        };
+
+        if !extras
+            .simplify_not_extras_with(|candidate| candidate == extra)
+            .is_false()
+        {
+            return None;
+        }
+
+        // Projecting away environment markers can make an extra appear implied even when another
+        // positive extra occurs on one of the original branches. Such markers must retain the DNF
+        // behavior, since callers use the first positive extra from every conjunction.
+        let mut seen = FxHashSet::default();
+        let mut stack = vec![self];
+        while let Some(tree) = stack.pop() {
+            if !seen.insert(tree) {
+                continue;
+            }
+
+            match tree.kind() {
+                MarkerTreeKind::True | MarkerTreeKind::False => {}
+                MarkerTreeKind::Version(marker) => {
+                    stack.extend(marker.edges().map(|(_, tree)| tree));
+                }
+                MarkerTreeKind::String(marker) => {
+                    stack.extend(marker.children().map(|(_, tree)| tree));
+                }
+                MarkerTreeKind::In(marker) => {
+                    stack.extend(marker.children().map(|(_, tree)| tree));
+                }
+                MarkerTreeKind::Contains(marker) => {
+                    stack.extend(marker.children().map(|(_, tree)| tree));
+                }
+                MarkerTreeKind::List(marker) => {
+                    stack.extend(marker.children().map(|(_, tree)| tree));
+                }
+                MarkerTreeKind::Extra(marker) => {
+                    if marker.name().extra() != extra && !marker.edge(true).is_false() {
+                        return None;
+                    }
+                    stack.extend(marker.children().map(|(_, tree)| tree));
+                }
+            }
+        }
+
+        Some(extra)
+    }
+
+    fn top_level_extra_dnf(self) -> Option<MarkerExpression> {
         let mut extra_expression = None;
         for conjunction in self.to_dnf() {
             let found = conjunction.iter().find(|expression| {
@@ -1206,7 +1280,11 @@ impl MarkerTree {
             return Some(Cow::Borrowed(extra));
         }
 
-        let extra_expression = self.top_level_extra()?;
+        if let Some(extra) = self.top_level_extra_fast() {
+            return Some(Cow::Borrowed(extra));
+        }
+
+        let extra_expression = self.top_level_extra_dnf()?;
 
         match extra_expression {
             MarkerExpression::Extra { name, .. } => name.into_extra().map(Cow::Owned),
@@ -1832,7 +1910,7 @@ mod test {
     use uv_pep440::Version;
 
     use crate::marker::{MarkerEnvironment, MarkerEnvironmentBuilder};
-    use crate::{MarkerExpression, MarkerOperator, MarkerTree, MarkerValueString};
+    use crate::{ExtraOperator, MarkerExpression, MarkerOperator, MarkerTree, MarkerValueString};
 
     fn parse_err(input: &str) -> String {
         MarkerTree::from_str(input).unwrap_err().to_string()
@@ -3579,6 +3657,136 @@ mod test {
             .only_extras(),
             m("os_name == 'Linux' or os_name != 'Linux'"),
         );
+    }
+
+    #[test]
+    fn top_level_extra() {
+        let cases = [
+            (
+                "extra == 'target' and (platform_machine == 'aarch64' or platform_machine == 'x86_64')",
+                Some("target"),
+            ),
+            (
+                "extra != 'excluded' and extra == 'target' and sys_platform == 'linux'",
+                Some("target"),
+            ),
+            (
+                "extra == 'target' and extra != 'zzz-excluded' and sys_platform == 'linux'",
+                Some("target"),
+            ),
+            (
+                "(extra == 'target' and sys_platform == 'linux') or (extra == 'target' and sys_platform == 'darwin')",
+                Some("target"),
+            ),
+            (
+                "(extra == 'target' and sys_platform == 'linux') or (extra == 'other' and sys_platform != 'linux')",
+                None,
+            ),
+            (
+                "(extra == 'a' and extra == 'b') or (extra == 'b' and extra == 'c')",
+                None,
+            ),
+            (
+                "(extra == 'a' and extra == 'b' and sys_platform == 'linux') or (extra == 'b' and sys_platform != 'linux')",
+                None,
+            ),
+            ("extra == 'b' and extra == 'a'", Some("a")),
+            ("sys_platform == 'linux'", None),
+        ];
+
+        for (input, expected) in cases {
+            let expected = expected.map(|extra| extra.parse::<ExtraName>().unwrap());
+            assert_eq!(
+                m(input).top_level_extra_name().as_deref(),
+                expected.as_ref()
+            );
+            assert_eq!(
+                m(input)
+                    .top_level_extra()
+                    .and_then(|expression| match expression {
+                        MarkerExpression::Extra { name, .. } => name.into_extra(),
+                        _ => None,
+                    }),
+                expected,
+            );
+        }
+
+        assert!(MarkerTree::TRUE.top_level_extra().is_none());
+        assert!(MarkerTree::TRUE.top_level_extra_name().is_none());
+        assert!(MarkerTree::FALSE.top_level_extra().is_none());
+        assert!(MarkerTree::FALSE.top_level_extra_name().is_none());
+    }
+
+    #[test]
+    fn top_level_extra_matches_dnf() {
+        fn expected(marker: MarkerTree) -> Option<MarkerExpression> {
+            let mut extra_expression = None;
+            for conjunction in marker.to_dnf() {
+                let found = conjunction.iter().find(|expression| {
+                    matches!(
+                        expression,
+                        MarkerExpression::Extra {
+                            operator: ExtraOperator::Equal,
+                            ..
+                        }
+                    )
+                })?;
+
+                if let Some(ref extra_expression) = extra_expression {
+                    if *extra_expression != *found {
+                        return None;
+                    }
+                    continue;
+                }
+
+                extra_expression = Some(found.clone());
+            }
+            extra_expression
+        }
+
+        let atoms = [
+            "extra == 'a'",
+            "extra != 'a'",
+            "extra == 'b'",
+            "extra != 'b'",
+            "extra == 'c'",
+            "sys_platform == 'linux'",
+            "sys_platform != 'linux'",
+            "python_version < '3.12'",
+        ];
+
+        for first in atoms {
+            for second in atoms {
+                for third in atoms {
+                    for input in [
+                        format!("({first} and {second}) or {third}"),
+                        format!("({first} or {second}) and {third}"),
+                    ] {
+                        let marker = m(&input);
+                        let expected = expected(marker);
+                        assert_eq!(marker.top_level_extra(), expected, "{input}");
+
+                        let expected_name = if let super::MarkerTreeKind::Extra(extra) =
+                            marker.kind()
+                            && extra.edge(true).is_true()
+                        {
+                            let super::CanonicalMarkerValueExtra::Extra(name) = extra.name;
+                            Some(name)
+                        } else {
+                            expected.as_ref().and_then(|expression| match expression {
+                                MarkerExpression::Extra { name, .. } => name.as_extra(),
+                                _ => None,
+                            })
+                        };
+                        assert_eq!(
+                            marker.top_level_extra_name().as_deref(),
+                            expected_name,
+                            "{input}",
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]
