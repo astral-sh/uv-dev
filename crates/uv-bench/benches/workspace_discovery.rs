@@ -15,6 +15,8 @@ use uv::GlobalInitialization;
 use uv::commands::ExitStatus;
 use uv_cache::Cache;
 use uv_cli::Cli;
+use uv_workspace::dependency_groups::FlatDependencyGroups;
+use uv_workspace::pyproject::PyProjectToml;
 use uv_workspace::{DiscoveryOptions, Workspace, WorkspaceCache};
 
 const EXCLUDE_NEWER: &str = "2024-08-08";
@@ -383,10 +385,40 @@ fn run_cli(
     );
 }
 
+fn flatten_dependency_group_with_python_markers(c: &mut Criterion<WallTime>) {
+    let requirements = (0..2048)
+        .map(|index| format!("\"package-{index}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let pyproject = PyProjectToml::from_string(
+        format!(
+            r#"
+[dependency-groups]
+dev = [{requirements}]
+
+[tool.uv.dependency-groups]
+dev = {{ requires-python = ">=3.8,!=3.9.*,!=3.10.*,!=3.11.2,<4" }}
+"#
+        ),
+        "pyproject.toml",
+    )
+    .expect("Failed to parse dependency-group benchmark pyproject.toml");
+
+    c.bench_function("flatten_dependency_group_with_python_markers", |b| {
+        b.iter(|| {
+            black_box(
+                FlatDependencyGroups::from_pyproject_toml(Path::new("pyproject.toml"), &pyproject)
+                    .expect("Failed to flatten benchmark dependency group"),
+            );
+        });
+    });
+}
+
 criterion_group!(
     workspace_discovery,
     discover_workspace_from_all_members,
     discover_workspace_from_all_members_with_excludes,
-    run_python_version_synthetic_workspace
+    run_python_version_synthetic_workspace,
+    flatten_dependency_group_with_python_markers
 );
 criterion_main!(workspace_discovery);
