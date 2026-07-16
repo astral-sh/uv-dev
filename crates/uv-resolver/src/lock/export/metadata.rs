@@ -483,11 +483,7 @@ fn root_dependencies<'lock>(
     // Root requirements retain names, extras, and markers rather than resolved package IDs. Match
     // them to the locked packages using the same name and fork-marker logic as lock export.
     for requirement in requirements {
-        for package in lock
-            .packages()
-            .iter()
-            .filter(|package| package.name() == &requirement.name)
-        {
+        for package in lock.packages_for_name(&requirement.name) {
             let Some(marker) = lock.root_requirement_marker(requirement, package) else {
                 continue;
             };
@@ -584,11 +580,7 @@ fn metadata_reachability(
         .iter()
         .chain(lock.dependency_groups().values().flatten())
     {
-        for package in lock
-            .packages()
-            .iter()
-            .filter(|package| package.name() == &requirement.name)
-        {
+        for package in lock.packages_for_name(&requirement.name) {
             let Some(marker) = lock.root_requirement_marker(requirement, package) else {
                 continue;
             };
@@ -1473,5 +1465,100 @@ impl Metadata {
 
     pub fn write_json(&self, writer: impl std::io::Write) -> Result<(), MetadataError> {
         Ok(serde_json::to_writer_pretty(writer, self)?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn root_dependencies_handle_out_of_order_forks_and_extras() {
+        let lock: Lock = toml::from_str(
+            r#"
+version = 1
+requires-python = ">=3.12"
+
+package = [
+    { name = "zulu", version = "1.0.0", source = { registry = "https://example.com/simple" } },
+    { name = "middle", version = "2.0.0", source = { registry = "https://example.com/simple" }, resolution-markers = ["sys_platform == 'linux'"], optional-dependencies = { feature = [] } },
+    { name = "grouped", version = "2.0.0", source = { registry = "https://example.com/simple" }, resolution-markers = ["sys_platform == 'linux'"], optional-dependencies = { feature = [] } },
+    { name = "alpha", version = "1.0.0", source = { registry = "https://example.com/simple" } },
+    { name = "middle", version = "1.0.0", source = { registry = "https://example.com/simple" }, resolution-markers = ["sys_platform == 'darwin'"], optional-dependencies = { feature = [] } },
+    { name = "grouped", version = "1.0.0", source = { registry = "https://example.com/simple" }, resolution-markers = ["sys_platform == 'win32'"], optional-dependencies = { feature = [] } },
+]
+
+[manifest]
+requirements = [
+    { name = "zulu", marker = "sys_platform == 'linux'" },
+    { name = "middle", extras = ["feature"], marker = "sys_platform != 'win32'" },
+    { name = "alpha" },
+]
+
+[manifest.dependency-groups]
+dev = [{ name = "grouped", extras = ["feature"], marker = "sys_platform != 'darwin'" }]
+"#,
+        )
+        .expect("valid lock");
+        let workspace_root = PortablePathBuf::from(Path::new("/workspace"));
+
+        let mut script_dependencies: Vec<_> =
+            root_dependencies(&workspace_root, &lock, lock.requirements())
+                .into_iter()
+                .map(|dependency| (dependency.id, dependency.marker))
+                .collect();
+        script_dependencies.sort();
+        assert_eq!(
+            script_dependencies,
+            [
+                (
+                    "alpha==1.0.0@registry+https://example.com/simple".to_string(),
+                    None
+                ),
+                (
+                    "middle[feature]==1.0.0@registry+https://example.com/simple".to_string(),
+                    Some("sys_platform == 'darwin'".to_string())
+                ),
+                (
+                    "middle[feature]==2.0.0@registry+https://example.com/simple".to_string(),
+                    Some("sys_platform == 'linux'".to_string())
+                ),
+                (
+                    "zulu==1.0.0@registry+https://example.com/simple".to_string(),
+                    Some("sys_platform == 'linux'".to_string())
+                ),
+            ]
+        );
+
+        let mut group_dependencies: Vec<_> = root_dependencies(
+            &workspace_root,
+            &lock,
+            lock.dependency_groups().values().flatten(),
+        )
+        .into_iter()
+        .map(|dependency| (dependency.id, dependency.marker))
+        .collect();
+        group_dependencies.sort();
+        assert_eq!(
+            group_dependencies,
+            [
+                (
+                    "grouped[feature]==1.0.0@registry+https://example.com/simple".to_string(),
+                    Some("sys_platform == 'win32'".to_string())
+                ),
+                (
+                    "grouped[feature]==2.0.0@registry+https://example.com/simple".to_string(),
+                    Some("sys_platform == 'linux'".to_string())
+                ),
+            ]
+        );
+
+        let reachability = metadata_reachability(&workspace_root, None, &lock);
+        for (id, _) in script_dependencies.iter().chain(&group_dependencies) {
+            assert!(
+                reachability.contains_key(id),
+                "missing reachability for {id}"
+            );
+        }
     }
 }
