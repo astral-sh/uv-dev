@@ -212,35 +212,29 @@ impl<'env> TreeDisplay<'env> {
         //    dependencies.
         // - `dependencies` in PEP 723 scripts.
         {
-            // Index the lockfile by name.
-            let by_name: FxHashMap<_, Vec<_>> = {
-                lock.packages().iter().enumerate().fold(
-                    FxHashMap::with_capacity_and_hasher(lock.len(), FxBuildHasher),
-                    |mut map, (index, package)| {
-                        map.entry(&package.id.name)
-                            .or_default()
-                            .push(PackageIndex(index));
-                        map
-                    },
+            // Index the lockfile by name and cache the fork markers needed by root requirements.
+            let names = lock
+                .requirements()
+                .iter()
+                .chain(
+                    lock.dependency_groups()
+                        .iter()
+                        .filter(|(group, _)| groups.contains(group))
+                        .flat_map(|(_, requirements)| requirements),
                 )
-            };
+                .map(|requirement| &requirement.name)
+                .collect::<FxHashSet<_>>();
+            let by_name = lock.root_packages_by_name(&names, |_| true);
 
             // Identify any requirements attached to the workspace itself.
             for requirement in lock.requirements() {
-                for &package_index in by_name.get(&requirement.name).into_iter().flatten() {
-                    let package = lock.package(package_index);
+                for (package_index, fork_marker) in
+                    by_name.get(&requirement.name).into_iter().flatten()
+                {
+                    let package_index = *package_index;
                     // Determine whether this entry is "relevant" for the requirement, by intersecting
                     // the markers.
-                    let marker = if package.fork_markers.is_empty() {
-                        requirement.marker
-                    } else {
-                        let mut combined = MarkerTree::FALSE;
-                        for fork_marker in &package.fork_markers {
-                            combined = combined.or(fork_marker.pep508());
-                        }
-                        combined = combined.and(requirement.marker);
-                        combined
-                    };
+                    let marker = fork_marker.and(requirement.marker);
                     if marker.is_false() {
                         continue;
                     }
@@ -279,20 +273,13 @@ impl<'env> TreeDisplay<'env> {
                     continue;
                 }
                 for requirement in requirements {
-                    for &package_index in by_name.get(&requirement.name).into_iter().flatten() {
-                        let package = lock.package(package_index);
+                    for (package_index, fork_marker) in
+                        by_name.get(&requirement.name).into_iter().flatten()
+                    {
+                        let package_index = *package_index;
                         // Determine whether this entry is "relevant" for the requirement, by intersecting
                         // the markers.
-                        let marker = if package.fork_markers.is_empty() {
-                            requirement.marker
-                        } else {
-                            let mut combined = MarkerTree::FALSE;
-                            for fork_marker in &package.fork_markers {
-                                combined = combined.or(fork_marker.pep508());
-                            }
-                            combined = combined.and(requirement.marker);
-                            combined
-                        };
+                        let marker = fork_marker.and(requirement.marker);
                         if marker.is_false() {
                             continue;
                         }
