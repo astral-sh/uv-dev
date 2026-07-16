@@ -854,6 +854,23 @@ fn edits(
     index: Option<&IndexName>,
     toml: &mut PyProjectTomlMut,
 ) -> Result<Vec<DependencyEdit>> {
+    let dev_dependencies = match dependency_type {
+        DependencyType::Dev => {
+            let fallback =
+                if toml.has_dev_dependencies() && !toml.has_dependency_group(&DEV_DEPENDENCIES) {
+                    DependencyType::Dev
+                } else {
+                    DependencyType::Group(DEV_DEPENDENCIES.clone())
+                };
+            Some((toml.find_dev_dependency_names(), fallback))
+        }
+        DependencyType::Group(group) if group == &*DEV_DEPENDENCIES => Some((
+            toml.find_dev_dependency_names(),
+            DependencyType::Group(DEV_DEPENDENCIES.clone()),
+        )),
+        DependencyType::Production | DependencyType::Optional(_) | DependencyType::Group(_) => None,
+    };
+
     let mut edits = Vec::<DependencyEdit>::with_capacity(requirements.len());
     for mut requirement in requirements {
         let editable = editable.and_then(|editable| editable.for_package(&requirement.name));
@@ -957,84 +974,54 @@ fn edits(
         };
 
         // Determine the dependency type.
-        let dependency_type = match &dependency_type {
-            DependencyType::Dev => {
-                let existing = toml.find_dependency(&requirement.name, None);
-                if existing.iter().any(|dependency_type| matches!(dependency_type, DependencyType::Group(group) if group == &*DEV_DEPENDENCIES)) {
-                    // If the dependency already exists in `dependency-groups.dev`, use that.
-                    DependencyType::Group(DEV_DEPENDENCIES.clone())
-                } else if existing.iter().any(|dependency_type| matches!(dependency_type, DependencyType::Dev)) {
-                    // If the dependency already exists in `dev-dependencies`, use that.
-                    DependencyType::Dev
-                } else {
-                    // Otherwise, use `dependency-groups.dev`, unless it would introduce a separate table.
-                    match (toml.has_dev_dependencies(), toml.has_dependency_group(&DEV_DEPENDENCIES)) {
-                        (true, false) => DependencyType::Dev,
-                        (false, true) => DependencyType::Group(DEV_DEPENDENCIES.clone()),
-                        (true, true) => DependencyType::Group(DEV_DEPENDENCIES.clone()),
-                        (false, false) => DependencyType::Group(DEV_DEPENDENCIES.clone()),
-                    }
-                }
+        let dependency_type = match &dev_dependencies {
+            Some(((standardized, _), _)) if standardized.contains(&requirement.name) => {
+                DependencyType::Group(DEV_DEPENDENCIES.clone())
             }
-            DependencyType::Group(group) if group == &*DEV_DEPENDENCIES => {
-                let existing = toml.find_dependency(&requirement.name, None);
-                if existing.iter().any(|dependency_type| matches!(dependency_type, DependencyType::Group(group) if group == &*DEV_DEPENDENCIES)) {
-                    // If the dependency already exists in `dependency-groups.dev`, use that.
-                    DependencyType::Group(DEV_DEPENDENCIES.clone())
-                } else if existing.iter().any(|dependency_type| matches!(dependency_type, DependencyType::Dev)) {
-                    // If the dependency already exists in `dev-dependencies`, use that.
-                    DependencyType::Dev
-                } else {
-                    // Otherwise, use `dependency-groups.dev`.
-                    DependencyType::Group(DEV_DEPENDENCIES.clone())
-                }
-            }
-            DependencyType::Production => DependencyType::Production,
-            DependencyType::Optional(extra) => DependencyType::Optional(extra.clone()),
-            DependencyType::Group(group) => DependencyType::Group(group.clone()),
+            Some(((_, legacy), _)) if legacy.contains(&requirement.name) => DependencyType::Dev,
+            Some((_, fallback)) => fallback.clone(),
+            None => dependency_type.clone(),
         };
-
-        // Update the `pyproject.toml`.
-        let edit = match &dependency_type {
-            DependencyType::Production => {
-                toml.add_dependency(&requirement, source.as_ref(), raw)?
-            }
-            DependencyType::Dev => toml.add_dev_dependency(&requirement, source.as_ref(), raw)?,
-            DependencyType::Optional(extra) => {
-                toml.add_optional_dependency(extra, &requirement, source.as_ref(), raw)?
-            }
-            DependencyType::Group(group) => {
-                toml.add_dependency_group_requirement(group, &requirement, source.as_ref(), raw)?
-            }
-        };
-
-        // If the edit was inserted before the end of the list, update the existing edits.
-        if let ArrayEdit::Add(index) = &edit {
-            for edit in &mut edits {
-                if edit.dependency_type == dependency_type {
-                    match &mut edit.edit {
-                        ArrayEdit::Add(existing) => {
-                            if *existing >= *index {
-                                *existing += 1;
-                            }
-                        }
-                        ArrayEdit::Update(existing) => {
-                            if *existing >= *index {
-                                *existing += 1;
-                            }
-                        }
-                    }
-                }
-            }
-        }
 
         edits.push(DependencyEdit {
             dependency_type,
             requirement,
             source,
-            edit,
+            edit: ArrayEdit::Add(0),
         });
     }
+
+    // Edit each dependency array in a single batch. Development dependencies can be split
+    // between the legacy and standardized tables; preserve the input sequence within each.
+    let mut dependency_types = Vec::new();
+    for edit in &edits {
+        if !dependency_types.contains(&edit.dependency_type) {
+            dependency_types.push(edit.dependency_type.clone());
+        }
+    }
+    for dependency_type in dependency_types {
+        let positions = edits
+            .iter()
+            .enumerate()
+            .filter_map(|(index, edit)| (edit.dependency_type == dependency_type).then_some(index))
+            .collect::<Vec<_>>();
+        let requirements = positions
+            .iter()
+            .map(|index| (&edits[*index].requirement, edits[*index].source.as_ref()))
+            .collect::<Vec<_>>();
+        let array_edits = toml.add_dependency_array(&dependency_type, &requirements, raw)?;
+
+        for (index, array_edit) in positions.into_iter().zip(array_edits) {
+            edits[index].edit = array_edit;
+        }
+    }
+
+    let requirements = edits
+        .iter()
+        .map(|edit| (&edit.requirement, edit.source.as_ref()))
+        .collect::<Vec<_>>();
+    toml.add_dependency_sources(&requirements)?;
+
     Ok(edits)
 }
 
