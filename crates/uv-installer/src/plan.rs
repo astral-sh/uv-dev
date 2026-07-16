@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use anyhow::{Result, bail};
 use owo_colors::OwoColorize;
+use rustc_hash::FxHashSet;
 use tracing::{debug, warn};
 
 use uv_cache::{Cache, CacheBucket, WheelCache};
@@ -869,9 +870,21 @@ impl Plan {
         // If any remote distributions are not matched, but are already installed, ensure that
         // they're uninstalled as part of the right plan. (Uninstalling them as part of the left
         // plan risks uninstalling them from the environment _prior_ to the replacement being built.)
-        let (left_reinstalls, right_reinstalls) = reinstalls
-            .into_iter()
-            .partition::<Vec<_>, _>(|dist| !right_remote.iter().any(|d| d.name() == dist.name()));
+        let (left_reinstalls, right_reinstalls) = match right_remote.as_slice() {
+            [] => (reinstalls, vec![]),
+            [remote] => reinstalls
+                .into_iter()
+                .partition::<Vec<_>, _>(|dist| remote.name() != dist.name()),
+            _ => {
+                let right_remote_names = right_remote
+                    .iter()
+                    .map(|dist| dist.name())
+                    .collect::<FxHashSet<_>>();
+                reinstalls
+                    .into_iter()
+                    .partition::<Vec<_>, _>(|dist| !right_remote_names.contains(dist.name()))
+            }
+        };
 
         // If the right plan is non-empty, then remove extraneous distributions as part of the
         // right plan, so they're present until the very end. Otherwise, we risk removing extraneous
@@ -909,8 +922,111 @@ impl Plan {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
     use std::str::FromStr;
+
+    use uv_distribution_types::{
+        DirectorySourceDist, InstalledDistKind, InstalledRegistryDist, SourceDist,
+    };
+    use uv_pep440::Version;
+    use uv_pep508::VerbatimUrl;
     use uv_platform_tags::{Arch, Os, Platform, TagsOptions};
+
+    fn remote(name: &str, path: &str) -> Arc<Dist> {
+        let path = std::path::absolute(path).unwrap();
+        Arc::new(Dist::Source(SourceDist::Directory(DirectorySourceDist {
+            name: PackageName::from_str(name).unwrap(),
+            install_path: path.clone().into(),
+            editable: None,
+            r#virtual: None,
+            url: VerbatimUrl::from_absolute_path(&path).unwrap(),
+        })))
+    }
+
+    fn installed(name: &str, version: &str, path: &str) -> InstalledDist {
+        InstalledDistKind::Registry(InstalledRegistryDist {
+            name: PackageName::from_str(name).unwrap(),
+            version: Version::from_str(version).unwrap(),
+            path: Path::new(path).into(),
+            cache_info: None,
+            build_info: None,
+        })
+        .into()
+    }
+
+    #[test]
+    fn partition_reinstalls_for_multiple_remote_distributions() {
+        let isolated = remote("isolated", "isolated");
+        let shared = remote("shared", "shared");
+        let shared_duplicate = remote("shared", "shared-duplicate");
+
+        let isolated_installed = installed("isolated", "1.0", "/installed/isolated");
+        let shared_installed = installed("shared", "2.0", "/installed/shared");
+        let unmatched_installed = installed("unmatched", "3.0", "/installed/unmatched");
+        let shared_older = installed("shared", "1.0", "/installed/shared-older");
+        let extraneous = installed("extraneous", "1.0", "/installed/extraneous");
+
+        let (left, right) = Plan {
+            cached: vec![],
+            remote: vec![isolated.clone(), shared.clone(), shared_duplicate.clone()],
+            reinstalls: vec![
+                isolated_installed.clone(),
+                shared_installed.clone(),
+                unmatched_installed.clone(),
+                shared_older.clone(),
+            ],
+            extraneous: vec![extraneous.clone()],
+        }
+        .partition(|name| name.as_ref() == "isolated");
+
+        assert_eq!(left.remote, vec![isolated]);
+        assert_eq!(
+            left.reinstalls,
+            vec![isolated_installed, unmatched_installed]
+        );
+        assert!(left.extraneous.is_empty());
+
+        assert_eq!(right.remote, vec![shared, shared_duplicate]);
+        assert_eq!(right.reinstalls, vec![shared_installed, shared_older]);
+        assert_eq!(right.extraneous, vec![extraneous]);
+    }
+
+    #[test]
+    fn partition_reinstalls_for_empty_and_single_remote_distribution() {
+        let isolated_installed = installed("isolated", "1.0", "/installed/isolated");
+        let shared_installed = installed("shared", "2.0", "/installed/shared");
+        let extraneous = installed("extraneous", "1.0", "/installed/extraneous");
+
+        let (left, right) = Plan {
+            cached: vec![],
+            remote: vec![remote("isolated", "isolated")],
+            reinstalls: vec![isolated_installed.clone(), shared_installed.clone()],
+            extraneous: vec![extraneous.clone()],
+        }
+        .partition(|_| true);
+
+        assert_eq!(
+            left.reinstalls,
+            vec![isolated_installed.clone(), shared_installed.clone()]
+        );
+        assert_eq!(left.extraneous, vec![extraneous.clone()]);
+        assert!(right.is_empty());
+
+        let shared = remote("shared", "shared");
+        let (left, right) = Plan {
+            cached: vec![],
+            remote: vec![shared.clone()],
+            reinstalls: vec![isolated_installed.clone(), shared_installed.clone()],
+            extraneous: vec![extraneous.clone()],
+        }
+        .partition(|_| false);
+
+        assert_eq!(left.reinstalls, vec![isolated_installed]);
+        assert!(left.extraneous.is_empty());
+        assert_eq!(right.remote, vec![shared]);
+        assert_eq!(right.reinstalls, vec![shared_installed]);
+        assert_eq!(right.extraneous, vec![extraneous]);
+    }
 
     #[test]
     fn test_abi3_on_free_threaded_python_hint() {
