@@ -56,6 +56,10 @@ harness = false
 [[bench]]
 name = "macos_dylib"
 path = "benches/macos_dylib.rs"
+
+[[bench]]
+name = "lock_lookup"
+path = "benches/lock_lookup.rs"
 harness = false
 
 [dev-dependencies]
@@ -71,6 +75,8 @@ uv-distribution-filename = { workspace = true }
 uv-distribution-types = { workspace = true }
 uv-extract = { workspace = true }
 uv-install-wheel = { workspace = true }
+uv-lock = { workspace = true }
+uv-normalize = { workspace = true }
 uv-pep440 = { workspace = true }
 uv-pep508 = { workspace = true }
 uv-performance-memory-allocator = { workspace = true }
