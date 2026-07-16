@@ -68,6 +68,14 @@ impl<'lock> ExportableRequirements<'lock> {
         install_options: &'lock InstallOptions,
         virtual_packages: VirtualPackages,
     ) -> Result<Self, LockError> {
+        let prune_index =
+            (prune.len() > 1).then(|| prune.iter().collect::<FxHashSet<&PackageName>>());
+        let is_pruned = |name: &PackageName| {
+            prune_index
+                .as_ref()
+                .map_or_else(|| prune.contains(name), |prune| prune.contains(name))
+        };
+
         let size_guess = target.lock().packages.len();
         let mut graph = Graph::<Node<'lock>, Edge<'lock>>::with_capacity(size_guess, size_guess);
         let mut node_by_package = vec![None; size_guess];
@@ -88,7 +96,7 @@ impl<'lock> ExportableRequirements<'lock> {
                     .map(|root| (root, InstallableRootKind::DependencyGroups)),
             )
         {
-            if prune.contains(root_name) {
+            if is_pruned(root_name) {
                 continue;
             }
 
@@ -139,7 +147,7 @@ impl<'lock> ExportableRequirements<'lock> {
                 activated_items.insert(ConflictItem::from((dist.id.name.clone(), group.clone())));
 
                 for dep in dependencies {
-                    if prune.contains(&dep.package_id.name) {
+                    if is_pruned(&dep.package_id.name) {
                         continue;
                     }
 
@@ -194,7 +202,7 @@ impl<'lock> ExportableRequirements<'lock> {
                     })
                     .flatten(),
             )
-            .filter(|dep| !prune.contains(&dep.name))
+            .filter(|dep| !is_pruned(&dep.name))
             .collect::<Vec<_>>();
 
         // Index the lockfile by package name, to avoid making multiple passes over the lockfile.
@@ -270,7 +278,7 @@ impl<'lock> ExportableRequirements<'lock> {
             };
 
             for dep in deps {
-                if prune.contains(&dep.package_id.name) {
+                if is_pruned(&dep.package_id.name) {
                     continue;
                 }
 
