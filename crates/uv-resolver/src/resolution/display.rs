@@ -143,8 +143,11 @@ impl std::fmt::Display for DisplayResolutionGraph<'_> {
                 for requirement in self
                     .resolution
                     .overrides
-                    .scoped_requirements_for(&parent.name, &parent.version)
-                    .filter(|requirement| requirement.name == dependency.name)
+                    .scoped_requirements_for_dependency(
+                        &parent.name,
+                        &parent.version,
+                        &dependency.name,
+                    )
                     .filter(|requirement| {
                         requirement.evaluate_markers(self.env.marker_environment(), &[])
                     })
