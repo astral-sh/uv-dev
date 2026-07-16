@@ -5,7 +5,7 @@ pub use error::Error;
 pub use first_party::FirstPartyPackages;
 pub use index::{BuiltWheelIndex, RegistryWheelIndex};
 pub use metadata::{
-    ArchiveMetadata, BuildRequires, FlatRequiresDist, LoweredExtraBuildDependencies,
+    ArchiveMetadata, BuildRequires, FlatRequiresDist, IndexLookup, LoweredExtraBuildDependencies,
     LoweredRequirement, LoweringError, Metadata, MetadataError, RequiresDist,
     SourcedDependencyGroups,
 };
