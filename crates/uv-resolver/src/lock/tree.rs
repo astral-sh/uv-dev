@@ -508,14 +508,17 @@ impl<'env> TreeDisplay<'env> {
         cursor: Cursor,
         visited: &mut FxHashMap<VisitedNode<'env>, Vec<PackageIndex>>,
         path: &mut Vec<VisitedNode<'env>>,
-    ) -> Vec<String> {
+        prefix: &mut String,
+        is_last: Option<bool>,
+        lines: &mut Vec<String>,
+    ) {
         // Short-circuit if the current path is longer than the provided depth.
         if path.len() > self.depth {
-            return Vec::new();
+            return;
         }
 
         let Node::Package(package_index) = self.graph[cursor.node()] else {
-            return Vec::new();
+            return;
         };
         let edge = cursor.edge().map(|edge_id| &self.graph[edge_id]);
         let package = self.lock.package(package_index);
@@ -529,7 +532,11 @@ impl<'env> TreeDisplay<'env> {
         };
 
         let line = {
-            let mut line = format!("{}", package_id.name);
+            let mut line = match is_last {
+                Some(true) => format!("{prefix}└── {}", package_id.name),
+                Some(false) => format!("{prefix}├── {}", package_id.name),
+                None => format!("{}", package_id.name),
+            };
 
             if let Some(extras) = edge.and_then(Edge::extras) {
                 if !extras.is_empty() {
@@ -574,16 +581,18 @@ impl<'env> TreeDisplay<'env> {
         // 1. The package is in the current traversal path (i.e., a dependency cycle).
         // 2. The package has been visited and de-duplication is enabled (default).
         if path.contains(&visited_node) {
-            return vec![format!("{line} (*)")];
+            lines.push(format!("{line} (*)"));
+            return;
         }
         if !self.no_dedupe
             && let Some(requirements) = visited.get(&visited_node)
         {
-            return if requirements.is_empty() {
-                vec![line]
+            lines.push(if requirements.is_empty() {
+                line
             } else {
-                vec![format!("{line} (*)")]
-            };
+                format!("{line} (*)")
+            });
+            return;
         }
 
         // Incorporate the latest version of the package, if known.
@@ -647,7 +656,7 @@ impl<'env> TreeDisplay<'env> {
             (edge, node)
         });
 
-        let mut lines = vec![line];
+        lines.push(line);
 
         // Keep track of the dependency path to avoid cycles.
         // Only mark as visited if we're going to expand children (not at depth limit).
@@ -665,50 +674,29 @@ impl<'env> TreeDisplay<'env> {
         }
         path.push(visited_node);
 
-        for (index, dep) in dependencies.iter().enumerate() {
-            // For sub-visited packages, add the prefix to make the tree display user-friendly.
-            // The key observation here is you can group the tree as follows when you're at the
-            // root of the tree:
-            // root_package
-            // ├── level_1_0          // Group 1
-            // │   ├── level_2_0      ...
-            // │   │   ├── level_3_0  ...
-            // │   │   └── level_3_1  ...
-            // │   └── level_2_1      ...
-            // ├── level_1_1          // Group 2
-            // │   ├── level_2_2      ...
-            // │   └── level_2_3      ...
-            // └── level_1_2          // Group 3
-            //     └── level_2_4      ...
-            //
-            // The lines in Group 1 and 2 have `├── ` at the top and `|   ` at the rest while
-            // those in Group 3 have `└── ` at the top and `    ` at the rest.
-            // This observation is true recursively even when looking at the subtree rooted
-            // at `level_1_0`.
-            let (prefix_top, prefix_rest) = if dependencies.len() - 1 == index {
-                ("└── ", "    ")
-            } else {
-                ("├── ", "│   ")
-            };
-            for (visited_index, visited_line) in self.visit(*dep, visited, path).iter().enumerate()
-            {
-                let prefix = if visited_index == 0 {
-                    prefix_top
-                } else {
-                    prefix_rest
-                };
-                lines.push(format!("{prefix}{visited_line}"));
-            }
+        let prefix_len = prefix.len();
+        if let Some(is_last) = is_last {
+            prefix.push_str(if is_last { "    " } else { "│   " });
         }
+        for (index, dep) in dependencies.iter().enumerate() {
+            self.visit(
+                *dep,
+                visited,
+                path,
+                prefix,
+                Some(dependencies.len() - 1 == index),
+                lines,
+            );
+        }
+        prefix.truncate(prefix_len);
 
         path.pop();
-
-        lines
     }
 
     /// Depth-first traverse the nodes to render the tree.
     fn render(&self) -> Vec<String> {
         let mut path = Vec::new();
+        let mut prefix = String::new();
         let mut lines = Vec::with_capacity(self.graph.node_count());
         let mut visited =
             FxHashMap::with_capacity_and_hasher(self.graph.node_count(), FxBuildHasher);
@@ -719,20 +707,28 @@ impl<'env> TreeDisplay<'env> {
                     for edge in self.graph.edges_directed(*node, Direction::Outgoing) {
                         let node = edge.target();
                         path.clear();
-                        lines.extend(self.visit(
+                        prefix.clear();
+                        self.visit(
                             Cursor::new(node, edge.id(), self.conflict_marker),
                             &mut visited,
                             &mut path,
-                        ));
+                            &mut prefix,
+                            None,
+                            &mut lines,
+                        );
                     }
                 }
                 Node::Package(_) => {
                     path.clear();
-                    lines.extend(self.visit(
+                    prefix.clear();
+                    self.visit(
                         Cursor::root(*node, self.conflict_marker),
                         &mut visited,
                         &mut path,
-                    ));
+                        &mut prefix,
+                        None,
+                        &mut lines,
+                    );
                 }
             }
         }
