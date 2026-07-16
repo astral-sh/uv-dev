@@ -9,14 +9,14 @@ use fs_err as fs;
 use fs_err::{DirEntry, File};
 use itertools::Itertools;
 use mailparse::parse_headers;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxBuildHasher, FxHashMap};
 use sha2::{Digest, Sha256};
 use tracing::{debug, instrument, trace, warn};
 use walkdir::WalkDir;
 
 use uv_fs::{
-    PortablePath, Simplified, copy_atomic_sync, normalize_path_under, persist_with_retry_sync,
-    relative_to,
+    PortablePath, Simplified, copy_atomic_sync, normalize_path, normalize_path_under,
+    persist_with_retry_sync, relative_to,
 };
 use uv_normalize::PackageName;
 use uv_pypi_types::DirectUrl;
@@ -589,6 +589,79 @@ pub(crate) enum LibKind {
     Plat,
 }
 
+/// Lazily index RECORD paths once enough data files are relocated to make repeated scans costly.
+#[derive(Default)]
+struct RecordIndex {
+    lookups: usize,
+    by_path: Option<FxHashMap<PathBuf, (usize, bool)>>,
+    original_paths: Vec<(usize, String)>,
+}
+
+impl RecordIndex {
+    fn find(&mut self, record: &mut [RecordEntry], path: &Path) -> Option<usize> {
+        const INDEX_THRESHOLD: usize = 8;
+
+        let path = normalize_path(path);
+        if let Some(by_path) = &self.by_path {
+            return by_path.get(path.as_ref()).map(|(index, _)| *index);
+        }
+
+        self.lookups += 1;
+        // Earlier relocations may have renamed an entry to another data file's source path. Swap
+        // the original paths back while scanning or building the index so those targets cannot
+        // shadow a file that has yet to be moved.
+        for (index, original_path) in &mut self.original_paths {
+            std::mem::swap(&mut record[*index].path, original_path);
+        }
+
+        let index = if self.lookups < INDEX_THRESHOLD {
+            record
+                .iter()
+                .position(|entry| Path::new(&entry.path) == path.as_ref())
+                .or_else(|| {
+                    record
+                        .iter()
+                        .position(|entry| normalize_path(Path::new(&entry.path)) == path)
+                })
+        } else {
+            let mut by_path = FxHashMap::with_capacity_and_hasher(record.len(), FxBuildHasher);
+            for (index, entry) in record.iter().enumerate() {
+                let entry_path = Path::new(&entry.path);
+                let normalized_path = normalize_path(entry_path);
+                let exact = entry_path == normalized_path.as_ref();
+                let selected = by_path
+                    .entry(normalized_path.into_owned())
+                    .or_insert((index, exact));
+                if exact && !selected.1 {
+                    *selected = (index, true);
+                }
+            }
+            let index = by_path.get(path.as_ref()).map(|(index, _)| *index);
+            self.by_path = Some(by_path);
+            index
+        };
+
+        for (index, original_path) in &mut self.original_paths {
+            std::mem::swap(&mut record[*index].path, original_path);
+        }
+        index
+    }
+
+    fn set_path(&mut self, record: &mut [RecordEntry], index: usize, path: String) {
+        if self.by_path.is_none()
+            && self
+                .original_paths
+                .iter()
+                .all(|(original_index, _)| *original_index != index)
+        {
+            let original_path = std::mem::replace(&mut record[index].path, path);
+            self.original_paths.push((index, original_path));
+        } else {
+            record[index].path = path;
+        }
+    }
+}
+
 /// Moves the files and folders in src to dest, updating the RECORD in the process
 fn move_folder_recorded(
     src_dir: &Path,
@@ -596,6 +669,7 @@ fn move_folder_recorded(
     scripts: &ValidatedWheelDestination,
     site_packages: &Path,
     record: &mut [RecordEntry],
+    record_index: &mut RecordIndex,
 ) -> Result<(), Error> {
     let dest_dir = destination.as_path();
     let mut rename_or_copy = RenameOrCopy::default();
@@ -619,16 +693,19 @@ fn move_folder_recorded(
         } else {
             validate_data_script_destination(&target, scripts.as_path())?;
             rename_or_copy.rename_or_copy(src, &target)?;
-            let entry = record
-                .iter_mut()
-                .find(|entry| Path::new(&entry.path) == relative_to_site_packages)
+            let index = record_index
+                .find(record, relative_to_site_packages)
                 .ok_or_else(|| Error::RecordFile {
                     relative: relative_to_site_packages.to_path_buf(),
                     absolute: src.to_path_buf(),
                 })?;
-            entry.path = relative_to(&target, site_packages)?
-                .portable_display()
-                .to_string();
+            record_index.set_path(
+                record,
+                index,
+                relative_to(&target, site_packages)?
+                    .portable_display()
+                    .to_string(),
+            );
         }
     }
     Ok(())
@@ -643,6 +720,7 @@ fn install_script(
     destination: &ValidatedWheelDestination,
     site_packages: &Path,
     record: &mut [RecordEntry],
+    record_index: &mut RecordIndex,
     file: &DirEntry,
     #[allow(unused)] rename_or_copy: &mut RenameOrCopy,
 ) -> Result<(), Error> {
@@ -821,9 +899,8 @@ fn install_script(
     let relative_to_site_packages = path
         .strip_prefix(site_packages)
         .expect("Prefix must no change");
-    let entry = record
-        .iter_mut()
-        .find(|entry| Path::new(&entry.path) == relative_to_site_packages)
+    let index = record_index
+        .find(record, relative_to_site_packages)
         .ok_or_else(|| {
             // It should not be possible to error at this point, but filesystems and such.
             Error::RecordFile {
@@ -831,9 +908,13 @@ fn install_script(
                 absolute: path.clone(),
             }
         })?;
-
     // Update the entry in the `RECORD`.
-    entry.path = script_relative.portable_display().to_string();
+    record_index.set_path(
+        record,
+        index,
+        script_relative.portable_display().to_string(),
+    );
+    let entry = &mut record[index];
     if let Some((size, encoded_hash)) = size_and_encoded_hash {
         entry.size = Some(size);
         entry.hash = Some(encoded_hash);
@@ -855,6 +936,7 @@ pub(crate) fn install_data(
     let site_packages = wheel.destination.as_path();
     let data_dir = wheel.installed_data_dir();
     let destinations = &wheel.data_destinations;
+    let mut record_index = RecordIndex::default();
     for entry in fs::read_dir(data_dir)? {
         let entry = entry?;
         let path = entry.path();
@@ -873,6 +955,7 @@ pub(crate) fn install_data(
                     &destinations.scripts,
                     site_packages,
                     record,
+                    &mut record_index,
                 )?;
             }
             Some("scripts") => {
@@ -914,6 +997,7 @@ pub(crate) fn install_data(
                         &destinations.scripts,
                         site_packages,
                         record,
+                        &mut record_index,
                         &file,
                         &mut rename_or_copy,
                     )?;
@@ -931,6 +1015,7 @@ pub(crate) fn install_data(
                     &destinations.scripts,
                     site_packages,
                     record,
+                    &mut record_index,
                 )?;
             }
             Some("purelib") => {
@@ -945,6 +1030,7 @@ pub(crate) fn install_data(
                     &destinations.scripts,
                     site_packages,
                     record,
+                    &mut record_index,
                 )?;
             }
             Some("platlib") => {
@@ -959,6 +1045,7 @@ pub(crate) fn install_data(
                     &destinations.scripts,
                     site_packages,
                     record,
+                    &mut record_index,
                 )?;
             }
             _ => {
@@ -1359,18 +1446,52 @@ impl RenameOrCopy {
 mod test {
     use std::assert_matches;
     use std::io::{Cursor, ErrorKind};
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
+    use std::str::FromStr;
 
     use anyhow::Result;
     use assert_fs::prelude::*;
     use indoc::{formatdoc, indoc};
+    use uv_normalize::PackageName;
+    use uv_pypi_types::Scheme;
 
     #[cfg(unix)]
     use super::RenameOrCopy;
     use super::{
-        Error, RecordEntry, Script, WheelFile, format_shebang, get_script_executable,
-        parse_email_message_file, parse_scripts, read_record, write_installer_metadata,
+        Error, RecordEntry, RecordIndex, Script, ValidatedWheel, WheelFile, format_shebang,
+        get_script_executable, install_data, parse_email_message_file, parse_scripts, read_record,
+        validate_and_heal_record, write_installer_metadata,
     };
+    use crate::Layout;
+
+    fn layout(environment: &Path, site_packages: &Path) -> Layout {
+        Layout {
+            sys_executable: environment.join("bin/python"),
+            python_version: (3, 13),
+            os_name: "posix".to_string(),
+            scheme: Scheme {
+                purelib: site_packages.to_path_buf(),
+                platlib: site_packages.to_path_buf(),
+                scripts: environment.join("bin"),
+                data: environment.to_path_buf(),
+                include: environment.join("include"),
+            },
+        }
+    }
+
+    fn validated_wheel<'wheel>(
+        layout: &Layout,
+        site_packages: &'wheel Path,
+        dist_name: &PackageName,
+    ) -> Result<ValidatedWheel<'wheel>, Error> {
+        ValidatedWheel::new(
+            layout,
+            site_packages,
+            "example-1.0.0",
+            dist_name,
+            site_packages,
+        )
+    }
 
     #[cfg(unix)]
     #[test]
@@ -1516,6 +1637,303 @@ mod test {
             .map(|entry| entry.path)
             .collect::<Vec<String>>();
         assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn install_data_with_non_canonical_record_paths() -> Result<()> {
+        let environment = assert_fs::TempDir::new()?;
+        let site_packages = environment.child("site-packages");
+        let data_dir = site_packages.child("example-1.0.0.data");
+        data_dir.child("data/nested/asset.txt").write_str("asset")?;
+        for index in 0..7 {
+            data_dir
+                .child(format!("data/padding-{index}.txt"))
+                .write_str("padding")?;
+        }
+        data_dir.child("scripts/tool").write_str("tool")?;
+        data_dir.child("headers/header.h").write_str("header")?;
+        data_dir.child("purelib/module.py").write_str("module")?;
+        data_dir.child("platlib/native.so").write_str("native")?;
+        site_packages
+            .child("example-1.0.0.dist-info/RECORD")
+            .write_str(indoc! {"
+                ./example-1.0.0.data/data/nested/asset.txt,sha256=asset,5
+                ./example-1.0.0.data/scripts/tool,sha256=tool,4
+                ./example-1.0.0.data/data/padding-0.txt,sha256=padding-0,7
+                ./example-1.0.0.data/data/padding-1.txt,sha256=padding-1,7
+                ./example-1.0.0.data/data/padding-2.txt,sha256=padding-2,7
+                ./example-1.0.0.data/data/padding-3.txt,sha256=padding-3,7
+                ./example-1.0.0.data/data/padding-4.txt,sha256=padding-4,7
+                ./example-1.0.0.data/data/padding-5.txt,sha256=padding-5,7
+                ./example-1.0.0.data/data/padding-6.txt,sha256=padding-6,7
+                ./example-1.0.0.data/headers/./header.h,sha256=header,6
+                example-1.0.0.data/purelib//module.py,sha256=module,6
+                ./example-1.0.0.data/platlib/nested/../native.so,sha256=native,6
+                example-1.0.0.dist-info/RECORD,,
+            "})?;
+
+        let unpacked_wheel = [
+            (PathBuf::from("example-1.0.0.data/data/nested/asset.txt"), 5),
+            (PathBuf::from("example-1.0.0.data/scripts/tool"), 4),
+            (PathBuf::from("example-1.0.0.data/data/padding-0.txt"), 7),
+            (PathBuf::from("example-1.0.0.data/data/padding-1.txt"), 7),
+            (PathBuf::from("example-1.0.0.data/data/padding-2.txt"), 7),
+            (PathBuf::from("example-1.0.0.data/data/padding-3.txt"), 7),
+            (PathBuf::from("example-1.0.0.data/data/padding-4.txt"), 7),
+            (PathBuf::from("example-1.0.0.data/data/padding-5.txt"), 7),
+            (PathBuf::from("example-1.0.0.data/data/padding-6.txt"), 7),
+            (PathBuf::from("example-1.0.0.data/headers/header.h"), 6),
+            (PathBuf::from("example-1.0.0.data/purelib/module.py"), 6),
+            (PathBuf::from("example-1.0.0.data/platlib/native.so"), 6),
+            (PathBuf::from("example-1.0.0.dist-info/RECORD"), 0),
+        ];
+        validate_and_heal_record(
+            site_packages.path(),
+            unpacked_wheel
+                .iter()
+                .map(|(path, size)| (path.as_path(), *size)),
+            "example==1.0.0",
+        )?;
+        let record_file =
+            fs_err::File::open(site_packages.child("example-1.0.0.dist-info/RECORD").path())?;
+        let mut record = read_record(record_file)?;
+
+        let layout = layout(environment.path(), site_packages.path());
+        let dist_name = PackageName::from_str("example")?;
+        let wheel = validated_wheel(&layout, site_packages.path(), &dist_name)?;
+        install_data(&layout, false, &wheel, &dist_name, &[], &[], &mut record)?;
+
+        assert_eq!(
+            fs_err::read_to_string(environment.path().join("nested/asset.txt"))?,
+            "asset"
+        );
+        assert_eq!(
+            fs_err::read_to_string(environment.path().join("bin/tool"))?,
+            "tool"
+        );
+        assert_eq!(record[0].path, "../nested/asset.txt");
+        assert_eq!(record[0].hash.as_deref(), Some("sha256=asset"));
+        assert_eq!(record[0].size, Some(5));
+        assert_eq!(record[1].path, "../bin/tool");
+        assert_eq!(record[1].hash.as_deref(), Some("sha256=tool"));
+        assert_eq!(record[1].size, Some(4));
+        for index in 0..7 {
+            assert_eq!(
+                fs_err::read_to_string(environment.path().join(format!("padding-{index}.txt")))?,
+                "padding"
+            );
+            assert_eq!(record[index + 2].path, format!("../padding-{index}.txt"));
+            assert_eq!(
+                record[index + 2].hash.as_deref(),
+                Some(format!("sha256=padding-{index}").as_str())
+            );
+            assert_eq!(record[index + 2].size, Some(7));
+        }
+        assert_eq!(
+            fs_err::read_to_string(environment.path().join("include/example/header.h"))?,
+            "header"
+        );
+        assert_eq!(record[9].path, "../include/example/header.h");
+        assert_eq!(record[9].hash.as_deref(), Some("sha256=header"));
+        assert_eq!(record[9].size, Some(6));
+        assert_eq!(
+            fs_err::read_to_string(site_packages.child("module.py").path())?,
+            "module"
+        );
+        assert_eq!(record[10].path, "module.py");
+        assert_eq!(record[10].hash.as_deref(), Some("sha256=module"));
+        assert_eq!(record[10].size, Some(6));
+        assert_eq!(
+            fs_err::read_to_string(site_packages.child("native.so").path())?,
+            "native"
+        );
+        assert_eq!(record[11].path, "native.so");
+        assert_eq!(record[11].hash.as_deref(), Some("sha256=native"));
+        assert_eq!(record[11].size, Some(6));
+
+        Ok(())
+    }
+
+    #[test]
+    fn install_data_uses_first_duplicate_record_entry() -> Result<()> {
+        let environment = assert_fs::TempDir::new()?;
+        let site_packages = environment.child("site-packages");
+        let data_dir = site_packages.child("example-1.0.0.data");
+        data_dir.child("data/asset.txt").write_str("asset")?;
+        let layout = layout(environment.path(), site_packages.path());
+        let dist_name = PackageName::from_str("example")?;
+        let wheel = validated_wheel(&layout, site_packages.path(), &dist_name)?;
+        let mut record = vec![
+            RecordEntry {
+                path: "./example-1.0.0.data/data/asset.txt".to_string(),
+                hash: Some("sha256=first".to_string()),
+                size: Some(5),
+            },
+            RecordEntry {
+                path: "./example-1.0.0.data/data/./asset.txt".to_string(),
+                hash: Some("sha256=second".to_string()),
+                size: Some(5),
+            },
+        ];
+        install_data(&layout, false, &wheel, &dist_name, &[], &[], &mut record)?;
+
+        assert_eq!(record[0].path, "../asset.txt");
+        assert_eq!(record[0].hash.as_deref(), Some("sha256=first"));
+        assert_eq!(record[1].path, "./example-1.0.0.data/data/./asset.txt");
+        assert_eq!(record[1].hash.as_deref(), Some("sha256=second"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn install_data_reports_missing_record_entry() -> Result<()> {
+        let environment = assert_fs::TempDir::new()?;
+        let site_packages = environment.child("site-packages");
+        let data_dir = site_packages.child("example-1.0.0.data");
+        data_dir.child("data/asset.txt").write_str("asset")?;
+        let layout = layout(environment.path(), site_packages.path());
+        let dist_name = PackageName::from_str("example")?;
+        let wheel = validated_wheel(&layout, site_packages.path(), &dist_name)?;
+        let error = install_data(&layout, false, &wheel, &dist_name, &[], &[], &mut [])
+            .expect_err("data files missing from RECORD must fail to install");
+
+        assert!(matches!(
+            error,
+            Error::RecordFile { relative, absolute }
+                if relative == Path::new("example-1.0.0.data/data/asset.txt")
+                    && absolute == data_dir.path().join("data/asset.txt")
+        ));
+
+        Ok(())
+    }
+
+    #[test]
+    fn record_index_uses_first_normalized_duplicate() {
+        let mut record = vec![
+            RecordEntry {
+                path: "./example-1.0.0.data/data/asset.txt".to_string(),
+                hash: Some("sha256=first".to_string()),
+                size: Some(5),
+            },
+            RecordEntry {
+                path: "./example-1.0.0.data/data/./asset.txt".to_string(),
+                hash: Some("sha256=second".to_string()),
+                size: Some(5),
+            },
+        ];
+        let mut index = RecordIndex::default();
+        let path = Path::new("example-1.0.0.data/data/asset.txt");
+        for _ in 0..8 {
+            assert_eq!(index.find(&mut record, path), Some(0));
+        }
+        assert!(index.by_path.is_some());
+    }
+
+    #[test]
+    fn record_index_prefers_exact_duplicate_across_threshold() {
+        let mut record = vec![
+            RecordEntry {
+                path: "./example-1.0.0.data/data/asset.txt".to_string(),
+                hash: Some("sha256=normalized".to_string()),
+                size: Some(1),
+            },
+            RecordEntry {
+                path: "example-1.0.0.data/data/asset.txt".to_string(),
+                hash: Some("sha256=exact".to_string()),
+                size: Some(2),
+            },
+        ];
+        record.extend((0..7).map(|index| RecordEntry {
+            path: format!("example-1.0.0.data/data/padding-{index}.txt"),
+            hash: Some(format!("sha256=padding-{index}")),
+            size: Some(index),
+        }));
+        let mut index = RecordIndex::default();
+        for padding in 0..6 {
+            assert_eq!(
+                index.find(
+                    &mut record,
+                    Path::new(&format!("example-1.0.0.data/data/padding-{padding}.txt"))
+                ),
+                Some(padding + 2)
+            );
+            index.set_path(
+                &mut record,
+                padding + 2,
+                format!("../padding-{padding}.txt"),
+            );
+        }
+
+        let source = Path::new("example-1.0.0.data/data/asset.txt");
+        assert_eq!(index.find(&mut record, source), Some(1));
+        index.set_path(&mut record, 1, "../asset.txt".to_string());
+        record[1].hash = Some("sha256=updated".to_string());
+        record[1].size = Some(7);
+        assert!(index.by_path.is_none());
+
+        assert_eq!(
+            index.find(
+                &mut record,
+                Path::new("example-1.0.0.data/data/padding-6.txt")
+            ),
+            Some(8)
+        );
+        assert!(index.by_path.is_some());
+        assert_eq!(index.find(&mut record, source), Some(1));
+        assert_eq!(record[0].path, "./example-1.0.0.data/data/asset.txt");
+        assert_eq!(record[0].hash.as_deref(), Some("sha256=normalized"));
+        assert_eq!(record[0].size, Some(1));
+        assert_eq!(record[1].path, "../asset.txt");
+        assert_eq!(record[1].hash.as_deref(), Some("sha256=updated"));
+        assert_eq!(record[1].size, Some(7));
+    }
+
+    #[test]
+    fn record_index_ignores_renamed_target_that_matches_later_source() {
+        let source_paths = [
+            "example-1.0.0.data/data/first.txt",
+            "example-1.0.0.data/headers/header.h",
+            "example-1.0.0.data/purelib/module.py",
+            "example-1.0.0.data/platlib/native.so",
+            "example-1.0.0.data/scripts/tool",
+            "example-1.0.0.data/data/second.txt",
+            "example-1.0.0.data/headers/second.h",
+            "example-1.0.0.data/purelib/later.py",
+        ];
+        let mut record = source_paths
+            .iter()
+            .enumerate()
+            .map(|(index, path)| RecordEntry {
+                path: format!("./{path}"),
+                hash: Some(format!("sha256={index}")),
+                size: Some(index as u64),
+            })
+            .collect::<Vec<_>>();
+        let mut index = RecordIndex::default();
+
+        for (record_index, source_path) in source_paths.iter().take(7).enumerate() {
+            assert_eq!(
+                index.find(&mut record, Path::new(source_path)),
+                Some(record_index)
+            );
+            let target = if record_index == 0 {
+                source_paths[7].to_string()
+            } else {
+                format!("../target-{record_index}")
+            };
+            index.set_path(&mut record, record_index, target);
+        }
+        assert_eq!(record[0].path, source_paths[7]);
+        assert!(index.by_path.is_none());
+
+        assert_eq!(index.find(&mut record, Path::new(source_paths[7])), Some(7));
+        assert!(index.by_path.is_some());
+        for (record_index, source_path) in source_paths.iter().enumerate() {
+            assert_eq!(
+                index.find(&mut record, Path::new(source_path)),
+                Some(record_index)
+            );
+        }
     }
 
     #[test]
