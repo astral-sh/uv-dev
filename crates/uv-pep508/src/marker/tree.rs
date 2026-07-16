@@ -6,6 +6,7 @@ use std::str::FromStr;
 
 use arcstr::ArcStr;
 use itertools::Itertools;
+use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use version_ranges::Ranges;
 
@@ -1136,27 +1137,75 @@ impl MarkerTree {
 
     /// Returns true if this marker simplifies to true if the given set of extras is activated.
     pub fn evaluate_only_extras(self, extras: &[ExtraName]) -> bool {
+        if extras.len() < 8 {
+            return self.evaluate_only_extras_impl(extras);
+        }
+
+        let extras = extras.iter().collect::<FxHashSet<_>>();
+        self.evaluate_only_extras_with(|extra| extras.contains(extra))
+    }
+
+    fn evaluate_only_extras_with(self, is_extra: impl Fn(&ExtraName) -> bool) -> bool {
+        self.evaluate_only_extras_with_impl(&is_extra, &mut FxHashMap::default())
+    }
+
+    fn evaluate_only_extras_with_impl(
+        self,
+        is_extra: &impl Fn(&ExtraName) -> bool,
+        cache: &mut FxHashMap<Self, bool>,
+    ) -> bool {
+        if let Some(value) = cache.get(&self) {
+            return *value;
+        }
+
+        let value = match self.kind() {
+            MarkerTreeKind::True => true,
+            MarkerTreeKind::False => false,
+            MarkerTreeKind::Version(marker) => marker
+                .edges()
+                .all(|(_, tree)| tree.evaluate_only_extras_with_impl(is_extra, cache)),
+            MarkerTreeKind::String(marker) => marker
+                .children()
+                .all(|(_, tree)| tree.evaluate_only_extras_with_impl(is_extra, cache)),
+            MarkerTreeKind::In(marker) => marker
+                .children()
+                .all(|(_, tree)| tree.evaluate_only_extras_with_impl(is_extra, cache)),
+            MarkerTreeKind::Contains(marker) => marker
+                .children()
+                .all(|(_, tree)| tree.evaluate_only_extras_with_impl(is_extra, cache)),
+            MarkerTreeKind::List(marker) => marker
+                .children()
+                .all(|(_, tree)| tree.evaluate_only_extras_with_impl(is_extra, cache)),
+            MarkerTreeKind::Extra(marker) => marker
+                .edge(is_extra(marker.name().extra()))
+                .evaluate_only_extras_with_impl(is_extra, cache),
+        };
+        cache.insert(self, value);
+        value
+    }
+
+    fn evaluate_only_extras_impl(self, extras: &[ExtraName]) -> bool {
         match self.kind() {
             MarkerTreeKind::True => true,
             MarkerTreeKind::False => false,
             MarkerTreeKind::Version(marker) => marker
                 .edges()
-                .all(|(_, tree)| tree.evaluate_only_extras(extras)),
+                .all(|(_, tree)| tree.evaluate_only_extras_impl(extras)),
             MarkerTreeKind::String(marker) => marker
                 .children()
-                .all(|(_, tree)| tree.evaluate_only_extras(extras)),
+                .all(|(_, tree)| tree.evaluate_only_extras_impl(extras)),
             MarkerTreeKind::In(marker) => marker
                 .children()
-                .all(|(_, tree)| tree.evaluate_only_extras(extras)),
+                .all(|(_, tree)| tree.evaluate_only_extras_impl(extras)),
             MarkerTreeKind::Contains(marker) => marker
                 .children()
-                .all(|(_, tree)| tree.evaluate_only_extras(extras)),
+                .all(|(_, tree)| tree.evaluate_only_extras_impl(extras)),
             MarkerTreeKind::List(marker) => marker
                 .children()
-                .all(|(_, tree)| tree.evaluate_only_extras(extras)),
+                .all(|(_, tree)| tree.evaluate_only_extras_impl(extras)),
             MarkerTreeKind::Extra(marker) => marker
                 .edge(extras.contains(marker.name().extra()))
-                .evaluate_only_extras(extras),
+                .evaluate_only_extras_impl(extras),
         }
     }
 
@@ -1823,6 +1872,7 @@ impl schemars::JsonSchema for MarkerTree {
 
 #[cfg(test)]
 mod test {
+    use rustc_hash::FxHashSet;
     use std::ops::Bound;
     use std::str::FromStr;
 
@@ -3676,5 +3726,68 @@ mod test {
         assert!(!marker.evaluate_only_extras(std::slice::from_ref(&a)));
         assert!(!marker.evaluate_only_extras(std::slice::from_ref(&b)));
         assert!(marker.evaluate_only_extras(&[a.clone(), b.clone()]));
+    }
+
+    #[test]
+    fn evaluate_only_extras_exhaustive() {
+        let a = ExtraName::from_str("a").unwrap();
+        let scoped = ExtraName::from_str("extra-3-pkg-b").unwrap();
+        let inactive = (0..8)
+            .map(|index| ExtraName::from_str(&format!("inactive-{index}")).unwrap())
+            .collect::<Vec<_>>();
+
+        for environment in [
+            m("sys_platform == 'linux'"),
+            m("python_full_version < '3.12'"),
+            m("sys_platform in 'linux,win32'"),
+            m("'lin' in sys_platform"),
+            m("'dev' in extras"),
+        ] {
+            let variables = [
+                m("extra == 'a'"),
+                m("extra == 'extra-3-pkg-b'"),
+                environment,
+            ];
+            for truth_table in 0..=u8::MAX {
+                let mut marker = MarkerTree::FALSE;
+                for assignment in 0..8 {
+                    if truth_table & (1 << assignment) == 0 {
+                        continue;
+                    }
+                    let mut conjunction = MarkerTree::TRUE;
+                    for (index, variable) in variables.iter().enumerate() {
+                        conjunction = conjunction.and(if assignment & (1 << index) == 0 {
+                            variable.negate()
+                        } else {
+                            *variable
+                        });
+                    }
+                    marker = marker.or(conjunction);
+                }
+
+                for active in 0..4 {
+                    let mut extras = inactive.clone();
+                    if active & 1 != 0 {
+                        extras.push(a.clone());
+                    }
+                    if active & 2 != 0 {
+                        extras.push(scoped.clone());
+                    }
+                    let indexed = extras.iter().collect::<FxHashSet<_>>();
+                    let restricted = marker
+                        .simplify_extras_with(|extra| indexed.contains(extra))
+                        .simplify_not_extras_with(|extra| !indexed.contains(extra))
+                        .is_true();
+                    let expected = marker.evaluate_only_extras_impl(&extras);
+
+                    assert_eq!(marker.evaluate_only_extras(&extras), expected);
+                    assert_eq!(
+                        marker.evaluate_only_extras_with(|extra| indexed.contains(extra)),
+                        expected
+                    );
+                    assert_eq!(restricted, expected);
+                }
+            }
+        }
     }
 }
