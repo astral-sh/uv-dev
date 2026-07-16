@@ -3915,13 +3915,10 @@ impl Package {
         let metadata = if id.source.is_immutable() {
             PackageMetadata::default()
         } else {
-            PackageMetadata::from_distribution(
-                annotated_dist
-                    .metadata
-                    .as_ref()
-                    .expect("metadata is present"),
-                root,
-            )?
+            let metadata = annotated_dist
+                .metadata_for_lock()
+                .expect("metadata is present");
+            PackageMetadata::from_distribution(metadata.as_ref(), root)?
         };
         Ok(Self {
             id,
@@ -4813,8 +4810,7 @@ impl PackageId {
         // Omit versions for dynamic source trees.
         let version = if source.is_source_tree()
             && annotated_dist
-                .metadata
-                .as_ref()
+                .metadata()
                 .is_some_and(|metadata| metadata.dynamic)
         {
             None
