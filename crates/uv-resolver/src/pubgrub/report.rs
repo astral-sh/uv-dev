@@ -10,7 +10,7 @@ use jiff::Timestamp;
 use owo_colors::OwoColorize;
 use pubgrub::{DerivationTree, Derived, External, Map, ReportFormatter, Term};
 use reqwest::StatusCode;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use uv_configuration::{IndexStrategy, NoBinary, NoBuild};
 use uv_distribution_types::{
@@ -769,6 +769,7 @@ impl PubGrubReportFormatter<'_> {
         }
 
         let mut pending = vec![derivation_tree];
+        let mut visited = FxHashSet::default();
         while let Some(derivation_tree) = pending.pop() {
             match derivation_tree {
                 DerivationTree::External(External::Custom(package, set, reason)) => {
@@ -966,6 +967,9 @@ impl PubGrubReportFormatter<'_> {
                 }
                 DerivationTree::External(External::NotRoot(..)) => {}
                 DerivationTree::Derived(derived) => {
+                    if !visited.insert(std::ptr::from_ref(derived)) {
+                        continue;
+                    }
                     pending.push(&derived.cause2);
                     pending.push(&derived.cause1);
                 }
@@ -982,6 +986,7 @@ impl PubGrubReportFormatter<'_> {
 
         let mut exclude_newer_ranges: FxHashMap<PackageName, Vec<VersionBounds>> =
             FxHashMap::default();
+        let mut visited = FxHashSet::default();
         let mut trees = vec![derivation_tree];
         while let Some(derivation_tree) = trees.pop() {
             match derivation_tree {
@@ -1007,6 +1012,9 @@ impl PubGrubReportFormatter<'_> {
                 }
                 DerivationTree::External(_) => {}
                 DerivationTree::Derived(derived) => {
+                    if !visited.insert(std::ptr::from_ref(derived)) {
+                        continue;
+                    }
                     trees.push(&derived.cause2);
                     trees.push(&derived.cause1);
                 }
@@ -2935,6 +2943,68 @@ mod tests {
                 }) if package == &package_name && version == &expected_version
             ));
         }
+    }
+
+    #[test]
+    fn generates_hints_for_shared_derivation_tree() {
+        let fixture = FormatterFixture::new();
+        let formatter = fixture.formatter();
+        let package = PubGrubPackage::from(PubGrubPackageInner::Root(None));
+        let mut tree = Arc::new(DerivationTree::External(External::NotRoot(
+            package,
+            Version::new([1_u64]),
+        )));
+        for shared_id in 0..64 {
+            tree = Arc::new(DerivationTree::Derived(Derived {
+                terms: Map::default(),
+                shared_id: Some(shared_id),
+                cause1: tree.clone(),
+                cause2: tree,
+            }));
+        }
+        let tree = Arc::unwrap_or_clone(tree);
+        let options = Options::default();
+        let environment = ResolverEnvironment::universal(vec![]);
+        let selector =
+            CandidateSelector::for_resolution(&options, &Manifest::simple(vec![]), &environment);
+        let marker_environment = MarkerEnvironment::try_from(MarkerEnvironmentBuilder {
+            implementation_name: "cpython",
+            implementation_version: "3.12.0",
+            os_name: "posix",
+            platform_machine: "x86_64",
+            platform_python_implementation: "CPython",
+            platform_release: "",
+            platform_system: "Linux",
+            platform_version: "",
+            python_full_version: "3.12.0",
+            python_version: "3.12",
+            sys_platform: "linux",
+        })
+        .expect("valid marker environment");
+        let mut hints = IndexSet::default();
+
+        formatter.generate_hints(
+            &tree,
+            &InMemoryIndex::default(),
+            &selector,
+            &IndexLocations::default(),
+            &IndexCapabilities::default(),
+            &FxHashMap::default(),
+            &FxHashMap::default(),
+            &FxHashMap::default(),
+            &ForkUrls::default(),
+            &ForkIndexes::default(),
+            &environment,
+            &marker_environment,
+            None,
+            &BTreeSet::default(),
+            &options,
+            &FxHashMap::default(),
+            &mut hints,
+        );
+
+        assert!(hints.is_empty());
+        crate::error::drop_derivation_tree(tree);
     }
 
     #[test]

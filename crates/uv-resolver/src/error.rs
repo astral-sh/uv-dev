@@ -183,6 +183,7 @@ pub(crate) fn derivation_tree_packages(
     derivation_tree: &ErrorTree,
 ) -> impl Iterator<Item = &PubGrubPackage> {
     let mut packages = FxHashSet::default();
+    let mut visited = FxHashSet::default();
     let mut trees = vec![derivation_tree];
 
     while let Some(tree) = trees.pop() {
@@ -199,6 +200,9 @@ pub(crate) fn derivation_tree_packages(
                 }
             },
             DerivationTree::Derived(derived) => {
+                if derived.shared_id.is_some_and(|id| !visited.insert(id)) {
+                    continue;
+                }
                 packages.extend(derived.terms.keys());
                 trees.push(&derived.cause1);
                 trees.push(&derived.cause2);
@@ -233,15 +237,31 @@ pub(crate) fn drop_derivation_tree(derivation_tree: ErrorTree) {
 /// The `Option` allows [`Drop`] to take ownership of the tree and applies the same iterative
 /// teardown during normal returns and unwinding.
 #[derive(Clone)]
-struct StackSafeErrorTree(Option<ErrorTree>);
+struct StackSafeErrorTree(Option<Arc<ErrorTree>>);
 
 impl StackSafeErrorTree {
     fn new(derivation_tree: ErrorTree) -> Self {
+        Self(Some(Arc::new(derivation_tree)))
+    }
+
+    fn from_arc(derivation_tree: Arc<ErrorTree>) -> Self {
         Self(Some(derivation_tree))
     }
 
-    fn into_inner(mut self) -> ErrorTree {
+    fn into_inner(self) -> ErrorTree {
+        Arc::unwrap_or_clone(self.into_arc())
+    }
+
+    fn into_arc(mut self) -> Arc<ErrorTree> {
         self.0.take().expect("derivation tree is only taken once")
+    }
+
+    fn as_ptr(&self) -> *const ErrorTree {
+        Arc::as_ptr(
+            self.0
+                .as_ref()
+                .expect("derivation tree is only taken during drop"),
+        )
     }
 }
 
@@ -250,7 +270,7 @@ impl Deref for StackSafeErrorTree {
 
     fn deref(&self) -> &Self::Target {
         self.0
-            .as_ref()
+            .as_deref()
             .expect("derivation tree is only taken during drop")
     }
 }
@@ -258,7 +278,9 @@ impl Deref for StackSafeErrorTree {
 impl Drop for StackSafeErrorTree {
     fn drop(&mut self) {
         if let Some(derivation_tree) = self.0.take() {
-            drop_derivation_tree(derivation_tree);
+            if let Ok(derivation_tree) = Arc::try_unwrap(derivation_tree) {
+                drop_derivation_tree(derivation_tree);
+            }
         }
     }
 }
@@ -311,23 +333,27 @@ struct DerivedMetadata {
 
 enum TreeTask {
     Visit(StackSafeErrorTree),
-    Rebuild(DerivedMetadata),
+    Rebuild(DerivedMetadata, Option<*const ErrorTree>),
+    Remember(*const ErrorTree),
 }
 
-fn schedule_derived(tasks: &mut Vec<TreeTask>, derived: ErrorDerived) {
+fn schedule_derived(
+    tasks: &mut Vec<TreeTask>,
+    derived: ErrorDerived,
+    identity: Option<*const ErrorTree>,
+) {
     let Derived {
         terms,
         shared_id,
         cause1,
         cause2,
     } = derived;
-    tasks.push(TreeTask::Rebuild(DerivedMetadata { terms, shared_id }));
-    tasks.push(TreeTask::Visit(StackSafeErrorTree::new(
-        Arc::unwrap_or_clone(cause2),
-    )));
-    tasks.push(TreeTask::Visit(StackSafeErrorTree::new(
-        Arc::unwrap_or_clone(cause1),
-    )));
+    tasks.push(TreeTask::Rebuild(
+        DerivedMetadata { terms, shared_id },
+        identity,
+    ));
+    tasks.push(TreeTask::Visit(StackSafeErrorTree::from_arc(cause2)));
+    tasks.push(TreeTask::Visit(StackSafeErrorTree::from_arc(cause1)));
 }
 
 fn transform_derivation_tree(
@@ -335,32 +361,60 @@ fn transform_derivation_tree(
     mut transform_external: impl FnMut(ErrorExternal) -> Option<ErrorTree>,
     mut transform_derived: impl FnMut(
         DerivedMetadata,
-        Option<ErrorTree>,
-        Option<ErrorTree>,
-    ) -> Option<ErrorTree>,
+        Option<Arc<ErrorTree>>,
+        Option<Arc<ErrorTree>>,
+    ) -> Option<Arc<ErrorTree>>,
 ) -> Option<ErrorTree> {
     let mut tasks = vec![TreeTask::Visit(StackSafeErrorTree::new(derivation_tree))];
     let mut results: Vec<Option<StackSafeErrorTree>> = Vec::new();
+    let mut transformed: FxHashMap<*const ErrorTree, Option<StackSafeErrorTree>> =
+        FxHashMap::default();
 
     while let Some(task) = tasks.pop() {
         match task {
-            TreeTask::Visit(tree) => match tree.into_inner() {
-                DerivationTree::External(external) => {
-                    results.push(transform_external(external).map(StackSafeErrorTree::new));
+            TreeTask::Visit(tree) => {
+                let identity = match &*tree {
+                    DerivationTree::Derived(_) => Some(tree.as_ptr()),
+                    DerivationTree::External(_) => None,
+                };
+                if let Some(identity) = identity
+                    && let Some(result) = transformed.get(&identity)
+                {
+                    results.push(result.clone());
+                    continue;
                 }
-                DerivationTree::Derived(derived) => schedule_derived(&mut tasks, derived),
-            },
-            TreeTask::Rebuild(metadata) => {
+
+                match tree.into_inner() {
+                    DerivationTree::External(external) => {
+                        results.push(transform_external(external).map(StackSafeErrorTree::new));
+                    }
+                    DerivationTree::Derived(derived) => {
+                        schedule_derived(&mut tasks, derived, identity);
+                    }
+                }
+            }
+            TreeTask::Rebuild(metadata, identity) => {
                 let cause2 = results
                     .pop()
                     .expect("every derived tree has a second transformed cause")
-                    .map(StackSafeErrorTree::into_inner);
+                    .map(StackSafeErrorTree::into_arc);
                 let cause1 = results
                     .pop()
                     .expect("every derived tree has a first transformed cause")
-                    .map(StackSafeErrorTree::into_inner);
-                results
-                    .push(transform_derived(metadata, cause1, cause2).map(StackSafeErrorTree::new));
+                    .map(StackSafeErrorTree::into_arc);
+                let result =
+                    transform_derived(metadata, cause1, cause2).map(StackSafeErrorTree::from_arc);
+                if let Some(identity) = identity {
+                    transformed.insert(identity, result.clone());
+                }
+                results.push(result);
+            }
+            TreeTask::Remember(identity) => {
+                let result = results
+                    .last()
+                    .expect("a remembered tree has a transformed result")
+                    .clone();
+                transformed.insert(identity, result);
             }
         }
     }
@@ -374,7 +428,7 @@ fn transform_derivation_tree(
 fn map_derivation_tree(
     derivation_tree: ErrorTree,
     mut transform_external: impl FnMut(ErrorExternal) -> ErrorTree,
-    mut transform_derived: impl FnMut(DerivedMetadata, ErrorTree, ErrorTree) -> ErrorTree,
+    mut transform_derived: impl FnMut(DerivedMetadata, Arc<ErrorTree>, Arc<ErrorTree>) -> Arc<ErrorTree>,
 ) -> ErrorTree {
     transform_derivation_tree(
         derivation_tree,
@@ -390,13 +444,17 @@ fn map_derivation_tree(
     .expect("map transformations retain the root")
 }
 
-fn derived_tree(metadata: DerivedMetadata, cause1: ErrorTree, cause2: ErrorTree) -> ErrorTree {
-    DerivationTree::Derived(Derived {
+fn derived_tree(
+    metadata: DerivedMetadata,
+    cause1: Arc<ErrorTree>,
+    cause2: Arc<ErrorTree>,
+) -> Arc<ErrorTree> {
+    Arc::new(DerivationTree::Derived(Derived {
         terms: metadata.terms,
         shared_id: metadata.shared_id,
-        cause1: Arc::new(cause1),
-        cause2: Arc::new(cause2),
-    })
+        cause1,
+        cause2,
+    }))
 }
 
 /// A wrapper around [`pubgrub::error::NoSolutionError`] that displays a resolution failure report.
@@ -632,11 +690,15 @@ impl NoSolutionError {
     /// Given a [`DerivationTree`], identify the largest required Python version that is missing.
     pub fn find_requires_python(&self) -> LowerBound {
         let mut minimum = LowerBound::default();
+        let mut visited = FxHashSet::default();
         let mut trees = vec![&*self.error];
 
         while let Some(derivation_tree) = trees.pop() {
             match derivation_tree {
                 DerivationTree::Derived(derived) => {
+                    if derived.shared_id.is_some_and(|id| !visited.insert(id)) {
+                        continue;
+                    }
                     trees.push(&derived.cause2);
                     trees.push(&derived.cause1);
                 }
@@ -739,6 +801,7 @@ impl NoSolutionError {
             display_tree(&tree, "Resolver derivation tree after reduction");
         }
 
+        let tree = StackSafeErrorTree::new(tree);
         let report = report_derivation_tree(&tree, &formatter);
 
         let inherited_exclude_newer_ranges = FxHashMap::default();
@@ -944,13 +1007,15 @@ fn collapse_redundant_no_versions(tree: ErrorTree) -> ErrorTree {
         tree,
         DerivationTree::External,
         |metadata, cause1, cause2| {
-            if let DerivationTree::External(External::NoVersions(package, versions)) = &cause1
+            if let DerivationTree::External(External::NoVersions(package, versions)) =
+                cause1.as_ref()
                 && can_drop_no_versions(package, versions, &cause2, &metadata.terms)
             {
                 return cause2;
             }
 
-            if let DerivationTree::External(External::NoVersions(package, versions)) = &cause2
+            if let DerivationTree::External(External::NoVersions(package, versions)) =
+                cause2.as_ref()
                 && can_drop_no_versions(package, versions, &cause1, &metadata.terms)
             {
                 return cause1;
@@ -1004,14 +1069,17 @@ fn collapse_redundant_no_versions_tree(tree: ErrorTree) -> (ErrorTree, bool) {
             if let (
                 DerivationTree::External(External::NoVersions(package, versions)),
                 DerivationTree::External(External::NoVersions(other_package, other_versions)),
-            ) = (&cause1, &cause2)
+            ) = (cause1.as_ref(), cause2.as_ref())
                 && package == other_package
                 && let Some(Term::Positive(term)) = metadata.terms.get(package)
                 && versions.subset_of(term)
                 && other_versions.subset_of(term)
             {
                 changed = true;
-                DerivationTree::External(External::NoVersions(package.clone(), term.clone()))
+                Arc::new(DerivationTree::External(External::NoVersions(
+                    package.clone(),
+                    term.clone(),
+                )))
             } else {
                 derived_tree(metadata, cause1, cause2)
             }
@@ -1043,12 +1111,12 @@ fn collapse_no_versions_of_workspace_members(
         tree,
         DerivationTree::External,
         |metadata, cause1, cause2| {
-            if let DerivationTree::External(External::NoVersions(package, _)) = &cause1
+            if let DerivationTree::External(External::NoVersions(package, _)) = cause1.as_ref()
                 && is_workspace_member(package, workspace_members)
             {
                 return cause2;
             }
-            if let DerivationTree::External(External::NoVersions(package, _)) = &cause2
+            if let DerivationTree::External(External::NoVersions(package, _)) = cause2.as_ref()
                 && is_workspace_member(package, workspace_members)
             {
                 return cause1;
@@ -1059,11 +1127,11 @@ fn collapse_no_versions_of_workspace_members(
 }
 
 fn collapse_redundant_dependency_child(
-    tree: ErrorTree,
+    tree: Arc<ErrorTree>,
     package: &PubGrubPackage,
     versions: &Range<Version>,
-) -> ErrorTree {
-    let DerivationTree::Derived(derived) = &tree else {
+) -> Arc<ErrorTree> {
+    let DerivationTree::Derived(derived) = tree.as_ref() else {
         return tree;
     };
     let dependency_clause = match (&*derived.cause1, &*derived.cause2) {
@@ -1088,7 +1156,7 @@ fn collapse_redundant_dependency_child(
             && package == no_versions_package
             && versions.subset_of(dependency_versions) =>
         {
-            Some(dependency_clause.clone())
+            Some(Arc::new(dependency_clause.clone()))
         }
         _ => None,
     };
@@ -1122,13 +1190,13 @@ fn collapse_redundant_depends_on_no_versions(tree: ErrorTree) -> ErrorTree {
         DerivationTree::External,
         |metadata, cause1, cause2| {
             if let DerivationTree::External(External::FromDependencyOf(package, versions, _, _)) =
-                &cause1
+                cause1.as_ref()
             {
                 let cause2 = collapse_redundant_dependency_child(cause2, package, versions);
                 return derived_tree(metadata, cause1, cause2);
             }
             if let DerivationTree::External(External::FromDependencyOf(package, versions, _, _)) =
-                &cause2
+                cause2.as_ref()
             {
                 let cause1 = collapse_redundant_dependency_child(cause1, package, versions);
                 return derived_tree(metadata, cause1, cause2);
@@ -1182,7 +1250,8 @@ fn merge_unavailable_versions(
     versions: &Range<Version>,
     reason: &UnavailableReason,
     other: &ErrorTree,
-) -> Option<ErrorTree> {
+    shared_id: Option<usize>,
+) -> Option<Arc<ErrorTree>> {
     let DerivationTree::Derived(derived) = other else {
         return None;
     };
@@ -1219,12 +1288,14 @@ fn merge_unavailable_versions(
     if let Some(Term::Positive(range)) = terms.get_mut(package) {
         *range = merged_versions;
     }
-    Some(DerivationTree::Derived(Derived {
+    Some(Arc::new(DerivationTree::Derived(Derived {
         terms,
-        shared_id: derived.shared_id,
+        // This is the transformed parent, not the child that supplied the merge. Retaining the
+        // child's shared identifier could conflate two different incompatibilities later.
+        shared_id,
         cause1,
         cause2,
-    }))
+    })))
 }
 
 /// Given a [`DerivationTree`], collapse incompatibilities for versions of a package that are
@@ -1235,13 +1306,27 @@ fn collapse_unavailable_versions(tree: ErrorTree) -> ErrorTree {
         tree,
         DerivationTree::External,
         |metadata, cause1, cause2| {
-            if let DerivationTree::External(External::Custom(package, versions, reason)) = &cause1
-                && let Some(tree) = merge_unavailable_versions(package, versions, reason, &cause2)
+            if let DerivationTree::External(External::Custom(package, versions, reason)) =
+                cause1.as_ref()
+                && let Some(tree) = merge_unavailable_versions(
+                    package,
+                    versions,
+                    reason,
+                    &cause2,
+                    metadata.shared_id,
+                )
             {
                 return tree;
             }
-            if let DerivationTree::External(External::Custom(package, versions, reason)) = &cause2
-                && let Some(tree) = merge_unavailable_versions(package, versions, reason, &cause1)
+            if let DerivationTree::External(External::Custom(package, versions, reason)) =
+                cause2.as_ref()
+                && let Some(tree) = merge_unavailable_versions(
+                    package,
+                    versions,
+                    reason,
+                    &cause1,
+                    metadata.shared_id,
+                )
             {
                 return tree;
             }
@@ -1271,54 +1356,85 @@ fn is_root_dependency_on_project(external: &ErrorExternal, project: &PackageName
 fn drop_root_dependency_on_project(tree: ErrorTree, project: &PackageName) -> ErrorTree {
     let mut tasks = vec![TreeTask::Visit(StackSafeErrorTree::new(tree))];
     let mut results = Vec::new();
+    let mut transformed: FxHashMap<*const ErrorTree, StackSafeErrorTree> = FxHashMap::default();
 
     while let Some(task) = tasks.pop() {
         match task {
-            TreeTask::Visit(tree) => match tree.into_inner() {
-                DerivationTree::External(external) => {
-                    results.push(StackSafeErrorTree::new(DerivationTree::External(external)));
+            TreeTask::Visit(tree) => {
+                let identity = match &*tree {
+                    DerivationTree::Derived(_) => Some(tree.as_ptr()),
+                    DerivationTree::External(_) => None,
+                };
+                if let Some(identity) = identity
+                    && let Some(result) = transformed.get(&identity)
+                {
+                    results.push(result.clone());
+                    continue;
                 }
-                DerivationTree::Derived(derived) => {
-                    let first_dependency = match derived.cause1.as_ref() {
-                        DerivationTree::External(external @ External::FromDependencyOf(..)) => {
-                            Some((external, true))
-                        }
-                        _ => match derived.cause2.as_ref() {
-                            DerivationTree::External(external @ External::FromDependencyOf(..)) => {
-                                Some((external, false))
-                            }
-                            _ => None,
-                        },
-                    };
 
-                    if let Some((external, dependency_is_cause1)) = first_dependency {
-                        if is_root_dependency_on_project(external, project) {
-                            let other = if dependency_is_cause1 {
-                                Arc::unwrap_or_clone(derived.cause2)
+                match tree.into_inner() {
+                    DerivationTree::External(external) => {
+                        results.push(StackSafeErrorTree::new(DerivationTree::External(external)));
+                    }
+                    DerivationTree::Derived(derived) => {
+                        let first_dependency = match derived.cause1.as_ref() {
+                            DerivationTree::External(external @ External::FromDependencyOf(..)) => {
+                                Some((external, true))
+                            }
+                            _ => match derived.cause2.as_ref() {
+                                DerivationTree::External(
+                                    external @ External::FromDependencyOf(..),
+                                ) => Some((external, false)),
+                                _ => None,
+                            },
+                        };
+
+                        if let Some((external, dependency_is_cause1)) = first_dependency {
+                            if is_root_dependency_on_project(external, project) {
+                                let other = if dependency_is_cause1 {
+                                    derived.cause2
+                                } else {
+                                    derived.cause1
+                                };
+                                if let Some(identity) = identity {
+                                    tasks.push(TreeTask::Remember(identity));
+                                }
+                                tasks.push(TreeTask::Visit(StackSafeErrorTree::from_arc(other)));
                             } else {
-                                Arc::unwrap_or_clone(derived.cause1)
-                            };
-                            tasks.push(TreeTask::Visit(StackSafeErrorTree::new(other)));
+                                let result =
+                                    StackSafeErrorTree::new(DerivationTree::Derived(derived));
+                                if let Some(identity) = identity {
+                                    transformed.insert(identity, result.clone());
+                                }
+                                results.push(result);
+                            }
                         } else {
-                            results.push(StackSafeErrorTree::new(DerivationTree::Derived(derived)));
+                            schedule_derived(&mut tasks, derived, identity);
                         }
-                    } else {
-                        schedule_derived(&mut tasks, derived);
                     }
                 }
-            },
-            TreeTask::Rebuild(metadata) => {
+            }
+            TreeTask::Rebuild(metadata, identity) => {
                 let cause2 = results
                     .pop()
                     .expect("every derived tree has a second reduced cause")
-                    .into_inner();
+                    .into_arc();
                 let cause1 = results
                     .pop()
                     .expect("every derived tree has a first reduced cause")
-                    .into_inner();
-                results.push(StackSafeErrorTree::new(derived_tree(
-                    metadata, cause1, cause2,
-                )));
+                    .into_arc();
+                let result = StackSafeErrorTree::from_arc(derived_tree(metadata, cause1, cause2));
+                if let Some(identity) = identity {
+                    transformed.insert(identity, result.clone());
+                }
+                results.push(result);
+            }
+            TreeTask::Remember(identity) => {
+                let result = results
+                    .last()
+                    .expect("a remembered tree has a reduced result")
+                    .clone();
+                transformed.insert(identity, result);
             }
         }
     }
@@ -1613,6 +1729,72 @@ mod tests {
         tree
     }
 
+    fn shared_derivation_tree(depth: usize) -> ErrorTree {
+        let package = PubGrubPackage::from(PubGrubPackageInner::Root(None));
+        let mut tree = Arc::new(ErrorTree::External(External::NotRoot(
+            package,
+            Version::new([1_u64]),
+        )));
+
+        for shared_id in 0..depth {
+            tree = Arc::new(ErrorTree::Derived(Derived {
+                terms: pubgrub::Map::default(),
+                shared_id: Some(shared_id),
+                cause1: tree.clone(),
+                cause2: tree,
+            }));
+        }
+
+        Arc::unwrap_or_clone(tree)
+    }
+
+    fn assert_shared_derivation_tree(tree: &ErrorTree, depth: usize) {
+        let mut tree = tree;
+        for shared_id in (0..depth).rev() {
+            assert!(matches!(
+                tree,
+                ErrorTree::Derived(Derived {
+                    shared_id: Some(id),
+                    cause1,
+                    cause2,
+                    ..
+                }) if *id == shared_id && (shared_id == 0 || Arc::ptr_eq(cause1, cause2))
+            ));
+            if let ErrorTree::Derived(derived) = tree {
+                tree = &derived.cause1;
+            }
+        }
+        assert!(matches!(tree, ErrorTree::External(External::NotRoot(..))));
+    }
+
+    fn alternating_derivation_tree(
+        depth: usize,
+        mut dependency: impl FnMut() -> Arc<ErrorTree>,
+    ) -> ErrorTree {
+        let package = PubGrubPackage::from(PubGrubPackageInner::Root(None));
+        let mut tree = Arc::new(ErrorTree::External(External::NotRoot(
+            package,
+            Version::new([1_u64]),
+        )));
+
+        for shared_id in 0..depth {
+            let shared_child = Arc::new(ErrorTree::Derived(Derived {
+                terms: pubgrub::Map::default(),
+                shared_id: None,
+                cause1: tree.clone(),
+                cause2: tree,
+            }));
+            tree = Arc::new(ErrorTree::Derived(Derived {
+                terms: pubgrub::Map::default(),
+                shared_id: Some(shared_id),
+                cause1: dependency(),
+                cause2: shared_child,
+            }));
+        }
+
+        Arc::unwrap_or_clone(tree)
+    }
+
     #[test]
     fn drops_transformed_derivation_tree_without_recursion() -> std::io::Result<()> {
         let thread = std::thread::Builder::new()
@@ -1629,6 +1811,240 @@ mod tests {
     fn derivation_tree_packages_are_unique() {
         let tree = StackSafeErrorTree::new(deep_derivation_tree());
         assert_eq!(derivation_tree_packages(&tree).count(), 1);
+    }
+
+    #[test]
+    fn transforms_shared_derivation_tree_once() -> std::io::Result<()> {
+        let thread = std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let depth = 64;
+                let mut external_calls = 0;
+                let mut derived_calls = 0;
+                let tree = transform_derivation_tree(
+                    shared_derivation_tree(depth),
+                    |external| {
+                        external_calls += 1;
+                        Some(ErrorTree::External(external))
+                    },
+                    |metadata, cause1, cause2| {
+                        derived_calls += 1;
+                        cause1
+                            .zip(cause2)
+                            .map(|(cause1, cause2)| derived_tree(metadata, cause1, cause2))
+                    },
+                );
+
+                assert_eq!(external_calls, 2);
+                assert_eq!(derived_calls, depth);
+                assert!(tree.is_some());
+                if let Some(tree) = tree {
+                    let tree = StackSafeErrorTree::new(tree);
+                    assert_shared_derivation_tree(&tree, depth);
+                }
+            })?;
+
+        assert!(thread.join().is_ok());
+        Ok(())
+    }
+
+    #[test]
+    fn transforms_distinct_trees_with_the_same_shared_id() {
+        let package = PubGrubPackage::from(PubGrubPackageInner::Root(None));
+        let first = Arc::new(ErrorTree::Derived(Derived {
+            terms: pubgrub::Map::default(),
+            shared_id: Some(7),
+            cause1: Arc::new(ErrorTree::External(External::NotRoot(
+                package.clone(),
+                Version::new([1_u64]),
+            ))),
+            cause2: Arc::new(ErrorTree::External(External::NotRoot(
+                package.clone(),
+                Version::new([2_u64]),
+            ))),
+        }));
+        let second = Arc::new(ErrorTree::Derived(Derived {
+            terms: pubgrub::Map::default(),
+            shared_id: Some(7),
+            cause1: Arc::new(ErrorTree::External(External::NotRoot(
+                package.clone(),
+                Version::new([3_u64]),
+            ))),
+            cause2: Arc::new(ErrorTree::External(External::NotRoot(
+                package,
+                Version::new([4_u64]),
+            ))),
+        }));
+        let tree = ErrorTree::Derived(Derived {
+            terms: pubgrub::Map::default(),
+            shared_id: None,
+            cause1: first,
+            cause2: second,
+        });
+        let expected = format!("{tree:?}");
+        let mut derived_calls = 0;
+        let tree = map_derivation_tree(tree, ErrorTree::External, |metadata, cause1, cause2| {
+            derived_calls += 1;
+            derived_tree(metadata, cause1, cause2)
+        });
+
+        assert_eq!(derived_calls, 3);
+        assert_eq!(format!("{tree:?}"), expected);
+    }
+
+    #[test]
+    fn drops_root_dependencies_from_a_shared_derivation_tree() {
+        let depth = 64;
+        let project: PackageName = "project".parse().expect("valid package name");
+        let tree = drop_root_dependency_on_project(shared_derivation_tree(depth), &project);
+        let tree = StackSafeErrorTree::new(tree);
+        assert_shared_derivation_tree(&tree, depth);
+    }
+
+    #[test]
+    fn transforms_shared_children_after_collapsing_proxies() {
+        let depth = 64;
+        let name: PackageName = "example".parse().expect("valid package name");
+        let proxy = PubGrubPackage::from(PubGrubPackageInner::Marker {
+            name: name.clone(),
+            marker: uv_pep508::MarkerTree::TRUE,
+        });
+        let package = PubGrubPackage::base(name);
+        let tree = alternating_derivation_tree(depth, || {
+            Arc::new(ErrorTree::External(External::FromDependencyOf(
+                proxy.clone(),
+                Range::full(),
+                package.clone(),
+                Range::full(),
+            )))
+        });
+        let tree = NoSolutionError::collapse_proxies(tree);
+        let mut derived_calls = 0;
+        let tree = map_derivation_tree(tree, ErrorTree::External, |metadata, cause1, cause2| {
+            derived_calls += 1;
+            derived_tree(metadata, cause1, cause2)
+        });
+
+        assert_eq!(derived_calls, depth);
+        let _tree = StackSafeErrorTree::new(tree);
+    }
+
+    #[test]
+    fn drops_shared_root_dependencies_once() {
+        let depth = 64;
+        let name: PackageName = "project".parse().expect("valid package name");
+        let root = PubGrubPackage::from(PubGrubPackageInner::Root(None));
+        let project = PubGrubPackage::base(name.clone());
+        let tree = alternating_derivation_tree(depth, || {
+            Arc::new(ErrorTree::External(External::FromDependencyOf(
+                root.clone(),
+                Range::full(),
+                project.clone(),
+                Range::full(),
+            )))
+        });
+        let tree = drop_root_dependency_on_project(tree, &name);
+        let mut derived_calls = 0;
+        let tree = map_derivation_tree(tree, ErrorTree::External, |metadata, cause1, cause2| {
+            derived_calls += 1;
+            derived_tree(metadata, cause1, cause2)
+        });
+
+        assert_eq!(derived_calls, depth);
+        let _tree = StackSafeErrorTree::new(tree);
+    }
+
+    #[test]
+    fn retains_unmatched_root_dependency_boundaries() {
+        let project: PackageName = "project".parse().expect("valid package name");
+        let other: PackageName = "other".parse().expect("valid package name");
+        let root = PubGrubPackage::from(PubGrubPackageInner::Root(None));
+        let root_dependency = |dependency| {
+            Arc::new(ErrorTree::External(External::FromDependencyOf(
+                root.clone(),
+                Range::full(),
+                dependency,
+                Range::full(),
+            )))
+        };
+        let shared = Arc::new(ErrorTree::Derived(Derived {
+            terms: pubgrub::Map::default(),
+            shared_id: Some(7),
+            cause1: root_dependency(PubGrubPackage::base(project.clone())),
+            cause2: Arc::new(ErrorTree::External(External::NotRoot(
+                root.clone(),
+                Version::new([1_u64]),
+            ))),
+        }));
+        let boundary = Arc::new(ErrorTree::Derived(Derived {
+            terms: pubgrub::Map::default(),
+            shared_id: None,
+            cause1: root_dependency(PubGrubPackage::base(other)),
+            cause2: shared.clone(),
+        }));
+        let tree = ErrorTree::Derived(Derived {
+            terms: pubgrub::Map::default(),
+            shared_id: None,
+            cause1: boundary,
+            cause2: shared,
+        });
+        let tree = drop_root_dependency_on_project(tree, &project);
+
+        assert!(matches!(
+            &tree,
+            ErrorTree::Derived(Derived { cause1, cause2, .. })
+                if matches!(
+                    cause1.as_ref(),
+                    ErrorTree::Derived(Derived {
+                        cause1: boundary,
+                        cause2: shared,
+                        ..
+                    }) if matches!(boundary.as_ref(), ErrorTree::External(External::FromDependencyOf(..)))
+                        && matches!(shared.as_ref(), ErrorTree::Derived(Derived { shared_id: Some(7), .. }))
+                ) && matches!(cause2.as_ref(), ErrorTree::External(External::NotRoot(..)))
+        ));
+        let expected = format!("{tree:?}");
+        let tree = map_derivation_tree(tree, ErrorTree::External, derived_tree);
+        assert_eq!(format!("{tree:?}"), expected);
+    }
+
+    #[test]
+    fn collapsed_unavailable_versions_retain_the_parent_shared_id() {
+        let name: PackageName = "example".parse().expect("valid package name");
+        let package = PubGrubPackage::base(name);
+        let reason = UnavailableReason::Package(UnavailablePackage::NoIndex);
+        let child = Arc::new(ErrorTree::Derived(Derived {
+            terms: pubgrub::Map::default(),
+            shared_id: Some(7),
+            cause1: Arc::new(ErrorTree::External(External::NotRoot(
+                PubGrubPackage::from(PubGrubPackageInner::Root(None)),
+                Version::new([1_u64]),
+            ))),
+            cause2: Arc::new(ErrorTree::External(External::Custom(
+                package.clone(),
+                Range::singleton(Version::new([1_u64])),
+                reason.clone(),
+            ))),
+        }));
+        let tree = ErrorTree::Derived(Derived {
+            terms: pubgrub::Map::default(),
+            shared_id: Some(11),
+            cause1: Arc::new(ErrorTree::External(External::Custom(
+                package,
+                Range::singleton(Version::new([2_u64])),
+                reason,
+            ))),
+            cause2: child,
+        });
+        let tree = collapse_unavailable_versions(tree);
+
+        assert!(matches!(
+            tree,
+            ErrorTree::Derived(Derived {
+                shared_id: Some(11),
+                ..
+            })
+        ));
     }
 
     #[test]
