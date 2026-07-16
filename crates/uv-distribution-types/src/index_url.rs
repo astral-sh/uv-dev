@@ -10,7 +10,7 @@ use itertools::Either;
 use rustc_hash::{FxHashMap, FxHashSet};
 use thiserror::Error;
 use url::{ParseError, Url};
-use uv_auth::RealmRef;
+use uv_auth::{Realm, RealmRef};
 use uv_cache_key::CanonicalUrl;
 use uv_pep508::{Scheme, VerbatimUrl, VerbatimUrlError, split_scheme};
 use uv_pypi_types::HashAlgorithm;
@@ -300,8 +300,89 @@ impl IndexLocations {
 
 /// Returns `true` if two [`IndexUrl`]s refer to the same index.
 fn is_same_index(a: &IndexUrl, b: &IndexUrl) -> bool {
-    RealmRef::from(&**b.url()) == RealmRef::from(&**a.url())
-        && CanonicalUrl::new(a.url().clone()) == CanonicalUrl::new(b.url().clone())
+    a.url() == b.url()
+        || RealmRef::from(&**b.url()) == RealmRef::from(&**a.url())
+            && CanonicalUrl::new(a.url().clone()) == CanonicalUrl::new(b.url().clone())
+}
+
+/// A precomputed lookup for settings on configured indexes.
+#[derive(Debug, Clone)]
+pub struct IndexLocationsLookup {
+    indexes: IndexLookup,
+}
+
+#[derive(Debug, Clone)]
+enum IndexLookup {
+    Linear(Arc<[Index]>),
+    Indexed(Arc<FxHashMap<(Realm, CanonicalUrl), Index>>),
+}
+
+impl From<&IndexLocations> for IndexLocationsLookup {
+    fn from(index_locations: &IndexLocations) -> Self {
+        if index_locations.indexes.len() <= 16 {
+            return Self {
+                indexes: IndexLookup::Linear(Arc::from(index_locations.indexes.clone())),
+            };
+        }
+
+        let mut indexes = FxHashMap::default();
+        for index in &index_locations.indexes {
+            indexes
+                .entry((
+                    Realm::from(index.raw_url()),
+                    CanonicalUrl::new(index.raw_url().clone()),
+                ))
+                .or_insert_with(|| index.clone());
+        }
+        Self {
+            indexes: IndexLookup::Indexed(Arc::new(indexes)),
+        }
+    }
+}
+
+impl IndexLocationsLookup {
+    /// Return the configured index matching the given URL.
+    fn index_for_url(&self, url: &IndexUrl) -> Option<&Index> {
+        match &self.indexes {
+            IndexLookup::Linear(indexes) => {
+                indexes.iter().find(|index| is_same_index(index.url(), url))
+            }
+            IndexLookup::Indexed(indexes) => {
+                indexes.get(&(Realm::from(url.url()), CanonicalUrl::new(url.url().clone())))
+            }
+        }
+    }
+
+    /// Return the [`IndexStatusCodeStrategy`] for an [`IndexUrl`].
+    pub fn status_code_strategy_for(&self, url: &IndexUrl) -> IndexStatusCodeStrategy {
+        self.index_for_url(url).map_or(
+            IndexStatusCodeStrategy::Default,
+            Index::status_code_strategy,
+        )
+    }
+
+    /// Return whether the given status code is explicitly ignored for an [`IndexUrl`].
+    pub fn ignores_error_code_for(&self, url: &IndexUrl, status_code: StatusCode) -> bool {
+        self.index_for_url(url)
+            .is_some_and(|index| index.ignores_error_code(status_code))
+    }
+
+    /// Return the Simple API cache control header for an [`IndexUrl`], if configured.
+    pub fn simple_api_cache_control_for(&self, url: &IndexUrl) -> Option<http::HeaderValue> {
+        self.index_for_url(url)
+            .and_then(Index::simple_api_cache_control)
+    }
+
+    /// Return the artifact cache control header for an [`IndexUrl`], if configured.
+    pub fn artifact_cache_control_for(&self, url: &IndexUrl) -> Option<http::HeaderValue> {
+        self.index_for_url(url)
+            .and_then(Index::artifact_cache_control)
+    }
+
+    /// Return the `exclude-newer` setting for a given index, if the index is configured.
+    pub fn exclude_newer_for(&self, url: &IndexUrl) -> Option<&ExcludeNewerOverride> {
+        self.index_for_url(url).and_then(Index::exclude_newer)
+    }
 }
 
 impl<'a> IndexLocations {
@@ -482,28 +563,16 @@ impl<'a> IndexLocations {
             .find(|index| is_same_index(index.url(), url))
     }
 
-    /// Return the [`IndexStatusCodeStrategy`] for an [`IndexUrl`].
-    pub fn status_code_strategy_for(&self, url: &IndexUrl) -> IndexStatusCodeStrategy {
-        self.index_for_url(url).map_or(
-            IndexStatusCodeStrategy::Default,
-            Index::status_code_strategy,
-        )
-    }
-
-    /// Return whether the given status code is explicitly ignored for an [`IndexUrl`].
-    pub fn ignores_error_code_for(&self, url: &IndexUrl, status_code: StatusCode) -> bool {
-        self.index_for_url(url)
-            .is_some_and(|index| index.ignores_error_code(status_code))
-    }
-
     /// Return the Simple API cache control header for an [`IndexUrl`], if configured.
-    pub fn simple_api_cache_control_for(&self, url: &IndexUrl) -> Option<http::HeaderValue> {
+    #[cfg(test)]
+    fn simple_api_cache_control_for(&self, url: &IndexUrl) -> Option<http::HeaderValue> {
         self.index_for_url(url)
             .and_then(Index::simple_api_cache_control)
     }
 
     /// Return the artifact cache control header for an [`IndexUrl`], if configured.
-    pub fn artifact_cache_control_for(&self, url: &IndexUrl) -> Option<http::HeaderValue> {
+    #[cfg(test)]
+    fn artifact_cache_control_for(&self, url: &IndexUrl) -> Option<http::HeaderValue> {
         self.index_for_url(url)
             .and_then(Index::artifact_cache_control)
     }
@@ -780,6 +849,81 @@ mod tests {
 
         assert_eq!(locations.indexes().count(), 2);
         assert_eq!(locations.fetch_indexes().count(), 1);
+    }
+
+    #[test]
+    fn index_lookup_preserves_canonical_matching() {
+        let indexes = [
+            (
+                "credentials",
+                "https://user:password@index.example.com/simple/",
+            ),
+            ("github", "https://github.com/Example/Index.git"),
+            ("encoded", "https://encoded.example.com/%73imple"),
+            ("port", "https://index.example.com:8443/simple"),
+        ]
+        .into_iter()
+        .map(|(name, url)| {
+            let mut index = Index::from(IndexUrl::from_str(url).unwrap());
+            index.name = Some(IndexName::from_str(name).unwrap());
+            index
+        })
+        .collect::<Vec<_>>();
+        let mut wide_indexes = indexes.clone();
+        wide_indexes.extend((0..17).map(|index| {
+            Index::from(
+                IndexUrl::from_str(&format!("https://unused-{index}.example.com/simple")).unwrap(),
+            )
+        }));
+
+        for locations in [
+            IndexLocations::new(indexes, Vec::new(), false),
+            IndexLocations::new(wide_indexes, Vec::new(), false),
+        ] {
+            let lookup = IndexLocationsLookup::from(&locations);
+            for query in [
+                "https://index.example.com:443/simple",
+                "https://github.com/example/index",
+                "https://encoded.example.com/simple/",
+                "https://index.example.com:8443/simple/",
+                "http://index.example.com/simple",
+                "https://other.example.com/simple",
+            ] {
+                let query = IndexUrl::from_str(query).unwrap();
+                assert_eq!(
+                    lookup.index_for_url(&query).map(|index| &index.name),
+                    locations.index_for_url(&query).map(|index| &index.name),
+                    "lookup differed for {query}",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn index_lookup_preserves_first_canonical_duplicate() {
+        let mut first = Index::from(
+            IndexUrl::from_str("https://user:password@index.example.com/simple/").unwrap(),
+        );
+        first.name = Some(IndexName::from_str("first").unwrap());
+        let mut second =
+            Index::from(IndexUrl::from_str("https://index.example.com/simple").unwrap());
+        second.name = Some(IndexName::from_str("second").unwrap());
+        let mut indexes = vec![first, second];
+        indexes.extend((0..17).map(|index| {
+            Index::from(
+                IndexUrl::from_str(&format!("https://unused-{index}.example.com/simple")).unwrap(),
+            )
+        }));
+        let locations = IndexLocations::new(indexes, Vec::new(), false);
+        let lookup = IndexLocationsLookup::from(&locations);
+        let query = IndexUrl::from_str("https://index.example.com:443/simple").unwrap();
+
+        assert_eq!(
+            lookup
+                .index_for_url(&query)
+                .and_then(|index| index.name.as_ref()),
+            Some(&IndexName::from_str("first").unwrap()),
+        );
     }
 
     #[test]

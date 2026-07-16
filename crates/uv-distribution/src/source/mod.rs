@@ -32,8 +32,9 @@ use uv_configuration::{BuildKind, BuildOutput, NoSources};
 use uv_distribution_filename::{SourceDistExtension, WheelFilename};
 use uv_distribution_types::{
     BuildInfo, BuildVariables, BuildableSource, ConfigSettings, DirectorySourceUrl,
-    ExtraBuildRequirement, GitDirectorySourceUrl, GitPathSourceUrl, HashPolicy, Hashed, IndexUrl,
-    PathSourceUrl, RemoteSource, RequirementSource, RequiresPython, SourceDist, SourceUrl,
+    ExtraBuildRequirement, GitDirectorySourceUrl, GitPathSourceUrl, HashPolicy, Hashed,
+    IndexLocationsLookup, IndexUrl, PathSourceUrl, RemoteSource, RequirementSource, RequiresPython,
+    SourceDist, SourceUrl,
 };
 use uv_fs::{Simplified, rename_with_retry, write_atomic};
 use uv_git::{Fetch, GIT_LFS, GitError, GitHttpSettings, GitResolver};
@@ -209,6 +210,7 @@ async fn fetch_git_source_tree(
 /// Fetch and build a source distribution from a remote source, or from a local cache.
 pub(crate) struct SourceDistributionBuilder<'a, T: BuildContext> {
     build_context: &'a T,
+    index_lookup: IndexLocationsLookup,
     build_stack: Option<&'a BuildStack>,
     reporter: Option<Arc<dyn Reporter>>,
 }
@@ -230,9 +232,10 @@ const SOURCE: &str = "src";
 
 impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
     /// Initialize a [`SourceDistributionBuilder`] from a [`BuildContext`].
-    pub(crate) fn new(build_context: &'a T) -> Self {
+    pub(crate) fn new(build_context: &'a T, index_lookup: IndexLocationsLookup) -> Self {
         Self {
             build_context,
+            index_lookup,
             build_stack: None,
             reporter: None,
         }
@@ -956,11 +959,8 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         // Determine the cache control policy for the request.
         let cache_control = match client.unmanaged.connectivity() {
             Connectivity::Online
-                if let Some(header) = index.and_then(|index| {
-                    self.build_context
-                        .locations()
-                        .artifact_cache_control_for(index)
-                }) =>
+                if let Some(header) =
+                    index.and_then(|index| self.index_lookup.artifact_cache_control_for(index)) =>
             {
                 CacheControl::Override(header)
             }
@@ -2750,11 +2750,8 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         // Determine the cache control policy for the request.
         let cache_control = match client.unmanaged.connectivity() {
             Connectivity::Online
-                if let Some(header) = index.and_then(|index| {
-                    self.build_context
-                        .locations()
-                        .artifact_cache_control_for(index)
-                }) =>
+                if let Some(header) =
+                    index.and_then(|index| self.index_lookup.artifact_cache_control_for(index)) =>
             {
                 CacheControl::Override(header)
             }
