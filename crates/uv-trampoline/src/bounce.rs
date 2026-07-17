@@ -2,30 +2,29 @@ use std::ffi::CString;
 use std::path::{Path, PathBuf};
 use std::vec::Vec;
 
-use windows::Win32::Foundation::{LPARAM, WPARAM};
-use windows::Win32::{
-    Foundation::{
-        CloseHandle, HANDLE, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE, SetHandleInformation, TRUE,
-    },
-    Storage::FileSystem::{FILE_TYPE_PIPE, GetFileType},
-    System::Console::{GetStdHandle, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, SetStdHandle},
-    System::Environment::GetCommandLineA,
-    System::LibraryLoader::{FindResourceW, LoadResource, LockResource, SizeofResource},
-    System::Threading::{
-        CreateProcessA, GetExitCodeProcess, GetStartupInfoA, INFINITE, PROCESS_CREATION_FLAGS,
-        PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOA, WaitForInputIdle,
-        WaitForSingleObject,
-    },
-    UI::WindowsAndMessaging::{
-        CreateWindowExA, DestroyWindow, GetMessageA, HWND_MESSAGE, MSG, PEEK_MESSAGE_REMOVE_TYPE,
-        PeekMessageA, PostMessageA, WINDOW_EX_STYLE, WINDOW_STYLE,
-    },
+use uv_static::EnvVars;
+use uv_windows::{Job, install_ctrl_handler};
+use windows::Win32::Foundation::{
+    CloseHandle, HANDLE, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE, LPARAM, SetHandleInformation,
+    TRUE, WPARAM,
+};
+use windows::Win32::Storage::FileSystem::{FILE_TYPE_PIPE, GetFileType};
+use windows::Win32::System::Console::{
+    GetStdHandle, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, SetStdHandle,
+};
+use windows::Win32::System::Environment::GetCommandLineA;
+use windows::Win32::System::LibraryLoader::{
+    FindResourceW, LoadResource, LockResource, SizeofResource,
+};
+use windows::Win32::System::Threading::{
+    CreateProcessA, GetExitCodeProcess, GetStartupInfoA, INFINITE, PROCESS_CREATION_FLAGS,
+    PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOA, WaitForInputIdle, WaitForSingleObject,
+};
+use windows::Win32::UI::WindowsAndMessaging::{
+    CreateWindowExA, DestroyWindow, GetMessageA, HWND_MESSAGE, MSG, PEEK_MESSAGE_REMOVE_TYPE,
+    PeekMessageA, PostMessageA, WINDOW_EX_STYLE, WINDOW_STYLE,
 };
 use windows::core::{PSTR, s};
-
-use uv_windows::{Job, install_ctrl_handler};
-
-use uv_static::EnvVars;
 
 use crate::{error, format, warn};
 
