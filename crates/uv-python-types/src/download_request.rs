@@ -296,6 +296,20 @@ impl PythonDownloadRequest {
         self.version.as_ref()
     }
 
+    /// Return the minor version requested by this download request, if any.
+    pub fn minor_version(&self) -> Option<(u8, u8)> {
+        match self.version.as_ref()? {
+            VersionRequest::MajorMinor(major, minor, ..)
+            | VersionRequest::MajorMinorPatch(major, minor, ..)
+            | VersionRequest::MajorMinorPrerelease(major, minor, ..)
+            | VersionRequest::MajorMinorPatchPrerelease(major, minor, ..) => Some((*major, *minor)),
+            VersionRequest::Default
+            | VersionRequest::Any
+            | VersionRequest::Major(..)
+            | VersionRequest::Range(..) => None,
+        }
+    }
+
     pub fn arch(&self) -> Option<&ArchRequest> {
         self.arch.as_ref()
     }
@@ -455,6 +469,49 @@ impl PythonDownloadRequest {
             arch: self.arch,
             libc: self.libc,
         }
+    }
+
+    /// Narrow a list sorted by descending [`PythonInstallationKey`] to candidates that may match
+    /// this request.
+    ///
+    /// The returned slice preserves the original order and still needs to be filtered with
+    /// [`Self::satisfied_by_key`], since platform and variant matching are not contiguous in the
+    /// key ordering.
+    pub fn narrow_sorted<'a, T>(
+        &self,
+        candidates: &'a [T],
+        key: impl Fn(&T) -> &PythonInstallationKey,
+    ) -> &'a [T] {
+        let Some(implementation) = self.implementation else {
+            return candidates;
+        };
+        let implementation = LenientImplementationName::from(implementation);
+
+        let compare = |candidate: &T| {
+            let key = key(candidate);
+            let ordering = key.implementation.cmp(&implementation);
+            if !ordering.is_eq() {
+                return ordering;
+            }
+
+            match self.version.as_ref() {
+                Some(VersionRequest::Major(major, ..)) => key.major.cmp(major),
+                Some(
+                    VersionRequest::MajorMinor(major, minor, ..)
+                    | VersionRequest::MajorMinorPrerelease(major, minor, ..),
+                ) => (key.major, key.minor).cmp(&(*major, *minor)),
+                Some(
+                    VersionRequest::MajorMinorPatch(major, minor, patch, ..)
+                    | VersionRequest::MajorMinorPatchPrerelease(major, minor, patch, ..),
+                ) => (key.major, key.minor, key.patch).cmp(&(*major, *minor, *patch)),
+                Some(VersionRequest::Default | VersionRequest::Any | VersionRequest::Range(..))
+                | None => std::cmp::Ordering::Equal,
+            }
+        };
+
+        let start = candidates.partition_point(|candidate| compare(candidate).is_gt());
+        let end = candidates.partition_point(|candidate| !compare(candidate).is_lt());
+        &candidates[start..end]
     }
 }
 
@@ -838,6 +895,21 @@ mod tests {
         assert_eq!(request.os, None);
         assert_eq!(request.arch, None);
         assert_eq!(request.libc, None);
+    }
+
+    #[test]
+    fn test_python_download_request_minor_version() {
+        for (request, expected) in [
+            ("cpython-3", None),
+            ("cpython-3.12", Some((3, 12))),
+            ("cpython-3.12.0", Some((3, 12))),
+            ("cpython-3.14.0rc1", Some((3, 14))),
+            ("cpython-3.13t", Some((3, 13))),
+        ] {
+            let request =
+                PythonDownloadRequest::from_str(request).expect("Test request should be parsed");
+            assert_eq!(request.minor_version(), expected);
+        }
     }
 
     /// We fail on extra parts in the request.
