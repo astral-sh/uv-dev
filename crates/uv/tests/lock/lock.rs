@@ -13266,6 +13266,31 @@ fn lock_warn_missing_transitive_lower_bounds() -> Result<()> {
     warning: The transitive dependency `colorama` is unpinned. Consider setting a lower bound with a constraint when using `--resolution lowest` to avoid using outdated versions.
     ");
 
+    pyproject_toml.write_str(
+        r#"
+        [project]
+        name = "foo"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["pytest>8"]
+
+        [tool.uv]
+        constraint-dependencies = ["packaging>=22"]
+        "#,
+    )?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--resolution").arg("lowest"), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Resolved 6 packages in [TIME]
+    warning: The transitive dependency `iniconfig` is unpinned. Consider setting a lower bound with a constraint when using `--resolution lowest` to avoid using outdated versions.
+    warning: The transitive dependency `colorama` is unpinned. Consider setting a lower bound with a constraint when using `--resolution lowest` to avoid using outdated versions.
+    Updated packaging v14.0 -> v22.0
+    ");
+
     Ok(())
 }
 
