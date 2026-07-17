@@ -9,6 +9,7 @@ use jiff::Timestamp;
 use jiff::civil::{Date, DateTime, Time};
 use jiff::tz::{Offset, TimeZone};
 use petgraph::graph::NodeIndex;
+use rustc_hash::FxHashSet;
 use serde::Deserialize;
 use toml_edit::{Array, ArrayOfTables, Item, Table, Value, value};
 use url::Url;
@@ -42,6 +43,8 @@ use uv_small_str::SmallString;
 use crate::lock::export::ExportableRequirements;
 use crate::lock::{Source, WheelTagHint, is_wheel_unreachable};
 use crate::{Installable, LockError, ResolverOutput};
+
+const NO_EMIT_INDEX_THRESHOLD: usize = 32;
 
 /// Format an array so that each element is on its own line and has a trailing comma.
 fn each_element_on_its_line_array(elements: impl Iterator<Item = impl Into<Value>>) -> Array {
@@ -406,13 +409,18 @@ impl<'lock> PylockToml {
         // We don't support attestation identities at time of writing.
         let attestation_identities = vec![];
 
-        // Convert each node to a `pylock.toml`-style package.
+        // Index large exclusion lists before converting each node.
+        let omit_index = (omit.len() > NO_EMIT_INDEX_THRESHOLD)
+            .then(|| omit.iter().collect::<FxHashSet<&PackageName>>());
         let mut packages = Vec::with_capacity(resolution.graph.node_count());
         for (node_index, node) in resolution.base_dists() {
             let ResolvedDist::Installable { dist, version } = &node.dist else {
                 continue;
             };
-            if omit.contains(dist.name()) {
+            if omit_index.as_ref().map_or_else(
+                || omit.contains(dist.name()),
+                |packages| packages.contains(dist.name()),
+            ) {
                 continue;
             }
 

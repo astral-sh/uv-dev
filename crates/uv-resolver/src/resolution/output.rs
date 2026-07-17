@@ -618,6 +618,11 @@ impl ResolverOutput {
         self.dists().any(|dist| dist.name() == name)
     }
 
+    /// Returns an iterator over the package names in the graph.
+    pub fn package_names(&self) -> impl Iterator<Item = &PackageName> {
+        self.dists().map(Name::name)
+    }
+
     /// Return the [`ResolutionDiagnostic`]s that were encountered while building the graph.
     pub fn diagnostics(&self) -> &[ResolutionDiagnostic] {
         &self.diagnostics
