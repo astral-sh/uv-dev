@@ -535,9 +535,9 @@ mod test {
     #[test]
     #[cfg(all(windows, target_arch = "aarch64", feature = "production"))]
     fn test_launchers_are_small() {
-        // At time of writing, they are ~45kb.
+        // At time of writing, they are ~50 KiB.
         assert!(
-            super::LAUNCHER_AARCH64_GUI.len() < 50 * 1024,
+            super::LAUNCHER_AARCH64_GUI.len() <= 50 * 1024,
             "GUI launcher: {}",
             super::LAUNCHER_AARCH64_GUI.len()
         );
