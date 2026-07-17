@@ -14493,6 +14493,155 @@ fn add_path_with_existing_workspace() -> Result<()> {
     Ok(())
 }
 
+/// Add multiple path dependencies to a workspace with an existing member glob.
+#[test]
+fn add_paths_with_existing_workspace() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "parent"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+
+        [tool.uv.workspace]
+        members = [
+            "./packages/*", # existing members
+        ]
+    "#})?;
+
+    context
+        .temp_dir
+        .child("packages/existing/pyproject.toml")
+        .write_str(indoc! {r#"
+            [project]
+            name = "existing"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = []
+        "#})?;
+
+    for name in ["new-a", "new-b"] {
+        context
+            .temp_dir
+            .child(format!("{name}/pyproject.toml"))
+            .write_str(&formatdoc! {r#"
+                [project]
+                name = "{name}"
+                version = "0.1.0"
+                requires-python = ">=3.12"
+                dependencies = []
+            "#})?;
+    }
+
+    uv_snapshot!(context.filters(), context
+        .add()
+        .arg("./new-a")
+        .arg("./new-b")
+        .arg("--workspace")
+        .arg("--frozen"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Added `new-a` to workspace members
+    Added `new-b` to workspace members
+    ");
+
+    let pyproject_toml = context.read("pyproject.toml");
+    assert_snapshot!(pyproject_toml, @r#"
+    [project]
+    name = "parent"
+    version = "0.1.0"
+    requires-python = ">=3.12"
+    dependencies = [
+        "new-a",
+        "new-b",
+    ]
+
+    [tool.uv.workspace]
+    members = [
+        "./packages/*",
+        "new-a",
+        "new-b", # existing members
+    ]
+
+    [tool.uv.sources]
+    new-a = { workspace = true }
+    new-b = { workspace = true }
+    "#);
+
+    Ok(())
+}
+
+/// Add a nested path dependency that is not matched by a shallower workspace member glob.
+#[test]
+fn add_nested_path_with_shallow_workspace_glob() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "parent"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+
+        [tool.uv.workspace]
+        members = ["packages/*"]
+    "#})?;
+    context
+        .temp_dir
+        .child(".gitignore")
+        .write_str("packages/foo/nested/\n")?;
+    context
+        .temp_dir
+        .child("packages/foo/nested/pyproject.toml")
+        .write_str(indoc! {r#"
+            [project]
+            name = "nested"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = []
+        "#})?;
+
+    uv_snapshot!(context.filters(), context
+        .add()
+        .arg("./packages/foo/nested")
+        .arg("--workspace")
+        .arg("--frozen"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Added `packages/foo/nested` to workspace members
+    ");
+
+    let pyproject_toml = context.read("pyproject.toml");
+    assert_snapshot!(pyproject_toml, @r#"
+    [project]
+    name = "parent"
+    version = "0.1.0"
+    requires-python = ">=3.12"
+    dependencies = [
+        "nested",
+    ]
+
+    [tool.uv.workspace]
+    members = [
+        "packages/*",
+        "packages/foo/nested",
+    ]
+
+    [tool.uv.sources]
+    nested = { workspace = true }
+    "#);
+
+    Ok(())
+}
+
 /// Add a path dependency with `--workspace` flag to add it to workspace members. The root doesn't
 /// contain a workspace definition, so `uv add` should create one.
 #[test]
