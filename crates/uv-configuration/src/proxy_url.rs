@@ -6,7 +6,6 @@ use std::str::FromStr;
 use reqwest::Proxy;
 use serde::{Deserialize, Deserializer, Serialize};
 use url::Url;
-
 use uv_redacted::DisplaySafeUrl;
 
 /// A validated proxy URL.

@@ -1,27 +1,28 @@
-use async_zip::base::write::{EntrySeekableWriter, ZipFileWriter};
-use async_zip::{Compression, ZipEntryBuilder};
-use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD as base64};
-use fs_err::File;
-use futures_lite::future::block_on;
-use futures_lite::io::{AsyncSeek, AsyncWrite, AsyncWriteExt};
-use globset::{GlobSet, GlobSetBuilder};
-use rustc_hash::FxHashSet;
-use sha2::{Digest, Sha256};
 use std::fmt::{Display, Formatter};
 use std::io::{BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::{io, mem};
-use tracing::{debug, trace};
-use walkdir::WalkDir;
 
+use async_zip::base::write::{EntrySeekableWriter, ZipFileWriter};
+use async_zip::{Compression, ZipEntryBuilder};
+use base64::Engine;
+use base64::prelude::BASE64_URL_SAFE_NO_PAD as base64;
+use fs_err::File;
+use futures_lite::future::block_on;
+use futures_lite::io::{AsyncSeek, AsyncWrite, AsyncWriteExt};
+use globset::{GlobSet, GlobSetBuilder};
+use rustc_hash::FxHashSet;
+use sha2::{Digest, Sha256};
+use tracing::{debug, trace};
 use uv_distribution_filename::WheelFilename;
 use uv_fs::{Simplified, normalize_path};
 use uv_globfilter::{GlobDirFilter, PortableGlobParser};
 use uv_platform_tags::{AbiTag, LanguageTag, PlatformTag};
 use uv_preview::PreviewFeature;
 use uv_warnings::warn_user_once;
+use walkdir::WalkDir;
 
 use crate::metadata::DEFAULT_EXCLUDES;
 use crate::{
@@ -1031,10 +1032,10 @@ impl DirectoryWriter for FilesystemWriter {
 
 #[cfg(test)]
 mod test {
-    use super::*;
-    use insta::assert_snapshot;
     use std::path::Path;
     use std::str::FromStr;
+
+    use insta::assert_snapshot;
     use tempfile::TempDir;
     use uv_distribution_filename::WheelFilename;
     use uv_fs::Simplified;
@@ -1042,6 +1043,8 @@ mod test {
     use uv_pep440::Version;
     use uv_platform_tags::{AbiTag, PlatformTag};
     use walkdir::WalkDir;
+
+    use super::*;
 
     #[test]
     fn test_wheel() {

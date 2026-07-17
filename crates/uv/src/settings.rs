@@ -1,36 +1,30 @@
 use std::env::VarError;
-use std::fmt;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
-use std::process;
 use std::str::FromStr;
 use std::time::Duration;
+use std::{fmt, process};
 
 use anyhow::{Result, bail};
 use rustc_hash::FxHashSet;
-
 use uv_audit::{VulnerabilityID, VulnerabilityServiceFormat};
 use uv_auth::Service;
 use uv_cache::{CacheArgs, Refresh};
 use uv_cli::comma::CommaSeparatedRequirements;
-use uv_cli::{
-    AddArgs, AuditArgs, AuditOutputFormat, AuthLoginArgs, AuthLogoutArgs, AuthTokenArgs,
-    ColorChoice, ExternalCommand, GlobalArgs, InitArgs, ListFormat, LockArgs, Maybe, MetadataArgs,
-    PipCheckArgs, PipCompileArgs, PipFreezeArgs, PipInstallArgs, PipListArgs, PipShowArgs,
-    PipSyncArgs, PipTreeArgs, PipUninstallArgs, PythonFindArgs, PythonInstallArgs, PythonListArgs,
-    PythonListFormat, PythonPinArgs, PythonUninstallArgs, PythonUpgradeArgs, RemoveArgs, RunArgs,
-    SyncArgs, SyncFormat, ToolDirArgs, ToolInstallArgs, ToolListArgs, ToolRunArgs,
-    ToolUninstallArgs, TreeArgs, TreeFormat, UpgradeArgs, VenvArgs, VersionArgs, VersionBumpSpec,
-    VersionFormat,
+use uv_cli::options::{
+    Flag, FlagSource, check_conflicts, flag, indexes_from_args, resolve_flag, resolve_flag_pair,
+    resolver_installer_options, resolver_installer_options_with_indexes, resolver_options,
 };
 use uv_cli::{
-    AuthorFrom, BuildArgs, CheckArgs, ExportArgs, FormatArgs, PublishArgs, PythonDirArgs,
-    ResolverInstallerArgs, ToolUpgradeArgs,
-    options::{
-        Flag, FlagSource, check_conflicts, flag, indexes_from_args, resolve_flag,
-        resolve_flag_pair, resolver_installer_options, resolver_installer_options_with_indexes,
-        resolver_options,
-    },
+    AddArgs, AuditArgs, AuditOutputFormat, AuthLoginArgs, AuthLogoutArgs, AuthTokenArgs,
+    AuthorFrom, BuildArgs, CheckArgs, ColorChoice, ExportArgs, ExternalCommand, FormatArgs,
+    GlobalArgs, InitArgs, ListFormat, LockArgs, Maybe, MetadataArgs, PipCheckArgs, PipCompileArgs,
+    PipFreezeArgs, PipInstallArgs, PipListArgs, PipShowArgs, PipSyncArgs, PipTreeArgs,
+    PipUninstallArgs, PublishArgs, PythonDirArgs, PythonFindArgs, PythonInstallArgs,
+    PythonListArgs, PythonListFormat, PythonPinArgs, PythonUninstallArgs, PythonUpgradeArgs,
+    RemoveArgs, ResolverInstallerArgs, RunArgs, SyncArgs, SyncFormat, ToolDirArgs, ToolInstallArgs,
+    ToolListArgs, ToolRunArgs, ToolUninstallArgs, ToolUpgradeArgs, TreeArgs, TreeFormat,
+    UpgradeArgs, VenvArgs, VersionArgs, VersionBumpSpec, VersionFormat,
 };
 use uv_client::Connectivity;
 use uv_configuration::{

@@ -18,21 +18,17 @@ use reqwest_retry::policies::ExponentialBackoff;
 use reqwest_retry::{Jitter, RetryTransientMiddleware};
 use thiserror::Error;
 use tracing::{debug, warn};
-use url::ParseError;
-use url::Url;
-
+use url::{ParseError, Url};
 use uv_auth::{
     AuthMiddleware, Credentials, CredentialsCache, CredentialsFromUrlError, Indexes, PyxTokenStore,
 };
-use uv_configuration::ProxyUrlKind;
-use uv_configuration::{Concurrency, KeyringProviderType, ProxyUrl, TrustedHost};
+use uv_configuration::{Concurrency, KeyringProviderType, ProxyUrl, ProxyUrlKind, TrustedHost};
 use uv_distribution_types::IndexCredentialsError;
 use uv_git::GitHttpSettings;
 use uv_pep508::MarkerEnvironment;
 use uv_platform_tags::Platform;
 use uv_preview::Preview;
-use uv_redacted::DisplaySafeUrl;
-use uv_redacted::DisplaySafeUrlError;
+use uv_redacted::{DisplaySafeUrl, DisplaySafeUrlError};
 use uv_static::EnvVars;
 use uv_version::version;
 use uv_warnings::warn_user_once;
@@ -1223,12 +1219,12 @@ pub enum RetryParsingError {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use anyhow::Result;
     use reqwest::{Client, Method};
     use wiremock::matchers::method;
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    use super::*;
 
     #[tokio::test]
     async fn cache_read_runtime_can_be_dropped_from_an_async_context() {

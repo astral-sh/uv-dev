@@ -5,7 +5,6 @@ use http::{HeaderValue, StatusCode};
 use serde::{Deserialize, Serialize, Serializer};
 use thiserror::Error;
 use url::Url;
-
 use uv_auth::{AuthPolicy, Credentials, CredentialsFromUrlError};
 use uv_redacted::DisplaySafeUrl;
 use uv_small_str::SmallString;
@@ -746,8 +745,9 @@ pub enum IndexSourceError {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use http::HeaderValue;
+
+    use super::*;
 
     #[test]
     fn test_index_cache_control_headers() {

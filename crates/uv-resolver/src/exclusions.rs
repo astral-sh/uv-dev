@@ -1,7 +1,7 @@
 use uv_configuration::Reinstall;
+use uv_normalize::PackageName;
 
 use crate::UpgradePackages;
-use uv_normalize::PackageName;
 
 /// Tracks locally installed packages that should not be selected during resolution.
 #[derive(Debug, Default, Clone)]

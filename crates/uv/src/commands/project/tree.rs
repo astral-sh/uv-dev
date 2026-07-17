@@ -10,8 +10,7 @@ use uv_cli::TreeFormat;
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_configuration::{Concurrency, DependencyGroups, TargetTriple};
 use uv_distribution_types::IndexCapabilities;
-use uv_normalize::DefaultGroups;
-use uv_normalize::PackageName;
+use uv_normalize::{DefaultGroups, PackageName};
 use uv_preview::{Preview, PreviewFeature};
 use uv_python::{ConfigDiscovery, PythonDownloads, PythonPreference, PythonRequest, PythonVersion};
 use uv_resolver::{PackageMap, TreeDisplay, TreeJsonTarget};
@@ -32,9 +31,7 @@ use crate::commands::project::{
 use crate::commands::reporters::LatestVersionReporter;
 use crate::commands::{ExitStatus, diagnostics};
 use crate::printer::Printer;
-use crate::settings::FrozenSource;
-use crate::settings::LockCheck;
-use crate::settings::ResolverSettings;
+use crate::settings::{FrozenSource, LockCheck, ResolverSettings};
 
 /// Run a command.
 #[expect(clippy::fn_params_excessive_bools)]

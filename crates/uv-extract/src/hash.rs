@@ -1,9 +1,9 @@
-use blake2::digest::consts::U32;
-use sha2::Digest;
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use tokio::io::{AsyncReadExt, ReadBuf};
 
+use blake2::digest::consts::U32;
+use sha2::Digest;
+use tokio::io::{AsyncReadExt, ReadBuf};
 use uv_pypi_types::{HashAlgorithm, HashDigest};
 
 #[derive(Debug)]

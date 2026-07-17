@@ -107,13 +107,15 @@ impl WindowsRunnable {
 mod tests {
 
     #[cfg(target_os = "windows")]
-    use super::WindowsRunnable;
-    #[cfg(target_os = "windows")]
-    use fs_err as fs;
-    #[cfg(target_os = "windows")]
     use std::ffi::OsStr;
     #[cfg(target_os = "windows")]
     use std::io;
+
+    #[cfg(target_os = "windows")]
+    use fs_err as fs;
+
+    #[cfg(target_os = "windows")]
+    use super::WindowsRunnable;
 
     /// Helper function to create a temporary directory with test files
     #[cfg(target_os = "windows")]

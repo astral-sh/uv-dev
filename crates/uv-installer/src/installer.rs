@@ -5,7 +5,6 @@ use anyhow::{Context, Error, Result};
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use tokio::sync::oneshot;
 use tracing::{instrument, warn};
-
 use uv_cache::Cache;
 use uv_configuration::initialize_rayon_once;
 use uv_distribution_types::CachedDist;

@@ -1,10 +1,11 @@
 use std::io;
 use std::path::{Path, PathBuf};
+
+use clap::{Parser, ValueHint};
+use tracing::{debug, warn};
 use uv_static::EnvVars;
 
 use crate::Cache;
-use clap::{Parser, ValueHint};
-use tracing::{debug, warn};
 
 #[derive(Parser, Debug, Clone)]
 #[command(next_help_heading = "Cache options")]

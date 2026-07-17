@@ -4,12 +4,9 @@ use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
 use indexmap::IndexSet;
-use petgraph::{
-    Directed, Direction,
-    graph::{Graph, NodeIndex},
-};
+use petgraph::graph::{Graph, NodeIndex};
+use petgraph::{Directed, Direction};
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
-
 use uv_configuration::{Constraints, Overrides};
 use uv_distribution::Metadata;
 use uv_distribution_types::{

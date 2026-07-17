@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use futures::{TryStreamExt, stream::FuturesOrdered};
-
+use futures::TryStreamExt;
+use futures::stream::FuturesOrdered;
 use uv_distribution::{DistributionDatabase, Reporter};
 use uv_distribution_types::{Identifier, Requirement};
 use uv_resolver::{InMemoryIndex, MetadataResponse};

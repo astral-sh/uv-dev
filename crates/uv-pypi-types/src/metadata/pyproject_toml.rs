@@ -5,7 +5,6 @@ use indexmap::IndexMap;
 use serde::Deserialize;
 use serde::de::IntoDeserializer;
 use tracing::instrument;
-
 use uv_normalize::{ExtraName, PackageName};
 use uv_pep440::{Version, VersionSpecifiers};
 

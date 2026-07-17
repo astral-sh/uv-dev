@@ -1,8 +1,8 @@
-use itertools::Either;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use tracing::info_span;
 
+use itertools::Either;
+use tracing::info_span;
 use uv_auth::CredentialsCache;
 use uv_configuration::{DependencyGroupsWithDefaults, ExcludeDependency, NoSources};
 use uv_distribution::LoweredRequirement;

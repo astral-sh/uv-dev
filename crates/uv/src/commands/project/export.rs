@@ -8,7 +8,6 @@ use clap::ValueEnum;
 use itertools::Itertools;
 use owo_colors::OwoColorize;
 use rustc_hash::FxHashSet;
-
 use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
 use uv_configuration::{

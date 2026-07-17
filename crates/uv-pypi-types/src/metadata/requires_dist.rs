@@ -1,7 +1,6 @@
 use std::str::FromStr;
 
 use itertools::Itertools;
-
 use uv_normalize::{ExtraName, PackageName};
 use uv_pep508::Requirement;
 

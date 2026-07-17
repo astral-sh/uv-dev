@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use itertools::Itertools;
 use tracing::trace;
-
 use uv_distribution_types::{RequiresPython, RequiresPythonRange};
 use uv_pep440::VersionSpecifiers;
 use uv_pep508::{MarkerEnvironment, MarkerTree};
@@ -706,10 +705,9 @@ mod tests {
     use std::ops::Bound;
     use std::sync::LazyLock;
 
+    use uv_distribution_types::{RequiresPython, RequiresPythonRange};
     use uv_pep440::{LowerBound, UpperBound, Version};
     use uv_pep508::{MarkerEnvironment, MarkerEnvironmentBuilder};
-
-    use uv_distribution_types::{RequiresPython, RequiresPythonRange};
 
     use super::*;
 

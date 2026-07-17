@@ -2,7 +2,6 @@ use std::fmt::Write;
 
 use anyhow::Context;
 use owo_colors::OwoColorize;
-
 use uv_fs::Simplified;
 use uv_python::managed::{ManagedPythonInstallations, python_executable_dir};
 

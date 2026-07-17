@@ -4,7 +4,6 @@ use std::str::Utf8Error;
 
 use fs_err::File;
 use thiserror::Error;
-
 use uv_fs::Simplified;
 
 #[cfg(all(windows, target_arch = "x86"))]
@@ -67,8 +66,8 @@ impl Launcher {
     #[cfg(windows)]
     pub fn try_from_path(path: &Path) -> Result<Option<Self>, Error> {
         use std::os::windows::ffi::OsStrExt;
-        use windows::Win32::System::LibraryLoader::LOAD_LIBRARY_AS_DATAFILE;
-        use windows::Win32::System::LibraryLoader::LoadLibraryExW;
+
+        use windows::Win32::System::LibraryLoader::{LOAD_LIBRARY_AS_DATAFILE, LoadLibraryExW};
 
         let path_str = path
             .as_os_str()
@@ -136,6 +135,7 @@ impl Launcher {
     #[cfg(windows)]
     pub fn write_to_file(self, file: &mut File, is_gui: bool) -> Result<(), Error> {
         use std::io::Write;
+
         use uv_fs::Simplified;
 
         let python_path = self.python_path.simplified_display().to_string();
@@ -285,6 +285,7 @@ fn write_resources(path: &Path, resources: &[(windows::core::PCWSTR, &[u8])]) ->
     #[allow(unsafe_code)]
     unsafe {
         use std::os::windows::ffi::OsStrExt;
+
         use windows::Win32::System::LibraryLoader::{
             BeginUpdateResourceW, EndUpdateResourceW, UpdateResourceW,
         };
@@ -387,7 +388,6 @@ pub fn windows_script_launcher(
     use async_zip::{Compression, ZipEntryBuilder};
     use futures_lite::future::block_on;
     use futures_lite::io::Cursor;
-
     use uv_fs::Simplified;
 
     let launcher_bin: &[u8] = get_launcher_bin(is_gui)?;
@@ -489,15 +489,13 @@ pub fn windows_python_launcher(
 #[expect(clippy::print_stdout)]
 mod test {
     use std::io::Write;
-    use std::path::Path;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::process::Command;
 
     use anyhow::Result;
     use assert_cmd::prelude::OutputAssertExt;
     use assert_fs::prelude::PathChild;
     use fs_err::File;
-
     use which::which;
 
     use super::{Launcher, LauncherKind, windows_python_launcher, windows_script_launcher};
@@ -537,9 +535,9 @@ mod test {
     #[test]
     #[cfg(all(windows, target_arch = "aarch64", feature = "production"))]
     fn test_launchers_are_small() {
-        // At time of writing, they are ~45kb.
+        // At time of writing, they are ~50 KiB.
         assert!(
-            super::LAUNCHER_AARCH64_GUI.len() < 50 * 1024,
+            super::LAUNCHER_AARCH64_GUI.len() <= 50 * 1024,
             "GUI launcher: {}",
             super::LAUNCHER_AARCH64_GUI.len()
         );

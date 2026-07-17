@@ -1,8 +1,7 @@
 use std::io;
-use std::path::{Path, PathBuf};
-
 #[cfg(feature = "tokio")]
 use std::io::Read;
+use std::path::{Path, PathBuf};
 
 #[cfg(feature = "tokio")]
 use encoding_rs_io::DecodeReaderBytes;

@@ -4,7 +4,6 @@ use std::path::{Component, Path, PathBuf};
 
 use owo_colors::OwoColorize;
 use url::Url;
-
 use uv_configuration::{
     DependencyGroupsWithDefaults, EditableMode, ExtrasSpecificationWithDefaults, InstallOptions,
 };

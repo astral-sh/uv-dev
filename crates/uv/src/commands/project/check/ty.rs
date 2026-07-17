@@ -8,7 +8,6 @@ use anyhow::{Context, Result};
 use tokio::io::AsyncWriteExt;
 use tokio::process::{ChildStdin, Command};
 use tracing::debug;
-
 use uv_bin_install::{BinVersion, Binary, ResolvedVersion, bin_install, find_matching_version};
 use uv_cache::Cache;
 use uv_client::BaseClientBuilder;

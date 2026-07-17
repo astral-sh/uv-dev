@@ -1,6 +1,5 @@
 use anyhow::{Result, anyhow};
 use clap::{Args, ValueEnum};
-
 use uv_warnings::warn_user;
 
 pub trait CompatArgs {

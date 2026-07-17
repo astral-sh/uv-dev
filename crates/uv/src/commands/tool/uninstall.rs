@@ -4,7 +4,6 @@ use anyhow::{Result, bail};
 use itertools::Itertools;
 use owo_colors::OwoColorize;
 use tracing::debug;
-
 use uv_fs::Simplified;
 use uv_normalize::PackageName;
 use uv_tool::{InstalledTools, Tool, ToolEntrypoint};

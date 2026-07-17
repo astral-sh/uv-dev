@@ -1,5 +1,6 @@
-use serde::{Deserialize, Serialize};
 use std::str::FromStr;
+
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use url::Url;
 use uv_redacted::{DisplaySafeUrl, DisplaySafeUrlError};

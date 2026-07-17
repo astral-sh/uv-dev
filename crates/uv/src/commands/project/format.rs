@@ -5,7 +5,6 @@ use std::str::FromStr;
 use anyhow::{Context, Result};
 use tokio::process::Command;
 use tracing::debug;
-
 use uv_bin_install::{BinVersion, Binary, ResolvedVersion, bin_install, find_matching_version};
 use uv_cache::Cache;
 use uv_client::BaseClientBuilder;

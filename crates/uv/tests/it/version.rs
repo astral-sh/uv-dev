@@ -3,7 +3,6 @@ use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use indoc::indoc;
 use insta::assert_snapshot;
-
 use uv_static::EnvVars;
 use uv_test::uv_snapshot;
 

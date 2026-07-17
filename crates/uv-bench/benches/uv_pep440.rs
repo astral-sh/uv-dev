@@ -1,7 +1,8 @@
 use std::hint::black_box;
 use std::str::FromStr;
 
-use criterion::{Criterion, criterion_group, criterion_main, measurement::WallTime};
+use criterion::measurement::WallTime;
+use criterion::{Criterion, criterion_group, criterion_main};
 use uv_pep440::VersionSpecifiers;
 
 fn parse_version_specifiers(c: &mut Criterion<WallTime>) {

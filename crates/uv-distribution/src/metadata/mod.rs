@@ -2,7 +2,6 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use thiserror::Error;
-
 use uv_auth::CredentialsCache;
 use uv_cache::Cache;
 use uv_configuration::NoSources;
@@ -15,8 +14,7 @@ use uv_workspace::{WorkspaceCache, WorkspaceError};
 
 pub use crate::metadata::build_requires::{BuildRequires, LoweredExtraBuildDependencies};
 pub use crate::metadata::dependency_groups::SourcedDependencyGroups;
-pub use crate::metadata::lowering::LoweredRequirement;
-pub use crate::metadata::lowering::LoweringError;
+pub use crate::metadata::lowering::{LoweredRequirement, LoweringError};
 pub use crate::metadata::requires_dist::{FlatRequiresDist, RequiresDist};
 
 mod build_requires;

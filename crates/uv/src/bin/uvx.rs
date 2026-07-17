@@ -1,9 +1,7 @@
 use std::convert::Infallible;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::{
-    ffi::OsString,
-    process::{Command, ExitCode, ExitStatus},
-};
+use std::process::{Command, ExitCode, ExitStatus};
 
 /// Spawns a command exec style.
 fn exec_spawn(cmd: &mut Command) -> std::io::Result<Infallible> {

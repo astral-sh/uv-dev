@@ -1,10 +1,10 @@
+use std::process::Command;
+
 use anyhow::Result;
 use assert_cmd::prelude::*;
 use assert_fs::prelude::*;
 use insta::assert_snapshot;
 use serde_json::json;
-use std::process::Command;
-
 use uv_fs::Simplified;
 use uv_static::EnvVars;
 #[cfg(unix)]

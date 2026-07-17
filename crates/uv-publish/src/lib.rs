@@ -22,7 +22,6 @@ use tokio::sync::Semaphore;
 use tokio_util::io::ReaderStream;
 use tracing::{Level, debug, enabled, trace, warn};
 use url::Url;
-
 use uv_auth::{Credentials, PyxTokenStore, Realm};
 use uv_cache::{Cache, Refresh};
 use uv_client::{
@@ -1525,20 +1524,20 @@ mod tests {
 
     use insta::{allow_duplicates, assert_debug_snapshot, assert_snapshot};
     use itertools::Itertools;
+    use tokio::sync::Semaphore;
     use uv_auth::Credentials;
     use uv_client::{AuthIntegration, BaseClientBuilder, RedirectPolicy};
     use uv_distribution_filename::DistFilename;
+    use uv_errors::{ErrorOptions, Hints, write_error_chain_with_options};
     use uv_pypi_types::{HashDigest, Metadata23};
     use uv_redacted::DisplaySafeUrl;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use crate::{
         FormMetadata, PublishError, Reporter, UploadDistribution, build_upload_request,
         group_files, upload,
     };
-    use tokio::sync::Semaphore;
-    use uv_errors::{ErrorOptions, Hints, write_error_chain_with_options};
-    use wiremock::matchers::{method, path};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     struct DummyReporter;
 

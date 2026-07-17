@@ -2,7 +2,8 @@ use std::fmt;
 
 use jiff::Timestamp;
 use owo_colors::OwoColorize;
-use tracing::{Event, Subscriber, field::Field};
+use tracing::field::Field;
+use tracing::{Event, Subscriber};
 use tracing_subscriber::field::MakeExt;
 use tracing_subscriber::fmt::format::{self, Writer};
 use tracing_subscriber::fmt::{FmtContext, FormatEvent, FormatFields};
@@ -132,7 +133,9 @@ fn format_field(writer: &mut Writer<'_>, field: &Field, value: &dyn fmt::Debug) 
 
 #[cfg(test)]
 mod tests {
-    use tracing::{Callsite, Event, Level, field::Value, metadata::Kind};
+    use tracing::field::Value;
+    use tracing::metadata::Kind;
+    use tracing::{Callsite, Event, Level};
     use tracing_subscriber::fmt::FormatFields;
     use tracing_subscriber::fmt::format::Writer;
 

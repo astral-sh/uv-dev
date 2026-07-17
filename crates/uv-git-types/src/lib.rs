@@ -1,6 +1,3 @@
-pub use crate::github::GitHubRepository;
-pub use crate::oid::{GitOid, OidParseError};
-pub use crate::reference::GitReference;
 use std::cmp::Ordering;
 use std::sync::LazyLock;
 
@@ -9,6 +6,10 @@ use thiserror::Error;
 use uv_cache_key::RepositoryUrl;
 use uv_redacted::DisplaySafeUrl;
 use uv_static::EnvVars;
+
+pub use crate::github::GitHubRepository;
+pub use crate::oid::{GitOid, OidParseError};
+pub use crate::reference::GitReference;
 
 mod github;
 mod oid;

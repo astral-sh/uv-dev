@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 use url::Url;
 use uv_cache_key::{CacheKey, CacheKeyHasher};
-
 use uv_distribution_filename::{DistExtension, ExtensionError};
 use uv_git_types::{GitUrl, GitUrlParseError};
 use uv_pep508::{
@@ -654,9 +653,10 @@ impl From<ParsedGitDirectoryUrl> for DisplaySafeUrl {
 #[cfg(test)]
 mod tests {
     use anyhow::Result;
-
-    use crate::{DirectUrl, parsed_url::ParsedUrl};
     use uv_redacted::DisplaySafeUrl;
+
+    use crate::DirectUrl;
+    use crate::parsed_url::ParsedUrl;
 
     #[test]
     fn direct_url_from_url() -> Result<()> {

@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use tracing::info_span;
-
 use uv_client::BaseClientBuilder;
 use uv_configuration::{BuildOptions, HashCheckingMode, TargetTriple};
 use uv_distribution_types::Resolution;

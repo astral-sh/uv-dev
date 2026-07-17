@@ -1,10 +1,10 @@
 //! Generate the environment variables reference from `uv_static::EnvVars`.
 
-use anyhow::bail;
-use pretty_assertions::StrComparison;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
+use anyhow::bail;
+use pretty_assertions::StrComparison;
 use uv_static::EnvVars;
 
 use crate::ROOT_DIR;

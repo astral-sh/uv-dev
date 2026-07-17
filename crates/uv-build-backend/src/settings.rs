@@ -1,5 +1,6 @@
-use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
 use uv_macros::OptionsMetadata;
 
 /// Settings for the uv build backend (`uv_build`).

@@ -4,6 +4,7 @@ use std::cmp::Ordering;
 use std::collections::Bound;
 use std::ops::Deref;
 use std::sync::LazyLock;
+
 use version_ranges::Ranges;
 
 use crate::{

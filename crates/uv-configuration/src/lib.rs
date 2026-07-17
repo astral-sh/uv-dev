@@ -20,7 +20,6 @@ pub use required_version::*;
 pub use sources::*;
 pub use target_triple::*;
 pub use threading::*;
-
 pub use trusted_host::*;
 pub use trusted_publishing::*;
 pub use vcs::*;

@@ -8,9 +8,7 @@ use anyhow::{Result, anyhow};
 use clap::builder::styling::{AnsiColor, Effects, Style};
 use clap::builder::{PossibleValue, Styles, TypedValueParser, ValueParserFactory};
 use clap::error::ErrorKind;
-use clap::{Args, Parser, Subcommand};
-use clap::{ValueEnum, ValueHint};
-
+use clap::{Args, Parser, Subcommand, ValueEnum, ValueHint};
 use uv_audit::VulnerabilityServiceFormat;
 use uv_auth::Service;
 use uv_cache::CacheArgs;

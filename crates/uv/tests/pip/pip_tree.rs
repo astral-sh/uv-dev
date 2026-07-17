@@ -1,12 +1,8 @@
 #![cfg(not(windows))]
 
 use assert_cmd::assert::OutputAssertExt;
-use assert_fs::fixture::FileTouch;
-use assert_fs::fixture::FileWriteStr;
-use assert_fs::fixture::PathChild;
-use assert_fs::fixture::PathCreateDir;
+use assert_fs::fixture::{FileTouch, FileWriteStr, PathChild, PathCreateDir};
 use indoc::indoc;
-
 use uv_test::uv_snapshot;
 
 #[test]

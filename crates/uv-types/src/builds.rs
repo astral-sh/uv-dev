@@ -2,7 +2,6 @@ use std::path::Path;
 use std::sync::Arc;
 
 use papaya::{HashMap, ResizeMode};
-
 use uv_configuration::{BuildKind, NoSources};
 use uv_normalize::PackageName;
 use uv_python::PythonEnvironment;

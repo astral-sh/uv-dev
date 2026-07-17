@@ -4,7 +4,6 @@ use std::iter;
 use std::sync::Arc;
 
 use reqwest::StatusCode;
-
 use uv_distribution_types::{IncompatibleDist, Requirement, RequirementSource};
 use uv_normalize::{ExtraName, PackageName};
 use uv_pep440::{Version, VersionSpecifiers};

@@ -3,8 +3,6 @@ use std::path::PathBuf;
 
 use owo_colors::OwoColorize;
 use tokio::task::JoinError;
-
-use crate::metadata::MetadataError;
 use uv_cache::Error as CacheError;
 use uv_client::WrappedReqwestError;
 use uv_distribution_filename::{WheelFilename, WheelFilenameError};
@@ -18,6 +16,8 @@ use uv_pypi_types::{HashAlgorithm, HashDigest};
 use uv_python::PythonVariant;
 use uv_redacted::DisplaySafeUrl;
 use uv_types::AnyErrorBuild;
+
+use crate::metadata::MetadataError;
 
 #[derive(Debug, Clone, Copy)]
 pub struct PythonVersion {
@@ -299,11 +299,13 @@ impl Error {
 
 #[cfg(test)]
 mod tests {
-    use super::{Error, PythonVersion};
     use std::str::FromStr;
+
     use uv_distribution_filename::WheelFilename;
     use uv_platform_tags::{Arch, Os, Platform};
     use uv_python::PythonVariant;
+
+    use super::{Error, PythonVersion};
 
     #[test]
     fn built_wheel_error_formats_freethreaded_python() {

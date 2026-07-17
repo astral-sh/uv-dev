@@ -631,9 +631,10 @@ impl IndexCapabilities {
 
 #[cfg(test)]
 mod tests {
+    use http::HeaderValue;
+
     use super::*;
     use crate::{IndexCacheControl, IndexFormat, IndexName};
-    use http::HeaderValue;
 
     #[test]
     fn test_index_url_parse_valid_paths() {

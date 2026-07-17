@@ -1,7 +1,6 @@
 use std::path::Path;
 
 use rustc_hash::{FxHashMap, FxHashSet};
-
 use uv_cache::Refresh;
 use uv_cache_info::Timestamp;
 use uv_distribution_types::{Requirement, RequirementSource};

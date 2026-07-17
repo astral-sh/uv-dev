@@ -4,7 +4,6 @@ use std::str::FromStr;
 
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Deserializer, Serialize};
-
 use uv_small_str::SmallString;
 
 use crate::{InvalidNameError, validate_and_normalize_ref};

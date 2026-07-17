@@ -1,10 +1,11 @@
+use std::io;
+use std::path::Path;
+use std::sync::LazyLock;
+
 use configparser::ini::{Ini, IniDefault};
 use regex::Regex;
 use rustc_hash::FxHashSet;
 use serde::Serialize;
-use std::io;
-use std::path::Path;
-use std::sync::LazyLock;
 
 use crate::{Error, wheel};
 

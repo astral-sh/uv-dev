@@ -16,7 +16,6 @@ use thiserror::Error;
 use tokio::process::Command;
 use tracing::{debug, trace, warn};
 use url::Url;
-
 use uv_cache::Cache;
 use uv_cli::{ExternalCommand, GlobalArgs};
 use uv_client::BaseClientBuilder;

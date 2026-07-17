@@ -1,6 +1,5 @@
 use pubgrub::{Id, Kind, State};
 use rustc_hash::FxHashMap;
-
 use uv_distribution_types::{DerivationChain, DerivationStep};
 use uv_pep440::Version;
 

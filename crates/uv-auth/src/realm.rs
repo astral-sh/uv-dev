@@ -1,5 +1,6 @@
+use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
-use std::{fmt::Display, fmt::Formatter};
+
 use url::Url;
 use uv_redacted::DisplaySafeUrl;
 use uv_small_str::SmallString;

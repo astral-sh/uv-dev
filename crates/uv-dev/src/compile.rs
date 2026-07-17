@@ -2,7 +2,6 @@ use std::path::PathBuf;
 
 use clap::Parser;
 use tracing::info;
-
 use uv_cache::{Cache, CacheArgs};
 use uv_configuration::Concurrency;
 use uv_python::{EnvironmentPreference, PythonEnvironment, PythonPreference, PythonRequest};

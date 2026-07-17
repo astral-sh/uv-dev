@@ -1,8 +1,9 @@
 use std::fmt::{Display, Formatter};
 
-use crate::BuildTag;
 use uv_platform_tags::{AbiTag, LanguageTag, PlatformTag, TagCompatibility, Tags};
 use uv_small_str::SmallString;
+
+use crate::BuildTag;
 
 /// A [`SmallVec`] type for storing tags.
 ///

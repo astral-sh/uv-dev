@@ -4,13 +4,12 @@
 //! e.g., `ruff` (which does have a Python package, but also has standalone binaries on GitHub).
 
 use std::error::Error as _;
-use std::fmt;
-use std::io;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::str::FromStr;
 use std::task::{Context, Poll};
 use std::time::{Duration, SystemTimeError};
+use std::{fmt, io};
 
 use futures::{StreamExt, TryStreamExt};
 use reqwest_retry::Retryable;
@@ -20,16 +19,16 @@ use thiserror::Error;
 use tokio::io::{AsyncRead, ReadBuf};
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use url::Url;
-use uv_client::retryable_on_request_failure;
-use uv_distribution_filename::SourceDistExtension;
-use uv_static::{astral_mirror_base_url, astral_mirror_url_from_env, custom_astral_mirror_url};
-
 use uv_cache::{Cache, CacheBucket, CacheEntry, Error as CacheError};
-use uv_client::{BaseClient, RetriableError, fetch_with_url_fallback};
+use uv_client::{
+    BaseClient, RetriableError, fetch_with_url_fallback, retryable_on_request_failure,
+};
+use uv_distribution_filename::SourceDistExtension;
 use uv_extract::{Error as ExtractError, stream};
 use uv_pep440::{Version, VersionSpecifier, VersionSpecifiers};
 use uv_platform::Platform;
 use uv_redacted::DisplaySafeUrl;
+use uv_static::{astral_mirror_base_url, astral_mirror_url_from_env, custom_astral_mirror_url};
 
 /// Binary tools that can be installed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -926,8 +925,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
     use std::io::Write;
+
+    use serde_json::json;
     use uv_client::{BaseClientBuilder, fetch_with_url_fallback, retryable_on_request_failure};
     use uv_redacted::DisplaySafeUrl;
     use wiremock::matchers::{method, path};

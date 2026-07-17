@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, RwLock};
+
 use tracing::trace;
 use uv_auth::{Credentials, CredentialsFromUrlError};
 use uv_cache_key::RepositoryUrl;

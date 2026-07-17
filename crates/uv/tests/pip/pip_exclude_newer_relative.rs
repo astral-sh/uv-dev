@@ -1,7 +1,6 @@
 use anyhow::Result;
 use assert_fs::fixture::{FileWriteStr, PathChild};
 use uv_static::EnvVars;
-
 use uv_test::uv_snapshot;
 
 /// Install with relative `exclude-newer` values from the `uv pip` CLI.

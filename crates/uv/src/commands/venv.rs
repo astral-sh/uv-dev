@@ -7,7 +7,6 @@ use anyhow::Result;
 use owo_colors::OwoColorize;
 use thiserror::Error;
 use tracing::warn;
-
 use uv_cache::Cache;
 use uv_client::{BaseClientBuilder, FlatIndexClient, RegistryClientBuilder};
 use uv_configuration::{
@@ -37,6 +36,7 @@ use uv_virtualenv::{OnExisting, RemovalReason, Seed};
 use uv_warnings::warn_user;
 use uv_workspace::{DiscoveryOptions, VirtualProject, WorkspaceCache, WorkspaceErrorKind};
 
+use super::project::default_dependency_groups;
 use crate::commands::ExitStatus;
 use crate::commands::pip::loggers::{DefaultInstallLogger, InstallLogger};
 use crate::commands::pip::operations::{Changelog, report_interpreter};
@@ -47,8 +47,6 @@ use crate::commands::project::{
 };
 use crate::commands::reporters::PythonDownloadReporter;
 use crate::printer::Printer;
-
-use super::project::default_dependency_groups;
 
 #[derive(Error, Debug)]
 enum VenvError {

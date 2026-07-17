@@ -1,7 +1,6 @@
 use std::convert::Infallible;
 
 use pubgrub::{Dependencies, DependencyProvider, PackageResolutionStatistics};
-
 use uv_pep440::Version;
 
 use crate::pubgrub::{PubGrubPackage, PubGrubPriority, PubGrubTiebreaker, Range};

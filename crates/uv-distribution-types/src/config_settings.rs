@@ -1,7 +1,7 @@
-use std::{
-    collections::{BTreeMap, btree_map::Entry},
-    str::FromStr,
-};
+use std::collections::BTreeMap;
+use std::collections::btree_map::Entry;
+use std::str::FromStr;
+
 use uv_cache_key::CacheKeyHasher;
 use uv_normalize::PackageName;
 

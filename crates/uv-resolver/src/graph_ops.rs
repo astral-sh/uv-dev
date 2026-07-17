@@ -5,7 +5,6 @@ use petgraph::graph::{EdgeIndex, NodeIndex};
 use petgraph::visit::EdgeRef;
 use petgraph::{Direction, Graph};
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
-
 use uv_pep508::MarkerTree;
 use uv_pypi_types::{ConflictItem, Conflicts, Inference};
 

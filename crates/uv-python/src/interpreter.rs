@@ -14,7 +14,6 @@ use same_file::is_same_file;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::{debug, trace, warn};
-
 use uv_cache::{Cache, CacheBucket, CachedByTimestamp, Freshness};
 use uv_cache_info::Timestamp;
 use uv_cache_key::cache_digest;
@@ -27,6 +26,8 @@ use uv_pep508::{MarkerEnvironment, StringVersion};
 use uv_platform::{Arch, Libc, Os};
 use uv_platform_tags::{Platform, Tags, TagsError, TagsOptions};
 use uv_pypi_types::{ResolverMarkerEnvironment, Scheme};
+#[cfg(windows)]
+use windows::Win32::Foundation::{APPMODEL_ERROR_NO_PACKAGE, ERROR_CANT_ACCESS_FILE, WIN32_ERROR};
 
 use crate::implementation::LenientImplementationName;
 use crate::managed::ManagedPythonInstallations;
@@ -35,9 +36,6 @@ use crate::{
     Prefix, PyVenvConfiguration, PythonInstallationKey, PythonVariant, PythonVersion, Target,
     VersionRequest, VirtualEnvironment,
 };
-
-#[cfg(windows)]
-use windows::Win32::Foundation::{APPMODEL_ERROR_NO_PACKAGE, ERROR_CANT_ACCESS_FILE, WIN32_ERROR};
 
 /// A Python executable and its associated platform markers.
 #[expect(clippy::struct_excessive_bools)]
@@ -1336,7 +1334,6 @@ mod tests {
     use fs_err as fs;
     use indoc::{formatdoc, indoc};
     use tempfile::tempdir;
-
     use uv_cache::Cache;
     use uv_pep440::Version;
 

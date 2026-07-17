@@ -44,7 +44,6 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::instrument;
 use unscanny::{Pattern, Scanner};
 use url::Url;
-
 #[cfg(feature = "http")]
 use uv_client::{BaseClient, ClientBuildError};
 use uv_client::{BaseClientBuilder, Connectivity};
@@ -1578,7 +1577,6 @@ mod test {
     use tempfile::tempdir;
     use test_case::test_case;
     use unscanny::Scanner;
-
     use uv_fs::Simplified;
 
     use crate::{RequirementsTxt, calculate_row_column};

@@ -1,5 +1,4 @@
 use serde::Deserialize;
-
 use uv_normalize::PackageName;
 
 use crate::MetadataError;

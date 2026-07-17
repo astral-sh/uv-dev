@@ -21,7 +21,6 @@ use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tokio_util::either::Either;
 use tracing::{debug, instrument};
 use url::Url;
-
 use uv_cache::{Cache, CacheBucket};
 use uv_cache_key::cache_digest;
 use uv_client::{
@@ -39,14 +38,13 @@ use uv_static::{
     EnvVars, astral_mirror_base_url, astral_mirror_url_from_env, custom_astral_mirror_url,
 };
 
-use crate::PythonVariant;
 use crate::implementation::{
     Error as ImplementationError, ImplementationName, LenientImplementationName,
 };
 use crate::installation::PythonInstallationKey;
 use crate::managed::ManagedPythonInstallation;
 use crate::python_version::{BuildVersionError, python_build_version_from_env};
-use crate::{Interpreter, PythonRequest, PythonVersion, VersionRequest};
+use crate::{Interpreter, PythonRequest, PythonVariant, PythonVersion, VersionRequest};
 
 #[derive(Error, Debug)]
 pub enum Error {
@@ -1858,12 +1856,12 @@ async fn read_url(
 mod tests {
     use std::collections::HashSet;
 
-    use crate::PythonVariant;
-    use crate::implementation::LenientImplementationName;
-    use crate::installation::PythonInstallationKey;
     use uv_platform::{Arch, Libc, Os, Platform};
 
     use super::*;
+    use crate::PythonVariant;
+    use crate::implementation::LenientImplementationName;
+    use crate::installation::PythonInstallationKey;
 
     /// Parse a request with all of its fields.
     #[test]

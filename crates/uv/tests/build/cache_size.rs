@@ -1,5 +1,4 @@
 use assert_cmd::assert::OutputAssertExt;
-
 use uv_test::uv_snapshot;
 
 /// Test that `cache size` returns 0 for an empty cache directory (raw output).

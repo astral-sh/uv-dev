@@ -9,20 +9,20 @@
 use std::str::FromStr as _;
 use std::sync::LazyLock;
 
-use indexmap::IndexMap;
-use rustc_hash::{FxHashMap, FxHashSet};
-use tracing::trace;
-
-use crate::types::{self, VulnerabilityID};
 use futures::{StreamExt as _, TryStreamExt as _};
+use indexmap::IndexMap;
 use jiff::Timestamp;
+use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
+use tracing::trace;
 use uv_cache::{Cache, CacheBucket, CacheEntry};
 use uv_client::{CacheControl, CachedClient, CachedClientError};
 use uv_configuration::Concurrency;
 use uv_normalize::PackageName;
 use uv_pep440::Version;
 use uv_redacted::{DisplaySafeUrl, DisplaySafeUrlError};
+
+use crate::types::{self, VulnerabilityID};
 
 pub static API_BASE: LazyLock<DisplaySafeUrl> = LazyLock::new(|| {
     DisplaySafeUrl::parse("https://api.osv.dev/").expect("embedded OSV URL is a valid URL")
@@ -525,10 +525,9 @@ mod tests {
     use wiremock::matchers::{body_json, method, path};
     use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
+    use super::{Event, OSV_QUERY_BATCH_SIZE, Osv};
     use crate::service::osv::{Filter, RangeType};
     use crate::types::{Dependency, Finding};
-
-    use super::{Event, OSV_QUERY_BATCH_SIZE, Osv};
 
     /// Create a [`CachedClient`] suitable for tests (no retries, no cache).
     fn test_client() -> CachedClient {

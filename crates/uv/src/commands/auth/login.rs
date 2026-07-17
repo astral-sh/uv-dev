@@ -5,7 +5,6 @@ use console::Term;
 use owo_colors::OwoColorize;
 use url::Url;
 use uuid::Uuid;
-
 use uv_auth::{
     AccessToken, AuthBackend, Credentials, PyxJwt, PyxOAuthTokens, PyxTokenStore, PyxTokens,
     Service, TextCredentialStore, is_default_pyx_domain,

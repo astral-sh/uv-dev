@@ -8,7 +8,6 @@ use anyhow::{Context, Result, anyhow, bail};
 use owo_colors::OwoColorize;
 use toml_edit::{InlineTable, Value};
 use tracing::{debug, trace, warn};
-
 use uv_cache::Cache;
 use uv_cli::AuthorFrom;
 use uv_client::BaseClientBuilder;

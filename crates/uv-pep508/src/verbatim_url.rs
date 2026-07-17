@@ -11,7 +11,6 @@ use regex::Regex;
 use thiserror::Error;
 use url::Url;
 use uv_cache_key::{CacheKey, CacheKeyHasher};
-
 #[cfg_attr(not(feature = "non-pep508-extensions"), allow(unused_imports))]
 use uv_fs::{normalize_absolute_path, normalize_url_path};
 use uv_redacted::{DisplaySafeUrl, DisplaySafeUrlError};

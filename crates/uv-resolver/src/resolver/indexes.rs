@@ -1,7 +1,8 @@
-use crate::resolver::ForkMap;
-use crate::{DependencyMode, Manifest, ResolverEnvironment};
 use uv_distribution_types::{IndexMetadata, RequirementSource};
 use uv_normalize::PackageName;
+
+use crate::resolver::ForkMap;
+use crate::{DependencyMode, Manifest, ResolverEnvironment};
 
 /// A map of package names to their explicit index.
 ///

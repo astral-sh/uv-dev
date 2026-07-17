@@ -3,7 +3,6 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use either::Either;
-
 use thiserror::Error;
 use uv_auth::CredentialsCache;
 use uv_distribution_filename::DistExtension;

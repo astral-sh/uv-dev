@@ -1,11 +1,9 @@
 use std::borrow::Cow;
+use std::fmt::{Debug, Display, Formatter};
 #[cfg(any(test, feature = "testing"))]
 use std::ops::BitOr;
+use std::str::FromStr;
 use std::sync::{Mutex, OnceLock};
-use std::{
-    fmt::{Debug, Display, Formatter},
-    str::FromStr,
-};
 
 use enumflags2::{BitFlags, bitflags};
 use thiserror::Error;
@@ -136,9 +134,10 @@ pub fn is_enabled(flag: PreviewFeature) -> bool {
 /// Functions for unit tests, do not use from normal code!
 #[cfg(feature = "testing")]
 pub mod test {
-    use super::{PREVIEW, Preview, PreviewMode};
     use std::cell::Cell;
     use std::sync::{Mutex, MutexGuard, RwLock};
+
+    use super::{PREVIEW, Preview, PreviewMode};
 
     /// The global preview state test mutex. It does not guard any data but is
     /// simply used to ensure tests which rely on the global preview state are

@@ -8,9 +8,8 @@ use etcetera::BaseStrategy;
 use reqwest_middleware::ClientWithMiddleware;
 use tracing::debug;
 use url::Url;
-use uv_fs::{LockedFile, LockedFileMode};
-
 use uv_cache_key::CanonicalUrl;
+use uv_fs::{LockedFile, LockedFileMode};
 use uv_redacted::{DisplaySafeUrl, DisplaySafeUrlError};
 use uv_small_str::SmallString;
 use uv_state::{StateBucket, StateStore};

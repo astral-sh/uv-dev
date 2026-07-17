@@ -1,11 +1,8 @@
-use std::{
-    env,
-    ffi::OsString,
-    path::{Path, PathBuf},
-};
+use std::env;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 
 use etcetera::BaseStrategy;
-
 use uv_static::EnvVars;
 
 /// Returns an appropriate user-level directory for storing executables.
@@ -191,14 +188,14 @@ pub fn system_config_file() -> Option<PathBuf> {
 
 #[cfg(test)]
 mod test {
+    use assert_fs::fixture::FixtureError;
+    use assert_fs::prelude::*;
+    use indoc::indoc;
+
     #[cfg(windows)]
     use crate::locate_system_config_windows;
     #[cfg(not(windows))]
     use crate::locate_system_config_xdg;
-
-    use assert_fs::fixture::FixtureError;
-    use assert_fs::prelude::*;
-    use indoc::indoc;
 
     #[test]
     #[cfg(not(windows))]

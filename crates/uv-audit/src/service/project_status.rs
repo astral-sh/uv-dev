@@ -5,7 +5,6 @@
 use futures::{StreamExt as _, stream};
 use tokio::sync::Semaphore;
 use tracing::trace;
-
 use uv_client::{MetadataFormat, RegistryClient};
 use uv_configuration::Concurrency;
 use uv_distribution_types::{IndexCapabilities, IndexMetadataRef, IndexUrl};

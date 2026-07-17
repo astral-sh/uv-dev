@@ -15,7 +15,6 @@
 //! See <https://learn.microsoft.com/en-us/windows/win32/sbscs/application-manifests>
 use embed_manifest::manifest::{ActiveCodePage, ExecutionLevel, Setting, SupportedOS};
 use embed_manifest::{embed_manifest, empty_manifest};
-
 use uv_static::EnvVars;
 
 fn main() {

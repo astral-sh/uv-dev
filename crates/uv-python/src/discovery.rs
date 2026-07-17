@@ -1,13 +1,15 @@
+use std::borrow::Cow;
+use std::env::consts::EXE_SUFFIX;
+use std::fmt::{self, Debug, Formatter};
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
+use std::{env, io, iter};
+
 use itertools::{Either, Itertools};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use regex::Regex;
 use rustc_hash::{FxBuildHasher, FxHashSet};
 use same_file::is_same_file;
-use std::borrow::Cow;
-use std::env::consts::EXE_SUFFIX;
-use std::fmt::{self, Debug, Formatter};
-use std::{env, io, iter};
-use std::{path::Path, path::PathBuf, str::FromStr};
 use thiserror::Error;
 use tracing::{debug, instrument, trace};
 use uv_cache::Cache;
@@ -27,16 +29,14 @@ use which::{which, which_all};
 use crate::downloads::{ManagedPythonDownloadList, PlatformRequest, PythonDownloadRequest};
 use crate::implementation::ImplementationName;
 use crate::installation::{PythonInstallation, PythonInstallationKey};
-use crate::interpreter::Error as InterpreterError;
-use crate::interpreter::{StatusCodeError, UnexpectedResponseError};
+use crate::interpreter::{Error as InterpreterError, StatusCodeError, UnexpectedResponseError};
 use crate::managed::{ManagedPythonInstallations, PythonMinorVersionLink};
 #[cfg(windows)]
 use crate::microsoft_store::find_microsoft_store_pythons;
 use crate::python_version::python_build_versions_from_env;
-use crate::virtualenv::Error as VirtualEnvError;
 use crate::virtualenv::{
-    CondaEnvironmentKind, conda_environment_from_env, virtualenv_from_env,
-    virtualenv_from_working_dir, virtualenv_python_executable,
+    CondaEnvironmentKind, Error as VirtualEnvError, conda_environment_from_env,
+    virtualenv_from_env, virtualenv_from_working_dir, virtualenv_python_executable,
 };
 #[cfg(windows)]
 use crate::windows_registry::{WindowsPython, registry_pythons};
@@ -1612,6 +1612,7 @@ fn warn_on_unsupported_python(interpreter: &Interpreter) {
 fn is_windows_store_shim(path: &Path) -> bool {
     use std::os::windows::fs::MetadataExt;
     use std::os::windows::prelude::OsStrExt;
+
     use windows::Win32::Foundation::CloseHandle;
     use windows::Win32::Storage::FileSystem::{
         CreateFileW, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS,
@@ -3720,26 +3721,26 @@ fn split_wheel_tag_release_version(version: Version) -> Version {
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::Cell, path::PathBuf, str::FromStr};
+    use std::cell::Cell;
+    use std::path::PathBuf;
+    use std::str::FromStr;
 
-    use assert_fs::{TempDir, prelude::*};
+    use assert_fs::TempDir;
+    use assert_fs::prelude::*;
     use target_lexicon::{Aarch64Architecture, Architecture};
     use test_log::test;
     use uv_cache::Cache;
     use uv_distribution_types::RequiresPython;
     use uv_pep440::{Prerelease, PrereleaseKind, Version, VersionSpecifiers};
-
-    use crate::{
-        discovery::{PythonRequest, VersionRequest},
-        downloads::{ArchRequest, PythonDownloadRequest},
-        implementation::ImplementationName,
-    };
     use uv_platform::{Arch, Libc, Os};
 
     use super::{
         DiscoveryPreferences, EnvironmentPreference, Error, PythonPreference, PythonSource,
         PythonVariant, QueryStrategy, python_installations_from_executables,
     };
+    use crate::discovery::{PythonRequest, VersionRequest};
+    use crate::downloads::{ArchRequest, PythonDownloadRequest};
+    use crate::implementation::ImplementationName;
 
     #[test]
     fn sequential_query_strategy_does_not_prefetch_executables() -> anyhow::Result<()> {

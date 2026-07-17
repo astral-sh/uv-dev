@@ -5,7 +5,6 @@ use std::io::Read;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use tracing::debug;
-
 use uv_auth::{
     AuthBackend, Credentials, DEFAULT_TOLERANCE_SECS, PyxTokenStore, is_default_pyx_domain,
 };
@@ -14,7 +13,8 @@ use uv_preview::{Preview, PreviewFeature};
 use uv_redacted::DisplaySafeUrl;
 use uv_warnings::warn_user;
 
-use crate::{commands::ExitStatus, printer::Printer};
+use crate::commands::ExitStatus;
+use crate::printer::Printer;
 
 /// Request format for the Bazel credential helper protocol.
 #[derive(Debug, Deserialize)]

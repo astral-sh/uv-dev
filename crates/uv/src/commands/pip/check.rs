@@ -3,7 +3,6 @@ use std::time::Instant;
 
 use anyhow::Result;
 use owo_colors::OwoColorize;
-
 use uv_cache::Cache;
 use uv_configuration::TargetTriple;
 use uv_distribution_types::{DependencyMetadata, Diagnostic, InstalledDist};

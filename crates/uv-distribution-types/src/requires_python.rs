@@ -1,7 +1,5 @@
 use std::collections::Bound;
 
-use version_ranges::Ranges;
-
 use uv_distribution_filename::WheelFilename;
 use uv_pep440::{
     LowerBound, UpperBound, Version, VersionSpecifier, VersionSpecifiers,
@@ -9,6 +7,7 @@ use uv_pep440::{
 };
 use uv_pep508::{MarkerExpression, MarkerTree, MarkerValueVersion};
 use uv_platform_tags::{AbiTag, CPythonAbiVariants, LanguageTag};
+use version_ranges::Ranges;
 
 /// The `Requires-Python` requirement specifier.
 ///

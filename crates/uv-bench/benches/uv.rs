@@ -10,7 +10,8 @@ use std::str::FromStr;
 
 use async_zip::base::write::ZipFileWriter;
 use async_zip::{Compression, ZipEntryBuilder};
-use criterion::{BatchSize, Criterion, criterion_group, criterion_main, measurement::WallTime};
+use criterion::measurement::WallTime;
+use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use flate2::write::GzEncoder;
 use futures::executor::block_on;
 use futures::io::AllowStdIo;
@@ -401,7 +402,6 @@ mod resolver {
     use std::sync::LazyLock;
 
     use anyhow::Result;
-
     use uv_cache::Cache;
     use uv_client::RegistryClient;
     use uv_configuration::{BuildOptions, Concurrency, Constraints, IndexStrategy, NoSources};

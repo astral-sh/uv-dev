@@ -2,12 +2,10 @@ mod line_wrap;
 
 use std::borrow::Cow;
 use std::error::Error;
-use std::fmt;
-use std::iter;
-
-use owo_colors::{AnsiColors, DynColor, OwoColorize};
+use std::{fmt, iter};
 
 use line_wrap::{get_wrap_width, wrap_text};
+use owo_colors::{AnsiColors, DynColor, OwoColorize};
 
 /// An error that may carry user-facing hints.
 ///

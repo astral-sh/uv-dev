@@ -15,23 +15,23 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::str::FromStr;
 use std::{env, io};
-use uv_python::downloads::ManagedPythonDownloadList;
 
 use assert_cmd::assert::{Assert, OutputAssertExt};
 use assert_fs::assert::PathAssert;
 use assert_fs::fixture::{
     ChildPath, FileWriteStr, PathChild, PathCopy, PathCreateDir, SymlinkToFile,
 };
-use base64::{Engine, prelude::BASE64_STANDARD as base64};
+use base64::Engine;
+use base64::prelude::BASE64_STANDARD as base64;
 use futures::StreamExt;
 use indoc::{formatdoc, indoc};
 use itertools::Itertools;
 use predicates::prelude::predicate;
 use regex::Regex;
 use tokio::io::AsyncWriteExt;
-
 use uv_cache::{Cache, CacheBucket};
 use uv_fs::Simplified;
+use uv_python::downloads::ManagedPythonDownloadList;
 use uv_python::managed::ManagedPythonInstallations;
 use uv_python::{
     EnvironmentPreference, PythonInstallation, PythonPreference, PythonRequest, PythonVersion,

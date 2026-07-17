@@ -12,7 +12,6 @@ use petgraph::graph::NodeIndex;
 use serde::Deserialize;
 use toml_edit::{Array, ArrayOfTables, Item, Table, Value, value};
 use url::Url;
-
 use uv_cache_key::RepositoryUrl;
 use uv_configuration::{
     BuildOptions, DependencyGroupsWithDefaults, EditableMode, ExtrasSpecificationWithDefaults,

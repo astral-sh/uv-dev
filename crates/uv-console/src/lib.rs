@@ -1,5 +1,7 @@
+use std::cmp::Ordering;
+use std::iter;
+
 use console::{Key, Term, measure_text_width, style};
-use std::{cmp::Ordering, iter};
 
 /// Prompt the user for confirmation in the given [`Term`].
 ///

@@ -1,7 +1,8 @@
 //! This parser and the tests are a translation of the official Python netrc library.
 
-use crate::lex::Lex;
 use std::collections::HashMap;
+
+use crate::lex::Lex;
 
 #[derive(Debug)]
 pub struct ParsingError {

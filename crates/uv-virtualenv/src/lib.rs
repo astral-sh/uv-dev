@@ -2,10 +2,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use thiserror::Error;
-
 use uv_fs::Simplified;
 use uv_python::{Interpreter, PythonEnvironment};
-
 pub use virtualenv::{ClearNonVirtualenv, OnExisting, RemovalReason, Seed};
 
 mod virtualenv;

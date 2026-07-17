@@ -1,15 +1,13 @@
-use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
+use std::borrow::Borrow;
+use std::cmp::Ordering;
 use std::fmt::Formatter;
+use std::hash::{Hash, Hasher};
 use std::num::NonZero;
 use std::ops::Deref;
-use std::sync::LazyLock;
-use std::{
-    borrow::Borrow,
-    cmp::Ordering,
-    hash::{Hash, Hasher},
-    str::FromStr,
-    sync::Arc,
-};
+use std::str::FromStr;
+use std::sync::{Arc, LazyLock};
+
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use uv_cache_key::{CacheKey, CacheKeyHasher};
 
 /// One of `~=` `==` `!=` `<=` `>=` `<` `>` `===`
@@ -2901,9 +2899,8 @@ pub static MIN_VERSION: LazyLock<Version> =
 mod tests {
     use std::str::FromStr;
 
-    use crate::VersionSpecifier;
-
     use super::*;
+    use crate::VersionSpecifier;
 
     /// <https://github.com/pypa/packaging/blob/237ff3aa348486cf835a980592af3a59fccd6101/tests/test_version.py#L24-L81>
     #[test]

@@ -1,7 +1,6 @@
 use std::str::FromStr;
 
 use anyhow::Result;
-
 use uv_cache::Cache;
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_distribution_filename::WheelFilename;

@@ -6,7 +6,6 @@ use anyhow::Result;
 use owo_colors::OwoColorize;
 use tokio::io::AsyncWriteExt;
 use tracing::debug;
-
 use uv_fs::Simplified;
 use uv_python::managed::python_executable_dir;
 use uv_shell::Shell;

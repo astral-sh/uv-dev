@@ -5,26 +5,25 @@ mod settings;
 mod source_dist;
 mod wheel;
 
-pub(crate) use metadata::PyProjectToml;
-pub use metadata::check_direct_build;
-pub use settings::{BuildBackendSettings, WheelDataIncludes};
-pub use source_dist::{build_source_dist, list_source_dist};
-use uv_warnings::warn_user_once;
-pub use wheel::{build_editable, build_wheel, list_wheel, metadata};
-
-use rustc_hash::FxHashSet;
 use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+
+pub(crate) use metadata::PyProjectToml;
+pub use metadata::check_direct_build;
+use rustc_hash::FxHashSet;
+pub use settings::{BuildBackendSettings, WheelDataIncludes};
+pub use source_dist::{build_source_dist, list_source_dist};
 use thiserror::Error;
 use tracing::debug;
-
 use uv_fs::{Simplified, normalize_path};
 use uv_globfilter::PortableGlobError;
 use uv_normalize::PackageName;
 use uv_pypi_types::{Identifier, IdentifierParseError};
+use uv_warnings::warn_user_once;
+pub use wheel::{build_editable, build_wheel, list_wheel, metadata};
 
 use crate::metadata::ValidationError;
 use crate::settings::ModuleName;
@@ -471,25 +470,27 @@ pub(crate) fn error_on_venv(file_name: &OsStr, path: &Path) -> Result<(), Error>
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::io::BufReader;
+    use std::iter;
+    use std::pin::Pin;
+
     use async_zip::base::read::mem::ZipFileReader;
     use flate2::bufread::GzDecoder;
     use fs_err::File;
-    use futures_lite::{StreamExt, future::block_on};
+    use futures_lite::StreamExt;
+    use futures_lite::future::block_on;
     use indoc::indoc;
     use insta::assert_snapshot;
     use itertools::Itertools;
     use regex::Regex;
     use sha2::Digest;
-    use std::io::BufReader;
-    use std::iter;
-    use std::pin::Pin;
     use tempfile::TempDir;
     use uv_distribution_filename::{SourceDistFilename, WheelFilename};
     use uv_errors::{ErrorWithHints, Hint};
     use uv_fs::{copy_dir_all, relative_to};
     use uv_preview::PreviewFeature;
 
+    use super::*;
     use crate::source_dist::SyncReader;
 
     const MOCK_UV_VERSION: &str = "1.0.0+test";

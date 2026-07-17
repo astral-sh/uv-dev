@@ -4,10 +4,9 @@ use std::fmt::{Debug, Display, Formatter};
 use petgraph::Direction;
 use petgraph::prelude::EdgeRef;
 use rustc_hash::FxHashSet;
-use version_ranges::Ranges;
-
 use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep440::Version;
+use version_ranges::Ranges;
 
 use crate::{
     BuiltDist, Dist, DistRef, Edge, Name, Node, RequestedDist, Resolution, ResolvedDist, SourceDist,

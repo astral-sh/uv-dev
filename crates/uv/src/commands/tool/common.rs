@@ -1,10 +1,8 @@
-use std::{
-    collections::{BTreeMap, BTreeSet, Bound},
-    ffi::OsString,
-    fmt::Write,
-    io,
-    path::{Path, PathBuf},
-};
+use std::collections::{BTreeMap, BTreeSet, Bound};
+use std::ffi::OsString;
+use std::fmt::Write;
+use std::io;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
 use itertools::Itertools;
@@ -111,9 +109,9 @@ impl Hint for NoExecutablesError {
         hints
     }
 }
+use crate::commands::project::lock::ValidatedLock;
 use crate::commands::project::{
     EnvironmentSpecification, PlatformState, PreferenceLocation, ProjectError, PythonRequestSource,
-    lock::ValidatedLock,
 };
 use crate::commands::reporters::PythonDownloadReporter;
 use crate::printer::Printer;

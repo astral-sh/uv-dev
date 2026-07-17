@@ -1,23 +1,9 @@
-use itertools::Itertools as _;
-use owo_colors::OwoColorize;
 use std::fmt::Write as _;
 use std::path::Path;
 
-use crate::commands::ExitStatus;
-use crate::commands::diagnostics;
-use crate::commands::pip::loggers::DefaultResolveLogger;
-use crate::commands::pip::resolution_markers;
-use crate::commands::project::default_dependency_groups;
-use crate::commands::project::lock::{LockMode, LockOperation};
-use crate::commands::project::lock_target::LockTarget;
-use crate::commands::project::{
-    ProjectError, ProjectInterpreter, ScriptInterpreter, UniversalState, WorkspacePython,
-};
-use crate::commands::reporters::AuditReporter;
-use crate::printer::Printer;
-use crate::settings::{FrozenSource, LockCheck, ResolverSettings};
-
 use anyhow::Result;
+use itertools::Itertools as _;
+use owo_colors::OwoColorize;
 use rustc_hash::FxHashSet;
 use tracing::trace;
 use uv_audit::{
@@ -38,6 +24,19 @@ use uv_scripts::Pep723Script;
 use uv_settings::PythonInstallMirrors;
 use uv_warnings::warn_user;
 use uv_workspace::{DiscoveryOptions, Workspace, WorkspaceCache};
+
+use crate::commands::pip::loggers::DefaultResolveLogger;
+use crate::commands::pip::resolution_markers;
+use crate::commands::project::lock::{LockMode, LockOperation};
+use crate::commands::project::lock_target::LockTarget;
+use crate::commands::project::{
+    ProjectError, ProjectInterpreter, ScriptInterpreter, UniversalState, WorkspacePython,
+    default_dependency_groups,
+};
+use crate::commands::reporters::AuditReporter;
+use crate::commands::{ExitStatus, diagnostics};
+use crate::printer::Printer;
+use crate::settings::{FrozenSource, LockCheck, ResolverSettings};
 
 mod json;
 mod sarif;

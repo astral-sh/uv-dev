@@ -9,8 +9,8 @@ use std::hint::black_box;
 use std::path::{Path, PathBuf};
 
 use clap::Parser;
-use criterion::{Criterion, criterion_group, criterion_main, measurement::WallTime};
-
+use criterion::measurement::WallTime;
+use criterion::{Criterion, criterion_group, criterion_main};
 use uv::GlobalInitialization;
 use uv::commands::ExitStatus;
 use uv_cache::Cache;

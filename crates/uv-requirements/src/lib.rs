@@ -1,3 +1,5 @@
+use uv_distribution_types::{Dist, DistErrorKind, Requirement, RequirementSource};
+
 pub use crate::extras::*;
 pub use crate::lookahead::*;
 pub use crate::source_tree::*;
@@ -8,8 +10,6 @@ pub use crate::upgrade::{
     LockedRequirements, read_lock_requirements, read_pylock_toml_requirements,
     read_requirements_txt,
 };
-
-use uv_distribution_types::{Dist, DistErrorKind, Requirement, RequirementSource};
 
 mod extras;
 mod lookahead;

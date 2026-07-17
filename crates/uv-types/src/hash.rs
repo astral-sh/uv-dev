@@ -4,7 +4,6 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use rustc_hash::FxHashMap;
-
 use uv_configuration::HashCheckingMode;
 use uv_distribution_types::{
     DistributionMetadata, HashGeneration, HashPolicy, Name, Requirement, RequirementSource,
@@ -488,6 +487,7 @@ pub enum HashStrategyError {
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
+
     use uv_configuration::HashCheckingMode;
     use uv_distribution_filename::DistExtension;
     use uv_distribution_types::{

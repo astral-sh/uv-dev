@@ -1,11 +1,10 @@
 //! An integration test for proxy support in `uv-client`.
 
 use anyhow::Result;
-use wiremock::matchers::{any, method};
-use wiremock::{Mock, MockServer, ResponseTemplate};
-
 use uv_client::BaseClientBuilder;
 use uv_configuration::ProxyUrl;
+use wiremock::matchers::{any, method};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[tokio::test]
 async fn http_proxy() -> Result<()> {

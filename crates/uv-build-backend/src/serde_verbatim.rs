@@ -1,8 +1,9 @@
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::borrow::Cow;
 use std::fmt::{Display, Formatter};
 use std::ops::Deref;
 use std::str::FromStr;
+
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Preserves the verbatim string representation when deserializing `T`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]

@@ -15,7 +15,6 @@ use petgraph::visit::EdgeRef;
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 use tracing::{debug, instrument, trace};
 use url::Url;
-
 use uv_cache_key::RepositoryUrl;
 use uv_configuration::{
     BuildOptions, Constraints, DependencyGroupsWithDefaults, ExcludeDependency,
@@ -57,9 +56,9 @@ use uv_workspace::{Editability, WorkspaceMember};
 
 use crate::fork_strategy::ForkStrategy;
 pub(crate) use crate::lock::export::PylockTomlPackage;
-pub use crate::lock::export::RequirementsTxtExport;
 pub use crate::lock::export::{
-    Metadata, PylockToml, PylockTomlError, PylockTomlErrorKind, cyclonedx_json,
+    Metadata, PylockToml, PylockTomlError, PylockTomlErrorKind, RequirementsTxtExport,
+    cyclonedx_json,
 };
 pub use crate::lock::installable::Installable;
 pub use crate::lock::map::PackageMap;

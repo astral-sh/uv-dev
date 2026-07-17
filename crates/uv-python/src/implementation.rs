@@ -1,7 +1,6 @@
-use std::{
-    fmt::{self, Display},
-    str::FromStr,
-};
+use std::fmt::{self, Display};
+use std::str::FromStr;
+
 use thiserror::Error;
 
 use crate::Interpreter;

@@ -3,7 +3,6 @@
 use std::fmt;
 
 use serde::Serialize;
-
 use uv_normalize::PackageName;
 use uv_pep508::uv_pep440::Version;
 

@@ -7,10 +7,9 @@ use std::str::FromStr;
 use arcstr::ArcStr;
 use itertools::Itertools;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
-use version_ranges::Ranges;
-
 use uv_normalize::{ExtraName, GroupName};
 use uv_pep440::{Version, VersionParseError, VersionSpecifier};
+use version_ranges::Ranges;
 
 use super::algebra::{Edges, INTERNER, NodeId, Variable};
 use super::simplify;
@@ -1826,7 +1825,6 @@ mod test {
     use std::str::FromStr;
 
     use insta::assert_snapshot;
-
     use uv_normalize::ExtraName;
     use uv_pep440::Version;
 

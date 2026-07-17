@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 use owo_colors::OwoColorize;
 use tracing::debug;
-
 use uv_cache::Cache;
 use uv_fs::{LockedFile, LockedFileError, Simplified};
 use uv_pep440::Version;

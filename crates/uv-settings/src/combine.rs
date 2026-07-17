@@ -1,8 +1,8 @@
+use std::collections::BTreeMap;
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
-use std::{collections::BTreeMap, num::NonZeroUsize};
 
 use url::Url;
-
 use uv_configuration::{
     BuildIsolation, ExportFormat, IndexStrategy, KeyringProviderType, NoSources, ProxyUrl,
     Reinstall, RequiredVersion, TargetTriple, TrustedPublishing, Upgrade,

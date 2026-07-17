@@ -6,14 +6,14 @@ use itertools::Itertools;
 use owo_colors::OwoColorize;
 use rustc_hash::FxHashSet;
 use tracing::debug;
-
 use uv_cache::Cache;
 use uv_distribution_types::{DependencyMetadata, Diagnostic, InstalledDistKind, Name};
 use uv_fs::Simplified;
 use uv_installer::SitePackages;
 use uv_normalize::PackageName;
-use uv_python::PythonPreference;
-use uv_python::{EnvironmentPreference, Prefix, PythonEnvironment, PythonRequest, Target};
+use uv_python::{
+    EnvironmentPreference, Prefix, PythonEnvironment, PythonPreference, PythonRequest, Target,
+};
 
 use crate::commands::ExitStatus;
 use crate::commands::pip::operations::report_target_environment;

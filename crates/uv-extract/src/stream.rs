@@ -8,7 +8,6 @@ use futures::{AsyncReadExt, StreamExt};
 use rustc_hash::{FxHashMap, FxHashSet};
 use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 use tracing::{debug, warn};
-
 use uv_distribution_filename::SourceDistExtension;
 use uv_warnings::warn_user_once;
 

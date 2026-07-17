@@ -1,13 +1,10 @@
-use std::fmt::Display;
-use std::fmt::Formatter;
+use std::fmt::{Display, Formatter};
 use std::hash::BuildHasherDefault;
-use std::sync::Arc;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
 use rustc_hash::{FxHashMap, FxHasher};
 use tracing::trace;
 use url::Url;
-
 use uv_once_map::OnceMap;
 use uv_redacted::DisplaySafeUrl;
 
@@ -300,10 +297,9 @@ impl From<(Realm, Username)> for RealmUsername {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::Credentials;
     use crate::credentials::Password;
-
-    use super::*;
 
     #[test]
     fn test_trie() {

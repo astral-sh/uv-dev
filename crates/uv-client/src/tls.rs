@@ -8,12 +8,11 @@ use reqwest::{Certificate, Identity};
 use rustls_native_certs::{CertificateResult, load_certs_from_paths};
 use rustls_pki_types::CertificateDer;
 use tracing::{debug, warn};
-use webpki::{Error as WebPkiError, anchor_from_trusted_cert};
-use x509_parser::prelude::{FromDer, X509Certificate};
-
 use uv_fs::Simplified;
 use uv_static::EnvVars;
 use uv_warnings::warn_user_once;
+use webpki::{Error as WebPkiError, anchor_from_trusted_cert};
+use x509_parser::prelude::{FromDer, X509Certificate};
 
 #[derive(Debug, Clone)]
 enum CertificateSource {

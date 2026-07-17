@@ -1,10 +1,8 @@
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::{FileTouch, FileWriteStr, PathChild, PathCreateDir};
 use indoc::{formatdoc, indoc};
-
 use uv_fs::Simplified;
 use uv_static::EnvVars;
-
 use uv_test::{site_packages_path, uv_snapshot};
 
 /// Filter the user scheme, which differs between Windows and Unix.

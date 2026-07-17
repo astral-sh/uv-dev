@@ -1,20 +1,15 @@
-use crate::metadata::DEFAULT_EXCLUDES;
-use crate::wheel::build_exclude_matcher;
-use crate::{
-    BuildBackendSettings, DirectoryWriter, Error, FileList, ListWriter, PyProjectToml,
-    error_on_venv, find_roots, write_directory_once, write_file_with_directories,
-};
+use std::io;
+use std::io::{BufReader, Cursor, Read, Write};
+use std::path::{Component, Path, PathBuf};
+use std::pin::Pin;
+use std::task::{Context, Poll};
+
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use fs_err::File;
 use futures_lite::future::block_on;
 use globset::{Glob, GlobSet};
 use rustc_hash::FxHashSet;
-use std::io;
-use std::io::{BufReader, Cursor, Read, Write};
-use std::path::{Component, Path, PathBuf};
-use std::pin::Pin;
-use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio_tar::{EntryType, Header};
 use tracing::{debug, trace};
@@ -25,6 +20,13 @@ use uv_preview::PreviewFeature;
 use uv_toml::has_toml11_features;
 use uv_warnings::warn_user_once;
 use walkdir::WalkDir;
+
+use crate::metadata::DEFAULT_EXCLUDES;
+use crate::wheel::build_exclude_matcher;
+use crate::{
+    BuildBackendSettings, DirectoryWriter, Error, FileList, ListWriter, PyProjectToml,
+    error_on_venv, find_roots, write_directory_once, write_file_with_directories,
+};
 
 /// Build a source distribution from the source tree and place it in the output directory.
 pub fn build_source_dist(

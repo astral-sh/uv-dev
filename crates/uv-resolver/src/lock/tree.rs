@@ -11,7 +11,6 @@ use petgraph::prelude::EdgeRef;
 use petgraph::{Direction, Graph};
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 use serde::Serialize;
-
 use uv_configuration::DependencyGroupsWithDefaults;
 use uv_console::human_readable_bytes;
 use uv_fs::PortablePathBuf;

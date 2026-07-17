@@ -1,5 +1,4 @@
 use uv_static::EnvVars;
-
 use uv_test::uv_snapshot;
 
 #[test]

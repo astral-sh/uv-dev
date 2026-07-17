@@ -8,10 +8,8 @@
 
 #![expect(clippy::cast_sign_loss)]
 
-use std::{
-    io::{BufRead, BufReader, Cursor, Read, Seek, SeekFrom},
-    sync::{Arc, Mutex},
-};
+use std::io::{BufRead, BufReader, Cursor, Read, Seek, SeekFrom};
+use std::sync::{Arc, Mutex};
 
 // Chosen from extraction benchmarks to reduce read calls without adding too
 // much per-clone buffering.

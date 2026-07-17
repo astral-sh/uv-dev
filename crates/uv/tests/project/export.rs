@@ -1,5 +1,9 @@
 #![expect(clippy::disallowed_types)]
 
+#[cfg(all(feature = "test-universal", feature = "test-git"))]
+use std::path::Path;
+use std::process::Stdio;
+
 use anyhow::{Ok, Result};
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
@@ -7,9 +11,6 @@ use assert_fs::prelude::*;
 use indoc::formatdoc;
 use indoc::indoc;
 use insta::assert_snapshot;
-#[cfg(all(feature = "test-universal", feature = "test-git"))]
-use std::path::Path;
-use std::process::Stdio;
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 use uv_fs::Simplified;
 use uv_static::EnvVars;

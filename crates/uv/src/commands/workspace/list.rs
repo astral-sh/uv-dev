@@ -4,7 +4,6 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-
 use owo_colors::OwoColorize;
 use uv_cache::Cache;
 use uv_fs::{CWD, Simplified, ValidatedReader, is_virtualenv_base, normalize_path};

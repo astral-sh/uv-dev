@@ -2,7 +2,6 @@ use std::process::Command;
 
 use assert_fs::prelude::*;
 use uv_static::EnvVars;
-
 use uv_test::{capture_uv_snapshot, diff_uv_snapshot, uv_snapshot};
 
 /// Add shared arguments to a command.

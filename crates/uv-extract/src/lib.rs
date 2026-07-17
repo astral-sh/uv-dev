@@ -1,4 +1,5 @@
-use std::{fmt::Display, sync::LazyLock};
+use std::fmt::Display;
+use std::sync::LazyLock;
 
 pub use error::Error;
 use regex::Regex;

@@ -4,7 +4,6 @@ use futures::{FutureExt, StreamExt};
 use reqwest::Response;
 use tracing::{Instrument, debug, info_span, warn};
 use url::Url;
-
 use uv_cache::{Cache, CacheBucket};
 use uv_cache_key::cache_digest;
 use uv_distribution_filename::DistFilename;
@@ -359,10 +358,12 @@ impl<'a> FlatIndexClient<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use fs_err::File;
     use std::io::Write;
+
+    use fs_err::File;
     use tempfile::tempdir;
+
+    use super::*;
 
     #[test]
     fn read_from_directory_sorts_distributions() {

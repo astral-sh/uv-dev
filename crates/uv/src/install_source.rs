@@ -1,9 +1,7 @@
 #![cfg(not(feature = "self-update"))]
 
-use std::{
-    ffi::OsStr,
-    path::{Path, PathBuf},
-};
+use std::ffi::OsStr;
+use std::path::{Path, PathBuf};
 
 /// Known sources for uv installations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

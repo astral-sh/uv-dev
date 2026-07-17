@@ -2,7 +2,6 @@ use std::future::Future;
 use std::sync::Arc;
 
 use reqwest::StatusCode;
-
 use uv_client::MetadataFormat;
 use uv_configuration::BuildOptions;
 use uv_distribution::{ArchiveMetadata, DistributionDatabase, Reporter};

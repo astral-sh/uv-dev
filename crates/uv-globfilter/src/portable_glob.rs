@@ -221,9 +221,10 @@ impl PortableGlobParser {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use insta::assert_snapshot;
     use uv_errors::{ErrorWithHints, Hint};
+
+    use super::*;
 
     #[test]
     fn test_error() {

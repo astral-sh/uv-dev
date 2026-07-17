@@ -2,9 +2,7 @@ use std::path::Path;
 use std::str::FromStr;
 
 use tracing::debug;
-
 use uv_pep440::Version;
-
 #[cfg(windows)]
 use windows::Win32::Devices::DeviceAndDriverInstallation::{
     CM_GETIDLIST_FILTER_CLASS, CM_GETIDLIST_FILTER_PRESENT, CM_Get_Device_ID_List_SizeW,

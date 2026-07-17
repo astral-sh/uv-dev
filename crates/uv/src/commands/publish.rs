@@ -614,13 +614,12 @@ fn prompt_username_and_password() -> Result<(Option<String>, Option<String>)> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use std::str::FromStr;
 
     use insta::assert_snapshot;
-
     use uv_redacted::DisplaySafeUrl;
+
+    use super::*;
 
     async fn get_credentials(
         url: DisplaySafeUrl,

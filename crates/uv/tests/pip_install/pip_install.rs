@@ -22,12 +22,6 @@ use predicates::prelude::predicate;
 use tokio::io::AsyncWriteExt;
 use tokio_util::compat::{FuturesAsyncReadCompatExt, FuturesAsyncWriteCompatExt};
 use url::Url;
-use walkdir::WalkDir;
-use wiremock::{
-    Mock, MockServer, ResponseTemplate,
-    matchers::{basic_auth, method, path},
-};
-
 use uv_fs::{PortablePath, Simplified};
 use uv_static::EnvVars;
 #[cfg(feature = "test-git")]
@@ -38,6 +32,9 @@ use uv_test::{
     DEFAULT_PYTHON_VERSION, TestContext, apply_filters, download_to_disk, get_bin, uv_snapshot,
     venv_bin_path,
 };
+use walkdir::WalkDir;
+use wiremock::matchers::{basic_auth, method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn write_tar_gz(file: File, entries: &[(&str, &str)]) -> Result<()> {
     let enc = GzEncoder::new(file, flate2::Compression::default());

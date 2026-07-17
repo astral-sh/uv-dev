@@ -2,10 +2,11 @@
 //! parsed and deserialized as [`IndexUrl`], but are stored as [`Index`] with the appropriate
 //! flags set.
 
-use serde::{Deserialize, Deserializer, Serialize};
 #[cfg(feature = "schemars")]
 use std::borrow::Cow;
 use std::path::Path;
+
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::{Index, IndexUrl, Origin};
 

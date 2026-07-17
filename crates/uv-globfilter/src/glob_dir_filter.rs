@@ -1,7 +1,8 @@
+use std::path::{MAIN_SEPARATOR, MAIN_SEPARATOR_STR, Path};
+
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use regex_automata::dfa;
 use regex_automata::dfa::Automaton;
-use std::path::{MAIN_SEPARATOR, MAIN_SEPARATOR_STR, Path};
 use tracing::warn;
 
 /// Chosen at a whim -Konsti
@@ -122,11 +123,13 @@ impl GlobDirFilter {
 
 #[cfg(test)]
 mod tests {
-    use crate::PortableGlobParser;
-    use crate::glob_dir_filter::GlobDirFilter;
     use std::path::{MAIN_SEPARATOR, Path};
+
     use tempfile::tempdir;
     use walkdir::WalkDir;
+
+    use crate::PortableGlobParser;
+    use crate::glob_dir_filter::GlobDirFilter;
 
     const FILES: [&str; 5] = [
         "path1/dir1/subdir/a.txt",

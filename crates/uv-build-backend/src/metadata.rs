@@ -1,18 +1,14 @@
-use indexmap::IndexMap;
-use itertools::Itertools;
-use serde::{Deserialize, Deserializer};
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, Bound};
 use std::ffi::OsStr;
-use std::fmt::Display;
-use std::fmt::Write;
+use std::fmt::{Display, Write};
 use std::path::{Path, PathBuf};
 use std::str::{self, FromStr};
-use tracing::{debug, trace, warn};
-use uv_warnings::warn_user_once;
-use version_ranges::Ranges;
-use walkdir::WalkDir;
 
+use indexmap::IndexMap;
+use itertools::Itertools;
+use serde::{Deserialize, Deserializer};
+use tracing::{debug, trace, warn};
 use uv_fs::Simplified;
 use uv_globfilter::{GlobDirFilter, PortableGlobParser};
 use uv_normalize::{ExtraName, PackageName};
@@ -24,6 +20,9 @@ use uv_pypi_types::{
     Identifier, IdentifierParseError, Keywords, Metadata23, ProjectUrls, VerbatimParsedUrl,
 };
 use uv_toml::deserialize_unique_map;
+use uv_warnings::warn_user_once;
+use version_ranges::Ranges;
+use walkdir::WalkDir;
 
 use crate::serde_verbatim::SerdeVerbatim;
 use crate::{BuildBackendSettings, Error, error_on_venv};
@@ -1247,11 +1246,13 @@ impl BuildSystem {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::iter;
+
     use indoc::{formatdoc, indoc};
     use insta::assert_snapshot;
-    use std::iter;
     use tempfile::TempDir;
+
+    use super::*;
 
     fn extend_project(payload: &str) -> String {
         formatdoc! {r#"

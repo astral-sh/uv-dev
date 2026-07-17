@@ -1,7 +1,6 @@
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::fixture::{FileWriteStr, PathChild};
-
 use uv_test::{copy_dir_ignore, uv_snapshot};
 
 /// Test basic output for a simple workspace with one member.

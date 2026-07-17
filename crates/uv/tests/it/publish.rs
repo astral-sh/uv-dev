@@ -1,12 +1,13 @@
+use std::env::current_dir;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::fixture::{FileTouch, FileWriteStr, PathChild};
 use fs_err::OpenOptions;
 use indoc::{formatdoc, indoc};
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use std::env::current_dir;
-use std::io::Write;
-use std::path::{Path, PathBuf};
 use uv_static::EnvVars;
 use uv_test::{uv_snapshot, venv_bin_path};
 use wiremock::matchers::{basic_auth, method, path};

@@ -2,8 +2,6 @@ use std::env;
 use std::io::Write;
 use std::path::PathBuf;
 use std::str::FromStr;
-use uv_preview::Preview;
-use uv_static::{EnvVars, parse_boolish_environment_variable};
 
 use anyhow::{Context, Result, bail};
 use tracing::debug;
@@ -11,8 +9,9 @@ use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Layer};
-
 use uv_logging::UvFormat;
+use uv_preview::Preview;
+use uv_static::{EnvVars, parse_boolish_environment_variable};
 
 /// Entrypoint for the `uv-build` Python package.
 fn main() -> Result<()> {

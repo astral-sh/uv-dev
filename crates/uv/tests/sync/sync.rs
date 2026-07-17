@@ -1,22 +1,22 @@
+#[cfg(feature = "test-git")]
+use std::process::Command;
+
 use anyhow::{Result, anyhow};
 use assert_cmd::prelude::*;
-use assert_fs::{fixture::ChildPath, prelude::*};
+use assert_fs::fixture::ChildPath;
+use assert_fs::prelude::*;
 use indoc::{formatdoc, indoc};
 use insta::assert_snapshot;
 use predicates::prelude::predicate;
 use serde_json::json;
-#[cfg(feature = "test-git")]
-use std::process::Command;
 use tempfile::tempdir_in;
 use url::Url;
-use wiremock::matchers::{basic_auth, body_string_contains, method, path};
-use wiremock::{Mock, MockServer, ResponseTemplate};
-
 use uv_fs::Simplified;
 use uv_static::EnvVars;
 use uv_test::packse::PackseServer;
-
 use uv_test::{TestContext, download_to_disk, uv_snapshot, venv_bin_path};
+use wiremock::matchers::{basic_auth, body_string_contains, method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[test]
 fn sync() -> Result<()> {
@@ -16246,10 +16246,8 @@ fn sync_extra_build_dependencies_cache() -> Result<()> {
 #[tokio::test]
 async fn sync_zstd_wheel() -> Result<()> {
     use serde_json::json;
-    use wiremock::{
-        Mock, MockServer, ResponseTemplate,
-        matchers::{method, path},
-    };
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     let context = uv_test::test_context!("3.13");
     let server = MockServer::start().await;

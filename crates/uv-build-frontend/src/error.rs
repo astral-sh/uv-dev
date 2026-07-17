@@ -1,11 +1,9 @@
-use std::env;
 use std::fmt::{Display, Formatter};
-use std::io;
 use std::path::PathBuf;
 use std::process::ExitStatus;
 use std::sync::LazyLock;
+use std::{env, io};
 
-use crate::PythonRunnerOutput;
 use owo_colors::OwoColorize;
 use regex::Regex;
 use thiserror::Error;
@@ -16,6 +14,8 @@ use uv_fs::Simplified;
 use uv_normalize::PackageName;
 use uv_pep440::Version;
 use uv_types::AnyErrorBuild;
+
+use crate::PythonRunnerOutput;
 
 /// e.g. `pygraphviz/graphviz_wrap.c:3020:10: fatal error: graphviz/cgraph.h: No such file or directory`
 static MISSING_HEADER_RE_GCC: LazyLock<Regex> = LazyLock::new(|| {
@@ -468,14 +468,16 @@ impl Error {
 
 #[cfg(test)]
 mod test {
-    use crate::{Error, PythonRunnerOutput};
-    use indoc::indoc;
     use std::process::ExitStatus;
     use std::str::FromStr;
+
+    use indoc::indoc;
     use uv_configuration::BuildOutput;
     use uv_errors::{ErrorWithHints, Hint};
     use uv_normalize::PackageName;
     use uv_pep440::Version;
+
+    use crate::{Error, PythonRunnerOutput};
 
     fn format_error_with_hints(err: &Error) -> String {
         // Unix uses exit status, Windows uses exit code.

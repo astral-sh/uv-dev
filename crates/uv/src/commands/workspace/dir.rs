@@ -2,7 +2,6 @@ use std::fmt::Write;
 use std::path::Path;
 
 use anyhow::{Result, bail};
-
 use owo_colors::OwoColorize;
 use uv_cache::Cache;
 use uv_fs::Simplified;

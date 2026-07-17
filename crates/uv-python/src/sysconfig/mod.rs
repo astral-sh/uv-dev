@@ -283,8 +283,9 @@ pub enum Error {
 #[cfg(test)]
 #[cfg(unix)]
 mod tests {
-    use super::*;
     use indoc::indoc;
+
+    use super::*;
 
     #[test]
     fn update_real_prefix() -> Result<(), Error> {

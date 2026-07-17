@@ -3,10 +3,11 @@
 //! This module reads all fields exhaustively. The fields are defined in the [Core metadata
 //! specification](https://packaging.python.org/en/latest/specifications/core-metadata/).
 
-use futures::executor::block_on;
-use futures::io::AllowStdIo;
 use std::io;
 use std::path::Path;
+
+use futures::executor::block_on;
+use futures::io::AllowStdIo;
 use thiserror::Error;
 use tokio::io::AsyncReadExt;
 use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
@@ -313,9 +314,11 @@ pub fn read_flat_wheel_metadata(
 
 #[cfg(test)]
 mod test {
-    use super::find_archive_dist_info;
     use std::str::FromStr;
+
     use uv_distribution_filename::WheelFilename;
+
+    use super::find_archive_dist_info;
 
     #[test]
     fn test_dot_in_name() {

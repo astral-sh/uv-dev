@@ -5,7 +5,6 @@ use std::fmt::Write;
 use itertools::Itertools;
 use owo_colors::OwoColorize;
 use rustc_hash::{FxBuildHasher, FxHashMap};
-
 use uv_configuration::DryRun;
 use uv_distribution_types::Name;
 use uv_normalize::PackageName;

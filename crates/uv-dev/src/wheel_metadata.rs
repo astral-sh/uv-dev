@@ -3,7 +3,6 @@ use std::str::FromStr;
 use anstream::println;
 use anyhow::{Result, bail};
 use clap::Parser;
-
 use uv_cache::{Cache, CacheArgs};
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_distribution_filename::WheelFilename;

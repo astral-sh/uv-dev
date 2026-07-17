@@ -1,22 +1,20 @@
+use std::env;
+use std::path::Path;
 #[cfg(windows)]
 use std::path::PathBuf;
-
-use std::{env, path::Path, process::Command};
+use std::process::Command;
 
 use anyhow::Context;
 use assert_cmd::assert::OutputAssertExt;
-use assert_fs::{
-    assert::PathAssert,
-    prelude::{FileTouch, FileWriteStr, PathChild, PathCreateDir},
-};
+use assert_fs::assert::PathAssert;
+use assert_fs::prelude::{FileTouch, FileWriteStr, PathChild, PathCreateDir};
 use indoc::indoc;
 use predicates::prelude::predicate;
 use tracing::debug;
-use uv_test::{LATEST_PYTHON_3_12, uv_snapshot};
-
 use uv_fs::Simplified;
 use uv_python::managed::platform_key_from_env;
 use uv_static::EnvVars;
+use uv_test::{LATEST_PYTHON_3_12, uv_snapshot};
 use walkdir::WalkDir;
 
 #[test]

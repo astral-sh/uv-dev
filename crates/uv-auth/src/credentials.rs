@@ -1,7 +1,6 @@
 use std::borrow::Cow;
 use std::fmt;
-use std::io::Read;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::str::{FromStr, Utf8Error};
 
 use base64::prelude::BASE64_STANDARD;
@@ -16,7 +15,6 @@ use reqwest::header::{HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use url::Url;
-
 use uv_netrc::Netrc;
 use uv_redacted::DisplaySafeUrl;
 use uv_static::EnvVars;

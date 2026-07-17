@@ -6,7 +6,6 @@ use indoc::{formatdoc, indoc};
 use insta::assert_snapshot;
 #[cfg(feature = "test-universal")]
 use url::Url;
-
 use uv_fs::Simplified;
 #[cfg(feature = "test-universal")]
 use uv_static::EnvVars;
@@ -9802,10 +9801,8 @@ fn lock_mixed_hashes() -> Result<()> {
 #[tokio::test]
 async fn lock_zstd_wheel() -> Result<()> {
     use serde_json::json;
-    use wiremock::{
-        Mock, MockServer, ResponseTemplate,
-        matchers::{method, path},
-    };
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     let context = uv_test::test_context!("3.13");
     let server = MockServer::start().await;

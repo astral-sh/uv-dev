@@ -3,7 +3,6 @@
 // utf8 codepage, so we can use the *A versions of Windows API functions and
 // don't have to mess with utf-16.
 use embed_manifest::{embed_manifest, new_manifest};
-
 use uv_static::EnvVars;
 
 fn main() {

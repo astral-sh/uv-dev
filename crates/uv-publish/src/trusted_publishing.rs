@@ -1,12 +1,13 @@
 //! Trusted publishing (via OIDC) with GitHub Actions and GitLab CI.
 
+use std::env;
+use std::fmt::Display;
+
 use base64::Engine;
 use base64::prelude::BASE64_URL_SAFE_NO_PAD;
 use reqwest::StatusCode;
 use reqwest_middleware::ClientWithMiddleware;
 use serde::{Deserialize, Serialize};
-use std::env;
-use std::fmt::Display;
 use thiserror::Error;
 use uv_redacted::{DisplaySafeUrl, DisplaySafeUrlError};
 use uv_static::EnvVars;

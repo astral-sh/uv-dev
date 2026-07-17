@@ -4,7 +4,6 @@ use std::str::FromStr;
 
 use itertools::Itertools;
 use rustc_hash::FxHashMap;
-
 use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep508::{ExtraOperator, MarkerEnvironment, MarkerExpression, MarkerOperator, MarkerTree};
 use uv_pypi_types::{ConflictItem, ConflictKind, Conflicts, Inference};
@@ -875,10 +874,11 @@ pub(crate) fn resolve_activated_extras(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::str::FromStr;
 
     use uv_pypi_types::ConflictSet;
+
+    use super::*;
 
     /// Creates a collection of declared conflicts from the sets
     /// provided.

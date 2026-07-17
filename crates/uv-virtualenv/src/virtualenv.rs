@@ -11,10 +11,7 @@ use console::Term;
 use fs_err::File;
 use itertools::Itertools;
 use owo_colors::OwoColorize;
-
 use tracing::{debug, trace};
-
-use crate::{Error, Prompt};
 use uv_fs::{CWD, Simplified, cachedir};
 use uv_platform_tags::Os;
 use uv_preview::PreviewFeature;
@@ -26,6 +23,8 @@ use uv_python::{Interpreter, VirtualEnvironment};
 use uv_shell::escape_posix_for_single_quotes;
 use uv_version::version;
 use uv_warnings::warn_user_once;
+
+use crate::{Error, Prompt};
 
 /// Activation scripts for the environment, with dependent paths templated out.
 const ACTIVATE_TEMPLATES: &[(&str, &str)] = &[

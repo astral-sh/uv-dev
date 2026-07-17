@@ -6,7 +6,6 @@ use itertools::{Either, Itertools};
 use owo_colors::OwoColorize;
 use rustc_hash::FxHashMap;
 use tracing::debug;
-
 use uv_cache::Cache;
 use uv_distribution_types::{DependencyMetadata, Diagnostic, Name};
 use uv_fs::Simplified;

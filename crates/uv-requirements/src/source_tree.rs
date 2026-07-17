@@ -5,12 +5,11 @@ use anyhow::{Context, Result};
 use futures::TryStreamExt;
 use futures::stream::FuturesOrdered;
 use url::Url;
-
 use uv_configuration::ExtrasSpecification;
 use uv_distribution::{DistributionDatabase, FlatRequiresDist, Reporter, RequiresDist};
-use uv_distribution_types::Requirement;
 use uv_distribution_types::{
-    BuildableSource, DirectorySourceUrl, HashGeneration, HashPolicy, Identifier, SourceUrl,
+    BuildableSource, DirectorySourceUrl, HashGeneration, HashPolicy, Identifier, Requirement,
+    SourceUrl,
 };
 use uv_fs::Simplified;
 use uv_normalize::{ExtraName, PackageName};

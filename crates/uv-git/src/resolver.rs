@@ -7,17 +7,14 @@ use fs_err::tokio as fs;
 use papaya::{HashMap, ResizeMode};
 use reqwest_middleware::ClientWithMiddleware;
 use tracing::debug;
-
 use uv_cache_key::{RepositoryUrl, cache_digest};
 use uv_fs::{LockedFile, LockedFileError, LockedFileMode};
 use uv_git_types::{GitHubRepository, GitOid, GitReference, GitUrl};
 use uv_static::EnvVars;
 use uv_version::version;
 
-use crate::{
-    Fetch, GitSource, Reporter,
-    rate_limit::{GITHUB_RATE_LIMIT_STATUS, is_github_rate_limited},
-};
+use crate::rate_limit::{GITHUB_RATE_LIMIT_STATUS, is_github_rate_limited};
+use crate::{Fetch, GitSource, Reporter};
 
 #[derive(Debug, thiserror::Error)]
 pub enum GitResolverError {

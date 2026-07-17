@@ -6,7 +6,6 @@ use std::str::FromStr;
 
 use fs_err::File;
 use tracing::{instrument, trace};
-
 use uv_distribution_filename::WheelFilename;
 use uv_pep440::Version;
 use uv_pypi_types::{DirectUrl, Metadata10};

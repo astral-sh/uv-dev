@@ -1,5 +1,4 @@
 use tracing::debug;
-
 use uv_pep508::MarkerEnvironment;
 
 /// A wrapper type around [`MarkerEnvironment`] that ensures the Python version markers are

@@ -4,10 +4,10 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use configparser::ini::Ini;
-use futures::{TryStreamExt, stream::FuturesOrdered};
+use futures::TryStreamExt;
+use futures::stream::FuturesOrdered;
 use tracing::debug;
 use url::Host;
-
 use uv_distribution::{DistributionDatabase, Reporter};
 use uv_distribution_filename::{DistExtension, SourceDistFilename, WheelFilename};
 use uv_distribution_types::{

@@ -1,8 +1,10 @@
-use crate::commands::ExitStatus;
-use anyhow::{Context, Result, bail};
 use std::env;
 use std::io::Write;
 use std::path::Path;
+
+use anyhow::{Context, Result, bail};
+
+use crate::commands::ExitStatus;
 
 /// PEP 517 hook to build a source distribution.
 pub(crate) fn build_sdist(sdist_directory: &Path) -> Result<ExitStatus> {

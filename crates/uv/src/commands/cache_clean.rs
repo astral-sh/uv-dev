@@ -3,7 +3,6 @@ use std::fmt::Write;
 use anyhow::{Context, Result};
 use owo_colors::OwoColorize;
 use tracing::debug;
-
 use uv_cache::{Cache, Removal};
 use uv_fs::Simplified;
 use uv_normalize::PackageName;

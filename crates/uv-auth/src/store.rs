@@ -8,7 +8,6 @@ use thiserror::Error;
 use uv_fs::{LockedFile, LockedFileError, LockedFileMode};
 use uv_preview::{Preview, PreviewFeature};
 use uv_redacted::DisplaySafeUrl;
-
 use uv_state::{StateBucket, StateStore};
 use uv_static::EnvVars;
 

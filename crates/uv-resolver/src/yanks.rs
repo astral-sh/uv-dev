@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use rustc_hash::{FxHashMap, FxHashSet};
-
 use uv_distribution_types::RequirementSource;
 use uv_normalize::PackageName;
 use uv_pep440::Version;

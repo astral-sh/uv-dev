@@ -40,7 +40,6 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use url::Url;
-
 use uv_distribution_filename::{
     DistExtension, SourceDistExtension, SourceDistFilename, WheelFilename,
 };
@@ -1746,8 +1745,9 @@ impl Identifier for BuildableSource<'_> {
 
 #[cfg(test)]
 mod test {
-    use crate::{BuiltDist, Dist, RemoteSource, SourceDist, UrlString};
     use uv_redacted::DisplaySafeUrl;
+
+    use crate::{BuiltDist, Dist, RemoteSource, SourceDist, UrlString};
 
     /// Ensure that we don't accidentally grow the `Dist` sizes.
     #[test]

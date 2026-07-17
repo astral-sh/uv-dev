@@ -19,16 +19,13 @@ use std::mem::ManuallyDrop;
 use std::os::windows::io::FromRawHandle;
 
 use arrayvec::ArrayVec;
-use windows::Win32::{
-    Foundation,
-    Globalization::CP_UTF8,
-    System::Console::{
-        CONSOLE_MODE, GetConsoleMode, GetConsoleOutputCP, GetStdHandle, STD_ERROR_HANDLE,
-        WriteConsoleW,
-    },
-    System::Diagnostics::Debug::{
-        CONTEXT, EXCEPTION_CONTINUE_SEARCH, EXCEPTION_POINTERS, SetUnhandledExceptionFilter,
-    },
+use windows::Win32::Foundation;
+use windows::Win32::Globalization::CP_UTF8;
+use windows::Win32::System::Console::{
+    CONSOLE_MODE, GetConsoleMode, GetConsoleOutputCP, GetStdHandle, STD_ERROR_HANDLE, WriteConsoleW,
+};
+use windows::Win32::System::Diagnostics::Debug::{
+    CONTEXT, EXCEPTION_CONTINUE_SEARCH, EXCEPTION_POINTERS, SetUnhandledExceptionFilter,
 };
 
 /// A write target for standard error that can be safely used in an exception handler.

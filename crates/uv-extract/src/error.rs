@@ -1,4 +1,5 @@
-use std::{ffi::OsString, path::PathBuf};
+use std::ffi::OsString;
+use std::path::PathBuf;
 
 use crate::validate_archive_member_name;
 

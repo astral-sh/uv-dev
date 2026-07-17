@@ -2,7 +2,6 @@ use std::str::FromStr;
 
 use memchr::memchr;
 use thiserror::Error;
-
 use uv_platform_tags::{
     AbiTag, LanguageTag, ParseAbiTagError, ParseLanguageTagError, ParsePlatformTagError,
     PlatformTag, TagCompatibility, Tags,

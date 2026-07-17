@@ -1,12 +1,10 @@
-use std::collections::BTreeMap;
-use std::collections::Bound;
+use std::collections::{BTreeMap, Bound};
 use std::ops::RangeBounds;
 use std::sync::OnceLock;
 
 use jiff::Timestamp;
 use pubgrub::Ranges;
 use tracing::{instrument, trace};
-
 use uv_client::{FlatIndexEntry, OwnedArchive, SimpleDetailMetadata, VersionFiles};
 use uv_configuration::BuildOptions;
 use uv_distribution_filename::{DistFilename, WheelFilename};

@@ -1,20 +1,23 @@
 #![expect(clippy::disallowed_types)]
 
+use std::path::Path;
+
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
-use assert_fs::{fixture::ChildPath, prelude::*};
+use assert_fs::fixture::ChildPath;
+use assert_fs::prelude::*;
 use indoc::{formatdoc, indoc};
 use insta::assert_snapshot;
-use predicates::{prelude::predicate, str::contains};
+use predicates::prelude::predicate;
+use predicates::str::contains;
 use serde_json::json;
-use std::path::Path;
 use uv_fs::copy_dir_all;
 use uv_python::PYTHON_VERSION_FILENAME;
 use uv_static::EnvVars;
+use uv_test::packse::PackseServer;
+use uv_test::{TestContext, uv_snapshot};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
-
-use uv_test::{TestContext, packse::PackseServer, uv_snapshot};
 
 #[test]
 fn run_with_python_version() -> Result<()> {
@@ -6156,8 +6159,9 @@ fn run_without_overlay() -> Result<()> {
 #[cfg(unix)]
 #[test]
 fn detect_infinite_recursion() -> Result<()> {
-    use indoc::formatdoc;
     use std::os::unix::fs::PermissionsExt;
+
+    use indoc::formatdoc;
     use uv_test::get_bin;
 
     let context = uv_test::test_context!("3.12");

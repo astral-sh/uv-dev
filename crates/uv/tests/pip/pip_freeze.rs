@@ -3,7 +3,6 @@ use assert_cmd::prelude::*;
 use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::*;
 use url::Url;
-
 use uv_test::uv_snapshot;
 
 #[test]

@@ -9,7 +9,6 @@ use thiserror::Error;
 use toml_edit::{
     Array, ArrayOfTables, DocumentMut, Formatted, Item, RawString, Table, TomlError, Value,
 };
-
 use uv_cache_key::CanonicalUrl;
 use uv_distribution_types::{Index, IndexFormat, IndexUrl};
 use uv_fs::{PortablePath, is_same_file_allow_missing};
@@ -1865,19 +1864,21 @@ fn split_specifiers(req: &str) -> (&str, &str) {
 
 #[cfg(test)]
 mod test {
-    use super::{
-        AddBoundsKind, DependencyTarget, PyProjectTomlMut, reformat_array_multiline,
-        remove_dependency, split_specifiers,
-    };
-    use anyhow::Result;
-    use insta::assert_snapshot;
     use std::path::Path;
     use std::str::FromStr;
+
+    use anyhow::Result;
+    use insta::assert_snapshot;
     use toml_edit::DocumentMut;
     use uv_distribution_types::Index;
     use uv_normalize::PackageName;
     use uv_pep440::Version;
     use uv_pep508::Requirement;
+
+    use super::{
+        AddBoundsKind, DependencyTarget, PyProjectTomlMut, reformat_array_multiline,
+        remove_dependency, split_specifiers,
+    };
 
     #[test]
     fn split() {

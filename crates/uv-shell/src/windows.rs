@@ -8,14 +8,13 @@ use std::path::Path;
 
 use anyhow::Context;
 use tracing::warn;
+use uv_static::EnvVars;
 use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_INVALID_DATA, LPARAM, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
     HWND_BROADCAST, SMTO_ABORTIFHUNG, SendMessageTimeoutW, WM_SETTINGCHANGE,
 };
 use windows::core::{HRESULT, w};
 use windows_registry::{CURRENT_USER, HSTRING};
-
-use uv_static::EnvVars;
 
 /// Append the given [`Path`] to the `PATH` environment variable in the Windows registry.
 ///

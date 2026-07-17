@@ -11,7 +11,6 @@ use cargo_util::{ProcessBuilder, ProcessError, paths};
 use owo_colors::OwoColorize;
 use tracing::{debug, instrument, warn};
 use url::Url;
-
 use uv_fs::Simplified;
 use uv_git_types::{GitOid, GitReference};
 use uv_redacted::DisplaySafeUrl;

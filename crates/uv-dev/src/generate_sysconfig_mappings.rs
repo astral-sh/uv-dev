@@ -1,11 +1,12 @@
 //! Generate sysconfig mappings for supported python-build-standalone *nix platforms.
+use std::collections::BTreeMap;
+use std::fmt::Write;
+use std::path::PathBuf;
+
 use anstream::println;
 use anyhow::{Result, bail};
 use pretty_assertions::StrComparison;
 use serde::Deserialize;
-use std::collections::BTreeMap;
-use std::fmt::Write;
-use std::path::PathBuf;
 
 use crate::ROOT_DIR;
 use crate::generate_all::Mode;
@@ -208,12 +209,10 @@ mod tests {
     use std::env;
 
     use anyhow::Result;
-
     use uv_static::EnvVars;
 
-    use crate::generate_all::Mode;
-
     use super::{Args, main};
+    use crate::generate_all::Mode;
 
     #[tokio::test]
     async fn test_generate_sysconfig_mappings() -> Result<()> {

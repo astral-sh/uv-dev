@@ -3,7 +3,6 @@ use std::fmt::Display;
 use std::path::Path;
 
 use itertools::Itertools;
-
 use uv_distribution_types::{
     DistributionMetadata, Name, RequiresPython, ResolvedDist, SimplifiedMarkerTree, Verbatim,
     VersionOrUrlRef,

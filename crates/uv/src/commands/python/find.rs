@@ -1,7 +1,7 @@
-use anyhow::Result;
 use std::fmt::Write;
 use std::path::Path;
 
+use anyhow::Result;
 use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
 use uv_configuration::DependencyGroupsWithDefaults;
@@ -16,9 +16,9 @@ use uv_settings::PythonInstallMirrors;
 use uv_warnings::{warn_user, warn_user_once};
 use uv_workspace::{DiscoveryOptions, VirtualProject, WorkspaceCache, WorkspaceErrorKind};
 
-use crate::commands::{
-    ExitStatus,
-    project::{ScriptInterpreter, WorkspacePython, validate_project_requires_python},
+use crate::commands::ExitStatus;
+use crate::commands::project::{
+    ScriptInterpreter, WorkspacePython, validate_project_requires_python,
 };
 use crate::printer::Printer;
 

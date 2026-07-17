@@ -23,21 +23,19 @@
 //!   the version matching needs to catch all sorts of special cases
 #![warn(missing_docs)]
 
+pub use version::{
+    BumpCommand, LocalSegment, LocalVersion, LocalVersionSlice, MIN_VERSION, Operator,
+    OperatorParseError, Prerelease, PrereleaseKind, Version, VersionParseError, VersionPattern,
+    VersionPatternParseError,
+};
 #[cfg(feature = "version-ranges")]
 pub use version_ranges::{
     LowerBound, UpperBound, canonicalize_version_ranges, release_specifier_to_range,
     release_specifiers_to_ranges, strip_local_version_sentinels,
 };
-pub use {
-    version::{
-        BumpCommand, LocalSegment, LocalVersion, LocalVersionSlice, MIN_VERSION, Operator,
-        OperatorParseError, Prerelease, PrereleaseKind, Version, VersionParseError, VersionPattern,
-        VersionPatternParseError,
-    },
-    version_specifier::{
-        TildeVersionSpecifier, VersionSpecifier, VersionSpecifierBuildError, VersionSpecifiers,
-        VersionSpecifiersParseError,
-    },
+pub use version_specifier::{
+    TildeVersionSpecifier, VersionSpecifier, VersionSpecifierBuildError, VersionSpecifiers,
+    VersionSpecifiersParseError,
 };
 
 mod version;
@@ -48,8 +46,9 @@ mod version_ranges;
 
 #[cfg(test)]
 mod tests {
-    use super::{Version, VersionSpecifier, VersionSpecifiers};
     use std::str::FromStr;
+
+    use super::{Version, VersionSpecifier, VersionSpecifiers};
 
     #[test]
     fn test_version() {

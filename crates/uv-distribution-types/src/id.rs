@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 
 use uv_cache_key::{CanonicalUrl, RepositoryUrl};
 use uv_git_types::GitUrl;
-
 use uv_normalize::PackageName;
 use uv_pep440::Version;
 use uv_pypi_types::{HashDigest, ParsedUrl};
@@ -241,9 +240,9 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use fs_err as fs;
+    use uv_redacted::DisplaySafeUrl;
 
     use super::VersionId;
-    use uv_redacted::DisplaySafeUrl;
 
     #[test]
     fn version_id_ignores_hash_fragments() {

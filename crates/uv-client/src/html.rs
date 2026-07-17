@@ -1,14 +1,17 @@
-use std::{borrow::Cow, str::FromStr, sync::Arc};
+use std::borrow::Cow;
+use std::str::FromStr;
+use std::sync::Arc;
 
 use jiff::Timestamp;
 use rustc_hash::FxHashMap;
 use tl::{HTMLTag, Node, Parser};
 use tracing::{debug, instrument, warn};
-
 use uv_normalize::PackageName;
 use uv_pep440::{VersionSpecifiers, VersionSpecifiersParseError};
-use uv_pypi_types::{BaseUrl, CoreMetadata, Hashes, ProjectStatus, PypiFile, Status, Yanked};
-use uv_pypi_types::{HashError, LenientVersionSpecifiers};
+use uv_pypi_types::{
+    BaseUrl, CoreMetadata, HashError, Hashes, LenientVersionSpecifiers, ProjectStatus, PypiFile,
+    Status, Yanked,
+};
 use uv_redacted::{DisplaySafeUrl, DisplaySafeUrlError};
 use uv_small_str::SmallString;
 

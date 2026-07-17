@@ -2,7 +2,6 @@ use std::borrow::Cow;
 
 use either::Either;
 use rustc_hash::FxHashMap;
-
 use uv_distribution_types::{Requirement, RequirementSource};
 use uv_normalize::PackageName;
 use uv_pep508::MarkerTree;

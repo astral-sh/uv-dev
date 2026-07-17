@@ -1,3 +1,7 @@
+use std::io::BufReader;
+use std::path::Path;
+use std::process::Command;
+
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::fixture::{FileTouch, FileWriteBin, FileWriteStr, PathChild, PathCreateDir};
@@ -6,9 +10,6 @@ use fs_err::File;
 use futures::io::AllowStdIo;
 use indoc::{formatdoc, indoc};
 use insta::{allow_duplicates, assert_json_snapshot, assert_snapshot};
-use std::io::BufReader;
-use std::path::Path;
-use std::process::Command;
 use tempfile::TempDir;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use uv_static::EnvVars;

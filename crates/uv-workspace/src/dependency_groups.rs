@@ -1,9 +1,9 @@
+use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
+use std::path::Path;
 use std::str::FromStr;
-use std::{collections::BTreeMap, path::Path};
 
 use thiserror::Error;
-
 use uv_distribution_types::RequiresPython;
 use uv_fs::Simplified;
 use uv_normalize::{DEV_DEPENDENCIES, GroupName};

@@ -1,10 +1,7 @@
 use anyhow::Result;
 use assert_cmd::prelude::*;
-use assert_fs::fixture::ChildPath;
-use assert_fs::fixture::FileWriteStr;
-use assert_fs::fixture::PathChild;
+use assert_fs::fixture::{ChildPath, FileWriteStr, PathChild};
 use assert_fs::prelude::*;
-
 use uv_static::EnvVars;
 use uv_test::uv_snapshot;
 

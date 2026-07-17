@@ -6,12 +6,10 @@ use std::process::Command;
 
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
+use assert_fs::assert::PathAssert;
 #[cfg(feature = "test-git")]
 use assert_fs::fixture::ChildPath;
-use assert_fs::{
-    assert::PathAssert,
-    fixture::{FileTouch, FileWriteStr, PathChild, PathCreateDir},
-};
+use assert_fs::fixture::{FileTouch, FileWriteStr, PathChild, PathCreateDir};
 use indoc::indoc;
 use insta::assert_snapshot;
 use predicates::prelude::predicate;
@@ -19,7 +17,6 @@ use predicates::prelude::predicate;
 use uv_fs::Simplified;
 use uv_fs::copy_dir_all;
 use uv_static::EnvVars;
-
 use uv_test::uv_snapshot;
 
 #[cfg(feature = "test-git")]

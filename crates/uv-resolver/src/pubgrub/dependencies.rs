@@ -2,7 +2,6 @@ use std::borrow::Cow;
 use std::iter;
 
 use either::Either;
-
 use uv_distribution_types::{IndexMetadata, Requirement, RequirementSource};
 use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep440::{Version, VersionSpecifiers};

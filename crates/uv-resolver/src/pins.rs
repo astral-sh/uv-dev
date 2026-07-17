@@ -1,5 +1,4 @@
 use rustc_hash::FxHashMap;
-
 use uv_distribution_types::{CompatibleDist, DistributionId, Identifier, ResolvedDist};
 use uv_normalize::PackageName;
 

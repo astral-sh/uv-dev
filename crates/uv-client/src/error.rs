@@ -9,10 +9,6 @@ use owo_colors::OwoColorize;
 use reqwest::Response;
 use serde::Deserialize;
 use tracing::warn;
-
-use crate::base_client::CertificateSource;
-use crate::middleware::OfflineError;
-use crate::{FlatIndexError, html};
 use uv_cache::Error as CacheError;
 use uv_distribution_filename::{WheelFilename, WheelFilenameError};
 use uv_distribution_types::IndexUrl;
@@ -20,6 +16,10 @@ use uv_errors::{Hint, Hints};
 use uv_git::GitError;
 use uv_normalize::PackageName;
 use uv_redacted::DisplaySafeUrl;
+
+use crate::base_client::CertificateSource;
+use crate::middleware::OfflineError;
+use crate::{FlatIndexError, html};
 
 /// RFC 9457 Problem Details for HTTP APIs
 ///
