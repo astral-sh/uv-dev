@@ -26,7 +26,7 @@ use uv_python::PythonEnvironment;
 use uv_redacted::DisplaySafeUrl;
 use uv_types::HashStrategy;
 
-use crate::satisfies::{BuildSettings, RequirementSatisfaction};
+use crate::satisfies::{BuildInfoCache, BuildSettings, RequirementSatisfaction};
 use crate::{InstallationStrategy, SitePackages};
 
 /// A wheel dependency is incompatible with the current platform.
@@ -295,6 +295,12 @@ impl<'a> Planner<'a> {
         let mut remote = vec![];
         let mut reinstalls = vec![];
         let mut extraneous = vec![];
+        let mut build_info = BuildInfoCache::new(BuildSettings {
+            config_settings,
+            config_settings_package,
+            extra_build_requires,
+            extra_build_variables,
+        });
 
         // TODO(charlie): There are a few assumptions here that are hard to spot:
         //
@@ -334,12 +340,7 @@ impl<'a> Planner<'a> {
                             dist.version(),
                             installation,
                             tags,
-                            Some(BuildSettings {
-                                config_settings,
-                                config_settings_package,
-                                extra_build_requires,
-                                extra_build_variables,
-                            }),
+                            Some(&mut build_info),
                         ) {
                             RequirementSatisfaction::Mismatch => {
                                 debug!(

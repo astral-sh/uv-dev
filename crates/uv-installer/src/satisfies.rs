@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 use std::fmt::Debug;
 
+use rustc_hash::FxHashMap;
 use same_file::is_same_file;
 use tracing::{debug, trace};
 use url::Url;
@@ -30,6 +31,54 @@ pub struct BuildSettings<'a> {
     pub extra_build_variables: &'a ExtraBuildVariables,
 }
 
+pub(crate) struct BuildInfoCache<'a> {
+    config_settings: &'a ConfigSettings,
+    config_settings_package: &'a PackageConfigSettings,
+    extra_build_requires: &'a ExtraBuildRequires,
+    extra_build_variables: &'a ExtraBuildVariables,
+    default_build_info: Option<BuildInfo>,
+    build_info: FxHashMap<PackageName, BuildInfo>,
+}
+
+impl<'a> BuildInfoCache<'a> {
+    pub(crate) fn new(build_settings: BuildSettings<'a>) -> Self {
+        Self {
+            config_settings: build_settings.config_settings,
+            config_settings_package: build_settings.config_settings_package,
+            extra_build_requires: build_settings.extra_build_requires,
+            extra_build_variables: build_settings.extra_build_variables,
+            default_build_info: None,
+            build_info: FxHashMap::default(),
+        }
+    }
+
+    fn matches(&mut self, name: &PackageName, installed: &BuildInfo) -> bool {
+        let extra_build_requires = extra_build_requires_for(name, self.extra_build_requires);
+        let extra_build_variables = extra_build_variables_for(name, self.extra_build_variables);
+        // Most packages use the same global build settings; prepare that payload only once.
+        if self.config_settings_package.get(name).is_none()
+            && extra_build_requires.is_empty()
+            && extra_build_variables.is_none_or(BuildVariables::is_empty)
+        {
+            let expected = self.default_build_info.get_or_insert_with(|| {
+                BuildInfo::from_settings(self.config_settings.clone(), Vec::new(), None)
+            });
+            return installed == expected;
+        }
+
+        let expected = self.build_info.entry(name.clone()).or_insert_with(|| {
+            let config_settings =
+                config_settings_for(name, self.config_settings, self.config_settings_package);
+            BuildInfo::from_settings(
+                config_settings.into_owned(),
+                extra_build_requires.to_vec(),
+                extra_build_variables.cloned(),
+            )
+        });
+        installed == expected
+    }
+}
+
 #[derive(Debug, Copy, Clone)]
 pub(crate) enum RequirementSatisfaction {
     Mismatch,
@@ -49,7 +98,7 @@ impl RequirementSatisfaction {
         version: Option<&Version>,
         installation: InstallationStrategy,
         tags: &Tags,
-        build_settings: Option<BuildSettings<'_>>,
+        build_info: Option<&mut BuildInfoCache<'_>>,
     ) -> Self {
         trace!(
             "Comparing installed with source: {:?} {:?}",
@@ -57,24 +106,10 @@ impl RequirementSatisfaction {
         );
 
         // If the distribution was built with other settings, it is out of date.
-        if let Some(build_settings) = build_settings
-            && distribution.build_info().is_some_and(|dist_build_info| {
-                let config_settings = config_settings_for(
-                    name,
-                    build_settings.config_settings,
-                    build_settings.config_settings_package,
-                );
-                let extra_build_requires =
-                    extra_build_requires_for(name, build_settings.extra_build_requires);
-                let extra_build_variables =
-                    extra_build_variables_for(name, build_settings.extra_build_variables);
-                let build_info = BuildInfo::from_settings(
-                    config_settings.into_owned(),
-                    extra_build_requires.to_vec(),
-                    extra_build_variables.cloned(),
-                );
-                dist_build_info != &build_info
-            })
+        if let Some(build_info) = build_info
+            && distribution
+                .build_info()
+                .is_some_and(|installed| !build_info.matches(name, installed))
         {
             debug!("Build info mismatch for {name}: {distribution}");
             return Self::OutOfDate;
@@ -638,5 +673,81 @@ fn generate_dist_compatibility_hint(wheel_tags: &ExpandedTags, tags: &Tags) -> O
             }
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use uv_distribution_types::{
+        BuildInfo, ConfigSettingEntry, ConfigSettingPackageEntry, ConfigSettings,
+        ExtraBuildRequirement, ExtraBuildRequires, ExtraBuildVariables, PackageConfigSettings,
+        Requirement,
+    };
+    use uv_normalize::PackageName;
+    use uv_pypi_types::VerbatimParsedUrl;
+
+    use super::{BuildInfoCache, BuildSettings};
+
+    #[test]
+    fn build_info_cache_reuses_default_and_package_settings() {
+        let package = PackageName::from_str("demo").expect("valid package name");
+        let first = PackageName::from_str("first").expect("valid package name");
+        let second = PackageName::from_str("second").expect("valid package name");
+        let config_settings = ["shared=global", "global=value"]
+            .into_iter()
+            .map(|setting| ConfigSettingEntry::from_str(setting).expect("valid config setting"))
+            .collect::<ConfigSettings>();
+        let config_settings_package = ["demo:shared=package", "demo:package=value"]
+            .into_iter()
+            .map(|setting| {
+                ConfigSettingPackageEntry::from_str(setting).expect("valid package config setting")
+            })
+            .collect::<PackageConfigSettings>();
+        let requirements = vec![ExtraBuildRequirement {
+            requirement: Requirement::from(
+                uv_pep508::Requirement::<VerbatimParsedUrl>::from_str("build-dependency>=1")
+                    .expect("valid build requirement"),
+            ),
+            match_runtime: false,
+        }];
+        let extra_build_requires = [(package.clone(), requirements.clone())]
+            .into_iter()
+            .collect::<ExtraBuildRequires>();
+        let variables = [(String::from("BUILD_VARIABLE"), String::from("value"))]
+            .into_iter()
+            .collect();
+        let extra_build_variables = [(package.clone(), variables)]
+            .into_iter()
+            .collect::<ExtraBuildVariables>();
+        let expected_settings = config_settings_package
+            .get(&package)
+            .expect("package settings")
+            .clone()
+            .merge(config_settings.clone());
+        let expected_package = BuildInfo::from_settings(
+            expected_settings,
+            requirements,
+            extra_build_variables.get(&package).cloned(),
+        );
+
+        let mut cache = BuildInfoCache::new(BuildSettings {
+            config_settings: &config_settings,
+            config_settings_package: &config_settings_package,
+            extra_build_requires: &extra_build_requires,
+            extra_build_variables: &extra_build_variables,
+        });
+
+        let expected_default = BuildInfo::from_settings(config_settings.clone(), Vec::new(), None);
+        assert!(cache.matches(&first, &expected_default));
+        assert!(cache.matches(&second, &expected_default));
+        assert!(cache.default_build_info.is_some());
+        assert!(cache.build_info.is_empty());
+
+        assert!(cache.matches(&package, &expected_package));
+        assert!(cache.matches(&package, &expected_package));
+        assert_eq!(cache.build_info.len(), 1);
+        assert!(!cache.matches(&package, &BuildInfo::default()));
     }
 }
