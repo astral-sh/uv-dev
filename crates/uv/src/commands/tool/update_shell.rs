@@ -6,7 +6,6 @@ use anyhow::Result;
 use owo_colors::OwoColorize;
 use tokio::io::AsyncWriteExt;
 use tracing::debug;
-
 use uv_fs::Simplified;
 use uv_shell::Shell;
 use uv_tool::tool_executable_dir;

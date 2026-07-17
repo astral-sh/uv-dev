@@ -5,7 +5,6 @@ use std::str::FromStr;
 
 use itertools::Either;
 use rustc_hash::FxHashSet;
-
 use uv_configuration::{
     BuildOptions, Constraints, DependencyGroupsWithDefaults, ExtrasSpecification,
     ExtrasSpecificationWithDefaults, InstallOptions,

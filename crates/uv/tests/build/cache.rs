@@ -1,8 +1,8 @@
+use std::process::Command;
+
 use anyhow::Result;
 use assert_fs::prelude::*;
 use predicates::prelude::predicate;
-use std::process::Command;
-
 #[cfg(unix)]
 use uv_fs::create_symlink;
 use uv_test::{get_bin, uv_snapshot};

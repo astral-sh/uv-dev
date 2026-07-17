@@ -17,6 +17,7 @@ use uv_settings::{MalwareCheckSettings, PythonInstallMirrors};
 use uv_warnings::warn_user;
 use uv_workspace::{DiscoveryOptions, VirtualProject, WorkspaceCache};
 
+use super::module_owners::{collect_module_owners, find_module_owners};
 use crate::commands::pip::loggers::DefaultResolveLogger;
 use crate::commands::project::install_target::InstallTarget;
 use crate::commands::project::lock::{LockMode, LockOperation};
@@ -28,8 +29,6 @@ use crate::commands::project::{
 use crate::commands::{ExitStatus, UvError, diagnostics};
 use crate::printer::Printer;
 use crate::settings::{FrozenSource, LockCheck, ResolverSettings};
-
-use super::module_owners::{collect_module_owners, find_module_owners};
 
 /// Display metadata about the workspace.
 pub(crate) async fn metadata(

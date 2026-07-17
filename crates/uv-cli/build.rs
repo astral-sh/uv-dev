@@ -1,10 +1,7 @@
-use std::{
-    path::{Path, PathBuf},
-    process::Command,
-};
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use fs_err as fs;
-
 use uv_static::EnvVars;
 
 fn main() {

@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+
 use uv_normalize::PackageName;
 use uv_redacted::DisplaySafeUrl;
 

@@ -5,28 +5,24 @@ mod conditional_imports {
     pub(crate) use uv_test::{READ_ONLY_GITHUB_TOKEN, decode_token};
 }
 
-#[cfg(feature = "test-git")]
-use conditional_imports::*;
+use std::path::Path;
 
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
+#[cfg(feature = "test-git")]
+use conditional_imports::*;
 use indoc::{formatdoc, indoc};
 use insta::assert_snapshot;
 use serde_json::json;
-use std::path::Path;
 use url::Url;
-use wiremock::{
-    Mock, MockServer, ResponseTemplate,
-    matchers::{method, path},
-};
-
 #[cfg(feature = "test-git-lfs")]
 use uv_cache_key::{RepositoryUrl, cache_digest};
 use uv_fs::Simplified;
 use uv_static::EnvVars;
-
 use uv_test::{uv_snapshot, venv_bin_path};
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 /// Add a PyPI requirement.
 #[test]

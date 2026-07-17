@@ -3,12 +3,11 @@ use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use indoc::{formatdoc, indoc};
 use serde_json::json;
-use wiremock::matchers::{method, path};
-use wiremock::{Mock, MockServer, ResponseTemplate};
-
 use uv_static::EnvVars;
 use uv_test::packse::PackseServer;
 use uv_test::uv_snapshot;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[test]
 fn audit_invalid_service_url() {

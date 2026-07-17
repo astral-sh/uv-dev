@@ -1,9 +1,9 @@
 use std::cmp::Reverse;
 use std::sync::Arc;
 
-use futures::{FutureExt, Stream, TryFutureExt, TryStreamExt, stream::FuturesUnordered};
+use futures::stream::FuturesUnordered;
+use futures::{FutureExt, Stream, TryFutureExt, TryStreamExt};
 use tracing::{debug, instrument};
-
 use uv_cache::Cache;
 use uv_configuration::BuildOptions;
 use uv_distribution::{DistributionDatabase, LocalWheel};

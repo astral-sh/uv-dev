@@ -1,7 +1,6 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
-
 use uv_cache_key::{CacheKey, CacheKeyHasher};
 use uv_normalize::PackageName;
 

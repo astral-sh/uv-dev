@@ -9,7 +9,8 @@ use std::io::Cursor;
 
 use async_zip::base::write::ZipFileWriter;
 use async_zip::{Compression as ZipCompression, ZipEntryBuilder};
-use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD as base64};
+use base64::Engine;
+use base64::prelude::BASE64_URL_SAFE_NO_PAD as base64;
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use futures::executor::block_on;
@@ -17,7 +18,6 @@ use futures::io::AllowStdIo;
 use indoc::formatdoc;
 use sha2::{Digest, Sha256};
 use tokio_util::compat::{FuturesAsyncReadCompatExt, FuturesAsyncWriteCompatExt};
-
 use uv_normalize::{ExtraName, PackageName};
 use uv_pep440::{Version, VersionSpecifiers};
 use uv_pep508::Requirement;

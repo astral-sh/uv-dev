@@ -1,12 +1,11 @@
 //! PEP 514 interactions with the Windows registry.
 
-use crate::managed::ManagedPythonInstallation;
-use crate::{COMPANY_DISPLAY_NAME, COMPANY_KEY, PythonInstallationKey, PythonVersion};
-use anyhow::anyhow;
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::str::FromStr;
+
+use anyhow::anyhow;
 use target_lexicon::PointerWidth;
 use thiserror::Error;
 use tracing::debug;
@@ -16,6 +15,9 @@ use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_KEY_DELETED};
 use windows::Win32::System::Registry::{KEY_WOW64_32KEY, KEY_WOW64_64KEY};
 use windows::core::HRESULT;
 use windows_registry::{CURRENT_USER, HSTRING, Key, LOCAL_MACHINE, Value};
+
+use crate::managed::ManagedPythonInstallation;
+use crate::{COMPANY_DISPLAY_NAME, COMPANY_KEY, PythonInstallationKey, PythonVersion};
 
 /// A Python interpreter found in the Windows registry through PEP 514 or from a known Microsoft
 /// Store path.

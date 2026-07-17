@@ -6,7 +6,6 @@ use std::str::FromStr;
 use anyhow::{Context, Result};
 use fs_err as fs;
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
-
 use uv_configuration::{ExcludeDependency, Excludes, Override, Overrides};
 use uv_distribution_filename::EggInfoFilename;
 use uv_distribution_types::{

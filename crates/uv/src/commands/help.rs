@@ -1,19 +1,20 @@
 use std::ffi::OsString;
+use std::fmt::{Display, Write};
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::{fmt::Display, fmt::Write};
 
-use anstream::{ColorChoice, stream::IsTerminal};
+use anstream::ColorChoice;
+use anstream::stream::IsTerminal;
 use anyhow::{Result, anyhow};
 use clap::CommandFactory;
 use itertools::Itertools;
 use owo_colors::OwoColorize;
+use uv_cli::Cli;
+use uv_static::EnvVars;
 use which::which;
 
 use super::ExitStatus;
 use crate::printer::Printer;
-use uv_cli::Cli;
-use uv_static::EnvVars;
 
 // hidden subcommands to show in the help command
 const SHOW_HIDDEN_COMMANDS: &[&str] = &["generate-shell-completion"];

@@ -7,7 +7,6 @@ use reqsign::azure::DefaultSigner as AzureDefaultSigner;
 use reqsign::google::DefaultSigner as GcsDefaultSigner;
 use tracing::debug;
 use url::{ParseError, Url};
-
 use uv_preview::{Preview, PreviewFeature};
 use uv_static::EnvVars;
 use uv_warnings::warn_user_once;

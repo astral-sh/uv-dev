@@ -3,7 +3,6 @@ use std::ops::Deref;
 use std::str::FromStr;
 
 use thiserror::Error;
-
 use uv_small_str::SmallString;
 
 /// The normalized name of an index.

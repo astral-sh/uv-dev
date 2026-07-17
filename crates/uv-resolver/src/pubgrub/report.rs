@@ -11,7 +11,6 @@ use owo_colors::OwoColorize;
 use pubgrub::{DerivationTree, Derived, External, Map, ReportFormatter, Term};
 use reqwest::StatusCode;
 use rustc_hash::FxHashMap;
-
 use uv_configuration::{IndexStrategy, NoBinary, NoBuild};
 use uv_distribution_types::{
     IncompatibleDist, IncompatibleSource, IncompatibleWheel, Index, IndexCapabilities,

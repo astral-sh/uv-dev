@@ -13,11 +13,9 @@ use rustc_hash::FxHashMap;
 use tokio::sync::{Mutex, Semaphore};
 use tracing::{Instrument, debug, info_span, instrument, trace, warn};
 use url::Url;
-
 use uv_auth::{CredentialsCache, Indexes, PyxTokenStore};
 use uv_cache::{Cache, CacheBucket, CacheEntry, WheelCache};
-use uv_configuration::IndexStrategy;
-use uv_configuration::KeyringProviderType;
+use uv_configuration::{IndexStrategy, KeyringProviderType};
 use uv_distribution_filename::{DistFilename, WheelFilename};
 use uv_distribution_types::{
     BuiltDist, File, FileLocation, IndexCapabilities, IndexFormat, IndexLocations,
@@ -30,9 +28,9 @@ use uv_normalize::PackageName;
 use uv_pep440::{Version, VersionSpecifiers};
 use uv_pep508::MarkerEnvironment;
 use uv_platform_tags::Platform;
-use uv_pypi_types::{HashAlgorithm, HashDigest, HashDigests, ProjectStatus, Yanked};
 use uv_pypi_types::{
-    PypiSimpleDetail, PypiSimpleIndex, PyxSimpleDetail, PyxSimpleIndex, ResolutionMetadata,
+    HashAlgorithm, HashDigest, HashDigests, ProjectStatus, PypiSimpleDetail, PypiSimpleIndex,
+    PyxSimpleDetail, PyxSimpleIndex, ResolutionMetadata, Yanked,
 };
 use uv_redacted::DisplaySafeUrl;
 use uv_small_str::SmallString;
@@ -1935,23 +1933,24 @@ mod tests {
 
     use tokio::sync::Semaphore;
     use url::Url;
-    use uv_normalize::PackageName;
-    use uv_pypi_types::PypiSimpleDetail;
-    use uv_redacted::DisplaySafeUrl;
-    use uv_torch::{TorchBackend, TorchSource, TorchStrategy};
-
-    use crate::{
-        BaseClientBuilder, Connectivity, RegistryClient, RegistryClientBuilder,
-        SimpleDetailMetadata, SimpleDetailMetadatum, html::SimpleDetailHTML,
-    };
     use uv_cache::Cache;
     use uv_distribution_types::{
         FileLocation, Index, IndexCapabilities, IndexFormat, IndexLocations, IndexMetadataRef,
         IndexUrl, ToUrlError,
     };
+    use uv_normalize::PackageName;
+    use uv_pypi_types::PypiSimpleDetail;
+    use uv_redacted::DisplaySafeUrl;
     use uv_small_str::SmallString;
+    use uv_torch::{TorchBackend, TorchSource, TorchStrategy};
     use wiremock::matchers::{basic_auth, method, path_regex};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    use crate::html::SimpleDetailHTML;
+    use crate::{
+        BaseClientBuilder, Connectivity, RegistryClient, RegistryClientBuilder,
+        SimpleDetailMetadata, SimpleDetailMetadatum,
+    };
 
     type Error = Box<dyn std::error::Error>;
 

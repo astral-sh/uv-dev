@@ -1,7 +1,5 @@
-use std::{
-    ops::{Deref, DerefMut},
-    str::FromStr,
-};
+use std::ops::{Deref, DerefMut};
+use std::str::FromStr;
 
 use jiff::Timestamp;
 use rustc_hash::FxHashMap;

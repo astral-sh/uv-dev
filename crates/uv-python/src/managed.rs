@@ -12,18 +12,16 @@ use fs_err as fs;
 use itertools::Itertools;
 use thiserror::Error;
 use tracing::{debug, warn};
-#[cfg(windows)]
-use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
-
 use uv_fs::{
     LockedFile, LockedFileError, LockedFileMode, Simplified, normalize_absolute_path,
     replace_symlink, symlink_or_copy_file, verbatim_path,
 };
-use uv_platform::{Error as PlatformError, Os};
-use uv_platform::{LibcDetectionError, Platform};
+use uv_platform::{Error as PlatformError, LibcDetectionError, Os, Platform};
 use uv_state::{StateBucket, StateStore};
 use uv_static::EnvVars;
 use uv_trampoline_builder::{Launcher, LauncherKind};
+#[cfg(windows)]
+use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
 
 use crate::discovery::VersionRequest;
 use crate::downloads::{Error as DownloadError, ManagedPythonDownload};
@@ -967,14 +965,16 @@ pub fn python_executable_dir() -> Result<PathBuf, Error> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+    use std::str::FromStr;
+
+    use uv_pep440::{Prerelease, PrereleaseKind};
+    use uv_platform::Platform;
+
     use super::*;
     use crate::implementation::LenientImplementationName;
     use crate::installation::PythonInstallationKey;
     use crate::{ImplementationName, PythonVariant};
-    use std::path::PathBuf;
-    use std::str::FromStr;
-    use uv_pep440::{Prerelease, PrereleaseKind};
-    use uv_platform::Platform;
 
     fn create_test_installation(
         implementation: ImplementationName,

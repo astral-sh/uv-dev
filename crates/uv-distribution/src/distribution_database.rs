@@ -11,7 +11,6 @@ use tokio::sync::Semaphore;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tracing::{Instrument, info_span, instrument, warn};
 use url::Url;
-
 use uv_cache::{ArchiveId, CacheBucket, CacheEntry, WheelCache};
 use uv_cache_info::{CacheInfo, Timestamp};
 use uv_client::{

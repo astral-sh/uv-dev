@@ -5,10 +5,11 @@ use either::Either;
 use itertools::Itertools;
 use smallvec::SmallVec;
 use tracing::{debug, trace};
-
 use uv_configuration::IndexStrategy;
-use uv_distribution_types::{CompatibleDist, IncompatibleDist, IncompatibleSource, IndexUrl};
-use uv_distribution_types::{DistributionMetadata, IncompatibleWheel, Name, PrioritizedDist};
+use uv_distribution_types::{
+    CompatibleDist, DistributionMetadata, IncompatibleDist, IncompatibleSource, IncompatibleWheel,
+    IndexUrl, Name, PrioritizedDist,
+};
 use uv_normalize::PackageName;
 use uv_pep440::Version;
 use uv_platform_tags::Tags;

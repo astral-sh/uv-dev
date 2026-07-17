@@ -5,12 +5,13 @@ use std::hash::{Hash, Hasher};
 use std::ops::Bound;
 use std::str::FromStr;
 
-use crate::{
-    Operator, OperatorParseError, Version, VersionPattern, VersionPatternParseError, version,
-};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 #[cfg(feature = "tracing")]
 use tracing::warn;
+
+use crate::{
+    Operator, OperatorParseError, Version, VersionPattern, VersionPatternParseError, version,
+};
 
 /// Sorted version specifiers, such as `>=2.1,<3`.
 ///
@@ -1064,13 +1065,13 @@ impl std::fmt::Display for TildeVersionSpecifier<'_> {
 
 #[cfg(test)]
 mod tests {
-    use std::{cmp::Ordering, str::FromStr};
+    use std::cmp::Ordering;
+    use std::str::FromStr;
 
     use indoc::indoc;
 
-    use crate::LocalSegment;
-
     use super::*;
+    use crate::LocalSegment;
 
     /// <https://peps.python.org/pep-0440/#version-matching>
     #[test]

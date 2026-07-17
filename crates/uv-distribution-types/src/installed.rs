@@ -8,7 +8,6 @@ use fs_err as fs;
 use thiserror::Error;
 use tracing::warn;
 use url::Url;
-
 use uv_cache_info::CacheInfo;
 use uv_distribution_filename::{EggInfoFilename, ExpandedTags};
 use uv_fs::Simplified;

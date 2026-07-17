@@ -8,16 +8,14 @@ use fs_err as fs;
 use itertools::Itertools;
 use rustc_hash::FxHashMap;
 use tracing::{debug, instrument};
-
 use uv_distribution_filename::WheelFilename;
 use uv_fs::Simplified;
+pub use uv_fs::link::LinkMode;
 use uv_fs::link::{CopyLocks, LinkOptions, OnExistingDirectory, link_dir};
 use uv_preview::{Preview, PreviewFeature};
 use uv_warnings::warn_user;
 
 use crate::Error;
-
-pub use uv_fs::link::LinkMode;
 
 /// Shared state for concurrent wheel installations.
 #[derive(Debug, Default)]

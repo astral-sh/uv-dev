@@ -61,8 +61,9 @@ impl FromStr for CommaSeparatedRequirements {
 
 #[cfg(test)]
 mod tests {
-    use super::CommaSeparatedRequirements;
     use std::str::FromStr;
+
+    use super::CommaSeparatedRequirements;
 
     #[test]
     fn single() {

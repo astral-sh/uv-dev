@@ -2,7 +2,6 @@ use std::borrow::Cow;
 use std::collections::BTreeSet;
 
 use either::Either;
-
 use uv_configuration::{Constraints, Excludes, Overrides};
 use uv_distribution_types::Requirement;
 use uv_normalize::PackageName;

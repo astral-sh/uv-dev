@@ -6,7 +6,6 @@ use assert_fs::prelude::*;
 use indoc::{formatdoc, indoc};
 use insta::{assert_json_snapshot, assert_snapshot};
 use url::Url;
-
 use uv_static::EnvVars;
 #[cfg(feature = "test-universal")]
 use uv_test::TestContext;

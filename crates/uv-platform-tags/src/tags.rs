@@ -1,8 +1,9 @@
+use std::cmp;
 use std::collections::BTreeSet;
 use std::fmt::Formatter;
+use std::num::NonZeroU32;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::{cmp, num::NonZeroU32};
 
 use rustc_hash::FxHashMap;
 

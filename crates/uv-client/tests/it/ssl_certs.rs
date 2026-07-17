@@ -8,10 +8,8 @@ use rcgen::CustomExtension;
 use temp_env::async_with_vars;
 use tempfile::{NamedTempFile, TempDir};
 use url::Url;
-
 use uv_cache::Cache;
-use uv_client::BaseClientBuilder;
-use uv_client::RegistryClientBuilder;
+use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_distribution_types::IndexUrl;
 use uv_errors::{ErrorOptions, Hint, write_error_chain_with_options};
 use uv_redacted::DisplaySafeUrl;

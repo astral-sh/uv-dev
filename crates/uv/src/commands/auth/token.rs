@@ -2,9 +2,7 @@ use std::fmt::Write;
 
 use anyhow::{Result, bail};
 use tracing::debug;
-
-use uv_auth::{AuthBackend, Service, is_default_pyx_domain};
-use uv_auth::{Credentials, PyxTokenStore};
+use uv_auth::{AuthBackend, Credentials, PyxTokenStore, Service, is_default_pyx_domain};
 use uv_client::{AuthIntegration, BaseClient, BaseClientBuilder};
 use uv_preview::Preview;
 

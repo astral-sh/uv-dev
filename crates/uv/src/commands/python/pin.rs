@@ -4,12 +4,11 @@ use std::path::Path;
 use anyhow::{Result, bail};
 use owo_colors::OwoColorize;
 use tracing::debug;
-use uv_python::downloads::ManagedPythonDownloadList;
-
 use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
 use uv_configuration::DependencyGroupsWithDefaults;
 use uv_fs::Simplified;
+use uv_python::downloads::ManagedPythonDownloadList;
 use uv_python::{
     EnvironmentPreference, PYTHON_VERSION_FILENAME, PythonDownloads, PythonInstallation,
     PythonPreference, PythonRequest, PythonVersionFile, VersionFileDiscoveryOptions,
@@ -18,9 +17,9 @@ use uv_settings::PythonInstallMirrors;
 use uv_warnings::warn_user_once;
 use uv_workspace::{DiscoveryOptions, VirtualProject, WorkspaceCache};
 
-use crate::commands::{
-    ExitStatus, project::find_requires_python, reporters::PythonDownloadReporter,
-};
+use crate::commands::ExitStatus;
+use crate::commands::project::find_requires_python;
+use crate::commands::reporters::PythonDownloadReporter;
 use crate::printer::Printer;
 
 /// Pin to a specific Python version.

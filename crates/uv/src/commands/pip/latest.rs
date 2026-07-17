@@ -1,6 +1,5 @@
 use tokio::sync::Semaphore;
 use tracing::debug;
-
 use uv_client::{MetadataFormat, RegistryClient, VersionFiles};
 use uv_distribution_filename::DistFilename;
 use uv_distribution_types::{

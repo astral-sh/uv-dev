@@ -7,14 +7,10 @@ use indoc::indoc;
 use insta::assert_snapshot;
 use predicates::prelude::predicate;
 use serde_json::json;
-use wiremock::{
-    Mock, MockServer, ResponseTemplate,
-    matchers::{method, path},
-};
-
 use uv_static::EnvVars;
-
 use uv_test::uv_snapshot;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[test]
 fn tool_upgrade_empty() {

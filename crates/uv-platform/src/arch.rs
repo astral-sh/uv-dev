@@ -1,5 +1,6 @@
-use crate::Error;
 use std::str::FromStr;
+
+use crate::Error;
 
 /// Architecture variants, e.g., with support for different instruction sets
 #[derive(Debug, Eq, PartialEq, Clone, Copy, Hash, Ord, PartialOrd)]
@@ -229,8 +230,9 @@ impl From<&uv_platform_tags::Arch> for Arch {
 
 #[cfg(test)]
 pub(crate) mod test_support {
-    use super::*;
     use std::cell::RefCell;
+
+    use super::*;
 
     thread_local! {
         static MOCK_ARCH: RefCell<Option<Arch>> = const { RefCell::new(None) };

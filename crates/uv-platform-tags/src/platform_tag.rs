@@ -3,8 +3,7 @@ use std::str::FromStr;
 
 use uv_small_str::SmallString;
 
-use crate::tags::AndroidAbi;
-use crate::tags::IosMultiarch;
+use crate::tags::{AndroidAbi, IosMultiarch};
 use crate::{Arch, BinaryFormat};
 
 /// Opaque release-and-architecture suffix used by [`PlatformTag`] variants that preserve a native
@@ -981,8 +980,7 @@ mod tests {
     use crate::platform_tag::{
         ParsePlatformTagError, ParseReleaseArchError, PlatformTag, ReleaseArch,
     };
-    use crate::tags::AndroidAbi;
-    use crate::tags::IosMultiarch;
+    use crate::tags::{AndroidAbi, IosMultiarch};
     use crate::{Arch, BinaryFormat};
 
     #[test]

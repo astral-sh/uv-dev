@@ -10,7 +10,6 @@ use anyhow::{Context, anyhow};
 use itertools::Itertools;
 use owo_colors::OwoColorize;
 use tracing::debug;
-
 use uv_cache::Cache;
 use uv_client::{BaseClientBuilder, RegistryClient};
 use uv_configuration::{
@@ -20,12 +19,12 @@ use uv_configuration::{
 use uv_dispatch::BuildDispatch;
 use uv_distribution::{DistributionDatabase, SourcedDependencyGroups};
 use uv_distribution_types::{
-    CachedDist, ConfigSettings, DependencyMetadata, Diagnostic, Dist, ExtraBuildRequires,
-    ExtraBuildVariables, IndexLocations, InstalledDist, InstalledVersion, LocalDist,
-    NameRequirementSpecification, PackageConfigSettings, Requirement, ResolutionDiagnostic,
-    UnresolvedRequirement, UnresolvedRequirementSpecification, VersionOrUrlRef,
+    CachedDist, ConfigSettings, DependencyMetadata, Diagnostic, Dist, DistributionMetadata,
+    ExtraBuildRequires, ExtraBuildVariables, IndexLocations, InstalledDist, InstalledMetadata,
+    InstalledVersion, LocalDist, Name, NameRequirementSpecification, PackageConfigSettings,
+    Requirement, Resolution, ResolutionDiagnostic, UnresolvedRequirement,
+    UnresolvedRequirementSpecification, VersionOrUrlRef,
 };
-use uv_distribution_types::{DistributionMetadata, InstalledMetadata, Name, Resolution};
 use uv_fs::{CWD, Simplified, normalize_path_under};
 use uv_install_wheel::{LinkMode, installed_dist_info_path, read_record_into_iter};
 use uv_installer::{InstallationStrategy, Plan, Planner, Preparer, SitePackages};
@@ -960,8 +959,9 @@ fn python_source_path_from_record(
 
 #[cfg(test)]
 mod tests {
-    use super::python_source_path_from_record;
     use std::path::{Path, PathBuf};
+
+    use super::python_source_path_from_record;
 
     #[test]
     fn record_python_sources_stay_in_site_packages() {

@@ -1,9 +1,9 @@
 //! Platform detection for operating system, architecture, and libc.
 
 use std::borrow::Cow;
-use std::cmp;
-use std::fmt;
 use std::str::FromStr;
+use std::{cmp, fmt};
+
 use target_lexicon::Architecture;
 use thiserror::Error;
 use tracing::trace;

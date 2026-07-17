@@ -1,7 +1,8 @@
-use serde::{Deserialize, Deserializer};
 #[cfg(feature = "schemars")]
 use std::borrow::Cow;
 use std::str::FromStr;
+
+use serde::{Deserialize, Deserializer};
 use url::Url;
 
 /// A host specification (wildcard, or host, with optional scheme and/or port) for which

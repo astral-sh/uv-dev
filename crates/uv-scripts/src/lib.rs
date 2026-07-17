@@ -10,7 +10,7 @@ use serde::Deserialize;
 use thiserror::Error;
 use tracing::instrument;
 use url::Url;
-
+pub use uv_configuration::ExcludeDependency;
 use uv_configuration::NoSources;
 use uv_normalize::PackageName;
 use uv_pep440::VersionSpecifiers;
@@ -18,10 +18,8 @@ use uv_pypi_types::VerbatimParsedUrl;
 use uv_redacted::DisplaySafeUrl;
 use uv_settings::{GlobalOptions, ResolverInstallerSchema};
 use uv_warnings::warn_user;
-use uv_workspace::pyproject::{ExtraBuildDependency, Sources};
-
-pub use uv_configuration::ExcludeDependency;
 pub use uv_workspace::pyproject::OverrideDependency;
+use uv_workspace::pyproject::{ExtraBuildDependency, Sources};
 
 static FINDER: LazyLock<Finder> = LazyLock::new(|| Finder::new(b"# /// script"));
 
@@ -704,8 +702,9 @@ fn serialize_metadata(metadata: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Pep723Error, Pep723Script, ScriptTag, serialize_metadata};
     use std::str::FromStr;
+
+    use crate::{Pep723Error, Pep723Script, ScriptTag, serialize_metadata};
 
     #[test]
     fn missing_space() {

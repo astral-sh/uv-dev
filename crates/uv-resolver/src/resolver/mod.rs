@@ -13,13 +13,13 @@ use either::Either;
 use futures::{FutureExt, StreamExt};
 use itertools::Itertools;
 use papaya::{HashMap, ResizeMode};
+pub(crate) use provider::MetadataUnavailable;
 use pubgrub::{Id, IncompId, Incompatibility, Kind, Ranges, State};
 use rustc_hash::{FxHashMap, FxHashSet};
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::sync::oneshot;
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::{Level, debug, info, instrument, trace, warn};
-
 use uv_configuration::{Constraints, Excludes, Overrides};
 use uv_distribution::{ArchiveMetadata, DistributionDatabase};
 use uv_distribution_types::{
@@ -80,7 +80,6 @@ pub(crate) use crate::resolver::urls::Urls;
 use crate::universal_marker::{ConflictMarker, UniversalMarker};
 use crate::yanks::AllowedYanks;
 use crate::{DependencyMode, Exclusions, FlatIndex, Options, ResolutionMode, VersionMap, marker};
-pub(crate) use provider::MetadataUnavailable;
 
 mod availability;
 mod batch_prefetch;

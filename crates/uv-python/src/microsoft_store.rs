@@ -3,14 +3,16 @@
 //!
 //! Effectively a port of <https://github.com/python/cpython/blob/58ce131037ecb34d506a613f21993cde2056f628/PC/launcher2.c#L1744>
 
-use crate::PythonVersion;
-use crate::windows_registry::WindowsPython;
-use itertools::Either;
 use std::env;
 use std::path::PathBuf;
 use std::str::FromStr;
+
+use itertools::Either;
 use tracing::debug;
 use uv_static::EnvVars;
+
+use crate::PythonVersion;
+use crate::windows_registry::WindowsPython;
 
 #[derive(Debug)]
 struct MicrosoftStorePython {

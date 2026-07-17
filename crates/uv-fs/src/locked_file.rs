@@ -7,7 +7,6 @@ use std::{env, io};
 
 use thiserror::Error;
 use tracing::{debug, error, info, trace, warn};
-
 use uv_static::EnvVars;
 #[cfg(windows)]
 use windows::Win32::Foundation::ERROR_LOCK_VIOLATION;
@@ -292,9 +291,10 @@ impl LockedFile {
 
     #[cfg(unix)]
     fn create(path: impl AsRef<Path>) -> Result<fs_err::File, LockedFileError> {
-        use rustix::io::Errno;
         #[expect(clippy::disallowed_types)]
         use std::{fs::File, os::unix::fs::PermissionsExt};
+
+        use rustix::io::Errno;
         use tempfile::NamedTempFile;
 
         /// The permissions the lockfile should end up with

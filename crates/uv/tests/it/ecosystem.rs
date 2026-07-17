@@ -1,7 +1,8 @@
+use std::path::Path;
+
 use anyhow::Result;
 use assert_fs::fixture::ChildPath;
 use insta::assert_snapshot;
-use std::path::Path;
 use uv_static::EnvVars;
 
 // These tests just run `uv lock` on an assorted of ecosystem

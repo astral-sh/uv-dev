@@ -1,7 +1,6 @@
 use anyhow::Result;
 use indoc::indoc;
 use insta::assert_snapshot;
-
 use uv_test::{make_project, uv_snapshot};
 
 /// The root package has diverging URLs for disjoint markers:

@@ -11,7 +11,6 @@ use reqwest_retry::{
 };
 use tracing::{debug, trace};
 use url::Url;
-
 use uv_redacted::DisplaySafeUrl;
 
 use crate::WrappedReqwestError;
@@ -271,8 +270,6 @@ fn find_source<E: Error + 'static>(orig: &dyn Error) -> Option<&E> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use anyhow::Result;
     use insta::assert_debug_snapshot;
     use reqwest::Client;
@@ -280,6 +277,7 @@ mod tests {
     use wiremock::matchers::path;
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
+    use super::*;
     use crate::{UvRetryableStrategy, retryable_on_request_failure};
 
     /// Enumerate which status codes we are retrying.

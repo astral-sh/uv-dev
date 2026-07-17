@@ -11,7 +11,6 @@ use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use insta::assert_snapshot;
-
 use uv_static::EnvVars;
 use uv_test::packse::PackseServer;
 use uv_test::uv_snapshot;

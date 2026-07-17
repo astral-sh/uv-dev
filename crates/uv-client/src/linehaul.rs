@@ -2,7 +2,6 @@ use std::env;
 
 use serde::Serialize;
 use tracing::instrument;
-
 use uv_pep508::MarkerEnvironment;
 use uv_platform_tags::{Os, Platform};
 use uv_static::EnvVars;

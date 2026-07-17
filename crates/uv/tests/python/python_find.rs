@@ -1,11 +1,9 @@
 use assert_cmd::assert::OutputAssertExt;
-use assert_fs::prelude::{FileTouch, PathChild};
-use assert_fs::{fixture::FileWriteStr, prelude::PathCreateDir};
+use assert_fs::fixture::FileWriteStr;
+use assert_fs::prelude::{FileTouch, PathChild, PathCreateDir};
 use indoc::indoc;
-
 use uv_platform::{Arch, Os};
 use uv_static::EnvVars;
-
 use uv_test::{uv_snapshot, venv_bin_path};
 
 #[test]

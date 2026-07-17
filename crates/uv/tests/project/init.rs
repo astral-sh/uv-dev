@@ -6,9 +6,7 @@ use assert_fs::prelude::*;
 use indoc::indoc;
 use insta::assert_snapshot;
 use predicates::prelude::predicate;
-
 use uv_static::EnvVars;
-
 use uv_test::{TestContext, uv_snapshot};
 
 #[test]

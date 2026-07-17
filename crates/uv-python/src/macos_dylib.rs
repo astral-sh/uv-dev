@@ -1,4 +1,5 @@
-use std::{io::ErrorKind, path::PathBuf};
+use std::io::ErrorKind;
+use std::path::PathBuf;
 
 use uv_fs::Simplified as _;
 use uv_warnings::warn_user;

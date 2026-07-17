@@ -1,12 +1,13 @@
-use petgraph::{
-    algo::toposort,
-    graph::{DiGraph, NodeIndex},
-};
-use rustc_hash::{FxHashMap, FxHashSet};
 #[cfg(feature = "schemars")]
 use std::borrow::Cow;
+use std::collections::BTreeSet;
 use std::fmt;
-use std::{collections::BTreeSet, hash::Hash, rc::Rc};
+use std::hash::Hash;
+use std::rc::Rc;
+
+use petgraph::algo::toposort;
+use petgraph::graph::{DiGraph, NodeIndex};
+use rustc_hash::{FxHashMap, FxHashSet};
 use uv_normalize::{ExtraName, GroupName, PackageName};
 
 use crate::dependency_groups::{DependencyGroupSpecifier, DependencyGroups};

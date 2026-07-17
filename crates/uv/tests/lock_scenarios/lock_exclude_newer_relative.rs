@@ -2,7 +2,6 @@ use anyhow::Result;
 use assert_fs::fixture::{FileWriteStr, PathChild};
 use insta::assert_snapshot;
 use uv_static::EnvVars;
-
 use uv_test::uv_snapshot;
 
 /// Lock with a relative exclude-newer value.

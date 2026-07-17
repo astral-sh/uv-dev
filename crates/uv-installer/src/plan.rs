@@ -5,7 +5,6 @@ use std::sync::Arc;
 use anyhow::{Result, bail};
 use owo_colors::OwoColorize;
 use tracing::{debug, warn};
-
 use uv_cache::{Cache, CacheBucket, WheelCache};
 use uv_cache_info::Timestamp;
 use uv_configuration::{BuildOptions, Reinstall};
@@ -908,9 +907,11 @@ impl Plan {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::str::FromStr;
+
     use uv_platform_tags::{Arch, Os, Platform, TagsOptions};
+
+    use super::*;
 
     #[test]
     fn test_abi3_on_free_threaded_python_hint() {

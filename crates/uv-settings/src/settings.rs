@@ -1,9 +1,10 @@
 #[cfg(feature = "schemars")]
 use std::borrow::Cow;
-use std::{fmt::Debug, num::NonZeroUsize, path::Path, path::PathBuf};
+use std::fmt::Debug;
+use std::num::NonZeroUsize;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-
 use uv_cache_info::CacheKey;
 use uv_configuration::{
     BuildIsolation, ExcludeDependency, IndexStrategy, KeyringProviderType, PackageNameSpecifier,

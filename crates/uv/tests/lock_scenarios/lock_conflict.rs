@@ -3,7 +3,6 @@ use std::time::Duration;
 use anyhow::Result;
 use assert_fs::prelude::*;
 use insta::assert_snapshot;
-
 use uv_test::uv_snapshot;
 
 // All of the tests in this file should use `tool.uv.conflicts` in some way.

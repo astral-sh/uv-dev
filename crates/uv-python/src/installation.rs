@@ -7,14 +7,13 @@ use indexmap::IndexMap;
 use ref_cast::RefCast;
 use reqwest_retry::policies::ExponentialBackoff;
 use tracing::{debug, info};
-use uv_fs::Simplified;
-use uv_warnings::warn_user;
-
 use uv_cache::Cache;
 use uv_cache_key::{CacheKey, CacheKeyHasher};
 use uv_client::{BaseClient, BaseClientBuilder};
+use uv_fs::Simplified;
 use uv_pep440::{Prerelease, Version};
 use uv_platform::{Arch, Libc, Os, Platform};
+use uv_warnings::warn_user;
 
 use crate::discovery::{
     EnvironmentPreference, PythonRequest, VersionRequest, find_best_python_installation,
@@ -910,8 +909,9 @@ impl From<PythonInstallationKey> for PythonInstallationMinorVersionKey {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use uv_platform::ArchVariant;
+
+    use super::*;
 
     #[test]
     fn test_python_installation_key_from_str() {

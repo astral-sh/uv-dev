@@ -3,18 +3,16 @@
 use std::io;
 use std::path::PathBuf;
 
+pub use install::{install_wheel, installed_dist_info_path};
+pub use linker::{InstallState, LinkMode};
 use owo_colors::OwoColorize;
+pub use record::RecordEntry;
 use thiserror::Error;
-
+pub use uninstall::{Uninstall, uninstall_egg, uninstall_legacy_editable, uninstall_wheel};
 use uv_fs::Simplified;
 use uv_normalize::PackageName;
 use uv_pep440::Version;
 use uv_pypi_types::Scheme;
-
-pub use install::{install_wheel, installed_dist_info_path};
-pub use linker::{InstallState, LinkMode};
-pub use record::RecordEntry;
-pub use uninstall::{Uninstall, uninstall_egg, uninstall_legacy_editable, uninstall_wheel};
 pub use wheel::{WheelFile, read_record, read_record_into_iter, validate_and_heal_record};
 
 mod install;

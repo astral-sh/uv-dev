@@ -1,5 +1,4 @@
 use rustc_hash::FxHashSet;
-
 use uv_configuration::Upgrade;
 use uv_normalize::PackageName;
 

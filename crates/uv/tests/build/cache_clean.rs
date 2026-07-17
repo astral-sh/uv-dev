@@ -1,10 +1,8 @@
 use anyhow::Result;
 use assert_cmd::prelude::*;
 use assert_fs::prelude::*;
-
 use uv_cache::Cache;
 use uv_static::EnvVars;
-
 use uv_test::uv_snapshot;
 
 /// `cache clean` should remove all packages.

@@ -1,7 +1,7 @@
-use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::BTreeMap;
 use std::str::FromStr;
 
+use serde::{Deserialize, Deserializer, Serialize};
 use uv_normalize::GroupName;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

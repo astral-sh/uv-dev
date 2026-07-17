@@ -13,7 +13,6 @@ use owo_colors::{AnsiColors, OwoColorize};
 use rustc_hash::{FxHashMap, FxHashSet};
 use tokio::sync::mpsc;
 use tracing::{debug, trace, warn};
-
 use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
 use uv_configuration::Concurrency;

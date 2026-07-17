@@ -2,12 +2,9 @@ use std::env::current_dir;
 
 use anyhow::Result;
 use assert_cmd::prelude::*;
-use assert_fs::fixture::FileWriteStr;
-use assert_fs::fixture::PathChild;
+use assert_fs::fixture::{FileWriteStr, PathChild};
 use indoc::indoc;
-
 use uv_static::EnvVars;
-
 use uv_test::uv_snapshot;
 
 #[test]

@@ -10,7 +10,6 @@ use itertools::Itertools;
 use pretty_assertions::StrComparison;
 use schemars::JsonSchema;
 use serde::Deserialize;
-
 use uv_macros::OptionsMetadata;
 use uv_options_metadata::{OptionField, OptionSet, OptionsMetadata, Visit};
 use uv_settings::Options as SettingsOptions;

@@ -13,14 +13,13 @@ use uv_pep440::VersionSpecifiers;
 use uv_pep508::{
     MarkerEnvironment, MarkerTree, RequirementOrigin, VerbatimUrl, VersionOrUrl, marker,
 };
-use uv_redacted::{DisplaySafeUrl, DisplaySafeUrlError};
-
-use crate::{IndexMetadata, IndexUrl};
-
 use uv_pypi_types::{
     ConflictItem, Hashes, ParsedArchiveUrl, ParsedDirectoryUrl, ParsedGitDirectoryUrl,
     ParsedGitPathUrl, ParsedPathUrl, ParsedUrl, ParsedUrlError, VerbatimParsedUrl,
 };
+use uv_redacted::{DisplaySafeUrl, DisplaySafeUrlError};
+
+use crate::{IndexMetadata, IndexUrl};
 
 #[derive(Debug, Error)]
 enum RequirementError {

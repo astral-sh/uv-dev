@@ -13,18 +13,16 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use serde_json::json;
-use wiremock::{Request, ResponseTemplate};
-
 use uv_distribution_filename::WheelFilename;
 use uv_normalize::PackageName;
 use uv_pep440::VersionSpecifiers;
-
-use crate::http_server::{HttpServer, content_type_for_filename};
-use crate::vendor::{VendorArtifact, vendor_artifacts};
+use wiremock::{Request, ResponseTemplate};
 
 use super::scenario::{Scenario, WheelTag};
 use super::scenarios_dir;
 use super::wheel::{generate_sdist, generate_wheel, sha256_hex};
+use crate::http_server::{HttpServer, content_type_for_filename};
+use crate::vendor::{VendorArtifact, vendor_artifacts};
 
 const PACKSE_UPLOAD_TIME: &str = "2024-03-24T00:00:00Z";
 
@@ -338,9 +336,8 @@ mod tests {
     use reqwest::StatusCode;
     use reqwest::header::{ACCEPT_RANGES, CONTENT_RANGE, RANGE};
 
-    use crate::vendor::vendor_artifacts;
-
     use super::{PackseServer, Scenario, build_server_index, extract_package_name};
+    use crate::vendor::vendor_artifacts;
 
     #[test]
     fn extract_package_name_accepts_with_or_without_trailing_slash() {

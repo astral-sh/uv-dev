@@ -1,6 +1,6 @@
-use owo_colors::OwoColorize;
 use std::fmt::Write;
 
+use owo_colors::OwoColorize;
 use uv_auth::{PyxTokenStore, Service, TextCredentialStore, is_default_pyx_domain};
 use uv_fs::Simplified;
 

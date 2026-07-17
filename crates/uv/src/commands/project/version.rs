@@ -5,7 +5,6 @@ use std::str::FromStr;
 use anyhow::{Result, anyhow};
 use owo_colors::OwoColorize;
 use thiserror::Error;
-
 use tracing::debug;
 use uv_cache::Cache;
 use uv_cli::version::ProjectVersionInfo;
@@ -15,18 +14,16 @@ use uv_configuration::{
     Concurrency, DependencyGroups, DryRun, ExtrasSpecification, InstallOptions,
 };
 use uv_fs::Simplified;
-use uv_normalize::DefaultExtras;
-use uv_normalize::PackageName;
+use uv_normalize::{DefaultExtras, PackageName};
 use uv_pep440::{BumpCommand, PrereleaseKind, Version};
 use uv_preview::Preview;
 use uv_python::{ConfigDiscovery, PythonDownloads, PythonPreference, PythonRequest};
 use uv_settings::{MalwareCheckSettings, PythonInstallMirrors};
 use uv_workspace::pyproject::PyProjectToml;
-use uv_workspace::pyproject_mut::Error;
+use uv_workspace::pyproject_mut::{DependencyTarget, Error, PyProjectTomlMut};
 use uv_workspace::{
     DiscoveryOptions, ProjectWorkspace, VirtualProject, WorkspaceCache, WorkspaceError,
     WorkspaceErrorKind,
-    pyproject_mut::{DependencyTarget, PyProjectTomlMut},
 };
 
 use crate::commands::pip::loggers::{DefaultInstallLogger, DefaultResolveLogger};

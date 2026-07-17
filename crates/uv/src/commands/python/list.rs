@@ -1,16 +1,16 @@
-use serde::Serialize;
 use std::collections::BTreeSet;
 use std::fmt::Write;
-use uv_cli::PythonListFormat;
-use uv_pep440::Version;
 
 use anyhow::Result;
 use itertools::Either;
 use owo_colors::OwoColorize;
 use rustc_hash::FxHashSet;
+use serde::Serialize;
 use uv_cache::Cache;
+use uv_cli::PythonListFormat;
 use uv_client::BaseClientBuilder;
 use uv_fs::Simplified;
+use uv_pep440::Version;
 use uv_python::downloads::{
     Error as PythonDownloadError, ManagedPythonDownloadList, PythonDownloadRequest,
 };

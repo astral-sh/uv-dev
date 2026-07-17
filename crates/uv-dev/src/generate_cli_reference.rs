@@ -7,11 +7,10 @@ use anyhow::{Result, bail};
 use clap::{Command, CommandFactory};
 use itertools::Itertools;
 use pretty_assertions::StrComparison;
+use uv_cli::Cli;
 
 use crate::ROOT_DIR;
 use crate::generate_all::Mode;
-
-use uv_cli::Cli;
 
 const REPLACEMENTS: &[(&str, &str)] = &[
     // Replace suggestions to use `uv help python` with a link to the

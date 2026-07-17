@@ -1,11 +1,11 @@
-use anyhow::Result;
-use itertools::Itertools;
-use owo_colors::OwoColorize;
 use std::collections::BTreeMap;
 use std::fmt::Write;
 use std::str::FromStr;
-use tracing::{debug, trace};
 
+use anyhow::Result;
+use itertools::Itertools;
+use owo_colors::OwoColorize;
+use tracing::{debug, trace};
 use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
 use uv_configuration::{Concurrency, Constraints, DryRun, HashCheckingMode, TargetTriple};
@@ -30,14 +30,17 @@ use uv_workspace::WorkspaceCache;
 use crate::commands::pip::loggers::{
     DefaultInstallLogger, SummaryResolveLogger, UpgradeInstallLogger,
 };
-use crate::commands::pip::{operations::Modifications, resolution_tags};
+use crate::commands::pip::operations::Modifications;
+use crate::commands::pip::resolution_tags;
 use crate::commands::project::{
     EnvironmentResolution, EnvironmentUpdate, PlatformState, resolve_environment, sync_environment,
     update_environment,
 };
 use crate::commands::reporters::PythonDownloadReporter;
-use crate::commands::tool::common::{ToolLock, remove_entrypoints, tool_environment_spec};
-use crate::commands::{ExitStatus, conjunction, tool::common::finalize_tool_install};
+use crate::commands::tool::common::{
+    ToolLock, finalize_tool_install, remove_entrypoints, tool_environment_spec,
+};
+use crate::commands::{ExitStatus, conjunction};
 use crate::printer::Printer;
 use crate::settings::ResolverInstallerSettings;
 

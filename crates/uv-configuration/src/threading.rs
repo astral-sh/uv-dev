@@ -2,6 +2,7 @@
 
 use std::sync::Once;
 use std::sync::atomic::{AtomicUsize, Ordering};
+
 use uv_static::EnvVars;
 
 /// The default minimum stack size for uv threads.

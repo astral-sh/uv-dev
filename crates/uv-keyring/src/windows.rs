@@ -38,12 +38,11 @@ different threads produces different results on different runs.
 
 #![allow(unsafe_code)]
 
-use crate::credential::{Credential, CredentialApi, CredentialBuilder, CredentialBuilderApi};
-use crate::error::{Error as ErrorCode, Result};
-use byteorder::{ByteOrder, LittleEndian};
 use std::collections::HashMap;
 use std::iter::once;
 use std::str;
+
+use byteorder::{ByteOrder, LittleEndian};
 use windows::Win32::Foundation::{
     ERROR_BAD_USERNAME, ERROR_INVALID_FLAGS, ERROR_INVALID_PARAMETER, ERROR_NO_SUCH_LOGON_SESSION,
     ERROR_NOT_FOUND, FILETIME, WIN32_ERROR,
@@ -55,6 +54,9 @@ use windows::Win32::Security::Credentials::{
 };
 use windows::core::PWSTR;
 use zeroize::Zeroize;
+
+use crate::credential::{Credential, CredentialApi, CredentialBuilder, CredentialBuilderApi};
+use crate::error::{Error as ErrorCode, Result};
 
 /// The representation of a Windows Generic credential.
 ///
@@ -523,7 +525,6 @@ impl std::error::Error for Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use crate::Entry;
     use crate::tests::{generate_random_string, generate_random_string_of_len};
 

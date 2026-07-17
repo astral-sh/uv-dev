@@ -1,7 +1,6 @@
 use std::fmt;
 
 use anstream::eprintln;
-
 use uv_cache::Refresh;
 use uv_configuration::{BuildIsolation, Reinstall, Upgrade};
 use uv_distribution_types::{ConfigSettings, Index, PackageConfigSettings, Requirement};

@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 use tracing::{debug, info_span, warn};
-
 use uv_fs::Simplified;
 
 use crate::git_info::{Commit, Tags};

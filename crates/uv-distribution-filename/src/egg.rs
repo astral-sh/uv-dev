@@ -1,7 +1,6 @@
 use std::str::FromStr;
 
 use thiserror::Error;
-
 use uv_normalize::{InvalidNameError, PackageName};
 use uv_pep440::{Version, VersionParseError};
 

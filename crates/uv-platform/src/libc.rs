@@ -3,21 +3,23 @@
 //! Taken from `glibc_version` (<https://github.com/delta-incubator/glibc-version-rs>),
 //! which used the Apache 2.0 license (but not the MIT license)
 
-use crate::{Arch, cpuinfo::detect_hardware_floating_point_support};
-use fs_err as fs;
-use goblin::elf::Elf;
-use regex::Regex;
 use std::fmt::Display;
-use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::str::FromStr;
 use std::sync::LazyLock;
-use std::{env, fmt};
+use std::{env, fmt, io};
+
+use fs_err as fs;
+use goblin::elf::Elf;
+use regex::Regex;
 use target_lexicon::Endianness;
 use tracing::trace;
 use uv_fs::Simplified;
 use uv_static::EnvVars;
+
+use crate::Arch;
+use crate::cpuinfo::detect_hardware_floating_point_support;
 
 #[derive(Debug, thiserror::Error)]
 pub enum LibcDetectionError {
@@ -467,9 +469,10 @@ fn find_ld_path_at(path: impl AsRef<Path>) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use indoc::indoc;
     use tempfile::tempdir;
+
+    use super::*;
 
     #[test]
     fn parse_ld_so_output() {

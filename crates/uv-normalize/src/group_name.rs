@@ -6,7 +6,6 @@ use std::sync::LazyLock;
 
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
 use uv_small_str::SmallString;
 
 use crate::{

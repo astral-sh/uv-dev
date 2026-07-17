@@ -1,7 +1,8 @@
 use std::borrow::Cow;
 use std::str::FromStr;
 
-use jiff::{Span, Timestamp, ToSpan, Unit, tz::TimeZone};
+use jiff::tz::TimeZone;
+use jiff::{Span, Timestamp, ToSpan, Unit};
 use serde::Deserialize;
 use serde::de::value::MapAccessDeserializer;
 

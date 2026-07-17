@@ -3,7 +3,6 @@ use std::path::Path;
 use std::slice;
 
 use rustc_hash::FxHashSet;
-
 use uv_auth::CredentialsCache;
 use uv_cache::Cache;
 use uv_configuration::NoSources;
@@ -458,7 +457,6 @@ mod test {
     use indoc::indoc;
     use insta::assert_snapshot;
     use tempfile::TempDir;
-
     use uv_auth::CredentialsCache;
     use uv_cache::Cache;
     use uv_configuration::NoSources;

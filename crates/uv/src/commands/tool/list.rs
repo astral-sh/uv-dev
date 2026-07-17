@@ -5,7 +5,6 @@ use futures::StreamExt;
 use itertools::Itertools;
 use owo_colors::OwoColorize;
 use rustc_hash::FxHashMap;
-
 use uv_cache::{Cache, Refresh};
 use uv_cache_info::Timestamp;
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};

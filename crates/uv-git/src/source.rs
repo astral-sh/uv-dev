@@ -8,7 +8,6 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use tracing::{debug, instrument};
-
 use uv_cache_key::cache_digest;
 use uv_git_types::{GitOid, GitReference, GitUrl};
 use uv_redacted::DisplaySafeUrl;

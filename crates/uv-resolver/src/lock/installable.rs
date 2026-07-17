@@ -1,6 +1,5 @@
-use std::collections::BTreeSet;
-use std::collections::VecDeque;
 use std::collections::hash_map::Entry;
+use std::collections::{BTreeSet, VecDeque};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -8,7 +7,6 @@ use either::Either;
 use itertools::Itertools;
 use petgraph::Graph;
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
-
 use uv_configuration::{
     BuildOptions, DependencyGroupsWithDefaults, ExtrasSpecification,
     ExtrasSpecificationWithDefaults, InstallOptions,

@@ -8,7 +8,8 @@ use uv_platform::{Arch, Os};
 use uv_python::{PYTHON_VERSION_FILENAME, PYTHON_VERSIONS_FILENAME};
 use uv_static::EnvVars;
 use uv_test::uv_snapshot;
-use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
+use wiremock::matchers::method;
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[test]
 fn python_pin() {

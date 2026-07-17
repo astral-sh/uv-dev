@@ -2,7 +2,6 @@ use std::borrow::Cow;
 use std::collections::hash_map::Entry;
 
 use rustc_hash::{FxHashMap, FxHashSet};
-
 use uv_cache::{Cache, CacheBucket, WheelCache};
 use uv_cache_info::CacheInfo;
 use uv_distribution_filename::WheelFilename;

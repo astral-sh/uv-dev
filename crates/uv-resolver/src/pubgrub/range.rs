@@ -3,7 +3,6 @@ use std::hash::{Hash, Hasher};
 use std::ops::{Bound, Deref, RangeBounds};
 
 use pubgrub::{Ranges, SetRelation, VersionSet};
-
 use uv_pep440::{
     LocalVersionSlice, Version, VersionSpecifiers, canonicalize_version_ranges,
     strip_local_version_sentinels,
@@ -274,9 +273,9 @@ mod tests {
     use std::str::FromStr;
 
     use pubgrub::{Ranges, VersionSet};
+    use uv_pep440::{Version, VersionSpecifiers, canonicalize_version_ranges};
 
     use super::Range;
-    use uv_pep440::{Version, VersionSpecifiers, canonicalize_version_ranges};
 
     fn range(specifiers: &str) -> Range<Version> {
         Range::from(

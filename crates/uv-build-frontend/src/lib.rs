@@ -7,14 +7,12 @@ mod pipreqs;
 
 use std::borrow::Cow;
 use std::ffi::OsString;
-use std::fmt::Formatter;
-use std::fmt::Write;
-use std::io;
+use std::fmt::{Formatter, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
 use std::str::FromStr;
 use std::sync::{Arc, LazyLock};
-use std::{env, iter};
+use std::{env, io, iter};
 
 use fs_err as fs;
 use indoc::formatdoc;
@@ -35,8 +33,7 @@ use uv_distribution::BuildRequires;
 use uv_distribution_types::{
     ConfigSettings, ExtraBuildRequirement, ExtraBuildRequires, IndexLocations, Requirement,
 };
-use uv_fs::{LockedFile, LockedFileMode};
-use uv_fs::{PythonExt, Simplified};
+use uv_fs::{LockedFile, LockedFileMode, PythonExt, Simplified};
 use uv_normalize::PackageName;
 use uv_pep440::Version;
 use uv_pypi_types::VerbatimParsedUrl;

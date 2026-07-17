@@ -19,18 +19,16 @@ use owo_colors::OwoColorize;
 use settings::PipTreeSettings;
 use tokio::task::spawn_blocking;
 use tracing::{debug, instrument, trace};
-
-#[cfg(not(feature = "self-update"))]
-use crate::install_source::InstallSource;
 use uv_cache::{Cache, Refresh};
 use uv_cache_info::Timestamp;
 #[cfg(feature = "self-update")]
 use uv_cli::SelfUpdateArgs;
+use uv_cli::compat::CompatArgs;
 use uv_cli::{
     AuthCommand, AuthHelperCommand, AuthNamespace, BuildBackendCommand, CacheCommand,
     CacheNamespace, Cli, Commands, PipCommand, PipNamespace, ProjectCommand, PythonCommand,
     PythonNamespace, SelfCommand, SelfNamespace, ToolCommand, ToolNamespace, TopLevelArgs,
-    WorkspaceCommand, WorkspaceNamespace, compat::CompatArgs,
+    WorkspaceCommand, WorkspaceNamespace,
 };
 use uv_client::BaseClientBuilder;
 use uv_configuration::min_stack_size;
@@ -53,6 +51,8 @@ use uv_workspace::{DiscoveryOptions, Workspace, WorkspaceCache};
 use crate::commands::{
     ExitStatus, ParsedRunCommand, RunCommand, ScriptPath, ToolRunCommand, UvError,
 };
+#[cfg(not(feature = "self-update"))]
+use crate::install_source::InstallSource;
 use crate::printer::Printer;
 use crate::settings::{
     CacheSettings, GlobalSettings, PipCheckSettings, PipCompileSettings, PipFreezeSettings,

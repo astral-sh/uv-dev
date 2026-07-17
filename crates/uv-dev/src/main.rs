@@ -11,7 +11,6 @@ use tracing_subscriber::filter::Directive;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Layer};
-
 use uv_dev::run;
 use uv_static::EnvVars;
 

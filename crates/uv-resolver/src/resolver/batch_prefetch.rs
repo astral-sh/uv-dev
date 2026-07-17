@@ -6,6 +6,10 @@ use pubgrub::Term;
 use rustc_hash::{FxHashMap, FxHashSet};
 use tokio::sync::mpsc::Sender;
 use tracing::{debug, trace};
+use uv_distribution_types::{CompatibleDist, Identifier, IndexCapabilities, IndexMetadata};
+use uv_normalize::PackageName;
+use uv_pep440::Version;
+use uv_pep508::MarkerTree;
 
 use crate::candidate_selector::CandidateSelector;
 use crate::pubgrub::{PubGrubPackage, PubGrubPackageInner, Range};
@@ -13,10 +17,6 @@ use crate::resolver::Request;
 use crate::{
     InMemoryIndex, PythonRequirement, ResolveError, ResolverEnvironment, VersionsResponse,
 };
-use uv_distribution_types::{CompatibleDist, Identifier, IndexCapabilities, IndexMetadata};
-use uv_normalize::PackageName;
-use uv_pep440::Version;
-use uv_pep508::MarkerTree;
 
 enum BatchPrefetchStrategy {
     /// Go through the next versions assuming the existing selection and its constraints

@@ -3,7 +3,6 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 use toml_edit::{Array, Item, Table, Value, value};
-
 use uv_configuration::ExcludeDependency;
 use uv_distribution_types::Requirement;
 use uv_fs::{PortablePath, Simplified};

@@ -1,5 +1,4 @@
 use anyhow::Result;
-
 use uv_configuration::{BuildOptions, DependencyGroupsWithDefaults, InstallOptions};
 use uv_distribution_types::Resolution;
 use uv_normalize::{GroupName, PackageName};

@@ -1,8 +1,6 @@
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::fixture::PathChild;
-
 use uv_static::EnvVars;
-
 use uv_test::uv_snapshot;
 
 #[test]

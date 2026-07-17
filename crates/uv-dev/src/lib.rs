@@ -3,7 +3,6 @@ use std::env;
 use anyhow::Result;
 use clap::Parser;
 use tracing::instrument;
-
 use uv_settings::EnvironmentOptions;
 
 use crate::clear_compile::ClearCompileArgs;

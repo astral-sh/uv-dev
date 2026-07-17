@@ -8,7 +8,6 @@ use std::sync::Arc;
 use owo_colors::OwoColorize;
 use rustc_hash::{FxBuildHasher, FxHashMap};
 use tracing::debug;
-
 use uv_cache::{Cache, Refresh};
 use uv_client::{BaseClientBuilder, FlatIndexClient, RegistryClientBuilder};
 use uv_configuration::{

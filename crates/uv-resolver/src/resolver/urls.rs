@@ -2,7 +2,6 @@ use either::Either;
 use rustc_hash::FxHashMap;
 use same_file::is_same_file;
 use tracing::debug;
-
 use uv_cache_key::CanonicalUrl;
 use uv_git::GitResolver;
 use uv_normalize::PackageName;

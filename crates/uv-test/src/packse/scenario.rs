@@ -10,7 +10,6 @@ use std::str::FromStr;
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
-
 use uv_configuration::TargetTriple;
 use uv_distribution_filename::WheelFilename;
 use uv_normalize::{ExtraName, PackageName};

@@ -3,7 +3,6 @@ use std::borrow::Cow;
 use either::Either;
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 use serde::de::IntoDeserializer;
-
 use uv_distribution_types::{Requirement, RequirementSource};
 use uv_normalize::PackageName;
 use uv_pep440::Version;

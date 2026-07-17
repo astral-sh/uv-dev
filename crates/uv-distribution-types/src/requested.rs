@@ -1,11 +1,12 @@
 use std::fmt::{Display, Formatter};
 
+use uv_normalize::PackageName;
+use uv_pep440::Version;
+
 use crate::{
     Dist, DistributionId, DistributionMetadata, Identifier, InstalledDist, Name, ResourceId,
     VersionId, VersionOrUrlRef,
 };
-use uv_normalize::PackageName;
-use uv_pep440::Version;
 
 /// A distribution that can be requested during resolution.
 ///

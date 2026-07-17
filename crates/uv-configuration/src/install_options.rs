@@ -1,7 +1,6 @@
 use std::collections::BTreeSet;
 
 use tracing::debug;
-
 use uv_normalize::PackageName;
 
 /// Minimal view of a package used to apply install filters.

@@ -1,4 +1,6 @@
-use std::{io::Write, process::Stdio};
+use std::io::Write;
+use std::process::Stdio;
+
 use tokio::process::Command;
 use tracing::{debug, instrument, trace, warn};
 use uv_redacted::DisplaySafeUrl;
@@ -422,8 +424,9 @@ impl KeyringProvider {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use url::Url;
+
+    use super::*;
 
     #[tokio::test]
     #[cfg_attr(

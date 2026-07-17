@@ -2,7 +2,6 @@ use std::str::FromStr;
 
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde::de::Error;
-
 use uv_normalize::PackageName;
 use uv_pep440::Version;
 

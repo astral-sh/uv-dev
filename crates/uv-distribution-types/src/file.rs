@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
-
 use uv_pep440::{VersionSpecifiers, VersionSpecifiersParseError};
 use uv_pep508::split_scheme;
 use uv_pypi_types::{CoreMetadata, HashDigests, Yanked};

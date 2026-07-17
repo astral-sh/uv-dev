@@ -12,14 +12,13 @@ use mailparse::parse_headers;
 use rustc_hash::FxHashMap;
 use sha2::{Digest, Sha256};
 use tracing::{debug, instrument, trace, warn};
-use walkdir::WalkDir;
-
 use uv_fs::{PortablePath, Simplified, normalize_path_under, persist_with_retry_sync, relative_to};
 use uv_normalize::PackageName;
 use uv_pypi_types::DirectUrl;
 use uv_shell::escape_posix_for_single_quotes;
 use uv_trampoline_builder::windows_script_launcher;
 use uv_warnings::warn_user_once;
+use walkdir::WalkDir;
 
 use crate::record::RecordEntry;
 use crate::script::{EntryPoints, Script};

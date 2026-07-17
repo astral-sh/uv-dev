@@ -1,3 +1,6 @@
+use std::env::current_dir;
+use std::path::Path;
+
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
@@ -6,15 +9,11 @@ use futures::executor::block_on;
 use indoc::{formatdoc, indoc};
 use insta::assert_snapshot;
 use predicates::prelude::predicate;
-use std::env::current_dir;
-use std::path::Path;
 use url::Url;
 use uv_static::EnvVars;
 use uv_test::{DEFAULT_PYTHON_VERSION, apply_filters, get_bin, uv_snapshot};
-use wiremock::{
-    Mock, MockServer, ResponseTemplate,
-    matchers::{method, path as url_path},
-};
+use wiremock::matchers::{method, path as url_path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn zip_file_names(path: &Path) -> Result<Vec<String>> {
     block_on(async {

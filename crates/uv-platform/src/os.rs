@@ -1,8 +1,9 @@
-use crate::Error;
 use std::fmt;
 use std::fmt::Display;
 use std::ops::Deref;
 use std::str::FromStr;
+
+use crate::Error;
 
 #[derive(Debug, Eq, PartialEq, Clone, Copy, Hash)]
 pub struct Os(pub(crate) target_lexicon::OperatingSystem);

@@ -5,7 +5,6 @@ use std::str::FromStr;
 use memchr::memchr;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use thiserror::Error;
-
 use uv_cache_key::cache_digest;
 use uv_normalize::{InvalidNameError, PackageName};
 use uv_pep440::{Version, VersionParseError};

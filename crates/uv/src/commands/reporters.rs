@@ -1,16 +1,12 @@
 use std::env;
 use std::fmt::Write;
 use std::ops::Deref;
-use std::sync::LazyLock;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use owo_colors::OwoColorize;
 use rustc_hash::FxHashMap;
-
-use crate::commands::human_readable_bytes;
-use crate::printer::Printer;
 use uv_cache::Removal;
 use uv_distribution_filename::DistFilename;
 use uv_distribution_types::{
@@ -21,6 +17,9 @@ use uv_pep440::Version;
 use uv_python::PythonInstallationKey;
 use uv_redacted::DisplaySafeUrl;
 use uv_static::EnvVars;
+
+use crate::commands::human_readable_bytes;
+use crate::printer::Printer;
 
 /// Since downloads, fetches and builds run in parallel, their message output order is
 /// non-deterministic, so can't capture them in test output.

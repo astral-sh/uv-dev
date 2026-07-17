@@ -21,7 +21,6 @@ use rustls::{RootCertStore, ServerConfig};
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 use tokio_rustls::TlsAcceptor;
-
 use uv_fs::Simplified;
 
 /// An issued certificate, together with the subject keypair.

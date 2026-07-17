@@ -197,7 +197,8 @@ impl MockCredential {
 #[cfg(test)]
 mod tests {
     use super::MockCredential;
-    use crate::{Entry, Error, tests::generate_random_string};
+    use crate::tests::generate_random_string;
+    use crate::{Entry, Error};
 
     fn entry_new(service: &str, user: &str) -> Entry {
         let credential = MockCredential::new_with_target(None, service, user);

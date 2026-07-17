@@ -1,7 +1,6 @@
 //! Vendored from <https://github.com/PyO3/python-pkginfo-rs>
 use std::collections::BTreeSet;
-use std::fmt::Display;
-use std::fmt::Write;
+use std::fmt::{Display, Write};
 use std::str;
 use std::str::FromStr;
 
@@ -404,9 +403,10 @@ impl ProjectUrls {
 
 #[cfg(test)]
 mod tests {
+    use insta::assert_snapshot;
+
     use super::*;
     use crate::MetadataError;
-    use insta::assert_snapshot;
 
     #[test]
     fn test_parse_from_str() {

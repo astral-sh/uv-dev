@@ -1,6 +1,7 @@
-use crate::{Shell, Simplified};
 use std::borrow::Cow;
 use std::path::Path;
+
+use crate::{Shell, Simplified};
 
 /// Quote a path, if necessary, for safe use in a POSIX-compatible shell command.
 pub fn shlex_posix(executable: impl AsRef<Path>) -> String {

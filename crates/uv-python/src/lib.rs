@@ -1,6 +1,5 @@
 //! Find requested Python interpreters and query interpreters for information.
 use thiserror::Error;
-
 #[cfg(test)]
 use uv_static::EnvVars;
 
@@ -203,35 +202,33 @@ impl From<PythonNotFound> for Error {
 // TODO(zanieb): We should write a mock interpreter script that works on Windows
 #[cfg(all(test, unix))]
 mod tests {
-    use std::{
-        env,
-        ffi::{OsStr, OsString},
-        path::{Path, PathBuf},
-        str::FromStr,
-    };
+    use std::env;
+    use std::ffi::{OsStr, OsString};
+    use std::path::{Path, PathBuf};
+    use std::str::FromStr;
 
     use anyhow::Result;
-    use assert_fs::{TempDir, fixture::ChildPath, prelude::*};
+    use assert_fs::TempDir;
+    use assert_fs::fixture::ChildPath;
+    use assert_fs::prelude::*;
     use indoc::{formatdoc, indoc};
     use temp_env::with_vars;
     use test_log::test;
+    use uv_cache::Cache;
     use uv_client::BaseClientBuilder;
     use uv_preview::PreviewFeature;
     use uv_static::EnvVars;
 
-    use uv_cache::Cache;
-
-    use crate::{
-        PythonDownloads, PythonNotFound, PythonRequest, PythonSource, PythonVersion,
-        find_all_python_installations, find_python_installations,
-        implementation::ImplementationName, installation::PythonInstallation,
-        managed::ManagedPythonInstallations, virtualenv::virtualenv_python_executable,
+    use crate::discovery::{
+        self, EnvironmentPreference, find_best_python_installation, find_python_installation,
     };
+    use crate::implementation::ImplementationName;
+    use crate::installation::PythonInstallation;
+    use crate::managed::ManagedPythonInstallations;
+    use crate::virtualenv::virtualenv_python_executable;
     use crate::{
-        PythonPreference,
-        discovery::{
-            self, EnvironmentPreference, find_best_python_installation, find_python_installation,
-        },
+        PythonDownloads, PythonNotFound, PythonPreference, PythonRequest, PythonSource,
+        PythonVersion, find_all_python_installations, find_python_installations,
     };
 
     struct TestContext {

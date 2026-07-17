@@ -34,15 +34,13 @@ use anyhow::{Context, Result};
 use rustc_hash::FxHashSet;
 use tracing::instrument;
 use url::Url;
-
 use uv_cache_key::CanonicalUrl;
 use uv_client::BaseClientBuilder;
 use uv_configuration::{
     DependencyGroups, ExcludeDependency, NoBinary, NoBuild, Override, PackageOverride,
 };
-use uv_distribution_types::{Index, Requirement};
 use uv_distribution_types::{
-    IndexUrl, NameRequirementSpecification, UnresolvedRequirement,
+    Index, IndexUrl, NameRequirementSpecification, Requirement, UnresolvedRequirement,
     UnresolvedRequirementSpecification,
 };
 use uv_fs::{CWD, Simplified};

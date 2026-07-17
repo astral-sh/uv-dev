@@ -1,9 +1,9 @@
-use http::Extensions;
 use std::fmt::Debug;
-use uv_redacted::DisplaySafeUrl;
 
+use http::Extensions;
 use reqwest::{Request, Response};
 use reqwest_middleware::{Middleware, Next};
+use uv_redacted::DisplaySafeUrl;
 
 /// A custom error type for the offline middleware.
 #[derive(Debug, Clone, PartialEq, Eq)]

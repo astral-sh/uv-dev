@@ -1,9 +1,10 @@
-use ref_cast::RefCast;
-use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::fmt::{Debug, Display};
 use std::ops::{Deref, DerefMut};
 use std::str::FromStr;
+
+use ref_cast::RefCast;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use url::Url;
 

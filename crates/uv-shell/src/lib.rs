@@ -3,20 +3,18 @@ mod shlex;
 #[cfg(windows)]
 mod windows;
 
-pub use runnable::WindowsRunnable;
-pub use shlex::{escape_posix_for_single_quotes, shlex_posix, shlex_windows};
-#[cfg(windows)]
-pub use windows::prepend_path;
-
 use std::borrow::Cow;
 use std::env::home_dir;
 use std::path::{Path, PathBuf};
 
-use uv_fs::Simplified;
-use uv_static::EnvVars;
-
+pub use runnable::WindowsRunnable;
+pub use shlex::{escape_posix_for_single_quotes, shlex_posix, shlex_windows};
 #[cfg(unix)]
 use tracing::debug;
+use uv_fs::Simplified;
+use uv_static::EnvVars;
+#[cfg(windows)]
+pub use windows::prepend_path;
 
 /// Shells for which virtualenv activation scripts are available.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -361,10 +359,11 @@ fn backtick_escape(s: &str) -> Cow<'_, str> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use fs_err::File;
     use temp_env::with_vars;
     use tempfile::tempdir;
+
+    use super::*;
 
     // First option used by std::env::home_dir.
     const HOME_DIR_ENV_VAR: &str = if cfg!(windows) {

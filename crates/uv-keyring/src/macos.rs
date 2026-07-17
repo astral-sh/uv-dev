@@ -30,11 +30,12 @@ Credentials on macOS can have a large number of _key/value_ attributes,
 but this module controls the _account_ and _name_ attributes and
 ignores all the others. so clients can't use it to access or update any attributes.
  */
-use crate::credential::{Credential, CredentialApi, CredentialBuilder, CredentialBuilderApi};
-use crate::error::{Error as ErrorCode, Result, decode_password};
 use security_framework::base::Error;
 use security_framework::os::macos::keychain::{SecKeychain, SecPreferencesDomain};
 use security_framework::os::macos::passwords::find_generic_password;
+
+use crate::credential::{Credential, CredentialApi, CredentialBuilder, CredentialBuilderApi};
+use crate::error::{Error as ErrorCode, Result, decode_password};
 
 /// The representation of a generic Keychain credential.
 ///
@@ -336,9 +337,9 @@ fn decode_error(err: Error) -> ErrorCode {
 #[cfg(not(miri))]
 #[cfg(test)]
 mod tests {
-    use crate::{Entry, Error, tests::generate_random_string};
-
     use super::MacCredential;
+    use crate::tests::generate_random_string;
+    use crate::{Entry, Error};
 
     fn entry_new(service: &str, user: &str) -> Entry {
         crate::tests::entry_from_constructor(

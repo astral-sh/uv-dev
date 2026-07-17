@@ -2,7 +2,6 @@ use anyhow::{Result, anyhow};
 use assert_fs::prelude::*;
 use insta::allow_duplicates;
 use url::Url;
-
 use uv_static::EnvVars;
 use uv_test::packse::PackseServer;
 use uv_test::{TestContext, uv_snapshot};

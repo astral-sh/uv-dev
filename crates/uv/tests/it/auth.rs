@@ -1,9 +1,9 @@
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
-use assert_fs::{fixture::PathChild, prelude::FileWriteStr};
+use assert_fs::fixture::PathChild;
+use assert_fs::prelude::FileWriteStr;
 use insta::allow_duplicates;
 use uv_static::EnvVars;
-
 use uv_test::uv_snapshot;
 
 #[tokio::test]

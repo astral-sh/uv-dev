@@ -3,14 +3,13 @@ use std::sync::{Arc, LazyLock};
 
 use owo_colors::OwoColorize;
 use rustc_hash::FxHashMap;
-use version_ranges::Ranges;
-
 use uv_distribution_types::{
     DerivationChain, DerivationStep, Dist, DistErrorKind, Name, RequestedDist,
 };
 use uv_errors::{Hint, Hints};
 use uv_normalize::PackageName;
 use uv_pep440::{Version, strip_local_version_sentinels};
+use version_ranges::Ranges;
 
 use crate::commands::pip;
 use crate::commands::pip::install::ExternallyManagedError;

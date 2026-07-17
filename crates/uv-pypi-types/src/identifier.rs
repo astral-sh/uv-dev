@@ -1,7 +1,8 @@
-use serde::{Serialize, Serializer};
 use std::borrow::Cow;
 use std::fmt::Display;
 use std::str::FromStr;
+
+use serde::{Serialize, Serializer};
 use thiserror::Error;
 
 /// Simplified Python identifier.
@@ -115,8 +116,9 @@ impl schemars::JsonSchema for Identifier {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use insta::assert_snapshot;
+
+    use super::*;
 
     #[test]
     fn valid() {

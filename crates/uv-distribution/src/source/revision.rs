@@ -1,7 +1,7 @@
-use serde::{Deserialize, Serialize};
 use std::path::Path;
-use uv_distribution_types::Hashed;
 
+use serde::{Deserialize, Serialize};
+use uv_distribution_types::Hashed;
 use uv_pypi_types::{HashDigest, HashDigests};
 
 /// The [`Revision`] is a thin wrapper around a unique identifier for the source distribution.

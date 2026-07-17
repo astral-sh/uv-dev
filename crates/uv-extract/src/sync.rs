@@ -1,8 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use crate::vendor::CloneableSeekableReader;
-use crate::{CompressionMethod, Error, insecure_no_validate, validate_archive_member_name};
 use async_zip::base::read::seek::ZipFileReader;
 use async_zip::error::ZipError;
 use futures::executor::block_on;
@@ -12,6 +10,9 @@ use rustc_hash::FxHashSet;
 use tracing::warn;
 use uv_configuration::initialize_rayon_once;
 use uv_warnings::warn_user_once;
+
+use crate::vendor::CloneableSeekableReader;
+use crate::{CompressionMethod, Error, insecure_no_validate, validate_archive_member_name};
 
 /// Unzip a `.zip` archive into the target directory.
 ///

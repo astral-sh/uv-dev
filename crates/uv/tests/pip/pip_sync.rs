@@ -8,14 +8,13 @@ use fs_err as fs;
 use indoc::indoc;
 use predicates::Predicate;
 use url::Url;
-use wiremock::matchers::{method, path};
-use wiremock::{Mock, MockServer, ResponseTemplate};
-
 use uv_fs::{Simplified, copy_dir_all};
 use uv_static::EnvVars;
 use uv_test::find_links::FindLinksServer;
 use uv_test::packse::PackseServer;
 use uv_test::{download_to_disk, site_packages_path, uv_snapshot};
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[test]
 fn missing_requirements_txt() {

@@ -10,7 +10,6 @@ use cyclonedx_bom::prelude::{Bom, Component, Components, NormalizedString};
 use itertools::Itertools;
 use percent_encoding::{AsciiSet, CONTROLS, percent_encode};
 use rustc_hash::FxHashSet;
-
 use uv_configuration::{
     DependencyGroupsWithDefaults, ExtrasSpecificationWithDefaults, InstallOptions,
 };

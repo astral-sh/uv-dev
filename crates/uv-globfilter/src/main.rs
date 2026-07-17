@@ -1,7 +1,8 @@
 #![expect(clippy::print_stdout)]
 
-use globset::GlobSetBuilder;
 use std::env::args;
+
+use globset::GlobSetBuilder;
 use tracing::trace;
 use uv_globfilter::{GlobDirFilter, PortableGlobParser};
 use walkdir::WalkDir;

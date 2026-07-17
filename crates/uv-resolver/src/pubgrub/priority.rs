@@ -3,7 +3,6 @@ use std::cmp::Reverse;
 use hashbrown::hash_map::{EntryRef, OccupiedEntry};
 use pubgrub::DependencyProvider;
 use rustc_hash::FxBuildHasher;
-
 use uv_normalize::PackageName;
 use uv_pep440::Version;
 

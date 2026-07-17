@@ -5,7 +5,6 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::{LazyLock, Mutex, OnceLock};
 
 use tracing::trace;
-
 use uv_fs::write_atomic_sync;
 use uv_pypi_types::Identifier;
 use uv_warnings::warn_user;
@@ -455,7 +454,6 @@ fn normalize_path(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use assert_fs::prelude::*;
-
     use uv_pypi_types::Scheme;
 
     use crate::Layout;

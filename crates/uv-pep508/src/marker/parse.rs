@@ -1,5 +1,6 @@
-use arcstr::ArcStr;
 use std::str::FromStr;
+
+use arcstr::ArcStr;
 use uv_normalize::{ExtraName, GroupName};
 use uv_pep440::{Version, VersionPattern, VersionSpecifier};
 

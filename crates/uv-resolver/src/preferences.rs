@@ -3,7 +3,6 @@ use std::str::FromStr;
 
 use rustc_hash::FxHashMap;
 use tracing::trace;
-
 use uv_distribution_types::{IndexUrl, InstalledDist, InstalledDistKind};
 use uv_normalize::PackageName;
 use uv_pep440::{Operator, Version};
@@ -383,8 +382,9 @@ impl From<Version> for Pin {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::str::FromStr;
+
+    use super::*;
 
     /// Test that [`PreferenceIndex::matches`] correctly ignores credentials when comparing URLs.
     ///

@@ -1,10 +1,10 @@
-use std::{collections::VecDeque, sync::Arc};
+use std::collections::VecDeque;
+use std::sync::Arc;
 
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use rustc_hash::FxHashSet;
 use tracing::trace;
-
 use uv_configuration::{Constraints, Excludes, Overrides};
 use uv_distribution::{DistributionDatabase, Reporter};
 use uv_distribution_types::{Dist, Identifier, Requirement, RequirementSource};

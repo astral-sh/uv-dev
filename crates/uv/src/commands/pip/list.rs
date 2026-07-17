@@ -9,7 +9,6 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use serde::Serialize;
 use tracing::debug;
 use unicode_width::UnicodeWidthStr;
-
 use uv_cache::{Cache, Refresh};
 use uv_cache_info::Timestamp;
 use uv_cli::ListFormat;
@@ -23,8 +22,9 @@ use uv_fs::Simplified;
 use uv_installer::SitePackages;
 use uv_normalize::PackageName;
 use uv_pep440::Version;
-use uv_python::PythonRequest;
-use uv_python::{EnvironmentPreference, Prefix, PythonEnvironment, PythonPreference, Target};
+use uv_python::{
+    EnvironmentPreference, Prefix, PythonEnvironment, PythonPreference, PythonRequest, Target,
+};
 use uv_resolver::{ExcludeNewer, PrereleaseMode};
 
 use crate::commands::ExitStatus;

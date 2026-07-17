@@ -2,10 +2,10 @@
 //!
 //! See: <https://github.com/astral-sh/ruff/blob/dc8db1afb08704ad6a788c497068b01edf8b460d/crates/ruff_workspace/sr.rs>
 
-use serde::{Serialize, Serializer};
 use std::collections::BTreeMap;
-
 use std::fmt::{Debug, Display, Formatter};
+
+use serde::{Serialize, Serializer};
 
 /// Visits [`OptionsMetadata`].
 ///

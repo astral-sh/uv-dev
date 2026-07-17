@@ -3,7 +3,6 @@ use std::str::FromStr;
 
 use anyhow::Result;
 use tracing::debug;
-
 use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
 use uv_configuration::{

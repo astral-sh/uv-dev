@@ -7,7 +7,6 @@ use petgraph::prelude::EdgeRef;
 use petgraph::visit::IntoNodeReferences;
 use petgraph::{Direction, Graph};
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
-
 use uv_configuration::{
     DependencyGroupsWithDefaults, ExtrasSpecificationWithDefaults, InstallOptions,
 };

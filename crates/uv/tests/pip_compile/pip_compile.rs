@@ -19,18 +19,16 @@ use indoc::formatdoc;
 use indoc::indoc;
 use tokio_util::compat::{FuturesAsyncReadCompatExt, FuturesAsyncWriteCompatExt};
 use url::Url;
-use wiremock::matchers::{method, path};
-use wiremock::{Mock, MockServer, ResponseTemplate};
-
 use uv_fs::Simplified;
 use uv_normalize::PackageName;
 use uv_pep440::Version;
 use uv_pep508::Requirement;
 use uv_static::EnvVars;
-
 use uv_test::packse::PackseServer;
 use uv_test::packse::scenario::{Package, PackageMetadata, Scenario};
 use uv_test::{DEFAULT_PYTHON_VERSION, TestContext, download_to_disk, uv_snapshot};
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn write_tar_gz(file: File, entries: &[(&str, &str)]) -> Result<()> {
     let enc = GzEncoder::new(file, flate2::Compression::default());

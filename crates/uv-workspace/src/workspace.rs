@@ -12,7 +12,6 @@ use glob::{GlobError, PatternError, glob};
 use itertools::Itertools;
 use rustc_hash::{FxHashSet, FxHasher};
 use tracing::{debug, trace, warn};
-
 use uv_cache::Cache;
 use uv_configuration::{DependencyGroupsWithDefaults, ExcludeDependency};
 use uv_distribution_types::{Index, Requirement, RequirementSource};
@@ -2247,7 +2246,6 @@ mod tests {
     use assert_fs::fixture::ChildPath;
     use assert_fs::prelude::*;
     use insta::{assert_json_snapshot, assert_snapshot};
-
     use uv_cache::Cache;
     use uv_normalize::{GroupName, PackageName};
     use uv_pypi_types::DependencyGroupSpecifier;

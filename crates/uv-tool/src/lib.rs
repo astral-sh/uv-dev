@@ -5,9 +5,10 @@ use std::str::FromStr;
 use fs_err as fs;
 use fs_err::File;
 use owo_colors::OwoColorize;
+pub(crate) use receipt::ToolReceipt;
 use thiserror::Error;
+pub use tool::{Tool, ToolEntrypoint};
 use tracing::{debug, warn};
-
 use uv_cache::Cache;
 use uv_dirs::user_executable_directory;
 use uv_fs::{LockedFile, LockedFileError, LockedFileMode, Simplified};
@@ -18,9 +19,6 @@ use uv_pep440::Version;
 use uv_python::{BrokenLink, Interpreter, PythonEnvironment};
 use uv_state::{StateBucket, StateStore};
 use uv_static::EnvVars;
-
-pub(crate) use receipt::ToolReceipt;
-pub use tool::{Tool, ToolEntrypoint};
 
 mod receipt;
 mod tool;

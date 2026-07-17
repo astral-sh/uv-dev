@@ -6,7 +6,6 @@ use anyhow::{Context, Result, bail};
 use pretty_assertions::StrComparison;
 use schemars::JsonSchema;
 use serde::Deserialize;
-
 use uv_settings::Options as SettingsOptions;
 use uv_workspace::pyproject::ToolUv as WorkspaceOptions;
 

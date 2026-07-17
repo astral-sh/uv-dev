@@ -1,7 +1,5 @@
-use std::fmt::Display;
-use std::fmt::Write;
-use std::path::Path;
-use std::path::PathBuf;
+use std::fmt::{Display, Write};
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use anyhow::{Context, bail};
@@ -10,16 +8,14 @@ use itertools::Itertools;
 use owo_colors::OwoColorize;
 use tokio::process::Command;
 use tracing::{debug, warn};
-
 use uv_cache::{Cache, Refresh};
 use uv_cache_info::Timestamp;
 use uv_cli::ExternalCommand;
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_configuration::{Concurrency, Constraints, GitLfsSetting, TargetTriple};
 use uv_distribution::LoweredExtraBuildDependencies;
-use uv_distribution_types::InstalledDist;
 use uv_distribution_types::{
-    IndexCapabilities, IndexUrl, Name, NameRequirementSpecification, Requirement,
+    IndexCapabilities, IndexUrl, InstalledDist, Name, NameRequirementSpecification, Requirement,
     RequirementSource, UnresolvedRequirement, UnresolvedRequirementSpecification,
 };
 use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
@@ -40,26 +36,21 @@ use uv_warnings::warn_user_once;
 use uv_workspace::WorkspaceCache;
 
 use crate::child::run_to_completion;
-use crate::commands::ExitStatus;
-
-use crate::commands::pip;
 use crate::commands::pip::latest::LatestClient;
 use crate::commands::pip::loggers::{
     DefaultInstallLogger, DefaultResolveLogger, SummaryInstallLogger, SummaryResolveLogger,
 };
 use crate::commands::pip::operations;
+use crate::commands::project::environment::CachedEnvironment;
 use crate::commands::project::{
     EnvironmentSpecification, PlatformState, ProjectError, resolve_names,
 };
 use crate::commands::reporters::PythonDownloadReporter;
 use crate::commands::tool::common::{ToolPython, matching_packages, refine_interpreter};
 use crate::commands::tool::{Target, ToolRequest};
-use crate::commands::{
-    UvError, diagnostics, project::environment::CachedEnvironment, read_env_files,
-};
+use crate::commands::{ExitStatus, UvError, diagnostics, pip, read_env_files};
 use crate::printer::Printer;
-use crate::settings::ResolverInstallerSettings;
-use crate::settings::ResolverSettings;
+use crate::settings::{ResolverInstallerSettings, ResolverSettings};
 
 /// The user-facing command used to invoke a tool run.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]

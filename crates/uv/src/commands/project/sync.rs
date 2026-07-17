@@ -42,8 +42,7 @@ use uv_workspace::{DiscoveryOptions, MemberDiscovery, VirtualProject, Workspace,
 use crate::commands::editable::apply_editable_mode;
 use crate::commands::pip::loggers::{DefaultInstallLogger, DefaultResolveLogger, InstallLogger};
 use crate::commands::pip::operations::{ChangedDist, Changelog, Modifications};
-use crate::commands::pip::resolution_markers;
-use crate::commands::pip::{operations, resolution_tags};
+use crate::commands::pip::{operations, resolution_markers, resolution_tags};
 use crate::commands::project::install_target::InstallTarget;
 use crate::commands::project::lock::{LockMode, LockOperation, LockResult};
 use crate::commands::project::lock_target::LockTarget;

@@ -1,13 +1,10 @@
 use std::borrow::Cow;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::{
-    env, io,
-    path::{Path, PathBuf},
-};
+use std::{env, io};
 
 use fs_err as fs;
 use thiserror::Error;
-
 use uv_preview::PreviewFeature;
 use uv_pypi_types::Scheme;
 use uv_static::EnvVars;

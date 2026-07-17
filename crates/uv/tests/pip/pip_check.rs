@@ -1,8 +1,5 @@
 use anyhow::Result;
-use assert_fs::fixture::ChildPath;
-use assert_fs::fixture::FileWriteStr;
-use assert_fs::fixture::PathChild;
-
+use assert_fs::fixture::{ChildPath, FileWriteStr, PathChild};
 use uv_test::uv_snapshot;
 
 #[test]

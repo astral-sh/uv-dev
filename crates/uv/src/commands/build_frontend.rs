@@ -9,7 +9,6 @@ use anyhow::{Context, Result};
 use owo_colors::OwoColorize;
 use thiserror::Error;
 use tracing::{debug, instrument};
-
 use uv_build_backend::check_direct_build;
 use uv_cache::{Cache, CacheBucket};
 use uv_client::{BaseClientBuilder, FlatIndexClient, RegistryClientBuilder};

@@ -139,9 +139,8 @@ use std::time::{Duration, SystemTime};
 
 use http::header::HeaderValue;
 
-use crate::rkyvutil::OwnedArchive;
-
 use self::control::CacheControl;
+use crate::rkyvutil::OwnedArchive;
 
 mod control;
 

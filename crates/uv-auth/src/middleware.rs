@@ -6,27 +6,23 @@ use reqwest::{Request, Response};
 use reqwest_middleware::{ClientWithMiddleware, Error, Middleware, Next};
 use tokio::sync::Mutex;
 use tracing::{debug, trace, warn};
-
 use uv_netrc::Netrc;
 use uv_preview::{Preview, PreviewFeature};
 use uv_redacted::DisplaySafeUrl;
 use uv_static::EnvVars;
 use uv_warnings::owo_colors::OwoColorize;
 
+use crate::cache::FetchUrl;
+use crate::credentials::{
+    Authentication, AuthenticationError, Credentials, CredentialsFromUrlError, Username,
+};
+use crate::index::{AuthPolicy, Indexes};
 use crate::providers::{
     AzureEndpointProvider, GcsEndpointProvider, HuggingFaceProvider, S3EndpointProvider,
 };
 use crate::pyx::{DEFAULT_TOLERANCE_SECS, PyxTokenStore};
-use crate::{
-    AccessToken, CredentialsCache, KeyringProvider,
-    cache::FetchUrl,
-    credentials::{
-        Authentication, AuthenticationError, Credentials, CredentialsFromUrlError, Username,
-    },
-    index::{AuthPolicy, Indexes},
-    realm::Realm,
-};
-use crate::{Index, TextCredentialStore};
+use crate::realm::Realm;
+use crate::{AccessToken, CredentialsCache, Index, KeyringProvider, TextCredentialStore};
 
 /// Cached check for whether we're running in Dependabot.
 static IS_DEPENDABOT: LazyLock<bool> =
@@ -991,15 +987,13 @@ mod tests {
     use reqwest::Client;
     use tempfile::NamedTempFile;
     use test_log::test;
-
     use url::Url;
     use wiremock::matchers::{basic_auth, method, path_regex};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
+    use super::*;
     use crate::Index;
     use crate::credentials::Password;
-
-    use super::*;
 
     type Error = Box<dyn std::error::Error>;
 

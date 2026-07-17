@@ -12,7 +12,6 @@ use insta::assert_json_snapshot;
 #[cfg(feature = "test-universal")]
 use insta::assert_snapshot;
 use serde::{Deserialize, Serialize};
-
 use uv_test::{copy_dir_ignore, make_project, uv_snapshot};
 
 fn workspaces_dir() -> PathBuf {

@@ -12,11 +12,10 @@ use hyper::service::service_fn;
 use hyper_util::rt::TokioIo;
 use serde_json::json;
 use tokio_stream::wrappers::ReceiverStream;
-use wiremock::matchers::{any, method};
-use wiremock::{Mock, MockServer, Request, ResponseTemplate};
-
 use uv_static::EnvVars;
 use uv_test::{TestContext, uv_snapshot};
+use wiremock::matchers::{any, method};
+use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
 /// Creates a CONNECT tunnel proxy that forwards connections to the target.
 ///

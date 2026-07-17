@@ -42,7 +42,6 @@ use std::sync::LazyLock;
 
 use either::Either;
 use url::Url;
-
 use uv_distribution_types::IndexUrl;
 use uv_normalize::PackageName;
 use uv_pep440::Version;

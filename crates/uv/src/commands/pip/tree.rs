@@ -9,7 +9,6 @@ use petgraph::Direction;
 use petgraph::graph::{EdgeIndex, NodeIndex};
 use petgraph::prelude::EdgeRef;
 use rustc_hash::{FxHashMap, FxHashSet};
-
 use uv_cache::{Cache, Refresh};
 use uv_cache_info::Timestamp;
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
@@ -679,9 +678,11 @@ impl Cursor {
 
 #[cfg(test)]
 mod tests {
-    use super::DisplayDependencyGraph;
     use std::str::FromStr;
+
     use uv_pep440::{VersionSpecifier, VersionSpecifiers};
+
+    use super::DisplayDependencyGraph;
 
     fn simplify_specs(specs: &[&str]) -> VersionSpecifiers {
         DisplayDependencyGraph::simplify_specifiers(

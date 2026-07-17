@@ -9,12 +9,11 @@ use anyhow::{Context, Result, bail};
 use clap::ValueEnum;
 use itertools::Itertools;
 use pretty_assertions::StrComparison;
-use walkdir::WalkDir;
-
 use uv_normalize::PackageName;
 use uv_pep440::Version;
 use uv_pep508::{Requirement, VersionOrUrl};
 use uv_test::packse::scenario::{Package, PackageMetadata, Scenario, ScenarioTest};
+use walkdir::WalkDir;
 
 use crate::ROOT_DIR;
 use crate::generate_all::Mode;

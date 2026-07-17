@@ -11,12 +11,11 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
 use tokio::sync::oneshot;
 use tracing::{debug, instrument};
-use walkdir::WalkDir;
-
 use uv_configuration::Concurrency;
 use uv_fs::Simplified;
 use uv_static::EnvVars;
 use uv_warnings::warn_user;
+use walkdir::WalkDir;
 
 const COMPILEALL_SCRIPT: &str = include_str!("pip_compileall.py");
 /// This is longer than any compilation should ever take.

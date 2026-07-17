@@ -424,8 +424,9 @@ where
 /// See: <https://github.com/astral-sh/uv/issues/18181>
 #[cfg(target_os = "linux")]
 fn reflink_with_permissions(from: &Path, to: &Path) -> io::Result<()> {
-    use fs_err::os::unix::fs::OpenOptionsExt;
     use std::os::unix::fs::PermissionsExt;
+
+    use fs_err::os::unix::fs::OpenOptionsExt;
 
     // Open source and read permissions from the file descriptor.
     let src = fs_err::File::open(from)?;
@@ -907,8 +908,9 @@ fn create_symlink(original: &Path, link: &Path) -> io::Result<()> {
 #[cfg(test)]
 #[expect(clippy::print_stderr)]
 mod tests {
-    use super::*;
     use tempfile::TempDir;
+
+    use super::*;
 
     /// Create a temporary directory on the default filesystem.
     fn test_tempdir() -> TempDir {

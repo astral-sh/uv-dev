@@ -3,7 +3,6 @@ use std::fmt::{Display, Formatter};
 use arcstr::ArcStr;
 use owo_colors::OwoColorize;
 use tracing::debug;
-
 use uv_distribution_filename::{BuildTag, WheelFilename};
 use uv_pep440::{Version, VersionSpecifier, VersionSpecifiers};
 use uv_pep508::{MarkerExpression, MarkerOperator, MarkerTree, MarkerValueString};

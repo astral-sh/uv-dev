@@ -27,14 +27,13 @@ println!(
 
 */
 
-pub use netrc::{Authenticator, Netrc};
-use std::fs;
-use std::io;
 use std::io::ErrorKind;
 #[cfg(windows)]
 use std::iter::repeat;
 use std::path::{Path, PathBuf};
-use std::result;
+use std::{fs, io, result};
+
+pub use netrc::{Authenticator, Netrc};
 
 mod lex;
 mod netrc;
@@ -108,8 +107,9 @@ impl Netrc {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
 
     static NETRC_COUNTER: AtomicUsize = AtomicUsize::new(0);
 

@@ -1,7 +1,5 @@
-use std::{
-    collections::BTreeMap,
-    path::{Component, Components, Path, PathBuf},
-};
+use std::collections::BTreeMap;
+use std::path::{Component, Components, Path, PathBuf};
 
 /// Check if a component of the path looks like it may be a glob pattern.
 ///

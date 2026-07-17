@@ -1,11 +1,10 @@
-use pubgrub::Ranges;
-use smallvec::SmallVec;
 use std::ops::Bound;
 
+use pubgrub::Ranges;
+use smallvec::SmallVec;
+use uv_distribution_types::RequiresPythonRange;
 use uv_pep440::{LowerBound, UpperBound, Version};
 use uv_pep508::{CanonicalMarkerValueVersion, MarkerTree, MarkerTreeKind};
-
-use uv_distribution_types::RequiresPythonRange;
 
 /// Returns the bounding Python versions that can satisfy the [`MarkerTree`], if it's constrained.
 pub(crate) fn requires_python(tree: MarkerTree) -> Option<RequiresPythonRange> {
@@ -96,10 +95,12 @@ pub(crate) fn requires_python(tree: MarkerTree) -> Option<RequiresPythonRange> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::ops::Bound;
     use std::str::FromStr;
+
     use uv_pep440::UpperBound;
+
+    use super::*;
 
     #[test]
     fn test_requires_python() {

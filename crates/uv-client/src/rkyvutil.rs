@@ -11,14 +11,11 @@ archive type own the buffer itself. It then provides convenient routines for
 serializing and deserializing.
 */
 
-use rkyv::{
-    Archive, Deserialize, Portable, Serialize,
-    api::high::{HighDeserializer, HighSerializer, HighValidator},
-    bytecheck::CheckBytes,
-    rancor,
-    ser::allocator::ArenaHandle,
-    util::AlignedVec,
-};
+use rkyv::api::high::{HighDeserializer, HighSerializer, HighValidator};
+use rkyv::bytecheck::CheckBytes;
+use rkyv::ser::allocator::ArenaHandle;
+use rkyv::util::AlignedVec;
+use rkyv::{Archive, Deserialize, Portable, Serialize, rancor};
 
 use crate::{Error, ErrorKind};
 

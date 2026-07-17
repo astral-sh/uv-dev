@@ -30,8 +30,9 @@ pub use tree::{
 
 /// `serde` helpers for [`MarkerTree`].
 pub mod ser {
-    use super::MarkerTree;
     use serde::Serialize;
+
+    use super::MarkerTree;
 
     /// A helper for `serde(skip_serializing_if)`.
     pub fn is_empty(marker: &MarkerTree) -> bool {

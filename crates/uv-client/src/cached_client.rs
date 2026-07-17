@@ -1,5 +1,7 @@
+use std::borrow::Cow;
+use std::io::Read;
+use std::path::Path;
 use std::time::{Duration, Instant};
-use std::{borrow::Cow, io::Read, path::Path};
 
 use futures::FutureExt;
 use reqwest::{Request, Response};
@@ -7,7 +9,6 @@ use rkyv::util::AlignedVec;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tracing::{Instrument, debug, info_span, instrument, trace, warn};
-
 use uv_cache::{CacheEntry, Freshness};
 use uv_fs::write_atomic;
 use uv_redacted::DisplaySafeUrl;

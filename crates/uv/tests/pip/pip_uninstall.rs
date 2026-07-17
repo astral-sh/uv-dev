@@ -5,7 +5,6 @@ use anyhow::Result;
 use assert_cmd::prelude::*;
 use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::*;
-
 use uv_test::uv_snapshot;
 
 #[test]

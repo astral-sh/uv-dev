@@ -354,10 +354,11 @@ impl Entry {
 /// Instead, it contains generics that each keystore invokes in their tests,
 /// passing their store-specific parameters for the generic ones.
 mod tests {
+    use std::collections::HashMap;
+
     use super::{Entry, Error};
     #[cfg(feature = "native-auth")]
     use super::{Result, credential::CredentialApi};
-    use std::collections::HashMap;
 
     /// Create a platform-specific credential given the constructor, service, and user
     #[cfg(feature = "native-auth")]
@@ -434,8 +435,9 @@ mod tests {
     }
 
     fn random_string_of_len(len: usize) -> String {
-        use fastrand;
         use std::iter::repeat_with;
+
+        use fastrand;
         repeat_with(fastrand::alphanumeric).take(len).collect()
     }
 
@@ -444,8 +446,9 @@ mod tests {
     }
 
     fn generate_random_bytes_of_len(len: usize) -> Vec<u8> {
-        use fastrand;
         use std::iter::repeat_with;
+
+        use fastrand;
         repeat_with(|| fastrand::u8(..)).take(len).collect()
     }
 

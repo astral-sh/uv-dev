@@ -1,5 +1,4 @@
 use tracing::debug;
-
 use uv_pep508::MarkerEnvironment;
 use uv_platform_tags::{Arch, Os, Platform};
 use uv_static::EnvVars;

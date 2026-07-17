@@ -1,11 +1,12 @@
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
-use crate::{SourceDistExtension, normalized_package_name_matches};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uv_normalize::{InvalidNameError, PackageName};
 use uv_pep440::{Version, VersionParseError};
+
+use crate::{SourceDistExtension, normalized_package_name_matches};
 
 /// Note that this is a normalized and not an exact representation, keep the original string if you
 /// need the latter.

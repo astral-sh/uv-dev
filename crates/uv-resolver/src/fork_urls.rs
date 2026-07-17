@@ -1,7 +1,6 @@
 use std::collections::hash_map::Entry;
 
 use rustc_hash::FxHashMap;
-
 use uv_normalize::PackageName;
 use uv_pypi_types::VerbatimParsedUrl;
 

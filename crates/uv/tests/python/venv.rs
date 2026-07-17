@@ -1,22 +1,20 @@
 use std::path::PathBuf;
+#[cfg(unix)]
+use std::{ffi::OsStr, os::unix::ffi::OsStrExt};
+#[cfg(windows)]
+use std::{ffi::OsString, os::windows::ffi::OsStringExt};
 
 use anyhow::Result;
 use assert_cmd::prelude::*;
 use assert_fs::prelude::*;
+#[cfg(unix)]
+use fs_err::os::unix::fs::symlink;
 use indoc::indoc;
 use predicates::prelude::*;
 use uv_cache_key::cache_digest;
 use uv_fs::{LockedFile, LockedFileMode};
 use uv_python::{PYTHON_VERSION_FILENAME, PYTHON_VERSIONS_FILENAME};
 use uv_static::EnvVars;
-
-#[cfg(unix)]
-use fs_err::os::unix::fs::symlink;
-#[cfg(unix)]
-use std::{ffi::OsStr, os::unix::ffi::OsStrExt};
-#[cfg(windows)]
-use std::{ffi::OsString, os::windows::ffi::OsStringExt};
-
 use uv_test::{site_packages_path, uv_snapshot};
 
 #[test]
@@ -2067,8 +2065,7 @@ fn create_venv_apostrophe() {
     use std::env;
     use std::ffi::OsString;
     use std::io::Write;
-    use std::process::Command;
-    use std::process::Stdio;
+    use std::process::{Command, Stdio};
 
     let context = uv_test::test_context_with_versions!(&["3.12"]);
 

@@ -1,19 +1,16 @@
-use std::{path::PathBuf, process::Command};
+use std::path::PathBuf;
+use std::process::Command;
 
 use anyhow::Result;
 use assert_fs::prelude::*;
-use axoupdater::{
-    ReleaseSourceType,
-    test::helpers::{RuntestArgs, perform_runtest},
-};
+use axoupdater::ReleaseSourceType;
+use axoupdater::test::helpers::{RuntestArgs, perform_runtest};
 use regex::escape;
 use serde_json::json;
+use uv_static::EnvVars;
+use uv_test::{TestContext, get_bin, uv_snapshot};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
-
-use uv_static::EnvVars;
-
-use uv_test::{TestContext, get_bin, uv_snapshot};
 
 #[test]
 fn check_self_update() {

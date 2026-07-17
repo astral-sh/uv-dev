@@ -4,7 +4,6 @@ use anyhow::{Result, bail};
 use clap::Parser;
 use futures::TryStreamExt;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
-
 use uv_cache::{Cache, CacheArgs};
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_pep508::VerbatimUrl;

@@ -3,10 +3,9 @@ use std::path::Path;
 
 use uv_distribution_filename::SourceDistExtension;
 use uv_git_types::GitUrl;
+use uv_normalize::PackageName;
 use uv_pep440::{Version, VersionSpecifiers};
 use uv_pep508::VerbatimUrl;
-
-use uv_normalize::PackageName;
 use uv_redacted::DisplaySafeUrl;
 
 use crate::{

@@ -1,10 +1,10 @@
-use regex::Regex;
-use serde::{Deserialize, Deserializer, Serialize, de};
 use std::borrow::Cow;
 use std::str::FromStr;
 use std::sync::LazyLock;
-use tracing::warn;
 
+use regex::Regex;
+use serde::{Deserialize, Deserializer, Serialize, de};
+use tracing::warn;
 use uv_pep440::{VersionSpecifiers, VersionSpecifiersParseError};
 use uv_pep508::{Pep508Error, Pep508Url, Requirement};
 
@@ -182,9 +182,8 @@ mod tests {
     use uv_pep440::VersionSpecifiers;
     use uv_pep508::Requirement;
 
-    use crate::LenientVersionSpecifiers;
-
     use super::LenientRequirement;
+    use crate::LenientVersionSpecifiers;
 
     #[test]
     fn requirement_missing_comma() {

@@ -53,9 +53,8 @@ use std::sync::{LazyLock, Mutex, MutexGuard};
 use arcstr::ArcStr;
 use itertools::{Either, Itertools};
 use rustc_hash::FxHashMap;
-use version_ranges::Ranges;
-
 use uv_pep440::{Operator, Version, VersionSpecifier, release_specifier_to_range};
+use version_ranges::Ranges;
 
 use crate::marker::MarkerValueExtra;
 use crate::marker::lowering::{

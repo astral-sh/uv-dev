@@ -7,7 +7,6 @@ use async_zip::base::write::ZipFileWriter;
 use async_zip::{Compression, ZipEntryBuilder};
 use futures::executor::block_on;
 use url::Url;
-
 use uv_test::{copy_dir_ignore, uv_snapshot};
 
 fn write_wheel(

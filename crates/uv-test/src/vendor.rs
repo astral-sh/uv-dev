@@ -7,7 +7,6 @@ use std::sync::{Arc, OnceLock};
 
 use anyhow::{Context, Result, anyhow, bail};
 use sha2::{Digest, Sha256};
-
 use uv_configuration::TrustedHost;
 use uv_fs::{LockedFile, LockedFileMode, persist_with_retry_sync, tempfile_in};
 use uv_static::EnvVars;

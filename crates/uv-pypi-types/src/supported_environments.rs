@@ -1,7 +1,6 @@
 use std::str::FromStr;
 
 use serde::ser::SerializeSeq;
-
 use uv_pep508::MarkerTree;
 
 /// A list of supported marker environments.

@@ -1,12 +1,9 @@
+use anyhow::Result;
 use uv_platform::{Arch, Os};
 use uv_static::EnvVars;
-
-use anyhow::Result;
 use uv_test::uv_snapshot;
-use wiremock::{
-    Mock, MockServer, ResponseTemplate,
-    matchers::{method, path},
-};
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[test]
 fn python_list() {

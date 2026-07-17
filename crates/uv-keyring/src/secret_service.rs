@@ -616,9 +616,11 @@ fn wrap(err: Error) -> Box<dyn std::error::Error + Send + Sync> {
 #[cfg(feature = "native-auth")]
 #[cfg(test)]
 mod tests {
-    use crate::secret_service::{EncryptionType, SecretService, SsCredential};
-    use crate::{Entry, Error, tests::generate_random_string};
     use std::collections::HashMap;
+
+    use crate::secret_service::{EncryptionType, SecretService, SsCredential};
+    use crate::tests::generate_random_string;
+    use crate::{Entry, Error};
 
     fn entry_new(service: &str, user: &str) -> Entry {
         crate::tests::entry_from_constructor(SsCredential::new_with_target, service, user)

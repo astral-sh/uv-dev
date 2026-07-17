@@ -4,7 +4,6 @@ use std::fmt::Debug;
 use same_file::is_same_file;
 use tracing::{debug, trace};
 use url::Url;
-
 use uv_cache_info::CacheInfo;
 use uv_cache_key::{CanonicalUrl, RepositoryUrl};
 use uv_distribution_filename::ExpandedTags;

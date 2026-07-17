@@ -4,18 +4,16 @@ use anyhow::Result;
 use itertools::{Either, Itertools};
 use owo_colors::OwoColorize;
 use tracing::{debug, warn};
-
 use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
 use uv_configuration::{DryRun, KeyringProviderType};
-use uv_distribution_types::Requirement;
-use uv_distribution_types::{InstalledMetadata, Name, UnresolvedRequirement};
+use uv_distribution_types::{InstalledMetadata, Name, Requirement, UnresolvedRequirement};
 use uv_fs::Simplified;
 use uv_pep508::UnnamedRequirement;
 use uv_pypi_types::VerbatimParsedUrl;
-use uv_python::PythonRequest;
-use uv_python::{EnvironmentPreference, PythonPreference};
-use uv_python::{Prefix, PythonEnvironment, Target};
+use uv_python::{
+    EnvironmentPreference, Prefix, PythonEnvironment, PythonPreference, PythonRequest, Target,
+};
 use uv_requirements::{RequirementsSource, RequirementsSpecification};
 
 use crate::commands::pip::operations::report_target_environment;

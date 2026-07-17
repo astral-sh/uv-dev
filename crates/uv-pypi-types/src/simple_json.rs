@@ -5,7 +5,6 @@ use std::sync::Arc;
 use jiff::Timestamp;
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Deserializer, Serialize};
-
 use uv_normalize::{ExtraName, PackageName};
 use uv_pep440::{Version, VersionSpecifiers, VersionSpecifiersParseError};
 use uv_pep508::Requirement;

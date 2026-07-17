@@ -2,7 +2,6 @@ use std::path::Path;
 
 use anyhow::Result;
 use tracing::info_span;
-
 use uv_configuration::Upgrade;
 use uv_fs::CWD;
 use uv_git::ResolvedRepositoryReference;

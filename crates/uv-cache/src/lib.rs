@@ -6,9 +6,9 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 
+pub use archive::ArchiveId;
 use rustc_hash::FxHashMap;
 use tracing::{debug, trace, warn};
-
 use uv_cache_info::Timestamp;
 use uv_fs::{LockedFile, LockedFileError, LockedFileMode, Simplified, cachedir, directories};
 use uv_normalize::PackageName;
@@ -21,7 +21,6 @@ use crate::removal::Remover;
 pub use crate::removal::{Removal, rm_rf};
 pub use crate::wheel::WheelCache;
 use crate::wheel::WheelCacheKind;
-pub use archive::ArchiveId;
 
 mod archive;
 mod by_timestamp;
@@ -1438,9 +1437,8 @@ impl Refresh {
 mod tests {
     use std::str::FromStr;
 
-    use crate::ArchiveId;
-
     use super::Link;
+    use crate::ArchiveId;
 
     #[test]
     fn test_link_round_trip() {

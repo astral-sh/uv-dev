@@ -12,15 +12,14 @@ use itertools::Itertools;
 use rustc_hash::FxHashMap;
 use thiserror::Error;
 use tracing::{debug, instrument, trace};
-
 use uv_build_backend::check_direct_build;
 use uv_build_frontend::{SourceBuild, SourceBuildContext};
 use uv_cache::Cache;
 use uv_client::RegistryClient;
 use uv_configuration::{
-    BuildKind, BuildOptions, Constraints, IndexStrategy, NoSources, Overrides, Reinstall,
+    BuildKind, BuildOptions, BuildOutput, Concurrency, Constraints, Excludes, IndexStrategy,
+    NoSources, Overrides, Reinstall,
 };
-use uv_configuration::{BuildOutput, Concurrency, Excludes};
 use uv_distribution::DistributionDatabase;
 use uv_distribution_filename::DistFilename;
 use uv_distribution_types::{

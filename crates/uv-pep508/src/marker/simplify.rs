@@ -5,9 +5,8 @@ use arcstr::ArcStr;
 use indexmap::IndexMap;
 use itertools::Itertools;
 use rustc_hash::FxBuildHasher;
-use version_ranges::Ranges;
-
 use uv_pep440::{Version, VersionSpecifier};
+use version_ranges::Ranges;
 
 use crate::marker::tree::ContainerOperator;
 use crate::{ExtraOperator, MarkerExpression, MarkerOperator, MarkerTree, MarkerTreeKind};
