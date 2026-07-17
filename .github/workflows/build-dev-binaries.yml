@@ -30,7 +30,7 @@ jobs:
         run: ./scripts/install-mold.sh
 
       - name: "Install Rust toolchain"
-        run: rustup toolchain install --profile minimal
+        run: rustup toolchain install --profile minimal --override
 
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
@@ -65,7 +65,7 @@ jobs:
         run: ./scripts/install-mold.sh
 
       - name: "Install Rust toolchain"
-        run: rustup toolchain install --profile minimal
+        run: rustup toolchain install --profile minimal --override
 
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
@@ -106,7 +106,7 @@ jobs:
 
       - name: "Install Rust toolchain"
         run: |
-          rustup toolchain install --profile minimal
+          rustup toolchain install --profile minimal --override
           rustup target add armv7-unknown-linux-gnueabihf
 
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
@@ -148,7 +148,7 @@ jobs:
 
       - name: "Install Rust toolchain"
         run: |
-          rustup toolchain install --profile minimal
+          rustup toolchain install --profile minimal --override
           rustup target add x86_64-unknown-linux-musl
 
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
@@ -181,7 +181,7 @@ jobs:
           persist-credentials: false
 
       - name: "Install Rust toolchain"
-        run: rustup toolchain install --profile minimal
+        run: rustup toolchain install --profile minimal --override
 
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
@@ -213,7 +213,7 @@ jobs:
           persist-credentials: false
 
       - name: "Install Rust toolchain"
-        run: rustup toolchain install --profile minimal
+        run: rustup toolchain install --profile minimal --override
 
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
@@ -254,7 +254,7 @@ jobs:
 
       - name: "Install Rust toolchain"
         working-directory: ${{ env.UV_WORKSPACE }}
-        run: rustup toolchain install --profile minimal
+        run: rustup toolchain install --profile minimal --override
 
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
@@ -297,7 +297,7 @@ jobs:
 
       - name: "Install Rust toolchain"
         working-directory: ${{ env.UV_WORKSPACE }}
-        run: rustup toolchain install --profile minimal
+        run: rustup toolchain install --profile minimal --override
 
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
@@ -382,7 +382,7 @@ jobs:
 
       - name: "Install Rust toolchain"
         run: |
-          rustup toolchain install --profile minimal
+          rustup toolchain install --profile minimal --override
           rustup target add aarch64-linux-android
 
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
