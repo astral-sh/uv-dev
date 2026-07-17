@@ -9,7 +9,7 @@ use std::sync::Arc;
 use anyhow::{Result, bail};
 use itertools::Itertools;
 use owo_colors::OwoColorize;
-use rustc_hash::{FxBuildHasher, FxHashMap};
+use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 use tracing::{debug, warn};
 
 use uv_cache::Cache;
@@ -817,15 +817,16 @@ fn standard_library_hint(
         return None;
     };
 
+    let mut packages = None;
     edits.iter().find_map(|edit| {
         if edit
             .source
             .as_ref()
             .is_none_or(|source| matches!(source, Source::Registry { .. }))
             && is_known_standard_library_package(python_minor, edit.requirement.name.as_ref())
-            && no_solution_error
-                .packages()
-                .any(|package| package == &edit.requirement.name)
+            && packages
+                .get_or_insert_with(|| no_solution_error.packages().collect::<FxHashSet<_>>())
+                .contains(&edit.requirement.name)
         {
             Some(format!(
                 "The module `{}` is included in the Python standard library and usually should not be added as a dependency",
