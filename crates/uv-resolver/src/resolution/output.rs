@@ -19,7 +19,7 @@ use uv_resolver_types::PackageRole;
 use uv_types::HashStrategy;
 
 use crate::graph_ops::{marker_reachability, simplify_conflict_markers};
-use crate::preferences::Preferences;
+use crate::preferences::{PreferenceHashes, Preferences};
 use crate::resolution::{AnnotatedDist, ResolutionGraphNode, ResolverOutput};
 use crate::resolution_mode::ResolutionStrategy;
 use crate::resolver::{
@@ -56,6 +56,8 @@ pub(crate) fn from_state(
     // Add the root node.
     let root_index = graph.add_node(ResolutionGraphNode::Root);
 
+    let preference_hashes = preferences.hashes();
+
     let mut seen = FxHashSet::default();
     for resolution in resolutions {
         let marker = resolution.env.try_universal_markers().unwrap_or_default();
@@ -88,7 +90,7 @@ pub(crate) fn from_state(
             let node = add_version(
                 &mut graph,
                 &mut diagnostics,
-                preferences,
+                &preference_hashes,
                 hasher,
                 index,
                 package,
@@ -220,7 +222,7 @@ fn add_edge(
 fn add_version(
     graph: &mut Graph<ResolutionGraphNode, UniversalMarker>,
     diagnostics: &mut Vec<ResolutionDiagnostic>,
-    preferences: &Preferences,
+    preference_hashes: &PreferenceHashes<'_>,
     hasher: &HashStrategy,
     in_memory: &InMemoryIndex,
     package: &ResolutionPackage,
@@ -239,7 +241,7 @@ fn add_version(
         url.as_ref(),
         &selected.hashes_id(),
         selected.version(),
-        preferences,
+        preference_hashes,
         hasher,
         in_memory,
     );
@@ -304,12 +306,12 @@ fn get_hashes(
     url: Option<&VerbatimParsedUrl>,
     metadata_id: &DistributionId,
     version: &Version,
-    preferences: &Preferences,
+    preference_hashes: &PreferenceHashes<'_>,
     hasher: &HashStrategy,
     in_memory: &InMemoryIndex,
 ) -> HashDigests {
     // 1. Look for hashes from the lockfile.
-    if let Some(digests) = preferences.match_hashes(name, version) {
+    if let Some(digests) = preference_hashes.get(name, version) {
         if !digests.is_empty() {
             return HashDigests::from(digests);
         }
