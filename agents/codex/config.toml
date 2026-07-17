@@ -47,8 +47,11 @@ extends = ":workspace"
 ".git" = "write"
 
 [permissions.pull-request-comments]
-description = "Read-only pull request comment handling with GitHub API access."
-extends = ":read-only"
+description = "Pull request comment handling with workspace and Git metadata access."
+extends = ":workspace"
+
+[permissions.pull-request-comments.filesystem.":workspace_roots"]
+".git" = "write"
 
 [permissions.pull-request-comments.network]
 enabled = true
