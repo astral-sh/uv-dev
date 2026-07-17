@@ -1,4 +1,4 @@
-# Collect pull request comments after review activity has settled.
+# Collect pull request comments and coalesce activity while a run is active.
 name: "pull-request-comments"
 
 on:
@@ -24,14 +24,11 @@ jobs:
       pull-requests: read
     concurrency:
       group: pull-request-comments-${{ github.event.issue.number || github.event.pull_request.number }}
-      cancel-in-progress: true
+      cancel-in-progress: false
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       PULL_REQUEST_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
     steps:
-      - name: "Wait for pull request comments to settle"
-        run: sleep 120
-
       - name: "Collect pull request comments"
         run: |
           repository="repos/$GITHUB_REPOSITORY"
