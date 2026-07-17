@@ -1,4 +1,4 @@
-# Collect pull request comments and coalesce activity while a run is active.
+# Collect pull request comments and resume the per-PR Codex thread.
 name: "pull-request-comments"
 
 on:
@@ -14,12 +14,16 @@ permissions: {}
 jobs:
   collect:
     if: >-
+      github.repository == 'astral-sh/uv-dev' &&
       (github.event_name != 'issue_comment' || github.event.issue.pull_request) &&
       contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association || github.event.review.author_association) &&
       !contains(fromJSON('["astral-automations-bot", "astral-automations-bot[bot]"]'), github.event.comment.user.login || github.event.review.user.login)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    environment: automations
+    timeout-minutes: 20
     permissions:
+      actions: read
+      contents: read
       issues: read
       pull-requests: read
     concurrency:
@@ -29,9 +33,24 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       PULL_REQUEST_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
     steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
       - name: "Collect pull request comments"
+        id: context
         run: |
           repository="repos/$GITHUB_REPOSITORY"
+
+          gh pr view "$PULL_REQUEST_NUMBER" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json number,title,body,author,baseRefName,baseRefOid,headRefName,headRefOid,isCrossRepository,isDraft,labels,files,additions,deletions,changedFiles \
+            > .pull-request-comments-event.json
+
+          gh pr diff "$PULL_REQUEST_NUMBER" \
+            --repo "$GITHUB_REPOSITORY" \
+            > .pull-request-comments.diff
 
           gh api --paginate --slurp \
             "$repository/issues/$PULL_REQUEST_NUMBER/comments?per_page=100" |
@@ -63,6 +82,96 @@ jobs:
               "- Reviews: \(.reviews | length)"
             ' "$RUNNER_TEMP/pull-request-comments.json"
           } >> "$GITHUB_STEP_SUMMARY"
+
+          if jq --exit-status '.isCrossRepository' .pull-request-comments-event.json > /dev/null; then
+            echo "Skipping Codex for a cross-repository pull request."
+            echo "eligible=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "eligible=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: "Restore Codex thread"
+        id: restore
+        if: steps.context.outputs.eligible == 'true'
+        run: |
+          thread_artifact="codex-thread-pull-request-comments-$PULL_REQUEST_NUMBER"
+          artifact="$(
+            gh api \
+              "repos/$GITHUB_REPOSITORY/actions/artifacts?name=$thread_artifact&per_page=100" |
+              jq --raw-output '
+                [.artifacts[] | select(.expired | not)] |
+                sort_by(.created_at, .id) |
+                last // empty |
+                [.workflow_run.id, .name] |
+                @tsv
+              '
+          )"
+
+          if [ -z "$artifact" ]; then
+            echo "No prior Codex thread found for pull request #$PULL_REQUEST_NUMBER."
+            echo "codex-args=[]" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          run_id="${artifact%%$'\t'*}"
+          artifact_name="${artifact#*$'\t'}"
+          mkdir -p agents/codex/sessions
+          gh run download "$run_id" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "$artifact_name" \
+            --dir agents/codex/sessions
+
+          find agents/codex/sessions -type f -name 'rollout-*.jsonl' \
+            -exec jq --raw-output 'select(.type == "session_meta" and .payload.source == "exec" and .payload.originator == "codex_github_action") | .payload.id' {} + |
+            sort -u > "$RUNNER_TEMP/codex-session-ids"
+
+          if [ "$(wc -l < "$RUNNER_TEMP/codex-session-ids")" -ne 1 ]; then
+            echo "Expected one root Codex session in $artifact_name; starting a new thread."
+            echo "codex-args=[]" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          session_id="$(sed -n '1p' "$RUNNER_TEMP/codex-session-ids")"
+          echo "Resuming Codex thread $session_id from $artifact_name."
+          printf 'codex-args=%s\n' "$(jq --compact-output --null-input --arg session_id "$session_id" '["resume", $session_id, "-"]')" >> "$GITHUB_OUTPUT"
+
+      - name: "Prepare Codex prompt"
+        if: steps.context.outputs.eligible == 'true'
+        run: |
+          {
+            printf 'Pull request comment automation for #%s\n\n' "$PULL_REQUEST_NUMBER"
+            cat agents/prompts/pull-request-comments.md
+          } > "$RUNNER_TEMP/pull-request-comments-prompt.md"
+
+      - name: "Handle pull request comments"
+        id: comments
+        if: steps.context.outputs.eligible == 'true'
+        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56 # v1
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          codex-version: "0.144.4"
+          codex-home: "agents/codex"
+          codex-args: ${{ steps.restore.outputs.codex-args }}
+          permission-profile: "pull-request-comments"
+          safety-strategy: drop-sudo
+          prompt-file: "${{ runner.temp }}/pull-request-comments-prompt.md"
+
+      - name: "Write Codex summary"
+        if: steps.comments.outputs.final-message != ''
+        run: printf '\n\n%s\n' "$CODEX_RESULT" >> "$GITHUB_STEP_SUMMARY"
+        env:
+          CODEX_RESULT: ${{ steps.comments.outputs.final-message }}
+
+      - name: "Upload Codex thread"
+        if: always() && steps.context.outputs.eligible == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codex-thread-pull-request-comments-${{ github.event.issue.number || github.event.pull_request.number }}
+          path: agents/codex/sessions
+          if-no-files-found: warn
+          overwrite: true
 
       - name: "Upload pull request comments"
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

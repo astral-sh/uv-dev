@@ -84,3 +84,14 @@ enabled = true
 [permissions.pull-request-labels.network.domains]
 "api.github.com" = "allow"
 "github.com" = "allow"
+
+[permissions.pull-request-comments]
+description = "Read-only pull request comment handling with GitHub API access."
+extends = ":read-only"
+
+[permissions.pull-request-comments.network]
+enabled = true
+
+[permissions.pull-request-comments.network.domains]
+"api.github.com" = "allow"
+"github.com" = "allow"
