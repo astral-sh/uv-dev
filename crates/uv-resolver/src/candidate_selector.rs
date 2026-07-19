@@ -509,6 +509,62 @@ impl CandidateSelector {
         }
     }
 
+    /// Iterate over candidates from a single index without checking for version preferences.
+    ///
+    /// This is equivalent to repeatedly calling [`Self::select_no_preference`] and removing each
+    /// selected version from `range`, but visits the version map only once.
+    pub(crate) fn iter_no_preference<'a>(
+        &'a self,
+        package_name: &'a PackageName,
+        range: &'a Range<Version>,
+        version_map: &'a VersionMap,
+        env: &ResolverEnvironment,
+    ) -> impl Iterator<Item = Candidate<'a>> + 'a {
+        let highest = self.use_highest_version(package_name, env);
+        let allow_prerelease = match self.prerelease_strategy.allows(package_name, env) {
+            AllowPrerelease::Yes => true,
+            AllowPrerelease::No => false,
+            AllowPrerelease::IfNecessary => !version_map.stable(),
+        };
+        let versions = if highest {
+            Either::Left(version_map.iter_included(range).rev())
+        } else {
+            Either::Right(version_map.iter_included(range))
+        };
+        let segments = if highest {
+            Either::Left(range.iter().rev())
+        } else {
+            Either::Right(range.iter())
+        };
+        let mut cursor = RangeCursor::new(segments, highest);
+
+        versions.filter_map(move |(version, maybe_dist)| {
+            if version.any_prerelease() && !allow_prerelease {
+                return None;
+            }
+            if !cursor.as_mut()?.contains(version) {
+                return None;
+            }
+            let dist = maybe_dist.prioritized_dist()?;
+            let candidate =
+                Candidate::new(package_name, version, dist, VersionChoiceKind::Compatible);
+            if matches!(
+                candidate.dist(),
+                CandidateDist::Incompatible {
+                    incompatible_dist: IncompatibleDist::Source(IncompatibleSource::ExcludeNewer(
+                        _
+                    )) | IncompatibleDist::Wheel(
+                        IncompatibleWheel::ExcludeNewer(_)
+                    ),
+                    ..
+                }
+            ) {
+                return None;
+            }
+            Some(candidate)
+        })
+    }
+
     /// By default, we select the latest version, but we also allow using the lowest version instead
     /// to check the lower bounds.
     pub(crate) fn use_highest_version(
@@ -720,6 +776,18 @@ fn is_after(version: &Version, bound: Bound<&Version>) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
+    use uv_distribution_filename::WheelFilename;
+    use uv_distribution_types::{
+        File, FileLocation, HashComparison, IndexUrl, RegistryBuiltWheel, WheelCompatibility,
+    };
+    use uv_platform_tags::IncompatibleTag;
+    use uv_pypi_types::HashDigests;
+    use uv_small_str::SmallString;
+
+    use crate::FlatDistributions;
+
     use super::*;
 
     fn version(value: &str) -> Version {
@@ -759,6 +827,208 @@ mod tests {
     #[test]
     fn range_cursor_descending() {
         assert_range_cursor(true, &["6", "5", "4", "3", "2.5", "2", "1"]);
+    }
+
+    fn test_version_map(entries: &[(&str, u8)]) -> VersionMap {
+        let index = "https://index.example/simple"
+            .parse::<IndexUrl>()
+            .expect("valid test index URL");
+        let base = SmallString::from("https://index.example/files/");
+        let distributions = entries
+            .iter()
+            .map(|(value, compatibility)| {
+                let version = version(value);
+                let filename = format!("example-{version}-py3-none-any.whl")
+                    .parse::<WheelFilename>()
+                    .expect("valid test wheel filename");
+                let file = File {
+                    dist_info_metadata: true,
+                    filename: SmallString::from(filename.to_string()),
+                    hashes: HashDigests::empty(),
+                    requires_python: None,
+                    size: None,
+                    upload_time_utc_ms: None,
+                    url: FileLocation::new(SmallString::from(filename.to_string()), &base),
+                    yanked: None,
+                    zstd: None,
+                };
+                let wheel = RegistryBuiltWheel {
+                    filename,
+                    file: Box::new(file),
+                    index: index.clone(),
+                };
+                let compatibility = match compatibility {
+                    b'i' => WheelCompatibility::Incompatible(IncompatibleWheel::Tag(
+                        IncompatibleTag::Platform,
+                    )),
+                    b'e' => {
+                        WheelCompatibility::Incompatible(IncompatibleWheel::ExcludeNewer(Some(1)))
+                    }
+                    _ => WheelCompatibility::Compatible(HashComparison::Matched, None, None),
+                };
+                (
+                    version,
+                    PrioritizedDist::from_built(wheel, vec![], compatibility),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        VersionMap::from(FlatDistributions::from(distributions))
+    }
+
+    fn candidates(
+        selector: &CandidateSelector,
+        package_name: &PackageName,
+        range: &Range<Version>,
+        version_map: &VersionMap,
+        env: &ResolverEnvironment,
+        limit: usize,
+        batched: bool,
+    ) -> Vec<(Version, bool)> {
+        let signature = |candidate: Candidate<'_>| {
+            (
+                candidate.version().clone(),
+                candidate.compatible().is_some(),
+            )
+        };
+        if batched {
+            return selector
+                .iter_no_preference(package_name, range, version_map, env)
+                .take(limit)
+                .map(signature)
+                .collect();
+        }
+
+        let mut range = range.clone();
+        std::iter::from_fn(|| {
+            let candidate = selector.select_no_preference(
+                package_name,
+                &range,
+                std::slice::from_ref(version_map),
+                env,
+            )?;
+            range = range.intersection(&Range::singleton(candidate.version().clone()).complement());
+            Some(signature(candidate))
+        })
+        .take(limit)
+        .collect()
+    }
+
+    #[test]
+    fn batch_selector_matches_repeated_single_index_selection() {
+        let version_map = test_version_map(&[
+            ("1", b'c'),
+            ("2", b'c'),
+            ("3", b'i'),
+            ("3.5a1", b'c'),
+            ("4", b'c'),
+            ("5", b'c'),
+            ("6", b'i'),
+            ("7a1", b'c'),
+            ("8", b'e'),
+            ("9", b'c'),
+        ]);
+        let package_name = "example"
+            .parse::<PackageName>()
+            .expect("valid test package name");
+        let env = ResolverEnvironment::universal(vec![]);
+        let range = [
+            (Bound::Unbounded, Bound::Excluded(version("2"))),
+            (Bound::Included(version("3")), Bound::Included(version("4"))),
+            (Bound::Excluded(version("5")), Bound::Unbounded),
+        ]
+        .into_iter()
+        .collect::<Range<_>>();
+
+        for resolution_strategy in [ResolutionStrategy::Highest, ResolutionStrategy::Lowest] {
+            for prerelease_strategy in [
+                PrereleaseStrategy::Disallow,
+                PrereleaseStrategy::Allow,
+                PrereleaseStrategy::IfNecessary,
+            ] {
+                let selector = CandidateSelector {
+                    resolution_strategy: resolution_strategy.clone(),
+                    prerelease_strategy,
+                    index_strategy: IndexStrategy::UnsafeBestMatch,
+                };
+                assert_eq!(
+                    candidates(
+                        &selector,
+                        &package_name,
+                        &range,
+                        &version_map,
+                        &env,
+                        6,
+                        true
+                    ),
+                    candidates(
+                        &selector,
+                        &package_name,
+                        &range,
+                        &version_map,
+                        &env,
+                        6,
+                        false
+                    )
+                );
+            }
+        }
+
+        let prereleases = test_version_map(&[("1a1", b'c'), ("2b1", b'c'), ("3rc1", b'c')]);
+        let selector = CandidateSelector {
+            resolution_strategy: ResolutionStrategy::Highest,
+            prerelease_strategy: PrereleaseStrategy::IfNecessary,
+            index_strategy: IndexStrategy::FirstIndex,
+        };
+
+        assert_eq!(
+            candidates(
+                &selector,
+                &package_name,
+                &Range::full(),
+                &prereleases,
+                &env,
+                3,
+                true,
+            ),
+            [
+                (version("3rc1"), true),
+                (version("2b1"), true),
+                (version("1a1"), true),
+            ]
+        );
+
+        let total_prefetch = 6;
+        let compatible = Range::singleton(version("5"));
+        let phased = [false, true].map(|batched| {
+            let mut selected = candidates(
+                &selector,
+                &package_name,
+                &compatible,
+                &version_map,
+                &env,
+                total_prefetch,
+                batched,
+            );
+            let in_order = Range::strictly_lower_than(
+                selected
+                    .last()
+                    .map(|(version, _)| version.clone())
+                    .expect("expected a compatible candidate"),
+            );
+            let remaining = total_prefetch - selected.len() - 1;
+            selected.extend(candidates(
+                &selector,
+                &package_name,
+                &in_order,
+                &version_map,
+                &env,
+                remaining,
+                batched,
+            ));
+            selected
+        });
+        assert_eq!(phased[0], phased[1]);
+        assert_eq!(phased[0].len(), 5);
     }
 }
 

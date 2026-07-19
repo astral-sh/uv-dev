@@ -7,11 +7,12 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use tokio::sync::mpsc::Sender;
 use tracing::{debug, trace};
 
-use crate::candidate_selector::CandidateSelector;
+use crate::candidate_selector::{Candidate, CandidateSelector};
 use crate::pubgrub::{PubGrubPackage, PubGrubPackageInner, Range};
 use crate::resolver::Request;
 use crate::{
-    InMemoryIndex, PythonRequirement, ResolveError, ResolverEnvironment, VersionsResponse,
+    InMemoryIndex, PythonRequirement, ResolveError, ResolverEnvironment, VersionMap,
+    VersionsResponse,
 };
 use uv_distribution_types::{CompatibleDist, Identifier, IndexCapabilities, IndexMetadata};
 use uv_normalize::PackageName;
@@ -212,13 +213,36 @@ impl BatchPrefetcherRunner {
         unchangeable_constraints: Option<&Term<Range<Version>>>,
         total_prefetch: usize,
         versions_response: &Arc<VersionsResponse>,
-        mut phase: BatchPrefetchStrategy,
+        phase: BatchPrefetchStrategy,
         python_requirement: &PythonRequirement,
         selector: &CandidateSelector,
         env: &ResolverEnvironment,
     ) -> Result<(), ResolveError> {
         let VersionsResponse::Found(version_map) = &**versions_response else {
             return Ok(());
+        };
+
+        let mut phase = match (version_map.as_slice(), phase) {
+            (
+                [version_map],
+                BatchPrefetchStrategy::Compatible {
+                    compatible,
+                    previous,
+                },
+            ) => {
+                return self.send_prefetch_single_index(
+                    name,
+                    unchangeable_constraints,
+                    total_prefetch,
+                    version_map,
+                    &compatible,
+                    previous,
+                    python_requirement,
+                    selector,
+                    env,
+                );
+            }
+            (_, phase) => phase,
         };
 
         let mut prefetch_count = 0;
@@ -277,45 +301,117 @@ impl BatchPrefetcherRunner {
                 }
             };
 
-            let Some(dist) = candidate.compatible() else {
-                continue;
+            let phase = match phase {
+                BatchPrefetchStrategy::Compatible { .. } => "compatible",
+                BatchPrefetchStrategy::InOrder { .. } => "in order",
             };
-
-            // Avoid prefetching source distributions, which could be expensive.
-            let Some(wheel) = dist.wheel() else {
-                continue;
-            };
-
-            // Avoid prefetching built distributions that don't support _either_ PEP 658 (`.metadata`)
-            // or range requests.
-            if !(wheel.file.dist_info_metadata
-                || self.capabilities.supports_range_requests(&wheel.index))
-            {
-                debug!("Abandoning prefetch for {wheel} due to missing registry capabilities");
+            if !self.enqueue_prefetch(&candidate, python_requirement, &mut prefetch_count, phase)? {
                 return Ok(());
             }
+        }
 
-            // Avoid prefetching for distributions that don't satisfy the Python requirement.
-            if !satisfies_python(dist, python_requirement) {
-                continue;
+        match prefetch_count {
+            0 => debug!("No `{name}` versions to prefetch"),
+            1 => debug!("Prefetched 1 `{name}` version"),
+            _ => debug!("Prefetched {prefetch_count} `{name}` versions"),
+        }
+
+        Ok(())
+    }
+
+    /// Enqueue a candidate for prefetching, returning `false` if prefetching should be abandoned.
+    fn enqueue_prefetch(
+        &self,
+        candidate: &Candidate<'_>,
+        python_requirement: &PythonRequirement,
+        prefetch_count: &mut usize,
+        phase: &str,
+    ) -> Result<bool, ResolveError> {
+        let Some(dist) = candidate.compatible() else {
+            return Ok(true);
+        };
+        let Some(wheel) = dist.wheel() else {
+            return Ok(true);
+        };
+        if !(wheel.file.dist_info_metadata
+            || self.capabilities.supports_range_requests(&wheel.index))
+        {
+            debug!("Abandoning prefetch for {wheel} due to missing registry capabilities");
+            return Ok(false);
+        }
+        if !satisfies_python(dist, python_requirement) {
+            return Ok(true);
+        }
+
+        let dist = dist.for_resolution();
+        trace!("Prefetching {prefetch_count} ({phase}) {dist}");
+        *prefetch_count += 1;
+        if self.index.distributions().register(dist.distribution_id()) {
+            self.request_sink.blocking_send(Request::from(dist))?;
+        }
+        Ok(true)
+    }
+
+    /// Prefetch candidates from a single index in one pass, enqueueing each candidate as soon as
+    /// it is selected.
+    fn send_prefetch_single_index(
+        &self,
+        name: &PackageName,
+        unchangeable_constraints: Option<&Term<Range<Version>>>,
+        total_prefetch: usize,
+        version_map: &VersionMap,
+        compatible: &Range<Version>,
+        mut previous: Version,
+        python_requirement: &PythonRequirement,
+        selector: &CandidateSelector,
+        env: &ResolverEnvironment,
+    ) -> Result<(), ResolveError> {
+        let mut prefetch_count = 0;
+        let mut compatible_count = 0;
+        for candidate in selector
+            .iter_no_preference(name, compatible, version_map, env)
+            .take(total_prefetch)
+        {
+            previous = candidate.version().clone();
+            compatible_count += 1;
+            if !self.enqueue_prefetch(
+                &candidate,
+                python_requirement,
+                &mut prefetch_count,
+                "compatible",
+            )? {
+                return Ok(());
             }
+        }
 
-            let dist = dist.for_resolution();
-
-            // Emit a request to fetch the metadata for this version.
-            trace!(
-                "Prefetching {prefetch_count} ({}) {}",
-                match phase {
-                    BatchPrefetchStrategy::Compatible { .. } => "compatible",
-                    BatchPrefetchStrategy::InOrder { .. } => "in order",
-                },
-                dist
-            );
-            prefetch_count += 1;
-
-            if self.index.distributions().register(dist.distribution_id()) {
-                let request = Request::from(dist);
-                self.request_sink.blocking_send(request)?;
+        // Switching phases consumes one iteration in the repeated-selector path.
+        let remaining = total_prefetch.saturating_sub(compatible_count + 1);
+        if remaining > 0 {
+            let mut range = if selector.use_highest_version(name, env) {
+                Range::strictly_lower_than(previous)
+            } else {
+                Range::strictly_higher_than(previous)
+            };
+            if let Some(unchangeable_constraints) = unchangeable_constraints {
+                range = match unchangeable_constraints {
+                    Term::Positive(constraints) => range.intersection(constraints),
+                    Term::Negative(negative_constraints) => {
+                        range.intersection(&negative_constraints.complement())
+                    }
+                };
+            }
+            for candidate in selector
+                .iter_no_preference(name, &range, version_map, env)
+                .take(remaining)
+            {
+                if !self.enqueue_prefetch(
+                    &candidate,
+                    python_requirement,
+                    &mut prefetch_count,
+                    "in order",
+                )? {
+                    return Ok(());
+                }
             }
         }
 
