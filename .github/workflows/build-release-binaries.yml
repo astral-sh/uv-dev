@@ -37,6 +37,9 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+      - name: "Use stable Rust toolchain"
+        shell: bash
+        run: cp crates/uv-build/rust-toolchain.toml rust-toolchain.toml
 
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
@@ -55,6 +58,7 @@ jobs:
         run: |
           # We can't use `--find-links` here, since we need maturin, which means no `--no-index`, and without that option
           # we run the risk that pip pull uv from PyPI instead.
+          tar --extract --to-stdout --file dist/${PACKAGE_NAME}-*.tar.gz --wildcards '*/rust-toolchain.toml' | cmp - crates/uv-build/rust-toolchain.toml
           pip install dist/${PACKAGE_NAME}-*.tar.gz --force-reinstall
           ${MODULE_NAME} --help
           python -m ${MODULE_NAME} --help
@@ -92,6 +96,9 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+      - name: "Use stable Rust toolchain"
+        shell: bash
+        run: cp crates/uv-build/rust-toolchain.toml rust-toolchain.toml
 
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
@@ -164,6 +171,9 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+      - name: "Use stable Rust toolchain"
+        shell: bash
+        run: cp crates/uv-build/rust-toolchain.toml rust-toolchain.toml
 
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
@@ -260,6 +270,9 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+      - name: "Use stable Rust toolchain"
+        shell: bash
+        run: cp crates/uv-build/rust-toolchain.toml rust-toolchain.toml
 
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
@@ -353,6 +366,9 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+      - name: "Use stable Rust toolchain"
+        shell: bash
+        run: cp crates/uv-build/rust-toolchain.toml rust-toolchain.toml
 
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
@@ -484,6 +500,9 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+      - name: "Use stable Rust toolchain"
+        shell: bash
+        run: cp crates/uv-build/rust-toolchain.toml rust-toolchain.toml
 
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
@@ -601,6 +620,9 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+      - name: "Use stable Rust toolchain"
+        shell: bash
+        run: cp crates/uv-build/rust-toolchain.toml rust-toolchain.toml
 
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
@@ -724,6 +746,9 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+      - name: "Use stable Rust toolchain"
+        shell: bash
+        run: cp crates/uv-build/rust-toolchain.toml rust-toolchain.toml
 
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
@@ -833,6 +858,9 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+      - name: "Use stable Rust toolchain"
+        shell: bash
+        run: cp crates/uv-build/rust-toolchain.toml rust-toolchain.toml
 
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
@@ -949,6 +977,9 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+      - name: "Use stable Rust toolchain"
+        shell: bash
+        run: cp crates/uv-build/rust-toolchain.toml rust-toolchain.toml
 
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
@@ -1061,6 +1092,9 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+      - name: "Use stable Rust toolchain"
+        shell: bash
+        run: cp crates/uv-build/rust-toolchain.toml rust-toolchain.toml
 
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:

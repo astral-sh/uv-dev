@@ -41,7 +41,7 @@ RUN curl --proto '=https' --tlsv1.2 -sSf \
   && rm rustup-init
 ENV PATH="$HOME/.cargo/bin:$PATH"
 # Install the toolchain then the musl target
-COPY rust-toolchain.toml rust-toolchain.toml
+COPY crates/uv-build/rust-toolchain.toml rust-toolchain.toml
 RUN rustup toolchain install
 RUN rustup target add $(cat rust_target.txt)
 
