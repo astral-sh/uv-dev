@@ -1,10 +1,25 @@
+name: Pull request security review
+
 on:
-  workflow_call:
+  workflow_dispatch:
+    inputs:
+      pull_request:
+        description: "The pull request number"
+        required: true
+        type: string
+      head_sha:
+        description: "The expected pull request head SHA"
+        required: true
+        type: string
 
 permissions: {}
 
 env:
   UV_LOCKED: 1
+
+concurrency:
+  group: pull-request-security-review-${{ inputs.pull_request }}
+  cancel-in-progress: true
 
 jobs:
   review:
@@ -21,6 +36,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: main
           fetch-depth: 0
           persist-credentials: false
 
@@ -43,13 +59,45 @@ jobs:
         run: ./agents/scripts/install-codex-security.sh
 
       - name: "Collect pull request context"
+        id: context
         run: |
           set -o pipefail
 
           gh pr view "$PULL_REQUEST_NUMBER" \
             --repo "$GITHUB_REPOSITORY" \
-            --json number,title,body,author,baseRefName,baseRefOid,headRefName,headRefOid,isDraft,labels,files,additions,deletions,changedFiles \
+            --json number,title,body,author,baseRefName,baseRefOid,headRefName,headRefOid,isCrossRepository,isDraft,state,labels,files,additions,deletions,changedFiles \
             > .pull-request-review-event.json
+
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$PULL_REQUEST_NUMBER" \
+            > "$RUNNER_TEMP/pull-request-live.json"
+
+          if ! [[ "$PULL_REQUEST_NUMBER" =~ ^[1-9][0-9]*$ ]] || ! [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "The dispatched pull request context is invalid." >&2
+            exit 1
+          fi
+          if ! jq --exit-status \
+            --arg head_sha "$EXPECTED_HEAD_SHA" \
+            '.state == "OPEN" and (.isDraft | not) and (.isCrossRepository | not) and .baseRefName == "main" and .headRefOid == $head_sha' \
+            .pull-request-review-event.json > /dev/null; then
+            echo "The pull request is no longer ready at the expected head; skipping security review." >&2
+            exit 1
+          fi
+          if ! jq --exit-status \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --argjson repository_id "$GITHUB_REPOSITORY_ID" \
+            --arg head_sha "$EXPECTED_HEAD_SHA" \
+            '.state == "open" and (.draft | not) and .base.ref == "main" and .base.repo.full_name == $repository and .base.repo.id == $repository_id and .head.repo.full_name == $repository and .head.repo.id == $repository_id and .head.sha == $head_sha' \
+            "$RUNNER_TEMP/pull-request-live.json" > /dev/null; then
+            echo "The pull request repository or head changed; skipping security review." >&2
+            exit 1
+          fi
+          if ! jq --exit-status \
+            '.files | any(.path | test("^(docs/|bin/|assets/|agents/|\\.claude/|\\.codex/)|^mkdocs.*\\.yml$|\\.md$"; "i") | not)' \
+            .pull-request-review-event.json > /dev/null; then
+            echo "The pull request contains no code or workflow changes to review."
+            echo "eligible=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
           gh pr diff "$PULL_REQUEST_NUMBER" \
             --repo "$GITHUB_REPOSITORY" \
@@ -66,9 +114,26 @@ jobs:
               "$(jq -r '.title | gsub("[\r\n]+"; " ")' .pull-request-review-event.json)"
             cat agents/prompts/pull-request-security-review.md
           } > "$RUNNER_TEMP/pull-request-security-review-prompt.md"
+
+          mkdir -p "$RUNNER_TEMP/codex-home"
+          cp -R agents/codex/. "$RUNNER_TEMP/codex-home/"
+          cp agents/schemas/pull-request-security-review.json "$RUNNER_TEMP/pull-request-security-review-schema.json"
+          cp agents/references/threat-model.md "$RUNNER_TEMP/pull-request-security-review-threat-model.md"
+
+          head_ref=$(jq --raw-output '.headRefName' .pull-request-review-event.json)
+          git check-ref-format "refs/heads/$head_ref"
+          git fetch --no-tags origin "refs/heads/$head_ref"
+          current_head=$(git rev-parse 'FETCH_HEAD^{commit}')
+          if [ "$current_head" != "$EXPECTED_HEAD_SHA" ]; then
+            echo "The pull request head changed; refusing to review a stale revision." >&2
+            exit 1
+          fi
+          git checkout --detach "$EXPECTED_HEAD_SHA"
+          echo "eligible=true" >> "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number }}
+          EXPECTED_HEAD_SHA: ${{ inputs.head_sha }}
+          PULL_REQUEST_NUMBER: ${{ inputs.pull_request }}
 
       - name: "Install cargo nextest"
         uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad # v2.85.10
@@ -77,6 +142,7 @@ jobs:
 
       - name: "Review pull request"
         id: review
+        if: steps.context.outputs.eligible == 'true'
         uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56 # v1.11
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -84,20 +150,20 @@ jobs:
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           codex-version: "0.146.0"
-          codex-home: "agents/codex"
+          codex-home: "${{ runner.temp }}/codex-home"
           effort: high
           permission-profile: "pull-request-review"
           safety-strategy: drop-sudo
           allow-bot-users: "astral-automations-bot[bot],renovate[bot]"
           prompt-file: "${{ runner.temp }}/pull-request-security-review-prompt.md"
-          output-schema-file: "agents/schemas/pull-request-security-review.json"
+          output-schema-file: "${{ runner.temp }}/pull-request-security-review-schema.json"
 
       - name: "Upload Codex thread"
-        if: always()
+        if: always() && steps.context.outputs.eligible == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: codex-thread-pull-request-security-review-${{ github.run_id }}-${{ github.run_attempt }}
-          path: agents/codex/sessions
+          path: ${{ runner.temp }}/codex-home/sessions
           if-no-files-found: warn
 
   prepare:
@@ -112,6 +178,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: main
           persist-credentials: false
 
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
@@ -129,7 +196,7 @@ jobs:
             printf '%s\n' "$delimiter"
           } >> "$GITHUB_OUTPUT"
         env:
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_SHA: ${{ inputs.head_sha }}
           REVIEW_RESULT: ${{ needs.review.outputs.result }}
 
   report:
@@ -182,6 +249,6 @@ jobs:
           done
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ inputs.head_sha }}
+          PULL_REQUEST_NUMBER: ${{ inputs.pull_request }}
           REVIEW_RESULT: ${{ needs.prepare.outputs.result }}
