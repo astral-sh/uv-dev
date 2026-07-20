@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 use std::fmt::{self, Debug, Formatter};
+use std::hash::BuildHasherDefault;
+use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -9,7 +11,7 @@ use futures::{FutureExt, StreamExt, TryStreamExt};
 use http::{HeaderMap, StatusCode};
 use itertools::Either;
 use reqwest::{Proxy, Response};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHasher};
 use tokio::sync::{Mutex, Semaphore};
 use tracing::{Instrument, debug, info_span, instrument, trace, warn};
 use url::Url;
@@ -27,6 +29,7 @@ use uv_distribution_types::{
 use uv_git::{GIT_LFS, GitError, GitHttpSettings, GitResolver, Reporter};
 use uv_metadata::{read_metadata_async_seek, read_metadata_async_stream};
 use uv_normalize::PackageName;
+use uv_once_map::OnceMap;
 use uv_pep440::{Version, VersionSpecifiers};
 use uv_pep508::MarkerEnvironment;
 use uv_platform_tags::Platform;
@@ -204,6 +207,7 @@ impl<'a> RegistryClientBuilder<'a> {
             client,
             read_timeout,
             flat_indexes: Arc::default(),
+            wheel_metadata_bundles: Arc::default(),
             pyx_token_store: PyxTokenStore::from_settings().ok(),
         })
     }
@@ -228,6 +232,8 @@ pub struct RegistryClient {
     read_timeout: Duration,
     /// The flat index entries for each `--find-links`-style index URL, with one slot per index.
     flat_indexes: Arc<Mutex<FlatIndexCache>>,
+    /// The optional, per-package wheel metadata bundles used by offline resolutions.
+    wheel_metadata_bundles: Arc<WheelMetadataBundles>,
     /// The pyx token store to use for persistent credentials.
     // TODO(charlie): The token store is only needed for `is_known_url`; can we avoid storing it here?
     pyx_token_store: Option<PyxTokenStore>,
@@ -1102,6 +1108,13 @@ impl RegistryClient {
                 WheelCache::Index(index).wheel_dir(filename.name.as_ref()),
                 format!("{}.msgpack", filename.cache_key()),
             );
+            if self.connectivity == Connectivity::Offline
+                && let Some(metadata) = self
+                    .wheel_metadata_bundle(&cache_entry, filename, &url)
+                    .await
+            {
+                return Ok(metadata);
+            }
             let cache_control = match self.connectivity {
                 Connectivity::Online
                     if let Some(header) = self.indexes.artifact_cache_control_for(index) =>
@@ -1178,6 +1191,13 @@ impl RegistryClient {
             cache_shard.wheel_dir(filename.name.as_ref()),
             format!("{}.msgpack", filename.cache_key()),
         );
+        if self.connectivity == Connectivity::Offline
+            && let Some(metadata) = self
+                .wheel_metadata_bundle(&cache_entry, filename, url)
+                .await
+        {
+            return Ok(metadata);
+        }
         let cache_control = match self.connectivity {
             Connectivity::Online
                 if let Some(index) = index
@@ -1324,6 +1344,77 @@ impl RegistryClient {
             .map_err(crate::Error::from)
     }
 
+    /// Read wheel metadata from an optional per-package bundle after repeated requests.
+    async fn wheel_metadata_bundle(
+        &self,
+        cache_entry: &CacheEntry,
+        filename: &WheelFilename,
+        url: &DisplaySafeUrl,
+    ) -> Option<ResolutionMetadata> {
+        let key = cache_entry.path().file_stem()?.to_str()?;
+        let directory = cache_entry.dir();
+
+        let bundle = if let Some(bundle) = self.wheel_metadata_bundles.loaded.get(directory) {
+            bundle
+        } else {
+            let directory = directory.to_path_buf();
+            if !self
+                .wheel_metadata_bundles
+                .should_load(&directory, key)
+                .await
+            {
+                return None;
+            }
+
+            if let Some(bundle) = self
+                .wheel_metadata_bundles
+                .loaded
+                .register_or_wait(&directory)
+                .await
+            {
+                bundle
+            } else {
+                let bundle_path = directory.join("metadata.bundle.msgpack");
+                let bundle = match fs_err::tokio::read(&bundle_path).await {
+                    Ok(bytes) => {
+                        if let Some(bundle) = WheelMetadataBundle::parse(bytes) {
+                            Some(bundle)
+                        } else {
+                            debug!(
+                                "Ignoring invalid wheel metadata bundle: {}",
+                                bundle_path.display()
+                            );
+                            None
+                        }
+                    }
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+                    Err(err) => {
+                        debug!(
+                            "Failed to read wheel metadata bundle at {}: {err}",
+                            bundle_path.display()
+                        );
+                        None
+                    }
+                };
+                let bundle = Arc::new(bundle);
+                self.wheel_metadata_bundles
+                    .loaded
+                    .done(directory, Arc::clone(&bundle));
+                bundle
+            }
+        };
+
+        let bundle = bundle.as_ref().as_ref()?;
+        let entry = bundle.entries.get(key)?;
+        if bundle.bytes.get(entry.url.clone())? != url.as_str().as_bytes() {
+            return None;
+        }
+        let metadata =
+            rmp_serde::from_slice::<ResolutionMetadata>(bundle.bytes.get(entry.payload.clone())?)
+                .ok()?;
+        (metadata.name == filename.name && metadata.version == filename.version).then_some(metadata)
+    }
+
     /// Handle a specific `reqwest` error, and convert it to [`io::Error`].
     fn handle_response_errors(&self, err: reqwest::Error) -> std::io::Error {
         if err.is_timeout() {
@@ -1378,6 +1469,91 @@ impl FlatIndexCache {
 
 type FlatIndexEntriesByPackage = FxHashMap<PackageName, Vec<FlatIndexEntry>>;
 type FlatIndexSlot = Arc<Mutex<Option<FlatIndexEntriesByPackage>>>;
+
+type FxOnceMap<K, V> = OnceMap<K, V, BuildHasherDefault<FxHasher>>;
+
+#[derive(Default, Debug)]
+struct WheelMetadataBundles {
+    /// The first wheel requested from each package directory.
+    first_requests: FxOnceMap<PathBuf, String>,
+    /// A loaded bundle, or a remembered absence or parse failure.
+    loaded: FxOnceMap<PathBuf, Arc<Option<WheelMetadataBundle>>>,
+}
+
+impl WheelMetadataBundles {
+    /// Return whether a distinct wheel has already been requested from this directory.
+    async fn should_load(&self, directory: &PathBuf, key: &str) -> bool {
+        if let Some(first_request) = self.first_requests.register_or_wait(directory).await {
+            first_request != key
+        } else {
+            self.first_requests.done(directory.clone(), key.to_owned());
+            false
+        }
+    }
+}
+
+#[derive(Debug)]
+struct WheelMetadataBundle {
+    bytes: Vec<u8>,
+    entries: FxHashMap<String, WheelMetadataBundleEntry>,
+}
+
+#[derive(Debug)]
+struct WheelMetadataBundleEntry {
+    url: Range<usize>,
+    payload: Range<usize>,
+}
+
+impl WheelMetadataBundle {
+    /// Parse a compact sequence of wheel filename keys, request URLs, and `MsgPack` payloads.
+    fn parse(bytes: Vec<u8>) -> Option<Self> {
+        let mut cursor = bytes.strip_prefix(b"uv-wheel-metadata-bundle-v1\0")?;
+        let count = usize::try_from(u32::from_le_bytes(
+            take_bundle_bytes(&mut cursor, 4)?.try_into().ok()?,
+        ))
+        .ok()?;
+        let mut entries = FxHashMap::default();
+        entries.try_reserve(count).ok()?;
+
+        for _ in 0..count {
+            let key_length = usize::from(u16::from_le_bytes(
+                take_bundle_bytes(&mut cursor, 2)?.try_into().ok()?,
+            ));
+            let url_length = usize::from(u16::from_le_bytes(
+                take_bundle_bytes(&mut cursor, 2)?.try_into().ok()?,
+            ));
+            let payload_length = usize::try_from(u32::from_le_bytes(
+                take_bundle_bytes(&mut cursor, 4)?.try_into().ok()?,
+            ))
+            .ok()?;
+            let key = std::str::from_utf8(take_bundle_bytes(&mut cursor, key_length)?).ok()?;
+            let url_start = bytes.len().checked_sub(cursor.len())?;
+            std::str::from_utf8(take_bundle_bytes(&mut cursor, url_length)?).ok()?;
+            let payload_start = bytes.len().checked_sub(cursor.len())?;
+            take_bundle_bytes(&mut cursor, payload_length)?;
+            if entries
+                .insert(
+                    key.to_owned(),
+                    WheelMetadataBundleEntry {
+                        url: url_start..url_start.checked_add(url_length)?,
+                        payload: payload_start..payload_start.checked_add(payload_length)?,
+                    },
+                )
+                .is_some()
+            {
+                return None;
+            }
+        }
+
+        cursor.is_empty().then_some(Self { bytes, entries })
+    }
+}
+
+fn take_bundle_bytes<'a>(cursor: &mut &'a [u8], length: usize) -> Option<&'a [u8]> {
+    let bytes = cursor.get(..length)?;
+    *cursor = cursor.get(length..)?;
+    Some(bytes)
+}
 
 #[derive(Default, Debug, rkyv::Archive, rkyv::Deserialize, rkyv::Serialize)]
 #[rkyv(derive(Debug))]
@@ -1931,12 +2107,14 @@ impl Connectivity {
 
 #[cfg(test)]
 mod tests {
+    use std::path::{Path, PathBuf};
     use std::str::FromStr;
 
     use tokio::sync::Semaphore;
     use url::Url;
     use uv_normalize::PackageName;
-    use uv_pypi_types::PypiSimpleDetail;
+    use uv_pep440::Version;
+    use uv_pypi_types::{PypiSimpleDetail, ResolutionMetadata};
     use uv_redacted::DisplaySafeUrl;
     use uv_torch::{TorchBackend, TorchSource, TorchStrategy};
 
@@ -1944,7 +2122,8 @@ mod tests {
         BaseClientBuilder, Connectivity, RegistryClient, RegistryClientBuilder,
         SimpleDetailMetadata, SimpleDetailMetadatum, html::SimpleDetailHTML,
     };
-    use uv_cache::Cache;
+    use uv_cache::{Cache, CacheEntry};
+    use uv_distribution_filename::WheelFilename;
     use uv_distribution_types::{
         FileLocation, Index, IndexCapabilities, IndexFormat, IndexLocations, IndexMetadataRef,
         IndexUrl, ToUrlError,
@@ -1954,6 +2133,35 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     type Error = Box<dyn std::error::Error>;
+
+    fn wheel_metadata_bundle_bytes(entries: &[(&str, &str, &[u8])]) -> Result<Vec<u8>, Error> {
+        let mut bytes = Vec::from(&b"uv-wheel-metadata-bundle-v1\0"[..]);
+        bytes.extend_from_slice(&u32::try_from(entries.len())?.to_le_bytes());
+        for (key, url, payload) in entries {
+            bytes.extend_from_slice(&u16::try_from(key.len())?.to_le_bytes());
+            bytes.extend_from_slice(&u16::try_from(url.len())?.to_le_bytes());
+            bytes.extend_from_slice(&u32::try_from(payload.len())?.to_le_bytes());
+            bytes.extend_from_slice(key.as_bytes());
+            bytes.extend_from_slice(url.as_bytes());
+            bytes.extend_from_slice(payload);
+        }
+        Ok(bytes)
+    }
+
+    fn wheel_metadata_payload(name: &str, version: &str) -> Result<Vec<u8>, Error> {
+        Ok(rmp_serde::to_vec(&ResolutionMetadata {
+            name: PackageName::from_str(name)?,
+            version: Version::from_str(version)?,
+            requires_dist: Box::default(),
+            requires_python: None,
+            provides_extra: Box::default(),
+            dynamic: false,
+        })?)
+    }
+
+    fn wheel_metadata_cache_entry(directory: &Path, filename: &WheelFilename) -> CacheEntry {
+        CacheEntry::new(directory, format!("{}.msgpack", filename.cache_key()))
+    }
 
     async fn start_test_server(username: &'static str, password: &'static str) -> MockServer {
         let server = MockServer::start().await;
@@ -2331,6 +2539,178 @@ mod tests {
             ["example_1-1.0.0.tar.gz", "example_1-1.0.0-py3-none-any.whl"]
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn wheel_metadata_bundle_round_trip() -> Result<(), Error> {
+        let key = "1.0.0-py3-none-any";
+        let url = "https://files.example/example-1.0.0-py3-none-any.whl.metadata";
+        let payload = b"metadata";
+        let bytes = wheel_metadata_bundle_bytes(&[(key, url, payload)])?;
+
+        let Some(bundle) = super::WheelMetadataBundle::parse(bytes.clone()) else {
+            return Err("valid wheel metadata bundle was rejected".into());
+        };
+        let Some(entry) = bundle.entries.get(key) else {
+            return Err("wheel metadata bundle entry was missing".into());
+        };
+        assert_eq!(bundle.bytes.get(entry.url.clone()), Some(url.as_bytes()));
+        assert_eq!(bundle.bytes.get(entry.payload.clone()), Some(&payload[..]));
+
+        let mut truncated = bytes.clone();
+        truncated.pop();
+        assert!(super::WheelMetadataBundle::parse(truncated).is_none());
+
+        let mut trailing = bytes;
+        trailing.push(0);
+        assert!(super::WheelMetadataBundle::parse(trailing).is_none());
+
+        let duplicate = wheel_metadata_bundle_bytes(&[(key, url, payload), (key, url, payload)])?;
+        assert!(super::WheelMetadataBundle::parse(duplicate).is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn wheel_metadata_bundle_threshold_is_concurrency_safe() {
+        let bundles = super::WheelMetadataBundles::default();
+        let directory = PathBuf::from("example");
+        let other_directory = PathBuf::from("other");
+
+        let (first, duplicate) = tokio::join!(
+            bundles.should_load(&directory, "1.0.0-py3-none-any"),
+            bundles.should_load(&directory, "1.0.0-py3-none-any"),
+        );
+        assert!(!first);
+        assert!(!duplicate);
+
+        let (second, second_duplicate) = tokio::join!(
+            bundles.should_load(&directory, "2.0.0-py3-none-any"),
+            bundles.should_load(&directory, "2.0.0-py3-none-any"),
+        );
+        assert!(second);
+        assert!(second_duplicate);
+        assert!(
+            !bundles
+                .should_load(&other_directory, "2.0.0-py3-none-any")
+                .await
+        );
+    }
+
+    #[tokio::test]
+    async fn wheel_metadata_bundle_waits_for_a_distinct_wheel() -> Result<(), Error> {
+        let directory = tempfile::tempdir()?;
+        let first = WheelFilename::from_str("example-1.0.0-py3-none-any.whl")?;
+        let second = WheelFilename::from_str("example-2.0.0-py3-none-any.whl")?;
+        let other = WheelFilename::from_str("other-1.0.0-py3-none-any.whl")?;
+        let first_url =
+            DisplaySafeUrl::parse("https://files.example/example-1.0.0-py3-none-any.whl.metadata")?;
+        let second_url =
+            DisplaySafeUrl::parse("https://files.example/example-2.0.0-py3-none-any.whl.metadata")?;
+        let first_payload = wheel_metadata_payload("example", "1.0.0")?;
+        let second_payload = wheel_metadata_payload("example", "2.0.0")?;
+        let bytes = wheel_metadata_bundle_bytes(&[
+            (&first.cache_key(), first_url.as_str(), &first_payload),
+            (&second.cache_key(), second_url.as_str(), &second_payload),
+        ])?;
+        let bundle_path = directory.path().join("metadata.bundle.msgpack");
+        fs_err::write(&bundle_path, bytes)?;
+
+        let client =
+            RegistryClientBuilder::new(BaseClientBuilder::default(), Cache::temp()?).build()?;
+        let first_entry = wheel_metadata_cache_entry(directory.path(), &first);
+        let second_entry = wheel_metadata_cache_entry(directory.path(), &second);
+
+        assert!(
+            client
+                .wheel_metadata_bundle(&first_entry, &first, &first_url)
+                .await
+                .is_none()
+        );
+        assert!(
+            client
+                .wheel_metadata_bundle(&first_entry, &first, &first_url)
+                .await
+                .is_none()
+        );
+
+        let Some(metadata) = client
+            .wheel_metadata_bundle(&second_entry, &second, &second_url)
+            .await
+        else {
+            return Err("second distinct wheel did not load the metadata bundle".into());
+        };
+        assert_eq!(metadata.name, second.name);
+        assert_eq!(metadata.version, second.version);
+
+        fs_err::remove_file(bundle_path)?;
+        let Some(metadata) = client
+            .wheel_metadata_bundle(&first_entry, &first, &first_url)
+            .await
+        else {
+            return Err("loaded wheel metadata bundle was not reused".into());
+        };
+        assert_eq!(metadata.name, first.name);
+        assert_eq!(metadata.version, first.version);
+
+        assert!(
+            client
+                .wheel_metadata_bundle(&first_entry, &first, &second_url)
+                .await
+                .is_none()
+        );
+        assert!(
+            client
+                .wheel_metadata_bundle(&first_entry, &second, &first_url)
+                .await
+                .is_none()
+        );
+        assert!(
+            client
+                .wheel_metadata_bundle(&first_entry, &other, &first_url)
+                .await
+                .is_none()
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn wheel_metadata_bundle_remembers_absence() -> Result<(), Error> {
+        let directory = tempfile::tempdir()?;
+        let first = WheelFilename::from_str("example-1.0.0-py3-none-any.whl")?;
+        let second = WheelFilename::from_str("example-2.0.0-py3-none-any.whl")?;
+        let first_url =
+            DisplaySafeUrl::parse("https://files.example/example-1.0.0-py3-none-any.whl.metadata")?;
+        let second_url =
+            DisplaySafeUrl::parse("https://files.example/example-2.0.0-py3-none-any.whl.metadata")?;
+        let client =
+            RegistryClientBuilder::new(BaseClientBuilder::default(), Cache::temp()?).build()?;
+        let first_entry = wheel_metadata_cache_entry(directory.path(), &first);
+        let second_entry = wheel_metadata_cache_entry(directory.path(), &second);
+
+        assert!(
+            client
+                .wheel_metadata_bundle(&first_entry, &first, &first_url)
+                .await
+                .is_none()
+        );
+        assert!(
+            client
+                .wheel_metadata_bundle(&second_entry, &second, &second_url)
+                .await
+                .is_none()
+        );
+
+        let payload = wheel_metadata_payload("example", "1.0.0")?;
+        let bytes =
+            wheel_metadata_bundle_bytes(&[(&first.cache_key(), first_url.as_str(), &payload)])?;
+        fs_err::write(directory.path().join("metadata.bundle.msgpack"), bytes)?;
+        assert!(
+            client
+                .wheel_metadata_bundle(&first_entry, &first, &first_url)
+                .await
+                .is_none()
+        );
         Ok(())
     }
 
