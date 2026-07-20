@@ -2,25 +2,26 @@
 name: "Pull request reviewers"
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
-    branches: [main]
   workflow_dispatch:
     inputs:
       pull_request:
         description: "A pull request number"
         required: true
-        type: number
+        type: string
+      head_sha:
+        description: "The expected pull request head SHA"
+        required: true
+        type: string
 
 permissions: {}
 
 concurrency:
-  group: ${{ github.workflow }}-${{ inputs.pull_request || github.event.pull_request.number }}
+  group: ${{ github.workflow }}-${{ inputs.pull_request }}
   cancel-in-progress: true
 
 jobs:
   select:
-    if: github.repository == 'astral-sh/uv' && (github.event_name == 'workflow_dispatch' || (!github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository))
+    if: github.repository == 'astral-sh/uv'
     runs-on: ubuntu-latest
     environment: automations
     timeout-minutes: 15
@@ -34,7 +35,7 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          ref: ${{ github.event.pull_request.base.sha || github.event.repository.default_branch }}
+          ref: main
           fetch-depth: 0
           persist-credentials: false
 
@@ -43,13 +44,33 @@ jobs:
         run: |
           gh pr view "$PULL_REQUEST_NUMBER" \
             --repo "$GITHUB_REPOSITORY" \
-            --json number,title,body,author,baseRefName,baseRefOid,headRefName,headRefOid,isDraft,state,labels,files,additions,deletions,changedFiles,reviewRequests,reviews,latestReviews \
+            --json number,title,body,author,baseRefName,baseRefOid,headRefName,headRefOid,isCrossRepository,isDraft,state,labels,files,additions,deletions,changedFiles,reviewRequests,reviews,latestReviews \
             > .pull-request-reviewers-event.json
 
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$PULL_REQUEST_NUMBER" \
+            > "$RUNNER_TEMP/pull-request-live.json"
+
+          if ! [[ "$PULL_REQUEST_NUMBER" =~ ^[1-9][0-9]*$ ]] || ! [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "The dispatched pull request context is invalid." >&2
+            exit 1
+          fi
+
           jq --raw-output '"head_sha=\(.headRefOid)"' .pull-request-reviewers-event.json >> "$GITHUB_OUTPUT"
-          if ! jq --exit-status '.state == "OPEN" and (.isDraft | not) and (.reviewRequests | length == 0)' .pull-request-reviewers-event.json > /dev/null; then
-            echo "The pull request is not ready or already has a requested reviewer."
+          if ! jq --exit-status \
+            --arg head_sha "$EXPECTED_HEAD_SHA" \
+            '.state == "OPEN" and (.isDraft | not) and (.isCrossRepository | not) and .baseRefName == "main" and .headRefOid == $head_sha and (.reviewRequests | length == 0)' \
+            .pull-request-reviewers-event.json > /dev/null; then
+            echo "The pull request is not ready at the expected head or already has a requested reviewer."
             exit 0
+          fi
+          if ! jq --exit-status \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --argjson repository_id "$GITHUB_REPOSITORY_ID" \
+            --arg head_sha "$EXPECTED_HEAD_SHA" \
+            '.state == "open" and (.draft | not) and .base.ref == "main" and .base.repo.full_name == $repository and .base.repo.id == $repository_id and .head.repo.full_name == $repository and .head.repo.id == $repository_id and .head.sha == $head_sha' \
+            "$RUNNER_TEMP/pull-request-live.json" > /dev/null; then
+            echo "The pull request repository or head changed; refusing to select a reviewer." >&2
+            exit 1
           fi
           echo "needs_reviewer=true" >> "$GITHUB_OUTPUT"
 
@@ -80,7 +101,8 @@ jobs:
             > .pull-request-reviewers-history.json
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PULL_REQUEST_NUMBER: ${{ inputs.pull_request || github.event.pull_request.number }}
+          EXPECTED_HEAD_SHA: ${{ inputs.head_sha }}
+          PULL_REQUEST_NUMBER: ${{ inputs.pull_request }}
 
       - name: "Select pull request reviewer"
         id: select
@@ -93,6 +115,7 @@ jobs:
           codex-home: "agents/codex"
           permission-profile: "pull-request-reviewers"
           safety-strategy: drop-sudo
+          allow-bot-users: "astral-automations-bot[bot]"
           prompt-file: "agents/prompts/pull-request-reviewers.md"
           output-schema-file: "agents/schemas/pull-request-reviewers.json"
 
@@ -110,13 +133,13 @@ jobs:
 
           gh pr view "$PULL_REQUEST_NUMBER" \
             --repo "$GITHUB_REPOSITORY" \
-            --json author,headRefOid,isDraft,state,reviewRequests,latestReviews \
+            --json author,baseRefName,headRefOid,isCrossRepository,isDraft,state,reviewRequests,latestReviews \
             > "$RUNNER_TEMP/pull-request.json"
 
           if ! jq --exit-status \
             --arg head_sha "$HEAD_SHA" \
             --arg reviewer "$reviewer" \
-            '.state == "OPEN" and (.isDraft | not) and .headRefOid == $head_sha and (.reviewRequests | length == 0) and .author.login != $reviewer and (.latestReviews | all(.author.login != $reviewer))' \
+            '.state == "OPEN" and (.isDraft | not) and (.isCrossRepository | not) and .baseRefName == "main" and .headRefOid == $head_sha and (.reviewRequests | length == 0) and .author.login != $reviewer and (.latestReviews | all(.author.login != $reviewer))' \
             "$RUNNER_TEMP/pull-request.json" > /dev/null; then
             echo "The pull request changed, is not ready, or already has a requested reviewer."
             exit 0
@@ -143,5 +166,5 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HEAD_SHA: ${{ needs.select.outputs.head_sha }}
-          PULL_REQUEST_NUMBER: ${{ inputs.pull_request || github.event.pull_request.number }}
+          PULL_REQUEST_NUMBER: ${{ inputs.pull_request }}
           REVIEW_RESULT: ${{ needs.select.outputs.result }}
