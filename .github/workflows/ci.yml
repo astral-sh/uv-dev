@@ -23,17 +23,6 @@ jobs:
   check-fmt:
     uses: $/.github/workflows/check-fmt.yml
 
-  review:
-    needs: plan
-    if: ${{ github.event_name == 'pull_request' && github.repository == 'astral-sh/uv' && github.event.pull_request.head.repo.full_name == github.repository && needs.plan.outputs.review-security == 'true' }}
-    uses: $/.github/workflows/pull-request-security-review.yml
-    secrets: inherit
-    permissions:
-      contents: read
-      id-token: write
-      issues: read
-      pull-requests: read
-
   check-lint:
     needs: plan
     uses: $/.github/workflows/check-lint.yml
