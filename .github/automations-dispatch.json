@@ -24,6 +24,33 @@
           "head_sha": "/pull_request/head/sha"
         }
       }
+    },
+    {
+      "event": "pull_request",
+      "action": "edited",
+      "repository": "astral-sh/uv-dev",
+      "repository_id": 1302176231,
+      "conditions": {
+        "/pull_request/state": "open",
+        "/pull_request/base/repo/id": 1302176231,
+        "/pull_request/head/repo/id": 1302176231,
+        "/changes/base/ref/from": { "exists": true }
+      },
+      "verify_pull_request": {
+        "number": "/pull_request/number",
+        "head_sha": "/pull_request/head/sha",
+        "allow_draft": true
+      },
+      "workflow": {
+        "repository": "astral-sh/uv-dev",
+        "repository_id": 1302176231,
+        "path": ".github/workflows/pull-request-conflicts.yml",
+        "ref": "main",
+        "inputs": {
+          "pull_request": "/pull_request/number",
+          "head_sha": "/pull_request/head/sha"
+        }
+      }
     }
   ]
 }
