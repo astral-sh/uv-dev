@@ -1,0 +1,43 @@
+name: Pull request security review
+
+on:
+  workflow_dispatch:
+    inputs:
+      pull_request:
+        description: "The pull request number"
+        required: true
+        type: string
+      head_sha:
+        description: "The expected pull request head SHA"
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: pull-request-security-review-${{ inputs.pull_request }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    uses: astral-sh/github-actions/.github/workflows/pull-request-security-review.yml@45c506043c254690f2612686e5d5a72c81c251a4
+    with:
+      pull-request: ${{ inputs.pull_request }}
+      head-sha: ${{ inputs.head_sha }}
+      runner: depot-ubuntu-24.04-16
+      helper-runner: github-ubuntu-24.04-x86_64-4
+      # renovate: datasource=github-release-attachments depName=astral-sh/uv
+      uv-version: "0.12.13"
+      uv-checksum: "745765a3b6e360ad76743599ae5c42e9278c7edf8bbff9fc76d05bf2623a04dd"
+      # Install Rust tools such as cargo-nextest so the reviewer can test PR code.
+      # Keep the environment outside the checkout when switching to the PR head.
+      setup-command: |
+        export UV_PROJECT_ENVIRONMENT="$RUNNER_TEMP/pull-request-review-tools"
+        uv sync --locked --only-dev
+        echo "$UV_PROJECT_ENVIRONMENT/bin" >> "$GITHUB_PATH"
+    secrets: inherit
+    permissions:
+      contents: read
+      id-token: write
+      issues: read
+      pull-requests: read
