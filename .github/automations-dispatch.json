@@ -24,6 +24,76 @@
           "head_sha": "/pull_request/head/sha"
         }
       }
+    },
+    {
+      "event": "issue_comment",
+      "actions": ["created", "edited"],
+      "repository": "astral-sh/uv-dev",
+      "repository_id": 1302176231,
+      "conditions": {
+        "/issue/pull_request/url": { "exists": true },
+        "/comment/author_association": {
+          "one_of": ["OWNER", "MEMBER", "COLLABORATOR"]
+        },
+        "/sender/type": { "not": "Bot" }
+      },
+      "verify_pull_request": { "number": "/issue/number" },
+      "workflow": {
+        "repository": "astral-sh/uv-dev",
+        "repository_id": 1302176231,
+        "path": ".github/workflows/pull-request-comments.yml",
+        "ref": "main",
+        "inputs": {
+          "pull_request": "/pull_request/number",
+          "head_sha": "/pull_request/head/sha"
+        }
+      }
+    },
+    {
+      "event": "pull_request_review_comment",
+      "actions": ["created", "edited"],
+      "repository": "astral-sh/uv-dev",
+      "repository_id": 1302176231,
+      "conditions": {
+        "/comment/author_association": {
+          "one_of": ["OWNER", "MEMBER", "COLLABORATOR"]
+        },
+        "/sender/type": { "not": "Bot" }
+      },
+      "verify_pull_request": { "number": "/pull_request/number" },
+      "workflow": {
+        "repository": "astral-sh/uv-dev",
+        "repository_id": 1302176231,
+        "path": ".github/workflows/pull-request-comments.yml",
+        "ref": "main",
+        "inputs": {
+          "pull_request": "/pull_request/number",
+          "head_sha": "/pull_request/head/sha"
+        }
+      }
+    },
+    {
+      "event": "pull_request_review",
+      "actions": ["submitted", "edited"],
+      "repository": "astral-sh/uv-dev",
+      "repository_id": 1302176231,
+      "conditions": {
+        "/review/author_association": {
+          "one_of": ["OWNER", "MEMBER", "COLLABORATOR"]
+        },
+        "/sender/type": { "not": "Bot" }
+      },
+      "verify_pull_request": { "number": "/pull_request/number" },
+      "workflow": {
+        "repository": "astral-sh/uv-dev",
+        "repository_id": 1302176231,
+        "path": ".github/workflows/pull-request-comments.yml",
+        "ref": "main",
+        "inputs": {
+          "pull_request": "/pull_request/number",
+          "head_sha": "/pull_request/head/sha"
+        }
+      }
     }
   ]
 }
