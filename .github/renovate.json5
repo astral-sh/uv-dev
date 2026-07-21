@@ -136,6 +136,15 @@
     },
     {
       matchManagers: ["custom.regex"],
+      matchDepNames: ["rust-nightly"],
+      extends: ["schedule:monthly"],
+      groupName: "Rust nightly toolchain",
+      commitMessageTopic: "Rust nightly toolchain",
+      // Toolchain updates can affect Docker and release builds.
+      labels: ["internal"],
+    },
+    {
+      matchManagers: ["custom.regex"],
       matchDepNames: ["maturin"],
       commitMessageTopic: "maturin",
       // Maturin upgrades can change release wheel contents, so keep release
@@ -186,6 +195,20 @@
       depNameTemplate: "rust",
       packageNameTemplate: "rust-lang/rust",
       datasourceTemplate: "github-releases",
+    },
+    // Development Rust nightly toolchain and matching workflow installs
+    {
+      customType: "regex",
+      managerFilePatterns: [
+        "/^rust-toolchain\\.toml$/",
+        "/^\\.github/workflows/(test|build-dev-binaries)\\.yml$/",
+      ],
+      matchStrings: [
+        '(?:channel\\s*=\\s*"|rustup toolchain install )(?<currentValue>nightly-\\d{4}-\\d{2}-\\d{2})',
+      ],
+      depNameTemplate: "rust-nightly",
+      datasourceTemplate: "rust-version",
+      versioningTemplate: "rust-release-channel",
     },
   ],
   vulnerabilityAlerts: {
