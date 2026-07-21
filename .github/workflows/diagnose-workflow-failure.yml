@@ -123,11 +123,9 @@ jobs:
     timeout-minutes: 5
     permissions:
       id-token: write # for the credential broker
-      issues: write # for upstream issue reports
     steps:
       - name: "Get uv-dev issue token"
         id: token
-        if: github.repository == 'astral-sh/uv-dev'
         uses: open-security-tools/ost-simple-sts@9e012247e07c39080fb6a832dbfbcfeacebc19c4
         with:
           exchange-url: ${{ secrets.STS_API_URL }}/exchange
@@ -139,8 +137,8 @@ jobs:
       - name: "Report workflow failure"
         env:
           DIAGNOSIS: ${{ needs.diagnose.outputs.result }}
-          GH_TOKEN: ${{ steps.token.outputs.token || secrets.GITHUB_TOKEN }}
-          ISSUE_REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          ISSUE_REPOSITORY: astral-sh/uv-dev
           RUN_ID: ${{ inputs.run }}
         run: |
           printf '%s\n' "$DIAGNOSIS" > "$RUNNER_TEMP/diagnosis.json"
@@ -167,7 +165,7 @@ jobs:
               exit 0
             fi
 
-            run_url="https://github.com/$ISSUE_REPOSITORY/actions/runs/$RUN_ID"
+            run_url="https://github.com/$GITHUB_REPOSITORY/actions/runs/$RUN_ID"
             gh issue comment "$duplicate_issue" \
               --repo "$ISSUE_REPOSITORY" \
               --body "Another workflow run encountered this failure: $run_url"
@@ -200,7 +198,7 @@ jobs:
             '[.[] | select(.title == $title)][0].number // empty' \
             "$RUNNER_TEMP/existing-issues.json")"
           if [ -n "$existing_issue" ]; then
-            run_url="https://github.com/$ISSUE_REPOSITORY/actions/runs/$RUN_ID"
+            run_url="https://github.com/$GITHUB_REPOSITORY/actions/runs/$RUN_ID"
             gh issue comment "$existing_issue" \
               --repo "$ISSUE_REPOSITORY" \
               --body "Another workflow run encountered this failure: $run_url"
