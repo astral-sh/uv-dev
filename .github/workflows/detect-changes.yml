@@ -1,0 +1,206 @@
+name: detect changes
+
+on:
+  workflow_call:
+    inputs:
+      base-sha:
+        description: "The base SHA used to determine changed files"
+        required: false
+        type: string
+      head-sha:
+        description: "The head SHA used to determine changed files"
+        required: false
+        type: string
+    outputs:
+      rust-code-changed:
+        description: "Whether Rust code changed"
+        value: ${{ jobs.detect-changes.outputs.rust-code-changed }}
+      rust-deps-changed:
+        description: "Whether Rust dependencies changed"
+        value: ${{ jobs.detect-changes.outputs.rust-deps-changed }}
+      rust-config-changed:
+        description: "Whether Rust configuration changed"
+        value: ${{ jobs.detect-changes.outputs.rust-config-changed }}
+      python-config-changed:
+        description: "Whether Python configuration changed"
+        value: ${{ jobs.detect-changes.outputs.python-config-changed }}
+      workflow-changed:
+        description: "Whether a workflow changed"
+        value: ${{ jobs.detect-changes.outputs.workflow-changed }}
+      release-workflow-changed:
+        description: "Whether a release workflow changed"
+        value: ${{ jobs.detect-changes.outputs.release-workflow-changed }}
+      release-build-changed:
+        description: "Whether release build inputs changed"
+        value: ${{ jobs.detect-changes.outputs.release-build-changed }}
+      ci-workflow-changed:
+        description: "Whether the CI workflow changed"
+        value: ${{ jobs.detect-changes.outputs.ci-workflow-changed }}
+      schema-changed:
+        description: "Whether the schema changed"
+        value: ${{ jobs.detect-changes.outputs.schema-changed }}
+      publish-code-changed:
+        description: "Whether publish code changed"
+        value: ${{ jobs.detect-changes.outputs.publish-code-changed }}
+      trampoline-workflow-changed:
+        description: "Whether the trampoline workflow changed"
+        value: ${{ jobs.detect-changes.outputs.trampoline-workflow-changed }}
+      trampoline-code-changed:
+        description: "Whether trampoline code changed"
+        value: ${{ jobs.detect-changes.outputs.trampoline-code-changed }}
+      trampoline-repro-changed:
+        description: "Whether trampoline reproducibility inputs changed"
+        value: ${{ jobs.detect-changes.outputs.trampoline-repro-changed }}
+      trampoline-build-scripts-changed:
+        description: "Whether trampoline build scripts changed"
+        value: ${{ jobs.detect-changes.outputs.trampoline-build-scripts-changed }}
+      trampoline-scripts-changed:
+        description: "Whether trampoline scripts changed"
+        value: ${{ jobs.detect-changes.outputs.trampoline-scripts-changed }}
+      uv-build-changed:
+        description: "Whether uv-build changed"
+        value: ${{ jobs.detect-changes.outputs.uv-build-changed }}
+      dockerfile-changed:
+        description: "Whether the Dockerfile changed"
+        value: ${{ jobs.detect-changes.outputs.dockerfile-changed }}
+      docker-workflow-changed:
+        description: "Whether the Docker workflow changed"
+        value: ${{ jobs.detect-changes.outputs.docker-workflow-changed }}
+      bench-workflow-changed:
+        description: "Whether the benchmark workflow changed"
+        value: ${{ jobs.detect-changes.outputs.bench-workflow-changed }}
+      integration-changed:
+        description: "Whether integration inputs changed"
+        value: ${{ jobs.detect-changes.outputs.integration-changed }}
+      system-workflow-changed:
+        description: "Whether the system-test workflow changed"
+        value: ${{ jobs.detect-changes.outputs.system-workflow-changed }}
+      system-test-changed:
+        description: "Whether system-test inputs changed"
+        value: ${{ jobs.detect-changes.outputs.system-test-changed }}
+      any-code-changed:
+        description: "Whether any code changed"
+        value: ${{ jobs.detect-changes.outputs.any-code-changed }}
+      any-rust-changed:
+        description: "Whether any Rust inputs changed"
+        value: ${{ jobs.detect-changes.outputs.any-rust-changed }}
+      publish-changed:
+        description: "Whether publish inputs changed"
+        value: ${{ jobs.detect-changes.outputs.publish-changed }}
+      cache-relevant-changed:
+        description: "Whether cache-relevant inputs changed"
+        value: ${{ jobs.detect-changes.outputs.cache-relevant-changed }}
+      docker-build-changed:
+        description: "Whether Docker build inputs changed"
+        value: ${{ jobs.detect-changes.outputs.docker-build-changed }}
+
+permissions: {}
+
+jobs:
+  detect-changes:
+    runs-on: depot-ubuntu-24.04
+    outputs:
+      rust-code-changed: ${{ steps.detect-changes.outputs.rust_code_changed }}
+      rust-deps-changed: ${{ steps.detect-changes.outputs.rust_deps_changed }}
+      rust-config-changed: ${{ steps.detect-changes.outputs.rust_config_changed }}
+      python-config-changed: ${{ steps.detect-changes.outputs.python_config_changed }}
+      workflow-changed: ${{ steps.detect-changes.outputs.workflow_changed }}
+      release-workflow-changed: ${{ steps.detect-changes.outputs.release_workflow_changed }}
+      release-build-changed: ${{ steps.detect-changes.outputs.release_build_changed }}
+      ci-workflow-changed: ${{ steps.detect-changes.outputs.ci_workflow_changed }}
+      schema-changed: ${{ steps.detect-changes.outputs.schema_changed }}
+      publish-code-changed: ${{ steps.detect-changes.outputs.publish_code_changed }}
+      trampoline-workflow-changed: ${{ steps.detect-changes.outputs.trampoline_workflow_changed }}
+      trampoline-code-changed: ${{ steps.detect-changes.outputs.trampoline_code_changed }}
+      trampoline-repro-changed: ${{ steps.detect-changes.outputs.trampoline_repro_changed }}
+      trampoline-build-scripts-changed: ${{ steps.detect-changes.outputs.trampoline_build_scripts_changed }}
+      trampoline-scripts-changed: ${{ steps.detect-changes.outputs.trampoline_scripts_changed }}
+      uv-build-changed: ${{ steps.detect-changes.outputs.uv_build_changed }}
+      dockerfile-changed: ${{ steps.detect-changes.outputs.dockerfile_changed }}
+      docker-workflow-changed: ${{ steps.detect-changes.outputs.docker_workflow_changed }}
+      bench-workflow-changed: ${{ steps.detect-changes.outputs.bench_workflow_changed }}
+      integration-changed: ${{ steps.detect-changes.outputs.integration_changed }}
+      system-workflow-changed: ${{ steps.detect-changes.outputs.system_workflow_changed }}
+      system-test-changed: ${{ steps.detect-changes.outputs.system_test_changed }}
+      any-code-changed: ${{ steps.detect-changes.outputs.any_code_changed }}
+      any-rust-changed: ${{ steps.detect-changes.outputs.any_rust_changed }}
+      publish-changed: ${{ steps.detect-changes.outputs.publish_changed }}
+      cache-relevant-changed: ${{ steps.detect-changes.outputs.cache_relevant_changed }}
+      docker-build-changed: ${{ steps.detect-changes.outputs.docker_build_changed }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ inputs.head-sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: "Detect changes"
+        id: detect-changes
+        shell: bash
+        env:
+          BASE_SHA: ${{ inputs.base-sha || github.event.pull_request.base.sha }}
+        run: |
+          while IFS= read -r file; do
+            [[ -z "$file" ]] && continue
+            [[ "$file" =~ \.rs$ ]] && rust_code_changed=1
+            [[ "$file" == "Cargo.toml" || "$file" == "Cargo.lock" || "$file" =~ ^crates/.*/Cargo\.toml$ ]] && rust_deps_changed=1
+            [[ "$file" == "rust-toolchain.toml" || "$file" == "crates/uv-build/rust-toolchain.toml" || "$file" =~ ^\.cargo/ ]] && rust_config_changed=1
+            [[ "$file" == "pyproject.toml" || "$file" =~ ^crates/.*/pyproject\.toml$ ]] && python_config_changed=1
+            [[ "$file" =~ ^\.github/workflows/.*\.yml$ ]] && workflow_changed=1
+            [[ "$file" == ".github/workflows/build-release-binaries.yml" || "$file" == ".github/workflows/release.yml" ]] && release_workflow_changed=1
+            [[ "$file" == "scripts/check_uv_wheel_contents.py" || "$file" == "scripts/patch-dist-manifest-checksums.py" || "$file" == "scripts/repair-sdist-cargo-lock.py" ]] && release_build_changed=1
+            [[ "$file" == ".github/workflows/ci.yml" ]] && ci_workflow_changed=1
+            [[ "$file" == "uv.schema.json" ]] && schema_changed=1
+            [[ "$file" =~ ^crates/uv-publish/ || "$file" =~ ^scripts/publish/ || "$file" == "crates/uv/src/commands/publish.rs" ]] && publish_code_changed=1
+            [[ "$file" == ".github/workflows/test-windows-trampolines.yml" ]] && trampoline_workflow_changed=1
+            [[ "$file" =~ ^crates/uv-trampoline/ || "$file" =~ ^crates/uv-trampoline-builder/ ]] && trampoline_code_changed=1
+            [[ "$file" =~ ^crates/uv-trampoline/.*\.rs$ || "$file" =~ ^crates/uv-trampoline-builder/trampolines/ ]] && trampoline_repro_changed=1
+            [[ "$file" == "scripts/build-trampolines.sh" || "$file" == "scripts/build-trampolines-in-docker.sh" ]] && trampoline_build_scripts_changed=1
+            [[ "$file" == "scripts/build-trampolines.sh" || "$file" == "scripts/build-trampolines-in-docker.sh" || "$file" == "scripts/check-trampoline-version-consistency.py" ]] && trampoline_scripts_changed=1
+            [[ "$file" =~ ^crates/uv-build/ ]] && uv_build_changed=1
+            [[ "$file" == "Dockerfile" ]] && dockerfile_changed=1
+            [[ "$file" == ".github/workflows/build-docker.yml" ]] && docker_workflow_changed=1
+            [[ "$file" == ".github/workflows/bench.yml" ]] && bench_workflow_changed=1
+            [[ "$file" == ".github/workflows/test-integration.yml" || "$file" =~ ^test/integration/ || "$file" == "scripts/check_registry.py" || "$file" == "scripts/check_cache_compat.py" || "$file" == "scripts/registries-test.py" ]] && integration_changed=1
+            [[ "$file" == ".github/workflows/test-system.yml" ]] && system_workflow_changed=1
+            [[ "$file" == "scripts/check_system_python.py" || "$file" == "scripts/check_embedded_python.py" ]] && system_test_changed=1
+            [[ "$file" =~ ^docs/ || "$file" =~ ^mkdocs.*\.yml$ || "$file" =~ \.md$ || "$file" =~ ^bin/ || "$file" =~ ^assets/ || "$file" =~ ^agents/ || "$file" =~ ^\.claude/ || "$file" =~ ^\.codex/ ]] && continue
+            any_code_changed=1
+          done <<< "$(git diff --no-ext-diff --no-textconv --name-only "${BASE_SHA:-origin/main}...HEAD")"
+
+          [[ $rust_code_changed || $rust_deps_changed || $rust_config_changed ]] && any_rust_changed=1
+          [[ $python_config_changed || $rust_deps_changed || $rust_config_changed || $uv_build_changed || $release_workflow_changed ]] && release_build_changed=1
+          [[ $publish_code_changed || $ci_workflow_changed ]] && publish_changed=1
+          [[ $rust_deps_changed || $rust_config_changed || $workflow_changed ]] && cache_relevant_changed=1
+          [[ $python_config_changed || $rust_deps_changed || $rust_config_changed || $dockerfile_changed || $docker_workflow_changed ]] && docker_build_changed=1
+
+          out() { [[ "$2" ]] && echo "$1=true" || echo "$1=false"; }
+          {
+            out rust_code_changed                 "$rust_code_changed"
+            out rust_deps_changed                 "$rust_deps_changed"
+            out rust_config_changed               "$rust_config_changed"
+            out python_config_changed             "$python_config_changed"
+            out workflow_changed                  "$workflow_changed"
+            out release_workflow_changed          "$release_workflow_changed"
+            out release_build_changed             "$release_build_changed"
+            out ci_workflow_changed               "$ci_workflow_changed"
+            out schema_changed                    "$schema_changed"
+            out publish_code_changed              "$publish_code_changed"
+            out trampoline_workflow_changed       "$trampoline_workflow_changed"
+            out trampoline_code_changed           "$trampoline_code_changed"
+            out trampoline_repro_changed          "$trampoline_repro_changed"
+            out trampoline_build_scripts_changed  "$trampoline_build_scripts_changed"
+            out trampoline_scripts_changed        "$trampoline_scripts_changed"
+            out uv_build_changed                  "$uv_build_changed"
+            out dockerfile_changed                "$dockerfile_changed"
+            out docker_workflow_changed           "$docker_workflow_changed"
+            out bench_workflow_changed            "$bench_workflow_changed"
+            out integration_changed               "$integration_changed"
+            out system_workflow_changed           "$system_workflow_changed"
+            out system_test_changed               "$system_test_changed"
+            out any_code_changed                  "$any_code_changed"
+            out any_rust_changed                  "$any_rust_changed"
+            out publish_changed                   "$publish_changed"
+            out cache_relevant_changed            "$cache_relevant_changed"
+            out docker_build_changed              "$docker_build_changed"
+          } >> "$GITHUB_OUTPUT"
