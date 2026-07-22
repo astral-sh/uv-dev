@@ -77,6 +77,21 @@
         "run": "/workflow_run/id",
         "head_sha": "/workflow_run/head_sha"
       }
+    },
+    {
+      "repository": "uv",
+      "on": {
+        "pull_request": [
+          "opened",
+          "synchronize",
+          "reopened",
+          "ready_for_review"
+        ]
+      },
+      "conditions": {
+        "/pull_request/base/ref": "main"
+      },
+      "workflow": "pull-request-reviewers.yml"
     }
   ]
 }
