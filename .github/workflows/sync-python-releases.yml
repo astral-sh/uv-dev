@@ -43,6 +43,17 @@ jobs:
       - name: "Update Python version constants"
         run: uv run --locked --python 3.12 --no-build --script scripts/sync-python-version-constants.py
 
+      - name: "Write pull request"
+        id: write-pull-request
+        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56 # v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          model: gpt-5.6-sol
+          permission-profile: ":read-only"
+          safety-strategy: drop-sudo
+          prompt-file: "agents/prompts/sync-python-releases.md"
+          output-schema-file: "agents/schemas/sync-python-releases.json"
+
       - name: "Get uv token"
         id: token
         uses: open-security-tools/ost-simple-sts@3c532a63c9ed6f457ec3e8d7357d1fd631385aa2 # v0.0.2
@@ -67,7 +78,7 @@ jobs:
             crates/uv-python/src/sysconfig/generated_mappings.rs
             crates/uv-test/src/lib.rs
           branch: "sync-python-releases"
-          title: "Sync latest Python releases"
-          body: "Automated update for Python releases."
+          title: ${{ fromJSON(steps.write-pull-request.outputs.final-message).title }}
+          body: ${{ fromJSON(steps.write-pull-request.outputs.final-message).body }}
           base: "main"
           draft: true
