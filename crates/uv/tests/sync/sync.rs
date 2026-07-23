@@ -7614,7 +7614,13 @@ fn no_binary_error() -> Result<()> {
 
     context.lock().assert().success();
 
-    uv_snapshot!(context.filters(), context.sync().arg("--no-binary-package").arg("odrive"), @"
+    let mut filters = context.filters();
+    filters.push((
+        r"(?m)^ \+ (pexpect==4\.9\.0|ptyprocess==0\.7\.0|pywin32==306)\n",
+        "",
+    ));
+
+    uv_snapshot!(filters, context.sync().arg("--no-binary-package").arg("odrive"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 39 packages in [TIME]
@@ -7640,10 +7646,8 @@ fn no_binary_error() -> Result<()> {
      + odrive==0.5.4
      + packaging==24.0
      + parso==0.8.3
-     + pexpect==4.9.0
      + pillow==10.2.0
      + prompt-toolkit==3.0.43
-     + ptyprocess==0.7.0
      + pure-eval==0.2.2
      + pygments==2.17.2
      + pyparsing==3.1.2
