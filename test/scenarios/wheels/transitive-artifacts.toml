@@ -7,6 +7,9 @@ requires = ["a"]
 [expected]
 satisfiable = true
 
+[testgen]
+disable = true
+
 [packages.a.versions."1.0.0"]
 requires = ["b==1.0.0", "c==1.0.0"]
 

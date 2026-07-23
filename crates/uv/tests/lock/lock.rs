@@ -35614,10 +35614,7 @@ fn lock_build_policy_invalidates_unusable_artifacts() -> Result<()> {
 
             if flag == "--no-binary-package" {
                 uv_snapshot!(context.filters(), command, @"
-        success: false
-        exit_code: 1
-        ----- stdout -----
-
+        exit_code: 1 (failure)
         ----- stderr -----
           × No solution found when resolving dependencies:
           ╰─▶ Because a==1.0.0 has no source distribution and your project depends on a==1.0.0, we can conclude that your project's requirements are unsatisfiable.
@@ -35626,10 +35623,7 @@ fn lock_build_policy_invalidates_unusable_artifacts() -> Result<()> {
                 ");
             } else {
                 uv_snapshot!(context.filters(), command, @"
-        success: false
-        exit_code: 1
-        ----- stdout -----
-
+        exit_code: 1 (failure)
         ----- stderr -----
           × No solution found when resolving dependencies:
           ╰─▶ Because a==1.0.0 has no usable wheels and your project depends on a==1.0.0, we can conclude that your project's requirements are unsatisfiable.
@@ -35643,7 +35637,7 @@ fn lock_build_policy_invalidates_unusable_artifacts() -> Result<()> {
 
     // A wheel for another platform remains valid during universal lock validation. Installation
     // will enforce compatibility if that package is active on the current platform.
-    let server = PackseServer::new("wheels/no-wheels-with-matching-platform.toml");
+    let server = PackseServer::new("wheels/requires-python-subset.toml");
     let context = uv_test::test_context!("3.12");
     context.temp_dir.child("pyproject.toml").write_str(
         r#"
@@ -35651,7 +35645,10 @@ fn lock_build_policy_invalidates_unusable_artifacts() -> Result<()> {
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["a==1.0.0"]
+        dependencies = ["win-only; sys_platform == 'win32'"]
+
+        [tool.uv]
+        required-environments = ["sys_platform == 'linux'", "sys_platform == 'win32'"]
         "#,
     )?;
     context
@@ -35666,7 +35663,7 @@ fn lock_build_policy_invalidates_unusable_artifacts() -> Result<()> {
         .arg(server.index_url())
         .arg("--locked")
         .arg("--no-build-package")
-        .arg("a")
+        .arg("win-only")
         .assert()
         .success();
 
