@@ -469,7 +469,7 @@ enum Bracket {
 ///
 /// This only checks the serialization shape. TOML validity and lockfile semantics are checked by
 /// the regular lockfile deserializer.
-pub(crate) fn find_lock_format_error(source: &str) -> Option<usize> {
+pub fn find_lock_format_error(source: &str) -> Option<usize> {
     let bytes = source.as_bytes();
     let mut brackets = Vec::with_capacity(4);
     let mut previous = None;

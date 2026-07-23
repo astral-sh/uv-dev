@@ -29,6 +29,11 @@ path = "benches/workspace_discovery.rs"
 harness = false
 
 [[bench]]
+name = "lockfile_check"
+path = "benches/lockfile_check.rs"
+harness = false
+
+[[bench]]
 name = "uv_pep440"
 path = "benches/uv_pep440.rs"
 harness = false

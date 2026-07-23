@@ -38,6 +38,8 @@ pub(crate) use project::export::export;
 pub(crate) use project::format::format;
 pub(crate) use project::init::{InitKind, InitProjectKind, init};
 pub(crate) use project::lock::lock;
+#[doc(hidden)]
+pub use project::lock_target::find_lock_format_error;
 pub(crate) use project::remove::remove;
 pub(crate) use project::run::{ParsedRunCommand, RunCommand, run};
 pub(crate) use project::sync::sync;
