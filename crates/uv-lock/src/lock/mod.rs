@@ -4323,7 +4323,13 @@ impl Lock {
                 && (build_options.no_binary_package(&package.id.name)
                     || build_options.no_build_package(&package.id.name))
                 && package
-                    .to_dist(root, TagPolicy::Preferred(tags), build_options, markers)
+                    .to_dist(
+                        root,
+                        TagPolicy::Preferred(tags),
+                        build_options,
+                        markers,
+                        FirstParty::No,
+                    )
                     .is_err()
             {
                 return Ok(SatisfiesResult::MismatchedBuildOptions(&package.id.name));
