@@ -19,8 +19,43 @@ on:
 permissions: {}
 
 jobs:
+  verify:
+    name: "Verify pull request #${{ inputs.number }}"
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    permissions:
+      pull-requests: read
+    outputs:
+      open: ${{ steps.verify.outputs.open }}
+    steps:
+      - name: Verify pull request is still open
+        id: verify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_REF: ${{ inputs.base-ref }}
+          HEAD_REF: ${{ inputs.head-ref }}
+          HEAD_SHA: ${{ inputs.head-sha }}
+          PULL_REQUEST_NUMBER: ${{ inputs.number }}
+        run: |
+          pull_request=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PULL_REQUEST_NUMBER")
+          if ! jq --exit-status \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg base_ref "$BASE_REF" \
+            --arg head_ref "$HEAD_REF" \
+            --arg head_sha "$HEAD_SHA" \
+            '.state == "open" and .base.repo.full_name == $repository and .base.ref == $base_ref and .head.repo.full_name == "astral-sh/uv-dev" and .head.ref == $head_ref and .head.sha == $head_sha' \
+            <<< "$pull_request" > /dev/null; then
+            echo "The pull request is no longer open at the expected head; skipping its rebase."
+            echo "open=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "open=true" >> "$GITHUB_OUTPUT"
+
   rebase:
     name: "Rebase pull request #${{ inputs.number }}"
+    needs: verify
+    if: needs.verify.outputs.open == 'true'
     runs-on: depot-ubuntu-24.04-4
     environment: automations
     timeout-minutes: 30
@@ -133,6 +168,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      pull-requests: read
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -164,7 +200,32 @@ jobs:
 
           echo "head_sha=$rebased_head" >> "$GITHUB_OUTPUT"
 
+      - name: Verify pull request is still open
+        id: verify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_REF: ${{ inputs.base-ref }}
+          HEAD_REF: ${{ inputs.head-ref }}
+          HEAD_SHA: ${{ inputs.head-sha }}
+          PULL_REQUEST_NUMBER: ${{ inputs.number }}
+        run: |
+          pull_request=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PULL_REQUEST_NUMBER")
+          if ! jq --exit-status \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg base_ref "$BASE_REF" \
+            --arg head_ref "$HEAD_REF" \
+            --arg head_sha "$HEAD_SHA" \
+            '.state == "open" and .base.repo.full_name == $repository and .base.ref == $base_ref and .head.repo.full_name == "astral-sh/uv-dev" and .head.ref == $head_ref and .head.sha == $head_sha' \
+            <<< "$pull_request" > /dev/null; then
+            echo "The pull request is no longer open at the expected head; skipping its push."
+            echo "open=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "open=true" >> "$GITHUB_OUTPUT"
+
       - name: Get uv-dev token
+        if: steps.verify.outputs.open == 'true'
         id: token
         uses: open-security-tools/ost-simple-sts@9e012247e07c39080fb6a832dbfbcfeacebc19c4
         with:
@@ -177,6 +238,7 @@ jobs:
             workflows: write
 
       - name: Push rebased pull request
+        if: steps.verify.outputs.open == 'true'
         env:
           GIT_CONFIG_GLOBAL: /dev/null
           GIT_CONFIG_NOSYSTEM: "1"
