@@ -1036,6 +1036,7 @@ pub(crate) struct ToolInstallSettings {
     pub(crate) settings: ResolverInstallerSettings,
     pub(crate) force: bool,
     pub(crate) editable: bool,
+    pub(crate) locked: LockCheck,
     pub(crate) install_mirrors: PythonInstallMirrors,
 }
 
@@ -1049,6 +1050,7 @@ impl ToolInstallSettings {
         let ToolInstallArgs {
             package,
             editable,
+            locked,
             from,
             with,
             with_editable,
@@ -1138,6 +1140,11 @@ impl ToolInstallSettings {
             python_platform,
             force,
             editable,
+            locked: if locked {
+                LockCheck::Enabled(LockCheckSource::LockedCli)
+            } else {
+                LockCheck::Disabled
+            },
             refresh: Refresh::try_from(refresh)?,
             options,
             settings,

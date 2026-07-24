@@ -1724,6 +1724,7 @@ async fn run_with_workspace_cache(
                 &excludes,
                 &build_constraints,
                 &entrypoints,
+                args.locked,
                 args.lfs,
                 args.python,
                 args.python_platform,

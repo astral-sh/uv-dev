@@ -578,7 +578,7 @@ impl std::ops::Deref for PlatformState {
 
 impl PlatformState {
     /// Fork the [`PlatformState`] to create a [`UniversalState`].
-    fn fork(&self) -> UniversalState {
+    pub(crate) fn fork(&self) -> UniversalState {
         UniversalState(self.0.fork())
     }
 

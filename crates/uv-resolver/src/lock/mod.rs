@@ -1281,6 +1281,50 @@ impl Lock {
         Ok(lock)
     }
 
+    /// Make local package sources independent of their original lockfile location.
+    ///
+    /// Project locks describe local sources relative to the project root. Tool locks live next to
+    /// their receipts instead, so those sources must be made absolute before copying a project lock
+    /// into a tool environment.
+    pub fn into_absolute_paths(mut self, root: &Path, editable: bool) -> Result<Self, LockError> {
+        for package in &mut self.packages {
+            package.id.source.make_absolute(root, editable)?;
+
+            for dependency in package
+                .dependencies
+                .iter_mut()
+                .chain(package.optional_dependencies.values_mut().flatten())
+                .chain(package.dependency_groups.values_mut().flatten())
+            {
+                dependency.package_id.source.make_absolute(root, editable)?;
+            }
+
+            package.metadata.requires_dist = std::mem::take(&mut package.metadata.requires_dist)
+                .into_iter()
+                .map(|requirement| requirement.to_absolute(root))
+                .collect();
+            for requirements in package.metadata.dependency_groups.values_mut() {
+                *requirements = std::mem::take(requirements)
+                    .into_iter()
+                    .map(|requirement| requirement.to_absolute(root))
+                    .collect();
+            }
+        }
+
+        Self::new(
+            self.version,
+            self.revision,
+            self.packages,
+            self.requires_python,
+            self.options,
+            self.manifest,
+            self.conflicts,
+            self.supported_environments,
+            self.required_environments,
+            self.fork_markers,
+        )
+    }
+
     /// Record the conflicting groups that were used to generate this lock.
     #[must_use]
     pub fn with_conflicts(mut self, conflicts: Conflicts) -> Self {
@@ -4840,6 +4884,28 @@ enum Source {
 }
 
 impl Source {
+    /// Resolve local sources against the root of their original lockfile.
+    fn make_absolute(&mut self, root: &Path, editable: bool) -> Result<(), LockError> {
+        match self {
+            Self::Registry(RegistrySource::Path(path)) | Self::Path(path) => {
+                *path = absolute_path(root, path)?.into_boxed_path();
+            }
+            Self::Directory(path) | Self::Editable(path) => {
+                let path = absolute_path(root, path)?.into_boxed_path();
+                *self = if editable {
+                    Self::Editable(path)
+                } else {
+                    Self::Directory(path)
+                };
+            }
+            Self::Virtual(path) => {
+                *path = absolute_path(root, path)?.into_boxed_path();
+            }
+            Self::Registry(RegistrySource::Url(_)) | Self::Git(..) | Self::Direct(..) => {}
+        }
+        Ok(())
+    }
+
     fn from_resolved_dist(resolved_dist: &ResolvedDist, root: &Path) -> Result<Self, LockError> {
         match *resolved_dist {
             // We pass empty installed packages for locking.

@@ -33,6 +33,7 @@ use uv_git::GitResolver;
 use uv_installer::SitePackages;
 use uv_normalize::{DefaultExtras, GroupName, PackageName};
 use uv_pep440::{Version, VersionSpecifier, VersionSpecifiers};
+use uv_pep508::MarkerTree;
 use uv_preview::Preview;
 use uv_pypi_types::Conflicts;
 use uv_python::{
@@ -49,7 +50,7 @@ use uv_shell::Shell;
 use uv_tool::{InstalledTools, Tool, ToolEntrypoint, entrypoint_paths};
 use uv_types::{BuildIsolation, HashStrategy, SourceTreeEditablePolicy};
 use uv_warnings::warn_user_once;
-use uv_workspace::WorkspaceCache;
+use uv_workspace::{VirtualProject, WorkspaceCache};
 
 use crate::commands::pip;
 
@@ -111,13 +112,15 @@ impl Hint for NoExecutablesError {
         hints
     }
 }
+use crate::commands::pip::loggers::DefaultResolveLogger;
 use crate::commands::project::{
     EnvironmentSpecification, PlatformState, PreferenceLocation, ProjectError, PythonRequestSource,
-    lock::ValidatedLock,
+    lock::{LockMode, LockOperation, ValidatedLock},
+    lock_target::LockTarget,
 };
 use crate::commands::reporters::PythonDownloadReporter;
 use crate::printer::Printer;
-use crate::settings::ResolverSettings;
+use crate::settings::{LockCheckSource, ResolverSettings};
 
 /// Return all packages which contain an executable with the given name.
 pub(super) fn matching_packages(name: &str, site_packages: &SitePackages) -> Vec<InstalledDist> {
@@ -279,6 +282,50 @@ async fn infer_requires_python_from_requirement(
     }
 }
 
+/// Discover and validate the existing project lock for a source-tree tool.
+pub(crate) async fn locked_tool_project(
+    requirement: &Requirement,
+    interpreter: &Interpreter,
+    settings: &ResolverSettings,
+    state: &PlatformState,
+    client_builder: &BaseClientBuilder<'_>,
+    concurrency: &Concurrency,
+    cache: &Cache,
+    workspace_cache: &WorkspaceCache,
+    printer: Printer,
+    preview: Preview,
+) -> Result<(VirtualProject, Lock), ProjectError> {
+    let project = StaticMetadataDatabase::new(client_builder, state.git(), cache)
+        .source_tree_project(&requirement.source, workspace_cache)
+        .await
+        .map_err(|err| ProjectError::Anyhow(err.into()))?
+        .ok_or_else(|| {
+            ProjectError::Anyhow(anyhow::anyhow!(
+                "`--locked` requires a tool from a source tree (e.g., a Git repository or local directory), but `{}` is not a source tree",
+                requirement.name.cyan()
+            ))
+        })?;
+
+    let universal_state = state.fork();
+    let lock = LockOperation::new(
+        LockMode::Locked(interpreter, LockCheckSource::LockedCli),
+        settings,
+        client_builder,
+        &universal_state,
+        Box::new(DefaultResolveLogger),
+        concurrency,
+        cache,
+        workspace_cache,
+        printer,
+        preview,
+    )
+    .execute(LockTarget::Workspace(project.workspace()))
+    .await?
+    .into_lock();
+
+    Ok((project, lock))
+}
+
 /// A universal lock for a tool environment.
 pub(crate) struct ToolLock {
     root: PathBuf,
@@ -293,6 +340,15 @@ pub(crate) struct ValidatedToolLock {
 }
 
 impl ValidatedToolLock {
+    /// Wrap a project lock that has already been checked in locked mode.
+    pub(crate) fn from_locked(lock: ToolLock) -> Self {
+        Self {
+            lock,
+            satisfied: true,
+            usable: true,
+        }
+    }
+
     /// Return whether the existing lock satisfies the current resolution inputs.
     pub(crate) fn is_satisfied(&self) -> bool {
         self.satisfied
@@ -343,6 +399,22 @@ impl ToolLock {
         Ok(Self {
             root: root.to_path_buf(),
             lock,
+        })
+    }
+
+    /// Copy a validated project lock into a tool environment.
+    pub(crate) fn from_project_lock(
+        root: &Path,
+        project_root: &Path,
+        lock: Lock,
+        manifest: &ResolverManifest,
+        editable: bool,
+    ) -> anyhow::Result<Self> {
+        let lock = lock.into_absolute_paths(project_root, editable)?;
+        let manifest = manifest.clone().relative_to(root)?;
+        Ok(Self {
+            root: root.to_path_buf(),
+            lock: lock.with_manifest(manifest),
         })
     }
 
@@ -592,6 +664,33 @@ impl ToolLock {
         }
 
         let markers = pip::resolution_markers(None, python_platform, interpreter);
+        if !self
+            .lock
+            .requires_python()
+            .contains(interpreter.python_version())
+        {
+            return Err(ProjectError::LockedPythonIncompatibility(
+                interpreter.python_version().clone(),
+                self.lock.requires_python().clone(),
+            )
+            .into());
+        }
+        let environments = self.lock.supported_environments();
+        if !environments.is_empty()
+            && !environments
+                .iter()
+                .any(|environment| environment.evaluate(&markers, &[]))
+        {
+            return Err(ProjectError::LockedPlatformIncompatibility(
+                self.lock
+                    .simplified_supported_environments()
+                    .into_iter()
+                    .filter_map(MarkerTree::contents)
+                    .map(|environment| format!("`{environment}`"))
+                    .join(", "),
+            )
+            .into());
+        }
         let tags = pip::resolution_tags(None, python_platform, interpreter)?;
         Ok(ToolLockInstallTarget {
             tool_lock: self,
