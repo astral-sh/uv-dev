@@ -45,13 +45,13 @@ use crate::commands::project::{
     resolve_environment, resolve_names, sync_environment, update_environment,
 };
 use crate::commands::tool::common::{
-    ToolLock, ToolPython, finalize_tool_install, refine_interpreter, remove_entrypoints,
-    tool_environment_spec,
+    ToolLock, ToolPython, ValidatedToolLock, finalize_tool_install, locked_tool_project,
+    refine_interpreter, remove_entrypoints, tool_environment_spec,
 };
 use crate::commands::tool::{Target, ToolRequest};
 use crate::commands::{diagnostics, reporters::PythonDownloadReporter};
 use crate::printer::Printer;
-use crate::settings::{ResolverInstallerSettings, ResolverSettings};
+use crate::settings::{LockCheck, ResolverInstallerSettings, ResolverSettings};
 
 /// Install a tool.
 pub(crate) async fn install(
@@ -64,6 +64,7 @@ pub(crate) async fn install(
     excludes: &[RequirementsSource],
     build_constraints: &[RequirementsSource],
     entrypoints: &[PackageName],
+    lock_check: LockCheck,
     lfs: GitLfsSetting,
     python: Option<String>,
     python_platform: Option<TargetTriple>,
@@ -83,11 +84,31 @@ pub(crate) async fn install(
     printer: Printer,
     preview: Preview,
 ) -> Result<ExitStatus> {
-    let tool_locks = preview.is_enabled(PreviewFeature::ToolInstallLocks);
+    let locked = matches!(lock_check, LockCheck::Enabled(_));
+    let tool_locks = locked || preview.is_enabled(PreviewFeature::ToolInstallLocks);
     if settings.resolver.torch_backend.is_some() {
         warn_user_once!(
             "The `--torch-backend` option is experimental and may change without warning."
         );
+    }
+
+    if locked {
+        if !preview.is_enabled(PreviewFeature::ToolInstallLocks) {
+            warn_user_once!(
+                "The `--locked` option for tool commands is experimental and may change without warning. Pass `--preview-features {}` to disable this warning.",
+                PreviewFeature::ToolInstallLocks
+            );
+        }
+        if !with.is_empty()
+            || !constraints.is_empty()
+            || !overrides.is_empty()
+            || !excludes.is_empty()
+            || !build_constraints.is_empty()
+        {
+            bail!(
+                "`--locked` cannot be used with additional requirements or constraints (`--with`, `--constraint`, `--override`, `--exclude`, or `--build-constraint`), since they are not represented in the project lockfile"
+            );
+        }
     }
 
     let reporter = PythonDownloadReporter::single(printer);
@@ -333,6 +354,32 @@ pub(crate) async fn install(
 
     let package_name = &requirement.name;
 
+    let source_project_lock = if locked {
+        match locked_tool_project(
+            &requirement,
+            &interpreter,
+            &settings.resolver,
+            &state,
+            &client_builder,
+            &concurrency,
+            &cache,
+            workspace_cache,
+            printer,
+            preview,
+        )
+        .await
+        {
+            Ok(project_lock) => Some(project_lock),
+            Err(err @ ProjectError::LockMismatch(..)) => {
+                writeln!(printer.stderr(), "{}", err.to_string().bold())?;
+                return Ok(ExitStatus::Failure);
+            }
+            Err(err) => return Err(err.into()),
+        }
+    } else {
+        None
+    };
+
     // If the user passed, e.g., `ruff@latest`, we need to mark it as upgradable.
     let settings = if request.is_latest() {
         ResolverInstallerSettings {
@@ -468,6 +515,17 @@ pub(crate) async fn install(
     let installed_tools = InstalledTools::from_settings()?.init()?;
     let _lock = installed_tools.lock().await?;
     let tool_dir = installed_tools.tool_dir(package_name);
+    let source_tool_lock = source_project_lock
+        .map(|(project, lock)| {
+            ToolLock::from_project_lock(
+                &tool_dir,
+                project.workspace().install_path(),
+                lock,
+                &lock_manifest,
+                editable,
+            )
+        })
+        .transpose()?;
 
     // Find the existing receipt, if it exists. If the receipt is present but malformed, we'll
     // remove the environment and continue with the install.
@@ -525,7 +583,9 @@ pub(crate) async fn install(
         .map_or(&interpreter, |environment| {
             environment.environment().interpreter()
         });
-    let mut existing_tool_lock = if tool_locks {
+    let mut existing_tool_lock = if let Some(lock) = source_tool_lock {
+        Some(ValidatedToolLock::from_locked(lock))
+    } else if tool_locks {
         if let Some(lock) = ToolLock::read(&tool_dir) {
             match Box::pin(lock.validate(
                 &requirements,
