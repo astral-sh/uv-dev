@@ -1168,7 +1168,7 @@ async fn check_malware_dependencies(
 }
 
 /// Filter out any virtual workspace members.
-fn apply_no_virtual_project(resolution: Resolution) -> Resolution {
+pub(crate) fn apply_no_virtual_project(resolution: Resolution) -> Resolution {
     resolution.filter(|dist| {
         let ResolvedDist::Installable { dist, .. } = dist else {
             return true;
@@ -1192,7 +1192,7 @@ fn apply_no_virtual_project(resolution: Resolution) -> Resolution {
 ///
 /// These credentials can come from any of `tool.uv.sources`, `tool.uv.dev-dependencies`,
 /// `project.dependencies`, and `project.optional-dependencies`.
-pub(super) fn store_credentials_from_target(
+pub(crate) fn store_credentials_from_target(
     target: InstallTarget<'_>,
     client_builder: &BaseClientBuilder,
 ) -> Result<()> {

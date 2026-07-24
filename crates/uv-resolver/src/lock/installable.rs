@@ -331,6 +331,20 @@ trait InstallableExt<'lock>: Installable<'lock> {
                     activated_groups.push((&dist.id.name, group));
                 }
             }
+
+            if include_manifest {
+                for requirement in self.lock().requirements() {
+                    if requirement.marker.evaluate(marker_env, &[]) {
+                        activated_projects.push(&requirement.name);
+                        activated_extras.extend(
+                            requirement
+                                .extras
+                                .iter()
+                                .map(|extra| (&requirement.name, extra)),
+                        );
+                    }
+                }
+            }
         }
 
         // Initialize the workspace roots.
