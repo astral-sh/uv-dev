@@ -340,6 +340,9 @@ pub enum PreviewFeature {
     MissingExcludeNewerPackageLock,
     /// Allows using `uv export --batch`.
     BatchExport,
+    /// Shares content-addressed dependency environments between PEP 723 scripts while retaining
+    /// a distinct, mutable virtual environment for each script.
+    SharedScriptEnvironments,
 }
 
 impl Display for PreviewFeature {
