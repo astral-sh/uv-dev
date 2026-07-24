@@ -462,10 +462,10 @@ pub async fn run(
                     match result {
                         Ok(shared_environment) => {
                             let shared_environment = PythonEnvironment::from(shared_environment);
-                            let parent_site_packages = shared_environment
-                                .site_packages()
-                                .next()
-                                .context("Failed to find `site-packages` directory for environment")?;
+                            let parent_site_packages =
+                                shared_environment.site_packages().next().context(
+                                    "Failed to find `site-packages` directory for environment",
+                                )?;
                             set_overlay(
                                 &environment,
                                 &format!(
@@ -474,7 +474,6 @@ pub async fn run(
                                 ),
                             )?;
                             set_parent_environment(&environment, shared_environment.root())?;
-                            environment.set_pyvenv_cfg("uv-overlay", "true")?;
                             Some(environment.into_interpreter())
                         }
                         Err(EnvironmentError::Resolve(err)) => {
