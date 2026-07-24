@@ -772,11 +772,11 @@ fn lock_canonical_reader_rejects_invalid_toml() -> Result<()> {
     insta::with_settings!({filters => context.filters()}, {
         assert_snapshot!(String::from_utf8_lossy(&output.get_output().stderr), @r"
         error: Failed to parse `uv.lock`
-          Caused by: TOML parse error at line 1, column 11
-              |
-            1 | version = 01
-              |           ^
-            unexpected leading zero, expected nothing
+          cause: TOML parse error at line 1, column 11
+                   |
+                 1 | version = 01
+                   |           ^
+                 unexpected leading zero, expected nothing
         ");
     });
 
