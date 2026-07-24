@@ -20,7 +20,7 @@ use uv_distribution_types::{
     BuiltDist, Dist, Identifier, Node, Resolution, ResolvedDist, SourceDist,
 };
 use uv_fs::PythonExt;
-use uv_preview::{Preview, PreviewFeature};
+use uv_preview::Preview;
 use uv_python::{Interpreter, PythonEnvironment, canonicalize_executable};
 use uv_settings::MalwareCheckSettings;
 use uv_types::{HashStrategy, HashVerification, SourceTreeEditablePolicy};
@@ -100,7 +100,6 @@ impl EphemeralEnvironment {
             parent_site_packages.escape_for_python()
         ))?;
         self.set_parent_environment(parent_environment.root())?;
-        self.0.set_pyvenv_cfg("uv-overlay", "true")?;
         Ok(())
     }
 
@@ -334,9 +333,7 @@ impl CachedEnvironment {
 
         if let Ok(root) = cache.resolve_link(cache_entry.path()) {
             if let Ok(environment) = PythonEnvironment::from_root(root, cache) {
-                if preview.is_enabled(PreviewFeature::SharedScriptEnvironments) {
-                    environment.set_pyvenv_cfg("uv-immutable", "true")?;
-                }
+                environment.set_pyvenv_cfg("immutable", "true")?;
                 return Ok(Self(environment));
             }
         }
@@ -372,9 +369,7 @@ impl CachedEnvironment {
         )
         .await?;
 
-        if preview.is_enabled(PreviewFeature::SharedScriptEnvironments) {
-            venv.set_pyvenv_cfg("uv-immutable", "true")?;
-        }
+        venv.set_pyvenv_cfg("immutable", "true")?;
 
         // Now that the environment is complete, sync it to its content-addressed location.
         let id = cache.persist(temp_dir.keep(), cache_entry.path()).await?;
