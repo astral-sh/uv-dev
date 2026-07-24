@@ -471,7 +471,6 @@ pub async fn run(
                             ),
                         )?;
                         set_parent_environment(&environment, shared_environment.root())?;
-                        environment.set_pyvenv_cfg("uv-overlay", "true")?;
                         Some(environment.into_interpreter())
                     }
                     Err(EnvironmentError::Resolve(err)) => {
