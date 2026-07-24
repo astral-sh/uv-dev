@@ -5520,6 +5520,15 @@ pub struct ToolInstallArgs {
     #[arg(short, long)]
     editable: bool,
 
+    /// Install the tool using the existing lockfile from its source project.
+    ///
+    /// The tool must be installed from a local directory or Git repository containing an
+    /// up-to-date `uv.lock` file.
+    ///
+    /// This option is in preview and may change in any future release.
+    #[arg(long)]
+    pub locked: bool,
+
     /// Include the given packages in editable mode.
     #[arg(long, value_hint = ValueHint::DirPath)]
     with_editable: Vec<comma::CommaSeparatedRequirements>,
