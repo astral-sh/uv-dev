@@ -6049,6 +6049,30 @@ fn tool_install_locked_missing_lockfile() -> Result<()> {
 }
 
 #[test]
+fn tool_install_locked_environment_variable() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_filtered_counts();
+    let project = context.temp_dir.child("foo");
+
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "foo"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.tool_install()
+        .arg(project.as_os_str())
+        .env(EnvVars::UV_LOCKED, "1")
+        .env(EnvVars::UV_PREVIEW_FEATURES, "tool-install-locks"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Unable to find lockfile at `uv.lock`, but `UV_LOCKED=1` was provided. To create a lockfile, run `uv lock` or `uv sync` without the flag.
+    ");
+
+    Ok(())
+}
+
+#[test]
 fn tool_install_locked_rejects_registry_package() {
     let context = uv_test::test_context!("3.12").with_filtered_counts();
 
@@ -6269,6 +6293,335 @@ fn tool_install_locked_workspace_member() -> Result<()> {
 }
 
 #[test]
+fn tool_install_locked_preserves_workspace_member_editability() -> Result<()> {
+    for (root_editable, dependency_editable) in [(false, true), (true, false)] {
+        let context = uv_test::test_context!("3.12")
+            .with_filtered_counts()
+            .with_filtered_exe_suffix();
+        let tool_dir = context.temp_dir.child("tools");
+        let bin_dir = context.temp_dir.child("bin");
+        let project = context.temp_dir.child("foo");
+        let dependency = project.child("child");
+
+        project.child("pyproject.toml").write_str(&format!(
+            indoc! {r#"
+                [project]
+                name = "foo"
+                version = "0.1.0"
+                requires-python = ">=3.12"
+                dependencies = ["child"]
+
+                [project.scripts]
+                foo = "foo:main"
+
+                [tool.uv.sources]
+                child = {{ workspace = true, editable = {dependency_editable} }}
+
+                [tool.uv.workspace]
+                members = ["child"]
+
+                [build-system]
+                requires = ["uv_build>=0.7,<10000"]
+                build-backend = "uv_build"
+            "#},
+            dependency_editable = dependency_editable
+        ))?;
+        let project_module = project.child("src").child("foo").child("__init__.py");
+        project_module.write_str(indoc! {r#"
+            VALUE = "ROOT"
+
+            def main():
+                import child
+                print(f"{VALUE} {child.VALUE}")
+        "#})?;
+        dependency.child("pyproject.toml").write_str(indoc! {r#"
+            [project]
+            name = "child"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+
+            [build-system]
+            requires = ["uv_build>=0.7,<10000"]
+            build-backend = "uv_build"
+        "#})?;
+        let dependency_module = dependency.child("src").child("child").child("__init__.py");
+        dependency_module.write_str("VALUE = 'CHILD'\n")?;
+        context
+            .lock()
+            .current_dir(project.path())
+            .assert()
+            .success();
+
+        let mut install = context.tool_install();
+        install
+            .arg(project.as_os_str())
+            .arg("--locked")
+            .env(EnvVars::UV_PREVIEW_FEATURES, "tool-install-locks")
+            .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+            .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
+            .env(EnvVars::PATH, bin_dir.as_os_str());
+        if root_editable {
+            install.arg("--editable");
+        }
+        install.assert().success();
+
+        project_module.write_str(indoc! {r#"
+            VALUE = "ROOT-CHANGED"
+
+            def main():
+                import child
+                print(f"{VALUE} {child.VALUE}")
+        "#})?;
+        dependency_module.write_str("VALUE = 'CHILD-CHANGED'\n")?;
+
+        if root_editable {
+            uv_snapshot!(context.filters(), Command::new("foo")
+                .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+            exit_code: 0 (success)
+            ----- stdout -----
+            ROOT-CHANGED CHILD
+            ");
+        } else {
+            uv_snapshot!(context.filters(), Command::new("foo")
+                .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+            exit_code: 0 (success)
+            ----- stdout -----
+            ROOT CHILD-CHANGED
+            ");
+        }
+    }
+
+    Ok(())
+}
+
+#[test]
+fn tool_install_locked_uses_project_resolver_settings() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_counts()
+        .with_filtered_exe_suffix();
+    let tool_dir = context.temp_dir.child("tools");
+    let bin_dir = context.temp_dir.child("bin");
+    let project = context.temp_dir.child("foo");
+
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "foo"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig>=1"]
+
+        [project.scripts]
+        foo = "foo:main"
+
+        [tool.uv]
+        resolution = "lowest"
+
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+    project
+        .child("src")
+        .child("foo")
+        .child("__init__.py")
+        .write_str("def main(): pass\n")?;
+    context
+        .lock()
+        .current_dir(project.path())
+        .assert()
+        .success();
+
+    uv_snapshot!(context.filters(), context.tool_install()
+        .arg(project.as_os_str())
+        .arg("--locked")
+        .env(EnvVars::UV_PREVIEW_FEATURES, "tool-install-locks")
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved [N] packages in [TIME]
+    Prepared [N] packages in [TIME]
+    Installed [N] packages in [TIME]
+     + foo==0.1.0 (from file://[TEMP_DIR]/foo)
+     + iniconfig==1.0.0
+    Installed 1 executable: foo
+    ");
+
+    Ok(())
+}
+
+#[test]
+fn tool_install_locked_preserves_dependency_policies() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_counts()
+        .with_filtered_exe_suffix();
+    let tool_dir = context.temp_dir.child("tools");
+    let bin_dir = context.temp_dir.child("bin");
+    let project = context.temp_dir.child("foo");
+
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "foo"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = [
+            "anyio==3.7.0",
+            "exceptiongroup",
+            "iniconfig",
+            "typing-extensions",
+        ]
+
+        [project.scripts]
+        foo = "foo:main"
+
+        [tool.uv]
+        constraint-dependencies = ["iniconfig<2"]
+        override-dependencies = [
+            "typing-extensions==4.9.0",
+            { package = { name = "anyio", version = "3.7.0" }, dependencies = ["idna==3.2"] },
+        ]
+        exclude-dependencies = ["exceptiongroup"]
+
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+    project
+        .child("src")
+        .child("foo")
+        .child("__init__.py")
+        .write_str(indoc! {r#"
+            def main():
+                import importlib.metadata
+                import importlib.util
+
+                for package in ("idna", "iniconfig", "typing-extensions"):
+                    print(f"{package}=={importlib.metadata.version(package)}")
+                print(f"exceptiongroup installed: {importlib.util.find_spec('exceptiongroup') is not None}")
+        "#})?;
+    context
+        .lock()
+        .current_dir(project.path())
+        .assert()
+        .success();
+
+    context
+        .tool_install()
+        .arg(project.as_os_str())
+        .arg("--locked")
+        .env(EnvVars::UV_PREVIEW_FEATURES, "tool-install-locks")
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .assert()
+        .success();
+
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("tools/foo/uv-receipt.toml"), @r#"
+        [tool]
+        requirements = [{ name = "foo", directory = "[TEMP_DIR]/foo" }]
+        constraints = [{ name = "iniconfig", specifier = "<2" }]
+        overrides = [
+            { package = { name = "anyio", version = "3.7.0" }, dependencies = [{ name = "idna", specifier = "==3.2" }] },
+            { name = "typing-extensions", specifier = "==4.9.0" },
+        ]
+        excludes = ["exceptiongroup"]
+        entrypoints = [
+            { name = "foo", install-path = "[TEMP_DIR]/bin/foo", from = "foo" },
+        ]
+
+        [tool.options]
+        exclude-newer = "2024-03-25T00:00:00Z"
+        "#);
+    });
+
+    context
+        .tool_upgrade()
+        .arg("foo")
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .assert()
+        .success();
+
+    uv_snapshot!(context.filters(), Command::new("foo")
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    idna==3.2
+    iniconfig==1.1.1
+    typing-extensions==4.9.0
+    exceptiongroup installed: False
+    ");
+
+    Ok(())
+}
+
+#[test]
+fn tool_install_locked_skips_virtual_dependencies() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_counts()
+        .with_filtered_exe_suffix();
+    let tool_dir = context.temp_dir.child("tools");
+    let bin_dir = context.temp_dir.child("bin");
+    let project = context.temp_dir.child("foo");
+    let dependency = project.child("core");
+
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "foo"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["core"]
+
+        [project.scripts]
+        foo = "foo:main"
+
+        [tool.uv.sources]
+        core = { path = "./core", package = false }
+
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+    project
+        .child("src")
+        .child("foo")
+        .child("__init__.py")
+        .write_str("def main(): pass\n")?;
+    dependency.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "core"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    context
+        .lock()
+        .current_dir(project.path())
+        .assert()
+        .success();
+
+    uv_snapshot!(context.filters(), context.tool_install()
+        .arg(project.as_os_str())
+        .arg("--locked")
+        .env(EnvVars::UV_PREVIEW_FEATURES, "tool-install-locks")
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved [N] packages in [TIME]
+    Prepared [N] packages in [TIME]
+    Installed [N] packages in [TIME]
+     + foo==0.1.0 (from file://[TEMP_DIR]/foo)
+    Installed 1 executable: foo
+    ");
+
+    Ok(())
+}
+
+#[test]
 fn tool_install_locked_with_extra() -> Result<()> {
     let context = uv_test::test_context!("3.12")
         .with_filtered_counts()
@@ -6320,6 +6673,173 @@ fn tool_install_locked_with_extra() -> Result<()> {
      + iniconfig==2.0.0
     Installed 1 executable: foo
     ");
+
+    Ok(())
+}
+
+#[test]
+fn tool_install_locked_rejects_unknown_extra() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_filtered_counts();
+    let project = context.temp_dir.child("foo");
+
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "foo"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    context
+        .lock()
+        .current_dir(project.path())
+        .assert()
+        .success();
+
+    uv_snapshot!(context.filters(), context.tool_install()
+        .arg(format!("foo[missing] @ file://{}", project.path().display()))
+        .arg("--locked")
+        .env(EnvVars::UV_PREVIEW_FEATURES, "tool-install-locks"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved [N] packages in [TIME]
+    error: Extra `missing` is not defined in the `optional-dependencies` table for `foo`
+    ");
+
+    Ok(())
+}
+
+#[test]
+fn tool_install_locked_checks_conflicting_extras() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_counts()
+        .with_filtered_exe_suffix();
+    let tool_dir = context.temp_dir.child("tools");
+    let bin_dir = context.temp_dir.child("bin");
+    let project = context.temp_dir.child("foo");
+
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "foo"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [project.optional-dependencies]
+        cpu = ["iniconfig==1.1.1"]
+        gpu = ["iniconfig==2.0.0"]
+
+        [project.scripts]
+        foo = "foo:main"
+
+        [tool.uv]
+        conflicts = [[{ extra = "cpu" }, { extra = "gpu" }]]
+
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+    project
+        .child("src")
+        .child("foo")
+        .child("__init__.py")
+        .write_str("def main(): pass\n")?;
+    context
+        .lock()
+        .current_dir(project.path())
+        .assert()
+        .success();
+
+    uv_snapshot!(context.filters(), context.tool_install()
+        .arg(format!("foo[cpu] @ file://{}", project.path().display()))
+        .arg("--locked")
+        .env(EnvVars::UV_PREVIEW_FEATURES, "tool-install-locks")
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved [N] packages in [TIME]
+    Prepared [N] packages in [TIME]
+    Installed [N] packages in [TIME]
+     + foo==0.1.0 (from file://[TEMP_DIR]/foo)
+     + iniconfig==1.1.1
+    Installed 1 executable: foo
+    ");
+
+    uv_snapshot!(context.filters(), context.tool_install()
+        .arg(format!("foo[cpu,gpu] @ file://{}", project.path().display()))
+        .arg("--locked")
+        .env(EnvVars::UV_PREVIEW_FEATURES, "tool-install-locks")
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved [N] packages in [TIME]
+    error: Found conflicting extras `foo[cpu]` and `foo[gpu]` enabled simultaneously
+    ");
+
+    Ok(())
+}
+
+#[test]
+fn tool_install_locked_preserves_build_constraints() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_counts()
+        .with_filtered_exe_suffix();
+    let tool_dir = context.temp_dir.child("tools");
+    let bin_dir = context.temp_dir.child("bin");
+    let project = context.temp_dir.child("foo");
+
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "foo"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [project.scripts]
+        foo = "foo:main"
+
+        [tool.uv]
+        build-constraint-dependencies = ["setuptools==69.0.0"]
+
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+    project
+        .child("src")
+        .child("foo")
+        .child("__init__.py")
+        .write_str("def main(): pass\n")?;
+    context
+        .lock()
+        .current_dir(project.path())
+        .assert()
+        .success();
+
+    context
+        .tool_install()
+        .arg(project.as_os_str())
+        .arg("--locked")
+        .env(EnvVars::UV_PREVIEW_FEATURES, "tool-install-locks")
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .assert()
+        .success();
+
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("tools/foo/uv-receipt.toml"), @r#"
+        [tool]
+        requirements = [{ name = "foo", directory = "[TEMP_DIR]/foo" }]
+        build-constraint-dependencies = [{ name = "setuptools", specifier = "==69.0.0" }]
+        entrypoints = [
+            { name = "foo", install-path = "[TEMP_DIR]/bin/foo", from = "foo" },
+        ]
+
+        [tool.options]
+        exclude-newer = "2024-03-25T00:00:00Z"
+        "#);
+    });
 
     Ok(())
 }

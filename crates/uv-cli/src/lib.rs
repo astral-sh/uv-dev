@@ -5666,7 +5666,7 @@ pub struct ToolInstallArgs {
     #[arg(short, long)]
     pub editable: bool,
 
-    /// Install the tool using the existing lockfile from its source project.
+    /// Install the tool using the existing lockfile from its source project [env: UV_LOCKED=]
     ///
     /// The tool must be installed from a local directory or Git repository containing an
     /// up-to-date `uv.lock` file.

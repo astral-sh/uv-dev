@@ -277,7 +277,9 @@ async fn upgrade_tool(
     concurrency: &Concurrency,
     preview: Preview,
 ) -> Result<UpgradeReport> {
-    let tool_locks = preview.is_enabled(PreviewFeature::ToolInstallLocks);
+    let tool_dir = installed_tools.tool_dir(name);
+    let tool_locks =
+        preview.is_enabled(PreviewFeature::ToolInstallLocks) || ToolLock::read(&tool_dir).is_some();
     // Ensure the tool is installed.
     let existing_tool_receipt = match installed_tools.get_tool_receipt(name) {
         Ok(Some(receipt)) => receipt,
@@ -365,19 +367,21 @@ async fn upgrade_tool(
     );
 
     // Resolve the requirements.
-    let spec = RequirementsSpecification::from_excludes(
-        existing_tool_receipt.requirements().to_vec(),
-        manifest_constraints,
-        manifest_overrides,
-        manifest_excludes,
-    );
+    let spec = RequirementsSpecification {
+        override_dependencies: manifest_overrides,
+        ..RequirementsSpecification::from_excludes(
+            existing_tool_receipt.requirements().to_vec(),
+            manifest_constraints,
+            Vec::new(),
+            manifest_excludes,
+        )
+    };
     // Initialize any shared state.
     let state = PlatformState::default();
     // Check if we need to create a new environment — if so, resolve it first, then install the
     // requested tool.
     let requested_interpreter =
         interpreter.filter(|interpreter| !environment.environment().uses(interpreter));
-    let tool_dir = installed_tools.tool_dir(name);
     // TODO(zanieb): When updating an existing environment, build it in the cache directory then
     // copy it into the tool directory.
     let (environment, outcome, tool_lock) = if tool_locks {

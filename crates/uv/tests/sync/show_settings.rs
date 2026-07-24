@@ -1020,6 +1020,7 @@ fn tool_install_baseline() {
         },
         force: false,
         editable: false,
+        locked: Disabled,
         install_mirrors: PythonInstallMirrors {
             python_install_mirror: None,
             pypy_install_mirror: None,

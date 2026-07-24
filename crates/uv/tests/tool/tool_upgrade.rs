@@ -1633,6 +1633,64 @@ async fn tool_upgrade_invalid_auth() -> Result<()> {
 }
 
 #[test]
+fn tool_upgrade_preserves_existing_lock_without_preview() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let tool_dir = context.temp_dir.child("tools");
+    let bin_dir = context.temp_dir.child("bin");
+    let project = context.temp_dir.child("foo");
+
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "foo"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [project.scripts]
+        foo = "foo:main"
+
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+    project
+        .child("src")
+        .child("foo")
+        .child("__init__.py")
+        .write_str("def main(): pass\n")?;
+    context
+        .lock()
+        .current_dir(project.path())
+        .assert()
+        .success();
+
+    context
+        .tool_install()
+        .arg(project.as_os_str())
+        .arg("--locked")
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .assert()
+        .success();
+
+    let lock_path = tool_dir.child("foo").child("uv.lock");
+    lock_path.assert(predicate::path::exists());
+
+    context
+        .tool_upgrade()
+        .arg("foo")
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .assert()
+        .success();
+
+    lock_path.assert(predicate::path::exists());
+
+    Ok(())
+}
+
+#[test]
 fn tool_upgrade_writes_preview_lock() {
     let context = uv_test::test_context!("3.12");
     let tool_dir = context.temp_dir.child("tools");

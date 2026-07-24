@@ -1032,12 +1032,46 @@ pub(crate) struct ToolInstallSettings {
     pub(crate) python: Option<String>,
     pub(crate) python_platform: Option<TargetTriple>,
     pub(crate) refresh: Refresh,
-    pub(crate) options: ResolverInstallerOptions,
+    pub(crate) options: ToolInstallOptions,
     pub(crate) settings: ResolverInstallerSettings,
     pub(crate) force: bool,
     pub(crate) editable: bool,
     pub(crate) locked: LockCheck,
     pub(crate) install_mirrors: PythonInstallMirrors,
+}
+
+/// Preserve resolver-option precedence while discovering a locked tool's source project.
+#[derive(Clone)]
+pub(crate) struct ToolInstallOptions {
+    options: ResolverInstallerOptions,
+    cli_environment: ResolverInstallerOptions,
+    filesystem: ResolverInstallerOptions,
+}
+
+impl fmt::Debug for ToolInstallOptions {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.options, formatter)
+    }
+}
+
+impl ToolInstallOptions {
+    /// Return the normally resolved tool options.
+    pub(crate) fn into_options(self) -> ResolverInstallerOptions {
+        self.options
+    }
+
+    /// Resolve options using CLI/environment, source-project, then user/system precedence.
+    pub(crate) fn for_project(&self, project_root: &Path) -> Result<ResolverInstallerOptions> {
+        let project = FilesystemOptions::find(project_root)?
+            .map(FilesystemOptions::into_options)
+            .map(|options| ResolverInstallerOptions::from(options.top_level))
+            .unwrap_or_default();
+        Ok(self
+            .cli_environment
+            .clone()
+            .combine(project)
+            .combine(self.filesystem.clone()))
+    }
 }
 
 impl ToolInstallSettings {
@@ -1072,7 +1106,7 @@ impl ToolInstallSettings {
 
         let filesystem_options = filesystem.map(FilesystemOptions::into_options);
 
-        let options = resolver_installer_options_with_environment(
+        let cli_environment_options = resolver_installer_options_with_environment(
             resolver_installer_options(
                 installer,
                 build,
@@ -1082,13 +1116,16 @@ impl ToolInstallSettings {
                     .unwrap_or_default(),
             )?,
             &environment,
-        )
-        .combine(ResolverInstallerOptions::from(
+        );
+        let resolver_filesystem_options = ResolverInstallerOptions::from(
             filesystem_options
                 .as_ref()
                 .map(|options| options.top_level.clone())
                 .unwrap_or_default(),
-        ));
+        );
+        let options = cli_environment_options
+            .clone()
+            .combine(resolver_filesystem_options.clone());
 
         let filesystem_install_mirrors = filesystem_options
             .map(|options| options.install_mirrors.clone())
@@ -1140,13 +1177,13 @@ impl ToolInstallSettings {
             python_platform,
             force,
             editable,
-            locked: if locked {
-                LockCheck::Enabled(LockCheckSource::LockedCli)
-            } else {
-                LockCheck::Disabled
-            },
+            locked: resolve_lock_check(resolve_flag(locked, "locked", environment.locked)),
             refresh: Refresh::try_from(refresh)?,
-            options,
+            options: ToolInstallOptions {
+                options,
+                cli_environment: cli_environment_options,
+                filesystem: resolver_filesystem_options,
+            },
             settings,
             install_mirrors: environment
                 .install_mirrors

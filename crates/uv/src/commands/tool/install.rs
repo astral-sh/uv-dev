@@ -9,8 +9,8 @@ use uv_cache::{Cache, Refresh};
 use uv_cache_info::Timestamp;
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_configuration::{
-    Concurrency, Constraints, DryRun, Excludes, GitLfsSetting, HashCheckingMode, Overrides,
-    Reinstall, TargetTriple, Upgrade,
+    Concurrency, Constraints, DryRun, Excludes, GitLfsSetting, HashCheckingMode, Override,
+    Overrides, Reinstall, TargetTriple, Upgrade,
 };
 use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::{
@@ -27,7 +27,7 @@ use uv_python::{
     PythonInstallation, PythonPreference, PythonRequest,
 };
 use uv_requirements::{RequirementsSource, RequirementsSpecification};
-use uv_settings::{PythonInstallMirrors, ResolverInstallerOptions, ToolOptions};
+use uv_settings::{PythonInstallMirrors, ToolOptions};
 use uv_tool::{InstalledTools, Tool};
 use uv_types::{HashStrategy, SourceTreeEditablePolicy};
 use uv_warnings::{warn_user, warn_user_once};
@@ -51,7 +51,7 @@ use crate::commands::tool::common::{
 use crate::commands::tool::{Target, ToolRequest};
 use crate::commands::{diagnostics, reporters::PythonDownloadReporter};
 use crate::printer::Printer;
-use crate::settings::{LockCheck, ResolverInstallerSettings, ResolverSettings};
+use crate::settings::{LockCheck, ResolverInstallerSettings, ResolverSettings, ToolInstallOptions};
 
 /// Install a tool.
 pub(crate) async fn install(
@@ -70,7 +70,7 @@ pub(crate) async fn install(
     python_platform: Option<TargetTriple>,
     install_mirrors: PythonInstallMirrors,
     force: bool,
-    options: ResolverInstallerOptions,
+    tool_options: ToolInstallOptions,
     settings: ResolverInstallerSettings,
     client_builder: BaseClientBuilder<'_>,
     python_preference: PythonPreference,
@@ -354,11 +354,15 @@ pub(crate) async fn install(
 
     let package_name = &requirement.name;
 
-    let source_project_lock = if locked {
+    let (source_project_lock, options, settings) = if let LockCheck::Enabled(lock_source) =
+        lock_check
+    {
         match locked_tool_project(
             &requirement,
             &interpreter,
-            &settings.resolver,
+            &settings,
+            &tool_options,
+            lock_source,
             &state,
             &client_builder,
             &concurrency,
@@ -369,7 +373,7 @@ pub(crate) async fn install(
         )
         .await
         {
-            Ok(project_lock) => Some(project_lock),
+            Ok((project, lock, options, settings)) => (Some((project, lock)), options, settings),
             Err(err @ ProjectError::LockMismatch(..)) => {
                 writeln!(printer.stderr(), "{}", err.to_string().bold())?;
                 return Ok(ExitStatus::Failure);
@@ -377,7 +381,7 @@ pub(crate) async fn install(
             Err(err) => return Err(err.into()),
         }
     } else {
-        None
+        (None, tool_options.into_options(), settings)
     };
 
     // If the user passed, e.g., `ruff@latest`, we need to mark it as upgradable.
@@ -468,14 +472,14 @@ pub(crate) async fn install(
     };
 
     // Resolve the constraints.
-    let receipt_constraints = spec
+    let mut receipt_constraints = spec
         .constraints
         .into_iter()
         .map(|constraint| constraint.requirement)
         .collect::<Vec<_>>();
 
     // Resolve the overrides.
-    let receipt_overrides = resolve_names(
+    let mut receipt_overrides = resolve_names(
         spec.overrides,
         &interpreter,
         &settings,
@@ -488,18 +492,29 @@ pub(crate) async fn install(
         preview,
         lfs,
     )
-    .await?;
+    .await?
+    .into_iter()
+    .map(Override::Requirement)
+    .collect::<Vec<_>>();
 
     // Resolve the excludes.
-    let receipt_excludes = spec.excludes.clone();
+    let mut receipt_excludes = spec.excludes.clone();
 
     // Resolve the build constraints.
-    let receipt_build_constraints =
+    let mut receipt_build_constraints =
         operations::read_constraints(build_constraints, &client_builder)
             .await?
             .into_iter()
             .map(|constraint| constraint.requirement)
             .collect::<Vec<_>>();
+    if let Some((project, lock)) = source_project_lock.as_ref() {
+        let project_root = project.workspace().install_path();
+        receipt_constraints.extend(lock.constraints(project_root).requirements().cloned());
+        receipt_overrides.extend(lock.overrides(project_root));
+        receipt_excludes.extend(lock.excludes().cloned());
+        receipt_build_constraints
+            .extend(lock.build_constraints(project_root).requirements().cloned());
+    }
 
     // Convert to tool options.
     let options = ToolOptions::from(options);
@@ -519,7 +534,8 @@ pub(crate) async fn install(
         .map(|(project, lock)| {
             ToolLock::from_project_lock(
                 &tool_dir,
-                project.workspace().install_path(),
+                &project,
+                package_name,
                 lock,
                 &lock_manifest,
                 editable,
@@ -675,7 +691,7 @@ pub(crate) async fn install(
                     site_packages.satisfies_requirements(
                         requirements.iter(),
                         receipt_constraints.iter().chain(latest.iter()),
-                        &Overrides::from_requirements(receipt_overrides.clone()),
+                        &Overrides::from_entries(receipt_overrides.clone())?,
                         &Excludes::from_entries(receipt_excludes.iter().cloned()),
                         InstallationStrategy::Permissive,
                         &markers,
@@ -721,11 +737,8 @@ pub(crate) async fn install(
             .chain(latest)
             .map(NameRequirementSpecification::from)
             .collect(),
-        overrides: receipt_overrides
-            .iter()
-            .cloned()
-            .map(UnresolvedRequirementSpecification::from)
-            .collect(),
+        overrides: Vec::new(),
+        override_dependencies: receipt_overrides.clone(),
         excludes: receipt_excludes.clone(),
         ..spec
     };
