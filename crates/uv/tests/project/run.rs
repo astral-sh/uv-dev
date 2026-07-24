@@ -541,7 +541,7 @@ fn run_pep723_scripts_share_immutable_environment() -> Result<()> {
         })
     }
 
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_pyvenv_cfg_filters();
     let script = indoc! { r#"
         # /// script
         # requires-python = ">=3.12"
@@ -558,23 +558,36 @@ fn run_pep723_scripts_share_immutable_environment() -> Result<()> {
     context.temp_dir.child("first.py").write_str(script)?;
     context.temp_dir.child("second.py").write_str(script)?;
 
-    let first = context
-        .run()
+    let first = uv_snapshot!(context.filters(), context.run()
         .arg("--preview-features")
         .arg("shared-script-environments")
-        .arg("first.py")
-        .assert()
-        .success();
-    let second = context
-        .run()
-        .arg("--preview-features")
-        .arg("shared-script-environments")
-        .arg("second.py")
-        .assert()
-        .success();
+        .arg("first.py"), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [CACHE_DIR]/environments-v2/first-[HASH]
+    [CACHE_DIR]/archive-v0/[HASH]/[PYTHON-LIB]/site-packages/iniconfig/__init__.py
 
-    let first_stdout = std::str::from_utf8(&first.get_output().stdout)?;
-    let second_stdout = std::str::from_utf8(&second.get_output().stdout)?;
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + iniconfig==2.0.0
+    ");
+    let second = uv_snapshot!(context.filters(), context.run()
+        .arg("--preview-features")
+        .arg("shared-script-environments")
+        .arg("second.py"), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [CACHE_DIR]/environments-v2/second-[HASH]
+    [CACHE_DIR]/archive-v0/[HASH]/[PYTHON-LIB]/site-packages/iniconfig/__init__.py
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+
+    let first_stdout = std::str::from_utf8(&first.stdout)?;
+    let second_stdout = std::str::from_utf8(&second.stdout)?;
     let mut first_lines = first_stdout.lines();
     let mut second_lines = second_stdout.lines();
     let first_root = first_lines
@@ -590,9 +603,6 @@ fn run_pep723_scripts_share_immutable_environment() -> Result<()> {
         .next()
         .context("second script did not report its installed dependency")?;
 
-    assert_ne!(first_root, second_root);
-    assert_eq!(first_import, second_import);
-
     let first_configuration = fs_err::read_to_string(Path::new(first_root).join("pyvenv.cfg"))?;
     let second_configuration = fs_err::read_to_string(Path::new(second_root).join("pyvenv.cfg"))?;
     let first_base = shared_base(&first_configuration)
@@ -600,29 +610,101 @@ fn run_pep723_scripts_share_immutable_environment() -> Result<()> {
     let second_base = shared_base(&second_configuration)
         .context("second script environment did not identify its shared base")?;
 
-    assert_eq!(first_base, second_base);
-    assert!(first_configuration.contains("uv-overlay = true"));
-    assert!(second_configuration.contains("uv-overlay = true"));
-    assert!(
-        fs_err::read_to_string(Path::new(first_base).join("pyvenv.cfg"))?
-            .contains("uv-immutable = true")
-    );
+    let shared_configuration = fs_err::read_to_string(Path::new(first_base).join("pyvenv.cfg"))?;
 
     insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(first_configuration, @"
+        home = [PYTHON_HOME]
+        implementation = CPython
+        uv = [UV_VERSION]
+        version_info = 3.12.[X]
+        include-system-site-packages = false
+        prompt = first.py
+        extends-environment = [CACHE_DIR]/archive-v0/[HASH]
+        ");
+
+        assert_snapshot!(second_configuration, @"
+        home = [PYTHON_HOME]
+        implementation = CPython
+        uv = [UV_VERSION]
+        version_info = 3.12.[X]
+        include-system-site-packages = false
+        prompt = second.py
+        extends-environment = [CACHE_DIR]/archive-v0/[HASH]
+        ");
+
+        assert_snapshot!(shared_configuration, @"
+        home = [PYTHON_HOME]
+        implementation = CPython
+        uv = [UV_VERSION]
+        version_info = 3.12.[X]
+        include-system-site-packages = false
+        relocatable = true
+        immutable = true
+        ");
+
         insta::assert_json_snapshot!(json!({
             "first_environment": first_root,
             "second_environment": second_root,
             "shared_base": first_base,
             "shared_dependency": first_import,
+            "environments_are_distinct": first_root != second_root,
+            "shared_bases_are_identical": first_base == second_base,
+            "dependency_paths_are_identical": first_import == second_import,
         }), @r#"
         {
+          "dependency_paths_are_identical": true,
+          "environments_are_distinct": true,
           "first_environment": "[CACHE_DIR]/environments-v2/first-[HASH]",
           "second_environment": "[CACHE_DIR]/environments-v2/second-[HASH]",
           "shared_base": "[CACHE_DIR]/archive-v0/[HASH]",
+          "shared_bases_are_identical": true,
           "shared_dependency": "[CACHE_DIR]/archive-v0/[HASH]/[PYTHON-LIB]/site-packages/iniconfig/__init__.py"
         }
         "#);
     });
+
+    Ok(())
+}
+
+/// All content-addressed environments should advertise their immutability, even without opting in
+/// to shared script environments.
+#[test]
+fn run_with_cached_environment_is_immutable() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_pyvenv_cfg_filters();
+    context.temp_dir.child("main.py").write_str(indoc! { r#"
+        import pathlib
+
+        import iniconfig
+
+        for parent in pathlib.Path(iniconfig.__file__).parents:
+            configuration = parent / "pyvenv.cfg"
+            if configuration.is_file():
+                print(configuration.read_text(), end="")
+                break
+        "#
+    })?;
+
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--with")
+        .arg("iniconfig==2.0.0")
+        .arg("main.py"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    home = [PYTHON_HOME]
+    implementation = CPython
+    uv = [UV_VERSION]
+    version_info = 3.12.[X]
+    include-system-site-packages = false
+    relocatable = true
+    immutable = true
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + iniconfig==2.0.0
+    ");
 
     Ok(())
 }
