@@ -19,7 +19,7 @@ use uv_client::BaseClientBuilder;
 use uv_distribution_types::{
     BuiltDist, Dist, Identifier, Node, Resolution, ResolvedDist, SourceDist,
 };
-use uv_preview::Preview;
+use uv_preview::{Preview, PreviewFeature};
 use uv_python_interpreter::{Interpreter, PythonEnvironment, canonicalize_executable};
 use uv_settings::MalwareCheckSettings;
 use uv_types::{HashStrategy, HashVerification, SourceTreeEditablePolicy};
@@ -240,6 +240,9 @@ impl CachedEnvironment {
 
         if let Ok(root) = cache.resolve_link(cache_entry.path()) {
             if let Ok(environment) = PythonEnvironment::from_root(root, cache) {
+                if preview.is_enabled(PreviewFeature::SharedScriptEnvironments) {
+                    environment.set_pyvenv_cfg("uv-immutable", "true")?;
+                }
                 return Ok(Self(environment));
             }
         }
@@ -257,7 +260,7 @@ impl CachedEnvironment {
             UpgradePolicy::Fixed,
         )?;
 
-        sync_environment(
+        let venv = sync_environment(
             venv,
             resolution,
             hash_strategy,
@@ -274,6 +277,10 @@ impl CachedEnvironment {
             preview,
         )
         .await?;
+
+        if preview.is_enabled(PreviewFeature::SharedScriptEnvironments) {
+            venv.set_pyvenv_cfg("uv-immutable", "true")?;
+        }
 
         // Now that the environment is complete, sync it to its content-addressed location.
         let id = cache.persist(temp_dir.keep(), cache_entry.path()).await?;

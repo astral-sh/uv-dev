@@ -1,6 +1,6 @@
 #![expect(clippy::disallowed_types)]
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::{fixture::ChildPath, prelude::*};
 use indoc::{formatdoc, indoc};
@@ -525,6 +525,155 @@ fn run_pep723_script_empty_dependency() -> Result<()> {
       |                 ^^
     Empty field is not allowed for PEP508
     "#);
+
+    Ok(())
+}
+
+/// Equivalent scripts should retain their own writable environments while sharing their installed
+/// dependencies when shared script environments are enabled.
+#[test]
+fn run_pep723_scripts_share_immutable_environment() -> Result<()> {
+    fn shared_base(configuration: &str) -> Option<&str> {
+        configuration.lines().find_map(|line| {
+            line.split_once('=')
+                .filter(|(key, _)| key.trim() == "extends-environment")
+                .map(|(_, value)| value.trim())
+        })
+    }
+
+    let context = uv_test::test_context!("3.12");
+    let script = indoc! { r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["iniconfig==2.0.0"]
+        # ///
+
+        import iniconfig
+        import sys
+
+        print(sys.prefix)
+        print(iniconfig.__file__)
+        "#
+    };
+    context.temp_dir.child("first.py").write_str(script)?;
+    context.temp_dir.child("second.py").write_str(script)?;
+
+    let first = context
+        .run()
+        .arg("--preview-features")
+        .arg("shared-script-environments")
+        .arg("first.py")
+        .assert()
+        .success();
+    let second = context
+        .run()
+        .arg("--preview-features")
+        .arg("shared-script-environments")
+        .arg("second.py")
+        .assert()
+        .success();
+
+    let first_stdout = std::str::from_utf8(&first.get_output().stdout)?;
+    let second_stdout = std::str::from_utf8(&second.get_output().stdout)?;
+    let mut first_lines = first_stdout.lines();
+    let mut second_lines = second_stdout.lines();
+    let first_root = first_lines
+        .next()
+        .context("first script did not report its virtual environment")?;
+    let second_root = second_lines
+        .next()
+        .context("second script did not report its virtual environment")?;
+    let first_import = first_lines
+        .next()
+        .context("first script did not report its installed dependency")?;
+    let second_import = second_lines
+        .next()
+        .context("second script did not report its installed dependency")?;
+
+    assert_ne!(first_root, second_root);
+    assert_eq!(first_import, second_import);
+
+    let first_configuration = fs_err::read_to_string(Path::new(first_root).join("pyvenv.cfg"))?;
+    let second_configuration = fs_err::read_to_string(Path::new(second_root).join("pyvenv.cfg"))?;
+    let first_base = shared_base(&first_configuration)
+        .context("first script environment did not identify its shared base")?;
+    let second_base = shared_base(&second_configuration)
+        .context("second script environment did not identify its shared base")?;
+
+    assert_eq!(first_base, second_base);
+    assert!(first_configuration.contains("uv-overlay = true"));
+    assert!(second_configuration.contains("uv-overlay = true"));
+    assert!(
+        fs_err::read_to_string(Path::new(first_base).join("pyvenv.cfg"))?
+            .contains("uv-immutable = true")
+    );
+
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_json_snapshot!(json!({
+            "first_environment": first_root,
+            "second_environment": second_root,
+            "shared_base": first_base,
+            "shared_dependency": first_import,
+        }), @r#"
+        {
+          "first_environment": "[CACHE_DIR]/environments-v2/first-[HASH]",
+          "second_environment": "[CACHE_DIR]/environments-v2/second-[HASH]",
+          "shared_base": "[CACHE_DIR]/archive-v0/[HASH]",
+          "shared_dependency": "[CACHE_DIR]/archive-v0/[HASH]/[PYTHON-LIB]/site-packages/iniconfig/__init__.py"
+        }
+        "#);
+    });
+
+    Ok(())
+}
+
+/// Mutating one script's overlay must not affect another script using the same cached base.
+#[test]
+fn run_pep723_script_overlays_isolate_mutations() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("first.py").write_str(indoc! { r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["iniconfig==2.0.0"]
+        # ///
+
+        import pathlib
+        import sysconfig
+
+        pathlib.Path(sysconfig.get_path("purelib"), "only_first.py").write_text("VALUE = 1")
+        "#
+    })?;
+    context.temp_dir.child("second.py").write_str(indoc! { r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["iniconfig==2.0.0"]
+        # ///
+
+        import importlib.util
+
+        print(importlib.util.find_spec("only_first"))
+        "#
+    })?;
+
+    context
+        .run()
+        .arg("--preview-features")
+        .arg("shared-script-environments")
+        .arg("first.py")
+        .assert()
+        .success();
+
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--preview-features")
+        .arg("shared-script-environments")
+        .arg("second.py"), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    None
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
 
     Ok(())
 }

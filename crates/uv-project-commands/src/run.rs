@@ -44,7 +44,7 @@ use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
 use uv_lock::{Installable, Lock};
 use uv_lock_operations::{LockError, LockMode, LockOperation, LockTarget};
 use uv_normalize::{DefaultExtras, DefaultGroups, PackageName};
-use uv_preview::Preview;
+use uv_preview::{Preview, PreviewFeature};
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::ProjectPythonRequest;
 use uv_python_discovery::PythonDownloadReporter;
@@ -428,43 +428,100 @@ pub async fn run(
                     })
                     .ok();
 
-                match update_environment(
-                    environment,
-                    spec,
-                    modifications,
-                    python_platform.as_ref(),
-                    SourceTreeEditablePolicy::Project,
-                    unlocked_build_constraints.clone(),
-                    script_extra_build_requires,
-                    &settings,
-                    &client_builder,
-                    &sync_state,
-                    if show_resolution {
-                        Box::new(DefaultResolveLogger)
-                    } else {
-                        Box::new(SummaryResolveLogger)
-                    },
-                    if show_resolution {
-                        Box::new(DefaultInstallLogger)
-                    } else {
-                        Box::new(SummaryInstallLogger)
-                    },
-                    installer_metadata,
-                    &concurrency,
-                    &cache,
-                    workspace_cache,
-                    DryRun::Disabled,
-                    printer,
-                    preview,
-                )
-                .await
+                if preview.is_enabled(PreviewFeature::SharedScriptEnvironments)
+                    && active != ActiveEnvironment::Prefer
+                    && script_extra_build_requires.is_empty()
                 {
-                    Ok(update) => Some(update.environment.into_interpreter()),
-                    Err(EnvironmentError::Resolve(err)) => {
-                        let err = *err;
-                        return Err(UvError::from(err.with_resolution_context("script")).into());
+                    let result = CachedEnvironment::from_spec(
+                        spec.into(),
+                        unlocked_build_constraints.clone(),
+                        environment.interpreter(),
+                        python_platform.as_ref(),
+                        &settings,
+                        &client_builder,
+                        &sync_state,
+                        if show_resolution {
+                            Box::new(DefaultResolveLogger)
+                        } else {
+                            Box::new(SummaryResolveLogger)
+                        },
+                        if show_resolution {
+                            Box::new(DefaultInstallLogger)
+                        } else {
+                            Box::new(SummaryInstallLogger)
+                        },
+                        installer_metadata,
+                        &concurrency,
+                        &cache,
+                        workspace_cache,
+                        printer,
+                        preview,
+                    )
+                    .await;
+
+                    match result {
+                        Ok(shared_environment) => {
+                            let shared_environment = PythonEnvironment::from(shared_environment);
+                            let parent_site_packages = shared_environment
+                                .site_packages()
+                                .next()
+                                .context("Failed to find `site-packages` directory for environment")?;
+                            set_overlay(
+                                &environment,
+                                &format!(
+                                    "import site; site.addsitedir({})",
+                                    parent_site_packages.escape_for_python()
+                                ),
+                            )?;
+                            set_parent_environment(&environment, shared_environment.root())?;
+                            environment.set_pyvenv_cfg("uv-overlay", "true")?;
+                            Some(environment.into_interpreter())
+                        }
+                        Err(EnvironmentError::Resolve(err)) => {
+                            let err = *err;
+                            return Err(UvError::from(err.with_resolution_context("script")).into());
+                        }
+                        Err(err) => return Err(UvError::from(err).into()),
                     }
-                    Err(err) => return Err(UvError::from(err).into()),
+                } else {
+                    match update_environment(
+                        environment,
+                        spec,
+                        modifications,
+                        python_platform.as_ref(),
+                        SourceTreeEditablePolicy::Project,
+                        unlocked_build_constraints.clone(),
+                        script_extra_build_requires,
+                        &settings,
+                        &client_builder,
+                        &sync_state,
+                        if show_resolution {
+                            Box::new(DefaultResolveLogger)
+                        } else {
+                            Box::new(SummaryResolveLogger)
+                        },
+                        if show_resolution {
+                            Box::new(DefaultInstallLogger)
+                        } else {
+                            Box::new(SummaryInstallLogger)
+                        },
+                        installer_metadata,
+                        &concurrency,
+                        &cache,
+                        workspace_cache,
+                        DryRun::Disabled,
+                        printer,
+                        preview,
+                    )
+                    .await
+                    {
+                        Ok(update) => Some(update.environment.into_interpreter()),
+                        Err(EnvironmentError::Resolve(err)) => {
+                            let err = *err;
+                            return Err(UvError::from(err.with_resolution_context("script")).into());
+                        }
+                        Err(err) => return Err(UvError::from(err).into()),
+                    }
                 }
             } else {
                 // Create a virtual environment.
