@@ -79,6 +79,10 @@ pub(crate) enum ToolLockError {
     #[error(transparent)]
     Lock(#[from] uv_lock_operations::LockError),
     #[error(transparent)]
+    Environment(#[from] EnvironmentError),
+    #[error(transparent)]
+    Settings(#[from] uv_settings::Error),
+    #[error(transparent)]
     Anyhow(#[from] anyhow::Error),
 }
 

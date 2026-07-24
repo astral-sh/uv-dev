@@ -50,6 +50,53 @@ impl Deref for FilesystemOptions {
     }
 }
 
+/// Resolver options for a tool install, retaining their precedence layers for source projects.
+#[derive(Clone)]
+pub struct ToolInstallOptions {
+    options: ResolverInstallerOptions,
+    cli_environment: ResolverInstallerOptions,
+    filesystem: ResolverInstallerOptions,
+}
+
+impl std::fmt::Debug for ToolInstallOptions {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(&self.options, formatter)
+    }
+}
+
+impl ToolInstallOptions {
+    /// Create tool install options from the resolved and individual precedence layers.
+    pub fn new(
+        options: ResolverInstallerOptions,
+        cli_environment: ResolverInstallerOptions,
+        filesystem: ResolverInstallerOptions,
+    ) -> Self {
+        Self {
+            options,
+            cli_environment,
+            filesystem,
+        }
+    }
+
+    /// Return the normally resolved tool options.
+    pub fn into_options(self) -> ResolverInstallerOptions {
+        self.options
+    }
+
+    /// Resolve options using CLI/environment, source-project, then user/system precedence.
+    pub fn for_project(&self, project_root: &Path) -> Result<ResolverInstallerOptions, Error> {
+        let project = FilesystemOptions::find(project_root)?
+            .map(FilesystemOptions::into_options)
+            .map(|options| ResolverInstallerOptions::from(options.top_level))
+            .unwrap_or_default();
+        Ok(self
+            .cli_environment
+            .clone()
+            .combine(project)
+            .combine(self.filesystem.clone()))
+    }
+}
+
 impl FilesystemOptions {
     /// Load the user [`FilesystemOptions`].
     pub fn user() -> Result<Option<Self>, Error> {
