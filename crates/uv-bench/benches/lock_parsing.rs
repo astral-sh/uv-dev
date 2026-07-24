@@ -34,17 +34,32 @@ fn generated_lock(package_count: usize) -> String {
     output
 }
 
+fn wide_lock(key_count: usize) -> String {
+    let mut output = String::with_capacity(key_count * 24);
+    output.push_str("version = 1\nrevision = 3\nrequires-python = \">=3.12\"\n");
+
+    for index in 0..key_count {
+        writeln!(output, "ignored-{index:05} = true").expect("writing to a string cannot fail");
+    }
+
+    output
+}
+
 fn lock_parsing(criterion: &mut Criterion) {
     let generated = generated_lock(5_000);
+    let wide = wide_lock(4_096);
+    let fallback = generated.replace("requires-python = \">=3.12\"", "requires-python = '>=3.12'");
     let cases = [
         ("repository", REPOSITORY_LOCK),
         ("generated-5000", generated.as_str()),
+        ("distinct-keys-4096", wide.as_str()),
+        ("noncanonical", fallback.as_str()),
     ];
 
     for (name, input) in cases {
         let expected: Lock = toml::from_str(input).expect("valid benchmark lock");
-        let actual = Lock::from_toml(input).expect("valid canonical benchmark lock");
-        assert_eq!(actual, expected, "{name}: direct lock differs from TOML");
+        let actual = Lock::from_toml(input).expect("valid benchmark lock");
+        assert_eq!(actual, expected, "{name}: lock differs from TOML");
     }
 
     let mut group = criterion.benchmark_group("lock_parsing");
