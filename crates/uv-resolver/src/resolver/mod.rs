@@ -515,10 +515,12 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                         .expect("a package was chosen but we don't have a term");
                     let range = term_intersection.unwrap_positive();
 
-                    // Within a fixed resolver environment, an implicit registry candidate is
-                    // stable for a given range and pre-release policy. Avoid repeating candidate
-                    // selection when PubGrub revisits an identical decision after backtracking.
-                    let cache_selected_version = url.is_none() && index.is_none();
+                    // In a specific environment, an implicit registry candidate is stable for a
+                    // given range. Avoid repeating candidate selection when PubGrub revisits an
+                    // identical decision after backtracking.
+                    let cache_selected_version = state.env.marker_environment().is_some()
+                        && url.is_none()
+                        && index.is_none();
                     let decision = if cache_selected_version
                         && let Some((selected_range, version)) =
                             state.selected_versions.get(&next_id)
