@@ -342,6 +342,9 @@ pub enum PreviewFeature {
     BatchExport,
     /// Allows setting minimum libc versions for universal resolutions.
     MinimumLibcVersion,
+    /// Shares content-addressed dependency environments between PEP 723 scripts while retaining
+    /// a distinct, mutable virtual environment for each script.
+    SharedScriptEnvironments,
 }
 
 impl Display for PreviewFeature {
