@@ -1683,6 +1683,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 &excludes,
                 &build_constraints,
                 &entrypoints,
+                args.locked,
                 args.lfs,
                 args.python,
                 args.python_platform,
