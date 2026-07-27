@@ -3238,7 +3238,7 @@ fn require_hashes_unknown_algorithm() -> Result<()> {
         .arg("--require-hashes"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Unsupported hash algorithm (expected one of: `md5`, `sha256`, `sha384`, `sha512`, or `blake2b`) on: `foo`
+    error: Unsupported hash algorithm (expected one of: `sha256`, `sha384`, `sha512`, or `blake2b`) on: `foo`
     "
     );
 
@@ -4297,16 +4297,34 @@ fn require_hashes_repeated_hash_multiple_files() -> Result<()> {
 fn require_hashes_at_least_one() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
-    // An MD5 digest alone must not satisfy integrity-enforced installs.
-    let md5_requirements_txt = context.temp_dir.child("requirements-md5.txt");
-    md5_requirements_txt.write_str("anyio==4.0.0 --hash=md5:420d85e19168705cdf0223621b18831a")?;
+    // MD5 digests must never be accepted as requirement hashes.
+    let requirements_txt = context.temp_dir.child("requirements-md5.txt");
+    requirements_txt.write_str("anyio==4.0.0 --hash=md5:420d85e19168705cdf0223621b18831a")?;
 
     uv_snapshot!(context.pip_sync()
-        .arg(md5_requirements_txt.path())
+        .arg(requirements_txt.path()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Unsupported hash algorithm (expected one of: `sha256`, `sha384`, `sha512`, or `blake2b`) on: `md5`
+    ");
+
+    uv_snapshot!(context.pip_sync()
+        .arg(requirements_txt.path())
         .arg("--require-hashes"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: `md5` hashes are insecure and cannot be used with `--require-hashes` but no other hashes are available for: anyio==4.0.0
+    error: Unsupported hash algorithm (expected one of: `sha256`, `sha384`, `sha512`, or `blake2b`) on: `md5`
+    ");
+
+    // A supported hash must not make an accompanying MD5 digest acceptable.
+    requirements_txt.write_str("anyio==4.0.0 --hash=sha256:f7ed51751b2c2add651e5747c891b47e26d2a21be5d32d9311dfe9692f3e5d7a --hash=md5:420d85e19168705cdf0223621b18831a")?;
+
+    uv_snapshot!(context.pip_sync()
+        .arg(requirements_txt.path())
+        .arg("--require-hashes"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Unsupported hash algorithm (expected one of: `sha256`, `sha384`, `sha512`, or `blake2b`) on: `md5`
     ");
 
     // Request `anyio` with a `sha256` hash.
@@ -4326,32 +4344,11 @@ fn require_hashes_at_least_one() -> Result<()> {
     "
     );
 
-    // An MD5 requirement can still use a secure hash supplied by its constraint.
-    let constraints_txt = context.temp_dir.child("constraints.txt");
-    constraints_txt
-        .write_str("anyio==4.0.0 --hash=sha256:f7ed51751b2c2add651e5747c891b47e26d2a21be5d32d9311dfe9692f3e5d7a")?;
-
-    uv_snapshot!(context.pip_sync()
-        .arg(md5_requirements_txt.path())
-        .arg("--constraint")
-        .arg(constraints_txt.path())
-        .arg("--reinstall")
-        .arg("--require-hashes"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Uninstalled 1 package in [TIME]
-    Installed 1 package in [TIME]
-     ~ anyio==4.0.0
-    "
-    );
-
     // Reinstall, requesting both `sha256` and `sha512`. We should reinstall from the cache, since
     // at least one hash matches.
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt
-        .write_str("anyio==4.0.0 --hash=sha256:f7ed51751b2c2add651e5747c891b47e26d2a21be5d32d9311dfe9692f3e5d7a --hash=md5:420d85e19168705cdf0223621b18831a")?;
+        .write_str("anyio==4.0.0 --hash=sha256:f7ed51751b2c2add651e5747c891b47e26d2a21be5d32d9311dfe9692f3e5d7a --hash=sha512:f30761c1e8725b49c498273b90dba4b05c0fd157811994c806183062cb6647e773364ce45f0e1ff0b10e32fe6d0232ea5ad39476ccf37109d6b49603a09c11c2")?;
 
     uv_snapshot!(context.pip_sync()
         .arg("requirements.txt")
@@ -4370,7 +4367,7 @@ fn require_hashes_at_least_one() -> Result<()> {
     // This should be true even if the second hash is wrong.
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt
-        .write_str("anyio==4.0.0 --hash=sha256:f7ed51751b2c2add651e5747c891b47e26d2a21be5d32d9311dfe9692f3e5d7a --hash=md5:1234")?;
+        .write_str("anyio==4.0.0 --hash=sha256:f7ed51751b2c2add651e5747c891b47e26d2a21be5d32d9311dfe9692f3e5d7a --hash=sha512:1234")?;
 
     uv_snapshot!(context.pip_sync()
         .arg("requirements.txt")
@@ -4385,19 +4382,6 @@ fn require_hashes_at_least_one() -> Result<()> {
      ~ anyio==4.0.0
     "
     );
-
-    // MD5 remains supported when hash checking is not required.
-    uv_snapshot!(context.pip_sync()
-        .arg(md5_requirements_txt.path())
-        .arg("--reinstall"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Uninstalled 1 package in [TIME]
-    Installed 1 package in [TIME]
-     ~ anyio==4.0.0
-    ");
 
     Ok(())
 }
