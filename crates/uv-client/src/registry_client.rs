@@ -1501,10 +1501,11 @@ impl From<CachedFile> for File {
 /// small.
 #[derive(rkyv::Archive, rkyv::Deserialize, rkyv::Serialize)]
 #[rkyv(derive(Debug))]
+#[repr(u8)]
 enum CachedHashDigests {
-    Sha256([u8; 32]),
-    Md5([u8; 16]),
-    Blake2b([u8; 32]),
+    Sha256([u8; 32]) = 0,
+    // Preserve the existing archived discriminants after removing MD5.
+    Blake2b([u8; 32]) = 2,
     Sha384(Box<[u8; 48]>),
     Sha512(Box<[u8; 64]>),
     Other(HashDigests),
@@ -1513,7 +1514,6 @@ enum CachedHashDigests {
 impl Debug for CachedHashDigests {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         let (name, digest) = match self {
-            Self::Md5(digest) => ("Md5", digest.as_slice()),
             Self::Sha256(digest) => ("Sha256", digest.as_slice()),
             Self::Blake2b(digest) => ("Blake2b", digest.as_slice()),
             Self::Sha384(digest) => ("Sha384", digest.as_slice()),
@@ -1530,7 +1530,6 @@ impl From<HashDigests> for CachedHashDigests {
             return Self::Other(hashes);
         };
         let cached = match hash.algorithm {
-            HashAlgorithm::Md5 => decode_digest(hash).map(Self::Md5),
             HashAlgorithm::Sha256 => decode_digest(hash).map(Self::Sha256),
             HashAlgorithm::Blake2b => decode_digest(hash).map(Self::Blake2b),
             HashAlgorithm::Sha384 => {
@@ -1559,7 +1558,6 @@ impl From<CachedHashDigests> for HashDigests {
 impl From<&CachedHashDigests> for HashDigests {
     fn from(hashes: &CachedHashDigests) -> Self {
         match hashes {
-            CachedHashDigests::Md5(digest) => Self::from(hash_digest(HashAlgorithm::Md5, digest)),
             CachedHashDigests::Sha256(digest) => {
                 Self::from(hash_digest(HashAlgorithm::Sha256, digest))
             }

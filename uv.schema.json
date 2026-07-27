@@ -1136,7 +1136,7 @@
     "IndexHashAlgorithm": {
       "description": "A hash algorithm that can be required for distributions resolved from an index.",
       "type": "string",
-      "enum": ["md5", "sha256", "sha384", "sha512", "blake2b"]
+      "enum": ["sha256", "sha384", "sha512", "blake2b"]
     },
     "IndexName": {
       "description": "The normalized name of an index.\n\nIndex names may contain letters, digits, hyphens, underscores, and periods, and must be ASCII.",

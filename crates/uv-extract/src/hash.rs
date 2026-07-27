@@ -7,7 +7,6 @@ use uv_pypi_types::{HashAlgorithm, HashDigest};
 
 #[derive(Debug)]
 pub enum Hasher {
-    Md5(md5::Md5),
     Sha256(sha2::Sha256),
     Sha384(sha2::Sha384),
     Sha512(sha2::Sha512),
@@ -17,7 +16,6 @@ pub enum Hasher {
 impl Hasher {
     fn update(&mut self, data: &[u8]) {
         match self {
-            Self::Md5(hasher) => hasher.update(data),
             Self::Sha256(hasher) => hasher.update(data),
             Self::Sha384(hasher) => hasher.update(data),
             Self::Sha512(hasher) => hasher.update(data),
@@ -29,7 +27,6 @@ impl Hasher {
 impl From<HashAlgorithm> for Hasher {
     fn from(algorithm: HashAlgorithm) -> Self {
         match algorithm {
-            HashAlgorithm::Md5 => Self::Md5(md5::Md5::new()),
             HashAlgorithm::Sha256 => Self::Sha256(sha2::Sha256::new()),
             HashAlgorithm::Sha384 => Self::Sha384(sha2::Sha384::new()),
             HashAlgorithm::Sha512 => Self::Sha512(sha2::Sha512::new()),
@@ -41,10 +38,6 @@ impl From<HashAlgorithm> for Hasher {
 impl From<Hasher> for HashDigest {
     fn from(hasher: Hasher) -> Self {
         match hasher {
-            Hasher::Md5(hasher) => Self {
-                algorithm: HashAlgorithm::Md5,
-                digest: hex::encode(hasher.finalize()).into(),
-            },
             Hasher::Sha256(hasher) => Self {
                 algorithm: HashAlgorithm::Sha256,
                 digest: hex::encode(hasher.finalize()).into(),
