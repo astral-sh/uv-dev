@@ -1513,10 +1513,11 @@ impl From<CachedFile> for File {
 /// in [`Self::Other`]. The larger digests are boxed to keep the common archived layout small.
 #[derive(rkyv::Archive, rkyv::Deserialize, rkyv::Serialize)]
 #[rkyv(derive(Debug))]
+#[repr(u8)]
 enum CachedHashDigests {
-    Sha256([u8; 32]),
-    Md5([u8; 16]),
-    Blake2b([u8; 32]),
+    Sha256([u8; 32]) = 0,
+    // Discriminant 2 is part of the archived representation and cannot be reassigned.
+    Blake2b([u8; 32]) = 2,
     Sha384(Box<[u8; 48]>),
     Sha512(Box<[u8; 64]>),
     Other(HashDigests),
@@ -1525,7 +1526,6 @@ enum CachedHashDigests {
 impl Debug for CachedHashDigests {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         let (name, digest) = match self {
-            Self::Md5(digest) => ("Md5", digest.as_slice()),
             Self::Sha256(digest) => ("Sha256", digest.as_slice()),
             Self::Blake2b(digest) => ("Blake2b", digest.as_slice()),
             Self::Sha384(digest) => ("Sha384", digest.as_slice()),
@@ -1542,7 +1542,6 @@ impl From<HashDigests> for CachedHashDigests {
             return Self::Other(hashes);
         };
         match hash {
-            HashDigest::Md5(digest) => Self::Md5(digest.decode()),
             HashDigest::Sha256(digest) => Self::Sha256(digest.decode()),
             HashDigest::Blake2b256(digest) => Self::Blake2b(digest.decode()),
             HashDigest::Sha384(digest) => Self::Sha384(Box::new(digest.decode())),
@@ -1563,9 +1562,6 @@ impl From<CachedHashDigests> for HashDigests {
 impl From<&CachedHashDigests> for HashDigests {
     fn from(hashes: &CachedHashDigests) -> Self {
         match hashes {
-            CachedHashDigests::Md5(digest) => {
-                Self::from(HashDigest::Md5(Digest::from_bytes(*digest)))
-            }
             CachedHashDigests::Sha256(digest) => {
                 Self::from(HashDigest::Sha256(Digest::from_bytes(*digest)))
             }
