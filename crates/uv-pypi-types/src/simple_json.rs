@@ -384,6 +384,12 @@ impl Hashes {
             && let Some(value) = parts.next()
             && let None = parts.next()
         {
+            if name == "md5" {
+                return Ok(Self {
+                    md5: Some(Digest::from_hex(value)?),
+                    ..Self::default()
+                });
+            }
             let algorithm = HashAlgorithm::from_str(name)
                 .map_err(|_| HashError::UnsupportedHashAlgorithm(fragment.to_string()))?;
             Ok(Self::from(HashDigest::new(algorithm, value)?))
@@ -407,7 +413,6 @@ impl Hashes {
     /// Insert a digest into its algorithm-specific slot.
     fn insert(&mut self, digest: HashDigest) {
         match digest {
-            HashDigest::Md5(digest) => self.md5 = Some(digest),
             HashDigest::Sha256(digest) => self.sha256 = Some(digest),
             HashDigest::Sha384(digest) => self.sha384 = Some(digest),
             HashDigest::Sha512(digest) => self.sha512 = Some(digest),
@@ -420,6 +425,14 @@ impl FromStr for Hashes {
     type Err = HashError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if let Some(("md5", digest)) = s.split_once(':')
+            && !digest.contains(':')
+        {
+            return Ok(Self {
+                md5: Some(Digest::from_hex(digest)?),
+                ..Self::default()
+            });
+        }
         HashDigest::from_str(s).map(Self::from)
     }
 }
@@ -440,9 +453,10 @@ impl FromStr for Hashes {
     rkyv::Serialize,
 )]
 #[rkyv(derive(Debug))]
+#[repr(u8)]
 pub enum HashAlgorithm {
-    Md5,
-    Sha256,
+    // The discriminants are part of the archived representation and cannot be reassigned.
+    Sha256 = 1,
     Sha384,
     Sha512,
     #[serde(rename = "Blake2b")]
@@ -452,20 +466,12 @@ pub enum HashAlgorithm {
 impl HashAlgorithm {
     /// Return the supported [`HashAlgorithm`] variants in order of preference.
     pub(crate) fn preferred() -> impl Iterator<Item = Self> {
-        [
-            Self::Sha512,
-            Self::Sha384,
-            Self::Sha256,
-            Self::Blake2b256,
-            Self::Md5,
-        ]
-        .into_iter()
+        [Self::Sha512, Self::Sha384, Self::Sha256, Self::Blake2b256].into_iter()
     }
 
     /// Return the string representation of the [`HashAlgorithm`].
     pub(crate) fn as_str(self) -> &'static str {
         match self {
-            Self::Md5 => "md5",
             Self::Sha256 => "sha256",
             Self::Sha384 => "sha384",
             Self::Sha512 => "sha512",
@@ -479,7 +485,6 @@ impl FromStr for HashAlgorithm {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "md5" => Ok(Self::Md5),
             "sha256" => Ok(Self::Sha256),
             "sha384" => Ok(Self::Sha384),
             "sha512" => Ok(Self::Sha512),
@@ -574,7 +579,6 @@ impl<'de, const BYTES: usize> Deserialize<'de> for Digest<BYTES> {
 #[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq, Hash, Serialize, Deserialize)]
 #[serde(try_from = "HashDigestWire", into = "HashDigestWire")]
 pub enum HashDigest {
-    Md5(Digest<16>),
     Sha256(Digest<32>),
     Sha384(Digest<48>),
     Sha512(Digest<64>),
@@ -589,7 +593,6 @@ impl HashDigest {
     ) -> Result<Self, HashError> {
         let digest = digest.into();
         match algorithm {
-            HashAlgorithm::Md5 => Ok(Self::Md5(Digest::from_hex(digest)?)),
             HashAlgorithm::Sha256 => Ok(Self::Sha256(Digest::from_hex(digest)?)),
             HashAlgorithm::Sha384 => Ok(Self::Sha384(Digest::from_hex(digest)?)),
             HashAlgorithm::Sha512 => Ok(Self::Sha512(Digest::from_hex(digest)?)),
@@ -600,7 +603,6 @@ impl HashDigest {
     /// Return the [`HashAlgorithm`] of the digest.
     pub fn algorithm(&self) -> HashAlgorithm {
         match self {
-            Self::Md5(_) => HashAlgorithm::Md5,
             Self::Sha256(_) => HashAlgorithm::Sha256,
             Self::Sha384(_) => HashAlgorithm::Sha384,
             Self::Sha512(_) => HashAlgorithm::Sha512,
@@ -615,7 +617,6 @@ impl HashDigest {
 
     fn digest_string(&self) -> &SmallString {
         match self {
-            Self::Md5(digest) => &digest.0,
             Self::Sha256(digest) | Self::Blake2b256(digest) => &digest.0,
             Self::Sha384(digest) => &digest.0,
             Self::Sha512(digest) => &digest.0,
@@ -672,7 +673,6 @@ impl From<HashDigest> for HashDigestWire {
     fn from(hash: HashDigest) -> Self {
         let algorithm = hash.algorithm();
         let digest = match hash {
-            HashDigest::Md5(digest) => digest.0,
             HashDigest::Sha256(digest) | HashDigest::Blake2b256(digest) => digest.0,
             HashDigest::Sha384(digest) => digest.0,
             HashDigest::Sha512(digest) => digest.0,
@@ -729,7 +729,6 @@ where
 {
     fn verify(&self, _context: &mut C) -> Result<(), C::Error> {
         let bytes = match self.algorithm {
-            ArchivedHashAlgorithm::Md5 => 16,
             ArchivedHashAlgorithm::Sha256 | ArchivedHashAlgorithm::Blake2b256 => 32,
             ArchivedHashAlgorithm::Sha384 => 48,
             ArchivedHashAlgorithm::Sha512 => 64,
@@ -813,7 +812,6 @@ impl From<Hashes> for HashDigests {
             usize::from(value.sha512.is_some())
                 + usize::from(value.sha384.is_some())
                 + usize::from(value.sha256.is_some())
-                + usize::from(value.md5.is_some())
                 + usize::from(value.blake2b.is_some()),
         );
         if let Some(sha512) = value.sha512 {
@@ -824,9 +822,6 @@ impl From<Hashes> for HashDigests {
         }
         if let Some(sha256) = value.sha256 {
             digests.push(HashDigest::Sha256(sha256));
-        }
-        if let Some(md5) = value.md5 {
-            digests.push(HashDigest::Md5(md5));
         }
         if let Some(blake2b) = value.blake2b {
             digests.push(HashDigest::Blake2b256(blake2b));
@@ -903,7 +898,7 @@ pub enum HashError {
     InvalidDigestCharacters(String),
 
     #[error(
-        "Unsupported hash algorithm (expected one of: `md5`, `sha256`, `sha384`, `sha512`, or `blake2b`) on: `{0}`"
+        "Unsupported hash algorithm (expected one of: `sha256`, `sha384`, `sha512`, or `blake2b`) on: `{0}`"
     )]
     UnsupportedHashAlgorithm(String),
 }
@@ -955,11 +950,9 @@ mod tests {
 
         Ok(())
     }
-
     #[test]
     fn hash_digest_variants() -> Result<(), HashError> {
         let variants = [
-            (HashAlgorithm::Md5, "md5", "Md5", 16),
             (HashAlgorithm::Sha256, "sha256", "Sha256", 32),
             (HashAlgorithm::Sha384, "sha384", "Sha384", 48),
             (HashAlgorithm::Sha512, "sha512", "Sha512", 64),
@@ -1006,7 +999,6 @@ mod tests {
     #[test]
     fn hash_digest_rejects_invalid_digests() {
         for (algorithm, bytes) in [
-            (HashAlgorithm::Md5, 16),
             (HashAlgorithm::Sha256, 32),
             (HashAlgorithm::Sha384, 48),
             (HashAlgorithm::Sha512, 64),
@@ -1054,6 +1046,10 @@ mod tests {
             sha512: Some(Digest::from_bytes([0x44; 64])),
             blake2b: Some(Digest::from_bytes([0x55; 32])),
         };
+        let expected_hashes = Hashes {
+            md5: None,
+            ..hashes.clone()
+        };
         let digests = HashDigests::from(hashes.clone());
 
         assert_eq!(
@@ -1062,7 +1058,6 @@ mod tests {
                 HashDigest::Sha512(Digest::from_bytes([0x44; 64])),
                 HashDigest::Sha384(Digest::from_bytes([0x33; 48])),
                 HashDigest::Sha256(Digest::from_bytes([0x22; 32])),
-                HashDigest::Md5(Digest::from_bytes([0x11; 16])),
                 HashDigest::Blake2b256(Digest::from_bytes([0x55; 32])),
             ]
         );
@@ -1071,14 +1066,13 @@ mod tests {
         assert_eq!(
             sorted.iter().map(HashDigest::algorithm).collect::<Vec<_>>(),
             [
-                HashAlgorithm::Md5,
                 HashAlgorithm::Sha256,
                 HashAlgorithm::Sha384,
                 HashAlgorithm::Sha512,
                 HashAlgorithm::Blake2b256,
             ]
         );
-        assert_eq!(Hashes::from(digests), hashes);
+        assert_eq!(Hashes::from(digests), expected_hashes);
     }
 
     #[test]
@@ -1150,6 +1144,14 @@ mod tests {
                 blake2b: None,
             }
         );
+        assert!(HashDigests::from(hashes).is_empty());
+
+        let result = "md5:090376d812fb6ac5f171e5938e82e7f2d7adc2b629101cec0db8b267815c85e2"
+            .parse::<HashDigest>();
+        assert!(matches!(
+            result,
+            Err(HashError::UnsupportedHashAlgorithm(_))
+        ));
 
         let result = "sha256=40627dcf047dadb22cd25ea7ecfe9cbf3bbbad0482ee5920b582f3809c97654f"
             .parse::<Hashes>();
