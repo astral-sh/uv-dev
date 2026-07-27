@@ -18,6 +18,9 @@ mod help;
 
 mod network;
 
+#[cfg(all(feature = "test-python", feature = "test-pypi"))]
+mod requirements;
+
 #[cfg(feature = "test-pypi")]
 mod publish;
 
