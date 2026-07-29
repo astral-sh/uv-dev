@@ -68,8 +68,12 @@ impl<'lock> ExportableRequirements<'lock> {
 
         let root = graph.add_node(Node::Root);
 
-        // Add the workspace packages to the queue.
-        for root_name in target.roots() {
+        // Add the workspace packages and any additional dependency-group roots to the queue.
+        for (root_name, include_production) in target
+            .roots()
+            .map(|root| (root, true))
+            .chain(target.group_roots(groups).map(|root| (root, false)))
+        {
             if prune.contains(root_name) {
                 continue;
             }
@@ -87,7 +91,7 @@ impl<'lock> ExportableRequirements<'lock> {
             // Track the activated package in the list of known conflicts.
             activated_items.insert(ConflictItem::from(dist.id.name.clone()), MarkerTree::TRUE);
 
-            if groups.prod() {
+            if include_production && groups.prod() {
                 // Add the workspace package to the graph.
                 let index = *inverse
                     .entry(&dist.id)

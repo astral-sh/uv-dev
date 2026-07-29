@@ -6444,10 +6444,15 @@ fn run_target_workspace_discovery_workspace_root_group() -> Result<()> {
         .arg("--only-group")
         .arg("test")
         .arg("subproj-a/scripts/thing.py"), @"
-    exit_code: 2 (failure)
+    exit_code: 0 (success)
+    ----- stdout -----
+    success
+
     ----- stderr -----
     Resolved 5 packages in [TIME]
-    error: Group `test` is not defined in the project's `dependency-groups` table
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + iniconfig==2.0.0
     ");
 
     Ok(())
@@ -6517,12 +6522,13 @@ fn run_target_workspace_discovery_workspace_group_defaults() -> Result<()> {
         .arg("child/scripts/groups.py"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    installed: typing_extensions
+    installed: typing_extensions, sniffio
 
     ----- stderr -----
     Resolved 6 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + sniffio==1.3.1
      + typing-extensions==4.10.0
     ");
 
@@ -6557,13 +6563,14 @@ fn run_target_workspace_discovery_workspace_group_defaults() -> Result<()> {
         .arg("child/scripts/groups.py"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    installed: typing_extensions, packaging
+    installed: typing_extensions, sniffio, packaging
 
     ----- stderr -----
     Resolved 7 packages in [TIME]
     Prepared 1 package in [TIME]
-    Installed 2 packages in [TIME]
+    Installed 3 packages in [TIME]
      + packaging==24.0
+     + sniffio==1.3.1
      + typing-extensions==4.10.0
     ");
 
@@ -6574,12 +6581,13 @@ fn run_target_workspace_discovery_workspace_group_defaults() -> Result<()> {
         .arg("child/scripts/groups.py"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    installed: packaging
+    installed: sniffio, packaging
 
     ----- stderr -----
     Resolved 7 packages in [TIME]
-    Installed 1 package in [TIME]
+    Installed 2 packages in [TIME]
      + packaging==24.0
+     + sniffio==1.3.1
     ");
 
     child.child("pyproject.toml").write_str(indoc! { r#"
@@ -6601,11 +6609,12 @@ fn run_target_workspace_discovery_workspace_group_defaults() -> Result<()> {
         .arg("child/scripts/groups.py"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    installed:
+    installed: sniffio
 
     ----- stderr -----
     Resolved 6 packages in [TIME]
-    Checked in [TIME]
+    Installed 1 package in [TIME]
+     + sniffio==1.3.1
     ");
 
     Ok(())
@@ -6717,10 +6726,17 @@ fn run_target_workspace_discovery_workspace_project_groups() -> Result<()> {
         .arg("--group")
         .arg("member-only")
         .arg("child/scripts/groups.py"), @"
-    exit_code: 2 (failure)
+    exit_code: 0 (success)
+    ----- stdout -----
+    installed: typing_extensions, sniffio, packaging
+
     ----- stderr -----
     Resolved 8 packages in [TIME]
-    error: Group `root-only` is not defined in the project's `dependency-groups` table
+    Prepared 1 package in [TIME]
+    Installed 3 packages in [TIME]
+     + packaging==24.0
+     + sniffio==1.3.1
+     + typing-extensions==4.10.0
     ");
 
     uv_snapshot!(context.filters(), context.run()
@@ -6730,12 +6746,13 @@ fn run_target_workspace_discovery_workspace_project_groups() -> Result<()> {
         .arg("child/scripts/groups.py"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    installed: six
+    installed: idna, six
 
     ----- stderr -----
     Resolved 8 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + idna==3.6
      + six==1.16.0
     ");
 
@@ -6751,7 +6768,6 @@ fn run_target_workspace_discovery_workspace_project_groups() -> Result<()> {
 
     ----- stderr -----
     Resolved 8 packages in [TIME]
-    Prepared 1 package in [TIME]
     Installed 2 packages in [TIME]
      + idna==3.6
      + six==1.16.0
@@ -6763,14 +6779,15 @@ fn run_target_workspace_discovery_workspace_project_groups() -> Result<()> {
         .arg("child/scripts/groups.py"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    installed: typing_extensions, packaging, six
+    installed: typing_extensions, sniffio, packaging, idna, six
 
     ----- stderr -----
     Resolved 8 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 3 packages in [TIME]
+    Installed 5 packages in [TIME]
+     + idna==3.6
      + packaging==24.0
      + six==1.16.0
+     + sniffio==1.3.1
      + typing-extensions==4.10.0
     ");
 
@@ -6798,10 +6815,14 @@ fn run_target_workspace_discovery_workspace_project_groups() -> Result<()> {
         .arg("--only-group")
         .arg("root-only")
         .arg("child/scripts/groups.py"), @"
-    exit_code: 2 (failure)
+    exit_code: 0 (success)
+    ----- stdout -----
+    installed: sniffio
+
     ----- stderr -----
     Resolved 8 packages in [TIME]
-    error: Group `root-only` is not defined in the project's `dependency-groups` table
+    Installed 1 package in [TIME]
+     + sniffio==1.3.1
     ");
 
     uv_snapshot!(context.filters(), context.run()
@@ -6812,10 +6833,14 @@ fn run_target_workspace_discovery_workspace_project_groups() -> Result<()> {
         .arg("root-only")
         .arg("python")
         .arg("child/scripts/groups.py"), @"
-    exit_code: 2 (failure)
+    exit_code: 0 (success)
+    ----- stdout -----
+    installed: sniffio
+
     ----- stderr -----
     Resolved 8 packages in [TIME]
-    error: Group `root-only` is not defined in the project's `dependency-groups` table
+    Installed 1 package in [TIME]
+     + sniffio==1.3.1
     ");
 
     uv_snapshot!(context.filters(), context.run()
@@ -6938,10 +6963,14 @@ fn run_target_workspace_discovery_virtual_workspace_groups() -> Result<()> {
         .arg("--only-group")
         .arg("root-only")
         .arg("child/scripts/groups.py"), @"
-    exit_code: 2 (failure)
+    exit_code: 0 (success)
+    ----- stdout -----
+    installed: sniffio
+
     ----- stderr -----
     Resolved 6 packages in [TIME]
-    error: Group `root-only` is not defined in the project's `dependency-groups` table
+    Installed 1 package in [TIME]
+     + sniffio==1.3.1
     ");
 
     uv_snapshot!(context.filters(), context.run()
@@ -7020,10 +7049,14 @@ fn run_target_workspace_discovery_virtual_workspace_groups() -> Result<()> {
         .arg("root-only")
         .arg("python")
         .arg("child/scripts/groups.py"), @"
-    exit_code: 2 (failure)
+    exit_code: 0 (success)
+    ----- stdout -----
+    installed: sniffio
+
     ----- stderr -----
     Resolved 6 packages in [TIME]
-    error: Group `root-only` is not defined in the project's `dependency-groups` table
+    Installed 1 package in [TIME]
+     + sniffio==1.3.1
     ");
 
     uv_snapshot!(context.filters(), context.run()
@@ -7117,10 +7150,12 @@ fn run_target_workspace_discovery_workspace_project_group_commands() -> Result<(
         .arg("child")
         .arg("--only-group")
         .arg("root-only"), @"
-    exit_code: 2 (failure)
+    exit_code: 0 (success)
     ----- stderr -----
     Resolved 8 packages in [TIME]
-    error: Group `root-only` is not defined in the project's `dependency-groups` table
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + sniffio==1.3.1
     ");
 
     uv_snapshot!(context.filters(), context.sync()
@@ -7131,9 +7166,12 @@ fn run_target_workspace_discovery_workspace_project_group_commands() -> Result<(
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 8 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Prepared 2 packages in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 2 packages in [TIME]
+     + idna==3.6
      + six==1.16.0
+     - sniffio==1.3.1
     ");
 
     uv_snapshot!(context.filters(), context.sync()
@@ -7144,8 +7182,9 @@ fn run_target_workspace_discovery_workspace_project_group_commands() -> Result<(
     ----- stderr -----
     Resolved 8 packages in [TIME]
     Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
+    Installed 3 packages in [TIME]
      + packaging==24.0
+     + sniffio==1.3.1
      + typing-extensions==4.10.0
     ");
 
@@ -7155,10 +7194,12 @@ fn run_target_workspace_discovery_workspace_project_group_commands() -> Result<(
         .arg("child")
         .arg("--only-group")
         .arg("root-only"), @"
-    exit_code: 2 (failure)
+    exit_code: 0 (success)
+    ----- stdout -----
+    sniffio==1.3.1
+
     ----- stderr -----
     Resolved 8 packages in [TIME]
-    error: Group `root-only` is not defined in the project's `dependency-groups` table
     ");
 
     uv_snapshot!(context.filters(), context.export()
@@ -7169,6 +7210,7 @@ fn run_target_workspace_discovery_workspace_project_group_commands() -> Result<(
         .arg("shared"), @"
     exit_code: 0 (success)
     ----- stdout -----
+    idna==3.6
     six==1.16.0
 
     ----- stderr -----
@@ -7182,8 +7224,10 @@ fn run_target_workspace_discovery_workspace_project_group_commands() -> Result<(
         .arg("--all-groups"), @"
     exit_code: 0 (success)
     ----- stdout -----
+    idna==3.6
     packaging==24.0
     six==1.16.0
+    sniffio==1.3.1
     typing-extensions==4.10.0
 
     ----- stderr -----
@@ -7239,10 +7283,12 @@ fn run_target_workspace_discovery_virtual_workspace_group_commands() -> Result<(
         .arg("child")
         .arg("--only-group")
         .arg("root-only"), @"
-    exit_code: 2 (failure)
+    exit_code: 0 (success)
     ----- stderr -----
     Resolved 6 packages in [TIME]
-    error: Group `root-only` is not defined in the project's `dependency-groups` table
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + sniffio==1.3.1
     ");
 
     uv_snapshot!(context.filters(), context.sync()
@@ -7254,9 +7300,11 @@ fn run_target_workspace_discovery_virtual_workspace_group_commands() -> Result<(
     ----- stderr -----
     Resolved 6 packages in [TIME]
     Prepared 2 packages in [TIME]
+    Uninstalled 1 package in [TIME]
     Installed 2 packages in [TIME]
      + idna==3.6
      + six==1.16.0
+     - sniffio==1.3.1
     ");
 
     uv_snapshot!(context.filters(), context.export()
@@ -7265,10 +7313,12 @@ fn run_target_workspace_discovery_virtual_workspace_group_commands() -> Result<(
         .arg("child")
         .arg("--only-group")
         .arg("root-only"), @"
-    exit_code: 2 (failure)
+    exit_code: 0 (success)
+    ----- stdout -----
+    sniffio==1.3.1
+
     ----- stderr -----
     Resolved 6 packages in [TIME]
-    error: Group `root-only` is not defined in the project's `dependency-groups` table
     ");
 
     uv_snapshot!(context.filters(), context.export()
