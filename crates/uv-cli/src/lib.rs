@@ -3465,6 +3465,13 @@ pub struct RunArgs {
     #[arg(long, conflicts_with_all = ["only_group", "only_dev"])]
     pub all_groups: bool,
 
+    /// Do not inherit dependency groups defined by the workspace root.
+    ///
+    /// By default, workspace root groups are available when running a workspace member that does
+    /// not define dependency groups of its own.
+    #[arg(long)]
+    pub no_workspace_groups: bool,
+
     /// Run a Python module.
     ///
     /// Equivalent to `python -m <module>`.
@@ -3812,6 +3819,13 @@ pub struct SyncArgs {
     /// `--no-group` can be used to exclude specific groups.
     #[arg(long, conflicts_with_all = ["only_group", "only_dev"])]
     pub all_groups: bool,
+
+    /// Do not inherit dependency groups defined by the workspace root.
+    ///
+    /// By default, workspace root groups are available when syncing a workspace member that does
+    /// not define dependency groups of its own.
+    #[arg(long)]
+    pub no_workspace_groups: bool,
 
     /// Install any non-editable dependencies, including the project and any workspace members, as
     /// editable.
@@ -4832,6 +4846,13 @@ pub struct ExportArgs {
     /// `--no-group` can be used to exclude specific groups.
     #[arg(long, conflicts_with_all = ["only_group", "only_dev"])]
     pub all_groups: bool,
+
+    /// Do not inherit dependency groups defined by the workspace root.
+    ///
+    /// By default, workspace root groups are available when exporting a workspace member that does
+    /// not define dependency groups of its own.
+    #[arg(long)]
+    pub no_workspace_groups: bool,
 
     /// Exclude comment annotations indicating the source of each package.
     #[arg(long, overrides_with("annotate"))]
