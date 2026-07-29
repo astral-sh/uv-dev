@@ -1539,6 +1539,12 @@ impl ValidatedLock {
                 );
                 Ok(Self::Preferable(lock))
             }
+            SatisfiesResult::MismatchedPackageName(expected, actual) => {
+                debug!(
+                    "Resolving despite existing lockfile due to mismatched package name: expected `{expected}`, found `{actual}`"
+                );
+                Ok(Self::Preferable(lock))
+            }
             SatisfiesResult::MismatchedPackageRequirements(name, version, expected, actual) => {
                 if let Some(version) = version {
                     debug!(
