@@ -2571,15 +2571,31 @@ impl Lock {
                         .version
                         .as_ref()
                         .map(|version| (&package.id.name, version));
+                    let is_workspace_package = packages.contains_key(&package.id.name);
                     let requirements = metadata
                         .requires_dist
                         .iter()
+                        .filter(|requirement| {
+                            requirement
+                                .marker
+                                .top_level_extra_name()
+                                .is_none_or(|extra| {
+                                    is_workspace_package
+                                        || package
+                                            .optional_dependencies
+                                            .contains_key(extra.as_ref())
+                                })
+                        })
                         .map(|requirement| (package_context, requirement))
                         .chain(
                             metadata
                                 .dependency_groups
-                                .values()
-                                .flatten()
+                                .iter()
+                                .filter(|(group, _)| {
+                                    is_workspace_package
+                                        || package.dependency_groups.contains_key(*group)
+                                })
+                                .flat_map(|(_, requirements)| requirements)
                                 .map(|requirement| (None, requirement)),
                         );
                     for (override_context, requirement) in requirements {
