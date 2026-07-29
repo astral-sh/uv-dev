@@ -2574,32 +2574,41 @@ impl Lock {
                         .version
                         .as_ref()
                         .map(|version| (&package.id.name, version));
-                    for requirement in dependency_overrides.apply_for_package(
-                        package_context,
-                        metadata
-                            .requires_dist
-                            .iter()
-                            .chain(metadata.dependency_groups.values().flatten()),
-                    ) {
-                        if !conditional_source_names.contains(&requirement.name)
-                            || matches!(requirement.source, RequirementSource::Registry { .. })
-                            || dependency_excludes
-                                .contains_for_package(package_context, &requirement.name)
+                    let requirements = metadata
+                        .requires_dist
+                        .iter()
+                        .map(|requirement| (package_context, requirement))
+                        .chain(
+                            metadata
+                                .dependency_groups
+                                .values()
+                                .flatten()
+                                .map(|requirement| (None, requirement)),
+                        );
+                    for (override_context, requirement) in requirements {
+                        for requirement in dependency_overrides
+                            .apply_for_package(override_context, iter::once(requirement))
                         {
-                            continue;
-                        }
+                            if !conditional_source_names.contains(&requirement.name)
+                                || matches!(requirement.source, RequirementSource::Registry { .. })
+                                || dependency_excludes
+                                    .contains_for_package(package_context, &requirement.name)
+                            {
+                                continue;
+                            }
 
-                        let mut requirement = requirement.into_owned();
-                        if let Some(extra) = requirement.marker.top_level_extra_name() {
-                            requirement.marker = requirement
-                                .marker
-                                .simplify_extras(slice::from_ref(extra.as_ref()));
+                            let mut requirement = requirement.into_owned();
+                            if let Some(extra) = requirement.marker.top_level_extra_name() {
+                                requirement.marker = requirement
+                                    .marker
+                                    .simplify_extras(slice::from_ref(extra.as_ref()));
+                            }
+                            source_requirements.push(normalize_requirement(
+                                requirement,
+                                root,
+                                &self.requires_python,
+                            )?);
                         }
-                        source_requirements.push(normalize_requirement(
-                            requirement,
-                            root,
-                            &self.requires_python,
-                        )?);
                     }
                 }
             }
