@@ -530,12 +530,15 @@ pub(crate) fn create(
             _ => Cow::Borrowed(bin_name),
         };
 
-        let activator = template
+        let mut activator = template
             .replace("{{ VIRTUAL_ENV_DIR }}", &virtual_env_dir)
             .replace("{{ BIN_NAME }}", &bin_name)
             .replace("{{ VIRTUAL_PROMPT }}", &virtual_prompt)
             .replace("{{ PATH_SEP }}", path_sep)
             .replace("{{ RELATIVE_SITE_PACKAGES }}", &relative_site_packages);
+        if *name == "activate.ps1" {
+            activator.insert(0, '\u{feff}');
+        }
         fs_err::write(scripts.join(name), activator)?;
     }
 
