@@ -12,6 +12,7 @@ use std::fmt::Formatter;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::sync::Arc;
 
 use glob::Pattern;
 use rustc_hash::{FxBuildHasher, FxHashSet};
@@ -75,9 +76,9 @@ where
 #[serde(rename_all = "kebab-case")]
 pub struct PyProjectToml {
     /// PEP 621-compliant project metadata.
-    pub project: Option<Project>,
+    pub project: Option<Arc<Project>>,
     /// Tool-specific metadata.
-    pub tool: Option<Tool>,
+    pub tool: Option<Arc<Tool>>,
     /// Non-project dependency groups, as defined in PEP 735.
     pub dependency_groups: Option<DependencyGroups>,
     /// The raw unserialized document.
