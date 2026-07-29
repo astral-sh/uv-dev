@@ -2555,10 +2555,7 @@ impl Lock {
                     }
                 }
 
-                for name in packages.keys() {
-                    let Some(package) = self.find_by_name(name).ok().flatten() else {
-                        continue;
-                    };
+                for package in &self.packages {
                     let Some(source_tree) = package.id.source.as_source_tree() else {
                         continue;
                     };
