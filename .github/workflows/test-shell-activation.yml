@@ -311,6 +311,12 @@ jobs:
           test "$VIRTUAL_ENV" = "$original_directory/.venv"
           or exit 1
 
+          false
+          fish_prompt >/dev/null
+          set prompt_status $status
+          test "$prompt_status" -eq 1
+          or exit 1
+
           python -c 'import os, sys; assert os.path.realpath(sys.prefix) == os.path.realpath(os.environ["VIRTUAL_ENV"])'
           or exit 1
 
