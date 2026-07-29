@@ -68,14 +68,15 @@ Preserve the quoted `eval` around Zsh- and KornShell-specific parameter expansio
 these expansions even in branches it does not execute, so removing `eval` prevents it from sourcing
 the POSIX activator ([astral-sh/uv#20743]).
 
-Use `${OSTYPE-}` when checking for Cygwin or MSYS. `OSTYPE` is not defined by POSIX and can be unset
-in Dash and BusyBox ash. Referencing `$OSTYPE` directly causes activation to fail under `set -u`
-([astral-sh/uv#20743]).
+Detect Cygwin, MSYS, and MinGW with `uname` ([pypa/virtualenv#3036]). `OSTYPE` is not defined by
+POSIX and can be unset in Dash and BusyBox ash, causing activation to fail under `set -u` if it is
+referenced directly ([astral-sh/uv#20743]).
 
 Keep `VIRTUAL_ENV_PROMPT` as the unformatted environment name and add parentheses only when
 constructing `PS1` ([astral-sh/uv#13501]).
 
 [astral-sh/uv#13501]: https://github.com/astral-sh/uv/pull/13501
+[pypa/virtualenv#3036]: https://github.com/pypa/virtualenv/pull/3036
 
 ### Fish on Windows
 
