@@ -18900,6 +18900,174 @@ fn lock_metadata_free_transitive_direct_url_constraint() -> Result<()> {
     Ok(())
 }
 
+/// Inactive extras on local dependencies cannot select a direct source for another package.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_metadata_free_ignores_inactive_local_extra_source() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("extras/lock-without-metadata.toml");
+    let httpx_url = server.file_url("httpx-1.0.0-py3-none-any.whl");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["httpx ; sys_platform != 'darwin'", "member", "local"]
+
+        [tool.uv]
+        constraint-dependencies = ["httpx @ {httpx_url} ; sys_platform == 'darwin'"]
+
+        [tool.uv.workspace]
+        members = ["member"]
+
+        [tool.uv.sources]
+        member = {{ workspace = true }}
+        local = {{ path = "local" }}
+        "#})?;
+    let member = context.temp_dir.child("member/pyproject.toml");
+    member.write_str(&formatdoc! {r#"
+        [project]
+        name = "member"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["httpx @ {httpx_url}"]
+        "#})?;
+    context
+        .temp_dir
+        .child("local/pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "local"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [project.optional-dependencies]
+        unused = ["httpx @ {httpx_url}"]
+        "#})?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--preview-features")
+        .arg("lock-without-metadata")
+        .arg("--index-url")
+        .arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+
+    member.write_str(indoc! {r#"
+        [project]
+        name = "member"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["httpx"]
+        "#})?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--preview-features")
+        .arg("lock-without-metadata")
+        .arg("--locked")
+        .arg("--index-url")
+        .arg(server.index_url()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 5 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+
+    Ok(())
+}
+
+/// Unselected dependency groups on local dependencies cannot select a direct source.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_metadata_free_ignores_inactive_local_group_source() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("extras/lock-without-metadata.toml");
+    let httpx_url = server.file_url("httpx-1.0.0-py3-none-any.whl");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["httpx ; sys_platform != 'darwin'", "member", "local"]
+
+        [tool.uv]
+        constraint-dependencies = ["httpx @ {httpx_url} ; sys_platform == 'darwin'"]
+
+        [tool.uv.workspace]
+        members = ["member"]
+
+        [tool.uv.sources]
+        member = {{ workspace = true }}
+        local = {{ path = "local" }}
+        "#})?;
+    let member = context.temp_dir.child("member/pyproject.toml");
+    member.write_str(&formatdoc! {r#"
+        [project]
+        name = "member"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["httpx @ {httpx_url}"]
+        "#})?;
+    context
+        .temp_dir
+        .child("local/pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "local"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [dependency-groups]
+        unused = ["httpx @ {httpx_url}"]
+        "#})?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--preview-features")
+        .arg("lock-without-metadata")
+        .arg("--index-url")
+        .arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+
+    member.write_str(indoc! {r#"
+        [project]
+        name = "member"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["httpx"]
+        "#})?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--preview-features")
+        .arg("lock-without-metadata")
+        .arg("--locked")
+        .arg("--index-url")
+        .arg(server.index_url()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 5 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+
+    Ok(())
+}
+
 /// Requested target extras must cover the same marker environments as their declarations.
 #[cfg(feature = "test-universal")]
 #[test]
