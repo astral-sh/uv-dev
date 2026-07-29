@@ -81,11 +81,11 @@ deactivate () {
 deactivate nondestructive
 
 VIRTUAL_ENV='{{ VIRTUAL_ENV_DIR }}'
-# Preserve this condition's grouping and command substitution for POSIX shell compatibility.
-# shellcheck disable=SC2091,SC2235
-if ([ "${OSTYPE-}" = "cygwin" ] || [ "${OSTYPE-}" = "msys" ]) && $(command -v cygpath &> /dev/null) ; then
-    VIRTUAL_ENV=$(cygpath -u "$VIRTUAL_ENV")
-fi
+case "$(uname)" in
+    CYGWIN*|MSYS*|MINGW*)
+        VIRTUAL_ENV=$(cygpath "$VIRTUAL_ENV")
+        ;;
+esac
 export VIRTUAL_ENV
 
 # Unset the `SCRIPT_PATH` variable, now that the `VIRTUAL_ENV` variable
