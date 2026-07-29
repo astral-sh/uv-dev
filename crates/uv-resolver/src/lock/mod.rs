@@ -665,6 +665,12 @@ struct ExpectedPackageDependencies<'lock> {
     workspace_root: &'lock Path,
 }
 
+/// Marker environments in which locked packages and optional extras can select a source.
+struct SourceContextMarkers<'lock> {
+    packages: FxHashMap<&'lock PackageId, MarkerTree>,
+    extras: FxHashMap<(&'lock PackageId, &'lock ExtraName), MarkerTree>,
+}
+
 impl<'lock> ExpectedPackageDependencies<'lock> {
     fn new(
         lock: &'lock Lock,
@@ -2280,10 +2286,7 @@ impl Lock {
     fn source_context_markers<'lock>(
         &'lock self,
         packages: &BTreeMap<PackageName, WorkspaceMember>,
-    ) -> (
-        FxHashMap<&'lock PackageId, MarkerTree>,
-        FxHashMap<(&'lock PackageId, &'lock ExtraName), MarkerTree>,
-    ) {
+    ) -> SourceContextMarkers<'lock> {
         let mut package_markers = FxHashMap::default();
         let mut extra_markers = FxHashMap::default();
         let mut pending = VecDeque::new();
@@ -2343,7 +2346,10 @@ impl Lock {
             }
         }
 
-        (package_markers, extra_markers)
+        SourceContextMarkers {
+            packages: package_markers,
+            extras: extra_markers,
+        }
     }
 
     /// Expand reachability and extra activation across a single locked dependency edge.
@@ -2645,7 +2651,7 @@ impl Lock {
                 .collect::<FxHashSet<_>>();
 
             if !conditional_source_names.is_empty() {
-                let (package_markers, extra_markers) = self.source_context_markers(packages);
+                let source_markers = self.source_context_markers(packages);
 
                 for requirement in requirements
                     .iter()
@@ -2724,7 +2730,8 @@ impl Lock {
                                     .simplify_extras(slice::from_ref(extra.as_ref()));
                                 if !is_workspace_package {
                                     requirement.marker = requirement.marker.and(
-                                        extra_markers
+                                        source_markers
+                                            .extras
                                             .get(&(&package.id, extra.as_ref()))
                                             .copied()
                                             .unwrap_or(MarkerTree::FALSE),
@@ -2732,7 +2739,8 @@ impl Lock {
                                 }
                             } else if !is_workspace_package {
                                 requirement.marker = requirement.marker.and(
-                                    package_markers
+                                    source_markers
+                                        .packages
                                         .get(&package.id)
                                         .copied()
                                         .unwrap_or(MarkerTree::FALSE),
