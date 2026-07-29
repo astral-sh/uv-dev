@@ -86,13 +86,17 @@ MinGW. Otherwise, Windows and POSIX paths are mixed in `PATH` and activation bre
 
 [astral-sh/uv#19703]: https://github.com/astral-sh/uv/pull/19703
 
-### Windows batch encoding
+### Windows activation encoding
 
 Preserve the temporary switch to the UTF-8 code page in `activate.bat` and restore the previous code
 page after activation. Without it, environment paths containing non-ASCII characters can be
 corrupted ([astral-sh/uv#11831]).
 
+Write the PowerShell activator with a UTF-8 byte order mark. Without it, Windows PowerShell assumes
+Windows-1252 when reading paths containing non-ASCII characters ([pypa/virtualenv#2687]).
+
 [astral-sh/uv#11831]: https://github.com/astral-sh/uv/pull/11831
+[pypa/virtualenv#2687]: https://github.com/pypa/virtualenv/pull/2687
 
 ### Shell activation tests
 
