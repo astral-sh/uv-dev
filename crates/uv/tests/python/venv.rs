@@ -72,6 +72,20 @@ fn create_venv() {
 }
 
 #[test]
+fn create_venv_powershell_activator_uses_utf8_bom() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context.venv().arg("--clear").assert().success();
+
+    let scripts = if cfg!(windows) { "Scripts" } else { "bin" };
+    let activator = fs_err::read(context.venv.join(scripts).join("activate.ps1"))?;
+
+    assert!(activator.starts_with(&[0xef, 0xbb, 0xbf]));
+
+    Ok(())
+}
+
+#[test]
 fn create_venv_preview_skips_distutils_patch_on_py310_plus() {
     let context = uv_test::test_context_with_versions!(&["3.12"]);
 
