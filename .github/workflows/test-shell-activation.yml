@@ -148,6 +148,10 @@ jobs:
           "${activation_command[@]}" <<'ACTIVATION' || activation_status=$?
           set -eu
 
+          if [ -n "${BASH_VERSION-}" ]; then
+            set +h
+          fi
+
           original_path=$PATH
           original_directory=$PWD
           SCRIPT_PATH=original-script-path
