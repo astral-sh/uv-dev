@@ -35737,11 +35737,84 @@ fn lock_path_dependency_marker_gated_requires_python() -> Result<()> {
     Resolved 3 packages in [TIME]
     ");
 
+    // Validating the existing lock must preserve the dependency's Python activation marker.
+    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+
     // Re-lock with `--refresh` should also succeed.
     uv_snapshot!(context.filters(), context.lock().arg("--refresh"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
+    ");
+
+    Ok(())
+}
+
+/// Changing a local dependency's Python compatibility invalidates an existing lock.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_invalidates_changed_path_dependency_requires_python() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["local"]
+
+        [tool.uv.sources]
+        local = { path = "local" }
+        "#})?;
+    let local = context.temp_dir.child("local/pyproject.toml");
+    local.write_str(indoc! {r#"
+        [project]
+        name = "local"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        "#})?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    local.write_str(indoc! {r#"
+        [project]
+        name = "local"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        "#})?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+      × No solution found when resolving dependencies:
+      ╰─▶ Because the requested Python version (>=3.12) does not satisfy Python>=3.13 and local==0.1.0 depends on Python>=3.13, we can conclude that local==0.1.0 cannot be used.
+          And because only local==0.1.0 is available and your project depends on local, we can conclude that your project's requirements are unsatisfiable.
+
+    hint: The `requires-python` value (>=3.12) includes Python versions that are not supported by your dependencies (e.g., local==0.1.0 only supports >=3.13). Consider using a more restrictive `requires-python` value (like >=3.13).
+    ");
+
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--preview-features")
+        .arg("lock-without-metadata")
+        .arg("--locked")
+        .arg("--offline"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+      × No solution found when resolving dependencies:
+      ╰─▶ Because the requested Python version (>=3.12) does not satisfy Python>=3.13 and local==0.1.0 depends on Python>=3.13, we can conclude that local==0.1.0 cannot be used.
+          And because only local==0.1.0 is available and your project depends on local, we can conclude that your project's requirements are unsatisfiable.
+
+    hint: The `requires-python` value (>=3.12) includes Python versions that are not supported by your dependencies (e.g., local==0.1.0 only supports >=3.13). Consider using a more restrictive `requires-python` value (like >=3.13).
     ");
 
     Ok(())
