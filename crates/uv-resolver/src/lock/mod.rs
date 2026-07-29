@@ -2641,23 +2641,38 @@ impl Lock {
 
         let source_requirements = if allow_missing_package_metadata {
             let mut source_requirements = normalized_constraints.into_iter().collect::<Vec<_>>();
-            let conditional_source_names = source_requirements
+            let explicit_source_names = source_requirements
                 .iter()
                 .filter(|requirement| {
                     !matches!(requirement.source, RequirementSource::Registry { .. })
                         && !requirement.marker.is_true()
                 })
                 .map(|requirement| requirement.name.clone())
+                .chain(
+                    self.packages
+                        .iter()
+                        .filter(|package| match package.id.source {
+                            Source::Registry(_) => false,
+                            Source::Editable(_) | Source::Virtual(_) => {
+                                !packages.contains_key(&package.id.name)
+                            }
+                            Source::Git(..)
+                            | Source::Direct(..)
+                            | Source::Path(_)
+                            | Source::Directory(_) => true,
+                        })
+                        .map(|package| package.id.name.clone()),
+                )
                 .collect::<FxHashSet<_>>();
 
-            if !conditional_source_names.is_empty() {
+            if !explicit_source_names.is_empty() {
                 let source_markers = self.source_context_markers(packages);
 
                 for requirement in requirements
                     .iter()
                     .chain(dependency_groups.values().flatten())
                 {
-                    if conditional_source_names.contains(&requirement.name)
+                    if explicit_source_names.contains(&requirement.name)
                         && !matches!(requirement.source, RequirementSource::Registry { .. })
                     {
                         source_requirements.push(normalize_requirement(
@@ -2715,7 +2730,7 @@ impl Lock {
                         for requirement in dependency_overrides
                             .apply_for_package(override_context, iter::once(requirement))
                         {
-                            if !conditional_source_names.contains(&requirement.name)
+                            if !explicit_source_names.contains(&requirement.name)
                                 || matches!(requirement.source, RequirementSource::Registry { .. })
                                 || dependency_excludes
                                     .contains_for_package(package_context, &requirement.name)
