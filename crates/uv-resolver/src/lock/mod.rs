@@ -2583,15 +2583,20 @@ impl Lock {
                     ) {
                         if !conditional_source_names.contains(&requirement.name)
                             || matches!(requirement.source, RequirementSource::Registry { .. })
-                            || requirement.marker.top_level_extra().is_some()
                             || dependency_excludes
                                 .contains_for_package(package_context, &requirement.name)
                         {
                             continue;
                         }
 
+                        let mut requirement = requirement.into_owned();
+                        if let Some(extra) = requirement.marker.top_level_extra_name() {
+                            requirement.marker = requirement
+                                .marker
+                                .simplify_extras(slice::from_ref(extra.as_ref()));
+                        }
                         source_requirements.push(normalize_requirement(
-                            requirement.into_owned(),
+                            requirement,
                             root,
                             &self.requires_python,
                         )?);
