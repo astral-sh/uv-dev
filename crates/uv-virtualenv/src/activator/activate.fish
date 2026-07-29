@@ -115,12 +115,14 @@ if test -z "$VIRTUAL_ENV_DISABLE_PROMPT"
     functions -c fish_prompt _old_fish_prompt
 
     function fish_prompt
+        set -l old_status $status
         # Run the user's prompt first; it might depend on (pipe)status.
         set -l prompt (_old_fish_prompt)
 
         printf '(%s) ' $VIRTUAL_ENV_PROMPT
 
         string join -- \n $prompt # handle multi-line prompts
+        echo "exit $old_status" | .
     end
 
     set -gx _OLD_FISH_PROMPT_OVERRIDE "$VIRTUAL_ENV"
