@@ -154,6 +154,9 @@ jobs:
 
           original_path=$PATH
           original_directory=$PWD
+          original_prompt='original prompt'
+          unset PS1
+          PS1=$original_prompt
           SCRIPT_PATH=original-script-path
           export SCRIPT_PATH
 
@@ -175,13 +178,18 @@ jobs:
           test "$PWD" = "$original_directory"
           test "$VIRTUAL_ENV" = "$original_directory/$ACTIVATION_DIRECTORY"
           test "$SCRIPT_PATH" = original-script-path
+          test "$PS1" = "($VIRTUAL_ENV_PROMPT) $original_prompt"
 
           python -c 'import os, sys; assert os.path.realpath(sys.prefix) == os.path.realpath(os.environ["VIRTUAL_ENV"])'
+          if [ -n "${BASH_VERSION-}" ]; then
+            python -c 'import os; assert "PS1" not in os.environ'
+          fi
 
           deactivate
 
           test "$PWD" = "$original_directory"
           test "$PATH" = "$original_path"
+          test "$PS1" = "$original_prompt"
           test "$SCRIPT_PATH" = original-script-path
           test -z "${VIRTUAL_ENV-}"
           test -z "${VIRTUAL_ENV_PROMPT-}"
