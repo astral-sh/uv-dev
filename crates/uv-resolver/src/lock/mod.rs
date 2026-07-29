@@ -2276,6 +2276,111 @@ impl Lock {
         }
     }
 
+    /// Recover the marker environments in which locked packages and their extras are reachable.
+    fn source_context_markers<'lock>(
+        &'lock self,
+        packages: &BTreeMap<PackageName, WorkspaceMember>,
+    ) -> (
+        FxHashMap<&'lock PackageId, MarkerTree>,
+        FxHashMap<(&'lock PackageId, &'lock ExtraName), MarkerTree>,
+    ) {
+        let mut package_markers = FxHashMap::default();
+        let mut extra_markers = FxHashMap::default();
+        let mut pending = VecDeque::new();
+
+        for name in packages.keys() {
+            let Some(package) = self.find_by_name(name).ok().flatten() else {
+                continue;
+            };
+            package_markers.insert(&package.id, MarkerTree::TRUE);
+            pending.push_back(package);
+        }
+
+        while let Some(package) = pending.pop_front() {
+            let package_marker = package_markers
+                .get(&package.id)
+                .copied()
+                .unwrap_or(MarkerTree::FALSE);
+            let is_workspace_package = packages.contains_key(&package.id.name);
+            for dependency in &package.dependencies {
+                self.expand_source_context_marker(
+                    dependency,
+                    package_marker,
+                    &mut package_markers,
+                    &mut extra_markers,
+                    &mut pending,
+                );
+            }
+
+            for (extra, dependencies) in &package.optional_dependencies {
+                let extra_marker = if is_workspace_package {
+                    package_marker
+                } else {
+                    extra_markers
+                        .get(&(&package.id, extra))
+                        .copied()
+                        .unwrap_or(MarkerTree::FALSE)
+                };
+                for dependency in dependencies {
+                    self.expand_source_context_marker(
+                        dependency,
+                        extra_marker,
+                        &mut package_markers,
+                        &mut extra_markers,
+                        &mut pending,
+                    );
+                }
+            }
+
+            for dependency in package.dependency_groups.values().flatten() {
+                self.expand_source_context_marker(
+                    dependency,
+                    package_marker,
+                    &mut package_markers,
+                    &mut extra_markers,
+                    &mut pending,
+                );
+            }
+        }
+
+        (package_markers, extra_markers)
+    }
+
+    /// Expand reachability and extra activation across a single locked dependency edge.
+    fn expand_source_context_marker<'lock>(
+        &'lock self,
+        dependency: &'lock Dependency,
+        context_marker: MarkerTree,
+        package_markers: &mut FxHashMap<&'lock PackageId, MarkerTree>,
+        extra_markers: &mut FxHashMap<(&'lock PackageId, &'lock ExtraName), MarkerTree>,
+        pending: &mut VecDeque<&'lock Package>,
+    ) {
+        let marker = context_marker.and(dependency.complexified_marker.pep508());
+        if marker.is_false() {
+            return;
+        }
+
+        let package_marker = package_markers
+            .entry(&dependency.package_id)
+            .or_insert(MarkerTree::FALSE);
+        let expanded_marker = package_marker.or(marker);
+        if expanded_marker != *package_marker {
+            *package_marker = expanded_marker;
+            pending.push_back(self.find_by_id(&dependency.package_id));
+        }
+
+        for extra in &dependency.extra {
+            let extra_marker = extra_markers
+                .entry((&dependency.package_id, extra))
+                .or_insert(MarkerTree::FALSE);
+            let expanded_marker = extra_marker.or(marker);
+            if expanded_marker != *extra_marker {
+                *extra_marker = expanded_marker;
+                pending.push_back(self.find_by_id(&dependency.package_id));
+            }
+        }
+    }
+
     /// Check whether the lock matches the project structure, requirements and configuration.
     #[instrument(skip_all)]
     pub async fn satisfies<Context: BuildContext>(
@@ -2540,6 +2645,8 @@ impl Lock {
                 .collect::<FxHashSet<_>>();
 
             if !conditional_source_names.is_empty() {
+                let (package_markers, extra_markers) = self.source_context_markers(packages);
+
                 for requirement in requirements
                     .iter()
                     .chain(dependency_groups.values().flatten())
@@ -2615,6 +2722,24 @@ impl Lock {
                                 requirement.marker = requirement
                                     .marker
                                     .simplify_extras(slice::from_ref(extra.as_ref()));
+                                if !is_workspace_package {
+                                    requirement.marker = requirement.marker.and(
+                                        extra_markers
+                                            .get(&(&package.id, extra.as_ref()))
+                                            .copied()
+                                            .unwrap_or(MarkerTree::FALSE),
+                                    );
+                                }
+                            } else if !is_workspace_package {
+                                requirement.marker = requirement.marker.and(
+                                    package_markers
+                                        .get(&package.id)
+                                        .copied()
+                                        .unwrap_or(MarkerTree::FALSE),
+                                );
+                            }
+                            if requirement.marker.is_false() {
+                                continue;
                             }
                             source_requirements.push(normalize_requirement(
                                 requirement,
