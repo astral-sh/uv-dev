@@ -18770,6 +18770,75 @@ fn lock_metadata_free_extra_direct_url_constraint() -> Result<()> {
     Ok(())
 }
 
+/// Scoped package overrides do not replace direct sources declared in dependency groups.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_metadata_free_group_direct_url_scoped_override() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("extras/lock-without-metadata.toml");
+    let httpx_url = server.file_url("httpx-1.0.0-py3-none-any.whl");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["httpx ; sys_platform != 'darwin'", "member"]
+
+        [tool.uv]
+        constraint-dependencies = ["httpx @ {httpx_url} ; sys_platform == 'darwin'"]
+        override-dependencies = [
+            {{ package = {{ name = "member", version = "0.1.0" }}, dependencies = ["httpx==1.0.0"] }},
+        ]
+
+        [tool.uv.workspace]
+        members = ["member"]
+
+        [tool.uv.sources]
+        member = {{ workspace = true }}
+        "#})?;
+    context
+        .temp_dir
+        .child("member/pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "member"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [dependency-groups]
+        dev = ["httpx @ {httpx_url}"]
+        "#})?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--preview-features")
+        .arg("lock-without-metadata")
+        .arg("--index-url")
+        .arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--preview-features")
+        .arg("lock-without-metadata")
+        .arg("--locked")
+        .arg("--offline")
+        .arg("--no-cache")
+        .arg("--index-url")
+        .arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+
+    Ok(())
+}
+
 /// Requested target extras must cover the same marker environments as their declarations.
 #[cfg(feature = "test-universal")]
 #[test]
