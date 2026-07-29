@@ -2044,7 +2044,7 @@ impl Lock {
     /// Return a [`SatisfiesResult`] if the given requirements do not match the [`Package`] metadata.
     fn satisfies_requires_dist<'lock>(
         &self,
-        requires_dist: Box<[Requirement]>,
+        mut requires_dist: Box<[Requirement]>,
         provides_extra: &[ExtraName],
         dependency_groups: BTreeMap<GroupName, Box<[Requirement]>>,
         source_requirements: &Constraints,
@@ -2072,8 +2072,13 @@ impl Lock {
 
         // Special-case: if the version is dynamic, compare the flattened requirements.
         let flattened = if package.is_dynamic() || missing_metadata {
+            let requirements = if missing_metadata {
+                std::mem::take(&mut requires_dist)
+            } else {
+                requires_dist.clone()
+            };
             Some(
-                FlatRequiresDist::from_requirements(requires_dist.clone(), &package.id.name)
+                FlatRequiresDist::from_requirements(requirements, &package.id.name)
                     .into_iter()
                     .map(|requirement| {
                         normalize_requirement(requirement, root, &self.requires_python)
@@ -2529,7 +2534,12 @@ impl Lock {
         }
 
         let source_requirements = if allow_missing_package_metadata {
-            let mut source_requirements = normalized_constraints.into_iter().collect::<Vec<_>>();
+            let mut source_requirements = normalized_constraints
+                .into_iter()
+                .filter(|requirement| {
+                    !matches!(requirement.source, RequirementSource::Registry { .. })
+                })
+                .collect::<Vec<_>>();
             let conditional_source_names = source_requirements
                 .iter()
                 .filter(|requirement| {
@@ -7495,6 +7505,11 @@ fn simplify_dependency_marker(
     parent: UniversalMarker,
     marker: UniversalMarker,
 ) -> SimplifiedMarkerTree {
+    // An edge that only repeats its parent's PEP 508 marker has no additional condition.
+    if marker.combined() == parent.pep508() {
+        return environment;
+    }
+
     let parent =
         SimplifiedMarkerTree::new(requires_python, parent.pep508()).as_simplified_marker_tree();
     let marker =

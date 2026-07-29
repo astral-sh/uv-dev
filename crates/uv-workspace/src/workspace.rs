@@ -491,9 +491,9 @@ impl Workspace {
             // Refresh the workspace sources.
             let workspace_sources = workspace_pyproject_toml
                 .tool
-                .clone()
-                .and_then(|tool| tool.uv)
-                .and_then(|uv| uv.sources)
+                .as_ref()
+                .and_then(|tool| tool.uv.as_ref())
+                .and_then(|uv| uv.sources.clone())
                 .map(ToolUvSources::into_inner)
                 .unwrap_or_default();
 
@@ -1070,17 +1070,17 @@ impl Workspace {
 
         let workspace_sources = workspace_pyproject_toml
             .tool
-            .clone()
-            .and_then(|tool| tool.uv)
-            .and_then(|uv| uv.sources)
+            .as_ref()
+            .and_then(|tool| tool.uv.as_ref())
+            .and_then(|uv| uv.sources.clone())
             .map(ToolUvSources::into_inner)
             .unwrap_or_default();
 
         let workspace_indexes = workspace_pyproject_toml
             .tool
-            .clone()
-            .and_then(|tool| tool.uv)
-            .and_then(|uv| uv.index)
+            .as_ref()
+            .and_then(|tool| tool.uv.as_ref())
+            .and_then(|uv| uv.index.clone())
             .unwrap_or_default();
 
         let required_members = Self::collect_required_members(
@@ -1341,7 +1341,7 @@ impl Workspace {
                     },
                 ) {
                     return Err(WorkspaceError::from(WorkspaceErrorKind::DuplicatePackage {
-                        name: existing.project.name,
+                        name: existing.project.name.clone(),
                         first: existing.root.clone(),
                         second: member_root,
                     }));
@@ -1377,7 +1377,7 @@ pub struct WorkspaceMember {
     root: PathBuf,
     /// The `[project]` table, from the `pyproject.toml` of the project found at
     /// `<root>/pyproject.toml`.
-    project: Project,
+    project: Arc<Project>,
     /// The `pyproject.toml` of the project, found at `<root>/pyproject.toml`.
     pyproject_toml: PyProjectToml,
 }
@@ -1714,7 +1714,7 @@ impl ProjectWorkspace {
 
         let current_project = WorkspaceMember {
             root: project_path.to_path_buf(),
-            project: project.clone(),
+            project: Arc::new(project.clone()),
             pyproject_toml: project_pyproject_toml.clone(),
         };
 
@@ -2248,7 +2248,7 @@ mod tests {
     use std::str::FromStr;
     use std::sync::Arc;
 
-    use anyhow::Result;
+    use anyhow::{Context, Result};
     use assert_fs::fixture::ChildPath;
     use assert_fs::prelude::*;
     use insta::{assert_json_snapshot, assert_snapshot};
@@ -2683,6 +2683,29 @@ mod tests {
         .await?;
 
         assert!(Arc::ptr_eq(&root_workspace, &member_workspace));
+
+        let root_member = root_workspace
+            .packages()
+            .get(&PackageName::from_str("albatross")?)
+            .context("workspace root should be included as a member")?;
+        let root_project = root_workspace
+            .pyproject_toml()
+            .project
+            .as_ref()
+            .context("workspace root should define a project")?;
+        assert!(Arc::ptr_eq(root_project, &root_member.project));
+
+        let root_tool = root_workspace
+            .pyproject_toml()
+            .tool
+            .as_ref()
+            .context("workspace root should define tool settings")?;
+        let member_tool = root_member
+            .pyproject_toml()
+            .tool
+            .as_ref()
+            .context("workspace root member should share tool settings")?;
+        assert!(Arc::ptr_eq(root_tool, member_tool));
 
         root.child("pyproject.toml")
             .write_str("not valid toml >.<")?;
