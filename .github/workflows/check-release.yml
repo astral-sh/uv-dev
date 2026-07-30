@@ -21,6 +21,9 @@ jobs:
           enable-cache: true
 
       - name: Run dist plan
+        env:
+          # Retry more than default to reduce flakes in CI
+          UV_HTTP_RETRIES: 5
         run: |
           uv run --locked --only-dev dist plan --output-format=json > plan-dist-manifest.json
           echo "dist plan completed successfully"
