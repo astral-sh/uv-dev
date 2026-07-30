@@ -1,0 +1,1 @@
+{"author":{"id":"MDQ6VXNlcjI1ODY2MDE=","is_bot":false,"login":"zanieb","name":"Zanie Blue"},"body":"At some point, we should remove this as it has been superseded by `[dependency-groups]`","number":20838,"title":"Drop support for `[tool.uv.dev-dependencies]`","url":"https://github.com/astral-sh/uv/issues/20838"}

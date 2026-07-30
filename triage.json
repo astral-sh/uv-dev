@@ -1,0 +1,34 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 15406,
+        "title": "Deprecate `tool.uv.dev-dependencies`",
+        "url": "https://github.com/astral-sh/uv/issues/15406",
+        "state": "closed",
+        "reason": "astral-sh/uv#15406 is the direct precursor: it requested a warning that the field was deprecated and would be removed in a future breaking release. It completed the deprecation phase, while this issue tracks the distinct removal phase."
+      },
+      {
+        "kind": "pull_request",
+        "number": 8272,
+        "title": "Support for PEP 735",
+        "url": "https://github.com/astral-sh/uv/pull/8272",
+        "state": "merged",
+        "reason": "astral-sh/uv#8272 introduced the standardized `[dependency-groups]` replacement. Its future-work list explicitly included warning about `tool.uv.dev-dependencies`, confirming the intended migration path toward eventual removal."
+      },
+      {
+        "kind": "issue",
+        "number": 8090,
+        "title": "Support for PEP 735: Dependency Groups in `pyproject.toml`",
+        "url": "https://github.com/astral-sh/uv/issues/8090",
+        "state": "closed",
+        "reason": "astral-sh/uv#8090 tracked adoption of dependency groups and discussed whether the `dev` group would supersede `tool.uv.dev-dependencies`; it provides the canonical background for the replacement now motivating removal."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests using the exact identifiers `tool.uv.dev-dependencies` and `dev-dependencies`, combined with `dependency-groups`, PEP 735, removal, deprecation, warnings, legacy terminology, and dropping support. Inspected the strongest candidates and their comments and linked discussions, including astral-sh/uv#15406, astral-sh/uv#8090, astral-sh/uv#8272, and astral-sh/uv#15557. astral-sh/uv#5340 was ruled out as merely changing whether `uv init` emitted an empty legacy section, not removing support. astral-sh/uv#15557 was also not included because it primarily renamed internal concepts and only referenced the deprecation discussion."
+  },
+  "type": "enhancement",
+  "type_reason": "This requests an intentional breaking removal of legacy functionality now superseded by standardized dependency groups. It is not a duplicate of astral-sh/uv#15406: that issue completed the earlier deprecation-and-warning phase and explicitly deferred removal to a future release, which is the separate work tracked here.",
+  "summary": "The closest history is the completed deprecation request astral-sh/uv#15406 and the PEP 735 implementation and discussion in astral-sh/uv#8272 and astral-sh/uv#8090. No existing issue or pull request was found that already tracks the actual removal phase."
+}
