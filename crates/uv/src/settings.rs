@@ -48,7 +48,7 @@ use uv_install_wheel::LinkMode;
 use uv_normalize::{ExtraName, PackageName, PipGroupName};
 use uv_pep440::Version;
 use uv_pep508::{MarkerTree, RequirementOrigin};
-use uv_preview::Preview;
+use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::SupportedEnvironments;
 use uv_python::{Prefix, PythonDownloads, PythonPreference, PythonVersion, Target};
 use uv_redacted::DisplaySafeUrl;
@@ -712,6 +712,7 @@ impl RunSettings {
                     only_group,
                     all_groups,
                 },
+            no_workspace,
             module: _,
             editable,
             no_editable,
@@ -743,6 +744,10 @@ impl RunSettings {
             no_env_file,
             max_recursion_depth,
         } = args;
+
+        let workspace_isolation = uv_preview::is_enabled(PreviewFeature::WorkspaceIsolation);
+        let no_project = no_project || (no_workspace && !workspace_isolation);
+        let no_workspace = no_workspace && workspace_isolation && !no_project;
 
         let filesystem_install_mirrors = filesystem
             .clone()
@@ -803,7 +808,8 @@ impl RunSettings {
                 no_default_groups,
                 only_group,
                 all_groups,
-            ),
+            )
+            .with_workspace_groups(!no_workspace),
             editable: EditableMode::from_args(
                 flag(editable.into(), no_editable.into(), "editable")?,
                 no_editable_package,
@@ -1796,6 +1802,7 @@ impl SyncSettings {
                     only_group,
                     all_groups,
                 },
+            no_workspace,
             editable,
             no_editable,
             no_editable_package,
@@ -1826,6 +1833,11 @@ impl SyncSettings {
             no_check,
             output_format,
         } = args;
+
+        if no_workspace && !uv_preview::is_enabled(PreviewFeature::WorkspaceIsolation) {
+            bail!("`--no-workspace` requires `--preview-features workspace-isolation`");
+        }
+
         let filesystem_install_mirrors = filesystem
             .clone()
             .map(|fs| fs.install_mirrors.clone())
@@ -1933,7 +1945,8 @@ impl SyncSettings {
                 no_default_groups,
                 only_group,
                 all_groups,
-            ),
+            )
+            .with_workspace_groups(!no_workspace),
             editable: EditableMode::from_args(
                 flag(editable.into(), no_editable.into(), "editable")?,
                 no_editable_package,
@@ -2795,6 +2808,7 @@ impl ExportSettings {
                     only_group,
                     all_groups,
                 },
+            no_workspace,
             annotate,
             no_annotate,
             header,
@@ -2825,6 +2839,11 @@ impl ExportSettings {
             script,
             python,
         } = args;
+
+        if no_workspace && !uv_preview::is_enabled(PreviewFeature::WorkspaceIsolation) {
+            bail!("`--no-workspace` requires `--preview-features workspace-isolation`");
+        }
+
         let filesystem_install_mirrors = filesystem
             .clone()
             .map(|fs| fs.install_mirrors.clone())
@@ -2879,7 +2898,8 @@ impl ExportSettings {
                 no_default_groups,
                 only_group,
                 all_groups,
-            ),
+            )
+            .with_workspace_groups(!no_workspace),
             editable: EditableMode::from_args(
                 flag(editable.into(), no_editable.into(), "editable")?,
                 no_editable_package,

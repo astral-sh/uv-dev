@@ -6583,6 +6583,22 @@ fn run_target_workspace_discovery_workspace_group_defaults() -> Result<()> {
      + typing-extensions==4.10.0
     ");
 
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--isolated")
+        .arg("--preview-features")
+        .arg("workspace-isolation")
+        .arg("--no-workspace")
+        .arg("child/scripts/groups.py"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    installed: typing_extensions
+
+    ----- stderr -----
+    Resolved 6 packages in [TIME]
+    Installed 1 package in [TIME]
+     + typing-extensions==4.10.0
+    ");
+
     child.child("pyproject.toml").write_str(indoc! { r#"
         [project]
         name = "child"
@@ -7360,6 +7376,332 @@ fn run_target_workspace_discovery_virtual_workspace_group_commands() -> Result<(
 
     ----- stderr -----
     Resolved 6 packages in [TIME]
+    ");
+
+    Ok(())
+}
+
+/// Workspace isolation can be distinguished from disabling project discovery in preview.
+#[test]
+fn run_target_workspace_discovery_workspace_isolation_preview() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! { r#"
+            [project]
+            name = "root"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = ["iniconfig"]
+
+            [dependency-groups]
+            root-only = ["sniffio"]
+            shared = ["idna"]
+
+            [tool.uv]
+            default-groups = ["root-only"]
+
+            [tool.uv.workspace]
+            members = ["child"]
+            "#
+        })?;
+
+    let child = context.temp_dir.child("child");
+    child.child("pyproject.toml").write_str(indoc! { r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["typing-extensions"]
+
+        [dependency-groups]
+        member-only = ["packaging"]
+        shared = ["six"]
+
+        [tool.uv]
+        default-groups = ["member-only"]
+        "#
+    })?;
+
+    child
+        .child("scripts")
+        .child("groups.py")
+        .write_str(indoc! { r#"
+            import importlib.util
+
+            installed = [
+                package
+                for package in (
+                    "iniconfig",
+                    "typing_extensions",
+                    "sniffio",
+                    "packaging",
+                    "idna",
+                    "six",
+                )
+                if importlib.util.find_spec(package) is not None
+            ]
+            print(f"installed: {', '.join(installed)}")
+            "#
+        })?;
+
+    // Without preview, workspace isolation retains its historical project-disabling behavior.
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--no-project")
+        .arg("--no-workspace")
+        .arg("python")
+        .arg("-c")
+        .arg("print('no project')"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    no project
+    ");
+
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--no_workspace")
+        .arg("python")
+        .arg("-c")
+        .arg("print('legacy alias')"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    legacy alias
+    ");
+
+    // Commands that did not previously accept workspace isolation require explicit preview.
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--package")
+        .arg("child")
+        .arg("--no-workspace"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: `--no-workspace` requires `--preview-features workspace-isolation`
+    ");
+
+    uv_snapshot!(context.filters(), context.export()
+        .args(["--no-header", "--no-hashes", "--no-annotate"])
+        .arg("--package")
+        .arg("child")
+        .arg("--no-workspace"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: `--no-workspace` requires `--preview-features workspace-isolation`
+    ");
+
+    // Preview distinguishes workspace isolation without making the existing flags conflict.
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--preview-features")
+        .arg("workspace-isolation")
+        .arg("--no-project")
+        .arg("--no-workspace")
+        .arg("python")
+        .arg("-c")
+        .arg("print('no project')"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    no project
+    ");
+
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--isolated")
+        .arg("--preview-features")
+        .arg("workspace-isolation")
+        .arg("--no-workspace")
+        .arg("--only-group")
+        .arg("root-only")
+        .arg("child/scripts/groups.py"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 8 packages in [TIME]
+    error: Group `root-only` is not defined in the project's `dependency-groups` table
+    ");
+
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--isolated")
+        .arg("--preview-features")
+        .arg("workspace-isolation")
+        .arg("--no-workspace")
+        .arg("--only-group")
+        .arg("shared")
+        .arg("child/scripts/groups.py"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    installed: six
+
+    ----- stderr -----
+    Resolved 8 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + six==1.16.0
+    ");
+
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--isolated")
+        .arg("--preview-features")
+        .arg("workspace-isolation")
+        .arg("--no-workspace")
+        .arg("--all-groups")
+        .arg("child/scripts/groups.py"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    installed: typing_extensions, packaging, six
+
+    ----- stderr -----
+    Resolved 8 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 3 packages in [TIME]
+     + packaging==24.0
+     + six==1.16.0
+     + typing-extensions==4.10.0
+    ");
+
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--package")
+        .arg("child")
+        .arg("--preview-features")
+        .arg("workspace-isolation")
+        .arg("--no-workspace")
+        .arg("--only-group")
+        .arg("root-only"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 8 packages in [TIME]
+    error: Group `root-only` is not defined in the project's `dependency-groups` table
+    ");
+
+    uv_snapshot!(context.filters(), context.export()
+        .args(["--no-header", "--no-hashes", "--no-annotate"])
+        .arg("--package")
+        .arg("child")
+        .arg("--preview-features")
+        .arg("workspace-isolation")
+        .arg("--no-workspace")
+        .arg("--only-group")
+        .arg("root-only"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 8 packages in [TIME]
+    error: Group `root-only` is not defined in the project's `dependency-groups` table
+    ");
+
+    let context = uv_test::test_context!("3.12");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! { r#"
+            [dependency-groups]
+            root-only = ["sniffio"]
+            shared = ["idna"]
+
+            [tool.uv]
+            default-groups = ["root-only"]
+
+            [tool.uv.workspace]
+            members = ["child"]
+            "#
+        })?;
+
+    let child = context.temp_dir.child("child");
+    child.child("pyproject.toml").write_str(indoc! { r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["typing-extensions"]
+
+        [dependency-groups]
+        member-only = ["packaging"]
+        shared = ["six"]
+
+        [tool.uv]
+        default-groups = ["member-only"]
+        "#
+    })?;
+
+    child
+        .child("scripts")
+        .child("groups.py")
+        .write_str(indoc! { r#"
+            import importlib.util
+
+            installed = [
+                package
+                for package in (
+                    "iniconfig",
+                    "typing_extensions",
+                    "sniffio",
+                    "packaging",
+                    "idna",
+                    "six",
+                )
+                if importlib.util.find_spec(package) is not None
+            ]
+            print(f"installed: {', '.join(installed)}")
+            "#
+        })?;
+
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--isolated")
+        .arg("--preview-features")
+        .arg("workspace-isolation")
+        .arg("--no-workspace")
+        .arg("--only-group")
+        .arg("root-only")
+        .arg("child/scripts/groups.py"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 6 packages in [TIME]
+    error: Group `root-only` is not defined in the project's `dependency-groups` table
+    ");
+
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--isolated")
+        .arg("--preview-features")
+        .arg("workspace-isolation")
+        .arg("--no-workspace")
+        .arg("--only-group")
+        .arg("shared")
+        .arg("child/scripts/groups.py"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    installed: six
+
+    ----- stderr -----
+    Resolved 6 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + six==1.16.0
+    ");
+
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--package")
+        .arg("child")
+        .arg("--preview-features")
+        .arg("workspace-isolation")
+        .arg("--no-workspace")
+        .arg("--only-group")
+        .arg("root-only"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 6 packages in [TIME]
+    error: Group `root-only` is not defined in the project's `dependency-groups` table
+    ");
+
+    uv_snapshot!(context.filters(), context.export()
+        .args(["--no-header", "--no-hashes", "--no-annotate"])
+        .arg("--package")
+        .arg("child")
+        .arg("--preview-features")
+        .arg("workspace-isolation")
+        .arg("--no-workspace")
+        .arg("--only-group")
+        .arg("root-only"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 6 packages in [TIME]
+    error: Group `root-only` is not defined in the project's `dependency-groups` table
     ");
 
     Ok(())

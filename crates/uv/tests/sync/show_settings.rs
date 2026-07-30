@@ -3390,6 +3390,7 @@ fn preview_features() {
     +            IndexHashAlgorithm,
     +            LockfileFormatCheck,
     +            LockWithoutMetadata,
+    +            WorkspaceIsolation,
     +        ],
          },
          python_preference: Managed,
