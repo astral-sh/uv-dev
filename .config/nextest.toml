@@ -37,6 +37,10 @@ test-group = 'serial'
 filter = 'package(uv-keyring)'
 test-group = 'serial'
 
+[[profile.ci-linux.overrides]]
+filter = 'test(/^pip_install::install_git_public_https_exact_commit$/)'
+retries = 1
+
 [[profile.ci-windows.overrides]]
 platform = 'cfg(target_os = "windows")'
 filter = 'test(/^python_install::/) + test(/^python_update::/) + test(/^python_find::/)'
