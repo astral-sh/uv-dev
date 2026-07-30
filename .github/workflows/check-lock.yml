@@ -13,6 +13,13 @@ jobs:
         with:
           persist-credentials: false
       - name: "Install uv"
+        id: setup-uv
+        continue-on-error: true
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.5"
+      - name: "Retry uv installation"
+        if: steps.setup-uv.outcome == 'failure'
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: "0.12.5"
