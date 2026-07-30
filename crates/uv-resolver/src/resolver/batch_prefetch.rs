@@ -8,6 +8,7 @@ use tokio::sync::mpsc::Sender;
 use tracing::{debug, trace};
 
 use crate::candidate_selector::CandidateSelector;
+use crate::prerelease::PrereleaseSelection;
 use crate::pubgrub::{PubGrubPackage, PubGrubPackageInner, Range};
 use crate::resolver::Request;
 use crate::{
@@ -222,15 +223,25 @@ impl BatchPrefetcherRunner {
         };
 
         let mut prefetch_count = 0;
+        let prefetch_stable_only = selector.prerelease_strategy().selection(name, env)
+            == PrereleaseSelection::PreferStable
+            && version_map
+                .iter()
+                .any(|version_map| version_map.versions().any(Version::is_stable));
+        let select_candidate = |range: &Range<Version>| {
+            if prefetch_stable_only {
+                selector.select_no_preference_stable(name, range, version_map, env)
+            } else {
+                selector.select_no_preference(name, range, version_map, env)
+            }
+        };
         for _ in 0..total_prefetch {
             let candidate = match phase {
                 BatchPrefetchStrategy::Compatible {
                     compatible,
                     previous,
                 } => {
-                    if let Some(candidate) =
-                        selector.select_no_preference(name, &compatible, version_map, env)
-                    {
+                    if let Some(candidate) = select_candidate(&compatible) {
                         let compatible = compatible.intersection(
                             &Range::singleton(candidate.version().clone()).complement(),
                         );
@@ -263,9 +274,7 @@ impl BatchPrefetcherRunner {
                             }
                         };
                     }
-                    if let Some(candidate) =
-                        selector.select_no_preference(name, &range, version_map, env)
-                    {
+                    if let Some(candidate) = select_candidate(&range) {
                         phase = BatchPrefetchStrategy::InOrder {
                             previous: candidate.version().clone(),
                         };
