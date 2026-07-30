@@ -176,7 +176,8 @@ jobs:
         run: rustup toolchain install 1.97.1
       - name: "Install Hawk"
         run: |
-          curl --proto '=https' --tlsv1.2 -LsSf \
+          set -o pipefail
+          curl --proto '=https' --tlsv1.2 -LsSf --retry 5 --retry-all-errors \
             "https://github.com/astral-sh/hawk/releases/download/${HAWK_VERSION}/cargo-hawk-installer.sh" | sh
       - name: "Hawk"
         run: cargo +1.97.1 hawk check --target-dir target/hawk -D warnings
