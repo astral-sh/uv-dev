@@ -157,6 +157,7 @@ mod tests {
         - `venv-safe-clear`: Prevents `uv venv --clear` from clearing a directory that does not contain a `pyvenv.cfg` file
           unless `--force` is provided.
         - `workspace-dir`: Allows using `uv workspace dir`.
+        - `workspace-isolation`: Distinguishes workspace isolation from disabling project discovery entirely.
         - `workspace-list`: Allows using `uv workspace list`.
         - `workspace-list-scripts`: Allows using `uv workspace list --scripts`.
         - `workspace-metadata`: Allows using `uv workspace metadata`.

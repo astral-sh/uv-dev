@@ -327,6 +327,8 @@ pub enum PreviewFeature {
     LockfileFormatCheck,
     /// Omit `package.metadata` from `uv.lock`.
     LockWithoutMetadata,
+    /// Distinguishes workspace isolation from disabling project discovery entirely.
+    WorkspaceIsolation,
 }
 
 impl Display for PreviewFeature {

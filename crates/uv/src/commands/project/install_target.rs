@@ -158,6 +158,10 @@ impl<'lock> Installable<'lock> for InstallTarget<'lock> {
             return true;
         }
 
+        if !groups.includes_workspace_groups() {
+            return false;
+        }
+
         !workspace.packages().get(*name).is_some_and(|member| {
             let pyproject = member.pyproject_toml();
             pyproject
@@ -556,9 +560,10 @@ impl<'lock> InstallTarget<'lock> {
 
                 // Groups defined directly on a non-project workspace root are not members.
                 let include_workspace_groups = match self {
-                    Self::Project { workspace, .. } | Self::Projects { workspace, .. } => {
-                        workspace.is_non_project()
+                    Self::Project { workspace, .. } => {
+                        workspace.is_non_project() && groups.includes_workspace_groups()
                     }
+                    Self::Projects { workspace, .. } => workspace.is_non_project(),
                     Self::Workspace { .. } | Self::NonProjectWorkspace { .. } => true,
                     Self::Script { .. } => false,
                 };
