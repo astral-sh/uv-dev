@@ -109,7 +109,10 @@ fn handle_request(
         return match file.bytes() {
             Ok(bytes) => ResponseTemplate::new(200)
                 .set_body_raw(bytes.to_vec(), content_type_for_filename(filename)),
-            Err(error) => ResponseTemplate::new(500).set_body_string(format!("{error:#}")),
+            Err(error) => {
+                eprintln!("failed to load vendored artifact `{filename}`: {error:#}");
+                ResponseTemplate::new(500).set_body_string(format!("{error:#}"))
+            }
         };
     }
 
