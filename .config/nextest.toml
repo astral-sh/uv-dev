@@ -38,6 +38,10 @@ filter = 'package(uv-keyring)'
 test-group = 'serial'
 
 [[profile.ci-windows.overrides]]
+filter = 'test(/^pip_sync::sanitize$/) + test(/^pip_compile::unnamed_https_requirement$/)'
+retries = 2
+
+[[profile.ci-windows.overrides]]
 platform = 'cfg(target_os = "windows")'
 filter = 'test(/^python_install::/) + test(/^python_update::/) + test(/^python_find::/)'
 test-group = 'io-bound'
