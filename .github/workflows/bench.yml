@@ -41,6 +41,7 @@ jobs:
 
       - name: "Install requirements and prime cache"
         run: |
+          sudo find /etc/apt/sources.list.d -maxdepth 1 -type f -iname '*twingate*' -delete
           sudo apt-get update
           sudo apt-get install -y libsasl2-dev libldap2-dev libkrb5-dev
           cargo run --bin uv -- venv --cache-dir .cache
@@ -119,6 +120,7 @@ jobs:
 
       - name: "Install requirements and prime cache"
         run: |
+          sudo find /etc/apt/sources.list.d -maxdepth 1 -type f -iname '*twingate*' -delete
           sudo apt-get update
           sudo apt-get install -y libsasl2-dev libldap2-dev libkrb5-dev
           cargo run --bin uv -- venv --cache-dir .cache
