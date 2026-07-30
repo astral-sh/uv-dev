@@ -1,0 +1,18 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 20839,
+        "title": "Fix conflicting flag diagnostics for `--[no-]upgrade` and `--[no-]refresh`",
+        "url": "https://github.com/astral-sh/uv/pull/20839",
+        "state": "merged",
+        "reason": "astral-sh/uv#20839 fixes the same diagnostic helper when conventional positive/negative flag pairs were passed the negative name. Its review explicitly identifies the distinct `--exact`/`--inexact` case and a maintainer says it should be handled separately; the merged patch does not change those three call sites."
+      }
+    ],
+    "search_scope": "Searched open and closed issues plus open, closed, and merged pull requests for the literal fragments `--no-inexact`, `exact`/`inexact`, `cannot be used together`, `conflicting flag diagnostics`, and `no-no-upgrade`; also searched conceptually for misleading boolean-flag conflict diagnostics, aliases, and flag-pair errors. Inspected astral-sh/uv#20839, its review thread and patch, astral-sh/uv#20841's timeline, and the relevant source call sites. Fix-oriented searches found no existing issue or pull request tracking astral-sh/uv#20841. astral-sh/uv#13052 was inspected as a plausible `--exact` result but ruled out because it requests configuration for making exact sync the default, not correction of conflict diagnostics."
+  },
+  "type": "bug",
+  "type_reason": "The repository source confirms that three `flag(exact, inexact, \"inexact\")` calls feed a helper that constructs the pair as `--{name}` and `--no-{name}`, producing the nonexistent `--no-inexact` instead of naming `--exact` and `--inexact`. This is incorrect user-facing output. It is not a duplicate of astral-sh/uv#20839 because that merged change only fixes conventional positive/negative pairs and its review explicitly defers this distinct case to follow-up work.",
+  "summary": "The closest result is merged astral-sh/uv#20839, which addresses the same helper's conflict diagnostics for conventional flag pairs but leaves the distinct `--exact`/`--inexact` call sites unchanged. No existing tracker or fix for this specific bug was found."
+}
