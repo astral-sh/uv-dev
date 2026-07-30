@@ -16,6 +16,7 @@ use uv_fs::rename_with_retry;
 use uv_pypi_types::{HashAlgorithm, HashDigest};
 
 use crate::error::Error;
+use crate::hash::ArtifactHashPolicy;
 
 /// An extracted source archive that satisfies the checks requested during extraction.
 ///
@@ -45,13 +46,14 @@ enum ArchiveOrigin {
 }
 
 impl ValidatedSourceArchive {
-    /// Download and extract a source distribution, computing its hashes and checking its size.
+    /// Download and extract a source distribution, checking its size and cache hash requirements.
     pub(super) async fn extract_http(
         response: Response,
         source: &BuildableSource<'_>,
         ext: SourceDistExtension,
         cache: &Cache,
         algorithms: &[HashAlgorithm],
+        policy: ArtifactHashPolicy<'_>,
     ) -> Result<Self, Error> {
         let temp_dir = tempfile::tempdir_in(cache.bucket(CacheBucket::SourceDistributions))
             .map_err(Error::CacheWrite)?;
@@ -68,7 +70,7 @@ impl ValidatedSourceArchive {
             BuildableSource::Dist(SourceDist::DirectUrl(dist)) => dist.size(),
             _ => None,
         };
-        Self::extract(
+        let archive = Self::extract(
             reader.compat(),
             ext,
             temp_dir,
@@ -78,7 +80,9 @@ impl ValidatedSourceArchive {
             source.to_string(),
             || Some(info_span!("download_source_dist", source_dist = %source)),
         )
-        .await
+        .await?;
+        policy.validate_download(source, &archive.metadata.hashes)?;
+        Ok(archive)
     }
 
     /// Extract a local source archive and compute its requested hashes.
