@@ -5,6 +5,13 @@
     feature = "test-pypi",
     feature = "test-universal"
 ))]
+mod lock_cache;
+
+#[cfg(all(
+    feature = "test-python",
+    feature = "test-pypi",
+    feature = "test-universal"
+))]
 mod lock_conflict;
 
 #[cfg(all(
