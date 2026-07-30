@@ -800,7 +800,8 @@ impl RunSettings {
                 no_default_groups,
                 only_group,
                 all_groups,
-            ),
+            )
+            .with_workspace_groups(false),
             editable: EditableMode::from_args(
                 flag(editable.into(), no_editable.into(), "editable")?,
                 no_editable_package,
@@ -1926,7 +1927,8 @@ impl SyncSettings {
                 no_default_groups,
                 only_group,
                 all_groups,
-            ),
+            )
+            .with_workspace_groups(false),
             editable: EditableMode::from_args(
                 flag(editable.into(), no_editable.into(), "editable")?,
                 no_editable_package,
@@ -2876,7 +2878,8 @@ impl ExportSettings {
                 no_default_groups,
                 only_group,
                 all_groups,
-            ),
+            )
+            .with_workspace_groups(false),
             editable: EditableMode::from_args(
                 flag(editable.into(), no_editable.into(), "editable")?,
                 no_editable_package,

@@ -122,6 +122,12 @@ pub(crate) async fn run(
     max_recursion_depth: u32,
     malware_settings: MalwareCheckSettings,
 ) -> anyhow::Result<ExitStatus> {
+    // Root dependency groups are inherited only when a script target selected its project.
+    let groups = groups.with_workspace_groups(matches!(
+        command.as_ref(),
+        Some(RunCommand::PythonScript(..) | RunCommand::PythonGuiScript(..))
+    ));
+
     // Check if max recursion depth was exceeded. This most commonly happens
     // for scripts with a shebang line like `#!/usr/bin/env -S uv run`, so try
     // to provide guidance for that case.
