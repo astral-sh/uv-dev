@@ -99,7 +99,6 @@ jobs:
     timeout-minutes: 10
     name: "python3.6 on debian buster"
     runs-on: ubuntu-latest
-    container: python:3.6-buster
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -110,14 +109,22 @@ jobs:
         with:
           name: uv-linux-musl-${{ inputs.sha }}
 
-      - name: "Prepare binary"
-        run: chmod +x ./uv
-
-      - name: "Print Python path"
-        run: echo $(which python3)
+      - name: "Pull Python 3.6 image"
+        run: |
+          for attempt in {1..5}; do
+            if docker pull python:3.6-buster; then
+              break
+            fi
+            if [ "$attempt" -eq 5 ]; then
+              exit 1
+            fi
+            sleep "$((attempt * 5))"
+          done
 
       - name: "Validate global Python install"
-        run: python3 scripts/check_system_python.py --uv ./uv
+        run: |
+          docker run --rm --volume "$PWD:/work" --workdir /work python:3.6-buster \
+            sh -c 'chmod +x ./uv && command -v python3 && python3 scripts/check_system_python.py --uv ./uv'
 
   system-test-python-37:
     timeout-minutes: 10
