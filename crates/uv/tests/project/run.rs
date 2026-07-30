@@ -7312,7 +7312,68 @@ fn run_target_workspace_discovery_virtual_workspace_group_commands() -> Result<(
 /// Workspace group inheritance can be disabled without changing the selected project.
 #[test]
 fn run_target_workspace_discovery_workspace_group_opt_out() -> Result<()> {
-    let context = setup_target_workspace_group_context(true)?;
+    let context = uv_test::test_context!("3.12");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! { r#"
+            [project]
+            name = "root"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = ["iniconfig"]
+
+            [dependency-groups]
+            root-only = ["sniffio"]
+            shared = ["idna"]
+
+            [tool.uv]
+            default-groups = ["root-only"]
+
+            [tool.uv.workspace]
+            members = ["child"]
+            "#
+        })?;
+
+    let child = context.temp_dir.child("child");
+    child.child("pyproject.toml").write_str(indoc! { r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["typing-extensions"]
+
+        [dependency-groups]
+        member-only = ["packaging"]
+        shared = ["six"]
+
+        [tool.uv]
+        default-groups = ["member-only"]
+        "#
+    })?;
+
+    child
+        .child("scripts")
+        .child("groups.py")
+        .write_str(indoc! { r#"
+            import importlib.util
+
+            installed = [
+                package
+                for package in (
+                    "iniconfig",
+                    "typing_extensions",
+                    "sniffio",
+                    "packaging",
+                    "idna",
+                    "six",
+                )
+                if importlib.util.find_spec(package) is not None
+            ]
+            print(f"installed: {', '.join(installed)}")
+            "#
+        })?;
 
     uv_snapshot!(context.filters(), context.run()
         .arg("--isolated")
@@ -7386,7 +7447,62 @@ fn run_target_workspace_discovery_workspace_group_opt_out() -> Result<()> {
     error: Group `root-only` is not defined in the project's `dependency-groups` table
     ");
 
-    let context = setup_target_workspace_group_context(false)?;
+    let context = uv_test::test_context!("3.12");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! { r#"
+            [dependency-groups]
+            root-only = ["sniffio"]
+            shared = ["idna"]
+
+            [tool.uv]
+            default-groups = ["root-only"]
+
+            [tool.uv.workspace]
+            members = ["child"]
+            "#
+        })?;
+
+    let child = context.temp_dir.child("child");
+    child.child("pyproject.toml").write_str(indoc! { r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["typing-extensions"]
+
+        [dependency-groups]
+        member-only = ["packaging"]
+        shared = ["six"]
+
+        [tool.uv]
+        default-groups = ["member-only"]
+        "#
+    })?;
+
+    child
+        .child("scripts")
+        .child("groups.py")
+        .write_str(indoc! { r#"
+            import importlib.util
+
+            installed = [
+                package
+                for package in (
+                    "iniconfig",
+                    "typing_extensions",
+                    "sniffio",
+                    "packaging",
+                    "idna",
+                    "six",
+                )
+                if importlib.util.find_spec(package) is not None
+            ]
+            print(f"installed: {', '.join(installed)}")
+            "#
+        })?;
 
     uv_snapshot!(context.filters(), context.run()
         .arg("--isolated")
