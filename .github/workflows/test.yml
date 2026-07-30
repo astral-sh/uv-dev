@@ -156,6 +156,13 @@ jobs:
       - name: "Install Rust toolchain"
         run: rustup toolchain install --profile minimal
 
+      - name: "Check macOS SDK"
+        run: |
+          sdk="$(xcrun --sdk macosx --show-sdk-path)"
+          if ! head -c 1 "$sdk/usr/lib/system/libdyld.tbd" > /dev/null; then
+            sudo xcode-select --switch /Library/Developer/CommandLineTools
+          fi
+
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         id: rust-cache
         with:
