@@ -435,6 +435,26 @@ impl CandidateSelector {
         )
     }
 
+    /// Select a stable candidate without considering pre-release fallbacks.
+    ///
+    /// Speculative prefetching uses this when stable releases are available to avoid exploring
+    /// pre-release candidates that the resolver is not currently trying to select.
+    pub(crate) fn select_no_preference_stable<'a>(
+        &'a self,
+        package_name: &'a PackageName,
+        range: &Range<Version>,
+        version_maps: &'a [VersionMap],
+        env: &ResolverEnvironment,
+    ) -> Option<Candidate<'a>> {
+        self.select_no_preference_from(
+            package_name,
+            range,
+            version_maps,
+            PrereleaseCandidates::Stable,
+            env,
+        )
+    }
+
     fn select_no_preference_with<'a>(
         &'a self,
         package_name: &'a PackageName,
