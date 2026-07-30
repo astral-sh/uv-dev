@@ -220,14 +220,21 @@ def run_test(
 
         result = None
         try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                check=False,
-                env=env,
-            )
+            for attempt in range(2):
+                try:
+                    result = subprocess.run(
+                        cmd,
+                        capture_output=True,
+                        text=True,
+                        timeout=timeout,
+                        check=False,
+                        env=env,
+                    )
+                    break
+                except subprocess.TimeoutExpired:
+                    if attempt == 1:
+                        raise
+                    print(f"{registry_name}: timed out after {timeout}s; retrying")
 
             if result.returncode != 0:
                 error_msg = result.stderr.strip() if result.stderr else "Unknown error"
