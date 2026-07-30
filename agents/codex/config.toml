@@ -67,6 +67,27 @@ enabled = true
 "api.github.com" = "allow"
 "github.com" = "allow"
 
+[permissions.pull-request-ci-repair]
+description = "Pull request CI repair with workspace and dependency-registry access."
+extends = ":workspace"
+
+[permissions.pull-request-ci-repair.filesystem]
+":tmpdir" = "write"
+
+[permissions.pull-request-ci-repair.network]
+enabled = true
+
+[permissions.pull-request-ci-repair.network.domains]
+"api.github.com" = "allow"
+"crates.io" = "allow"
+"files.pythonhosted.org" = "allow"
+"github.com" = "allow"
+"index.crates.io" = "allow"
+"pypi.org" = "allow"
+"registry.npmjs.org" = "allow"
+"static.crates.io" = "allow"
+"static.rust-lang.org" = "allow"
+
 [permissions.pull-request-rebase]
 description = "Pull request rebase with workspace and Git metadata access."
 extends = ":workspace"
