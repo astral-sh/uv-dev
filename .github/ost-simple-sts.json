@@ -133,14 +133,6 @@
       "caller": "uv-dev",
       "environment": "automations",
       "caller_workflow": "pull-request-conflicts.yml",
-      "on": ["push"],
-      "permissions": { "pull_requests": "read" },
-      "target": "uv"
-    },
-    {
-      "caller": "uv-dev",
-      "environment": "automations",
-      "caller_workflow": "pull-request-conflicts.yml",
       "reusable_workflow": "rebase-conflicted-pull-request.yml",
       "on": ["push", "workflow_dispatch"],
       "permissions": { "contents": "write", "workflows": "write" },
