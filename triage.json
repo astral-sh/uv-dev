@@ -1,0 +1,42 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 20792,
+        "title": "Windows antivirus/EDR issues",
+        "url": "https://github.com/astral-sh/uv/issues/20792",
+        "state": "open",
+        "reason": "astral-sh/uv#20792 is the open meta issue for Windows AV/EDR interference, explicitly including uv being quarantined or deleted. It is the current canonical place for recurring antivirus reports such as this one."
+      },
+      {
+        "kind": "issue",
+        "number": 16518,
+        "title": "Windows antivirus flags uvw as trojan",
+        "url": "https://github.com/astral-sh/uv/issues/16518",
+        "state": "closed",
+        "reason": "This is a particularly close historical match: VirusTotal and company antivirus scanners flagged uvw from the Windows release archive. A maintainer identified those detections as false positives."
+      },
+      {
+        "kind": "issue",
+        "number": 17344,
+        "title": "The latest version 0.9.22 doesn't work on Windows",
+        "url": "https://github.com/astral-sh/uv/issues/17344",
+        "state": "closed",
+        "reason": "This prior version-specific incident prevented Windows installation and specifically involved VirusTotal and Defender flagging uvw.exe and uvx.exe. Maintainers documented that the launchers invoke uv, confirmed the public release pipeline, and treated the detections as transient false positives."
+      },
+      {
+        "kind": "pull_request",
+        "number": 18280,
+        "title": "Add code signing of release binaries via `cargo-code-sign`",
+        "url": "https://github.com/astral-sh/uv/pull/18280",
+        "state": "open",
+        "reason": "This existing pull request implements Windows and macOS release-binary signing, the mitigation tracked in astral-sh/uv#10336 for recurring antivirus reports. It remains open and does not yet configure production release credentials."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests using literal terms including uvw.exe, uvw, VirusTotal, malicious, malware, antivirus, antimalware, Defender, trojan, and quarantine. Conceptual searches covered false positives, AV/EDR interference, unsigned binaries, executable signing, and Windows release artifacts; version-specific searches examined earlier detections and signing work. Strong candidates and their comment/reference chains were inspected, including astral-sh/uv#15011, astral-sh/uv#17417, astral-sh/uv#17403, astral-sh/uv#17344, astral-sh/uv#10336, and astral-sh/uv#18280. astral-sh/uv#10288 was ruled adjacent rather than equivalent because it concerns launch latency caused by AV scanning, not malware classification or blocked installation."
+  },
+  "type": "duplicate",
+  "type_reason": "astral-sh/uv#20792 already openly centralizes Windows AV/EDR incidents, explicitly including quarantine or deletion of uv executables. The new report supplies a version-specific uvw.exe/VirusTotal occurrence but does not establish a distinct uv defect or a regression from a repository fix; prior maintainers characterized closely matching detections as antivirus false positives. Discussion can therefore be centralized in the open tracker.",
+  "summary": "The report is another instance of the recurring Windows antivirus classification tracked by astral-sh/uv#20792. Historical reports closely match both VirusTotal detection of uvw and version-specific installation blocking, while astral-sh/uv#18280 is the open signing work intended to mitigate such reports."
+}
