@@ -1,0 +1,34 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 17902,
+        "title": "Extend uv_build direct build compatibility",
+        "url": "https://github.com/astral-sh/uv/pull/17902",
+        "state": "merged",
+        "reason": "astral-sh/uv#17902 deliberately expanded the direct-build fast path across uv_build versions and introduced the known-compatible-version test implicated here. It is implementation history, not an existing tracker for disregarding the declared specifier or hash constraints."
+      },
+      {
+        "kind": "issue",
+        "number": 18283,
+        "title": "Is build-constraint-dependencies working in uv 0.10.8?",
+        "url": "https://github.com/astral-sh/uv/issues/18283",
+        "state": "closed",
+        "reason": "astral-sh/uv#18283 also reported uv build ignoring build constraints, but specifically workspace-level build-constraint-dependencies for ordinary PEP 517 backends. It did not concern bundled uv_build, declared version specifiers, or --require-hashes."
+      },
+      {
+        "kind": "pull_request",
+        "number": 18350,
+        "title": "Respect build constraints for workspace members",
+        "url": "https://github.com/astral-sh/uv/pull/18350",
+        "state": "merged",
+        "reason": "astral-sh/uv#18350 fixed astral-sh/uv#18283's separate workspace propagation bug. It is relevant historical evidence that ignored uv build constraints are incorrect, but it does not address the uv_build direct path reported here."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests separately for the exact diagnostics and identifiers (bundled uv_build backend, known compatible range, force-pep517, build-system.requires), version pins/specifiers, build constraints, require-hashes/hash mismatch, direct/fast builds, and reproducibility/Generator differences. Inspected candidate discussions and fix chains. astral-sh/uv#18894 was ruled out because it requests generation of build-constraint lock data rather than enforcement; astral-sh/uv#13096 concerns nondeterministic temporary paths, not backend selection. Repository source confirms the direct-build eligibility check accepts a requirement when any hard-coded compatible version satisfies it, while uv build then selects the bundled backend without a PEP 517 dependency installation."
+  },
+  "type": "bug",
+  "type_reason": "This is a source-backed correctness problem: the current direct-build check can approve a declared specifier based on a different known-compatible version instead of requiring the bundled running version to satisfy it, after which the fast path bypasses build dependency resolution and its constraint/hash verification. No open issue or pull request already tracks this same uv_build fast-path defect, and the historical constraint bug had a different cause and scope, so this is not a duplicate.",
+  "summary": "No existing tracker matches both reported failures. The closest history is astral-sh/uv#17902's cross-version direct-build compatibility mechanism and the distinct, already-fixed build-constraint propagation bug in astral-sh/uv#18283 and astral-sh/uv#18350."
+}
