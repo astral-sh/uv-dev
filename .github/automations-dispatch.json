@@ -65,6 +65,19 @@
     {
       "repository": "uv-dev",
       "on": {
+        "pull_request": ["synchronize"]
+      },
+      "conditions": {
+        "/sender/login": "astral-automations-bot[bot]"
+      },
+      "workflow": "promote-pull-request.yml",
+      "inputs": {
+        "promoter": "/sender/login"
+      }
+    },
+    {
+      "repository": "uv-dev",
+      "on": {
         "pull_request": ["edited"]
       },
       "conditions": {
