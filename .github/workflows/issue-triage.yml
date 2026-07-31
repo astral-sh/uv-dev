@@ -95,7 +95,7 @@ jobs:
     steps:
       - name: "Prepare issue context"
         run: |
-          printf '%s\n' "$ISSUE_CONTEXT" > "$RUNNER_TEMP/issue.json"
+          printf '%s\n' "$ISSUE_CONTEXT" | jq '.' > "$RUNNER_TEMP/issue.json"
           printf '%s\n' "$TRIAGE_RESULT" | jq '.' > "$RUNNER_TEMP/triage.json"
           printf '%s\n%s\n%s\n' '```json' "$TRIAGE_RESULT" '```' >> "$GITHUB_STEP_SUMMARY"
         env:
