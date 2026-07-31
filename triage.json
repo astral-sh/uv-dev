@@ -1,0 +1,42 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 20275,
+        "title": "Update Rust toolchain to 1.97 and MSRV to 1.95",
+        "url": "https://github.com/astral-sh/uv/pull/20275",
+        "state": "merged",
+        "reason": "Closest causal change: astral-sh/uv#20275 updated the trampoline toolchain to nightly-2026-01-21 but did not update crates/uv-trampoline/Dockerfile. The current source confirms that mismatch."
+      },
+      {
+        "kind": "pull_request",
+        "number": 19600,
+        "title": "Update Rust toolchain to 1.96 and MSRV to 1.94",
+        "url": "https://github.com/astral-sh/uv/pull/19600",
+        "state": "merged",
+        "reason": "Earlier causal change: astral-sh/uv#19600 updated crates/uv-trampoline/rust-toolchain.toml to a newer nightly without changing the Dockerfile, beginning the divergence reported here."
+      },
+      {
+        "kind": "pull_request",
+        "number": 18665,
+        "title": "Reproducible Windows trampoline builds",
+        "url": "https://github.com/astral-sh/uv/pull/18665",
+        "state": "merged",
+        "reason": "Introduced scripts/build-trampolines.sh and the pinned trampoline Dockerfile, including nightly-2025-11-02. It establishes the intended reproducible-build design but predates the later toolchain drift."
+      },
+      {
+        "kind": "issue",
+        "number": 19374,
+        "title": "Windows console launchers run base Python in stdlib venv --symlinks",
+        "url": "https://github.com/astral-sh/uv/issues/19374",
+        "state": "open",
+        "reason": "Adjacent but distinct launcher-runtime bug. Its proposed removal of dunce may reduce launcher size enough to accommodate regenerated AArch64 binaries, but it does not track the Docker/toolchain mismatch."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests using literal terms including build-trampolines.sh, nightly-2026-01-21, nightly-2025-11-02, rust-src, rust-toolchain.toml, trampoline_repro_changed, and test_launchers_are_small. Conceptual searches covered trampoline toolchain synchronization, Docker build images, reproducibility checks, and AArch64 launcher size. Fix-oriented searches inspected astral-sh/uv#18665, astral-sh/uv#19600, astral-sh/uv#20275, and astral-sh/uv#19374 plus their comments and references. Current repository source confirms the nightly mismatch and incomplete workflow filter. astral-sh/uv#18808 was inspected and ruled out because it concerns Docker layer-cache misses, not failure from an absent toolchain component. No existing issue or pull request already tracking this same mismatch was found."
+  },
+  "type": "bug",
+  "type_reason": "The repository currently contains incompatible configuration: scripts/build-trampolines.sh selects nightly-2026-01-21 from rust-toolchain.toml, while the Docker image installs rust-src only for nightly-2025-11-02. This source-confirmed mismatch makes the intended build script fail. No prior tracker for the same current defect was found, so it is a bug rather than a duplicate.",
+  "summary": "The defect was introduced by toolchain updates in astral-sh/uv#19600 and astral-sh/uv#20275 after the reproducible Docker build was added in astral-sh/uv#18665. astral-sh/uv#19374 is only an adjacent size-related dependency; no duplicate tracker was found."
+}
