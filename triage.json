@@ -1,0 +1,34 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 18998,
+        "title": "uv's HEAD-based range detection for wheel metadata is inconsistent with RFC 9110 and misclassifies GAR wheel URLs",
+        "url": "https://github.com/astral-sh/uv/issues/18998",
+        "state": "open",
+        "reason": "astral-sh/uv#18998 covers uv fetching wheel metadata through Google Artifact Registry download redirects when PEP 658 metadata is unavailable. It is the closest subsystem and trigger match, but reports successful fallback to full streaming rather than the 403 failure in astral-sh/uv#20850, so a shared root cause is not established."
+      },
+      {
+        "kind": "issue",
+        "number": 13037,
+        "title": "`uv sync` failing to fetch package from private index with 302 error on 0.6.15",
+        "url": "https://github.com/astral-sh/uv/issues/13037",
+        "state": "closed",
+        "reason": "astral-sh/uv#13037 also failed while following a Google Artifact Registry artifacts-downloads redirect. Maintainers confirmed its failure was relative-redirect handling, whereas astral-sh/uv#20850 reaches the redirected URL and receives 403, making this a related historical case rather than the same confirmed bug."
+      },
+      {
+        "kind": "pull_request",
+        "number": 13754,
+        "title": "Update redirect implementation to handle more cases and be more testable",
+        "url": "https://github.com/astral-sh/uv/pull/13754",
+        "state": "merged",
+        "reason": "astral-sh/uv#13754 is the later redirect implementation associated with private-index failures, including credential propagation for same-origin redirects and credential lookup after redirects. It predates uv 0.11.32 and does not confirm why this same-host GAR redirect returns 403, but it is relevant fix history."
+      }
+    ],
+    "search_scope": "Searched authenticated GitHub issue and pull-request results across open, closed, and merged states. Literal searches covered GCP/Google Artifact Registry, GAR, python.pkg.dev, artifacts-downloads, xlwings, 403 Forbidden, HTTP status client error, and Failed to fetch. Conceptual searches covered private indexes, wheel metadata, HEAD/range requests, PEP 658, redirects, authentication propagation, and Windows fetching a macOS wheel. Fix-oriented searches examined historical GAR redirect failures and redirect/authentication changes. Inspected astral-sh/uv#18998 and its maintainer discussion, astral-sh/uv#13037 and its referenced fix chain, plus astral-sh/uv#1371; the latter was ruled out as a close match because it concerned older Azure/GitLab HEAD and authentication failures rather than GAR and was fixed years before this report."
+  },
+  "type": "bug",
+  "type_reason": "The report describes a package-specific installation failure from a configured registry while other packages from that registry work, and the repository already labels astral-sh/uv#20850 as a bug. The evidence establishes incorrect behavior but not its mechanism: GAR wheel-metadata and redirect handling are plausible areas, yet authentication failure, metadata probing, and redirect credential handling remain hypotheses. No existing thread was found that tracks this exact 403 failure closely enough for duplicate classification.",
+  "summary": "The closest open discussion is astral-sh/uv#18998, which covers GAR wheel-metadata retrieval but has a different outcome. astral-sh/uv#13037 and astral-sh/uv#13754 provide related GAR/private-index redirect history; none establishes the same 403 failure."
+}
