@@ -1,0 +1,26 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 15215,
+        "title": "In Docker, installing app code with CLI entrypoint and `--only-group` fails with `uv sync`, works with `uv pip install`",
+        "url": "https://github.com/astral-sh/uv/issues/15215",
+        "state": "open",
+        "reason": "astral-sh/uv#15215 confirms the intended baseline: `--only-group` omits the project as a root. The new case differs because `lint-format` selects `flake8-carrot`, whose locked dependencies include `typed-classproperties`; uv therefore installs the local project transitively to satisfy that selected dependency."
+      },
+      {
+        "kind": "issue",
+        "number": 16396,
+        "title": "uv sync includes packages from excluded dependency group when using `--no-group`/`--only-group`",
+        "url": "https://github.com/astral-sh/uv/issues/16396",
+        "state": "closed",
+        "reason": "astral-sh/uv#16396 is an adjacent report about unexpected builds under group filtering. Maintainers distinguished excluded packages being processed during locking from packages actually selected for installation. Here the lockfile directly shows the selected `lint-format` dependency chain returning to the local project."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and pull requests for literal variants of `only-group`, local-project building/installing, editable builds, `no-install-project`, omitted projects, dependency groups, workspace members, self-dependencies, and transitive dependencies. Inspected astral-sh/uv#10743, astral-sh/uv#11675, astral-sh/uv#15215, astral-sh/uv#16396, astral-sh/uv#9211, astral-sh/uv#15676 and astral-sh/uv#6578, plus referenced discussions and fixes. astral-sh/uv#11675 was ruled out as the closest duplicate because it concerns resolving unselected path sources, whereas this report's selected `flake8-carrot` package explicitly depends on the local project. Repository tests also explicitly cover installing the project when an `--only-group` dependency chain includes it."
+  },
+  "type": "question",
+  "type_reason": "The reported behavior is source-confirmed as intentional dependency closure rather than failure to omit the project root. In the reporter's current lockfile, `lint-format` includes `flake8-carrot`, and `flake8-carrot` depends on `typed-classproperties`; uv satisfies that selected dependency with the local editable project. Thus `--only-group` omits the project and its ordinary dependencies by default, but does not discard the project when it is transitively required by the selected group. No existing issue was found tracking the same misunderstanding closely enough for duplicate classification.",
+  "summary": "The closest discussions establish that `--only-group` normally omits the project, while the new report has a distinct self-dependency path through `flake8-carrot`. No same-problem tracker or regression fix was found."
+}
