@@ -1506,7 +1506,7 @@ pub async fn resolve_environment(
     let preferences = match spec.preferences {
         Some(PreferenceLocation::Lock { lock, install_path }) => {
             let LockedRequirements { preferences, git } =
-                read_lock_requirements(lock, install_path, &upgrade)?;
+                read_lock_requirements(lock, install_path, &upgrade, &[], None)?;
 
             // Populate the Git resolver.
             for ResolvedRepositoryReference { reference, sha } in git {
