@@ -2346,6 +2346,8 @@ async fn run_project(
             .await
         }
         ProjectCommand::Sync(args) => {
+            let no_workspace_package = args.no_workspace_package.clone();
+
             // Resolve the settings from the command-line arguments and workspace configuration.
             let args = settings::SyncSettings::resolve(args, filesystem, environment)?;
             show_settings!(args);
@@ -2377,6 +2379,7 @@ async fn run_project(
                 args.active,
                 args.all_packages,
                 args.package,
+                no_workspace_package,
                 args.extras,
                 args.groups,
                 args.editable,

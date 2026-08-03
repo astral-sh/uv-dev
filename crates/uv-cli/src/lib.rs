@@ -3783,6 +3783,19 @@ pub struct SyncArgs {
     #[arg(long, conflicts_with = "no_install_local", hide = true)]
     pub only_install_local: bool,
 
+    /// Resolve the specified workspace packages from an index instead of their local sources.
+    ///
+    /// Performs a fresh resolution without updating the workspace lockfile. This is useful when a
+    /// dependency group requires a published distribution with the same name as a workspace
+    /// package.
+    #[arg(
+        long,
+        conflicts_with_all = ["locked", "frozen", "script"],
+        value_delimiter = ' ',
+        value_hint = ValueHint::Other,
+    )]
+    pub no_workspace_package: Vec<PackageName>,
+
     /// Do not install the given package(s).
     ///
     /// By default, all of the project's dependencies are installed into the environment. The
