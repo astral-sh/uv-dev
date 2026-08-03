@@ -342,6 +342,8 @@ pub enum PreviewFeature {
     BatchExport,
     /// Allows setting minimum libc versions for universal resolutions.
     MinimumLibcVersion,
+    /// Allows dependency groups to include dependency groups from the workspace root.
+    IncludeGroupWorkspace,
 }
 
 impl Display for PreviewFeature {
