@@ -3496,6 +3496,47 @@ fn lock_conflicting_project_basic1() -> Result<()> {
     Ok(())
 }
 
+/// Selecting an extra always selects its package, so the conflict is impossible to satisfy.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_self_conflicting_extra() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "self-conflict"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [project.optional-dependencies]
+        foo = []
+
+        [tool.uv]
+        conflicts = [[
+            { package = "self-conflict" },
+            { package = "self-conflict", extra = "foo" },
+        ]]
+        "#,
+    )?;
+
+    // Locking incorrectly accepts this impossible conflict: astral-sh/uv#20694.
+    uv_snapshot!(context.filters(), context.lock(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: Declaring conflicts for packages (`package = ...`) is experimental and may change without warning. Pass `--preview-features package-conflicts` to disable this warning.
+    Resolved 1 package in [TIME]
+    ");
+
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--extra=foo"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Extra `foo` and package `self-conflict` are incompatible with the declared conflicts: {`self-conflict[foo]`, self-conflict}
+    ");
+
+    Ok(())
+}
+
 /// This tests a case where workspace members conflict with each other.
 #[cfg(feature = "test-universal")]
 #[test]
