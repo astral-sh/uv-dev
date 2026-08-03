@@ -48,13 +48,11 @@ impl FlatDependencyGroups {
                 .dependency_groups
                 .as_ref()
                 .is_some_and(|groups| {
-                    groups.into_iter().any(|(_, specifiers)| {
-                        specifiers.iter().any(|specifier| {
-                            matches!(
-                                specifier,
-                                DependencyGroupSpecifier::IncludeWorkspaceGroup { .. }
-                            )
-                        })
+                    groups.into_iter().any(|(group, _)| {
+                        pyproject_toml
+                            .workspace_group_includes(group)
+                            .next()
+                            .is_some()
                     })
                 });
         let workspace_groups = (path != workspace.install_path() && includes_workspace_group)
@@ -204,33 +202,6 @@ impl FlatDependencyGroups {
                                 .collect();
                         }
                     }
-                    DependencyGroupSpecifier::IncludeWorkspaceGroup { include_group } => {
-                        let workspace_groups = workspace_groups.ok_or_else(|| {
-                            DependencyGroupErrorInner::WorkspaceGroupOutsideWorkspace(
-                                include_group.clone(),
-                                name.clone(),
-                            )
-                        })?;
-                        let included = workspace_groups.get(include_group).ok_or_else(|| {
-                            DependencyGroupErrorInner::WorkspaceGroupNotFound(
-                                include_group.clone(),
-                                name.clone(),
-                            )
-                        })?;
-
-                        if !uv_preview::is_enabled(PreviewFeature::IncludeGroupWorkspace) {
-                            warn_user_once!(
-                                "Including dependency groups from the workspace root (`include-group = {{ workspace = ... }}`) is experimental and may change without warning. Pass `--preview-features {}` to disable this warning.",
-                                PreviewFeature::IncludeGroupWorkspace
-                            );
-                        }
-
-                        requirements.extend(included.requirements.iter().cloned());
-                        requires_python_intersection = requires_python_intersection
-                            .into_iter()
-                            .chain(included.requires_python.clone().into_iter().flatten())
-                            .collect();
-                    }
                     DependencyGroupSpecifier::Object(map) => {
                         return Err(
                             DependencyGroupErrorInner::DependencyObjectSpecifierNotSupported(
@@ -243,8 +214,40 @@ impl FlatDependencyGroups {
             }
 
             let empty_settings = DependencyGroupSettings::default();
-            let DependencyGroupSettings { requires_python } =
-                settings.get(name).unwrap_or(&empty_settings);
+            let DependencyGroupSettings {
+                requires_python,
+                include_groups,
+            } = settings.get(name).unwrap_or(&empty_settings);
+
+            for include in include_groups {
+                let workspace_group = &include.workspace;
+                let workspace_groups = workspace_groups.ok_or_else(|| {
+                    DependencyGroupErrorInner::WorkspaceGroupOutsideWorkspace(
+                        workspace_group.clone(),
+                        name.clone(),
+                    )
+                })?;
+                let included = workspace_groups.get(workspace_group).ok_or_else(|| {
+                    DependencyGroupErrorInner::WorkspaceGroupNotFound(
+                        workspace_group.clone(),
+                        name.clone(),
+                    )
+                })?;
+
+                if !uv_preview::is_enabled(PreviewFeature::IncludeGroupWorkspace) {
+                    warn_user_once!(
+                        "Including dependency groups from the workspace root (`[tool.uv.dependency-groups]` with `include-groups = [{{ workspace = ... }}]`) is experimental and may change without warning. Pass `--preview-features {}` to disable this warning.",
+                        PreviewFeature::IncludeGroupWorkspace
+                    );
+                }
+
+                requirements.extend(included.requirements.iter().cloned());
+                requires_python_intersection = requires_python_intersection
+                    .into_iter()
+                    .chain(included.requires_python.clone().into_iter().flatten())
+                    .collect();
+            }
+
             if let Some(requires_python) = requires_python {
                 // Intersect the requires-python for this group to get the final requires-python
                 // that will be used by interpreter discovery and checking.

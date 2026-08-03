@@ -225,45 +225,33 @@ impl Conflicts {
         self.0.extend(conflict_sets.into_iter().skip(seeded));
     }
 
-    /// Expand workspace-root group conflicts to member groups that include them.
-    pub fn expand_workspace_group_includes(
+    /// Expand workspace-root group conflicts to a member group that includes one.
+    pub fn expand_workspace_group_include(
         &mut self,
         workspace_package: &PackageName,
+        workspace_group: &GroupName,
         package: &PackageName,
+        group: &GroupName,
         groups: &DependencyGroups,
     ) {
-        let mut includes_workspace_group = false;
+        let workspace_item =
+            ConflictItem::from((workspace_package.clone(), workspace_group.clone()));
+        let member_item = ConflictItem::from((package.clone(), group.clone()));
+        let inferred_sets = self
+            .0
+            .iter()
+            .filter(|set| set.contains_item(&workspace_item))
+            .filter_map(|set| set.replaced_item(&workspace_item, member_item.clone()).ok())
+            .filter(|set| set.set.len() >= 2)
+            .collect::<Vec<_>>();
 
-        for (group, specifiers) in groups {
-            for specifier in specifiers {
-                let DependencyGroupSpecifier::IncludeWorkspaceGroup { include_group } = specifier
-                else {
-                    continue;
-                };
-                includes_workspace_group = true;
-
-                let workspace_item =
-                    ConflictItem::from((workspace_package.clone(), include_group.clone()));
-                let member_item = ConflictItem::from((package.clone(), group.clone()));
-                let inferred_sets = self
-                    .0
-                    .iter()
-                    .filter(|set| set.contains_item(&workspace_item))
-                    .filter_map(|set| set.replaced_item(&workspace_item, member_item.clone()).ok())
-                    .filter(|set| set.set.len() >= 2)
-                    .collect::<Vec<_>>();
-
-                for inferred_set in inferred_sets {
-                    if !self.0.contains(&inferred_set) {
-                        self.0.push(inferred_set);
-                    }
-                }
+        for inferred_set in inferred_sets {
+            if !self.0.contains(&inferred_set) {
+                self.0.push(inferred_set);
             }
         }
 
-        if includes_workspace_group {
-            self.expand_transitive_group_includes(package, groups);
-        }
+        self.expand_transitive_group_includes(package, groups);
     }
 }
 
@@ -963,15 +951,17 @@ mod tests {
             "other": [],
         }))?;
         let member_groups: DependencyGroups = serde_json::from_value(serde_json::json!({
-            "lint": [{ "include-group": { "workspace": "lint" } }],
+            "lint": [],
             "dev": [{ "include-group": "lint" }],
         }))?;
         let mut conflicts = Conflicts(vec![conflict_set(&workspace_package, "format", "other")?]);
 
         conflicts.expand_transitive_group_includes(&workspace_package, &workspace_groups);
-        conflicts.expand_workspace_group_includes(
+        conflicts.expand_workspace_group_include(
             &workspace_package,
+            &lint,
             &member_package,
+            &lint,
             &member_groups,
         );
 
