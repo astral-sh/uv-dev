@@ -218,6 +218,10 @@ while building a Docker image. `uv sync` has several flags for this purpose.
 When these options are used, all the dependencies of the target are still installed. For example,
 `--no-install-project` will omit the _project_ but not any of its dependencies.
 
+To resolve a workspace package from an index instead of its local source, use
+`--no-workspace-package <name>`. This performs a fresh resolution without modifying `uv.lock`, and
+cannot be combined with `--locked` or `--frozen`.
+
 If used improperly, these flags can result in a broken environment since a package can be missing
 its dependencies.
 

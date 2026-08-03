@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fmt::Write;
 use std::ops::Deref;
 use std::path::Path;
@@ -19,9 +20,10 @@ use uv_configuration::{
     TargetTriple, Upgrade,
 };
 use uv_dispatch::BuildDispatch;
-use uv_distribution::LoweredExtraBuildDependencies;
+use uv_distribution::{LoweredExtraBuildDependencies, SourcedDependencyGroups};
 use uv_distribution_types::{
     Dist, Index, IndexUrl, Name, Requirement, Resolution, ResolvedDist, SourceDist,
+    UnresolvedRequirementSpecification,
 };
 use uv_fs::{PortablePathBuf, Simplified};
 use uv_installer::{InstallationStrategy, SitePackages};
@@ -33,6 +35,7 @@ use uv_python::{
     ConfigDiscovery, PythonDownloads, PythonEnvironment, PythonPreference, PythonRequest,
 };
 use uv_redacted::DisplaySafeUrl;
+use uv_requirements::{RequirementsSource, RequirementsSpecification};
 use uv_resolver::{
     FlatIndex, ForkStrategy, Installable, Lock, Prerelease, PythonReport, ResolutionMode,
 };
@@ -40,6 +43,7 @@ use uv_scripts::Pep723Script;
 use uv_settings::{MalwareCheckSettings, PythonInstallMirrors};
 use uv_types::{BuildIsolation, HashStrategy, SourceTreeEditablePolicy};
 use uv_warnings::{warn_user, warn_user_once};
+use uv_workspace::dependency_groups::FlatDependencyGroups;
 use uv_workspace::pyproject::Source;
 use uv_workspace::{DiscoveryOptions, MemberDiscovery, VirtualProject, Workspace, WorkspaceCache};
 
@@ -72,6 +76,7 @@ pub(crate) async fn sync(
     active: Option<bool>,
     all_packages: bool,
     package: Vec<PackageName>,
+    no_workspace_package: Vec<PackageName>,
     extras: ExtrasSpecification,
     groups: DependencyGroups,
     editable: Option<EditableMode>,
@@ -219,6 +224,173 @@ pub(crate) async fn sync(
     // Show the intermediate results if relevant
     if let Some(message) = sync_report.format(output_format) {
         writeln!(printer.stderr(), "{message}")?;
+    }
+
+    if !no_workspace_package.is_empty()
+        && let SyncTarget::Project(project) = &target
+    {
+        let workspace = project.workspace();
+        for name in &no_workspace_package {
+            if !workspace.packages().contains_key(name) {
+                return Err(anyhow::anyhow!("Package `{name}` not found in workspace"));
+            }
+        }
+
+        let selected_members = if all_packages || project.is_non_project() {
+            workspace.packages().keys().collect::<Vec<_>>()
+        } else if package.is_empty() {
+            project.project_name().into_iter().collect::<Vec<_>>()
+        } else {
+            package.iter().collect::<Vec<_>>()
+        };
+
+        let mut specification = RequirementsSpecification::default();
+        let member_requirements = workspace
+            .members_requirements()
+            .map(|requirement| (requirement.name.clone(), requirement))
+            .collect::<BTreeMap<_, _>>();
+
+        for name in selected_members {
+            let Some(member) = workspace.packages().get(name) else {
+                continue;
+            };
+            let pyproject_path = member.root().join("pyproject.toml");
+
+            if groups.prod() {
+                if no_workspace_package.contains(name) {
+                    let project_requirements = RequirementsSpecification::from_source(
+                        &RequirementsSource::PyprojectToml(pyproject_path.clone()),
+                        &client_builder,
+                    )
+                    .await?;
+                    specification
+                        .requirements
+                        .extend(project_requirements.requirements);
+                    specification
+                        .source_trees
+                        .extend(project_requirements.source_trees);
+                } else if let Some(requirement) = member_requirements.get(name) {
+                    specification
+                        .requirements
+                        .push(UnresolvedRequirementSpecification::from(
+                            requirement.clone(),
+                        ));
+                }
+            }
+
+            let raw_groups =
+                FlatDependencyGroups::from_pyproject_toml(member.root(), member.pyproject_toml())?;
+            let sourced_groups = SourcedDependencyGroups::from_virtual_project(
+                &pyproject_path,
+                None,
+                &settings.resolver.index_locations,
+                settings.resolver.sources.clone(),
+                cache,
+                workspace_cache,
+                client_builder.credentials_cache(),
+            )
+            .await?;
+
+            for (group, requirements) in sourced_groups.dependency_groups {
+                if !groups.contains(&group) {
+                    continue;
+                }
+
+                specification.requirements.extend(
+                    requirements
+                        .into_iter()
+                        .filter(|requirement| !no_workspace_package.contains(&requirement.name))
+                        .map(UnresolvedRequirementSpecification::from),
+                );
+
+                if let Some(raw_group) = raw_groups.get(&group) {
+                    specification.requirements.extend(
+                        raw_group
+                            .requirements
+                            .iter()
+                            .filter(|requirement| no_workspace_package.contains(&requirement.name))
+                            .cloned()
+                            .map(Requirement::from)
+                            .map(UnresolvedRequirementSpecification::from),
+                    );
+                }
+            }
+        }
+
+        let build_constraints = Constraints::from_requirements(
+            LockTarget::from(workspace)
+                .build_constraints()
+                .into_iter()
+                .map(Requirement::from),
+        );
+        let extra_build_requires = LoweredExtraBuildDependencies::from_workspace(
+            settings.resolver.extra_build_dependencies.clone(),
+            workspace,
+            &settings.resolver.index_locations,
+            &settings.resolver.sources,
+            cache,
+            workspace_cache,
+            client_builder.credentials_cache(),
+        )
+        .await?
+        .into_inner();
+
+        match update_environment(
+            environment.clone(),
+            specification,
+            modifications,
+            python_platform.as_ref(),
+            SourceTreeEditablePolicy::Project,
+            build_constraints,
+            extra_build_requires,
+            &settings,
+            &client_builder,
+            &PlatformState::default(),
+            Box::new(DefaultResolveLogger),
+            Box::new(DefaultInstallLogger),
+            installer_metadata,
+            &concurrency,
+            cache,
+            workspace_cache,
+            dry_run,
+            printer,
+            preview,
+        )
+        .await
+        {
+            Ok(EnvironmentUpdate { changelog, .. }) => {
+                write_sync_report(
+                    &target,
+                    &environment,
+                    &changelog,
+                    None,
+                    dry_run,
+                    output_format,
+                    printer,
+                )?;
+                return Ok(ExitStatus::Success);
+            }
+            Err(ProjectError::Operation(operations::Error::OutdatedEnvironment(changelog))) => {
+                write_sync_report(
+                    &target,
+                    &environment,
+                    &changelog,
+                    None,
+                    dry_run,
+                    output_format,
+                    printer,
+                )?;
+                return diagnostics::OperationDiagnostic::default()
+                    .report(operations::Error::OutdatedEnvironment(changelog))
+                    .map_or(Ok(ExitStatus::Failure), |err| Err(err.into()));
+            }
+            Err(ProjectError::Operation(err)) => {
+                return diagnostics::OperationDiagnostic::default()
+                    .report(err)
+                    .map_or(Ok(ExitStatus::Failure), |err| Err(err.into()));
+            }
+            Err(err) => return Err(err.into()),
+        }
     }
 
     // Special-case: we're syncing a script that doesn't have an associated lockfile. In that case,

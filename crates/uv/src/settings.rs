@@ -1807,6 +1807,7 @@ impl SyncSettings {
             only_install_workspace,
             no_install_local,
             only_install_local,
+            no_workspace_package,
             no_install_package,
             only_install_package,
             locked,
@@ -1848,6 +1849,12 @@ impl SyncSettings {
 
         // Check for conflicts between locked and frozen.
         check_conflicts(locked, frozen)?;
+
+        if !no_workspace_package.is_empty() {
+            let no_workspace_package = Flag::from_cli("no-workspace-package");
+            check_conflicts(no_workspace_package, locked)?;
+            check_conflicts(no_workspace_package, frozen)?;
+        }
 
         let (dev, no_dev) = resolve_flag_pair(
             dev,

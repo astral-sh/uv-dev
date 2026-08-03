@@ -4711,6 +4711,144 @@ fn sync_group_transitive_self() -> Result<()> {
     Ok(())
 }
 
+/// A workspace package can be resolved from the registry when syncing only a dependency group.
+#[test]
+fn sync_group_transitive_self_no_workspace_package() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "idna"
+        version = "3.6"
+        requires-python = ">=3.12"
+
+        [dependency-groups]
+        foo = ["anyio"]
+
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+        "#,
+    )?;
+    context
+        .temp_dir
+        .child("src")
+        .child("idna")
+        .child("__init__.py")
+        .touch()?;
+
+    context.lock().assert().success();
+    let lock = context.read("uv.lock");
+
+    uv_snapshot!(context.filters(), context.sync().arg("--only-group").arg("foo").arg("--no-workspace-package").arg("idna"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Prepared 3 packages in [TIME]
+    Installed 3 packages in [TIME]
+     + anyio==4.3.0
+     + idna==3.6
+     + sniffio==1.3.1
+    ");
+
+    assert_eq!(context.read("uv.lock"), lock);
+
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--only-group").arg("foo")
+        .arg("--no-workspace-package").arg("missing"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Package `missing` not found in workspace
+    ");
+
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--only-group").arg("foo")
+        .arg("--no-workspace-package").arg("idna")
+        .env(EnvVars::UV_FROZEN, "1"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: the argument `--no-workspace-package` cannot be used with `UV_FROZEN` (environment variable)
+    ");
+
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--only-group").arg("foo")
+        .arg("--no-workspace-package").arg("idna")
+        .env(EnvVars::UV_LOCKED, "1"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: the argument `--no-workspace-package` cannot be used with `UV_LOCKED` (environment variable)
+    ");
+
+    Ok(())
+}
+
+/// A direct workspace dependency can be resolved from the registry instead of its local source.
+#[test]
+fn sync_group_member_no_workspace_package() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [dependency-groups]
+        foo = ["idna"]
+
+        [tool.uv.workspace]
+        members = ["idna"]
+
+        [tool.uv.sources]
+        idna = { workspace = true }
+        "#,
+    )?;
+
+    context
+        .temp_dir
+        .child("idna")
+        .child("pyproject.toml")
+        .write_str(
+            r#"
+            [project]
+            name = "idna"
+            version = "3.6"
+            requires-python = ">=3.12"
+
+            [build-system]
+            requires = ["uv_build>=0.7,<10000"]
+            build-backend = "uv_build"
+            "#,
+        )?;
+    context
+        .temp_dir
+        .child("idna")
+        .child("src")
+        .child("idna")
+        .child("__init__.py")
+        .touch()?;
+
+    context.lock().assert().success();
+    let lock = context.read("uv.lock");
+
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--only-group").arg("foo")
+        .arg("--no-workspace-package").arg("idna"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + idna==3.6
+    ");
+
+    assert_eq!(context.read("uv.lock"), lock);
+
+    Ok(())
+}
+
 /// Sync with `--only-group`, where the group includes the project itself.
 #[test]
 fn sync_group_self() -> Result<()> {
