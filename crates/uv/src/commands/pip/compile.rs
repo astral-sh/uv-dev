@@ -557,6 +557,11 @@ pub(crate) async fn pip_compile(
         .torch_backend(torch_backend)
         .build_options(build_options.clone())
         .artifact_environments(artifact_environments)
+        .required_environments(if universal {
+            required_environments.clone()
+        } else {
+            SupportedEnvironments::default()
+        })
         .build();
 
     // Resolve the requirements.
