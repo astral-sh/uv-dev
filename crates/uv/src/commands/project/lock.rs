@@ -654,7 +654,17 @@ async fn do_lock(
             if package != &project.name
                 && let Some(groups) = &member.pyproject_toml().dependency_groups
             {
-                conflicts.expand_workspace_group_includes(&project.name, package, groups);
+                for (group, _) in groups {
+                    for workspace_group in member.pyproject_toml().workspace_group_includes(group) {
+                        conflicts.expand_workspace_group_include(
+                            &project.name,
+                            workspace_group,
+                            package,
+                            group,
+                            groups,
+                        );
+                    }
+                }
             }
         }
     }

@@ -146,7 +146,7 @@
       ]
     },
     "dependency-groups": {
-      "description": "Additional settings for `dependency-groups`.\n\nCurrently this can only be used to add `requires-python` constraints\nto dependency groups (typically to inform uv that your dev tooling\nhas a higher python requirement than your actual project).\n\nThis cannot be used to define dependency groups, use the top-level\n`[dependency-groups]` table for that.",
+      "description": "Additional settings for `dependency-groups`.\n\nThis can be used to add `requires-python` constraints to dependency groups or include a\ndependency group from the workspace root.\n\nThis cannot be used to define dependency groups, use the top-level\n`[dependency-groups]` table for that.",
       "anyOf": [
         {
           "$ref": "#/definitions/ToolUvDependencyGroups"
@@ -873,9 +873,31 @@
         }
       ]
     },
+    "DependencyGroupInclude": {
+      "type": "object",
+      "properties": {
+        "workspace": {
+          "description": "The dependency group to include from the workspace root.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/GroupName"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": ["workspace"]
+    },
     "DependencyGroupSettings": {
       "type": "object",
       "properties": {
+        "include-groups": {
+          "description": "Additional dependency groups to include from the workspace root.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/DependencyGroupInclude"
+          }
+        },
         "requires-python": {
           "description": "Version of python to require when installing this group",
           "type": ["string", "null"]
