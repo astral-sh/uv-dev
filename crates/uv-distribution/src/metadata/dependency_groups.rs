@@ -94,8 +94,11 @@ impl SourcedDependencyGroups {
             VirtualProject::discover(project_dir, &discovery, cache, workspace_cache).await?;
 
         // Collect the dependency groups.
-        let dependency_groups =
-            FlatDependencyGroups::from_pyproject_toml(project.root(), project.pyproject_toml())?;
+        let dependency_groups = FlatDependencyGroups::from_workspace(
+            project.root(),
+            project.pyproject_toml(),
+            project.workspace(),
+        )?;
 
         // Early return if all sources are disabled
         if matches!(no_sources, NoSources::All) {

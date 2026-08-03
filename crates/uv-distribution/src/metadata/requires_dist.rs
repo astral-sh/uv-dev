@@ -135,9 +135,10 @@ impl RequiresDist {
             .map(ToolUvSources::inner)
             .unwrap_or(&empty);
 
-        let dependency_groups = FlatDependencyGroups::from_pyproject_toml(
+        let dependency_groups = FlatDependencyGroups::from_workspace(
             project_workspace.current_project().root(),
             project_workspace.current_project().pyproject_toml(),
+            project_workspace.workspace(),
         )?;
 
         // Now that we've resolved the dependency groups, we can validate that each source references

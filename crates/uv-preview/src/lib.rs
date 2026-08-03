@@ -463,6 +463,8 @@ pub enum PreviewFeature {
     /// Enables experimental support for [wheel variants](https://peps.python.org/pep-0825/).
     /// Variant wheels are not yet selectable.
     WheelVariants,
+    /// Allows dependency groups to include dependency groups from the workspace root.
+    IncludeGroupWorkspace,
 }
 
 impl Display for PreviewFeature {
