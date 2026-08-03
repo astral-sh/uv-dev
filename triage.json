@@ -1,0 +1,42 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 9863,
+        "title": "uv workspace doesn't install development dependencies for packages",
+        "url": "https://github.com/astral-sh/uv/issues/9863",
+        "state": "open",
+        "reason": "Tracks the same requested union of root and selected-member development dependencies without installing every workspace package."
+      },
+      {
+        "kind": "issue",
+        "number": 11537,
+        "title": "Better sync API for groups with workspaces",
+        "url": "https://github.com/astral-sh/uv/issues/11537",
+        "state": "open",
+        "reason": "Requests syncing a root group with a selected member and explicitly anticipates additional dependencies in the member's same-named group, closely matching this report."
+      },
+      {
+        "kind": "pull_request",
+        "number": 20840,
+        "title": "Allow commands run in workspace members to use root dependency groups",
+        "url": "https://github.com/astral-sh/uv/pull/20840",
+        "state": "merged",
+        "reason": "Direct release-history evidence: astral-sh/uv#20840 shipped in v0.12.1 and explicitly made member definitions override same-named root groups. Its integration tests confirm that uv sync selects only the member's overlapping group."
+      },
+      {
+        "kind": "issue",
+        "number": 13540,
+        "title": "Allow using workspace root dependency groups from member",
+        "url": "https://github.com/astral-sh/uv/issues/13540",
+        "state": "closed",
+        "reason": "The feature request implemented by astral-sh/uv#20840 establishes why root groups became available to selected members in v0.12.1, although it focused primarily on root-only groups rather than additive overlapping definitions."
+      }
+    ],
+    "search_scope": "Searched issues and pull requests using literal additive, override, workspace dev, member sync, and v0.12.1 terminology; conceptual root-group inheritance, union, precedence, default-group, and workspace sync API terminology; and fix-oriented release and source history. Inspected referenced discussions and implementation tests. astral-sh/uv#4730 was ruled out because its additive semantics concern retaining virtual-environment packages between commands, not merging same-named groups. astral-sh/uv#14005 concerns per-package default-group selection, and astral-sh/uv#15656 concerns transitive members, so neither matches the root/member overlap."
+  },
+  "type": "duplicate",
+  "type_reason": "astral-sh/uv#9863 and especially astral-sh/uv#11537 already track combining root and selected-member dependency groups, including optional additions under the same group name. The report's v0.12.1 timing is source-confirmed by astral-sh/uv#20840, which deliberately introduced member precedence; there is no evidence that a previously fixed bug regressed, so the existing open requests take duplicate precedence.",
+  "summary": "The same additive root-plus-member group behavior is already requested in astral-sh/uv#9863 and astral-sh/uv#11537. astral-sh/uv#20840 directly explains the v0.12.1 change to member-over-root precedence."
+}
