@@ -768,7 +768,9 @@ trait InstallableExt<'lock>: Installable<'lock> {
                     }
                     Entry::Occupied(entry) => {
                         let index = *entry.get();
-                        if matches!(&petgraph[index], Node::Dist { install: false, .. }) {
+                        if matches!(&petgraph[index], Node::Dist { install: false, .. })
+                            && (groups.prod() || self.project_name() != Some(dep_dist.name()))
+                        {
                             petgraph[index] = self.package_to_node(
                                 dep_dist,
                                 tags,

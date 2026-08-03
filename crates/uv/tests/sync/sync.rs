@@ -4701,10 +4701,9 @@ fn sync_group_transitive_self() -> Result<()> {
     uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--only-group").arg("foo"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
      + anyio==4.3.0
-     + idna==3.6 (from file://[TEMP_DIR]/)
      + sniffio==1.3.1
     ");
 
