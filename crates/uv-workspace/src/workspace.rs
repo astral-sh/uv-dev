@@ -776,7 +776,7 @@ impl Workspace {
             // Get the requires-python for each enabled group on this package
             // We need to do full flattening here because include-group can transfer requires-python
             let dependency_groups =
-                FlatDependencyGroups::from_pyproject_toml(member.root(), &member.pyproject_toml)?;
+                FlatDependencyGroups::from_workspace(member.root(), &member.pyproject_toml, self)?;
             let group_requires =
                 dependency_groups
                     .into_iter()
@@ -3455,6 +3455,7 @@ mod tests {
 foo = ["a", {include-group = "bar"}]
 bar = ["b"]
 future = [{include-group = "bar", unknown = "value"}]
+workspace = [{include-group = {workspace = "root"}}]
 "#;
 
         let result = PyProjectToml::from_string(toml.to_string(), "pyproject.toml")
@@ -3493,6 +3494,16 @@ future = [{include-group = "bar", unknown = "value"}]
                 ("include-group".to_string(), "bar".to_string()),
                 ("unknown".to_string(), "value".to_string()),
             ]))]
+        );
+
+        let workspace = groups
+            .get(&GroupName::from_str("workspace").unwrap())
+            .expect("Group `workspace` should be present");
+        assert_eq!(
+            workspace,
+            &[DependencyGroupSpecifier::IncludeWorkspaceGroup {
+                include_group: GroupName::from_str("root").unwrap(),
+            }]
         );
     }
 
