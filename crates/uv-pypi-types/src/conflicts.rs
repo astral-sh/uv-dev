@@ -91,8 +91,9 @@ impl Conflicts {
         // Nothing to infer without a conflicting group and at least one
         // group include.
         if !self.0.iter().any(|set| {
-            set.iter()
-                .any(|item| matches!(item.kind(), ConflictKind::Group(_)))
+            set.iter().any(|item| {
+                item.package() == package && matches!(item.kind(), ConflictKind::Group(_))
+            })
         }) {
             return;
         }
@@ -122,6 +123,9 @@ impl Conflicts {
         for set in &self.0 {
             conflict_sets.insert(set.clone());
             for item in set.iter() {
+                if item.package() != package {
+                    continue;
+                }
                 let ConflictKind::Group(group) = &item.kind else {
                     // TODO(john): Do we also want to handle extras here?
                     continue;
@@ -219,6 +223,47 @@ impl Conflicts {
 
         // Everything past the seeded originals is newly inferred.
         self.0.extend(conflict_sets.into_iter().skip(seeded));
+    }
+
+    /// Expand workspace-root group conflicts to member groups that include them.
+    pub fn expand_workspace_group_includes(
+        &mut self,
+        workspace_package: &PackageName,
+        package: &PackageName,
+        groups: &DependencyGroups,
+    ) {
+        let mut includes_workspace_group = false;
+
+        for (group, specifiers) in groups {
+            for specifier in specifiers {
+                let DependencyGroupSpecifier::IncludeWorkspaceGroup { include_group } = specifier
+                else {
+                    continue;
+                };
+                includes_workspace_group = true;
+
+                let workspace_item =
+                    ConflictItem::from((workspace_package.clone(), include_group.clone()));
+                let member_item = ConflictItem::from((package.clone(), group.clone()));
+                let inferred_sets = self
+                    .0
+                    .iter()
+                    .filter(|set| set.contains_item(&workspace_item))
+                    .filter_map(|set| set.replaced_item(&workspace_item, member_item.clone()).ok())
+                    .filter(|set| set.set.len() >= 2)
+                    .collect::<Vec<_>>();
+
+                for inferred_set in inferred_sets {
+                    if !self.0.contains(&inferred_set) {
+                        self.0.push(inferred_set);
+                    }
+                }
+            }
+        }
+
+        if includes_workspace_group {
+            self.expand_transitive_group_includes(package, groups);
+        }
     }
 }
 
@@ -895,6 +940,60 @@ mod tests {
                 conflict_set(&package, "outer-a", "inner-b")?,
                 conflict_set(&package, "inner-a", "outer-b")?,
                 conflict_set(&package, "outer-a", "outer-b")?,
+            ]
+            .into_iter()
+            .collect::<FxHashSet<_>>(),
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn expand_workspace_group_includes_scopes_groups_to_each_package() -> Result<()> {
+        let workspace_package = PackageName::from_str("root")?;
+        let member_package = PackageName::from_str("child")?;
+        let format = GroupName::from_str("format")?;
+        let lint = GroupName::from_str("lint")?;
+        let other = GroupName::from_str("other")?;
+        let dev = GroupName::from_str("dev")?;
+
+        let workspace_groups: DependencyGroups = serde_json::from_value(serde_json::json!({
+            "format": [],
+            "lint": [{ "include-group": "format" }],
+            "other": [],
+        }))?;
+        let member_groups: DependencyGroups = serde_json::from_value(serde_json::json!({
+            "lint": [{ "include-group": { "workspace": "lint" } }],
+            "dev": [{ "include-group": "lint" }],
+        }))?;
+        let mut conflicts = Conflicts(vec![conflict_set(&workspace_package, "format", "other")?]);
+
+        conflicts.expand_transitive_group_includes(&workspace_package, &workspace_groups);
+        conflicts.expand_workspace_group_includes(
+            &workspace_package,
+            &member_package,
+            &member_groups,
+        );
+
+        assert_eq!(
+            conflicts.0.into_iter().collect::<FxHashSet<_>>(),
+            [
+                ConflictSet::try_from(vec![
+                    ConflictItem::from((workspace_package.clone(), format)),
+                    ConflictItem::from((workspace_package.clone(), other.clone())),
+                ])?,
+                ConflictSet::try_from(vec![
+                    ConflictItem::from((workspace_package.clone(), lint.clone())),
+                    ConflictItem::from((workspace_package.clone(), other.clone())),
+                ])?,
+                ConflictSet::try_from(vec![
+                    ConflictItem::from((member_package.clone(), lint)),
+                    ConflictItem::from((workspace_package.clone(), other.clone())),
+                ])?,
+                ConflictSet::try_from(vec![
+                    ConflictItem::from((member_package, dev)),
+                    ConflictItem::from((workspace_package, other)),
+                ])?,
             ]
             .into_iter()
             .collect::<FxHashSet<_>>(),
