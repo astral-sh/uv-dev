@@ -9,7 +9,9 @@ use tracing::info_span;
 
 use uv_auth::CredentialsCache;
 use uv_cache::Cache;
-use uv_configuration::{DependencyGroupsWithDefaults, ExcludeDependency, NoSources, Upgrade};
+use uv_configuration::{
+    DependencyGroupsWithDefaults, ExcludeDependency, NoSources, RequiredEnvironmentsMode, Upgrade,
+};
 use uv_distribution::LoweredRequirement;
 use uv_distribution_types::{Index, IndexLocations, Requirement, RequiresPython};
 use uv_normalize::{GroupName, PackageName};
@@ -252,6 +254,14 @@ impl<'lock> LockTarget<'lock> {
                 // TODO(charlie): Add support for environments in scripts.
                 None
             }
+        }
+    }
+
+    /// Returns the policy used to satisfy required environments for the [`LockTarget`].
+    pub(crate) fn required_environments_mode(self) -> Option<RequiredEnvironmentsMode> {
+        match self {
+            Self::Workspace(workspace) => workspace.required_environments_mode(),
+            Self::Script(_) => None,
         }
     }
 

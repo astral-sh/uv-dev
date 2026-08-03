@@ -20,7 +20,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
 use tracing::instrument;
 use uv_build_backend::BuildBackendSettings;
-use uv_configuration::{ExcludeDependency, GitLfsSetting, Override};
+use uv_configuration::{ExcludeDependency, GitLfsSetting, Override, RequiredEnvironmentsMode};
 use uv_distribution_types::{Index, IndexName, RequirementSource};
 use uv_fs::{PortablePathBuf, try_relative_to_if};
 use uv_git_types::GitReference;
@@ -647,6 +647,23 @@ pub struct ToolUv {
         "#
     )]
     pub(crate) required_environments: Option<SupportedEnvironments>,
+
+    /// The policy to apply when satisfying `required-environments`.
+    ///
+    /// By default, a compatible source distribution satisfies a required environment. Set this to
+    /// `require-wheels` to require a compatible wheel for every dependency active in the required
+    /// environment, even when a source distribution is available.
+    ///
+    /// This option is in preview and may change in any future release.
+    #[option(
+        default = "null",
+        value_type = "str",
+        example = r#"
+            required-environments = ["python_version == '3.13'"]
+            required-environments-mode = "require-wheels"
+        "#
+    )]
+    pub(crate) required_environments_mode: Option<RequiredEnvironmentsMode>,
 
     /// Declare collections of extras or dependency groups that are conflicting
     /// (i.e., mutually exclusive).

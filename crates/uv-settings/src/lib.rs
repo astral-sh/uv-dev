@@ -306,6 +306,7 @@ fn validate_uv_toml(path: &Path, options: &Options) -> Result<(), Error> {
         build_constraint_dependencies: _,
         environments,
         required_environments,
+        required_environments_mode,
         conflicts,
         workspace,
         sources,
@@ -368,6 +369,12 @@ fn validate_uv_toml(path: &Path, options: &Options) -> Result<(), Error> {
         return Err(Error::PyprojectOnlyField(
             path.to_path_buf(),
             "required-environments",
+        ));
+    }
+    if required_environments_mode.is_some() {
+        return Err(Error::PyprojectOnlyField(
+            path.to_path_buf(),
+            "required-environments-mode",
         ));
     }
     Ok(())
@@ -456,6 +463,7 @@ fn warn_uv_toml_masked_fields(options: &Options) {
         build_constraint_dependencies,
         environments: _,
         required_environments: _,
+        required_environments_mode: _,
         conflicts: _,
         workspace: _,
         sources: _,
