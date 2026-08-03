@@ -725,6 +725,7 @@ async fn do_lock(
     } else {
         None
     };
+    let required_environments_mode = target.required_environments_mode();
 
     // Determine the supported Python range. If no range is defined, and warn and default to the
     // current minor version.
@@ -827,6 +828,8 @@ async fn do_lock(
         .index_strategy(*index_strategy)
         .build_options(build_options.clone())
         .artifact_environments(artifact_environments.clone())
+        .required_environments(lock_required_environments.clone())
+        .required_environments_mode(required_environments_mode)
         .build();
     let hasher = HashStrategy::generate(HashGeneration::Url);
 
@@ -1233,6 +1236,15 @@ impl ValidatedLock {
             // shouldn't if the fork markers cannot be reused.
             debug!("Ignoring existing lockfile due to `--upgrade`");
             return Ok(Self::Unusable(lock));
+        }
+
+        if lock.required_environments_mode() != options.required_environments_mode {
+            debug!(
+                "Resolving despite existing lockfile due to change in required environments mode: `{:?}` vs. `{:?}`",
+                lock.required_environments_mode(),
+                options.required_environments_mode
+            );
+            return Ok(Self::Versions(lock));
         }
 
         // NOTE: It's important that this appears before any possible path that

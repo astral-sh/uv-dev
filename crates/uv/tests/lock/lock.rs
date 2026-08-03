@@ -15,7 +15,7 @@ use wiremock::{
 use uv_fs::{Simplified, create_symlink};
 use uv_static::EnvVars;
 #[cfg(feature = "test-universal")]
-use uv_test::packse::PackseServer;
+use uv_test::packse::{PackseServer, scenario::Scenario};
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 use uv_test::{READ_ONLY_GITHUB_TOKEN, decode_token};
 use uv_test::{diff_snapshot, uv_snapshot};
@@ -79,6 +79,186 @@ fn lock_preserves_noncanonical_lock() -> Result<()> {
         .assert()
         .success();
     assert_eq!(context.read("uv.lock"), noncanonical_lock);
+
+    Ok(())
+}
+
+/// Keep legacy required-environment behavior by default, then opt in to requiring Python 3.13
+/// wheels and allow a known holdout to remain active only on Python 3.12.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_requires_matching_wheel() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario: Scenario = toml::from_str(
+        r#"
+        name = "required-environment-hard-ranking"
+
+        [root]
+        requires = ["upgradeable", "holdout"]
+
+        [expected]
+        satisfiable = true
+
+        [packages.upgradeable.versions."1.0.0"]
+        wheel_tags = ["cp312-cp312-manylinux_2_17_x86_64"]
+
+        [packages.upgradeable.versions."2.0.0"]
+        wheel_tags = ["cp313-cp313-manylinux_2_17_x86_64"]
+
+        [packages.holdout.versions."1.0.0"]
+        wheel_tags = ["cp312-cp312-manylinux_2_17_x86_64"]
+        "#,
+    )?;
+    let server = PackseServer::from_scenario(&scenario);
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["upgradeable<2", "holdout"]
+        "#,
+    )?;
+
+    let mut lock = context.lock();
+    lock.env_remove(EnvVars::UV_EXCLUDE_NEWER);
+    lock.arg("--index-url").arg(server.index_url());
+    uv_snapshot!(context.filters(), lock, @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+
+    pyproject_toml.write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["upgradeable<2", "holdout"]
+
+        [tool.uv]
+        required-environments = ["python_version == '3.13'"]
+        "#,
+    )?;
+
+    let mut lock = context.lock();
+    lock.env_remove(EnvVars::UV_EXCLUDE_NEWER);
+    lock.arg("--index-url").arg(server.index_url());
+    uv_snapshot!(context.filters(), lock, @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+
+    pyproject_toml.write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["upgradeable<2", "holdout"]
+
+        [tool.uv]
+        required-environments = ["python_version == '3.13'"]
+        required-environments-mode = "require-wheels"
+        "#,
+    )?;
+
+    let mut lock = context.lock();
+    lock.env_remove(EnvVars::UV_EXCLUDE_NEWER);
+    lock.arg("--index-url").arg(server.index_url());
+    uv_snapshot!(context.filters(), lock, @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    warning: The `required-environments-mode` setting is experimental and may change without warning. Pass `--preview-features required-environments-mode` to disable this warning.
+      × No solution found when resolving dependencies for split (markers: python_full_version == '3.13.*'):
+      ╰─▶ Because only holdout==1.0.0 is available and holdout==1.0.0 has no `python_full_version == '3.13.*'`-compatible wheels, we can conclude that all versions of holdout cannot be used.
+          And because your project depends on holdout, we can conclude that your project's requirements are unsatisfiable.
+
+    hint: While the active Python version is 3.12, the resolution failed for other Python versions supported by your project. Consider limiting your project's supported Python versions using `requires-python`.
+    ");
+
+    pyproject_toml.write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["upgradeable<2", "holdout"]
+
+        [tool.uv]
+        required-environments = ["python_version == '3.13'"]
+        required-environments-mode = "require-wheels"
+        preview-features = ["required-environments-mode"]
+        "#,
+    )?;
+
+    let mut lock = context.lock();
+    lock.env_remove(EnvVars::UV_EXCLUDE_NEWER);
+    lock.arg("--index-url").arg(server.index_url());
+    uv_snapshot!(context.filters(), lock, @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+      × No solution found when resolving dependencies for split (markers: python_full_version == '3.13.*'):
+      ╰─▶ Because only holdout==1.0.0 is available and holdout==1.0.0 has no `python_full_version == '3.13.*'`-compatible wheels, we can conclude that all versions of holdout cannot be used.
+          And because your project depends on holdout, we can conclude that your project's requirements are unsatisfiable.
+
+    hint: While the active Python version is 3.12, the resolution failed for other Python versions supported by your project. Consider limiting your project's supported Python versions using `requires-python`.
+    ");
+
+    pyproject_toml.write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = [
+            "upgradeable",
+            "holdout; python_version < '3.13'",
+        ]
+
+        [tool.uv]
+        required-environments = ["python_version == '3.13'"]
+        required-environments-mode = "require-wheels"
+        preview-features = ["required-environments-mode"]
+        "#,
+    )?;
+
+    let mut lock = context.lock();
+    lock.env_remove(EnvVars::UV_EXCLUDE_NEWER);
+    lock.arg("--index-url").arg(server.index_url());
+    uv_snapshot!(context.filters(), lock, @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    Updated upgradeable v1.0.0 -> v1.0.0, v2.0.0
+    ");
+
+    let versions_and_options = context
+        .read("uv.lock")
+        .lines()
+        .filter(|line| {
+            line.starts_with("name = ")
+                || line.starts_with("version = ")
+                || line.starts_with("required-environments-mode = ")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_snapshot!(versions_and_options, @r#"
+    version = 1
+    required-environments-mode = "require-wheels"
+    name = "holdout"
+    version = "1.0.0"
+    name = "project"
+    version = "0.1.0"
+    name = "upgradeable"
+    version = "1.0.0"
+    name = "upgradeable"
+    version = "2.0.0"
+    "#);
 
     Ok(())
 }
