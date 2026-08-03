@@ -139,7 +139,8 @@ fn write_options(writer: &mut LockWriter, options: &ResolverOptions) -> Result<(
         || options.prerelease.global != PrereleaseMode::default()
         || !options.prerelease.package.is_empty()
         || options.fork_strategy != ForkStrategy::default()
-        || !options.exclude_newer.is_empty();
+        || !options.exclude_newer.is_empty()
+        || options.required_environments_mode.is_some();
     if !has_options {
         return Ok(());
     }
@@ -153,6 +154,12 @@ fn write_options(writer: &mut LockWriter, options: &ResolverOptions) -> Result<(
     }
     if options.fork_strategy != ForkStrategy::default() {
         writer.key_value("fork-strategy", options.fork_strategy.to_string())?;
+    }
+    if let Some(required_environments_mode) = options.required_environments_mode {
+        writer.key_value(
+            "required-environments-mode",
+            required_environments_mode.to_string(),
+        )?;
     }
 
     let exclude_newer = &options.exclude_newer;
