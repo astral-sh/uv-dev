@@ -14,7 +14,7 @@ use uv_pypi_types::{HashDigest, Yanked};
 
 use crate::{
     File, InstalledDist, KnownPlatform, MinimumLibcVersion, RegistryBuiltDist, RegistryBuiltWheel,
-    RegistrySourceDist, ResolvedDistRef,
+    RegistrySourceDist, RequiresPython, ResolvedDistRef,
 };
 
 /// A collection of distributions that have been filtered by relevance.
@@ -496,6 +496,31 @@ impl PrioritizedDist {
     /// Return the hashes for each distribution.
     pub fn hashes(&self) -> &[HashDigest] {
         &self.0.hashes
+    }
+
+    /// Return the set of environments supported by the compatible wheels in this distribution.
+    ///
+    /// Unlike the distribution markers, this does not treat a source distribution as support for
+    /// every environment.
+    pub fn implied_wheel_markers(
+        &self,
+        minimum_libc_version: Option<MinimumLibcVersion>,
+    ) -> MarkerTree {
+        let mut markers = MarkerTree::FALSE;
+        for (wheel, compatibility) in &self.0.wheels {
+            if !compatibility.is_compatible() {
+                continue;
+            }
+
+            let mut marker = implied_markers(&wheel.filename, minimum_libc_version);
+            if let Some(requires_python) = &wheel.file.requires_python {
+                marker = marker.and(
+                    RequiresPython::from_specifiers((**requires_python).clone()).to_marker_tree(),
+                );
+            }
+            markers = markers.or(marker);
+        }
+        markers
     }
 
     /// Returns true if and only if this distribution does not contain any
