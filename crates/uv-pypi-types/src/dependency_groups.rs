@@ -1,4 +1,5 @@
 use serde::{Deserialize, Deserializer, Serialize};
+use serde_untagged::UntaggedEnumVisitor;
 use std::collections::BTreeMap;
 use std::str::FromStr;
 
@@ -93,8 +94,40 @@ pub enum DependencyGroupSpecifier {
         /// The name of the group to include.
         include_group: GroupName,
     },
+    /// A reference to a dependency group in the workspace root.
+    IncludeWorkspaceGroup {
+        /// The name of the workspace-root group to include.
+        include_group: GroupName,
+    },
     /// A Dependency Object Specifier.
     Object(BTreeMap<String, String>),
+}
+
+enum DependencyGroupObjectValue {
+    String(String),
+    Workspace(GroupName),
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkspaceGroupInclude {
+    workspace: GroupName,
+}
+
+impl<'de> Deserialize<'de> for DependencyGroupObjectValue {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        UntaggedEnumVisitor::new()
+            .expecting("a string")
+            .string(|value| Ok(Self::String(value.to_owned())))
+            .map(|map| {
+                map.deserialize::<WorkspaceGroupInclude>()
+                    .map(|include| Self::Workspace(include.workspace))
+            })
+            .deserialize(deserializer)
+    }
 }
 
 impl<'de> Deserialize<'de> for DependencyGroupSpecifier {
@@ -132,17 +165,32 @@ impl<'de> Deserialize<'de> for DependencyGroupSpecifier {
                 }
 
                 if map_data.len() == 1
-                    && let Some(include_group) = map_data
-                        .get("include-group")
-                        .map(String::as_str)
-                        .map(GroupName::from_str)
-                        .transpose()
-                        .map_err(serde::de::Error::custom)?
+                    && let Some(include_group) = map_data.remove("include-group")
                 {
-                    Ok(DependencyGroupSpecifier::IncludeGroup { include_group })
-                } else {
-                    Ok(DependencyGroupSpecifier::Object(map_data))
+                    return match include_group {
+                        DependencyGroupObjectValue::String(include_group) => {
+                            GroupName::from_str(&include_group)
+                                .map(|include_group| DependencyGroupSpecifier::IncludeGroup {
+                                    include_group,
+                                })
+                                .map_err(serde::de::Error::custom)
+                        }
+                        DependencyGroupObjectValue::Workspace(include_group) => {
+                            Ok(DependencyGroupSpecifier::IncludeWorkspaceGroup { include_group })
+                        }
+                    };
                 }
+
+                let map_data = map_data
+                    .into_iter()
+                    .map(|(key, value)| match value {
+                        DependencyGroupObjectValue::String(value) => Ok((key, value)),
+                        DependencyGroupObjectValue::Workspace(_) => Err(
+                            serde::de::Error::custom("workspace group includes must be the only entry in a dependency object"),
+                        ),
+                    })
+                    .collect::<Result<_, _>>()?;
+                Ok(DependencyGroupSpecifier::Object(map_data))
             }
         }
 
