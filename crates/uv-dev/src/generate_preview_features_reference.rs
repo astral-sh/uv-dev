@@ -124,6 +124,7 @@ mod tests {
         - `format-command`: Allows using `uv format`.
         - `gcs-endpoint`: Allows signing requests to configured Google Cloud Storage endpoints.
         - `index-by-name`: Allows selecting configured package indexes by name with `--index` and `--default-index`.
+        - `include-group-workspace`: Allows dependency groups to include dependency groups from the workspace root.
         - `index-exclude-newer`: Allows setting `exclude-newer` on configured package indexes.
         - `index-hash-algorithm`: Allows requiring a hash algorithm for configured package indexes.
         - `init-project-flag`: Rejects the deprecated `--project` option in `uv init`.
