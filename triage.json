@@ -1,0 +1,34 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 10522,
+        "title": "uv venv \"Failed to parse: `pyproject.toml`\" warning without the root cause + why the project version in `pyproject.toml`",
+        "url": "https://github.com/astral-sh/uv/issues/10522",
+        "state": "closed",
+        "reason": "astral-sh/uv#10522 concerns the same broad error-reporting failure: a pyproject parsing cause was hidden behind a less useful message. It differs because it involved `uv venv` settings discovery and a missing version, not `uv lock`, invalid dependency syntax, `no-build`, or metadata fallback."
+      },
+      {
+        "kind": "pull_request",
+        "number": 10553,
+        "title": "Provide `pyproject.toml` path for parse errors in `uv venv`",
+        "url": "https://github.com/astral-sh/uv/pull/10553",
+        "state": "merged",
+        "reason": "astral-sh/uv#10553 fixed astral-sh/uv#10522 by retaining the detailed parse error. It is relevant precedent, but its narrowly scoped `uv venv` change does not cover the reported lock and metadata-generation path."
+      },
+      {
+        "kind": "issue",
+        "number": 10204,
+        "title": "Add a non-package-mode",
+        "url": "https://github.com/astral-sh/uv/issues/10204",
+        "state": "open",
+        "reason": "astral-sh/uv#10204 is the canonical broader discussion of non-package projects and documents `[tool.uv] package = false`. The new issue identifies a narrower correctness problem where that existing setting is allegedly ignored during recovery from malformed project metadata, so discussion cannot be fully centralized in the broader design issue."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests using exact fragments and identifiers including `Building source distributions ... disabled`, `Failed to generate package metadata`, `no-build`, `package = false`, parser errors, and the malformed dependency. Conceptual searches covered invalid dependency syntax, pyproject parsing, metadata fallback through PEP 517, non-package projects, and hidden parse causes. Fix-oriented searches covered merged changes for pyproject parse-error propagation and metadata parsing. Inspected the strongest candidates and their comments and linked fixes. astral-sh/uv#9911 was especially plausible from its title and label but was ruled out because it concerns duplicate warning/error rendering for invalid TOML, rather than replacement of a dependency parsing error by a build-disabled failure or disregard of `package = false`."
+  },
+  "type": "bug",
+  "type_reason": "The report provides a concrete `uv lock` reproduction where malformed dependency syntax is obscured by an unrelated build-disabled message, and where an existing `package = false` setting does not control the fallback behavior as intended. These are correctness and misleading-output problems, not requests for new functionality. No existing issue or pull request was found that already tracks this same combination closely enough for duplicate classification.",
+  "summary": "The closest precedent is astral-sh/uv#10522 and its fix astral-sh/uv#10553 for preserving useful pyproject parse causes; astral-sh/uv#10204 is adjacent background for non-package semantics. None tracks the reported `uv lock` metadata fallback involving malformed dependencies, `no-build`, and `package = false`."
+}
