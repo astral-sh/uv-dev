@@ -1,0 +1,42 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 10336,
+        "title": "Sign published executables for Windows",
+        "url": "https://github.com/astral-sh/uv/issues/10336",
+        "state": "open",
+        "reason": "astral-sh/uv#10336 is the active canonical discussion for signing Windows releases to reduce recurring antivirus reports. It explicitly tracks this problem class, although signing is only a proposed mitigation and is not confirmed to prevent Kaspersky's behavioral detection."
+      },
+      {
+        "kind": "pull_request",
+        "number": 18280,
+        "title": "Add code signing of release binaries via `cargo-code-sign`",
+        "url": "https://github.com/astral-sh/uv/pull/18280",
+        "state": "open",
+        "reason": "astral-sh/uv#18280 implements the Windows code-signing work tracked by astral-sh/uv#10336. It remains unfinished and does not establish the cause of PDM:Trojan.Win32.Generic."
+      },
+      {
+        "kind": "issue",
+        "number": 13553,
+        "title": "Bitdefender is detecting UV as malware",
+        "url": "https://github.com/astral-sh/uv/issues/13553",
+        "state": "closed",
+        "reason": "astral-sh/uv#13553 is the closest prior vendor-specific report: a third-party antivirus heuristically identified an official Windows uv release as malware. Maintainers classified it as a vendor false positive, and the vendor later resolved it after submission."
+      },
+      {
+        "kind": "issue",
+        "number": 17344,
+        "title": "The latest version 0.9.22 doesn't work on Windows",
+        "url": "https://github.com/astral-sh/uv/issues/17344",
+        "state": "closed",
+        "reason": "astral-sh/uv#17344 documents the same observable release-binary blocking pattern and maintainer guidance that heuristic detections can disappear after updated definitions or reputation analysis. It differs because it involved Microsoft Defender, mostly uvw.exe/uvx.exe, and uv 0.9.22."
+      }
+    ],
+    "search_scope": "Searched all issue and pull-request states for the exact identifiers \"PDM:Trojan.Win32.Generic\", \"System Watcher\", and Kaspersky; these found only astral-sh/uv#20906. Conceptual searches covered antivirus/AV, malware, trojan, heuristic and false-positive detections, Windows executable blocking or quarantine, uv.exe/uvw.exe/uvx.exe, installer and runtime behavior, SmartScreen, unsigned binaries, code signing, and release-specific fixes. Inspected the strongest issue chains and maintainer comments, including astral-sh/uv#1587, astral-sh/uv#3157, astral-sh/uv#4300, astral-sh/uv#7590, astral-sh/uv#9144, astral-sh/uv#10079, astral-sh/uv#12621, astral-sh/uv#15011, astral-sh/uv#16518, astral-sh/uv#17403, astral-sh/uv#17417, and astral-sh/uv#18967, plus open signing work astral-sh/uv#18280. astral-sh/uv#15011 was especially plausible but was ruled out as a closest match because it concerns Defender deleting 32-bit uvw.exe during extraction rather than Kaspersky behaviorally intercepting uv.exe during ordinary commands."
+  },
+  "type": "duplicate",
+  "type_reason": "The report is another instance of the recurring Windows antivirus false-positive problem already centralized in open astral-sh/uv#10336, with an active mitigation in astral-sh/uv#18280. Repository history supports that such heuristic alarms are external false positives, but it does not confirm why Kaspersky flags uv 0.12.1 or that code signing will eliminate this specific behavioral detection.",
+  "summary": "The exact Kaspersky signature is new, but the underlying Windows antivirus false-positive problem is already tracked by astral-sh/uv#10336 and its open signing implementation astral-sh/uv#18280; prior vendor-specific reports show closely matching behavior."
+}
