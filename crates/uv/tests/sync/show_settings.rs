@@ -4032,6 +4032,7 @@ fn preview_features() {
     +            BuildDependencyCheck,
     +            BuildLazyImports,
     +            BuildDependencyHashes,
+    +            IncludeGroupWorkspace,
     +        ],
          },
          python_preference: Managed,

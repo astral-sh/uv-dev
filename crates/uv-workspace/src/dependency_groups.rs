@@ -30,7 +30,7 @@ impl FlatDependencyGroups {
     /// Gather and flatten all the dependency-groups defined in the given pyproject.toml
     ///
     /// The path is only used in diagnostics.
-    pub fn from_pyproject_toml(
+    pub(crate) fn from_pyproject_toml(
         path: &Path,
         pyproject_toml: &PyProjectToml,
     ) -> Result<Self, DependencyGroupError> {
