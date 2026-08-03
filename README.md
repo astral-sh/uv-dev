@@ -21,3 +21,9 @@ This is a newly reported performance regression, not a duplicate: no existing is
   This is the canonical uv 0.12 stabilization discussion. Maintainers specifically considered whether adjust-ulimit had caused problems before deciding to stabilize it; astral-sh/uv#20225 closed the tracker.
 - https://github.com/astral-sh/uv/pull/20225 (merged pull request): Stabilize preview features for uv 0.12
   This made adjust-ulimit the default for uv 0.12, matching the reported regression boundary. The PR raises the open-file limit at startup but contains no tcsh/csh-specific report or remedy.
+
+## Reproduction
+
+Status: `needs_more_information`
+
+uv 0.12.1 raised a controlled RLIMIT_NOFILE from (1024, 65536) to (65536, 65536), confirming the behavior introduced by astral-sh/uv#20225. However, `uv run --no-project -- tcsh -f -c 'exit 0'` did not become slower with Ubuntu tcsh 6.24.10 or 6.21.00: raised-versus-capped medians were about 21–23 ms, and strace recorded 47 close calls at both limits. The runner’s hard limit prevented testing 524288, and its uv build is GNU rather than the reported musl build. Reproduction needs the exact container image/tag or Dockerfile, full `tcsh --version`, `readlink -f /bin/csh`, and kernel version. The existing test `crates/uv/tests/it/resource_limits.rs::adjust_open_file_limit` verifies limit inheritance but not tcsh performance.
