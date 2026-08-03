@@ -1,0 +1,50 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 15357,
+        "title": "Stabilize conflicting modules warning",
+        "url": "https://github.com/astral-sh/uv/issues/15357",
+        "state": "open",
+        "reason": "Canonical tracker for overlapping wheel modules causing nondeterministic installations and broken uninstallations. It tracks stabilizing the existing preview warning and explicitly references astral-sh/uv#15238."
+      },
+      {
+        "kind": "issue",
+        "number": 15238,
+        "title": "`uv sync` removes necessary dependencies when two packages include the same module",
+        "url": "https://github.com/astral-sh/uv/issues/15238",
+        "state": "open",
+        "reason": "Tracks the same RECORD-overlap failure: uninstall removes shared package files while dist-info remains, and later sync considers the distribution installed and does not restore it. Maintainers explicitly proposed detecting incomplete installs or handling files claimed by another RECORD."
+      },
+      {
+        "kind": "issue",
+        "number": 16546,
+        "title": "report an error when installing a package that overrides another",
+        "url": "https://github.com/astral-sh/uv/issues/16546",
+        "state": "open",
+        "reason": "Matches the request to report or reject silent collisions. Maintainers confirm conflict detection currently exists only through the preview feature and is not enabled by default because legitimate packages also overlap."
+      },
+      {
+        "kind": "pull_request",
+        "number": 13437,
+        "title": "Warn when two packages write to the same module",
+        "url": "https://github.com/astral-sh/uv/pull/13437",
+        "state": "merged",
+        "reason": "Implemented warnings for top-level module collisions installed in one operation and names the conflicting wheels. Its scope is narrower than the report: it does not generally detect arbitrary shared paths or repair incomplete environments."
+      },
+      {
+        "kind": "issue",
+        "number": 19412,
+        "title": "`uv sync` does not properly recover from an environment with faulty packages (opencv-contrib-python package problem)",
+        "url": "https://github.com/astral-sh/uv/issues/19412",
+        "state": "open",
+        "reason": "A second concrete reproduction where overlapping distributions leave files missing after uninstall and `uv sync` does not repair the environment, confirming the behavior beyond the reporter's aws-cdk packages."
+      }
+    ],
+    "search_scope": "Searched open and closed issues plus open, closed, and merged pull requests separately for file/module collisions, overlapping wheels and RECORD ownership, silent overrides, shared-file uninstall behavior, orphaned files, missing files with surviving dist-info, incomplete-install detection, and sync verification/restoration. Exact and conceptual searches included “file collision distribution,” “overlapping/shared files uninstall,” “RECORD missing files sync,” “verify installed files,” “orphaned file uninstall,” “dist-info missing file,” and “clobber files wheel.” Followed maintainer references through astral-sh/uv#16546, astral-sh/uv#15238, astral-sh/uv#15357, astral-sh/uv#19412, astral-sh/uv#13437, and the closed, unmerged astral-sh/uv#19430. Ruled out astral-sh/uv#16468 as less direct because it reports an incomplete installation with a missing RECORD after remove/add and lacks a confirmed collision mechanism. Astral-sh/uv#888 concerns RECORD hash validation and is adjacent, but does not directly track sync repairing missing installed files."
+  },
+  "type": "duplicate",
+  "type_reason": "The report combines already-tracked facets of the same overlapping-distribution problem: astral-sh/uv#15357 is the canonical open collision-warning tracker, while astral-sh/uv#15238 already tracks broken uninstallation and sync failing to restore files because dist-info remains. The aws-cdk reproduction and the observation that a shared file can survive uninstalling both distributions add useful triggering detail, but do not establish a separate underlying problem. No evidence indicates a regression of a completed fix: collision warnings remain preview-only, and repair of existing incomplete environments is still open.",
+  "summary": "The report is best centralized in astral-sh/uv#15357 and astral-sh/uv#15238. Existing work covers collision diagnostics, broken overlap-aware uninstall behavior, and sync treating surviving metadata as sufficient; the aws-cdk case supplies another concrete reproduction."
+}
