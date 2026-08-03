@@ -204,6 +204,22 @@ ignoring Linux and Windows). On the other hand,
 source distribution include a wheel for macOS in order to be installable (and would fail if no such
 wheel is available).
 
+When updating an existing lockfile, uv drops lock preferences for packages that do not include a
+wheel for a required environment and resolves those packages again. This makes a Python-version
+upgrade eager: once a constraint is removed, a package that was previously pinned to a version
+without matching wheels can move to another allowed version. Constraints on known holdouts
+continue to be respected, but source-only packages may also be upgraded because their pins are
+discarded.
+
+```toml title="pyproject.toml"
+[project]
+requires-python = ">=3.12"
+
+[tool.uv]
+required-environments = ["python_version == '3.13'"]
+constraint-dependencies = ["known-holdout<2"]
+```
+
 In practice, `required-environments` can be useful for declaring explicit support for non-latest
 platforms, since this often requires backtracking past the latest published versions of those
 packages. For example, to guarantee that any built distribution-only packages includes support for
