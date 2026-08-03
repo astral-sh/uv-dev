@@ -126,6 +126,8 @@ struct ResolverState<InstalledPackages: InstalledPackagesProvider> {
     python_requirement: PythonRequirement,
     conflicts: Conflicts,
     workspace_members: BTreeSet<PackageName>,
+    /// Workspace packages explicitly requested from a registry by a group-scoped source.
+    registry_workspace_members: BTreeSet<PackageName>,
     selector: CandidateSelector,
     index: InMemoryIndex,
     installed_packages: InstalledPackages,
@@ -238,6 +240,7 @@ impl<Provider: ResolverProvider, InstalledPackages: InstalledPackagesProvider>
             indexes: Indexes::from_manifest(&manifest, &env, options.dependency_mode),
             project: manifest.project,
             workspace_members: manifest.workspace_members,
+            registry_workspace_members: manifest.registry_workspace_members,
             requirements: manifest.requirements,
             constraints: manifest.constraints,
             overrides: manifest.overrides,
@@ -832,6 +835,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             &self.git,
             self.python_requirement.target().clone(),
             &self.conflicts,
+            &self.registry_workspace_members,
             self.selector.resolution_strategy(),
             self.options.clone(),
         )
@@ -1051,7 +1055,9 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                 parent: _,
                 source: _,
             } = dependency;
-            let url = package.name().and_then(|name| state.fork_urls.get(name));
+            let url = (!package.is_registry())
+                .then(|| package.name().and_then(|name| state.fork_urls.get(name)))
+                .flatten();
             let index = package.name().and_then(|name| state.fork_indexes.get(name));
             self.visit_package(package, url, index, request_sink)?;
         }
@@ -1068,7 +1074,10 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
         request_sink: &Sender<Request>,
     ) -> Result<(), ResolveError> {
         // Ignore unresolved URL packages, i.e., packages that use a direct URL in some forks.
-        if url.is_none() && package.name().is_none_or(|name| self.urls.any_url(name)) {
+        if url.is_none()
+            && !package.is_registry()
+            && package.name().is_none_or(|name| self.urls.any_url(name))
+        {
             return Ok(());
         }
 
@@ -1140,13 +1149,14 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                 extra: None,
                 group: None,
                 marker: MarkerTree::TRUE,
+                registry,
             } = &**package
             else {
                 continue;
             };
             // Avoid pre-visiting packages that have any URLs in any fork. At this point we can't
             // tell whether they are registry distributions or which url they use.
-            if urls.any_url(name) {
+            if !registry && urls.any_url(name) {
                 continue;
             }
             // Avoid visiting packages that may use an explicit index.
@@ -1189,7 +1199,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
     ) -> Option<&'a [Version]> {
         let name = package.name_no_root()?;
         // Versions of packages from a URL or the workspace are not registry versions.
-        if fork_urls.get(name).is_some() {
+        if !package.is_registry() && fork_urls.get(name).is_some() {
             return None;
         }
         if !known_versions.contains_key(name) {
@@ -1267,7 +1277,10 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             | PubGrubPackageInner::Extra { name, .. }
             | PubGrubPackageInner::Group { name, .. }
             | PubGrubPackageInner::Package { name, .. } => {
-                if let Some(url) = package.name().and_then(|name| fork_urls.get(name)) {
+                if let Some(url) = (!package.is_registry())
+                    .then(|| package.name().and_then(|name| fork_urls.get(name)))
+                    .flatten()
+                {
                     self.choose_version_url(id, name, range, url, env, python_requirement, pubgrub)
                 } else {
                     self.choose_version_registry(
@@ -1958,6 +1971,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
 
                 PubGrubDependency::from_requirements(
                     &self.conflicts,
+                    &self.registry_workspace_members,
                     requirements,
                     None,
                     Some(package),
@@ -1965,10 +1979,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             }
 
             PubGrubPackageInner::Package {
-                name,
-                extra,
-                group,
-                marker: _,
+                name, extra, group, ..
             } => {
                 // If we're excluding transitive dependencies, short-circuit.
                 if self.dependency_mode.is_direct() {
@@ -2083,6 +2094,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
 
                 PubGrubDependency::from_requirements(
                     &self.conflicts,
+                    &self.registry_workspace_members,
                     requirements,
                     group.as_ref(),
                     Some(package),
@@ -2108,6 +2120,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                                 extra: None,
                                 group: None,
                                 marker,
+                                registry: false,
                             }),
                             version: Range::singleton(version.clone()),
                             parent: None,
@@ -2136,6 +2149,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                                         extra: extra.cloned(),
                                         group: None,
                                         marker,
+                                        registry: false,
                                     }),
                                     version: Range::singleton(version.clone()),
                                     parent: None,
@@ -2162,6 +2176,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                                 extra: None,
                                 group: Some(group.clone()),
                                 marker,
+                                registry: false,
                             }),
                             version: Range::singleton(version.clone()),
                             parent: None,
@@ -3548,7 +3563,7 @@ impl ForkState {
                         name: self_name,
                         extra: self_extra,
                         group: self_group,
-                        marker: _,
+                        ..
                     } => (Some(self_name), self_extra.as_ref(), self_group.as_ref()),
 
                     PubGrubPackageInner::Root(_) => (None, None, None),
@@ -3557,7 +3572,19 @@ impl ForkState {
                 };
 
                 let (self_url, self_index) = self_name
-                    .map(|self_name| self.source(self_name, self_version))
+                    .map(|self_name| {
+                        if self_package.is_registry() {
+                            (
+                                None,
+                                self.pins
+                                    .get(self_name, self_version)
+                                    .expect("Every registry package should be pinned")
+                                    .index(),
+                            )
+                        } else {
+                            self.source(self_name, self_version)
+                        }
+                    })
                     .unwrap_or((None, None));
 
                 match **dependency_package {
@@ -3566,6 +3593,7 @@ impl ForkState {
                         extra: ref dependency_extra,
                         group: ref dependency_dev,
                         marker: ref dependency_marker,
+                        ..
                     } => {
                         debug_assert!(
                             dependency_extra.is_none(),
@@ -3584,7 +3612,17 @@ impl ForkState {
                             }
                         }
 
-                        let (to_url, to_index) = self.source(dependency_name, dependency_version);
+                        let (to_url, to_index) = if dependency_package.is_registry() {
+                            (
+                                None,
+                                self.pins
+                                    .get(dependency_name, dependency_version)
+                                    .expect("Every registry package should be pinned")
+                                    .index(),
+                            )
+                        } else {
+                            self.source(dependency_name, dependency_version)
+                        };
 
                         let edge = ResolutionDependencyEdge {
                             from: self_name.cloned(),
@@ -3731,9 +3769,20 @@ impl ForkState {
                     extra,
                     group,
                     marker: MarkerTree::TRUE,
+                    registry,
                 } = &*self.pubgrub.package_store[package]
                 {
-                    let (url, index) = self.source(name, &version);
+                    let (url, index) = if *registry {
+                        (
+                            None,
+                            self.pins
+                                .get(name, &version)
+                                .expect("Every registry package should be pinned")
+                                .index(),
+                        )
+                    } else {
+                        self.source(name, &version)
+                    };
                     Some((
                         ResolutionPackage {
                             name: name.clone(),

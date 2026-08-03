@@ -388,7 +388,7 @@ impl<'env> LockOperation<'env> {
                 if let LockTarget::Workspace(workspace) = target {
                     for package_name in workspace.packages().keys() {
                         existing
-                            .find_by_name(package_name)
+                            .find_workspace_member(package_name)
                             .map_err(|_| ProjectError::LockWorkspaceMismatch(package_name.clone()))?
                             .ok_or_else(|| {
                                 ProjectError::LockWorkspaceMismatch(package_name.clone())
@@ -1063,6 +1063,7 @@ async fn do_lock(
                 // The root is always null in workspaces, it "depends on" the projects
                 None,
                 packages.keys().cloned().collect(),
+                target.registry_workspace_members(sources),
                 &extras,
                 &groups,
                 preferences,

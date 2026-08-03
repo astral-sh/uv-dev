@@ -84,7 +84,7 @@ impl<'lock> ExportableRequirements<'lock> {
 
             let dist = target
                 .lock()
-                .find_by_name(root_name)
+                .find_workspace_member(root_name)
                 .map_err(|_| LockErrorKind::MultipleRootPackages {
                     name: root_name.clone(),
                 })?

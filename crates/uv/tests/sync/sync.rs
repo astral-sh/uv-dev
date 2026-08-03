@@ -4711,6 +4711,136 @@ fn sync_group_transitive_self() -> Result<()> {
     Ok(())
 }
 
+/// A group can explicitly request the published distribution of the current workspace project.
+#[test]
+fn sync_group_transitive_self_remote_workspace_source() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "idna"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig"]
+
+        [dependency-groups]
+        foo = ["anyio", "idna"]
+
+        [tool.uv.sources]
+        idna = { workspace = false, group = "foo" }
+
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+        "#,
+    )?;
+    context
+        .temp_dir
+        .child("src")
+        .child("idna")
+        .child("__init__.py")
+        .touch()?;
+
+    context.lock().assert().success();
+
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--only-group").arg("foo"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 3 packages in [TIME]
+    Installed 3 packages in [TIME]
+     + anyio==4.3.0
+     + idna==3.6
+     + sniffio==1.3.1
+    ");
+
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 2 packages in [TIME]
+    Uninstalled 3 packages in [TIME]
+    Installed 2 packages in [TIME]
+     - anyio==4.3.0
+     - idna==3.6
+     + idna==0.1.0 (from file://[TEMP_DIR]/)
+     + iniconfig==2.0.0
+     - sniffio==1.3.1
+    ");
+
+    Ok(())
+}
+
+#[test]
+fn sync_group_remote_workspace_member_source() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [dependency-groups]
+        foo = ["idna"]
+
+        [tool.uv.workspace]
+        members = ["idna"]
+
+        [tool.uv.sources]
+        idna = { workspace = false, group = "foo" }
+        "#,
+    )?;
+
+    context
+        .temp_dir
+        .child("idna")
+        .child("pyproject.toml")
+        .write_str(
+            r#"
+            [project]
+            name = "idna"
+            version = "3.6"
+            requires-python = ">=3.12"
+            dependencies = ["iniconfig"]
+
+            [build-system]
+            requires = ["uv_build>=0.7,<10000"]
+            build-backend = "uv_build"
+            "#,
+        )?;
+    context
+        .temp_dir
+        .child("idna")
+        .child("src")
+        .child("idna")
+        .child("__init__.py")
+        .touch()?;
+
+    context.lock().assert().success();
+
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--only-group").arg("foo"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + idna==3.6
+    ");
+
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--all-packages"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 2 packages in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 2 packages in [TIME]
+     - idna==3.6
+     + idna==3.6 (from file://[TEMP_DIR]/idna)
+     + iniconfig==2.0.0
+    ");
+
+    Ok(())
+}
+
 /// Sync with `--only-group`, where the group includes the project itself.
 #[test]
 fn sync_group_self() -> Result<()> {

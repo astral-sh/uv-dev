@@ -137,7 +137,7 @@ impl LoweredRequirement {
                             )));
                         }
                         Source::Workspace {
-                            workspace: WorkspaceReference::Bool(true),
+                            workspace: WorkspaceReference::Bool(_),
                             ..
                         } => {
                             // OK
@@ -593,8 +593,6 @@ pub enum LoweringError {
         "`{0}` is associated with a URL source, but references a Git repository. Consider using a Git source instead (e.g., `{0} = {{ git = \"{1}\" }}`)"
     )]
     MissingGitSource(PackageName, DisplaySafeUrl),
-    #[error("`workspace = false` is not yet supported")]
-    WorkspaceFalse,
     #[error(transparent)]
     Workspace(#[from] WorkspaceError),
     #[error(
@@ -829,7 +827,7 @@ async fn workspace_source(
     };
 
     match workspace_ref {
-        WorkspaceReference::Bool(false) => Err(LoweringError::WorkspaceFalse),
+        WorkspaceReference::Bool(false) => Ok(Requirement::from(requirement.clone()).source),
         WorkspaceReference::Bool(true) => {
             let workspace = current_workspace.ok_or(LoweringError::WorkspaceMember)?;
             let member = workspace.packages().get(&requirement.name).ok_or_else(|| {

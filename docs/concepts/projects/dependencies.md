@@ -491,6 +491,20 @@ members = [
 ]
 ```
 
+To use the published version of a workspace member for a specific dependency group, set
+`workspace = false` and specify the group:
+
+```toml title="pyproject.toml"
+[dependency-groups]
+lint = ["foo"]
+
+[tool.uv.sources]
+foo = { workspace = false, group = "lint" }
+```
+
+The workspace member remains available locally, while `uv sync --only-group lint` installs the
+published distribution from the package index.
+
 ### Platform-specific sources
 
 You can limit a source to a given platform or Python version by providing

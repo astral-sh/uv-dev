@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use itertools::Either;
@@ -20,7 +20,7 @@ use uv_scripts::Pep723Script;
 use uv_workspace::dependency_groups::{
     DependencyGroupError, FlatDependencyGroup, FlatDependencyGroups,
 };
-use uv_workspace::pyproject::OverrideDependency;
+use uv_workspace::pyproject::{OverrideDependency, Source as WorkspaceSource, WorkspaceReference};
 use uv_workspace::{Editability, Workspace, WorkspaceCache, WorkspaceMember};
 
 use crate::commands::project::{ProjectError, find_requires_python};
@@ -219,6 +219,45 @@ impl<'lock> LockTarget<'lock> {
                 &EMPTY
             }
         }
+    }
+
+    /// Return workspace members that a source explicitly requests from a package index.
+    pub(crate) fn registry_workspace_members(
+        self,
+        no_sources: &NoSources,
+    ) -> BTreeSet<PackageName> {
+        let Self::Workspace(workspace) = self else {
+            return BTreeSet::new();
+        };
+
+        workspace
+            .sources()
+            .iter()
+            .chain(workspace.packages().values().flat_map(|member| {
+                member
+                    .pyproject_toml()
+                    .tool
+                    .as_ref()
+                    .and_then(|tool| tool.uv.as_ref())
+                    .and_then(|uv| uv.sources.as_ref())
+                    .into_iter()
+                    .flat_map(|sources| sources.inner().iter())
+            }))
+            .filter(|(name, sources)| {
+                !no_sources.for_package(name)
+                    && workspace.packages().contains_key(*name)
+                    && sources.iter().any(|source| {
+                        matches!(
+                            source,
+                            WorkspaceSource::Workspace {
+                                workspace: WorkspaceReference::Bool(false),
+                                ..
+                            }
+                        )
+                    })
+            })
+            .map(|(name, _)| name.clone())
+            .collect()
     }
 
     /// Return the set of required workspace members, i.e., those that are required by other

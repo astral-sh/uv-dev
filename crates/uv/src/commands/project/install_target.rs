@@ -215,7 +215,7 @@ impl<'lock> InstallTarget<'lock> {
             && self.group_root(groups).is_none()
             && let Some(roots) = self
                 .roots()
-                .map(|root_name| self.lock().find_by_name(root_name).ok().flatten())
+                .map(|root_name| self.lock().find_workspace_member(root_name).ok().flatten())
                 .collect::<Option<Vec<_>>>()
         {
             return self.lock().to_resolution(

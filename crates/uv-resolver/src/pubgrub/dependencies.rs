@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::collections::BTreeSet;
 use std::iter;
 
 use either::Either;
@@ -116,6 +117,7 @@ impl PubGrubDependency {
     /// reason that package cannot be selected.
     pub(crate) fn from_requirements<'a>(
         conflicts: &Conflicts,
+        registry_workspace_members: &'a BTreeSet<PackageName>,
         requirements: impl IntoIterator<Item = Cow<'a, Requirement>>,
         group_name: Option<&'a GroupName>,
         parent_package: Option<&'a PubGrubPackage>,
@@ -124,6 +126,7 @@ impl PubGrubDependency {
         for requirement in requirements {
             dependencies.extend(Self::from_requirement(
                 conflicts,
+                registry_workspace_members,
                 requirement,
                 group_name,
                 parent_package,
@@ -134,6 +137,7 @@ impl PubGrubDependency {
 
     fn from_requirement<'a>(
         conflicts: &Conflicts,
+        registry_workspace_members: &'a BTreeSet<PackageName>,
         requirement: Cow<'a, Requirement>,
         group_name: Option<&'a GroupName>,
         parent_package: Option<&'a PubGrubPackage>,
@@ -193,8 +197,12 @@ impl PubGrubDependency {
 
         // Add the package, plus any extra variants.
         Ok(iter.map(move |(extra, group)| {
-            let pubgrub_requirement =
-                PubGrubRequirement::from_requirement(&requirement, extra, group);
+            let pubgrub_requirement = PubGrubRequirement::from_requirement(
+                &requirement,
+                extra,
+                group,
+                registry_workspace_members,
+            );
             let PubGrubRequirement {
                 package,
                 version,
@@ -280,7 +288,16 @@ impl PubGrubRequirement {
         requirement: &Requirement,
         extra: Option<ExtraName>,
         group: Option<GroupName>,
+        registry_workspace_members: &BTreeSet<PackageName>,
     ) -> PubGrubPackage {
+        if extra.is_none()
+            && group.is_none()
+            && matches!(requirement.source, RequirementSource::Registry { .. })
+            && registry_workspace_members.contains(&requirement.name)
+        {
+            return PubGrubPackage::from_registry(requirement.name.clone(), requirement.marker);
+        }
+
         PubGrubPackage::from_package(requirement.name.clone(), extra, group, requirement.marker)
     }
 
@@ -290,10 +307,17 @@ impl PubGrubRequirement {
         requirement: &Requirement,
         extra: Option<ExtraName>,
         group: Option<GroupName>,
+        registry_workspace_members: &BTreeSet<PackageName>,
     ) -> Self {
         let (verbatim_url, parsed_url) = match &requirement.source {
             RequirementSource::Registry { specifier, .. } => {
-                return Self::from_registry_requirement(specifier, extra, group, requirement);
+                return Self::from_registry_requirement(
+                    specifier,
+                    extra,
+                    group,
+                    requirement,
+                    registry_workspace_members,
+                );
             }
             RequirementSource::Url {
                 subdirectory,
@@ -361,7 +385,12 @@ impl PubGrubRequirement {
         };
 
         Self {
-            package: Self::package_for_requirement(requirement, extra, group),
+            package: Self::package_for_requirement(
+                requirement,
+                extra,
+                group,
+                registry_workspace_members,
+            ),
             version: Range::full(),
             source: DependencySource::Url(Box::new(VerbatimParsedUrl {
                 parsed_url,
@@ -375,9 +404,15 @@ impl PubGrubRequirement {
         extra: Option<ExtraName>,
         group: Option<GroupName>,
         requirement: &Requirement,
+        registry_workspace_members: &BTreeSet<PackageName>,
     ) -> Self {
         Self {
-            package: Self::package_for_requirement(requirement, extra, group),
+            package: Self::package_for_requirement(
+                requirement,
+                extra,
+                group,
+                registry_workspace_members,
+            ),
             source: DependencySource::from_requirement(requirement),
             version: Range::from(specifier.clone()),
         }

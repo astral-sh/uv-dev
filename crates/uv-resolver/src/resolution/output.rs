@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
@@ -131,6 +131,7 @@ impl ResolverOutput {
         git: &GitResolver,
         requires_python: RequiresPython,
         conflicts: &Conflicts,
+        registry_workspace_members: &BTreeSet<PackageName>,
         resolution_strategy: &ResolutionStrategy,
         options: Options,
     ) -> Result<Self, ResolveError> {
@@ -251,7 +252,7 @@ impl ResolverOutput {
         // re-enable this.
         if conflicts.is_empty() {
             #[allow(unused_mut, reason = "Used in debug_assertions below")]
-            let mut conflicting = output.find_conflicting_distributions();
+            let mut conflicting = output.find_conflicting_distributions(registry_workspace_members);
             if !conflicting.is_empty() {
                 tracing::warn!(
                     "found {} conflicting distributions in resolution, \
@@ -775,33 +776,41 @@ impl ResolverOutput {
     /// same marker environment in this resolution. This in turn implies that
     /// an installation in that marker environment could wind up trying to
     /// install different versions of the same package, which is not allowed.
-    fn find_conflicting_distributions(&self) -> Vec<ConflictingDistributionError> {
-        let mut name_to_markers: BTreeMap<&PackageName, Vec<(&Version, &UniversalMarker)>> =
+    fn find_conflicting_distributions(
+        &self,
+        registry_workspace_members: &BTreeSet<PackageName>,
+    ) -> Vec<ConflictingDistributionError> {
+        let mut name_to_distributions: BTreeMap<&PackageName, Vec<&AnnotatedDist>> =
             BTreeMap::new();
         for node in self.graph.node_weights() {
             let annotated_dist = match node {
                 ResolutionGraphNode::Root => continue,
                 ResolutionGraphNode::Dist(annotated_dist) => annotated_dist,
             };
-            name_to_markers
+            name_to_distributions
                 .entry(&annotated_dist.name)
                 .or_default()
-                .push((&annotated_dist.version, &annotated_dist.marker));
+                .push(annotated_dist);
         }
         let mut dupes = vec![];
-        for (name, marker_trees) in name_to_markers {
-            for (i, (version1, marker1)) in marker_trees.iter().enumerate() {
-                for (version2, marker2) in &marker_trees[i + 1..] {
-                    if version1 == version2 {
+        for (name, distributions) in name_to_distributions {
+            for (index, first) in distributions.iter().enumerate() {
+                for second in &distributions[index + 1..] {
+                    if first.version == second.version {
                         continue;
                     }
-                    if !marker1.is_disjoint(**marker2) {
+                    if registry_workspace_members.contains(name)
+                        && first.dist.is_local() != second.dist.is_local()
+                    {
+                        continue;
+                    }
+                    if !first.marker.is_disjoint(second.marker) {
                         dupes.push(ConflictingDistributionError {
                             name: name.clone(),
-                            version1: (*version1).clone(),
-                            version2: (*version2).clone(),
-                            marker1: **marker1,
-                            marker2: **marker2,
+                            version1: first.version.clone(),
+                            version2: second.version.clone(),
+                            marker1: first.marker,
+                            marker2: second.marker,
                         });
                     }
                 }

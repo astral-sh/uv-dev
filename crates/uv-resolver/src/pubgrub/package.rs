@@ -55,6 +55,8 @@ pub enum PubGrubPackageInner {
         extra: Option<ExtraName>,
         group: Option<GroupName>,
         marker: MarkerTree,
+        /// Whether this requirement explicitly bypasses a same-named local workspace source.
+        registry: bool,
     },
     /// A proxy package to represent a dependency with an extra (e.g., `black[colorama]`).
     ///
@@ -129,8 +131,25 @@ impl PubGrubPackage {
                 extra,
                 group: None,
                 marker,
+                registry: false,
             }))
         }
+    }
+
+    /// Create a registry package that remains distinct from a same-named workspace package.
+    pub(crate) fn from_registry(name: PackageName, marker: MarkerTree) -> Self {
+        Self(Arc::new(PubGrubPackageInner::Package {
+            name,
+            extra: None,
+            group: None,
+            marker,
+            registry: true,
+        }))
+    }
+
+    /// Return whether this package must be resolved from a registry.
+    pub(crate) fn is_registry(&self) -> bool {
+        matches!(&**self, PubGrubPackageInner::Package { registry: true, .. })
     }
 
     /// If this package is a proxy package, return the base package it depends on.
@@ -351,6 +370,7 @@ impl std::fmt::Display for PubGrubPackageInner {
                 extra: None,
                 marker,
                 group: None,
+                ..
             } => {
                 if let Some(marker) = marker.contents() {
                     write!(f, "{name}{{{marker}}}")
@@ -363,6 +383,7 @@ impl std::fmt::Display for PubGrubPackageInner {
                 extra: Some(extra),
                 marker,
                 group: None,
+                ..
             } => {
                 if let Some(marker) = marker.contents() {
                     write!(f, "{name}[{extra}]{{{marker}}}")
@@ -375,6 +396,7 @@ impl std::fmt::Display for PubGrubPackageInner {
                 extra: None,
                 marker,
                 group: Some(dev),
+                ..
             } => {
                 if let Some(marker) = marker.contents() {
                     write!(f, "{name}:{dev}{{{marker}}}")
@@ -399,6 +421,7 @@ impl std::fmt::Display for PubGrubPackageInner {
                 extra: Some(_),
                 marker: _,
                 group: Some(_),
+                ..
             } => unreachable!(),
         }
     }
