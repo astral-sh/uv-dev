@@ -7,10 +7,13 @@ use smallvec::SmallVec;
 use tracing::{debug, trace};
 
 use uv_configuration::IndexStrategy;
-use uv_distribution_types::{DistributionMetadata, IndexUrl, Name, ResolutionRecorder};
+use uv_distribution_types::{
+    DistributionMetadata, IndexUrl, MinimumLibcVersion, Name, ResolutionRecorder,
+};
 use uv_normalize::PackageName;
 use uv_pep440::Version;
 use uv_platform_tags::Tags;
+use uv_pypi_types::SupportedEnvironments;
 use uv_types::InstalledPackagesProvider;
 
 use crate::preferences::{Entry, PreferenceSource, Preferences};
@@ -29,6 +32,8 @@ pub(crate) struct CandidateSelector {
     resolution_strategy: ResolutionStrategy,
     prerelease_strategy: PrereleaseStrategy,
     index_strategy: IndexStrategy,
+    minimum_libc_version: Option<MinimumLibcVersion>,
+    required_environments: SupportedEnvironments,
 }
 
 impl CandidateSelector {
@@ -53,6 +58,8 @@ impl CandidateSelector {
                 options.dependency_mode,
             ),
             index_strategy: options.index_strategy,
+            minimum_libc_version: options.minimum_libc_version,
+            required_environments: options.required_environments.clone(),
         }
     }
 
@@ -119,6 +126,23 @@ impl CandidateSelector {
             env,
             tags,
         ) {
+            if !self.supports_required_environments(preferred.dist(), env)
+                && let Some(candidate) = self.select_no_preference_with(
+                    package_name,
+                    range,
+                    version_maps,
+                    prerelease_selection,
+                    env,
+                    true,
+                )
+            {
+                debug!(
+                    "Ignoring preference {} {} in favor of {} with wheels for the required environments",
+                    preferred.name, preferred.version, candidate.version
+                );
+                return Some(candidate);
+            }
+
             trace!("Using preference {} {}", preferred.name, preferred.version);
             return Some(preferred);
         }
@@ -147,6 +171,7 @@ impl CandidateSelector {
             version_maps,
             prerelease_selection,
             env,
+            false,
         );
 
         // Cross-reference against the already-installed distribution.
@@ -438,9 +463,12 @@ impl CandidateSelector {
             version_maps,
             self.prerelease_strategy.selection(package_name, env),
             env,
+            false,
         )
     }
 
+    /// Select a candidate without checking for version preferences, optionally requiring matching
+    /// wheels for the required environments.
     fn select_no_preference_with<'a>(
         &'a self,
         package_name: &'a PackageName,
@@ -448,6 +476,7 @@ impl CandidateSelector {
         version_maps: &'a [VersionMap],
         prerelease_selection: PrereleaseSelection,
         env: &ResolverEnvironment,
+        require_wheels: bool,
     ) -> Option<Candidate<'a>> {
         match prerelease_selection {
             PrereleaseSelection::Allow => self.select_no_preference_from(
@@ -456,6 +485,7 @@ impl CandidateSelector {
                 version_maps,
                 PrereleaseCandidates::All,
                 env,
+                require_wheels,
             ),
             PrereleaseSelection::Disallow => self.select_no_preference_from(
                 package_name,
@@ -463,6 +493,7 @@ impl CandidateSelector {
                 version_maps,
                 PrereleaseCandidates::Stable,
                 env,
+                require_wheels,
             ),
             PrereleaseSelection::PreferStable
                 if self.index_strategy == IndexStrategy::UnsafeFirstMatch =>
@@ -475,6 +506,7 @@ impl CandidateSelector {
                         version_maps,
                         PrereleaseCandidates::Stable,
                         env,
+                        require_wheels,
                     )
                     .or_else(|| {
                         self.select_no_preference_from(
@@ -483,6 +515,7 @@ impl CandidateSelector {
                             version_maps,
                             PrereleaseCandidates::Prerelease,
                             env,
+                            require_wheels,
                         )
                     })
                 })
@@ -494,6 +527,7 @@ impl CandidateSelector {
                     version_maps,
                     PrereleaseCandidates::Stable,
                     env,
+                    require_wheels,
                 )
                 .or_else(|| {
                     self.select_no_preference_from(
@@ -502,6 +536,7 @@ impl CandidateSelector {
                         version_maps,
                         PrereleaseCandidates::Prerelease,
                         env,
+                        require_wheels,
                     )
                 }),
         }
@@ -514,6 +549,7 @@ impl CandidateSelector {
         version_maps: &'a [VersionMap],
         prerelease_candidates: PrereleaseCandidates,
         env: &ResolverEnvironment,
+        require_wheels: bool,
     ) -> Option<Candidate<'a>> {
         trace!(
             "Selecting candidate for {package_name} with range {range} with {} remote versions",
@@ -547,6 +583,11 @@ impl CandidateSelector {
                     range,
                     prerelease_candidates,
                     highest,
+                    require_wheels.then_some((
+                        &self.required_environments,
+                        env,
+                        self.minimum_libc_version,
+                    )),
                 )
             } else {
                 Self::select_candidate(
@@ -572,6 +613,11 @@ impl CandidateSelector {
                     range,
                     prerelease_candidates,
                     highest,
+                    require_wheels.then_some((
+                        &self.required_environments,
+                        env,
+                        self.minimum_libc_version,
+                    )),
                 )
             }
         } else {
@@ -583,6 +629,11 @@ impl CandidateSelector {
                         range,
                         prerelease_candidates,
                         highest,
+                        require_wheels.then_some((
+                            &self.required_environments,
+                            env,
+                            self.minimum_libc_version,
+                        )),
                     )
                 })
             } else {
@@ -593,6 +644,11 @@ impl CandidateSelector {
                         range,
                         prerelease_candidates,
                         highest,
+                        require_wheels.then_some((
+                            &self.required_environments,
+                            env,
+                            self.minimum_libc_version,
+                        )),
                     )
                 })
             }
@@ -630,6 +686,11 @@ impl CandidateSelector {
         range: &Range<Version>,
         prerelease_candidates: PrereleaseCandidates,
         highest: bool,
+        required_environments: Option<(
+            &SupportedEnvironments,
+            &ResolverEnvironment,
+            Option<MinimumLibcVersion>,
+        )>,
     ) -> Option<Candidate<'a>> {
         let segments = range.iter();
         let segments = if highest {
@@ -671,6 +732,18 @@ impl CandidateSelector {
                 let Some(dist) = maybe_dist.prioritized_dist() else {
                     continue;
                 };
+                if required_environments.is_some_and(
+                    |(required_environments, env, minimum_libc_version)| {
+                        required_environments.iter().copied().any(|marker| {
+                            env.included_by_marker(marker)
+                                && dist
+                                    .implied_wheel_markers(minimum_libc_version)
+                                    .is_disjoint(marker)
+                        })
+                    },
+                ) {
+                    continue;
+                }
                 trace!(
                     "Found candidate for package {package_name} with range {range} after {steps} steps: {version} version"
                 );
@@ -739,6 +812,23 @@ impl CandidateSelector {
             "Exhausted all candidates for package {package_name} with range {range} after {steps} steps"
         );
         None
+    }
+
+    /// Return whether the candidate has compatible wheels for every applicable required
+    /// environment.
+    fn supports_required_environments(
+        &self,
+        dist: &CandidateDist,
+        env: &ResolverEnvironment,
+    ) -> bool {
+        let Some(dist) = dist.prioritized() else {
+            return true;
+        };
+        let wheel_markers = dist.implied_wheel_markers(self.minimum_libc_version);
+        self.required_environments
+            .iter()
+            .copied()
+            .all(|marker| !env.included_by_marker(marker) || !wheel_markers.is_disjoint(marker))
     }
 }
 
