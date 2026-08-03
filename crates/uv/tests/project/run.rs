@@ -7165,6 +7165,60 @@ fn run_target_workspace_discovery_workspace_project_group_include() -> Result<()
     Ok(())
 }
 
+/// Workspace-group conflicts also apply to member groups that include them transitively.
+#[test]
+fn run_target_workspace_discovery_workspace_group_include_conflicts() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! { r#"
+            [project]
+            name = "root"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+
+            [dependency-groups]
+            lint = [{ include-group = "format" }]
+            format = ["sortedcontainers==2.3.0"]
+            other = ["sortedcontainers==2.4.0"]
+
+            [tool.uv]
+            conflicts = [[{ group = "format" }, { group = "other" }]]
+
+            [tool.uv.workspace]
+            members = ["child"]
+            "#
+        })?;
+
+    context
+        .temp_dir
+        .child("child")
+        .child("pyproject.toml")
+        .write_str(indoc! { r#"
+            [project]
+            name = "child"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+
+            [dependency-groups]
+            lint = [{ include-group = { workspace = "lint" } }]
+            dev = [{ include-group = "lint" }]
+            "#
+        })?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--preview-features")
+        .arg("include-group-workspace"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+
+    Ok(())
+}
+
 /// Workspace members can also include groups from a non-project workspace root.
 #[test]
 fn run_target_workspace_discovery_virtual_workspace_group_include() -> Result<()> {

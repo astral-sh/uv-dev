@@ -644,10 +644,17 @@ async fn do_lock(
 
     // Collect the conflicts.
     let mut conflicts = target.conflicts()?;
-    if let LockTarget::Workspace(workspace) = target {
-        if let Some(groups) = &workspace.pyproject_toml().dependency_groups {
-            if let Some(project) = &workspace.pyproject_toml().project {
-                conflicts.expand_transitive_group_includes(&project.name, groups);
+    if let LockTarget::Workspace(workspace) = target
+        && let Some(groups) = &workspace.pyproject_toml().dependency_groups
+        && let Some(project) = &workspace.pyproject_toml().project
+    {
+        conflicts.expand_transitive_group_includes(&project.name, groups);
+
+        for (package, member) in workspace.packages() {
+            if package != &project.name
+                && let Some(groups) = &member.pyproject_toml().dependency_groups
+            {
+                conflicts.expand_workspace_group_includes(&project.name, package, groups);
             }
         }
     }
