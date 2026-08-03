@@ -10,7 +10,8 @@ use tracing::info_span;
 use uv_auth::CredentialsCache;
 use uv_cache::Cache;
 use uv_configuration::{
-    Constraints, DependencyGroupsWithDefaults, ExcludeDependency, NoSources, Upgrade,
+    Constraints, DependencyGroupsWithDefaults, ExcludeDependency, NoSources,
+    RequiredEnvironmentsMode, Upgrade,
 };
 use uv_distribution::LoweredRequirement;
 use uv_distribution_types::{
@@ -264,6 +265,14 @@ impl<'lock> LockTarget<'lock> {
     pub(crate) fn minimum_libc_version(self) -> Option<MinimumLibcVersion> {
         match self {
             Self::Workspace(workspace) => workspace.minimum_libc_version(),
+            Self::Script(_) => None,
+        }
+    }
+
+    /// Returns the policy used to satisfy required environments for the [`LockTarget`].
+    pub(crate) fn required_environments_mode(self) -> Option<RequiredEnvironmentsMode> {
+        match self {
+            Self::Workspace(workspace) => workspace.required_environments_mode(),
             Self::Script(_) => None,
         }
     }

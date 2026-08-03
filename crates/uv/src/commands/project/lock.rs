@@ -706,6 +706,15 @@ async fn do_lock(
     } else {
         None
     };
+    let required_environments_mode = target.required_environments_mode();
+    if required_environments_mode.is_some()
+        && !uv_preview::is_enabled(PreviewFeature::RequiredEnvironmentsMode)
+    {
+        warn_user_once!(
+            "The `required-environments-mode` setting is experimental and may change without warning. Pass `--preview-features {}` to disable this warning.",
+            PreviewFeature::RequiredEnvironmentsMode
+        );
+    }
 
     let minimum_libc_version = target.minimum_libc_version();
     if minimum_libc_version.is_some() && !preview.is_enabled(PreviewFeature::MinimumLibcVersion) {
@@ -817,6 +826,8 @@ async fn do_lock(
         .build_options(build_options.clone())
         .artifact_environments(artifact_environments.clone())
         .minimum_libc_version(minimum_libc_version)
+        .required_environments(lock_required_environments.clone())
+        .required_environments_mode(required_environments_mode)
         .build();
     // Checking an existing lockfile may build metadata and install build dependencies. Verify any
     // artifacts recorded in that lockfile, including for an ordinary unlocked command.
@@ -1254,6 +1265,15 @@ impl ValidatedLock {
             // shouldn't if the fork markers cannot be reused.
             debug!("Ignoring existing lockfile due to `--upgrade`");
             return Ok(Self::Unusable(lock));
+        }
+
+        if lock.required_environments_mode() != options.required_environments_mode {
+            debug!(
+                "Resolving despite existing lockfile due to change in required environments mode: `{:?}` vs. `{:?}`",
+                lock.required_environments_mode(),
+                options.required_environments_mode
+            );
+            return Ok(Self::Versions(lock));
         }
 
         // NOTE: It's important that this appears before any possible path that

@@ -8,8 +8,8 @@ use uv_cache_info::CacheKey;
 use uv_configuration::{
     AnnotationStyle, BuildIsolation, ExcludeDependency, ExcludeNewerPackage, ForkStrategy,
     IndexStrategy, KeyringProviderType, PackageNameSpecifier, PrereleaseMode, PrereleasePackage,
-    ProxyUrl, Reinstall, RequiredVersion, ResolutionMode, TargetTriple, TrustedHost,
-    TrustedPublishing, Upgrade, serialize_exclude_newer_package_with_spans,
+    ProxyUrl, Reinstall, RequiredEnvironmentsMode, RequiredVersion, ResolutionMode, TargetTriple,
+    TrustedHost, TrustedPublishing, Upgrade, serialize_exclude_newer_package_with_spans,
 };
 use uv_distribution_types::{
     ConfigSettings, ExcludeNewerOverride, ExcludeNewerSpan, ExcludeNewerValue, ExtraBuildVariables,
@@ -167,6 +167,7 @@ pub struct Options {
 
     #[cfg_attr(feature = "schemars", schemars(skip))]
     pub minimum_libc_version: Option<MinimumLibcVersion>,
+    pub required_environments_mode: Option<RequiredEnvironmentsMode>,
 
     // NOTE(charlie): These fields should be kept in-sync with `ToolUv` in
     // `crates/uv-workspace/src/pyproject.rs`. The documentation lives on that struct.
@@ -2642,6 +2643,7 @@ struct OptionsWire {
     environments: Option<SupportedEnvironments>,
     required_environments: Option<SupportedEnvironments>,
     minimum_libc_version: Option<MinimumLibcVersion>,
+    required_environments_mode: Option<RequiredEnvironmentsMode>,
 
     // NOTE(charlie): These fields should be kept in-sync with `ToolUv` in
     // `crates/uv-workspace/src/pyproject.rs`. The documentation lives on that struct.
@@ -2726,6 +2728,7 @@ impl TryFrom<OptionsWire> for Options {
             environments,
             required_environments,
             minimum_libc_version,
+            required_environments_mode,
             conflicts,
             publish_url,
             trusted_publishing,
@@ -2809,6 +2812,7 @@ impl TryFrom<OptionsWire> for Options {
             environments,
             required_environments,
             minimum_libc_version,
+            required_environments_mode,
             install_mirrors: PythonInstallMirrors {
                 python_install_mirror,
                 pypy_install_mirror,

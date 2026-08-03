@@ -48,6 +48,7 @@ Ok(
                     {},
                 ),
             },
+            required_environments_mode: None,
         },
         packages: [
             Package {
