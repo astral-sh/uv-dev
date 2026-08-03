@@ -1,8 +1,8 @@
 use std::borrow::Cow;
-use std::collections::BTreeSet;
 use std::iter;
 
 use either::Either;
+use rustc_hash::FxHashMap;
 
 use uv_distribution_types::{IndexMetadata, Requirement, RequirementSource};
 use uv_normalize::{ExtraName, GroupName, PackageName};
@@ -13,7 +13,9 @@ use uv_pypi_types::{
     ParsedGitPathUrl, ParsedPathUrl, ParsedUrl, VerbatimParsedUrl,
 };
 
-use crate::pubgrub::{PubGrubPackage, PubGrubPackageInner, Range};
+use crate::ResolverEnvironment;
+use crate::pubgrub::{PackageSource, PubGrubPackage, PubGrubPackageInner, Range};
+use crate::resolver::ForkMap;
 use crate::resolver::UnsatisfiableRequirement;
 
 /// The source constraint carried by a single dependency edge.
@@ -26,6 +28,8 @@ pub(crate) enum DependencySource {
     /// The dependency does not carry an edge-local source constraint.
     #[default]
     Unspecified,
+    /// The dependency explicitly selects the default package index.
+    Registry,
     /// The dependency was introduced by a direct URL-like requirement.
     Url(Box<VerbatimParsedUrl>),
     /// The dependency was introduced by a requirement pinned to an explicit index.
@@ -39,16 +43,20 @@ impl DependencySource {
     /// explicit index. Direct URL-like requirements always preserve their verbatim URL.
     fn from_requirement(requirement: &Requirement) -> Self {
         match &requirement.source {
-            RequirementSource::Registry { index, .. }
-                if matches!(
-                    requirement.origin.as_ref(),
-                    Some(RequirementOrigin::Group(_, Some(_), _))
-                ) =>
+            RequirementSource::Registry {
+                index, conflict, ..
+            } if matches!(
+                requirement.origin.as_ref(),
+                Some(RequirementOrigin::Group(_, Some(_), _))
+            ) || conflict.is_some() =>
             {
-                index
-                    .clone()
-                    .map(Self::ExplicitIndex)
-                    .unwrap_or(Self::Unspecified)
+                index.clone().map(Self::ExplicitIndex).unwrap_or_else(|| {
+                    if conflict.is_some() {
+                        Self::Registry
+                    } else {
+                        Self::Unspecified
+                    }
+                })
             }
             RequirementSource::Registry { .. } => Self::Unspecified,
             RequirementSource::Url { .. }
@@ -68,7 +76,7 @@ impl DependencySource {
     pub(crate) fn verbatim_url(&self) -> Option<&VerbatimParsedUrl> {
         match self {
             Self::Url(url) => Some(url.as_ref()),
-            Self::Unspecified | Self::ExplicitIndex(_) => None,
+            Self::Unspecified | Self::Registry | Self::ExplicitIndex(_) => None,
         }
     }
 
@@ -76,7 +84,7 @@ impl DependencySource {
     pub(crate) fn explicit_index(&self) -> Option<&IndexMetadata> {
         match self {
             Self::ExplicitIndex(index) => Some(index),
-            Self::Unspecified | Self::Url(_) => None,
+            Self::Unspecified | Self::Registry | Self::Url(_) => None,
         }
     }
 }
@@ -117,7 +125,9 @@ impl PubGrubDependency {
     /// reason that package cannot be selected.
     pub(crate) fn from_requirements<'a>(
         conflicts: &Conflicts,
-        registry_workspace_members: &'a BTreeSet<PackageName>,
+        sources: &'a ForkMap<PackageSource>,
+        fork_sources: &'a FxHashMap<PackageName, PackageSource>,
+        env: &'a ResolverEnvironment,
         requirements: impl IntoIterator<Item = Cow<'a, Requirement>>,
         group_name: Option<&'a GroupName>,
         parent_package: Option<&'a PubGrubPackage>,
@@ -126,7 +136,9 @@ impl PubGrubDependency {
         for requirement in requirements {
             dependencies.extend(Self::from_requirement(
                 conflicts,
-                registry_workspace_members,
+                sources,
+                fork_sources,
+                env,
                 requirement,
                 group_name,
                 parent_package,
@@ -137,7 +149,9 @@ impl PubGrubDependency {
 
     fn from_requirement<'a>(
         conflicts: &Conflicts,
-        registry_workspace_members: &'a BTreeSet<PackageName>,
+        sources: &'a ForkMap<PackageSource>,
+        fork_sources: &'a FxHashMap<PackageName, PackageSource>,
+        env: &'a ResolverEnvironment,
         requirement: Cow<'a, Requirement>,
         group_name: Option<&'a GroupName>,
         parent_package: Option<&'a PubGrubPackage>,
@@ -201,7 +215,9 @@ impl PubGrubDependency {
                 &requirement,
                 extra,
                 group,
-                registry_workspace_members,
+                sources,
+                fork_sources,
+                env,
             );
             let PubGrubRequirement {
                 package,
@@ -288,17 +304,32 @@ impl PubGrubRequirement {
         requirement: &Requirement,
         extra: Option<ExtraName>,
         group: Option<GroupName>,
-        registry_workspace_members: &BTreeSet<PackageName>,
+        sources: &ForkMap<PackageSource>,
+        fork_sources: &FxHashMap<PackageName, PackageSource>,
+        env: &ResolverEnvironment,
     ) -> PubGrubPackage {
-        if extra.is_none()
-            && group.is_none()
-            && matches!(requirement.source, RequirementSource::Registry { .. })
-            && registry_workspace_members.contains(&requirement.name)
+        let source = if matches!(requirement.source, RequirementSource::Registry { .. })
+            && (matches!(
+                DependencySource::from_requirement(requirement),
+                DependencySource::Registry
+            ) || fork_sources.get(&requirement.name) == Some(&PackageSource::Registry)
+                || sources
+                    .get(&requirement.name, env)
+                    .into_iter()
+                    .any(|source| *source == PackageSource::Registry))
         {
-            return PubGrubPackage::from_registry(requirement.name.clone(), requirement.marker);
-        }
+            PackageSource::Registry
+        } else {
+            PackageSource::Unspecified
+        };
 
-        PubGrubPackage::from_package(requirement.name.clone(), extra, group, requirement.marker)
+        PubGrubPackage::from_package(
+            requirement.name.clone(),
+            extra,
+            group,
+            requirement.marker,
+            source,
+        )
     }
 
     /// Convert a [`Requirement`] to a PubGrub-compatible package and range, while returning the URL
@@ -307,7 +338,9 @@ impl PubGrubRequirement {
         requirement: &Requirement,
         extra: Option<ExtraName>,
         group: Option<GroupName>,
-        registry_workspace_members: &BTreeSet<PackageName>,
+        sources: &ForkMap<PackageSource>,
+        fork_sources: &FxHashMap<PackageName, PackageSource>,
+        env: &ResolverEnvironment,
     ) -> Self {
         let (verbatim_url, parsed_url) = match &requirement.source {
             RequirementSource::Registry { specifier, .. } => {
@@ -316,7 +349,9 @@ impl PubGrubRequirement {
                     extra,
                     group,
                     requirement,
-                    registry_workspace_members,
+                    sources,
+                    fork_sources,
+                    env,
                 );
             }
             RequirementSource::Url {
@@ -389,7 +424,9 @@ impl PubGrubRequirement {
                 requirement,
                 extra,
                 group,
-                registry_workspace_members,
+                sources,
+                fork_sources,
+                env,
             ),
             version: Range::full(),
             source: DependencySource::Url(Box::new(VerbatimParsedUrl {
@@ -404,14 +441,18 @@ impl PubGrubRequirement {
         extra: Option<ExtraName>,
         group: Option<GroupName>,
         requirement: &Requirement,
-        registry_workspace_members: &BTreeSet<PackageName>,
+        sources: &ForkMap<PackageSource>,
+        fork_sources: &FxHashMap<PackageName, PackageSource>,
+        env: &ResolverEnvironment,
     ) -> Self {
         Self {
             package: Self::package_for_requirement(
                 requirement,
                 extra,
                 group,
-                registry_workspace_members,
+                sources,
+                fork_sources,
+                env,
             ),
             source: DependencySource::from_requirement(requirement),
             version: Range::from(specifier.clone()),

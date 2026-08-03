@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use itertools::Either;
@@ -14,7 +14,9 @@ use uv_distribution::LoweredRequirement;
 use uv_distribution_types::{Index, IndexLocations, Requirement, RequiresPython};
 use uv_normalize::{GroupName, PackageName};
 use uv_pep508::RequirementOrigin;
-use uv_pypi_types::{Conflicts, SupportedEnvironments, VerbatimParsedUrl};
+use uv_pypi_types::{
+    ConflictItem, ConflictSet, Conflicts, SupportedEnvironments, VerbatimParsedUrl,
+};
 use uv_resolver::{Lock, LockVersion, VERSION};
 use uv_scripts::Pep723Script;
 use uv_workspace::dependency_groups::{
@@ -221,43 +223,75 @@ impl<'lock> LockTarget<'lock> {
         }
     }
 
-    /// Return workspace members that a source explicitly requests from a package index.
-    pub(crate) fn registry_workspace_members(
-        self,
-        no_sources: &NoSources,
-    ) -> BTreeSet<PackageName> {
+    /// Infer conflicts between explicitly selected registry sources and local workspace packages.
+    pub(crate) fn source_conflicts(self, no_sources: &NoSources) -> Conflicts {
         let Self::Workspace(workspace) = self else {
-            return BTreeSet::new();
+            return Conflicts::empty();
         };
 
-        workspace
-            .sources()
-            .iter()
-            .chain(workspace.packages().values().flat_map(|member| {
-                member
-                    .pyproject_toml()
-                    .tool
-                    .as_ref()
-                    .and_then(|tool| tool.uv.as_ref())
-                    .and_then(|uv| uv.sources.as_ref())
-                    .into_iter()
-                    .flat_map(|sources| sources.inner().iter())
-            }))
-            .filter(|(name, sources)| {
-                !no_sources.for_package(name)
-                    && workspace.packages().contains_key(*name)
-                    && sources.iter().any(|source| {
-                        matches!(
-                            source,
-                            WorkspaceSource::Workspace {
-                                workspace: WorkspaceReference::Bool(false),
-                                ..
-                            }
-                        )
-                    })
-            })
-            .map(|(name, _)| name.clone())
-            .collect()
+        let root_sources = workspace
+            .pyproject_toml()
+            .project
+            .as_ref()
+            .into_iter()
+            .flat_map(|project| {
+                workspace
+                    .sources()
+                    .iter()
+                    .map(move |(name, sources)| (&project.name, name, sources))
+            });
+        let member_sources = workspace.packages().values().flat_map(|member| {
+            member
+                .pyproject_toml()
+                .tool
+                .as_ref()
+                .and_then(|tool| tool.uv.as_ref())
+                .and_then(|uv| uv.sources.as_ref())
+                .into_iter()
+                .flat_map(move |sources| {
+                    sources
+                        .inner()
+                        .iter()
+                        .map(move |(name, sources)| (&member.project().name, name, sources))
+                })
+        });
+
+        let mut conflicts = Conflicts::empty();
+        for (project, name, sources) in root_sources.chain(member_sources) {
+            if no_sources.for_package(name) || !workspace.packages().contains_key(name) {
+                continue;
+            }
+
+            for source in sources.iter() {
+                let WorkspaceSource::Workspace {
+                    workspace: WorkspaceReference::Bool(false),
+                    extra,
+                    group,
+                    ..
+                } = source
+                else {
+                    continue;
+                };
+                let source = if let Some(extra) = extra {
+                    ConflictItem::from((project.clone(), extra.clone()))
+                } else if let Some(group) = group {
+                    ConflictItem::from((project.clone(), group.clone()))
+                } else {
+                    continue;
+                };
+
+                let Ok(conflict) =
+                    ConflictSet::try_from(vec![source, ConflictItem::from(name.clone())])
+                else {
+                    continue;
+                };
+                if !conflicts.iter().any(|existing| existing == &conflict) {
+                    conflicts.push(conflict);
+                }
+            }
+        }
+
+        conflicts
     }
 
     /// Return the set of required workspace members, i.e., those that are required by other

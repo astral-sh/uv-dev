@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
@@ -25,6 +25,7 @@ use uv_pypi_types::{Conflicts, HashDigests, ParsedUrlError, VerbatimParsedUrl, Y
 use crate::graph_ops::{marker_reachability, simplify_conflict_markers};
 use crate::pins::FilePins;
 use crate::preferences::Preferences;
+use crate::pubgrub::PackageSource;
 use crate::redirect::url_to_precise;
 use crate::resolution::AnnotatedDist;
 use crate::resolution_mode::ResolutionStrategy;
@@ -131,7 +132,6 @@ impl ResolverOutput {
         git: &GitResolver,
         requires_python: RequiresPython,
         conflicts: &Conflicts,
-        registry_workspace_members: &BTreeSet<PackageName>,
         resolution_strategy: &ResolutionStrategy,
         options: Options,
     ) -> Result<Self, ResolveError> {
@@ -149,7 +149,14 @@ impl ResolverOutput {
         for resolution in resolutions {
             // Add every package to the graph.
             for (package, version) in &resolution.nodes {
-                if !seen.insert((package, version)) {
+                if !seen.insert(PackageRef {
+                    package_name: &package.name,
+                    version,
+                    url: package.url.as_ref(),
+                    index: package.index.as_ref(),
+                    extra: package.extra.as_ref(),
+                    group: package.dev.as_ref(),
+                }) {
                     // Insert each node only once.
                     continue;
                 }
@@ -252,7 +259,7 @@ impl ResolverOutput {
         // re-enable this.
         if conflicts.is_empty() {
             #[allow(unused_mut, reason = "Used in debug_assertions below")]
-            let mut conflicting = output.find_conflicting_distributions(registry_workspace_members);
+            let mut conflicting = output.find_conflicting_distributions();
             if !conflicting.is_empty() {
                 tracing::warn!(
                     "found {} conflicting distributions in resolution, \
@@ -338,6 +345,7 @@ impl ResolverOutput {
             dev: group,
             url,
             index,
+            source,
         } = &package;
         // Map the package to a distribution.
         let (dist, hashes, metadata) = Self::parse_dist(
@@ -345,6 +353,7 @@ impl ResolverOutput {
             index.as_ref(),
             url.as_ref(),
             version,
+            *source,
             pins,
             diagnostics,
             preferences,
@@ -404,6 +413,7 @@ impl ResolverOutput {
         index: Option<&IndexUrl>,
         url: Option<&VerbatimParsedUrl>,
         version: &Version,
+        source: PackageSource,
         pins: &FilePins,
         diagnostics: &mut Vec<ResolutionDiagnostic>,
         preferences: &Preferences,
@@ -453,7 +463,7 @@ impl ResolverOutput {
             )
         } else {
             let (dist, metadata_id) = pins
-                .dist_and_id(name, version)
+                .dist_and_id(name, version, source)
                 .expect("Every package should be pinned");
             let dist = dist.clone();
             let hashes_id = dist.distribution_id();
@@ -776,10 +786,7 @@ impl ResolverOutput {
     /// same marker environment in this resolution. This in turn implies that
     /// an installation in that marker environment could wind up trying to
     /// install different versions of the same package, which is not allowed.
-    fn find_conflicting_distributions(
-        &self,
-        registry_workspace_members: &BTreeSet<PackageName>,
-    ) -> Vec<ConflictingDistributionError> {
+    fn find_conflicting_distributions(&self) -> Vec<ConflictingDistributionError> {
         let mut name_to_distributions: BTreeMap<&PackageName, Vec<&AnnotatedDist>> =
             BTreeMap::new();
         for node in self.graph.node_weights() {
@@ -797,11 +804,6 @@ impl ResolverOutput {
             for (index, first) in distributions.iter().enumerate() {
                 for second in &distributions[index + 1..] {
                     if first.version == second.version {
-                        continue;
-                    }
-                    if registry_workspace_members.contains(name)
-                        && first.dist.is_local() != second.dist.is_local()
-                    {
                         continue;
                     }
                     if !first.marker.is_disjoint(second.marker) {

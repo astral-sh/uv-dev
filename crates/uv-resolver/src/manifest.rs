@@ -39,9 +39,6 @@ pub struct Manifest {
     /// Members of the project's workspace.
     pub(super) workspace_members: BTreeSet<PackageName>,
 
-    /// Workspace members explicitly requested from a package index.
-    pub(super) registry_workspace_members: BTreeSet<PackageName>,
-
     /// The installed packages to exclude from consideration during resolution.
     ///
     /// These typically represent packages that are being upgraded or reinstalled
@@ -76,7 +73,6 @@ impl Manifest {
             preferences,
             project,
             workspace_members,
-            registry_workspace_members: BTreeSet::new(),
             exclusions,
             lookaheads,
         }
@@ -92,7 +88,6 @@ impl Manifest {
             project: None,
             exclusions: Exclusions::default(),
             workspace_members: BTreeSet::new(),
-            registry_workspace_members: BTreeSet::new(),
             lookaheads: Vec::new(),
         }
     }
@@ -106,16 +101,6 @@ impl Manifest {
     #[must_use]
     pub fn with_lookaheads(mut self, lookaheads: Vec<RequestedRequirements>) -> Self {
         self.lookaheads = lookaheads;
-        self
-    }
-
-    /// Register workspace members that may also resolve from a package index.
-    #[must_use]
-    pub fn with_registry_workspace_members(
-        mut self,
-        registry_workspace_members: BTreeSet<PackageName>,
-    ) -> Self {
-        self.registry_workspace_members = registry_workspace_members;
         self
     }
 

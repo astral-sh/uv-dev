@@ -10514,6 +10514,10 @@ fn lock_group_remote_workspace_source() -> Result<()> {
         version = 1
         revision = 3
         requires-python = ">=3.12"
+        conflicts = [[
+            { package = "idna" },
+            { package = "project", group = "foo" },
+        ]]
 
         [options]
         exclude-newer = "2024-03-25T00:00:00Z"
@@ -10551,7 +10555,7 @@ fn lock_group_remote_workspace_source() -> Result<()> {
         [package.metadata]
 
         [package.metadata.requires-dev]
-        foo = [{ name = "idna" }]
+        foo = [{ name = "idna", conflict = { package = "project", group = "foo" } }]
         "#
         );
     });

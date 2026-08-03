@@ -107,7 +107,6 @@ pub(crate) async fn resolve<InstalledPackages: InstalledPackagesProvider>(
     source_trees: Vec<SourceTree>,
     mut project: Option<PackageName>,
     workspace_members: BTreeSet<PackageName>,
-    registry_workspace_members: BTreeSet<PackageName>,
     extras: &ExtrasSpecification,
     groups: &BTreeMap<PathBuf, DependencyGroups>,
     preferences: Vec<Preference>,
@@ -359,8 +358,7 @@ pub(crate) async fn resolve<InstalledPackages: InstalledPackagesProvider>(
         workspace_members,
         exclusions,
         lookaheads,
-    )
-    .with_registry_workspace_members(registry_workspace_members);
+    );
 
     // Resolve the dependencies.
     let resolution = {

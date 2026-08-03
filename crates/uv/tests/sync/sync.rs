@@ -4841,6 +4841,198 @@ fn sync_group_remote_workspace_member_source() -> Result<()> {
     Ok(())
 }
 
+/// A group-scoped registry source must not change ordinary transitive workspace dependencies.
+#[test]
+fn sync_group_remote_workspace_source_does_not_leak() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["anyio", "idna"]
+
+        [dependency-groups]
+        foo = ["idna"]
+
+        [tool.uv.workspace]
+        members = ["idna"]
+
+        [tool.uv.sources]
+        idna = [{ workspace = true }, { workspace = false, group = "foo" }]
+        "#,
+    )?;
+    context
+        .temp_dir
+        .child("idna")
+        .child("pyproject.toml")
+        .write_str(
+            r#"
+            [project]
+            name = "idna"
+            version = "9.0.0"
+            requires-python = ">=3.12"
+
+            [tool.uv]
+            package = false
+            "#,
+        )?;
+
+    context.lock().assert().success();
+
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + anyio==4.3.0
+     + sniffio==1.3.1
+    ");
+
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--only-group").arg("foo"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 1 package in [TIME]
+    Uninstalled 2 packages in [TIME]
+    Installed 1 package in [TIME]
+     - anyio==4.3.0
+     + idna==3.6
+     - sniffio==1.3.1
+    ");
+
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--group").arg("foo"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Package `idna` and group `foo` are incompatible with the declared conflicts: {idna, `project:foo`}
+    ");
+
+    Ok(())
+}
+
+/// A registry source's platform marker must also constrain its transitive source selection.
+#[test]
+fn sync_group_remote_workspace_source_respects_markers() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["idna"]
+
+        [dependency-groups]
+        foo = ["anyio", "idna"]
+
+        [tool.uv.workspace]
+        members = ["idna"]
+
+        [tool.uv.sources]
+        idna = [
+            { workspace = false, group = "foo", marker = "sys_platform == 'nonexistent'" },
+            { workspace = true, group = "foo", marker = "sys_platform != 'nonexistent'" },
+            { workspace = true },
+        ]
+        "#,
+    )?;
+    context
+        .temp_dir
+        .child("idna")
+        .child("pyproject.toml")
+        .write_str(
+            r#"
+            [project]
+            name = "idna"
+            version = "9.0.0"
+            requires-python = ">=3.12"
+
+            [tool.uv]
+            package = false
+            "#,
+        )?;
+
+    context.lock().assert().success();
+
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--only-group").arg("foo"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + anyio==4.3.0
+     + sniffio==1.3.1
+    ");
+
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--group").arg("foo"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked 2 packages in [TIME]
+    ");
+
+    Ok(())
+}
+
+/// Source identity must survive the extra proxy so published extras use published metadata.
+#[test]
+fn sync_group_remote_workspace_source_with_extra() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [dependency-groups]
+        foo = ["requests[socks]"]
+
+        [tool.uv.workspace]
+        members = ["requests"]
+
+        [tool.uv.sources]
+        requests = { workspace = false, group = "foo" }
+        "#,
+    )?;
+    context
+        .temp_dir
+        .child("requests")
+        .child("pyproject.toml")
+        .write_str(
+            r#"
+            [project]
+            name = "requests"
+            version = "2.31.0"
+            requires-python = ">=3.12"
+
+            [project.optional-dependencies]
+            socks = ["iniconfig"]
+
+            [tool.uv]
+            package = false
+            "#,
+        )?;
+
+    context.lock().assert().success();
+
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--only-group").arg("foo"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 6 packages in [TIME]
+    Installed 6 packages in [TIME]
+     + certifi==2024.2.2
+     + charset-normalizer==3.3.2
+     + idna==3.6
+     + pysocks==1.7.1
+     + requests==2.31.0
+     + urllib3==2.2.1
+    ");
+
+    Ok(())
+}
+
 /// Sync with `--only-group`, where the group includes the project itself.
 #[test]
 fn sync_group_self() -> Result<()> {

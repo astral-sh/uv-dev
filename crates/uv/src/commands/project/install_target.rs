@@ -12,16 +12,17 @@ use uv_configuration::{
 };
 use uv_distribution_types::{Index, Resolution};
 use uv_normalize::{DEV_DEPENDENCIES, ExtraName, GroupName, PackageName};
+use uv_pep508::MarkerTree;
 use uv_platform_tags::Tags;
 use uv_preview::PreviewFeature;
 use uv_pypi_types::{
-    DependencyGroupSpecifier, DependencyGroups, LenientRequirement, ResolverMarkerEnvironment,
-    VerbatimParsedUrl,
+    ConflictKind, ConflictSet, DependencyGroupSpecifier, DependencyGroups, LenientRequirement,
+    ResolverMarkerEnvironment, VerbatimParsedUrl,
 };
 use uv_resolver::{Installable, InstallableRootKind, Lock, LockError, Package};
 use uv_scripts::Pep723Script;
 use uv_workspace::Workspace;
-use uv_workspace::pyproject::{Source, Sources, ToolUvSources};
+use uv_workspace::pyproject::{Source, Sources, ToolUvSources, WorkspaceReference};
 
 use crate::commands::project::ProjectError;
 
@@ -191,6 +192,66 @@ impl<'lock> Installable<'lock> for InstallTarget<'lock> {
 }
 
 impl<'lock> InstallTarget<'lock> {
+    /// Return the platform scope for a conflict inferred from an explicit registry source.
+    pub(crate) fn source_conflict_marker(&self, conflict: &ConflictSet) -> Option<MarkerTree> {
+        let workspace = match self {
+            Self::Project { workspace, .. }
+            | Self::Projects { workspace, .. }
+            | Self::Workspace { workspace, .. }
+            | Self::NonProjectWorkspace { workspace, .. } => workspace,
+            Self::Script { .. } => return None,
+        };
+        let local = conflict
+            .iter()
+            .find(|item| matches!(item.kind(), ConflictKind::Project))?;
+        let selection = conflict
+            .iter()
+            .find(|item| matches!(item.kind(), ConflictKind::Extra(_) | ConflictKind::Group(_)))?;
+
+        let root_sources = workspace
+            .pyproject_toml()
+            .project
+            .as_ref()
+            .into_iter()
+            .filter(|project| &project.name == selection.package())
+            .filter_map(|_| workspace.sources().get(local.package()));
+        let member_sources = workspace
+            .packages()
+            .get(selection.package())
+            .and_then(|member| member.pyproject_toml().tool.as_ref())
+            .and_then(|tool| tool.uv.as_ref())
+            .and_then(|uv| uv.sources.as_ref())
+            .and_then(|sources| sources.inner().get(local.package()));
+
+        let mut marker = None;
+        for source in root_sources.chain(member_sources) {
+            for source in source.iter() {
+                let Source::Workspace {
+                    workspace: WorkspaceReference::Bool(false),
+                    marker: source_marker,
+                    extra,
+                    group,
+                    ..
+                } = source
+                else {
+                    continue;
+                };
+                let matches_selection = match selection.kind() {
+                    ConflictKind::Extra(selection) => extra.as_ref() == Some(selection),
+                    ConflictKind::Group(selection) => group.as_ref() == Some(selection),
+                    ConflictKind::Project => false,
+                };
+                if matches_selection {
+                    marker = Some(marker.map_or(*source_marker, |marker: MarkerTree| {
+                        marker.or(*source_marker)
+                    }));
+                }
+            }
+        }
+
+        marker
+    }
+
     /// Convert the target's locked packages to a [`Resolution`].
     pub(crate) fn to_resolution(
         self,

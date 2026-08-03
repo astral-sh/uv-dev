@@ -671,6 +671,9 @@ async fn do_lock(
         );
     }
 
+    // Source selections that replace a local package must occupy separate installation forks.
+    conflicts.append(&mut target.source_conflicts(sources));
+
     // Collect the list of supported environments.
     let environments = {
         let environments = target.environments();
@@ -1063,7 +1066,6 @@ async fn do_lock(
                 // The root is always null in workspaces, it "depends on" the projects
                 None,
                 packages.keys().cloned().collect(),
-                target.registry_workspace_members(sources),
                 &extras,
                 &groups,
                 preferences,

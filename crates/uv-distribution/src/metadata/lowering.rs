@@ -281,22 +281,40 @@ impl LoweredRequirement {
                             workspace: workspace_ref,
                             editable: source_editable,
                             marker,
-                            ..
+                            extra,
+                            group,
                         } => {
-                            let source = workspace_source(
-                                requirement,
-                                &workspace_ref,
-                                source_editable,
-                                editable,
-                                origin,
-                                project_dir,
-                                workspace.install_path(),
-                                Some(workspace),
-                                git_member,
-                                cache,
-                                workspace_cache,
-                            )
-                            .await?;
+                            let source = if matches!(workspace_ref, WorkspaceReference::Bool(false))
+                            {
+                                let mut source = Requirement::from(requirement.clone()).source;
+                                if let RequirementSource::Registry { conflict, .. } = &mut source {
+                                    *conflict = project_name.and_then(|project_name| {
+                                        if let Some(extra) = extra {
+                                            Some(ConflictItem::from((project_name.clone(), extra)))
+                                        } else {
+                                            group.map(|group| {
+                                                ConflictItem::from((project_name.clone(), group))
+                                            })
+                                        }
+                                    });
+                                }
+                                source
+                            } else {
+                                workspace_source(
+                                    requirement,
+                                    &workspace_ref,
+                                    source_editable,
+                                    editable,
+                                    origin,
+                                    project_dir,
+                                    workspace.install_path(),
+                                    Some(workspace),
+                                    git_member,
+                                    cache,
+                                    workspace_cache,
+                                )
+                                .await?
+                            };
                             (source, marker)
                         }
                     };

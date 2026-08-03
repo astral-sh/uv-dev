@@ -4,6 +4,7 @@ use uv_distribution_types::{CompatibleDist, DistributionId, Identifier, Resolved
 use uv_normalize::PackageName;
 
 use crate::candidate_selector::Candidate;
+use crate::pubgrub::PackageSource;
 
 #[derive(Clone, Debug)]
 struct FilePin {
@@ -19,18 +20,26 @@ struct FilePin {
 /// `3.0.0` to the specific wheel or source distribution archive that was pinned for installation,
 /// along with the concrete distribution whose metadata was used during resolution.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct FilePins(FxHashMap<(PackageName, uv_pep440::Version), FilePin>);
+pub(crate) struct FilePins(FxHashMap<(PackageName, uv_pep440::Version, PackageSource), FilePin>);
 
 // Inserts are common (every time we select a version) while reads are rare (converting the
 // final resolution).
 impl FilePins {
     /// Pin a candidate package.
     ///
-    /// Within a single fork, the same `(name, version)` always resolves to the same distribution,
-    /// so we skip construction when an entry already exists.
-    pub(crate) fn insert(&mut self, candidate: &Candidate, dist: &CompatibleDist) {
+    /// Within a single fork, the same package, version, and source resolve to one distribution.
+    pub(crate) fn insert(
+        &mut self,
+        candidate: &Candidate,
+        dist: &CompatibleDist,
+        source: PackageSource,
+    ) {
         self.0
-            .entry((candidate.name().clone(), candidate.version().clone()))
+            .entry((
+                candidate.name().clone(),
+                candidate.version().clone(),
+                source,
+            ))
             .or_insert_with(|| FilePin {
                 dist: dist.for_installation().to_owned(),
                 metadata_id: dist.for_resolution().distribution_id(),
@@ -42,9 +51,10 @@ impl FilePins {
         &self,
         name: &PackageName,
         version: &uv_pep440::Version,
+        source: PackageSource,
     ) -> Option<&ResolvedDist> {
         self.0
-            .get(&(name.clone(), version.clone()))
+            .get(&(name.clone(), version.clone(), source))
             .map(|pin| &pin.dist)
     }
 
@@ -53,9 +63,10 @@ impl FilePins {
         &self,
         name: &PackageName,
         version: &uv_pep440::Version,
+        source: PackageSource,
     ) -> Option<(&ResolvedDist, &DistributionId)> {
         self.0
-            .get(&(name.clone(), version.clone()))
+            .get(&(name.clone(), version.clone(), source))
             .map(|pin| (&pin.dist, &pin.metadata_id))
     }
 }
