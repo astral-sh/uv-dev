@@ -1,0 +1,34 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 9278,
+        "title": "`uv export --package` from workspace root doesn't export root's dependencies",
+        "url": "https://github.com/astral-sh/uv/issues/9278",
+        "state": "closed",
+        "reason": "The maintainer explicitly states that `uv export --package package1` should export the dependency tree rooted at that package, excluding unrelated workspace-root dependencies. This directly establishes the expected behavior contradicted by the reported uv 0.12.1 output."
+      },
+      {
+        "kind": "issue",
+        "number": 16503,
+        "title": "uv export in a monorepo with workspaces: allow exporting dependencies for a subset of packages",
+        "url": "https://github.com/astral-sh/uv/issues/16503",
+        "state": "closed",
+        "reason": "This is the canonical discussion of selecting workspace-package subsets for export. It confirms that exporting one package's dependencies already worked and requested extending selection to multiple packages."
+      },
+      {
+        "kind": "pull_request",
+        "number": 16603,
+        "title": "Accept multiple packages in `uv export`",
+        "url": "https://github.com/astral-sh/uv/pull/16603",
+        "state": "merged",
+        "reason": "This implemented workspace-package subset selection and added integration coverage. It reinforces that `--package` is intended to restrict the exported dependency graph, though there is no source-backed evidence yet that this change caused the uv 0.12.1 regression."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests for literal combinations of `uv export`, `--package`, workspace, requirements.txt, all dependencies, and uv 0.12; then searched conceptually for workspace-member selection, package subsets, unrelated dependencies, and exports rooted at a selected package. Also inspected version-oriented changes between uv 0.11 and 0.12. astral-sh/uv#18887 and its fix astral-sh/uv#18888 concern extra-marker traversal, while astral-sh/uv#20238 concerns relative paths; both were inspected and ruled out because neither changes which workspace packages are selected."
+  },
+  "type": "bug",
+  "type_reason": "Repository-backed maintainer guidance in astral-sh/uv#9278 establishes that `uv export --package` should traverse from only the selected package, and astral-sh/uv#16503 plus astral-sh/uv#16603 preserve that package-subset model. The reported change from package-specific output in uv 0.11 to the entire workspace graph in uv 0.12.1 therefore describes incorrect behavior. No existing open issue or pull request was found tracking this regression, so it is not a duplicate. The precise cause remains unconfirmed.",
+  "summary": "The closest historical discussions establish that `--package` must restrict export to the selected workspace package's dependency tree. No existing report tracks the claimed uv 0.12.1 regression."
+}
