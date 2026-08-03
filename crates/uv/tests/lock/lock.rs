@@ -10449,6 +10449,126 @@ fn lock_no_workspace_source() -> Result<()> {
     Ok(())
 }
 
+/// A dependency group can resolve a workspace member from an index without replacing its local
+/// entry in the lockfile.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_group_remote_workspace_source() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [dependency-groups]
+        foo = ["idna"]
+
+        [tool.uv.workspace]
+        members = ["idna"]
+
+        [tool.uv.sources]
+        idna = { workspace = false, group = "foo" }
+        "#,
+    )?;
+
+    context
+        .temp_dir
+        .child("idna")
+        .child("pyproject.toml")
+        .write_str(
+            r#"
+            [project]
+            name = "idna"
+            version = "3.6"
+            requires-python = ">=3.12"
+
+            [build-system]
+            requires = ["uv_build>=0.7,<10000"]
+            build-backend = "uv_build"
+            "#,
+        )?;
+    context
+        .temp_dir
+        .child("idna")
+        .child("src")
+        .child("idna")
+        .child("__init__.py")
+        .touch()?;
+
+    uv_snapshot!(context.filters(), context.lock(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+
+    let lock = context.read("uv.lock");
+
+    insta::with_settings!({
+        filters => context.filters(),
+    }, {
+        assert_snapshot!(
+            lock, @r#"
+        version = 1
+        revision = 3
+        requires-python = ">=3.12"
+        conflicts = [[
+            { package = "idna" },
+            { package = "project", group = "foo" },
+        ]]
+
+        [options]
+        exclude-newer = "2024-03-25T00:00:00Z"
+
+        [manifest]
+        members = [
+            "idna",
+            "project",
+        ]
+
+        [[package]]
+        name = "idna"
+        version = "3.6"
+        source = { registry = "https://pypi.org/simple" }
+        sdist = { url = "https://files.pythonhosted.org/packages/bf/3f/ea4b9117521a1e9c50344b909be7886dd00a519552724809bb1f486986c2/idna-3.6.tar.gz", hash = "sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca", size = 175426, upload-time = "2023-11-25T15:40:54.902Z" }
+        wheels = [
+            { url = "https://files.pythonhosted.org/packages/c2/e7/a82b05cf63a603df6e68d59ae6a68bf5064484a0718ea5033660af4b54a9/idna-3.6-py3-none-any.whl", hash = "sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f", size = 61567, upload-time = "2023-11-25T15:40:52.604Z" },
+        ]
+
+        [[package]]
+        name = "idna"
+        version = "3.6"
+        source = { editable = "idna" }
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+
+        [package.dev-dependencies]
+        foo = [
+            { name = "idna", version = "3.6", source = { registry = "https://pypi.org/simple" } },
+        ]
+
+        [package.metadata]
+
+        [package.metadata.requires-dev]
+        foo = [{ name = "idna", conflict = { package = "project", group = "foo" } }]
+        "#
+        );
+    });
+
+    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+
+    Ok(())
+}
+
 /// Regression test for <https://github.com/astral-sh/uv/issues/19916>.
 ///
 /// Lock a workspace with a member that also supports standalone installation via platform-specific

@@ -25,6 +25,7 @@ use uv_pypi_types::{Conflicts, HashDigests, ParsedUrlError, VerbatimParsedUrl, Y
 use crate::graph_ops::{marker_reachability, simplify_conflict_markers};
 use crate::pins::FilePins;
 use crate::preferences::Preferences;
+use crate::pubgrub::PackageSource;
 use crate::redirect::url_to_precise;
 use crate::resolution::AnnotatedDist;
 use crate::resolution_mode::ResolutionStrategy;
@@ -148,7 +149,14 @@ impl ResolverOutput {
         for resolution in resolutions {
             // Add every package to the graph.
             for (package, version) in &resolution.nodes {
-                if !seen.insert((package, version)) {
+                if !seen.insert(PackageRef {
+                    package_name: &package.name,
+                    version,
+                    url: package.url.as_ref(),
+                    index: package.index.as_ref(),
+                    extra: package.extra.as_ref(),
+                    group: package.dev.as_ref(),
+                }) {
                     // Insert each node only once.
                     continue;
                 }
@@ -337,6 +345,7 @@ impl ResolverOutput {
             dev: group,
             url,
             index,
+            source,
         } = &package;
         // Map the package to a distribution.
         let (dist, hashes, metadata) = Self::parse_dist(
@@ -344,6 +353,7 @@ impl ResolverOutput {
             index.as_ref(),
             url.as_ref(),
             version,
+            *source,
             pins,
             diagnostics,
             preferences,
@@ -403,6 +413,7 @@ impl ResolverOutput {
         index: Option<&IndexUrl>,
         url: Option<&VerbatimParsedUrl>,
         version: &Version,
+        source: PackageSource,
         pins: &FilePins,
         diagnostics: &mut Vec<ResolutionDiagnostic>,
         preferences: &Preferences,
@@ -452,7 +463,7 @@ impl ResolverOutput {
             )
         } else {
             let (dist, metadata_id) = pins
-                .dist_and_id(name, version)
+                .dist_and_id(name, version, source)
                 .expect("Every package should be pinned");
             let dist = dist.clone();
             let hashes_id = dist.distribution_id();
@@ -776,32 +787,32 @@ impl ResolverOutput {
     /// an installation in that marker environment could wind up trying to
     /// install different versions of the same package, which is not allowed.
     fn find_conflicting_distributions(&self) -> Vec<ConflictingDistributionError> {
-        let mut name_to_markers: BTreeMap<&PackageName, Vec<(&Version, &UniversalMarker)>> =
+        let mut name_to_distributions: BTreeMap<&PackageName, Vec<&AnnotatedDist>> =
             BTreeMap::new();
         for node in self.graph.node_weights() {
             let annotated_dist = match node {
                 ResolutionGraphNode::Root => continue,
                 ResolutionGraphNode::Dist(annotated_dist) => annotated_dist,
             };
-            name_to_markers
+            name_to_distributions
                 .entry(&annotated_dist.name)
                 .or_default()
-                .push((&annotated_dist.version, &annotated_dist.marker));
+                .push(annotated_dist);
         }
         let mut dupes = vec![];
-        for (name, marker_trees) in name_to_markers {
-            for (i, (version1, marker1)) in marker_trees.iter().enumerate() {
-                for (version2, marker2) in &marker_trees[i + 1..] {
-                    if version1 == version2 {
+        for (name, distributions) in name_to_distributions {
+            for (index, first) in distributions.iter().enumerate() {
+                for second in &distributions[index + 1..] {
+                    if first.version == second.version {
                         continue;
                     }
-                    if !marker1.is_disjoint(**marker2) {
+                    if !first.marker.is_disjoint(second.marker) {
                         dupes.push(ConflictingDistributionError {
                             name: name.clone(),
-                            version1: (*version1).clone(),
-                            version2: (*version2).clone(),
-                            marker1: **marker1,
-                            marker2: **marker2,
+                            version1: first.version.clone(),
+                            version2: second.version.clone(),
+                            marker1: first.marker,
+                            marker2: second.marker,
                         });
                     }
                 }

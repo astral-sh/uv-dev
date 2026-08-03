@@ -94,6 +94,7 @@ impl BatchPrefetcher {
             extra: None,
             group: None,
             marker: MarkerTree::TRUE,
+            ..
         } = &**next
         else {
             return Ok(());
@@ -149,6 +150,7 @@ impl BatchPrefetcher {
             extra: None,
             group: None,
             marker: MarkerTree::TRUE,
+            ..
         } = &**package
         else {
             return;
@@ -168,6 +170,7 @@ impl BatchPrefetcher {
             extra: None,
             group: None,
             marker: MarkerTree::TRUE,
+            ..
         } = &**next
         else {
             return (0, false);

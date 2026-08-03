@@ -17,7 +17,7 @@ use uv_configuration::{
 use uv_distribution_types::Verbatim;
 use uv_normalize::{DefaultExtras, DefaultGroups, PackageName};
 use uv_preview::Preview;
-use uv_python::{ConfigDiscovery, PythonDownloads, PythonPreference, PythonRequest};
+use uv_python::{ConfigDiscovery, Interpreter, PythonDownloads, PythonPreference, PythonRequest};
 use uv_requirements::is_pylock_toml;
 use uv_resolver::{PylockToml, RequirementsTxtExport, cyclonedx_json};
 use uv_scripts::Pep723Script;
@@ -348,7 +348,12 @@ pub(crate) async fn export(
 
     // Skip conflict detection for CycloneDX exports, as SBOMs are meant to document all dependencies including conflicts.
     if !matches!(format, ExportFormat::CycloneDX1_5) {
-        detect_conflicts(&target, &extras, &groups)?;
+        detect_conflicts(
+            &target,
+            &extras,
+            &groups,
+            interpreter.as_ref().map(Interpreter::markers),
+        )?;
     }
 
     // If the user is exporting to PEP 751, ensure the filename matches the specification.

@@ -388,7 +388,7 @@ impl<'env> LockOperation<'env> {
                 if let LockTarget::Workspace(workspace) = target {
                     for package_name in workspace.packages().keys() {
                         existing
-                            .find_by_name(package_name)
+                            .find_workspace_member(package_name)
                             .map_err(|_| ProjectError::LockWorkspaceMismatch(package_name.clone()))?
                             .ok_or_else(|| {
                                 ProjectError::LockWorkspaceMismatch(package_name.clone())
@@ -670,6 +670,9 @@ async fn do_lock(
             PreviewFeature::PackageConflicts
         );
     }
+
+    // Source selections that replace a local package must occupy separate installation forks.
+    conflicts.append(&mut target.source_conflicts(sources));
 
     // Collect the list of supported environments.
     let environments = {

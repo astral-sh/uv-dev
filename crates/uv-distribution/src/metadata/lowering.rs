@@ -137,7 +137,7 @@ impl LoweredRequirement {
                             )));
                         }
                         Source::Workspace {
-                            workspace: WorkspaceReference::Bool(true),
+                            workspace: WorkspaceReference::Bool(_),
                             ..
                         } => {
                             // OK
@@ -281,22 +281,40 @@ impl LoweredRequirement {
                             workspace: workspace_ref,
                             editable: source_editable,
                             marker,
-                            ..
+                            extra,
+                            group,
                         } => {
-                            let source = workspace_source(
-                                requirement,
-                                &workspace_ref,
-                                source_editable,
-                                editable,
-                                origin,
-                                project_dir,
-                                workspace.install_path(),
-                                Some(workspace),
-                                git_member,
-                                cache,
-                                workspace_cache,
-                            )
-                            .await?;
+                            let source = if matches!(workspace_ref, WorkspaceReference::Bool(false))
+                            {
+                                let mut source = Requirement::from(requirement.clone()).source;
+                                if let RequirementSource::Registry { conflict, .. } = &mut source {
+                                    *conflict = project_name.and_then(|project_name| {
+                                        if let Some(extra) = extra {
+                                            Some(ConflictItem::from((project_name.clone(), extra)))
+                                        } else {
+                                            group.map(|group| {
+                                                ConflictItem::from((project_name.clone(), group))
+                                            })
+                                        }
+                                    });
+                                }
+                                source
+                            } else {
+                                workspace_source(
+                                    requirement,
+                                    &workspace_ref,
+                                    source_editable,
+                                    editable,
+                                    origin,
+                                    project_dir,
+                                    workspace.install_path(),
+                                    Some(workspace),
+                                    git_member,
+                                    cache,
+                                    workspace_cache,
+                                )
+                                .await?
+                            };
                             (source, marker)
                         }
                     };
@@ -593,8 +611,6 @@ pub enum LoweringError {
         "`{0}` is associated with a URL source, but references a Git repository. Consider using a Git source instead (e.g., `{0} = {{ git = \"{1}\" }}`)"
     )]
     MissingGitSource(PackageName, DisplaySafeUrl),
-    #[error("`workspace = false` is not yet supported")]
-    WorkspaceFalse,
     #[error(transparent)]
     Workspace(#[from] WorkspaceError),
     #[error(
@@ -829,7 +845,7 @@ async fn workspace_source(
     };
 
     match workspace_ref {
-        WorkspaceReference::Bool(false) => Err(LoweringError::WorkspaceFalse),
+        WorkspaceReference::Bool(false) => Ok(Requirement::from(requirement.clone()).source),
         WorkspaceReference::Bool(true) => {
             let workspace = current_workspace.ok_or(LoweringError::WorkspaceMember)?;
             let member = workspace.packages().get(&requirement.name).ok_or_else(|| {

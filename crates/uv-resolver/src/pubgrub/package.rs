@@ -7,6 +7,16 @@ use uv_pypi_types::ConflictItemRef;
 
 use crate::python_requirement::PythonRequirement;
 
+/// The source identity attached to a package and its proxy packages.
+#[derive(Debug, Clone, Copy, Default, Eq, Hash, PartialEq, PartialOrd, Ord)]
+pub enum PackageSource {
+    /// Resolve normally, allowing an applicable URL or workspace source to take precedence.
+    #[default]
+    Unspecified,
+    /// Resolve explicitly from a package index, independently of any URL source.
+    Registry,
+}
+
 /// [`Arc`] wrapper around [`PubGrubPackageInner`] to make cloning (inside PubGrub) cheap.
 #[derive(Debug, Clone, Eq, Hash, PartialEq, PartialOrd, Ord)]
 pub struct PubGrubPackage(Arc<PubGrubPackageInner>);
@@ -55,6 +65,8 @@ pub enum PubGrubPackageInner {
         extra: Option<ExtraName>,
         group: Option<GroupName>,
         marker: MarkerTree,
+        /// The source identity shared by this package and its proxy packages.
+        source: PackageSource,
     },
     /// A proxy package to represent a dependency with an extra (e.g., `black[colorama]`).
     ///
@@ -73,6 +85,7 @@ pub enum PubGrubPackageInner {
         name: PackageName,
         extra: ExtraName,
         marker: MarkerTree,
+        source: PackageSource,
     },
     /// A proxy package to represent an enabled dependency group.
     ///
@@ -83,6 +96,7 @@ pub enum PubGrubPackageInner {
         name: PackageName,
         group: GroupName,
         marker: MarkerTree,
+        source: PackageSource,
     },
     /// A proxy package for a base package with a marker (e.g., `black; python_version >= "3.6"`).
     ///
@@ -92,6 +106,7 @@ pub enum PubGrubPackageInner {
         name: PackageName,
         /// The marker associated with this proxy package.
         marker: MarkerTree,
+        source: PackageSource,
     },
 }
 
@@ -102,6 +117,7 @@ impl PubGrubPackage {
         extra: Option<ExtraName>,
         group: Option<GroupName>,
         marker: MarkerTree,
+        source: PackageSource,
     ) -> Self {
         // Remove all extra expressions from the marker, since we track extras
         // separately. This also avoids an issue where packages added via
@@ -114,22 +130,42 @@ impl PubGrubPackage {
                 name,
                 extra,
                 marker,
+                source,
             }))
         } else if let Some(group) = group {
             Self(Arc::new(PubGrubPackageInner::Group {
                 name,
                 group,
                 marker,
+                source,
             }))
         } else if !marker.is_true() {
-            Self(Arc::new(PubGrubPackageInner::Marker { name, marker }))
+            Self(Arc::new(PubGrubPackageInner::Marker {
+                name,
+                marker,
+                source,
+            }))
         } else {
             Self(Arc::new(PubGrubPackageInner::Package {
                 name,
                 extra,
                 group: None,
                 marker,
+                source,
             }))
+        }
+    }
+
+    /// Return the source identity associated with this package.
+    pub(crate) fn source(&self) -> PackageSource {
+        match &**self {
+            PubGrubPackageInner::Root(_)
+            | PubGrubPackageInner::Python(_)
+            | PubGrubPackageInner::System(_) => PackageSource::Unspecified,
+            PubGrubPackageInner::Package { source, .. }
+            | PubGrubPackageInner::Extra { source, .. }
+            | PubGrubPackageInner::Group { source, .. }
+            | PubGrubPackageInner::Marker { source, .. } => *source,
         }
     }
 
@@ -154,6 +190,7 @@ impl PubGrubPackage {
                     None,
                     None,
                     MarkerTree::TRUE,
+                    self.source(),
                 ))
             }
         }
@@ -251,6 +288,10 @@ impl PubGrubPackage {
     /// If this package can't possibly be classified as conflicting, then
     /// this returns `None`.
     pub(crate) fn conflicting_item(&self) -> Option<ConflictItemRef<'_>> {
+        if self.source() == PackageSource::Registry {
+            return None;
+        }
+
         let package = self.name_no_root()?;
         match (self.extra(), self.group()) {
             (None, None) => Some(ConflictItemRef::from(package)),
@@ -322,7 +363,13 @@ impl PubGrubPackage {
 
     /// Returns a new [`PubGrubPackage`] representing the base package with the given name.
     pub(crate) fn base(name: PackageName) -> Self {
-        Self::from_package(name, None, None, MarkerTree::TRUE)
+        Self::from_package(
+            name,
+            None,
+            None,
+            MarkerTree::TRUE,
+            PackageSource::Unspecified,
+        )
     }
 }
 
@@ -351,6 +398,7 @@ impl std::fmt::Display for PubGrubPackageInner {
                 extra: None,
                 marker,
                 group: None,
+                ..
             } => {
                 if let Some(marker) = marker.contents() {
                     write!(f, "{name}{{{marker}}}")
@@ -363,6 +411,7 @@ impl std::fmt::Display for PubGrubPackageInner {
                 extra: Some(extra),
                 marker,
                 group: None,
+                ..
             } => {
                 if let Some(marker) = marker.contents() {
                     write!(f, "{name}[{extra}]{{{marker}}}")
@@ -375,6 +424,7 @@ impl std::fmt::Display for PubGrubPackageInner {
                 extra: None,
                 marker,
                 group: Some(dev),
+                ..
             } => {
                 if let Some(marker) = marker.contents() {
                     write!(f, "{name}:{dev}{{{marker}}}")
@@ -399,6 +449,7 @@ impl std::fmt::Display for PubGrubPackageInner {
                 extra: Some(_),
                 marker: _,
                 group: Some(_),
+                ..
             } => unreachable!(),
         }
     }

@@ -1474,7 +1474,7 @@ impl Lock {
         marker_environment: &MarkerEnvironment,
     ) -> Result<DependencySelection<'lock>, String> {
         let (root, production, groups) = if let Some(project_name) = project_name {
-            let Some(project) = self.find_by_name(project_name)? else {
+            let Some(project) = self.find_workspace_member(project_name)? else {
                 return Ok(DependencySelection {
                     root: None,
                     production: None,
@@ -1976,7 +1976,7 @@ impl Lock {
     /// Returns the package with the given name. If there are multiple
     /// matching packages, then an error is returned. If there are no
     /// matching packages, then `Ok(None)` is returned.
-    pub fn find_by_name(&self, name: &PackageName) -> Result<Option<&Package>, String> {
+    fn find_by_name(&self, name: &PackageName) -> Result<Option<&Package>, String> {
         let mut found_dist = None;
         for dist in &self.packages {
             if &dist.id.name == name {
@@ -1987,6 +1987,22 @@ impl Lock {
             }
         }
         Ok(found_dist)
+    }
+
+    /// Return the local package for a workspace member that also has a registry distribution.
+    pub fn find_workspace_member(&self, name: &PackageName) -> Result<Option<&Package>, String> {
+        let mut local_packages = self
+            .packages
+            .iter()
+            .filter(|package| &package.id.name == name && package.id.source.is_local());
+        if let Some(package) = local_packages.next() {
+            if local_packages.next().is_some() {
+                return Err(format!("found multiple local packages matching `{name}`"));
+            }
+            return Ok(Some(package));
+        }
+
+        self.find_by_name(name)
     }
 
     /// Returns the package with the given name.
@@ -2335,7 +2351,7 @@ impl Lock {
         // Validate that the member sources have not changed (e.g., that they've switched from
         // virtual to non-virtual or vice versa).
         for (name, member) in packages {
-            let source = self.find_by_name(name).ok().flatten();
+            let source = self.find_workspace_member(name).ok().flatten();
 
             // Determine whether the member was required by any other member.
             let value = required_members.get(name);
@@ -2600,7 +2616,7 @@ impl Lock {
         // Add the workspace packages to the queue.
         for root_name in packages.keys() {
             let root = self
-                .find_by_name(root_name)
+                .find_workspace_member(root_name)
                 .expect("found too many packages matching root");
 
             let Some(root) = root else {
