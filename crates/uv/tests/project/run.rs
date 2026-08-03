@@ -7071,11 +7071,11 @@ fn run_target_workspace_discovery_workspace_project_group_include() -> Result<()
         requires-python = ">=3.12"
 
         [dependency-groups]
-        dev = [{ include-group = { workspace = "lint" } }, "six"]
+        dev = ["six"]
         replaced = ["packaging"]
 
         [tool.uv.dependency-groups]
-        dev = { requires-python = ">=3.12" }
+        dev = { requires-python = ">=3.12", include-groups = [{ workspace = "lint" }] }
         "#
     })?;
 
@@ -7104,7 +7104,7 @@ fn run_target_workspace_discovery_workspace_project_group_include() -> Result<()
     installed: idna, six
 
     ----- stderr -----
-    warning: Including dependency groups from the workspace root (`include-group = { workspace = ... }`) is experimental and may change without warning. Pass `--preview-features include-group-workspace` to disable this warning.
+    warning: Including dependency groups from the workspace root (`[tool.uv.dependency-groups]` with `include-groups = [{ workspace = ... }]`) is experimental and may change without warning. Pass `--preview-features include-group-workspace` to disable this warning.
     Resolved 6 packages in [TIME]
     Prepared 2 packages in [TIME]
     Installed 2 packages in [TIME]
@@ -7165,6 +7165,62 @@ fn run_target_workspace_discovery_workspace_project_group_include() -> Result<()
     Ok(())
 }
 
+/// Member groups can include multiple differently named workspace-root groups.
+#[test]
+fn run_target_workspace_discovery_workspace_group_includes() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! { r#"
+            [dependency-groups]
+            lint = ["idna"]
+            test = ["six"]
+
+            [tool.uv.workspace]
+            members = ["child"]
+            "#
+        })?;
+
+    context
+        .temp_dir
+        .child("child")
+        .child("pyproject.toml")
+        .write_str(indoc! { r#"
+            [project]
+            name = "child"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+
+            [dependency-groups]
+            dev = ["packaging"]
+
+            [tool.uv.dependency-groups]
+            dev = { include-groups = [{ workspace = "lint" }, { workspace = "test" }] }
+            "#
+        })?;
+
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--preview-features")
+        .arg("include-group-workspace")
+        .arg("--package")
+        .arg("child")
+        .arg("--only-group")
+        .arg("dev"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    Prepared 3 packages in [TIME]
+    Installed 3 packages in [TIME]
+     + idna==3.6
+     + packaging==24.0
+     + six==1.16.0
+    ");
+
+    Ok(())
+}
+
 /// Workspace-group conflicts also apply to member groups that include them transitively.
 #[test]
 fn run_target_workspace_discovery_workspace_group_include_conflicts() -> Result<()> {
@@ -7203,8 +7259,11 @@ fn run_target_workspace_discovery_workspace_group_include_conflicts() -> Result<
             requires-python = ">=3.12"
 
             [dependency-groups]
-            lint = [{ include-group = { workspace = "lint" } }]
+            lint = []
             dev = [{ include-group = "lint" }]
+
+            [tool.uv.dependency-groups]
+            lint = { include-groups = [{ workspace = "lint" }] }
             "#
         })?;
 
@@ -7247,7 +7306,10 @@ fn run_target_workspace_discovery_virtual_workspace_group_include() -> Result<()
             requires-python = ">=3.12"
 
             [dependency-groups]
-            dev = [{ include-group = { workspace = "lint" } }, "six"]
+            dev = ["six"]
+
+            [tool.uv.dependency-groups]
+            dev = { include-groups = [{ workspace = "lint" }] }
             "#
         })?;
 
@@ -7323,7 +7385,10 @@ fn run_target_workspace_discovery_workspace_group_include_requires_python() -> R
             requires-python = ">=3.12"
 
             [dependency-groups]
-            dev = [{ include-group = { workspace = "lint" } }]
+            dev = []
+
+            [tool.uv.dependency-groups]
+            dev = { include-groups = [{ workspace = "lint" }] }
             "#
         })?;
 
@@ -7380,7 +7445,10 @@ fn run_target_workspace_discovery_workspace_group_include_missing() -> Result<()
             requires-python = ">=3.12"
 
             [dependency-groups]
-            dev = [{ include-group = { workspace = "lint" } }]
+            dev = []
+
+            [tool.uv.dependency-groups]
+            dev = { include-groups = [{ workspace = "lint" }] }
             "#
         })?;
 
@@ -7411,7 +7479,10 @@ fn run_target_workspace_discovery_workspace_group_include_without_workspace() ->
             requires-python = ">=3.12"
 
             [dependency-groups]
-            dev = [{ include-group = { workspace = "lint" } }]
+            dev = []
+
+            [tool.uv.dependency-groups]
+            dev = { include-groups = [{ workspace = "lint" }] }
             "#
         })?;
 

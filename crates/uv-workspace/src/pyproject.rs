@@ -141,6 +141,18 @@ impl PyProjectToml {
         }
     }
 
+    /// Returns the workspace-root dependency groups included by a local group.
+    pub fn workspace_group_includes(&self, group: &GroupName) -> impl Iterator<Item = &GroupName> {
+        self.tool
+            .as_ref()
+            .and_then(|tool| tool.uv.as_ref())
+            .and_then(|uv| uv.dependency_groups.as_ref())
+            .and_then(|groups| groups.inner().get(group))
+            .into_iter()
+            .flat_map(|settings| &settings.include_groups)
+            .map(|include| &include.workspace)
+    }
+
     /// Returns the set of conflicts for the project.
     pub(crate) fn conflicts(&self) -> Result<Conflicts, ConflictError> {
         let empty = Conflicts::empty();
@@ -401,9 +413,8 @@ pub struct ToolUv {
 
     /// Additional settings for `dependency-groups`.
     ///
-    /// Currently this can only be used to add `requires-python` constraints
-    /// to dependency groups (typically to inform uv that your dev tooling
-    /// has a higher python requirement than your actual project).
+    /// This can be used to add `requires-python` constraints to dependency groups or include a
+    /// dependency group from the workspace root.
     ///
     /// This cannot be used to define dependency groups, use the top-level
     /// `[dependency-groups]` table for that.
@@ -811,6 +822,18 @@ pub(crate) struct DependencyGroupSettings {
     /// Version of python to require when installing this group
     #[cfg_attr(feature = "schemars", schemars(with = "Option<String>"))]
     pub(crate) requires_python: Option<VersionSpecifiers>,
+    /// Additional dependency groups to include from the workspace root.
+    #[serde(default)]
+    pub(crate) include_groups: Vec<DependencyGroupInclude>,
+}
+
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(test, derive(Serialize))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DependencyGroupInclude {
+    /// The dependency group to include from the workspace root.
+    pub(crate) workspace: GroupName,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

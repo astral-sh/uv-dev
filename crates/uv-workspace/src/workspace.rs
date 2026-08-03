@@ -3455,11 +3455,23 @@ mod tests {
 foo = ["a", {include-group = "bar"}]
 bar = ["b"]
 future = [{include-group = "bar", unknown = "value"}]
-workspace = [{include-group = {workspace = "root"}}]
+workspace = ["c"]
+
+[tool.uv.dependency-groups]
+workspace = {include-groups = [{workspace = "root"}]}
 "#;
 
         let result = PyProjectToml::from_string(toml.to_string(), "pyproject.toml")
             .expect("Deserialization should succeed");
+
+        let workspace_group = GroupName::from_str("workspace").unwrap();
+        let root_group = GroupName::from_str("root").unwrap();
+        assert_eq!(
+            result
+                .workspace_group_includes(&workspace_group)
+                .collect::<Vec<_>>(),
+            vec![&root_group]
+        );
 
         let groups = result
             .dependency_groups
@@ -3497,13 +3509,11 @@ workspace = [{include-group = {workspace = "root"}}]
         );
 
         let workspace = groups
-            .get(&GroupName::from_str("workspace").unwrap())
+            .get(&workspace_group)
             .expect("Group `workspace` should be present");
         assert_eq!(
             workspace,
-            &[DependencyGroupSpecifier::IncludeWorkspaceGroup {
-                include_group: GroupName::from_str("root").unwrap(),
-            }]
+            &[DependencyGroupSpecifier::Requirement("c".to_string())]
         );
     }
 
