@@ -17,6 +17,7 @@ pub struct Options {
     pub index_strategy: IndexStrategy,
     pub artifact_environments: SupportedEnvironments,
     pub minimum_libc_version: Option<MinimumLibcVersion>,
+    pub required_environments: SupportedEnvironments,
     pub flexibility: Flexibility,
     pub build_options: BuildOptions,
     pub torch_backend: Option<TorchStrategy>,
@@ -33,6 +34,7 @@ pub struct OptionsBuilder {
     index_strategy: IndexStrategy,
     artifact_environments: SupportedEnvironments,
     minimum_libc_version: Option<MinimumLibcVersion>,
+    required_environments: SupportedEnvironments,
     flexibility: Flexibility,
     build_options: BuildOptions,
     torch_backend: Option<TorchStrategy>,
@@ -103,6 +105,13 @@ impl OptionsBuilder {
         self
     }
 
+    /// Sets the environments that should prefer matching artifacts when reusing a resolution.
+    #[must_use]
+    pub fn required_environments(mut self, required_environments: SupportedEnvironments) -> Self {
+        self.required_environments = required_environments;
+        self
+    }
+
     /// Sets the [`Flexibility`].
     #[must_use]
     pub fn flexibility(mut self, flexibility: Flexibility) -> Self {
@@ -135,6 +144,7 @@ impl OptionsBuilder {
             index_strategy: self.index_strategy,
             artifact_environments: self.artifact_environments,
             minimum_libc_version: self.minimum_libc_version,
+            required_environments: self.required_environments,
             flexibility: self.flexibility,
             build_options: self.build_options,
             torch_backend: self.torch_backend,
