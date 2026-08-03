@@ -460,6 +460,8 @@ pub enum PreviewFeature {
     /// project resolution, and installation. See [project build dependency
     /// hashes](./projects/build.md#project-build-dependency-hashes) for configuration and exceptions.
     BuildDependencyHashes,
+    /// Allows dependency groups to include dependency groups from the workspace root.
+    IncludeGroupWorkspace,
 }
 
 impl Display for PreviewFeature {

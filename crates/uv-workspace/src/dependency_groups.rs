@@ -9,8 +9,11 @@ use uv_fs::Simplified;
 use uv_normalize::{DEV_DEPENDENCIES, GroupName};
 use uv_pep440::VersionSpecifiers;
 use uv_pep508::Pep508Error;
+use uv_preview::PreviewFeature;
 use uv_pypi_types::{DependencyGroupSpecifier, VerbatimParsedUrl};
+use uv_warnings::warn_user_once;
 
+use crate::Workspace;
 use crate::pyproject::{DependencyGroupSettings, PyProjectToml, ToolUvDependencyGroups};
 
 /// PEP 735 dependency groups, with any `include-group` entries resolved.
@@ -30,6 +33,43 @@ impl FlatDependencyGroups {
     pub fn from_pyproject_toml(
         path: &Path,
         pyproject_toml: &PyProjectToml,
+    ) -> Result<Self, DependencyGroupError> {
+        Self::from_pyproject_toml_with_workspace(path, pyproject_toml, None)
+    }
+
+    /// Gather and flatten dependency groups, including any referenced workspace-root groups.
+    pub fn from_workspace(
+        path: &Path,
+        pyproject_toml: &PyProjectToml,
+        workspace: &Workspace,
+    ) -> Result<Self, DependencyGroupError> {
+        let includes_workspace_group =
+            pyproject_toml
+                .dependency_groups
+                .as_ref()
+                .is_some_and(|groups| {
+                    groups.into_iter().any(|(_, specifiers)| {
+                        specifiers.iter().any(|specifier| {
+                            matches!(
+                                specifier,
+                                DependencyGroupSpecifier::IncludeWorkspaceGroup { .. }
+                            )
+                        })
+                    })
+                });
+        let workspace_groups = (path != workspace.install_path() && includes_workspace_group)
+            .then(|| {
+                Self::from_pyproject_toml(workspace.install_path(), workspace.pyproject_toml())
+            })
+            .transpose()?;
+
+        Self::from_pyproject_toml_with_workspace(path, pyproject_toml, workspace_groups.as_ref())
+    }
+
+    fn from_pyproject_toml_with_workspace(
+        path: &Path,
+        pyproject_toml: &PyProjectToml,
+        workspace_groups: Option<&Self>,
     ) -> Result<Self, DependencyGroupError> {
         // First, collect `tool.uv.dev_dependencies`
         let dev_dependencies = pyproject_toml
@@ -55,18 +95,20 @@ impl FlatDependencyGroups {
             .unwrap_or(&empty_settings);
 
         // Flatten the dependency groups.
-        let mut dependency_groups =
-            Self::from_dependency_groups(&dependency_groups, group_settings.inner()).map_err(
-                |err| DependencyGroupError {
-                    package: pyproject_toml
-                        .project
-                        .as_ref()
-                        .map(|project| project.name.to_string())
-                        .unwrap_or_default(),
-                    path: path.user_display().to_string(),
-                    error: err.with_dev_dependencies(dev_dependencies),
-                },
-            )?;
+        let mut dependency_groups = Self::from_dependency_groups(
+            &dependency_groups,
+            group_settings.inner(),
+            workspace_groups,
+        )
+        .map_err(|err| DependencyGroupError {
+            package: pyproject_toml
+                .project
+                .as_ref()
+                .map(|project| project.name.to_string())
+                .unwrap_or_default(),
+            path: path.user_display().to_string(),
+            error: err.with_dev_dependencies(dev_dependencies),
+        })?;
 
         // Add the `dev` group, if the legacy `dev-dependencies` is defined.
         //
@@ -91,11 +133,13 @@ impl FlatDependencyGroups {
     fn from_dependency_groups(
         groups: &BTreeMap<&GroupName, &Vec<DependencyGroupSpecifier>>,
         settings: &BTreeMap<GroupName, DependencyGroupSettings>,
+        workspace_groups: Option<&Self>,
     ) -> Result<Self, DependencyGroupErrorInner> {
         fn resolve_group<'data>(
             resolved: &mut BTreeMap<GroupName, FlatDependencyGroup>,
             groups: &'data BTreeMap<&GroupName, &Vec<DependencyGroupSpecifier>>,
             settings: &BTreeMap<GroupName, DependencyGroupSettings>,
+            workspace_groups: Option<&FlatDependencyGroups>,
             name: &'data GroupName,
             parents: &mut Vec<&'data GroupName>,
         ) -> Result<(), DependencyGroupErrorInner> {
@@ -142,7 +186,14 @@ impl FlatDependencyGroups {
                         }
                     }
                     DependencyGroupSpecifier::IncludeGroup { include_group } => {
-                        resolve_group(resolved, groups, settings, include_group, parents)?;
+                        resolve_group(
+                            resolved,
+                            groups,
+                            settings,
+                            workspace_groups,
+                            include_group,
+                            parents,
+                        )?;
                         if let Some(included) = resolved.get(include_group) {
                             requirements.extend(included.requirements.iter().cloned());
 
@@ -152,6 +203,33 @@ impl FlatDependencyGroups {
                                 .chain(included.requires_python.clone().into_iter().flatten())
                                 .collect();
                         }
+                    }
+                    DependencyGroupSpecifier::IncludeWorkspaceGroup { include_group } => {
+                        let workspace_groups = workspace_groups.ok_or_else(|| {
+                            DependencyGroupErrorInner::WorkspaceGroupOutsideWorkspace(
+                                include_group.clone(),
+                                name.clone(),
+                            )
+                        })?;
+                        let included = workspace_groups.get(include_group).ok_or_else(|| {
+                            DependencyGroupErrorInner::WorkspaceGroupNotFound(
+                                include_group.clone(),
+                                name.clone(),
+                            )
+                        })?;
+
+                        if !uv_preview::is_enabled(PreviewFeature::IncludeGroupWorkspace) {
+                            warn_user_once!(
+                                "Including dependency groups from the workspace root (`include-group = {{ workspace = ... }}`) is experimental and may change without warning. Pass `--preview-features {}` to disable this warning.",
+                                PreviewFeature::IncludeGroupWorkspace
+                            );
+                        }
+
+                        requirements.extend(included.requirements.iter().cloned());
+                        requires_python_intersection = requires_python_intersection
+                            .into_iter()
+                            .chain(included.requires_python.clone().into_iter().flatten())
+                            .collect();
                     }
                     DependencyGroupSpecifier::Object(map) => {
                         return Err(
@@ -213,7 +291,14 @@ impl FlatDependencyGroups {
         let mut resolved = BTreeMap::new();
         for name in groups.keys() {
             let mut parents = Vec::new();
-            resolve_group(&mut resolved, groups, settings, name, &mut parents)?;
+            resolve_group(
+                &mut resolved,
+                groups,
+                settings,
+                workspace_groups,
+                name,
+                &mut parents,
+            )?;
         }
         Ok(Self(resolved))
     }
@@ -276,6 +361,12 @@ enum DependencyGroupErrorInner {
     ),
     #[error("Failed to find group `{0}` included by `{1}`")]
     GroupNotFound(GroupName, GroupName),
+    #[error("Failed to find workspace group `{0}` included by `{1}`")]
+    WorkspaceGroupNotFound(GroupName, GroupName),
+    #[error(
+        "Group `{1}` includes workspace group `{0}`, but this project is not a workspace member"
+    )]
+    WorkspaceGroupOutsideWorkspace(GroupName, GroupName),
     #[error(
         "Group `{0}` includes the `dev` group (`include = \"dev\"`), but only `tool.uv.dev-dependencies` was found. To reference the `dev` group via an `include`, remove the `tool.uv.dev-dependencies` section and add any development dependencies to the `dev` entry in the `[dependency-groups]` table instead."
     )]
