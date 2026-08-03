@@ -354,6 +354,12 @@ mod tests {
         those scripts, although arbitrary binaries and nonstandard scripts are not guaranteed to be
         relocatable. Use `uv venv --no-relocatable` to opt out.
 
+        ### `required-environments-mode` {#required-environments-mode}
+
+        The `required-environments-mode` setting controls whether source distributions can satisfy
+        required resolution environments. In `require-wheels` mode, every dependency active in a
+        required environment must provide a compatible wheel.
+
         ### `resolution-inputs` {#resolution-inputs}
 
         uv omits redundant runtime constraints and unused overrides, exclusions, dependency

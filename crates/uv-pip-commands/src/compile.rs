@@ -16,7 +16,7 @@ use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_configuration::{
     BuildIsolation, BuildOptions, Concurrency, Constraints, ExcludeDependency, ExtrasSpecification,
     HashCheckingMode, IndexStrategy, NoBinary, NoBuild, NoSources, Override, PipCompileFormat,
-    Reinstall, Upgrade,
+    Reinstall, RequiredEnvironmentsMode, Upgrade,
 };
 use uv_configuration::{KeyringProviderType, TargetTriple};
 use uv_dispatch::{BuildDispatch, SharedState};
@@ -80,6 +80,7 @@ pub async fn pip_compile(
     environments: SupportedEnvironments,
     required_environments: SupportedEnvironments,
     minimum_libc_version: Option<MinimumLibcVersion>,
+    required_environments_mode: Option<RequiredEnvironmentsMode>,
     extras: ExtrasSpecification,
     groups: GroupsSpecification,
     output_file: Option<&Path>,
@@ -554,6 +555,20 @@ pub async fn pip_compile(
         );
     }
 
+    let required_environments_mode = if universal {
+        if required_environments_mode.is_some()
+            && !uv_preview::is_enabled(PreviewFeature::RequiredEnvironmentsMode)
+        {
+            warn_user_once!(
+                "The `required-environments-mode` setting is experimental and may change without warning. Pass `--preview-features {}` to disable this warning.",
+                PreviewFeature::RequiredEnvironmentsMode
+            );
+        }
+        required_environments_mode
+    } else {
+        None
+    };
+
     let options = OptionsBuilder::new()
         .resolution_mode(resolution_mode)
         .prerelease(prerelease)
@@ -569,6 +584,12 @@ pub async fn pip_compile(
         } else {
             None
         })
+        .required_environments(if universal {
+            required_environments.clone()
+        } else {
+            SupportedEnvironments::default()
+        })
+        .required_environments_mode(required_environments_mode)
         .build();
 
     // Resolve the requirements.

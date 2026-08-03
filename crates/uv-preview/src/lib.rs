@@ -412,6 +412,10 @@ pub enum PreviewFeature {
     /// dependencies. Their metadata is retained so uv can check whether those sources are requested
     /// or stale without network access.
     LockWithoutMetadata,
+    /// The `required-environments-mode` setting controls whether source distributions can satisfy
+    /// required resolution environments. In `require-wheels` mode, every dependency active in a
+    /// required environment must provide a compatible wheel.
+    RequiredEnvironmentsMode,
     /// The `--index` and `--default-index` options accept the names of configured package indexes
     /// as well as URLs. For example, `--index internal` selects the configured index named
     /// `internal`, so its URL does not need to be repeated on the command line.
