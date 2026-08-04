@@ -13,8 +13,11 @@ use uv_test::{TestContext, uv_snapshot};
 
 const WHEEL_FILENAME: &str = "basic_package-0.1.0-py3-none-any.whl";
 const WHEEL_HASH: &str = "7b6229db79b5800e4e98a351b5628c1c8a944533a2d428aeeaa7275a30d4ea82";
+const WHEEL_BLAKE2B: &str = "a5b2398d1a4702cf48948e53709b6a83d3c4c220e2af335216e27b76dba5cef1";
 const WHEEL_METADATA: &str = "Metadata-Version: 2.3\nName: basic-package\nVersion: 0.1.0\n";
 const SOURCE_FILENAME: &str = "basic_package-0.1.0.tar.gz";
+const SOURCE_PACKAGE_BLAKE2B: &str =
+    "c7def5eb9a2ec8013e1bbbf3c51474c8f823e0deb354a1df903a5d7f7978714e";
 
 #[derive(Clone, Copy)]
 enum ArtifactKind {
@@ -770,8 +773,10 @@ async fn proxy_index_artifact_url_template_installs_a_canonical_pypi_lock() -> R
 }
 
 #[tokio::test]
-async fn proxy_index_artifact_url_template_rejects_unknown_canonical_pypi_url() -> Result<()> {
+async fn proxy_index_artifact_url_template_derives_canonical_pypi_url_from_proxy_bytes()
+-> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let wheel = fixture(&context, WHEEL_FILENAME)?;
     let physical_index = MockServer::start().await;
     let physical_artifacts = MockServer::start().await;
     let physical_path = format!("/packages/basic-package/{WHEEL_FILENAME}");
@@ -787,6 +792,235 @@ async fn proxy_index_artifact_url_template_rejects_unknown_canonical_pypi_url() 
         1,
     )
     .await;
+    Mock::given(method("GET"))
+        .and(path(format!("{physical_path}.metadata")))
+        .respond_with(ResponseTemplate::new(200).set_body_string(WHEEL_METADATA))
+        .expect(1)
+        .mount(&physical_artifacts)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(physical_path.clone()))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .expect(2)
+        .mount(&physical_artifacts)
+        .await;
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+            [project]
+            name = "project"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = ["basic-package==0.1.0"]
+
+            [[tool.uv.index]]
+            name = "mirror"
+            url = "{}/simple/"
+            artifact-url = "{}/packages/{{normalized_name}}/{{filename}}"
+            proxy-for = "pypi"
+            "#,
+            physical_index.uri(),
+            physical_artifacts.uri(),
+        })?;
+
+    uv_snapshot!(context.filters(), context.lock(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    let canonical_url = format!(
+        "https://files.pythonhosted.org/packages/{}/{}/{}/{WHEEL_FILENAME}",
+        &WHEEL_BLAKE2B[..2],
+        &WHEEL_BLAKE2B[2..4],
+        &WHEEL_BLAKE2B[4..]
+    );
+    let lock = context.read("uv.lock");
+    assert!(lock.contains(&canonical_url));
+    assert!(!lock.contains(&physical_artifacts.uri()));
+
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + basic-package==0.1.0
+    ");
+
+    assert_requested_once(&physical_index, "/simple/basic-package/").await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn proxy_index_artifact_url_template_derives_canonical_pypi_source_url() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let kind = ArtifactKind::Source;
+    let source = kind.bytes(&context)?;
+    let source_hash = sha256(&source);
+    let physical_index = MockServer::start().await;
+    let physical_artifacts = MockServer::start().await;
+    let physical_path = format!("/packages/{}/{}", kind.package(), kind.filename());
+
+    mount_simple(
+        &physical_index,
+        kind.package(),
+        vec![kind.advertised_file(
+            &format!("{}{physical_path}", physical_artifacts.uri()),
+            Some(&source_hash),
+        )],
+        1,
+    )
+    .await;
+    Mock::given(method("GET"))
+        .and(path(physical_path.clone()))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(source))
+        .expect(2)
+        .mount(&physical_artifacts)
+        .await;
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+            [project]
+            name = "project"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = ["source-package==1.0.0"]
+
+            [[tool.uv.index]]
+            name = "mirror"
+            url = "{}/simple/"
+            artifact-url = "{}/packages/{{normalized_name}}/{{filename}}"
+            proxy-for = "pypi"
+
+            [[tool.uv.dependency-metadata]]
+            name = "source-package"
+            version = "1.0.0"
+            requires-dist = []
+            "#,
+            physical_index.uri(),
+            physical_artifacts.uri(),
+        })?;
+
+    uv_snapshot!(context.filters(), context.lock(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    let canonical_url = format!(
+        "https://files.pythonhosted.org/packages/{}/{}/{}/{}",
+        &SOURCE_PACKAGE_BLAKE2B[..2],
+        &SOURCE_PACKAGE_BLAKE2B[2..4],
+        &SOURCE_PACKAGE_BLAKE2B[4..],
+        kind.filename()
+    );
+    let lock = context.read("uv.lock");
+    assert!(lock.contains(&canonical_url));
+    assert!(!lock.contains(&physical_artifacts.uri()));
+
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + source-package==1.0.0
+    ");
+
+    assert_requested_once(&physical_index, "/simple/source-package/").await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn proxy_index_artifact_url_template_reuses_advertised_pypi_digest() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let physical_index = MockServer::start().await;
+    let physical_artifacts = MockServer::start().await;
+    let physical_path = format!("/packages/basic-package/{WHEEL_FILENAME}");
+    let physical_url = format!("{}{physical_path}", physical_artifacts.uri());
+    let mut file = advertised_file(WHEEL_FILENAME, &physical_url, Some(WHEEL_HASH));
+    file["hashes"]["blake2b"] = json!(WHEEL_BLAKE2B);
+
+    mount_simple(&physical_index, "basic-package", vec![file], 1).await;
+    Mock::given(method("GET"))
+        .and(path(format!("{physical_path}.metadata")))
+        .respond_with(ResponseTemplate::new(200).set_body_string(WHEEL_METADATA))
+        .expect(1)
+        .mount(&physical_artifacts)
+        .await;
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+            [project]
+            name = "project"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = ["basic-package==0.1.0"]
+
+            [[tool.uv.index]]
+            name = "mirror"
+            url = "{}/simple/"
+            artifact-url = "{}/packages/{{normalized_name}}/{{filename}}"
+            proxy-for = "pypi"
+            "#,
+            physical_index.uri(),
+            physical_artifacts.uri(),
+        })?;
+
+    uv_snapshot!(context.filters(), context.lock(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    let lock = context.read("uv.lock");
+    assert!(lock.contains(&format!(
+        "https://files.pythonhosted.org/packages/a5/b2/398d1a4702cf48948e53709b6a83d3c4c220e2af335216e27b76dba5cef1/{WHEEL_FILENAME}"
+    )));
+    let requests = physical_artifacts
+        .received_requests()
+        .await
+        .ok_or_else(|| anyhow!("physical artifact origin should record requests"))?;
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.url.path() != physical_path),
+        "an advertised BLAKE2b digest should not trigger an artifact download: {requests:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn proxy_index_artifact_url_template_rejects_unverified_pypi_digest() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let mut wheel = fixture(&context, WHEEL_FILENAME)?;
+    wheel.push(0);
+    let physical_index = MockServer::start().await;
+    let physical_artifacts = MockServer::start().await;
+    let physical_path = format!("/packages/basic-package/{WHEEL_FILENAME}");
+
+    mount_simple(
+        &physical_index,
+        "basic-package",
+        vec![advertised_file(
+            WHEEL_FILENAME,
+            &format!("{}{physical_path}", physical_artifacts.uri()),
+            Some(WHEEL_HASH),
+        )],
+        1,
+    )
+    .await;
+    Mock::given(method("GET"))
+        .and(path(physical_path))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .expect(1)
+        .mount(&physical_artifacts)
+        .await;
 
     context
         .temp_dir
@@ -811,12 +1045,10 @@ async fn proxy_index_artifact_url_template_rejects_unknown_canonical_pypi_url() 
     uv_snapshot!(context.filters(), context.lock(), @r"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Cannot derive the canonical artifact URL for proxy artifact `http://[LOCALHOST]/packages/basic-package/basic_package-0.1.0-py3-none-any.whl`
+    error: Proxy artifact `http://[LOCALHOST]/packages/basic-package/basic_package-0.1.0-py3-none-any.whl` does not match its advertised SHA-256 hash
     ");
 
     assert!(!context.temp_dir.child("uv.lock").exists());
-    assert_requested_once(&physical_index, "/simple/basic-package/").await?;
-    assert_no_requests(&physical_artifacts, "physical artifact origin").await?;
     Ok(())
 }
 

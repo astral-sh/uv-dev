@@ -917,7 +917,8 @@ fn canonicalize_registry_file(
 ) -> Result<(), ProxyIndexError> {
     if index_route.is_proxy() {
         let physical_url = file.url.to_url()?;
-        let canonical_url = index_route.to_canonical_url(&physical_url)?;
+        let canonical_url =
+            index_route.to_canonical_url_with_hashes(&physical_url, file.hashes.as_slice())?;
         file.url = FileLocation::AbsoluteUrl(canonical_url.into());
     }
 

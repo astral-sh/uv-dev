@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_http_range_reader::AsyncHttpRangeReader;
+use blake2::{Blake2b, digest::Digest, digest::consts::U32};
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use http::{HeaderMap, StatusCode};
 use itertools::Either;
@@ -21,8 +22,8 @@ use uv_configuration::KeyringProviderType;
 use uv_distribution_filename::{DistFilename, WheelFilename};
 use uv_distribution_types::{
     BuiltDist, File, FileLocation, IndexCapabilities, IndexFormat, IndexLocations,
-    IndexMetadataRef, IndexRoutes, IndexStatusCodeDecision, IndexStatusCodeStrategy, IndexUrl,
-    Name, RegistryBuiltWheel, Zstd,
+    IndexMetadataRef, IndexRoute, IndexRoutes, IndexStatusCodeDecision, IndexStatusCodeStrategy,
+    IndexUrl, Name, ProxyIndexError, RegistryBuiltWheel, Zstd,
 };
 use uv_git::{GIT_LFS, GitError, GitHttpSettings, GitResolver, Reporter};
 use uv_metadata::{read_metadata_async_seek, read_metadata_async_stream};
@@ -681,6 +682,10 @@ impl RegistryClient {
             .map_err(|err| {
                 ErrorKind::from_reqwest(url.clone(), err, self.client.certificate_source())
             })?;
+        let pypi_proxy_route = self
+            .routes
+            .proxy_routes()
+            .find(|route| &route.physical == index && route.requires_pypi_artifact_hash());
         let parse_simple_response = |response: Response| {
             async {
                 // Use the response URL, rather than the request URL, as the base for relative URLs.
@@ -702,7 +707,7 @@ impl RegistryClient {
                     ))
                 })?;
 
-                let unarchived = match media_type {
+                let mut unarchived = match media_type {
                     MediaType::PyxV1Msgpack => {
                         let bytes = response.bytes().await.map_err(|err| {
                             ErrorKind::from_reqwest(
@@ -771,6 +776,12 @@ impl RegistryClient {
                         SimpleDetailMetadata::from_html(&text, package_name, &url)?
                     }
                 };
+
+                if let Some(route) = pypi_proxy_route {
+                    self.populate_pypi_proxy_hashes(&mut unarchived, package_name, route)
+                        .await?;
+                }
+
                 OwnedArchive::from_unarchived(&unarchived)
             }
             .boxed_local()
@@ -786,6 +797,115 @@ impl RegistryClient {
             )
             .await?;
         Ok(simple)
+    }
+
+    /// Compute the BLAKE2b-256 digests PyPI uses in content-addressed artifact URLs.
+    async fn populate_pypi_proxy_hashes(
+        &self,
+        metadata: &mut SimpleDetailMetadata,
+        package_name: &PackageName,
+        route: &IndexRoute,
+    ) -> Result<(), Error> {
+        for version in &mut metadata.versions {
+            futures::stream::iter(
+                version
+                    .files
+                    .source_dists
+                    .iter_mut()
+                    .chain(version.files.wheels.iter_mut()),
+            )
+            .map(|file| self.populate_pypi_proxy_hash(file, package_name, route))
+            .buffer_unordered(8)
+            .try_collect::<Vec<_>>()
+            .await?;
+        }
+
+        Ok(())
+    }
+
+    /// Hash a verified proxy artifact once and reuse its digest from the index cache.
+    async fn populate_pypi_proxy_hash(
+        &self,
+        file: &mut CachedFile,
+        package_name: &PackageName,
+        route: &IndexRoute,
+    ) -> Result<(), Error> {
+        let mut hashes = file.hashes().to_vec();
+        if hashes
+            .iter()
+            .any(|hash| hash.algorithm == HashAlgorithm::Blake2b)
+        {
+            return Ok(());
+        }
+        let Some(expected_sha256) = hashes
+            .iter()
+            .find(|hash| hash.algorithm == HashAlgorithm::Sha256)
+            .map(|hash| hash.digest.to_string())
+        else {
+            return Ok(());
+        };
+
+        let url = file.url.to_url().map_err(ErrorKind::InvalidUrl)?;
+        if !matches!(
+            route.to_canonical_url(&url),
+            Err(ProxyIndexError::UnknownCanonicalUrl { .. })
+        ) {
+            return Ok(());
+        }
+        let request = self
+            .uncached_client(&url)
+            .get(Url::from(url.clone()))
+            .header(
+                "accept-encoding",
+                reqwest::header::HeaderValue::from_static("identity"),
+            )
+            .build()
+            .map_err(|error| {
+                ErrorKind::from_reqwest(url.clone(), error, self.client.certificate_source())
+            })?;
+        let cache_entry = self.cache.entry(
+            CacheBucket::Simple,
+            WheelCache::Index(&route.physical).root(),
+            format!(
+                "{package_name}-{}-{expected_sha256}.blake2b",
+                file.filename()
+            ),
+        );
+        let read_digest = |response: Response| async {
+            let mut blake2b = Blake2b::<U32>::new();
+            let mut sha256 = sha2::Sha256::new();
+            let mut stream = response.bytes_stream();
+            while let Some(chunk) = stream.next().await {
+                let chunk = chunk.map_err(|error| {
+                    ErrorKind::from_reqwest(url.clone(), error, self.client.certificate_source())
+                })?;
+                blake2b.update(&chunk);
+                sha256.update(&chunk);
+            }
+
+            if !hex::encode(sha256.finalize()).eq_ignore_ascii_case(&expected_sha256) {
+                return Err(Error::from(ErrorKind::ProxyIndex(
+                    ProxyIndexError::ArtifactHashMismatch {
+                        url: Box::new(url.clone()),
+                    },
+                )));
+            }
+
+            Ok(hex::encode(blake2b.finalize()))
+        };
+
+        let digest = self
+            .cached_client()
+            .get_serde_with_retry(request, &cache_entry, CacheControl::AllowStale, read_digest)
+            .await
+            .map_err(Error::from)?;
+
+        hashes.push(HashDigest {
+            algorithm: HashAlgorithm::Blake2b,
+            digest: digest.into(),
+        });
+        file.hashes = CachedHashDigests::from(HashDigests::from(hashes));
+        Ok(())
     }
 
     /// Fetch the [`SimpleDetailMetadata`] from a local file, using a PEP 503-compatible directory

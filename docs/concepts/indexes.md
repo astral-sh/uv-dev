@@ -115,9 +115,9 @@ proxy-for = "private"
 ```
 
 An `artifact-url` template can also route an existing PyPI lockfile through a proxy that changes
-artifact paths. However, creating a new lockfile through that proxy requires a known canonical
-artifact URL. If the proxy's layout does not identify PyPI's original artifact URL, uv rejects the
-artifact instead of recording a fabricated URL.
+artifact paths. When creating a new lockfile through the proxy, uv derives PyPI's canonical artifact
+URL from the artifact's BLAKE2b-256 content digest. If the proxy does not advertise that digest, uv
+downloads and verifies the artifact to compute it without contacting PyPI.
 
 Proxies must also provide supported hashes for package files included in `uv.lock` or `pylock.toml`.
 

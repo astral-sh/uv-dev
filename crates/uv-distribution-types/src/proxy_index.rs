@@ -8,6 +8,7 @@ use uv_distribution_filename::DistFilename;
 use uv_normalize::PackageName;
 #[cfg(test)]
 use uv_pep508::VerbatimUrl;
+use uv_pypi_types::{HashAlgorithm, HashDigest};
 use uv_redacted::DisplaySafeUrl;
 
 use crate::index_url::PYPI_ARTIFACT_BASE_URL;
@@ -96,6 +97,13 @@ pub enum ProxyIndexError {
         url: Box<DisplaySafeUrl>,
     },
 
+    /// A proxy artifact did not match the hash advertised by its Simple API response.
+    #[error("Proxy artifact `{url}` does not match its advertised SHA-256 hash")]
+    ArtifactHashMismatch {
+        /// The physical artifact URL whose content failed verification.
+        url: Box<DisplaySafeUrl>,
+    },
+
     /// A registry artifact location could not be converted to an absolute URL.
     #[error(transparent)]
     InvalidArtifactUrl(#[from] ToUrlError),
@@ -148,6 +156,66 @@ impl IndexRoute {
         url: &DisplaySafeUrl,
     ) -> Result<DisplaySafeUrl, ProxyIndexError> {
         self.rewrite_artifact_url(url, MappingDirection::ToCanonical)
+    }
+
+    /// Return whether deriving canonical PyPI URLs requires the artifact's BLAKE2b-256 digest.
+    pub fn requires_pypi_artifact_hash(&self) -> bool {
+        self.canonical.is_pypi()
+            && self.artifact_mapping.as_ref().is_some_and(|mapping| {
+                mapping.canonical_template.is_none()
+                    && mapping
+                        .physical_template
+                        .as_ref()
+                        .is_some_and(|template| !template.preserves_path())
+            })
+    }
+
+    /// Translate a proxy artifact URL using its content hashes when PyPI's path is not preserved.
+    pub fn to_canonical_url_with_hashes(
+        &self,
+        url: &DisplaySafeUrl,
+        hashes: &[HashDigest],
+    ) -> Result<DisplaySafeUrl, ProxyIndexError> {
+        match self.to_canonical_url(url) {
+            Err(ProxyIndexError::UnknownCanonicalUrl { .. })
+                if self.requires_pypi_artifact_hash() =>
+            {
+                let digest = hashes
+                    .iter()
+                    .find(|hash| hash.algorithm == HashAlgorithm::Blake2b)
+                    .map(|hash| hash.digest.as_ref())
+                    .filter(|digest| {
+                        digest.len() == 64 && digest.as_bytes().iter().all(u8::is_ascii_hexdigit)
+                    })
+                    .ok_or_else(|| ProxyIndexError::UnknownCanonicalUrl {
+                        url: Box::new(url.clone()),
+                    })?;
+                let digest = digest.to_ascii_lowercase();
+                let Some(mapping) = &self.artifact_mapping else {
+                    return Err(ProxyIndexError::UnknownCanonicalUrl {
+                        url: Box::new(url.clone()),
+                    });
+                };
+                let Some(filename) = url.path().rsplit('/').next() else {
+                    return Err(ProxyIndexError::UnknownCanonicalUrl {
+                        url: Box::new(url.clone()),
+                    });
+                };
+                let mut canonical = mapping.canonical.clone();
+                let base = canonical.path().trim_end_matches('/');
+                let path = format!(
+                    "{base}/{}/{}/{}/{filename}",
+                    &digest[..2],
+                    &digest[2..4],
+                    &digest[4..]
+                );
+                canonical.set_path(&path);
+                canonical.set_query(url.query());
+                canonical.set_fragment(url.fragment());
+                Ok(canonical)
+            }
+            result => result,
+        }
     }
 
     fn rewrite_artifact_url(
@@ -863,6 +931,37 @@ mod tests {
         assert_eq!(route.to_proxy_url(&canonical)?, physical);
         assert!(matches!(
             route.to_canonical_url(&physical),
+            Err(ProxyIndexError::UnknownCanonicalUrl { .. })
+        ));
+
+        let hashes = vec![HashDigest {
+            algorithm: HashAlgorithm::Blake2b,
+            digest: "a5b2398d1a4702cf48948e53709b6a83d3c4c220e2af335216e27b76dba5cef1".into(),
+        }];
+        assert_eq!(
+            route.to_canonical_url_with_hashes(&physical, &hashes)?,
+            url(
+                "https://files.pythonhosted.org/packages/a5/b2/398d1a4702cf48948e53709b6a83d3c4c220e2af335216e27b76dba5cef1/my_package-1.2.3-py3-none-any.whl"
+            )?
+        );
+
+        let uppercase = vec![HashDigest {
+            algorithm: HashAlgorithm::Blake2b,
+            digest: "A5B2398D1A4702CF48948E53709B6A83D3C4C220E2AF335216E27B76DBA5CEF1".into(),
+        }];
+        assert_eq!(
+            route.to_canonical_url_with_hashes(&physical, &uppercase)?,
+            url(
+                "https://files.pythonhosted.org/packages/a5/b2/398d1a4702cf48948e53709b6a83d3c4c220e2af335216e27b76dba5cef1/my_package-1.2.3-py3-none-any.whl"
+            )?
+        );
+
+        let invalid = vec![HashDigest {
+            algorithm: HashAlgorithm::Blake2b,
+            digest: "not-a-blake2b-digest".into(),
+        }];
+        assert!(matches!(
+            route.to_canonical_url_with_hashes(&physical, &invalid),
             Err(ProxyIndexError::UnknownCanonicalUrl { .. })
         ));
         Ok(())
