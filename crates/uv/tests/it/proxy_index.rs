@@ -622,6 +622,205 @@ async fn proxy_index_locks_canonical_urls_without_origin_requests() -> Result<()
 }
 
 #[tokio::test]
+async fn proxy_index_artifact_url_templates_support_different_registry_layouts() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheel = fixture(&context, WHEEL_FILENAME)?;
+    let canonical_index = MockServer::start().await;
+    let canonical_artifacts = MockServer::start().await;
+    let physical_index = MockServer::start().await;
+    let physical_artifacts = MockServer::start().await;
+    let physical_path = format!("/packages/basic-package/{WHEEL_FILENAME}");
+    let physical_url = format!("{}{physical_path}", physical_artifacts.uri());
+
+    mount_simple(
+        &physical_index,
+        "basic-package",
+        vec![advertised_file(
+            WHEEL_FILENAME,
+            &physical_url,
+            Some(WHEEL_HASH),
+        )],
+        1,
+    )
+    .await;
+    Mock::given(method("GET"))
+        .and(path(format!("{physical_path}.metadata")))
+        .respond_with(ResponseTemplate::new(200).set_body_string(WHEEL_METADATA))
+        .expect(1)
+        .mount(&physical_artifacts)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(physical_path.clone()))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .expect(1)
+        .mount(&physical_artifacts)
+        .await;
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+            [project]
+            name = "project"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = ["basic-package==0.1.0"]
+
+            [[tool.uv.index]]
+            name = "canonical"
+            url = "{}/simple/"
+            artifact-url = "{}/tree/production/{{normalized_name}}/{{version}}/{{filename}}"
+            default = true
+
+            [[tool.uv.index]]
+            name = "mirror"
+            url = "{}/simple/"
+            artifact-url = "{}/packages/{{name}}/{{filename}}"
+            proxy-for = "canonical"
+            "#,
+            canonical_index.uri(),
+            canonical_artifacts.uri(),
+            physical_index.uri(),
+            physical_artifacts.uri(),
+        })?;
+
+    uv_snapshot!(context.filters(), context.lock(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    let lock = context.read("uv.lock");
+    let canonical_url = format!(
+        "{}/tree/production/basic-package/0.1.0/{WHEEL_FILENAME}",
+        canonical_artifacts.uri()
+    );
+    assert!(lock.contains(&canonical_url));
+    assert!(!lock.contains(&physical_artifacts.uri()));
+
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + basic-package==0.1.0
+    ");
+
+    assert_requested_once(&physical_index, "/simple/basic-package/").await?;
+    assert_requested_once(&physical_artifacts, &physical_path).await?;
+    assert_no_origin_requests(&canonical_index, &canonical_artifacts).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn proxy_index_artifact_url_template_installs_a_canonical_pypi_lock() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheel = fixture(&context, WHEEL_FILENAME)?;
+    let physical_index = MockServer::start().await;
+    let physical_artifacts = MockServer::start().await;
+    let physical_path = format!("/packages/basic-package/{WHEEL_FILENAME}");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+            [project]
+            name = "project"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = ["basic-package==0.1.0"]
+
+            [[tool.uv.index]]
+            name = "mirror"
+            url = "{}/simple/"
+            artifact-url = "{}/packages/{{normalized_name}}/{{filename}}"
+            proxy-for = "pypi"
+            "#,
+            physical_index.uri(),
+            physical_artifacts.uri(),
+        })?;
+
+    write_frozen_lock_for_registry(
+        &context,
+        "https://pypi.org/simple/",
+        "basic-package",
+        "0.1.0",
+        "wheels",
+        &format!("https://files.pythonhosted.org/packages/aa/bb/0123456789abcdef/{WHEEL_FILENAME}"),
+        WHEEL_HASH,
+    )?;
+    Mock::given(method("GET"))
+        .and(path(physical_path.clone()))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .expect(1)
+        .mount(&physical_artifacts)
+        .await;
+
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + basic-package==0.1.0
+    ");
+
+    assert_requested_once(&physical_artifacts, &physical_path).await?;
+    assert_no_requests(&physical_index, "physical proxy index").await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn proxy_index_artifact_url_template_rejects_unknown_canonical_pypi_url() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let physical_index = MockServer::start().await;
+    let physical_artifacts = MockServer::start().await;
+    let physical_path = format!("/packages/basic-package/{WHEEL_FILENAME}");
+
+    mount_simple(
+        &physical_index,
+        "basic-package",
+        vec![advertised_file(
+            WHEEL_FILENAME,
+            &format!("{}{physical_path}", physical_artifacts.uri()),
+            Some(WHEEL_HASH),
+        )],
+        1,
+    )
+    .await;
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+            [project]
+            name = "project"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = ["basic-package==0.1.0"]
+
+            [[tool.uv.index]]
+            name = "mirror"
+            url = "{}/simple/"
+            artifact-url = "{}/packages/{{normalized_name}}/{{filename}}"
+            proxy-for = "pypi"
+            "#,
+            physical_index.uri(),
+            physical_artifacts.uri(),
+        })?;
+
+    uv_snapshot!(context.filters(), context.lock(), @r"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Cannot derive the canonical artifact URL for proxy artifact `http://[LOCALHOST]/packages/basic-package/basic_package-0.1.0-py3-none-any.whl`
+    ");
+
+    assert!(!context.temp_dir.child("uv.lock").exists());
+    assert_requested_once(&physical_index, "/simple/basic-package/").await?;
+    assert_no_requests(&physical_artifacts, "physical artifact origin").await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn proxy_index_reports_physical_authentication_errors_without_origin_requests() -> Result<()>
 {
     for status in [401, 403] {

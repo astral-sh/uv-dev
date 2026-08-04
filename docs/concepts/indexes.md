@@ -95,12 +95,35 @@ proxy-for = "private"
 
 An index can have at most one proxy. Package files must have the same path after each index's
 `artifact-base-url`. For example, `https://downloads.example.com/packages/example/package.whl` maps
-to `https://proxy.example.com/files/example/package.whl`. Proxies that change package file paths are
-not supported. Proxies must also provide supported hashes for package files included in `uv.lock` or
-`pylock.toml`.
+to `https://proxy.example.com/files/example/package.whl`.
+
+For indexes that use different artifact layouts, set `artifact-url` to a complete URL template on
+each index. Templates support `{name}`, `{normalized_name}`, `{version}`, `{filename}`, and `{path}`
+placeholders:
+
+```toml
+[[tool.uv.index]]
+name = "private"
+url = "https://packages.example.com/simple/"
+artifact-url = "https://downloads.example.com/tree/production/{normalized_name}/{version}/{filename}"
+
+[[tool.uv.index]]
+name = "private-proxy"
+url = "https://proxy.example.com/simple/"
+artifact-url = "https://proxy.example.com/packages/{name}/{filename}"
+proxy-for = "private"
+```
+
+An `artifact-url` template can also route an existing PyPI lockfile through a proxy that changes
+artifact paths. However, creating a new lockfile through that proxy requires a known canonical
+artifact URL. If the proxy's layout does not identify PyPI's original artifact URL, uv rejects the
+artifact instead of recording a fabricated URL.
+
+Proxies must also provide supported hashes for package files included in `uv.lock` or `pylock.toml`.
 
 If artifact downloads require authentication on a different host, configure the credentials on
-`artifact-base-url`. Credentials from the proxy index are not copied to another host.
+`artifact-base-url`. Credentials from the proxy index are not copied to another host, and
+`artifact-url` templates cannot contain credentials.
 
 ## Pinning a package to an index
 

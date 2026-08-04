@@ -159,6 +159,13 @@ pub struct Index {
         serialize_with = "serialize_artifact_base_url"
     )]
     pub artifact_base_url: Option<DisplaySafeUrl>,
+    /// The URL template from which this index serves package files.
+    ///
+    /// Supported placeholders are `{name}`, `{normalized_name}`, `{version}`, `{filename}`, and
+    /// `{path}`. For example, `https://proxy.example.com/{normalized_name}/{filename}` supports
+    /// registries that store artifacts beneath their normalized package name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact_url: Option<String>,
     /// The name of the original index that this index proxies.
     ///
     /// A proxy index downloads packages on behalf of the original index; it is not a separate
@@ -303,6 +310,7 @@ impl PartialEq for Index {
             name,
             url,
             artifact_base_url,
+            artifact_url,
             proxy_for,
             explicit,
             default,
@@ -318,6 +326,7 @@ impl PartialEq for Index {
         *url == other.url
             && *name == other.name
             && *artifact_base_url == other.artifact_base_url
+            && *artifact_url == other.artifact_url
             && *proxy_for == other.proxy_for
             && *explicit == other.explicit
             && *default == other.default
@@ -345,6 +354,7 @@ impl Ord for Index {
             name,
             url,
             artifact_base_url,
+            artifact_url,
             proxy_for,
             explicit,
             default,
@@ -360,6 +370,7 @@ impl Ord for Index {
         url.cmp(&other.url)
             .then_with(|| name.cmp(&other.name))
             .then_with(|| artifact_base_url.cmp(&other.artifact_base_url))
+            .then_with(|| artifact_url.cmp(&other.artifact_url))
             .then_with(|| proxy_for.cmp(&other.proxy_for))
             .then_with(|| explicit.cmp(&other.explicit))
             .then_with(|| default.cmp(&other.default))
@@ -379,6 +390,7 @@ impl std::hash::Hash for Index {
             name,
             url,
             artifact_base_url,
+            artifact_url,
             proxy_for,
             explicit,
             default,
@@ -394,6 +406,7 @@ impl std::hash::Hash for Index {
         url.hash(state);
         name.hash(state);
         artifact_base_url.hash(state);
+        artifact_url.hash(state);
         proxy_for.hash(state);
         explicit.hash(state);
         default.hash(state);
@@ -463,6 +476,7 @@ impl Index {
             url,
             name: None,
             artifact_base_url: None,
+            artifact_url: None,
             proxy_for: None,
             explicit: false,
             default: true,
@@ -483,6 +497,7 @@ impl Index {
             url,
             name: None,
             artifact_base_url: None,
+            artifact_url: None,
             proxy_for: None,
             explicit: false,
             default: false,
@@ -503,6 +518,7 @@ impl Index {
             url,
             name: None,
             artifact_base_url: None,
+            artifact_url: None,
             proxy_for: None,
             explicit: false,
             default: false,
@@ -532,6 +548,18 @@ impl Index {
     /// Return the raw [`Url`] of the index.
     pub fn raw_url(&self) -> &DisplaySafeUrl {
         self.url.url()
+    }
+
+    /// Return the artifact host prefix, including prefixes derived from URL templates.
+    pub fn artifact_url_base(&self) -> Option<DisplaySafeUrl> {
+        if let Some(base) = &self.artifact_base_url {
+            return Some(base.clone());
+        }
+
+        let template = self.artifact_url.as_ref()?;
+        let (prefix, _) = template.split_once('{')?;
+        let (base, _) = prefix.rsplit_once('/')?;
+        DisplaySafeUrl::parse(&format!("{base}/")).ok()
     }
 
     /// Return the root [`Url`] of the index, if applicable.
@@ -644,6 +672,7 @@ impl From<IndexUrl> for Index {
             name: None,
             url: value,
             artifact_base_url: None,
+            artifact_url: None,
             proxy_for: None,
             explicit: false,
             default: false,
@@ -673,6 +702,7 @@ impl FromStr for Index {
                 name: Some(name),
                 url,
                 artifact_base_url: None,
+                artifact_url: None,
                 proxy_for: None,
                 explicit: false,
                 default: false,
@@ -693,6 +723,7 @@ impl FromStr for Index {
             name: None,
             url,
             artifact_base_url: None,
+            artifact_url: None,
             proxy_for: None,
             explicit: false,
             default: false,
@@ -784,6 +815,8 @@ struct IndexWire {
     url: IndexUrl,
     #[serde(default, deserialize_with = "deserialize_artifact_base_url")]
     artifact_base_url: Option<DisplaySafeUrl>,
+    #[serde(default, deserialize_with = "deserialize_artifact_url")]
+    artifact_url: Option<String>,
     #[serde(default)]
     proxy_for: Option<IndexName>,
     #[serde(default)]
@@ -832,6 +865,27 @@ where
         .transpose()
 }
 
+/// Reject template credentials before an index can be displayed or serialized in settings.
+fn deserialize_artifact_url<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<String>::deserialize(deserializer)?;
+    if let Some(template) = value.as_deref() {
+        let prefix = template
+            .split_once('{')
+            .map_or(template, |(prefix, _)| prefix);
+        if let Ok(url) = DisplaySafeUrl::parse(prefix)
+            && (!url.username().is_empty() || url.password().is_some())
+        {
+            return Err(serde::de::Error::custom(
+                "artifact URL templates cannot contain credentials",
+            ));
+        }
+    }
+    Ok(value)
+}
+
 impl<'de> Deserialize<'de> for Index {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -850,6 +904,7 @@ impl<'de> Deserialize<'de> for Index {
             name: wire.name,
             url: wire.url,
             artifact_base_url: wire.artifact_base_url,
+            artifact_url: wire.artifact_url,
             proxy_for: wire.proxy_for,
             explicit: wire.explicit,
             default: wire.default,
@@ -945,6 +1000,24 @@ mod tests {
         assert!(artifact_base.password().is_none());
 
         Ok(())
+    }
+
+    #[test]
+    fn test_index_rejects_artifact_url_template_credentials_before_display() {
+        let index = toml::from_str::<Index>(
+            r#"
+            name = "socket"
+            url = "https://proxy.example.com/simple/"
+            artifact-url = "https://artifact-user:artifact-secret@proxy.example.com/files/{filename}"
+            proxy-for = "pypi"
+            "#,
+        );
+
+        assert!(index.is_err_and(|error| {
+            error
+                .message()
+                .contains("artifact URL templates cannot contain credentials")
+        }));
     }
 
     #[test]

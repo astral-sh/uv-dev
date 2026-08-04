@@ -170,10 +170,10 @@ impl<'a> RegistryClientBuilder<'a> {
             }
 
             if index.proxy_for.is_some()
-                && let Some(artifact_base_url) = &index.artifact_base_url
+                && let Some(artifact_base_url) = index.artifact_url_base()
             {
                 self.base_client_builder
-                    .store_credentials_from_url(artifact_base_url)?;
+                    .store_credentials_from_url(&artifact_base_url)?;
             }
         }
         Ok(())
@@ -205,8 +205,7 @@ impl<'a> RegistryClientBuilder<'a> {
                 .chain(self.index_locations.proxy_indexes())
                 .map(|index| authentication_index(index.url(), index.authenticate))
                 .chain(self.index_locations.proxy_indexes().filter_map(|index| {
-                    index.artifact_base_url.as_ref().map(|artifact_base_url| {
-                        let mut url = artifact_base_url.clone();
+                    index.artifact_url_base().map(|mut url| {
                         url.remove_credentials();
 
                         AuthIndex {
