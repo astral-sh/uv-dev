@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use rustc_hash::FxHashSet;
@@ -178,25 +179,30 @@ impl IndexRoute {
             });
         };
 
-        if let Some(source_template) = source_template {
-            let rendered = source_template.render(url, suffix)?;
+        let path = if let Some(source_template) = source_template {
+            let path = source_template.capture_path(url, suffix)?;
+            let rendered = source_template.render(url, &path)?;
             if RealmRef::from(&**url) != RealmRef::from(&*rendered) || url.path() != rendered.path()
             {
                 return Err(ProxyIndexError::UnmappedUrl {
                     url: Box::new(url.clone()),
                 });
             }
-        }
+            path
+        } else {
+            Cow::Borrowed(suffix)
+        };
 
         if let Some(target_template) = target_template {
-            let mut rewritten = target_template.render(url, suffix)?;
+            let mut rewritten = target_template.render(url, &path)?;
             rewritten.set_query(url.query());
             rewritten.set_fragment(url.fragment());
             return Ok(rewritten);
         }
 
         if matches!(direction, MappingDirection::ToCanonical)
-            && source_template.is_some_and(|template| !template.preserves_path())
+            && source_template
+                .is_some_and(|template| !template.preserves_path() && !template.contains_path())
         {
             return Err(ProxyIndexError::UnknownCanonicalUrl {
                 url: Box::new(url.clone()),
@@ -205,12 +211,12 @@ impl IndexRoute {
 
         let mut rewritten = target.clone();
         let target_path = target.path().trim_end_matches('/');
-        if suffix.is_empty() {
+        if path.is_empty() {
             if prefix.path().ends_with('/') && !target.path().ends_with('/') {
                 rewritten.set_path(&format!("{target_path}/"));
             }
         } else {
-            rewritten.set_path(&format!("{target_path}/{suffix}"));
+            rewritten.set_path(&format!("{target_path}/{path}"));
         }
         rewritten.set_query(url.query());
         rewritten.set_fragment(url.fragment());
@@ -232,6 +238,7 @@ impl ArtifactUrlTemplate {
         let mut remaining = value.as_str();
         let mut preview = String::with_capacity(value.len());
         let mut contains_artifact = false;
+        let mut contains_path = false;
         while let Some((literal, after_open)) = remaining.split_once('{') {
             if literal.contains('}') {
                 return Err(invalid("unmatched closing brace"));
@@ -245,6 +252,9 @@ impl ArtifactUrlTemplate {
                 "name" | "normalized_name" | "version" | "filename" | "path"
             ) {
                 return Err(invalid("unsupported placeholder"));
+            }
+            if placeholder == "path" && std::mem::replace(&mut contains_path, true) {
+                return Err(invalid("templates cannot repeat `{path}`"));
             }
             contains_artifact |= matches!(placeholder, "filename" | "path");
             preview.push_str("placeholder");
@@ -287,6 +297,18 @@ impl ArtifactUrlTemplate {
         source: &DisplaySafeUrl,
         path: &str,
     ) -> Result<DisplaySafeUrl, ProxyIndexError> {
+        let rendered = self.render_value(source, path, path)?;
+        DisplaySafeUrl::parse(&rendered).map_err(|_| ProxyIndexError::UnmappedUrl {
+            url: Box::new(source.clone()),
+        })
+    }
+
+    fn render_value(
+        &self,
+        source: &DisplaySafeUrl,
+        path: &str,
+        replacement: &str,
+    ) -> Result<String, ProxyIndexError> {
         let Some(encoded_filename) = path.rsplit('/').next().filter(|value| !value.is_empty())
         else {
             return Err(ProxyIndexError::UnmappedUrl {
@@ -307,17 +329,58 @@ impl ArtifactUrlTemplate {
         let normalized_name = distribution.name().as_ref();
         let version = distribution.version().to_string();
 
-        let rendered = self
+        Ok(self
             .value
             .replace("{normalized_name}", normalized_name)
             .replace("{name}", normalized_name)
             .replace("{version}", &version)
             .replace("{filename}", encoded_filename)
-            .replace("{path}", path);
+            .replace("{path}", replacement))
+    }
 
-        DisplaySafeUrl::parse(&rendered).map_err(|_| ProxyIndexError::UnmappedUrl {
-            url: Box::new(source.clone()),
-        })
+    /// Recover the incoming artifact path when a template adds metadata around `{path}`.
+    fn capture_path<'a>(
+        &self,
+        source: &DisplaySafeUrl,
+        path: &'a str,
+    ) -> Result<Cow<'a, str>, ProxyIndexError> {
+        const PLACEHOLDER: &str = "uv-artifact-relative-path-placeholder";
+
+        if !self.contains_path() {
+            return Ok(Cow::Borrowed(path));
+        }
+
+        let rendered = self.render(source, path)?;
+        let rendered_path = rendered.path();
+        let substituted = self.render_value(source, path, PLACEHOLDER)?;
+        let substituted =
+            DisplaySafeUrl::parse(&substituted).map_err(|_| ProxyIndexError::UnmappedUrl {
+                url: Box::new(source.clone()),
+            })?;
+        let Some((prefix, suffix)) = substituted.path().split_once(PLACEHOLDER) else {
+            return Err(ProxyIndexError::UnmappedUrl {
+                url: Box::new(source.clone()),
+            });
+        };
+        let Some(captured) = source
+            .path()
+            .strip_prefix(prefix)
+            .and_then(|value| value.strip_suffix(suffix))
+        else {
+            return Err(ProxyIndexError::UnmappedUrl {
+                url: Box::new(source.clone()),
+            });
+        };
+
+        if rendered_path == source.path() {
+            Ok(Cow::Borrowed(path))
+        } else {
+            Ok(Cow::Owned(captured.to_string()))
+        }
+    }
+
+    fn contains_path(&self) -> bool {
+        self.value.contains("{path}")
     }
 
     /// Return whether the template preserves the entire incoming relative artifact path.
@@ -745,6 +808,40 @@ mod tests {
     }
 
     #[test]
+    fn proxy_artifact_template_recovers_paths_prefixed_by_package_metadata() -> TestResult {
+        let canonical = named_index(
+            "upstream",
+            "https://upstream.example.com/simple/",
+            Some("https://upstream.example.com/distributions/"),
+            None,
+        )?;
+        let mut proxy = named_index(
+            "mirror",
+            "https://proxy.example.com/simple/",
+            None,
+            Some("upstream"),
+        )?;
+        proxy.artifact_url =
+            Some("https://proxy.example.com/files/{normalized_name}/{path}".to_string());
+
+        let locations = IndexLocations::new(vec![canonical.clone(), proxy], Vec::new(), false);
+        let route = IndexRoutes::try_from(&locations)?.route_for(canonical.url());
+        let canonical_artifact = url(
+            "https://upstream.example.com/distributions/aa/bb/my_package-1.2.3-py3-none-any.whl",
+        )?;
+        let physical_artifact = url(
+            "https://proxy.example.com/files/my-package/aa/bb/my_package-1.2.3-py3-none-any.whl",
+        )?;
+
+        assert_eq!(route.to_proxy_url(&canonical_artifact)?, physical_artifact);
+        assert_eq!(
+            route.to_canonical_url(&physical_artifact)?,
+            canonical_artifact
+        );
+        Ok(())
+    }
+
+    #[test]
     fn proxy_artifact_template_rejects_unknown_canonical_pypi_paths() -> TestResult {
         let mut proxy = named_index(
             "mirror",
@@ -777,6 +874,7 @@ mod tests {
             "https://proxy.example.com/packages/{unknown}/{filename}",
             "https://proxy.example.com/packages/{normalized_name}",
             "https://proxy.example.com/packages/{filename",
+            "https://proxy.example.com/packages/{path}/{path}",
             "https://proxy-user:proxy-password@proxy.example.com/packages/{filename}",
             "https://{host}/packages/{filename}",
         ] {

@@ -815,7 +815,7 @@ struct IndexWire {
     url: IndexUrl,
     #[serde(default, deserialize_with = "deserialize_artifact_base_url")]
     artifact_base_url: Option<DisplaySafeUrl>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_artifact_url")]
     artifact_url: Option<String>,
     #[serde(default)]
     proxy_for: Option<IndexName>,
@@ -863,6 +863,27 @@ where
     Option::<String>::deserialize(deserializer)?
         .map(|value| DisplaySafeUrl::parse(&value).map_err(serde::de::Error::custom))
         .transpose()
+}
+
+/// Reject template credentials before an index can be displayed or serialized in settings.
+fn deserialize_artifact_url<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<String>::deserialize(deserializer)?;
+    if let Some(template) = value.as_deref() {
+        let prefix = template
+            .split_once('{')
+            .map_or(template, |(prefix, _)| prefix);
+        if let Ok(url) = DisplaySafeUrl::parse(prefix)
+            && (!url.username().is_empty() || url.password().is_some())
+        {
+            return Err(serde::de::Error::custom(
+                "artifact URL templates cannot contain credentials",
+            ));
+        }
+    }
+    Ok(value)
 }
 
 impl<'de> Deserialize<'de> for Index {
@@ -979,6 +1000,24 @@ mod tests {
         assert!(artifact_base.password().is_none());
 
         Ok(())
+    }
+
+    #[test]
+    fn test_index_rejects_artifact_url_template_credentials_before_display() {
+        let index = toml::from_str::<Index>(
+            r#"
+            name = "socket"
+            url = "https://proxy.example.com/simple/"
+            artifact-url = "https://artifact-user:artifact-secret@proxy.example.com/files/{filename}"
+            proxy-for = "pypi"
+            "#,
+        );
+
+        assert!(index.is_err_and(|error| {
+            error
+                .message()
+                .contains("artifact URL templates cannot contain credentials")
+        }));
     }
 
     #[test]
