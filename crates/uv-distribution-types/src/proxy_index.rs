@@ -3,6 +3,7 @@ use std::sync::Arc;
 use rustc_hash::FxHashSet;
 use thiserror::Error;
 use uv_auth::RealmRef;
+use uv_distribution_filename::DistFilename;
 use uv_normalize::PackageName;
 #[cfg(test)]
 use uv_pep508::VerbatimUrl;
@@ -78,6 +79,22 @@ pub enum ProxyIndexError {
         url: Box<DisplaySafeUrl>,
     },
 
+    /// An artifact URL template cannot safely represent an artifact location.
+    #[error("Invalid artifact URL template for index `{index}`: {reason}")]
+    InvalidArtifactTemplate {
+        /// The index containing the invalid artifact URL template.
+        index: Box<DisplaySafeUrl>,
+        /// The reason the template cannot safely be used.
+        reason: &'static str,
+    },
+
+    /// A proxy-specific artifact layout does not identify the canonical artifact URL.
+    #[error("Cannot derive the canonical artifact URL for proxy artifact `{url}`")]
+    UnknownCanonicalUrl {
+        /// The physical artifact URL without a verifiable canonical counterpart.
+        url: Box<DisplaySafeUrl>,
+    },
+
     /// A registry artifact location could not be converted to an absolute URL.
     #[error(transparent)]
     InvalidArtifactUrl(#[from] ToUrlError),
@@ -88,6 +105,15 @@ pub enum ProxyIndexError {
 struct ArtifactUrlMapping {
     canonical: DisplaySafeUrl,
     physical: DisplaySafeUrl,
+    canonical_template: Option<ArtifactUrlTemplate>,
+    physical_template: Option<ArtifactUrlTemplate>,
+}
+
+/// A validated absolute artifact URL template and its static URL prefix.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ArtifactUrlTemplate {
+    value: String,
+    base: DisplaySafeUrl,
 }
 
 /// A validated route from a canonical package index to the index used for requests.
@@ -132,15 +158,50 @@ impl IndexRoute {
             return Ok(url.clone());
         };
 
-        let (prefix, target) = match direction {
-            MappingDirection::ToProxy => (&mapping.canonical, &mapping.physical),
-            MappingDirection::ToCanonical => (&mapping.physical, &mapping.canonical),
+        let (prefix, target, source_template, target_template) = match direction {
+            MappingDirection::ToProxy => (
+                &mapping.canonical,
+                &mapping.physical,
+                mapping.canonical_template.as_ref(),
+                mapping.physical_template.as_ref(),
+            ),
+            MappingDirection::ToCanonical => (
+                &mapping.physical,
+                &mapping.canonical,
+                mapping.physical_template.as_ref(),
+                mapping.canonical_template.as_ref(),
+            ),
         };
         let Some(suffix) = path_suffix(url, prefix) else {
             return Err(ProxyIndexError::UnmappedUrl {
                 url: Box::new(url.clone()),
             });
         };
+
+        if let Some(source_template) = source_template {
+            let rendered = source_template.render(url, suffix)?;
+            if RealmRef::from(&**url) != RealmRef::from(&*rendered) || url.path() != rendered.path()
+            {
+                return Err(ProxyIndexError::UnmappedUrl {
+                    url: Box::new(url.clone()),
+                });
+            }
+        }
+
+        if let Some(target_template) = target_template {
+            let mut rewritten = target_template.render(url, suffix)?;
+            rewritten.set_query(url.query());
+            rewritten.set_fragment(url.fragment());
+            return Ok(rewritten);
+        }
+
+        if matches!(direction, MappingDirection::ToCanonical)
+            && source_template.is_some_and(|template| !template.preserves_path())
+        {
+            return Err(ProxyIndexError::UnknownCanonicalUrl {
+                url: Box::new(url.clone()),
+            });
+        }
 
         let mut rewritten = target.clone();
         let target_path = target.path().trim_end_matches('/');
@@ -154,6 +215,114 @@ impl IndexRoute {
         rewritten.set_query(url.query());
         rewritten.set_fragment(url.fragment());
         Ok(rewritten)
+    }
+}
+
+impl ArtifactUrlTemplate {
+    /// Validate an absolute artifact URL template and determine its static URL prefix.
+    fn new(index: &Index) -> Result<Option<Self>, ProxyIndexError> {
+        let Some(value) = index.artifact_url.as_ref() else {
+            return Ok(None);
+        };
+        let invalid = |reason| ProxyIndexError::InvalidArtifactTemplate {
+            index: Box::new(index.url.url().clone()),
+            reason,
+        };
+
+        let mut remaining = value.as_str();
+        let mut preview = String::with_capacity(value.len());
+        let mut contains_artifact = false;
+        while let Some((literal, after_open)) = remaining.split_once('{') {
+            if literal.contains('}') {
+                return Err(invalid("unmatched closing brace"));
+            }
+            preview.push_str(literal);
+            let Some((placeholder, after_close)) = after_open.split_once('}') else {
+                return Err(invalid("unmatched opening brace"));
+            };
+            if !matches!(
+                placeholder,
+                "name" | "normalized_name" | "version" | "filename" | "path"
+            ) {
+                return Err(invalid("unsupported placeholder"));
+            }
+            contains_artifact |= matches!(placeholder, "filename" | "path");
+            preview.push_str("placeholder");
+            remaining = after_close;
+        }
+        if remaining.contains('}') {
+            return Err(invalid("unmatched closing brace"));
+        }
+        preview.push_str(remaining);
+        if !contains_artifact {
+            return Err(invalid("templates must include `{filename}` or `{path}`"));
+        }
+
+        let preview = DisplaySafeUrl::parse(&preview)
+            .map_err(|_| invalid("templates must be absolute HTTP(S) URLs"))?;
+        validate_prefix(&preview)?;
+        if !preview.username().is_empty() || preview.password().is_some() {
+            return Err(invalid("templates cannot contain credentials"));
+        }
+
+        let Some((static_prefix, _)) = value.split_once('{') else {
+            return Err(invalid("templates must contain placeholders"));
+        };
+        let Some((base, _)) = static_prefix.rsplit_once('/') else {
+            return Err(invalid("placeholders are only supported in URL paths"));
+        };
+        let base = DisplaySafeUrl::parse(&format!("{base}/"))
+            .map_err(|_| invalid("placeholders are only supported in URL paths"))?;
+        validate_prefix(&base)?;
+
+        Ok(Some(Self {
+            value: value.clone(),
+            base,
+        }))
+    }
+
+    /// Render the URL template using metadata parsed from the artifact filename.
+    fn render(
+        &self,
+        source: &DisplaySafeUrl,
+        path: &str,
+    ) -> Result<DisplaySafeUrl, ProxyIndexError> {
+        let Some(encoded_filename) = path.rsplit('/').next().filter(|value| !value.is_empty())
+        else {
+            return Err(ProxyIndexError::UnmappedUrl {
+                url: Box::new(source.clone()),
+            });
+        };
+        let filename = percent_encoding::percent_decode_str(encoded_filename)
+            .decode_utf8()
+            .map_err(|_| ProxyIndexError::UnmappedUrl {
+                url: Box::new(source.clone()),
+            })?;
+        let distribution =
+            DistFilename::try_from_normalized_filename(&filename).ok_or_else(|| {
+                ProxyIndexError::UnmappedUrl {
+                    url: Box::new(source.clone()),
+                }
+            })?;
+        let normalized_name = distribution.name().as_ref();
+        let version = distribution.version().to_string();
+
+        let rendered = self
+            .value
+            .replace("{normalized_name}", normalized_name)
+            .replace("{name}", normalized_name)
+            .replace("{version}", &version)
+            .replace("{filename}", encoded_filename)
+            .replace("{path}", path);
+
+        DisplaySafeUrl::parse(&rendered).map_err(|_| ProxyIndexError::UnmappedUrl {
+            url: Box::new(source.clone()),
+        })
+    }
+
+    /// Return whether the template preserves the entire incoming relative artifact path.
+    fn preserves_path(&self) -> bool {
+        self.value == format!("{}{{path}}", self.base)
     }
 }
 
@@ -245,15 +414,35 @@ impl TryFrom<&IndexLocations> for IndexRoutes {
             validate_prefix(canonical_url)?;
             validate_prefix(physical_url)?;
 
-            let canonical_artifact_base = artifact_base(canonical)?;
-            let physical_artifact_base = proxy.artifact_base_url.clone().ok_or_else(|| {
-                ProxyIndexError::MissingProxyArtifactBase {
+            let canonical_template = ArtifactUrlTemplate::new(canonical)?;
+            let physical_template = ArtifactUrlTemplate::new(proxy)?;
+            let canonical_artifact_base = artifact_base(canonical, canonical_template.as_ref())?;
+            let physical_artifact_base = proxy
+                .artifact_base_url
+                .clone()
+                .or_else(|| {
+                    physical_template
+                        .as_ref()
+                        .map(|template| template.base.clone())
+                })
+                .ok_or_else(|| ProxyIndexError::MissingProxyArtifactBase {
                     index: Box::new(physical_url.clone()),
-                }
-            })?;
+                })?;
             validate_prefix(&canonical_artifact_base)?;
             validate_prefix(&physical_artifact_base)?;
             validate_canonical_prefix(&canonical_artifact_base)?;
+
+            for (template, base) in [
+                (canonical_template.as_ref(), &canonical_artifact_base),
+                (physical_template.as_ref(), &physical_artifact_base),
+            ] {
+                if template.is_some_and(|template| path_suffix(&template.base, base).is_none()) {
+                    return Err(ProxyIndexError::InvalidMapping {
+                        url: Box::new(base.clone()),
+                        reason: "artifact URL templates must be within the artifact base URL",
+                    });
+                }
+            }
 
             routes.push(IndexRoute {
                 canonical: canonical.url.clone(),
@@ -261,6 +450,8 @@ impl TryFrom<&IndexLocations> for IndexRoutes {
                 artifact_mapping: Some(Arc::new(ArtifactUrlMapping {
                     canonical: canonical_artifact_base,
                     physical: physical_artifact_base,
+                    canonical_template,
+                    physical_template,
                 })),
             });
         }
@@ -284,9 +475,16 @@ fn find_canonical_index<'a>(locations: &'a IndexLocations, name: &IndexName) -> 
         })
 }
 
-fn artifact_base(index: &Index) -> Result<DisplaySafeUrl, ProxyIndexError> {
+fn artifact_base(
+    index: &Index,
+    template: Option<&ArtifactUrlTemplate>,
+) -> Result<DisplaySafeUrl, ProxyIndexError> {
     if let Some(base) = &index.artifact_base_url {
         return Ok(base.clone());
+    }
+
+    if let Some(template) = template {
+        return Ok(template.base.clone());
     }
 
     if index.url().is_pypi() {
@@ -505,6 +703,94 @@ mod tests {
             route.to_canonical_url(&url("https://proxy.example.com/files/package.whl")?)?,
             canonical_artifact,
         );
+        Ok(())
+    }
+
+    #[test]
+    fn proxy_artifact_templates_support_different_registry_layouts() -> TestResult {
+        let mut canonical = named_index(
+            "upstream",
+            "https://upstream.example.com/simple/",
+            None,
+            None,
+        )?;
+        canonical.artifact_url = Some(
+            "https://upstream.example.com/tree/production/{normalized_name}/{version}/{filename}"
+                .to_string(),
+        );
+
+        let mut proxy = named_index(
+            "mirror",
+            "https://proxy.example.com/simple/",
+            None,
+            Some("upstream"),
+        )?;
+        proxy.artifact_url =
+            Some("https://proxy.example.com/packages/{name}/{filename}".to_string());
+
+        let locations = IndexLocations::new(vec![canonical.clone(), proxy], Vec::new(), false);
+        let route = IndexRoutes::try_from(&locations)?.route_for(canonical.url());
+        let canonical_artifact = url(
+            "https://upstream.example.com/tree/production/my-package/1.2.3/my_package-1.2.3-py3-none-any.whl",
+        )?;
+        let physical_artifact =
+            url("https://proxy.example.com/packages/my-package/my_package-1.2.3-py3-none-any.whl")?;
+
+        assert_eq!(route.to_proxy_url(&canonical_artifact)?, physical_artifact);
+        assert_eq!(
+            route.to_canonical_url(&physical_artifact)?,
+            canonical_artifact
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn proxy_artifact_template_rejects_unknown_canonical_pypi_paths() -> TestResult {
+        let mut proxy = named_index(
+            "mirror",
+            "https://proxy.example.com/simple/",
+            None,
+            Some("pypi"),
+        )?;
+        proxy.artifact_url =
+            Some("https://proxy.example.com/packages/{normalized_name}/{filename}".to_string());
+
+        let routes = IndexRoutes::try_from(&pypi_locations(proxy))?;
+        let route = routes.route_for(&index_url("https://pypi.org/simple/")?);
+        let physical =
+            url("https://proxy.example.com/packages/my-package/my_package-1.2.3-py3-none-any.whl")?;
+        let canonical = url(
+            "https://files.pythonhosted.org/packages/aa/bb/0123456789abcdef/my_package-1.2.3-py3-none-any.whl",
+        )?;
+
+        assert_eq!(route.to_proxy_url(&canonical)?, physical);
+        assert!(matches!(
+            route.to_canonical_url(&physical),
+            Err(ProxyIndexError::UnknownCanonicalUrl { .. })
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn proxy_artifact_template_rejects_invalid_placeholders_and_credentials() -> TestResult {
+        for template in [
+            "https://proxy.example.com/packages/{unknown}/{filename}",
+            "https://proxy.example.com/packages/{normalized_name}",
+            "https://proxy.example.com/packages/{filename",
+            "https://proxy-user:proxy-password@proxy.example.com/packages/{filename}",
+            "https://{host}/packages/{filename}",
+        ] {
+            let mut proxy = pypi_proxy()?;
+            proxy.artifact_url = Some(template.to_string());
+
+            assert!(
+                matches!(
+                    IndexRoutes::try_from(&pypi_locations(proxy)),
+                    Err(ProxyIndexError::InvalidArtifactTemplate { .. })
+                ),
+                "invalid artifact URL template was accepted: {template}"
+            );
+        }
         Ok(())
     }
 

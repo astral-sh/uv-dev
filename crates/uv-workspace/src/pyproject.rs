@@ -354,6 +354,9 @@ pub struct ToolUv {
     /// artifact-base-url = "https://proxy.example.com/files/"
     /// proxy-for = "pypi"
     /// ```
+    ///
+    /// For registries that use different artifact layouts, configure `artifact-url` with
+    /// placeholders such as `{normalized_name}`, `{version}`, and `{filename}`.
     #[option(
         default = "[]",
         value_type = "dict",

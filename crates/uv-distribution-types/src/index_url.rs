@@ -936,6 +936,7 @@ mod tests {
                 name: Some(IndexName::from_str("index1").unwrap()),
                 url: IndexUrl::from_str("https://index1.example.com/simple").unwrap(),
                 artifact_base_url: None,
+                artifact_url: None,
                 proxy_for: None,
                 cache_control: Some(crate::IndexCacheControl {
                     api: Some(HeaderValue::from_static("max-age=300")),
@@ -955,6 +956,7 @@ mod tests {
                 name: Some(IndexName::from_str("index2").unwrap()),
                 url: IndexUrl::from_str("https://index2.example.com/simple").unwrap(),
                 artifact_base_url: None,
+                artifact_url: None,
                 proxy_for: None,
                 cache_control: None,
                 explicit: false,
@@ -997,6 +999,7 @@ mod tests {
             name: Some(IndexName::from_str("pytorch").unwrap()),
             url: IndexUrl::from_str("https://download.pytorch.org/whl/cu118").unwrap(),
             artifact_base_url: None,
+            artifact_url: None,
             proxy_for: None,
             cache_control: None, // No explicit cache control
             explicit: false,
@@ -1033,6 +1036,7 @@ mod tests {
             name: Some(IndexName::from_str("pytorch").unwrap()),
             url: IndexUrl::from_str("https://download.pytorch.org/whl/cu118").unwrap(),
             artifact_base_url: None,
+            artifact_url: None,
             proxy_for: None,
             cache_control: Some(IndexCacheControl {
                 api: Some(HeaderValue::from_static("no-cache")),
@@ -1070,6 +1074,7 @@ mod tests {
             name: Some(IndexName::from_str("nvidia").unwrap()),
             url: IndexUrl::from_str("https://pypi.nvidia.com").unwrap(),
             artifact_base_url: None,
+            artifact_url: None,
             proxy_for: None,
             cache_control: None, // No explicit cache control
             explicit: false,
