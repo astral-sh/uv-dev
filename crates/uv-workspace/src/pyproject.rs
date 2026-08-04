@@ -356,7 +356,8 @@ pub struct ToolUv {
     /// ```
     ///
     /// For registries that use different artifact layouts, configure `artifact-url` with
-    /// placeholders such as `{normalized_name}`, `{version}`, and `{filename}`.
+    /// placeholders such as `{normalized_name}`, `{version}`, `{filename}`, and digest slices
+    /// such as `{blake2_0_2}`.
     #[option(
         default = "[]",
         value_type = "dict",

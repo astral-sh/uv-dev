@@ -682,10 +682,6 @@ impl RegistryClient {
             .map_err(|err| {
                 ErrorKind::from_reqwest(url.clone(), err, self.client.certificate_source())
             })?;
-        let pypi_proxy_route = self
-            .routes
-            .proxy_routes()
-            .find(|route| &route.physical == index && route.requires_pypi_artifact_hash());
         let parse_simple_response = |response: Response| {
             async {
                 // Use the response URL, rather than the request URL, as the base for relative URLs.
@@ -707,7 +703,7 @@ impl RegistryClient {
                     ))
                 })?;
 
-                let mut unarchived = match media_type {
+                let unarchived = match media_type {
                     MediaType::PyxV1Msgpack => {
                         let bytes = response.bytes().await.map_err(|err| {
                             ErrorKind::from_reqwest(
@@ -777,11 +773,6 @@ impl RegistryClient {
                     }
                 };
 
-                if let Some(route) = pypi_proxy_route {
-                    self.populate_pypi_proxy_hashes(&mut unarchived, package_name, route)
-                        .await?;
-                }
-
                 OwnedArchive::from_unarchived(&unarchived)
             }
             .boxed_local()
@@ -799,32 +790,24 @@ impl RegistryClient {
         Ok(simple)
     }
 
-    /// Compute the BLAKE2b-256 digests PyPI uses in content-addressed artifact URLs.
-    async fn populate_pypi_proxy_hashes(
+    /// Populate digest placeholders for one selected package version without hashing its history.
+    pub async fn populate_artifact_hashes(
         &self,
-        metadata: &mut SimpleDetailMetadata,
+        files: &mut VersionFiles,
         package_name: &PackageName,
         route: &IndexRoute,
     ) -> Result<(), Error> {
-        for version in &mut metadata.versions {
-            futures::stream::iter(
-                version
-                    .files
-                    .source_dists
-                    .iter_mut()
-                    .chain(version.files.wheels.iter_mut()),
-            )
-            .map(|file| self.populate_pypi_proxy_hash(file, package_name, route))
+        futures::stream::iter(files.source_dists.iter_mut().chain(files.wheels.iter_mut()))
+            .map(|file| self.populate_artifact_hash(file, package_name, route))
             .buffer_unordered(8)
             .try_collect::<Vec<_>>()
             .await?;
-        }
 
         Ok(())
     }
 
     /// Hash a verified proxy artifact once and reuse its digest from the index cache.
-    async fn populate_pypi_proxy_hash(
+    async fn populate_artifact_hash(
         &self,
         file: &mut CachedFile,
         package_name: &PackageName,

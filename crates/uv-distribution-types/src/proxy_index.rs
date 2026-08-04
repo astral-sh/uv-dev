@@ -11,7 +11,7 @@ use uv_pep508::VerbatimUrl;
 use uv_pypi_types::{HashAlgorithm, HashDigest};
 use uv_redacted::DisplaySafeUrl;
 
-use crate::index_url::PYPI_ARTIFACT_BASE_URL;
+use crate::index_url::{PYPI_ARTIFACT_BASE_URL, PYPI_ARTIFACT_URL_TEMPLATE};
 use crate::{Index, IndexFormat, IndexLocations, IndexName, IndexUrl, ToUrlError};
 
 /// An invalid proxy index or artifact URL.
@@ -104,6 +104,15 @@ pub enum ProxyIndexError {
         url: Box<DisplaySafeUrl>,
     },
 
+    /// The artifact digest required by an artifact URL template could not be computed.
+    #[error("Failed to compute an artifact URL digest for `{package}`: {reason}")]
+    ArtifactHashUnavailable {
+        /// The package containing the selected artifact.
+        package: PackageName,
+        /// The credential-safe reason the artifact could not be hashed.
+        reason: String,
+    },
+
     /// A registry artifact location could not be converted to an absolute URL.
     #[error(transparent)]
     InvalidArtifactUrl(#[from] ToUrlError),
@@ -147,7 +156,7 @@ impl IndexRoute {
 
     /// Translate a canonical artifact URL to its configured physical proxy URL.
     pub fn to_proxy_url(&self, url: &DisplaySafeUrl) -> Result<DisplaySafeUrl, ProxyIndexError> {
-        self.rewrite_artifact_url(url, MappingDirection::ToProxy)
+        self.rewrite_artifact_url(url, MappingDirection::ToProxy, &[])
     }
 
     /// Translate a physical proxy artifact URL to its configured canonical URL.
@@ -155,73 +164,37 @@ impl IndexRoute {
         &self,
         url: &DisplaySafeUrl,
     ) -> Result<DisplaySafeUrl, ProxyIndexError> {
-        self.rewrite_artifact_url(url, MappingDirection::ToCanonical)
+        self.rewrite_artifact_url(url, MappingDirection::ToCanonical, &[])
     }
 
-    /// Return whether deriving canonical PyPI URLs requires the artifact's BLAKE2b-256 digest.
-    pub fn requires_pypi_artifact_hash(&self) -> bool {
-        self.canonical.is_pypi()
-            && self.artifact_mapping.as_ref().is_some_and(|mapping| {
-                mapping.canonical_template.is_none()
-                    && mapping
-                        .physical_template
-                        .as_ref()
-                        .is_some_and(|template| !template.preserves_path())
-            })
+    /// Return whether either artifact URL template uses a BLAKE2b-256 digest.
+    pub fn requires_artifact_hash(&self) -> bool {
+        self.artifact_mapping.as_ref().is_some_and(|mapping| {
+            mapping
+                .canonical_template
+                .as_ref()
+                .is_some_and(ArtifactUrlTemplate::requires_hash)
+                || mapping
+                    .physical_template
+                    .as_ref()
+                    .is_some_and(ArtifactUrlTemplate::requires_hash)
+        })
     }
 
-    /// Translate a proxy artifact URL using its content hashes when PyPI's path is not preserved.
+    /// Translate a proxy artifact URL using its advertised or computed content hashes.
     pub fn to_canonical_url_with_hashes(
         &self,
         url: &DisplaySafeUrl,
         hashes: &[HashDigest],
     ) -> Result<DisplaySafeUrl, ProxyIndexError> {
-        match self.to_canonical_url(url) {
-            Err(ProxyIndexError::UnknownCanonicalUrl { .. })
-                if self.requires_pypi_artifact_hash() =>
-            {
-                let digest = hashes
-                    .iter()
-                    .find(|hash| hash.algorithm == HashAlgorithm::Blake2b)
-                    .map(|hash| hash.digest.as_ref())
-                    .filter(|digest| {
-                        digest.len() == 64 && digest.as_bytes().iter().all(u8::is_ascii_hexdigit)
-                    })
-                    .ok_or_else(|| ProxyIndexError::UnknownCanonicalUrl {
-                        url: Box::new(url.clone()),
-                    })?;
-                let digest = digest.to_ascii_lowercase();
-                let Some(mapping) = &self.artifact_mapping else {
-                    return Err(ProxyIndexError::UnknownCanonicalUrl {
-                        url: Box::new(url.clone()),
-                    });
-                };
-                let Some(filename) = url.path().rsplit('/').next() else {
-                    return Err(ProxyIndexError::UnknownCanonicalUrl {
-                        url: Box::new(url.clone()),
-                    });
-                };
-                let mut canonical = mapping.canonical.clone();
-                let base = canonical.path().trim_end_matches('/');
-                let path = format!(
-                    "{base}/{}/{}/{}/{filename}",
-                    &digest[..2],
-                    &digest[2..4],
-                    &digest[4..]
-                );
-                canonical.set_path(&path);
-                canonical.set_query(url.query());
-                canonical.set_fragment(url.fragment());
-                Ok(canonical)
-            }
-            result => result,
-        }
+        self.rewrite_artifact_url(url, MappingDirection::ToCanonical, hashes)
     }
 
     fn rewrite_artifact_url(
         &self,
         url: &DisplaySafeUrl,
         direction: MappingDirection,
+        hashes: &[HashDigest],
     ) -> Result<DisplaySafeUrl, ProxyIndexError> {
         let Some(mapping) = &self.artifact_mapping else {
             return Ok(url.clone());
@@ -248,21 +221,29 @@ impl IndexRoute {
         };
 
         let path = if let Some(source_template) = source_template {
-            let path = source_template.capture_path(url, suffix)?;
-            let rendered = source_template.render(url, &path)?;
-            if RealmRef::from(&**url) != RealmRef::from(&*rendered) || url.path() != rendered.path()
+            if source_template.requires_hash()
+                && hashes.is_empty()
+                && matches!(direction, MappingDirection::ToProxy)
             {
-                return Err(ProxyIndexError::UnmappedUrl {
-                    url: Box::new(url.clone()),
-                });
+                Cow::Borrowed(suffix)
+            } else {
+                let path = source_template.capture_path(url, suffix, hashes)?;
+                let rendered = source_template.render(url, &path, hashes)?;
+                if RealmRef::from(&**url) != RealmRef::from(&*rendered)
+                    || url.path() != rendered.path()
+                {
+                    return Err(ProxyIndexError::UnmappedUrl {
+                        url: Box::new(url.clone()),
+                    });
+                }
+                path
             }
-            path
         } else {
             Cow::Borrowed(suffix)
         };
 
         if let Some(target_template) = target_template {
-            let mut rewritten = target_template.render(url, &path)?;
+            let mut rewritten = target_template.render(url, &path, hashes)?;
             rewritten.set_query(url.query());
             rewritten.set_fragment(url.fragment());
             return Ok(rewritten);
@@ -294,8 +275,8 @@ impl IndexRoute {
 
 impl ArtifactUrlTemplate {
     /// Validate an absolute artifact URL template and determine its static URL prefix.
-    fn new(index: &Index) -> Result<Option<Self>, ProxyIndexError> {
-        let Some(value) = index.artifact_url.as_ref() else {
+    fn new(index: &Index, default: Option<&str>) -> Result<Option<Self>, ProxyIndexError> {
+        let Some(value) = index.artifact_url.as_deref().or(default) else {
             return Ok(None);
         };
         let invalid = |reason| ProxyIndexError::InvalidArtifactTemplate {
@@ -303,7 +284,7 @@ impl ArtifactUrlTemplate {
             reason,
         };
 
-        let mut remaining = value.as_str();
+        let mut remaining = value;
         let mut preview = String::with_capacity(value.len());
         let mut contains_artifact = false;
         let mut contains_path = false;
@@ -318,7 +299,8 @@ impl ArtifactUrlTemplate {
             if !matches!(
                 placeholder,
                 "name" | "normalized_name" | "version" | "filename" | "path"
-            ) {
+            ) && Self::blake2_bounds(placeholder).is_none()
+            {
                 return Err(invalid("unsupported placeholder"));
             }
             if placeholder == "path" && std::mem::replace(&mut contains_path, true) {
@@ -354,7 +336,7 @@ impl ArtifactUrlTemplate {
         validate_prefix(&base)?;
 
         Ok(Some(Self {
-            value: value.clone(),
+            value: value.to_string(),
             base,
         }))
     }
@@ -364,8 +346,9 @@ impl ArtifactUrlTemplate {
         &self,
         source: &DisplaySafeUrl,
         path: &str,
+        hashes: &[HashDigest],
     ) -> Result<DisplaySafeUrl, ProxyIndexError> {
-        let rendered = self.render_value(source, path, path)?;
+        let rendered = self.render_value(source, path, path, hashes)?;
         DisplaySafeUrl::parse(&rendered).map_err(|_| ProxyIndexError::UnmappedUrl {
             url: Box::new(source.clone()),
         })
@@ -376,6 +359,7 @@ impl ArtifactUrlTemplate {
         source: &DisplaySafeUrl,
         path: &str,
         replacement: &str,
+        hashes: &[HashDigest],
     ) -> Result<String, ProxyIndexError> {
         let Some(encoded_filename) = path.rsplit('/').next().filter(|value| !value.is_empty())
         else {
@@ -397,13 +381,47 @@ impl ArtifactUrlTemplate {
         let normalized_name = distribution.name().as_ref();
         let version = distribution.version().to_string();
 
-        Ok(self
-            .value
-            .replace("{normalized_name}", normalized_name)
-            .replace("{name}", normalized_name)
-            .replace("{version}", &version)
-            .replace("{filename}", encoded_filename)
-            .replace("{path}", replacement))
+        let digest = hashes
+            .iter()
+            .find(|hash| hash.algorithm == HashAlgorithm::Blake2b)
+            .map(|hash| hash.digest.as_ref())
+            .filter(|digest| {
+                digest.len() == 64 && digest.as_bytes().iter().all(u8::is_ascii_hexdigit)
+            })
+            .map(str::to_ascii_lowercase);
+
+        let mut rendered = String::with_capacity(self.value.len());
+        let mut remaining = self.value.as_str();
+        while let Some((literal, after_open)) = remaining.split_once('{') {
+            rendered.push_str(literal);
+            let Some((placeholder, after_close)) = after_open.split_once('}') else {
+                return Err(ProxyIndexError::UnmappedUrl {
+                    url: Box::new(source.clone()),
+                });
+            };
+            match placeholder {
+                "name" | "normalized_name" => rendered.push_str(normalized_name),
+                "version" => rendered.push_str(&version),
+                "filename" => rendered.push_str(encoded_filename),
+                "path" => rendered.push_str(replacement),
+                placeholder => {
+                    let Some((start, end)) = Self::blake2_bounds(placeholder) else {
+                        return Err(ProxyIndexError::UnmappedUrl {
+                            url: Box::new(source.clone()),
+                        });
+                    };
+                    let Some(digest) = digest.as_deref() else {
+                        return Err(ProxyIndexError::UnknownCanonicalUrl {
+                            url: Box::new(source.clone()),
+                        });
+                    };
+                    rendered.push_str(&digest[start..end]);
+                }
+            }
+            remaining = after_close;
+        }
+        rendered.push_str(remaining);
+        Ok(rendered)
     }
 
     /// Recover the incoming artifact path when a template adds metadata around `{path}`.
@@ -411,6 +429,7 @@ impl ArtifactUrlTemplate {
         &self,
         source: &DisplaySafeUrl,
         path: &'a str,
+        hashes: &[HashDigest],
     ) -> Result<Cow<'a, str>, ProxyIndexError> {
         const PLACEHOLDER: &str = "uv-artifact-relative-path-placeholder";
 
@@ -418,9 +437,9 @@ impl ArtifactUrlTemplate {
             return Ok(Cow::Borrowed(path));
         }
 
-        let rendered = self.render(source, path)?;
+        let rendered = self.render(source, path, hashes)?;
         let rendered_path = rendered.path();
-        let substituted = self.render_value(source, path, PLACEHOLDER)?;
+        let substituted = self.render_value(source, path, PLACEHOLDER, hashes)?;
         let substituted =
             DisplaySafeUrl::parse(&substituted).map_err(|_| ProxyIndexError::UnmappedUrl {
                 url: Box::new(source.clone()),
@@ -449,6 +468,23 @@ impl ArtifactUrlTemplate {
 
     fn contains_path(&self) -> bool {
         self.value.contains("{path}")
+    }
+
+    fn requires_hash(&self) -> bool {
+        self.value.contains("{blake2")
+    }
+
+    /// Parse a zero-based, end-exclusive BLAKE2b-256 hexadecimal digest slice.
+    fn blake2_bounds(placeholder: &str) -> Option<(usize, usize)> {
+        if placeholder == "blake2" {
+            return Some((0, 64));
+        }
+
+        let bounds = placeholder.strip_prefix("blake2_")?;
+        let (start, end) = bounds.split_once('_')?;
+        let start = start.parse::<usize>().ok()?;
+        let end = end.parse::<usize>().ok()?;
+        (start < end && end <= 64).then_some((start, end))
     }
 
     /// Return whether the template preserves the entire incoming relative artifact path.
@@ -545,8 +581,13 @@ impl TryFrom<&IndexLocations> for IndexRoutes {
             validate_prefix(canonical_url)?;
             validate_prefix(physical_url)?;
 
-            let canonical_template = ArtifactUrlTemplate::new(canonical)?;
-            let physical_template = ArtifactUrlTemplate::new(proxy)?;
+            let physical_template = ArtifactUrlTemplate::new(proxy, None)?;
+            let default_template = (canonical.url().is_pypi()
+                && physical_template.as_ref().is_some_and(|template| {
+                    !template.preserves_path() && !template.contains_path()
+                }))
+            .then_some(PYPI_ARTIFACT_URL_TEMPLATE);
+            let canonical_template = ArtifactUrlTemplate::new(canonical, default_template)?;
             let canonical_artifact_base = artifact_base(canonical, canonical_template.as_ref())?;
             let physical_artifact_base = proxy
                 .artifact_base_url
@@ -910,6 +951,48 @@ mod tests {
     }
 
     #[test]
+    fn proxy_artifact_templates_render_digest_slices_for_any_registry() -> TestResult {
+        let mut canonical = named_index(
+            "upstream",
+            "https://upstream.example.com/simple/",
+            None,
+            None,
+        )?;
+        canonical.artifact_url = Some(
+            "https://upstream.example.com/distributions/{blake2_0_8}/{blake2_8_64}/{filename}"
+                .to_string(),
+        );
+        let mut proxy = named_index(
+            "mirror",
+            "https://proxy.example.com/simple/",
+            None,
+            Some("upstream"),
+        )?;
+        proxy.artifact_url =
+            Some("https://proxy.example.com/packages/{normalized_name}/{filename}".to_string());
+
+        let locations = IndexLocations::new(vec![canonical.clone(), proxy], Vec::new(), false);
+        let route = IndexRoutes::try_from(&locations)?.route_for(canonical.url());
+        let physical =
+            url("https://proxy.example.com/packages/my-package/my_package-1.2.3-py3-none-any.whl")?;
+        let hashes = vec![HashDigest {
+            algorithm: HashAlgorithm::Blake2b,
+            digest: "A5B2398D1A4702CF48948E53709B6A83D3C4C220E2AF335216E27B76DBA5CEF1".into(),
+        }];
+        let canonical = url(
+            "https://upstream.example.com/distributions/a5b2398d/1a4702cf48948e53709b6a83d3c4c220e2af335216e27b76dba5cef1/my_package-1.2.3-py3-none-any.whl",
+        )?;
+
+        assert!(route.requires_artifact_hash());
+        assert_eq!(
+            route.to_canonical_url_with_hashes(&physical, &hashes)?,
+            canonical
+        );
+        assert_eq!(route.to_proxy_url(&canonical)?, physical);
+        Ok(())
+    }
+
+    #[test]
     fn proxy_artifact_template_rejects_unknown_canonical_pypi_paths() -> TestResult {
         let mut proxy = named_index(
             "mirror",
@@ -974,6 +1057,10 @@ mod tests {
             "https://proxy.example.com/packages/{normalized_name}",
             "https://proxy.example.com/packages/{filename",
             "https://proxy.example.com/packages/{path}/{path}",
+            "https://proxy.example.com/packages/{blake2_5_4}/{filename}",
+            "https://proxy.example.com/packages/{blake2_0_65}/{filename}",
+            "https://proxy.example.com/packages/{blake2_0_2_4}/{filename}",
+            "https://proxy.example.com/packages/{blake2_invalid}/{filename}",
             "https://proxy-user:proxy-password@proxy.example.com/packages/{filename}",
             "https://{host}/packages/{filename}",
         ] {

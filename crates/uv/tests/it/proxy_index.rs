@@ -780,15 +780,24 @@ async fn proxy_index_artifact_url_template_derives_canonical_pypi_url_from_proxy
     let physical_index = MockServer::start().await;
     let physical_artifacts = MockServer::start().await;
     let physical_path = format!("/packages/basic-package/{WHEEL_FILENAME}");
+    let historical_filename = "basic_package-0.0.9-py3-none-any.whl";
+    let historical_path = format!("/packages/basic-package/{historical_filename}");
 
     mount_simple(
         &physical_index,
         "basic-package",
-        vec![advertised_file(
-            WHEEL_FILENAME,
-            &format!("{}{physical_path}", physical_artifacts.uri()),
-            Some(WHEEL_HASH),
-        )],
+        vec![
+            advertised_file(
+                historical_filename,
+                &format!("{}{historical_path}", physical_artifacts.uri()),
+                Some(WHEEL_HASH),
+            ),
+            advertised_file(
+                WHEEL_FILENAME,
+                &format!("{}{physical_path}", physical_artifacts.uri()),
+                Some(WHEEL_HASH),
+            ),
+        ],
         1,
     )
     .await;
@@ -850,6 +859,107 @@ async fn proxy_index_artifact_url_template_derives_canonical_pypi_url_from_proxy
     ");
 
     assert_requested_once(&physical_index, "/simple/basic-package/").await?;
+    let requests = physical_artifacts
+        .received_requests()
+        .await
+        .ok_or_else(|| anyhow!("physical artifact origin should record requests"))?;
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.url.path() != historical_path),
+        "unselected historical versions must not be downloaded for digest templates: {requests:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn proxy_index_artifact_url_template_computes_digest_slices_for_any_registry() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheel = fixture(&context, WHEEL_FILENAME)?;
+    let canonical_index = MockServer::start().await;
+    let canonical_artifacts = MockServer::start().await;
+    let physical_index = MockServer::start().await;
+    let physical_artifacts = MockServer::start().await;
+    let physical_path = format!("/packages/basic-package/{WHEEL_FILENAME}");
+
+    mount_simple(
+        &physical_index,
+        "basic-package",
+        vec![advertised_file(
+            WHEEL_FILENAME,
+            &format!("{}{physical_path}", physical_artifacts.uri()),
+            Some(WHEEL_HASH),
+        )],
+        1,
+    )
+    .await;
+    Mock::given(method("GET"))
+        .and(path(format!("{physical_path}.metadata")))
+        .respond_with(ResponseTemplate::new(200).set_body_string(WHEEL_METADATA))
+        .expect(1)
+        .mount(&physical_artifacts)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(physical_path.clone()))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .expect(2)
+        .mount(&physical_artifacts)
+        .await;
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+            [project]
+            name = "project"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = ["basic-package==0.1.0"]
+
+            [[tool.uv.index]]
+            name = "canonical"
+            url = "{}/simple/"
+            artifact-url = "{}/downloads/{{blake2_0_8}}/{{blake2_8_64}}/{{filename}}"
+            default = true
+
+            [[tool.uv.index]]
+            name = "mirror"
+            url = "{}/simple/"
+            artifact-url = "{}/packages/{{normalized_name}}/{{filename}}"
+            proxy-for = "canonical"
+            "#,
+            canonical_index.uri(),
+            canonical_artifacts.uri(),
+            physical_index.uri(),
+            physical_artifacts.uri(),
+        })?;
+
+    uv_snapshot!(context.filters(), context.lock(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    let canonical_url = format!(
+        "{}/downloads/{}/{}/{WHEEL_FILENAME}",
+        canonical_artifacts.uri(),
+        &WHEEL_BLAKE2B[..8],
+        &WHEEL_BLAKE2B[8..]
+    );
+    let lock = context.read("uv.lock");
+    assert!(lock.contains(&canonical_url));
+    assert!(!lock.contains(&physical_artifacts.uri()));
+
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + basic-package==0.1.0
+    ");
+
+    assert_requested_once(&physical_index, "/simple/basic-package/").await?;
+    assert_no_origin_requests(&canonical_index, &canonical_artifacts).await?;
     Ok(())
 }
 

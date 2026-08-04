@@ -2756,6 +2756,12 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                     }
                 };
 
+                // Digest templates are materialized on the resolver thread; attempting to
+                // prefetch them from this runtime thread would block its network driver.
+                if version_map.iter().any(VersionMap::requires_artifact_hash) {
+                    return Ok(None);
+                }
+
                 // We don't have access to the fork state when prefetching.
                 let env = ResolverEnvironment::universal(vec![]);
 

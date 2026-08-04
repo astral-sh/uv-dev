@@ -224,6 +224,7 @@ impl<Context: BuildContext> ResolverProvider for DefaultResolverProvider<'_, Con
                             MetadataFormat::Simple(metadata) => VersionMap::from_simple_metadata(
                                 metadata,
                                 package_name,
+                                self.fetcher.client().unmanaged,
                                 self.fetcher.client().unmanaged.routes().route_for(index),
                                 self.tags.clone(),
                                 self.requires_python.clone(),
