@@ -161,9 +161,11 @@ pub struct Index {
     pub artifact_base_url: Option<DisplaySafeUrl>,
     /// The URL template from which this index serves package files.
     ///
-    /// Supported placeholders are `{name}`, `{normalized_name}`, `{version}`, `{filename}`, and
-    /// `{path}`. For example, `https://proxy.example.com/{normalized_name}/{filename}` supports
-    /// registries that store artifacts beneath their normalized package name.
+    /// Supported placeholders are `{name}`, `{normalized_name}`, `{version}`, `{filename}`,
+    /// `{path}`, and `{blake2}`. Use `{blake2_START_END}` for a zero-based, end-exclusive slice of
+    /// the BLAKE2b-256 hexadecimal digest. For example,
+    /// `https://proxy.example.com/{normalized_name}/{filename}` supports registries that store
+    /// artifacts beneath their normalized package name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artifact_url: Option<String>,
     /// The name of the original index that this index proxies.

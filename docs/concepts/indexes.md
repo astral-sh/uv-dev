@@ -98,8 +98,9 @@ An index can have at most one proxy. Package files must have the same path after
 to `https://proxy.example.com/files/example/package.whl`.
 
 For indexes that use different artifact layouts, set `artifact-url` to a complete URL template on
-each index. Templates support `{name}`, `{normalized_name}`, `{version}`, `{filename}`, and `{path}`
-placeholders:
+each index. Templates support `{name}`, `{normalized_name}`, `{version}`, `{filename}`, `{path}`,
+and `{blake2}` placeholders. BLAKE2b-256 digests can also be sliced using zero-based, end-exclusive
+offsets such as `{blake2_0_2}` and `{blake2_2_4}`:
 
 ```toml
 [[tool.uv.index]]
@@ -115,9 +116,15 @@ proxy-for = "private"
 ```
 
 An `artifact-url` template can also route an existing PyPI lockfile through a proxy that changes
-artifact paths. However, creating a new lockfile through that proxy requires a known canonical
-artifact URL. If the proxy's layout does not identify PyPI's original artifact URL, uv rejects the
-artifact instead of recording a fabricated URL.
+artifact paths. PyPI's default artifact URL template is:
+
+```text
+https://files.pythonhosted.org/packages/{blake2_0_2}/{blake2_2_4}/{blake2_4_64}/{filename}
+```
+
+Any index can use digest placeholders in its artifact URL template. If a selected package version
+does not advertise the BLAKE2b-256 digest needed by a template, uv downloads and verifies its
+artifacts through the proxy to compute the missing digests without contacting the original index.
 
 Proxies must also provide supported hashes for package files included in `uv.lock` or `pylock.toml`.
 

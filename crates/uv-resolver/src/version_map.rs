@@ -5,9 +5,10 @@ use std::sync::OnceLock;
 
 use jiff::Timestamp;
 use pubgrub::Ranges;
+use tokio::runtime::Handle;
 use tracing::{instrument, trace};
 
-use uv_client::{FlatIndexEntry, OwnedArchive, SimpleDetailMetadata, VersionFiles};
+use uv_client::{FlatIndexEntry, OwnedArchive, RegistryClient, SimpleDetailMetadata, VersionFiles};
 use uv_configuration::BuildOptions;
 use uv_distribution_filename::{DistFilename, SourceDistFilename, WheelFilename};
 use uv_distribution_types::{
@@ -46,6 +47,7 @@ impl VersionMap {
     pub(crate) fn from_simple_metadata(
         simple_metadata: OwnedArchive<SimpleDetailMetadata>,
         package_name: &PackageName,
+        client: &RegistryClient,
         index_route: IndexRoute,
         tags: Option<Tags>,
         requires_python: RequiresPython,
@@ -89,6 +91,13 @@ impl VersionMap {
         if let Some(flat_index) = flat_index {
             map = map.merge_flat(flat_index);
         }
+        let artifact_hasher = index_route
+            .requires_artifact_hash()
+            .then(|| ArtifactHashClient {
+                client: client.clone(),
+                runtime: Handle::current(),
+            });
+
         Self {
             inner: VersionMapInner::Lazy(VersionMapLazy {
                 package_name: package_name.clone(),
@@ -98,6 +107,7 @@ impl VersionMap {
                 no_binary: build_options.no_binary_package(package_name),
                 no_build: build_options.no_build_package(package_name),
                 index_route,
+                artifact_hasher,
                 proxy_mapping_error: OnceLock::new(),
                 tags,
                 allowed_yanks,
@@ -192,6 +202,11 @@ impl VersionMap {
         }
 
         Ok(())
+    }
+
+    /// Return whether materializing this version map requires asynchronous artifact hashing.
+    pub(crate) fn requires_artifact_hash(&self) -> bool {
+        matches!(&self.inner, VersionMapInner::Lazy(lazy) if lazy.artifact_hasher.is_some())
     }
 
     /// Return the included-version cutoff for this version map, if any.
@@ -507,6 +522,8 @@ struct VersionMapLazy {
     no_build: bool,
     /// The validated route from the canonical index to its physical endpoint.
     index_route: IndexRoute,
+    /// The client and runtime used to hash only package versions selected by the resolver.
+    artifact_hasher: Option<ArtifactHashClient>,
     /// The first invalid proxy artifact encountered during lazy materialization.
     proxy_mapping_error: OnceLock<ProxyIndexError>,
     /// The set of compatibility tags that determines whether a wheel is usable
@@ -523,6 +540,12 @@ struct VersionMapLazy {
     hasher: HashStrategy,
     /// The `requires-python` constraint for the resolution.
     requires_python: RequiresPython,
+}
+
+#[derive(Debug)]
+struct ArtifactHashClient {
+    client: RegistryClient,
+    runtime: Handle,
 }
 
 /// A registry artifact paired with its already-evaluated selection compatibility.
@@ -657,7 +680,7 @@ impl VersionMapLazy {
         simple: &'p SimplePrioritizedDist,
     ) -> Option<&'p PrioritizedDist> {
         let get_or_init = || {
-            let files = rkyv::deserialize::<VersionFiles, rkyv::rancor::Error>(
+            let mut files = rkyv::deserialize::<VersionFiles, rkyv::rancor::Error>(
                 &self
                     .simple_metadata
                     .datum(simple.datum_index)
@@ -665,6 +688,31 @@ impl VersionMapLazy {
                     .files,
             )
             .expect("archived version files always deserializes");
+
+            if let Some(hasher) = &self.artifact_hasher
+                && let Err(error) = hasher
+                    .runtime
+                    .block_on(hasher.client.populate_artifact_hashes(
+                        &mut files,
+                        &self.package_name,
+                        &self.index_route,
+                    ))
+            {
+                if let Some(flat) = init {
+                    return Some(flat.clone());
+                }
+
+                let error = match error.into_kind() {
+                    uv_client::ErrorKind::ProxyIndex(error) => error,
+                    error => ProxyIndexError::ArtifactHashUnavailable {
+                        package: self.package_name.clone(),
+                        reason: error.to_string(),
+                    },
+                };
+                let _ = self.proxy_mapping_error.set(error);
+                return None;
+            }
+
             let mut priority_dist = init.cloned().unwrap_or_default();
             for (filename, mut file) in files.all(&self.package_name) {
                 // Support resolving as if it were an earlier timestamp, at least as long files have
@@ -917,7 +965,8 @@ fn canonicalize_registry_file(
 ) -> Result<(), ProxyIndexError> {
     if index_route.is_proxy() {
         let physical_url = file.url.to_url()?;
-        let canonical_url = index_route.to_canonical_url(&physical_url)?;
+        let canonical_url =
+            index_route.to_canonical_url_with_hashes(&physical_url, file.hashes.as_slice())?;
         file.url = FileLocation::AbsoluteUrl(canonical_url.into());
     }
 

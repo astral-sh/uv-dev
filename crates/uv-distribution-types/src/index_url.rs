@@ -27,6 +27,9 @@ pub(crate) static PYPI_ARTIFACT_BASE_URL: LazyLock<DisplaySafeUrl> = LazyLock::n
         .expect("the PyPI artifact base URL must be valid")
 });
 
+pub(crate) const PYPI_ARTIFACT_URL_TEMPLATE: &str =
+    "https://files.pythonhosted.org/packages/{blake2_0_2}/{blake2_2_4}/{blake2_4_64}/{filename}";
+
 static DEFAULT_INDEX: LazyLock<Index> = LazyLock::new(|| {
     Index::from_index_url(IndexUrl::Pypi(Arc::new(VerbatimUrl::from_url(
         PYPI_URL.clone(),
