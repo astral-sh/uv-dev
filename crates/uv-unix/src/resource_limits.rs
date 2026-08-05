@@ -39,48 +39,8 @@ pub const SUPPORTED_RESOURCE_LIMITS: &[(&str, RunResource)] = &[
         RunResource::Nix(Resource::RLIMIT_CPU),
     ),
     (
-        EnvVars::UV_RUN_RLIMIT_DATA,
-        RunResource::Nix(Resource::RLIMIT_DATA),
-    ),
-    (
         EnvVars::UV_RUN_RLIMIT_FSIZE,
         RunResource::Nix(Resource::RLIMIT_FSIZE),
-    ),
-    #[cfg(target_os = "freebsd")]
-    (
-        EnvVars::UV_RUN_RLIMIT_KQUEUES,
-        RunResource::Nix(Resource::RLIMIT_KQUEUES),
-    ),
-    #[cfg(any(target_os = "linux", target_os = "android"))]
-    (
-        EnvVars::UV_RUN_RLIMIT_LOCKS,
-        RunResource::Nix(Resource::RLIMIT_LOCKS),
-    ),
-    #[cfg(any(
-        target_os = "linux",
-        target_os = "android",
-        target_os = "freebsd",
-        target_os = "netbsd",
-        target_os = "openbsd"
-    ))]
-    (
-        EnvVars::UV_RUN_RLIMIT_MEMLOCK,
-        RunResource::Nix(Resource::RLIMIT_MEMLOCK),
-    ),
-    #[cfg(target_vendor = "apple")]
-    (
-        EnvVars::UV_RUN_RLIMIT_MEMLOCK,
-        RunResource::Apple(rustix::process::Resource::Memlock),
-    ),
-    #[cfg(any(target_os = "linux", target_os = "android"))]
-    (
-        EnvVars::UV_RUN_RLIMIT_MSGQUEUE,
-        RunResource::Nix(Resource::RLIMIT_MSGQUEUE),
-    ),
-    #[cfg(any(target_os = "linux", target_os = "android"))]
-    (
-        EnvVars::UV_RUN_RLIMIT_NICE,
-        RunResource::Nix(Resource::RLIMIT_NICE),
     ),
     (
         EnvVars::UV_RUN_RLIMIT_NOFILE,
@@ -102,62 +62,6 @@ pub const SUPPORTED_RESOURCE_LIMITS: &[(&str, RunResource)] = &[
     (
         EnvVars::UV_RUN_RLIMIT_NPROC,
         RunResource::Apple(rustix::process::Resource::Nproc),
-    ),
-    #[cfg(target_os = "freebsd")]
-    (
-        EnvVars::UV_RUN_RLIMIT_NPTS,
-        RunResource::Nix(Resource::RLIMIT_NPTS),
-    ),
-    #[cfg(any(
-        target_os = "linux",
-        target_os = "android",
-        target_os = "freebsd",
-        target_os = "netbsd",
-        target_os = "openbsd",
-        target_os = "aix"
-    ))]
-    (
-        EnvVars::UV_RUN_RLIMIT_RSS,
-        RunResource::Nix(Resource::RLIMIT_RSS),
-    ),
-    #[cfg(target_vendor = "apple")]
-    (
-        EnvVars::UV_RUN_RLIMIT_RSS,
-        RunResource::Apple(rustix::process::Resource::Rss),
-    ),
-    #[cfg(any(target_os = "linux", target_os = "android"))]
-    (
-        EnvVars::UV_RUN_RLIMIT_RTPRIO,
-        RunResource::Nix(Resource::RLIMIT_RTPRIO),
-    ),
-    #[cfg(target_os = "linux")]
-    (
-        EnvVars::UV_RUN_RLIMIT_RTTIME,
-        RunResource::Nix(Resource::RLIMIT_RTTIME),
-    ),
-    #[cfg(any(target_os = "freebsd", target_os = "dragonfly"))]
-    (
-        EnvVars::UV_RUN_RLIMIT_SBSIZE,
-        RunResource::Nix(Resource::RLIMIT_SBSIZE),
-    ),
-    #[cfg(any(target_os = "linux", target_os = "android"))]
-    (
-        EnvVars::UV_RUN_RLIMIT_SIGPENDING,
-        RunResource::Nix(Resource::RLIMIT_SIGPENDING),
-    ),
-    (
-        EnvVars::UV_RUN_RLIMIT_STACK,
-        RunResource::Nix(Resource::RLIMIT_STACK),
-    ),
-    #[cfg(target_os = "freebsd")]
-    (
-        EnvVars::UV_RUN_RLIMIT_SWAP,
-        RunResource::Nix(Resource::RLIMIT_SWAP),
-    ),
-    #[cfg(target_os = "freebsd")]
-    (
-        EnvVars::UV_RUN_RLIMIT_VMEM,
-        RunResource::Nix(Resource::RLIMIT_VMEM),
     ),
 ];
 
