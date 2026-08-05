@@ -178,6 +178,7 @@ jobs:
         fromJSON(needs.triage.outputs.result).type == 'question'
       )
     permissions:
+      actions: read
       contents: read
       id-token: write
       issues: read
