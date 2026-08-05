@@ -6,6 +6,8 @@
 #![cfg(windows)]
 
 mod ctrl_handler;
+#[cfg(feature = "editpe")]
+pub mod editpe;
 #[cfg(feature = "std")]
 mod exception;
 mod job;
