@@ -675,6 +675,35 @@ impl PubGrubReportFormatter<'_> {
         external2: &External<PubGrubPackage, Range<Version>, UnavailableReason>,
     ) -> String {
         match (external1, external2) {
+            // When a yanked release is the only candidate in the required range, its exact
+            // version already explains the failure. Versions outside that range add no context.
+            (
+                External::NoVersions(package, unavailable),
+                incompatibility @ External::Custom(
+                    other_package,
+                    versions,
+                    UnavailableReason::Version(UnavailableVersion::IncompatibleDist(
+                        IncompatibleDist::Wheel(IncompatibleWheel::Yanked(_))
+                        | IncompatibleDist::Source(IncompatibleSource::Yanked(_)),
+                    )),
+                ),
+            )
+            | (
+                incompatibility @ External::Custom(
+                    other_package,
+                    versions,
+                    UnavailableReason::Version(UnavailableVersion::IncompatibleDist(
+                        IncompatibleDist::Wheel(IncompatibleWheel::Yanked(_))
+                        | IncompatibleDist::Source(IncompatibleSource::Yanked(_)),
+                    )),
+                ),
+                External::NoVersions(package, unavailable),
+            ) if package == other_package
+                && versions.as_singleton().is_some()
+                && unavailable.complement().as_singleton().is_none() =>
+            {
+                self.format_external(incompatibility)
+            }
             (
                 External::FromDependencyOf(package1, package_set1, dependency1, dependency_set1),
                 External::FromDependencyOf(package2, package_set2, dependency2, dependency_set2),
