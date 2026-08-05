@@ -201,5 +201,7 @@ jobs:
     with:
       issue: ${{ inputs.issue || github.event.issue.number }}
       issue-type: ${{ fromJSON(needs.triage.outputs.result).type }}
+      issue-subtype: ${{ fromJSON(needs.triage.outputs.result).subtype || '' }}
+      triage-result: ${{ needs.triage.outputs.result }}
       runner: ubuntu-latest
     secrets: inherit # zizmor: ignore[secrets-inherit] -- protected environment secrets are needed for reproduction
