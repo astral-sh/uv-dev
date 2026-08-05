@@ -1,0 +1,52 @@
+name: "Upload Codex thread"
+description: "Retain the Codex sessions produced by one automation step."
+
+inputs:
+  name:
+    description: "The stable automation-step name used in the retained artifact name."
+    required: true
+  path:
+    description: "The Codex sessions directory to retain."
+    default: "agents/codex/sessions"
+    required: false
+
+outputs:
+  artifact-digest:
+    description: "The SHA-256 digest of the retained Codex thread artifact."
+    value: ${{ steps.upload.outputs.artifact-digest }}
+  artifact-id:
+    description: "The identifier of the retained Codex thread artifact."
+    value: ${{ steps.upload.outputs.artifact-id }}
+  artifact-name:
+    description: "The run- and attempt-scoped Codex thread artifact name."
+    value: ${{ steps.artifact.outputs.name }}
+  artifact-url:
+    description: "The GitHub URL of the retained Codex thread artifact."
+    value: ${{ steps.upload.outputs.artifact-url }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: "Identify Codex thread artifact"
+      id: artifact
+      shell: bash
+      env:
+        RUN_ATTEMPT: ${{ github.run_attempt }}
+        RUN_ID: ${{ github.run_id }}
+        THREAD_NAME: ${{ inputs.name }}
+      run: |
+        if ! [[ "$THREAD_NAME" =~ ^[A-Za-z0-9_.-]+$ ]]; then
+          echo "The Codex automation-step name is invalid." >&2
+          exit 1
+        fi
+
+        printf 'name=codex-thread-%s-%s-%s\n' \
+          "$THREAD_NAME" "$RUN_ID" "$RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+
+    - name: "Upload Codex thread artifact"
+      id: upload
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: ${{ steps.artifact.outputs.name }}
+        path: ${{ inputs.path }}
+        if-no-files-found: warn
