@@ -675,6 +675,30 @@ impl PubGrubReportFormatter<'_> {
         external2: &External<PubGrubPackage, Range<Version>, UnavailableReason>,
     ) -> String {
         match (external1, external2) {
+            // Avoid repeating the package and version when availability and the incompatibility
+            // both describe the same sole release.
+            (
+                External::NoVersions(package, unavailable),
+                incompatibility @ External::Custom(other_package, versions, _),
+            )
+            | (
+                incompatibility @ External::Custom(other_package, versions, _),
+                External::NoVersions(package, unavailable),
+            ) if package == other_package
+                && versions.as_singleton().is_some()
+                && unavailable.complement().as_singleton() == versions.as_singleton() =>
+            {
+                let version = self.compatible_range(package, versions).to_string();
+                let explanation = self.format_external(incompatibility);
+                if let Some(reason) = explanation
+                    .strip_prefix(&version)
+                    .and_then(|reason| reason.strip_prefix(' '))
+                {
+                    format!("{version} is the only available version and {reason}")
+                } else {
+                    explanation
+                }
+            }
             (
                 External::FromDependencyOf(package1, package_set1, dependency1, dependency_set1),
                 External::FromDependencyOf(package2, package_set2, dependency2, dependency_set2),
