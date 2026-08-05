@@ -108,7 +108,7 @@ jobs:
                 "# \($issue.title)",
                 "",
                 "Issue: \($repository)#\($issue.number)",
-                "Classification: \($triage.type)",
+                "Classification: \($triage.type)\(if $triage.subtype == null then "" else " (\($triage.subtype))" end)",
                 "",
                 "## Summary",
                 "",
