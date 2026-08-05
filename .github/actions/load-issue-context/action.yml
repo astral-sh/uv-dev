@@ -1,0 +1,83 @@
+name: "Load issue context"
+description: "Load and verify the persisted investigation for a GitHub issue."
+
+inputs:
+  issue-number:
+    description: "The issue whose persisted investigation should be loaded."
+    required: true
+  repository:
+    description: "The repository containing persisted issue investigations."
+    default: "astral-sh/uv-dev"
+    required: false
+  path:
+    description: "The checkout destination; defaults to an issue-context directory in runner.temp."
+    required: false
+
+outputs:
+  head-sha:
+    description: "The verified revision of the persisted investigation."
+    value: ${{ steps.load.outputs.head-sha }}
+  issue-number:
+    description: "The verified issue number recorded by the persisted investigation."
+    value: ${{ steps.load.outputs.issue-number }}
+  path:
+    description: "The absolute checkout path containing the persisted investigation."
+    value: ${{ steps.load.outputs.path }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: "Load persisted issue investigation"
+      id: load
+      shell: bash
+      env:
+        DESTINATION: ${{ inputs.path || format('{0}/issue-context', runner.temp) }}
+        GIT_CONFIG_GLOBAL: /dev/null
+        GIT_CONFIG_NOSYSTEM: "1"
+        ISSUE_NUMBER: ${{ inputs.issue-number }}
+        REPOSITORY: ${{ inputs.repository }}
+      run: |
+        if ! [[ "$ISSUE_NUMBER" =~ ^[1-9][0-9]*$ ]] ||
+          ! [[ "$REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] ||
+          ! [[ "$DESTINATION" =~ ^[A-Za-z0-9_./-]+$ ]]; then
+          echo "The persisted issue investigation source or destination is invalid." >&2
+          exit 1
+        fi
+
+        resolve_path() {
+          python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$1"
+        }
+        resolved_destination="$(resolve_path "$DESTINATION")"
+        resolved_runner_temp="$(resolve_path "$RUNNER_TEMP")"
+        resolved_workspace="$(resolve_path "$GITHUB_WORKSPACE")"
+        case "$resolved_destination" in
+          "$resolved_runner_temp"/*|"$resolved_workspace"/*) ;;
+          *)
+            echo "The investigation destination must be inside the runner or workspace." >&2
+            exit 1
+            ;;
+        esac
+
+        if [ -e "$resolved_destination" ]; then
+          echo "The investigation destination already exists." >&2
+          exit 1
+        fi
+
+        git -c core.hooksPath=/dev/null init --quiet "$resolved_destination"
+        git -C "$resolved_destination" -c core.hooksPath=/dev/null remote add origin \
+          "https://github.com/$REPOSITORY.git"
+        git -C "$resolved_destination" -c core.hooksPath=/dev/null fetch --quiet --no-tags \
+          origin "refs/heads/issue/$ISSUE_NUMBER"
+        git -C "$resolved_destination" -c core.hooksPath=/dev/null checkout --quiet --detach FETCH_HEAD
+
+        if ! jq --exit-status --argjson issue_number "$ISSUE_NUMBER" \
+          '.number == $issue_number' "$resolved_destination/issue.json" > /dev/null; then
+          echo "The persisted investigation does not match the requested issue." >&2
+          exit 1
+        fi
+
+        {
+          printf 'head-sha=%s\n' "$(git -C "$resolved_destination" rev-parse HEAD)"
+          printf 'issue-number=%s\n' "$ISSUE_NUMBER"
+          printf 'path=%s\n' "$resolved_destination"
+        } >> "$GITHUB_OUTPUT"
