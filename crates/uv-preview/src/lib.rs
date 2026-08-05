@@ -347,6 +347,8 @@ pub enum PreviewFeature {
     /// Enables lazy imports in build backend invocations on CPython 3.15 and later.
     /// This can affect import-time side effects in third-party build backends.
     BuildLazyImports,
+    /// Allows `--output-format jsonl` to stream progress and final JSON output.
+    Jsonl,
 }
 
 impl Display for PreviewFeature {

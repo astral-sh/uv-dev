@@ -22,7 +22,7 @@ use crate::commands::ExitStatus;
 use crate::commands::project::audit::{
     AuditResults, artifact_uri, audit_lock, json, sarif, warn_unmatched_ignores,
 };
-use crate::printer::Printer;
+use crate::printer::{Printer, jsonl_result};
 use crate::settings::ResolverInstallerSettings;
 
 /// Audit selected installed tools, or every installed tool if no names are provided.
@@ -257,13 +257,14 @@ fn render_audits(
                 results.render()?;
             }
         }
-        AuditOutputFormat::Json => {
+        AuditOutputFormat::Json | AuditOutputFormat::Jsonl => {
             let report = json::ToolReports::from_audits(audits);
-            writeln!(
-                printer.stdout_important(),
-                "{}",
+            let output = if matches!(output_format, AuditOutputFormat::Jsonl) {
+                jsonl_result(&report)?
+            } else {
                 serde_json::to_string_pretty(&report)?
-            )?;
+            };
+            writeln!(printer.stdout_important(), "{output}")?;
         }
         AuditOutputFormat::Sarif => {
             let report = sarif::Report::from_audits(audits);
