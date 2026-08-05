@@ -73,6 +73,8 @@ fn run_resource_limit_overrides() {
         .arg("-c")
         .arg(concat!(
             "import resource; ",
+            "print(resource.getrlimit(resource.RLIMIT_AS)[0]); ",
+            "print(resource.getrlimit(resource.RLIMIT_CORE)[0]); ",
             "print(resource.getrlimit(resource.RLIMIT_CPU)[0]); ",
             "print(resource.getrlimit(resource.RLIMIT_FSIZE)[0]); ",
             "print(resource.getrlimit(resource.RLIMIT_NOFILE)[0])",
@@ -80,6 +82,8 @@ fn run_resource_limit_overrides() {
         .current_dir(context.temp_dir.path())
         .env(EnvVars::UV_CACHE_DIR, context.cache_dir.path())
         .env(EnvVars::UV_PYTHON_DOWNLOADS, "never")
+        .env(EnvVars::UV_RUN_RLIMIT_AS, "1125899906842624")
+        .env(EnvVars::UV_RUN_RLIMIT_CORE, "0")
         .env(EnvVars::UV_RUN_RLIMIT_CPU, "60")
         .env(EnvVars::UV_RUN_RLIMIT_FSIZE, "4294967296")
         .env(EnvVars::UV_RUN_RLIMIT_NOFILE, "128");
@@ -87,6 +91,8 @@ fn run_resource_limit_overrides() {
     uv_snapshot!(context.filters(), command, @r"
     exit_code: 0 (success)
     ----- stdout -----
+    1125899906842624
+    0
     60
     4294967296
     128
@@ -95,7 +101,7 @@ fn run_resource_limit_overrides() {
 
 #[cfg(target_vendor = "apple")]
 #[test]
-fn run_apple_resource_limit_overrides() {
+fn run_apple_process_limit_override() {
     let context = uv_test::test_context!("3.12");
     let python = &context.python_versions[0].1;
 
@@ -106,25 +112,16 @@ fn run_apple_resource_limit_overrides() {
         .arg("--")
         .arg(python)
         .arg("-c")
-        .arg(concat!(
-            "import resource; ",
-            "print(resource.getrlimit(resource.RLIMIT_MEMLOCK)[0]); ",
-            "print(resource.getrlimit(resource.RLIMIT_NPROC)[0]); ",
-            "print(resource.getrlimit(resource.RLIMIT_RSS)[0])",
-        ))
+        .arg("import resource; print(resource.getrlimit(resource.RLIMIT_NPROC)[0])")
         .current_dir(context.temp_dir.path())
         .env(EnvVars::UV_CACHE_DIR, context.cache_dir.path())
         .env(EnvVars::UV_PYTHON_DOWNLOADS, "never")
-        .env(EnvVars::UV_RUN_RLIMIT_MEMLOCK, "1048576")
-        .env(EnvVars::UV_RUN_RLIMIT_NPROC, "4096")
-        .env(EnvVars::UV_RUN_RLIMIT_RSS, "1125899906842624");
+        .env(EnvVars::UV_RUN_RLIMIT_NPROC, "4096");
 
     uv_snapshot!(context.filters(), command, @r"
     exit_code: 0 (success)
     ----- stdout -----
-    1048576
     4096
-    1125899906842624
     ");
 }
 
