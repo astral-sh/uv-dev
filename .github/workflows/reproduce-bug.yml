@@ -22,6 +22,9 @@ on:
       result:
         description: "The issue reproduction result"
         value: ${{ jobs.reproduce.outputs.result }}
+      thread-artifact-id:
+        description: "The artifact identifier for the retained issue reproduction session"
+        value: ${{ jobs.reproduce.outputs.thread-artifact-id }}
       test-result:
         description: "The integration-test creation result"
         value: ${{ jobs.create-integration-test.outputs.result }}
@@ -57,6 +60,7 @@ jobs:
     outputs:
       issue-number: ${{ steps.issue.outputs.issue-number }}
       result: ${{ steps.reproduce.outputs.final-message }}
+      thread-artifact-id: ${{ steps.thread.outputs.artifact-id }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -101,6 +105,7 @@ jobs:
 
       - name: "Upload Codex thread"
         if: always()
+        id: thread
         uses: ./.github/actions/upload-codex-thread
         with:
           name: reproduce-bug
@@ -195,6 +200,7 @@ jobs:
     environment: automations
     timeout-minutes: 60
     permissions:
+      actions: read
       contents: read
       id-token: write # for the uv-dev credential broker
       issues: read
@@ -211,6 +217,13 @@ jobs:
         uses: ./.github/actions/load-issue-context
         with:
           issue-number: ${{ needs.reproduce.outputs.issue-number }}
+
+      - name: "Load reproduction Codex thread"
+        id: reproduction-thread
+        uses: ./.github/actions/load-codex-thread
+        with:
+          artifact-id: ${{ needs.reproduce.outputs.thread-artifact-id }}
+          run-id: ${{ github.run_id }}
 
       - name: "Install uv"
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
@@ -231,6 +244,7 @@ jobs:
           path: ${{ runner.temp }}/issue-triage-event.json
 
       - name: "Prepare reproduction context"
+        id: prepare
         run: |
           printf '%s\n' "$REPRODUCTION_RESULT" > "$RUNNER_TEMP/bug-reproduction-result.json"
           if ! jq --exit-status \
@@ -243,9 +257,13 @@ jobs:
             echo "The persisted investigation does not match the reproduced issue." >&2
             exit 1
           fi
+          printf 'codex-args=%s\n' \
+            "$(jq --null-input --compact-output --arg id "$SESSION_ID" '["resume", $id]')" \
+            >> "$GITHUB_OUTPUT"
         env:
           ISSUE_CONTEXT: ${{ steps.context.outputs.path }}
           REPRODUCTION_RESULT: ${{ needs.reproduce.outputs.result }}
+          SESSION_ID: ${{ steps.reproduction-thread.outputs.session-id }}
 
       - name: "Create integration test"
         id: create-test
@@ -258,6 +276,7 @@ jobs:
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           codex-home: "agents/codex"
+          codex-args: ${{ steps.prepare.outputs.codex-args }}
           effort: high
           permission-profile: "create-bug-test"
           safety-strategy: drop-sudo
