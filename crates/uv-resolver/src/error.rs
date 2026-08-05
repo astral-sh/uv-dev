@@ -726,7 +726,7 @@ impl NoSolutionError {
 
         // This needs to be applied _after_ simplification of the ranges
         let unavailable_reasons = unavailable_reasons(&tree);
-        tree = collapse_redundant_no_versions(tree, &unavailable_reasons, &self.included_versions);
+        tree = collapse_redundant_no_versions(tree, &unavailable_reasons);
         tree = collapse_equivalent_unavailable_versions(tree, &self.included_versions);
 
         loop {
@@ -925,7 +925,6 @@ fn can_drop_no_versions(
     other: &ErrorTree,
     parent_terms: &ErrorTerms,
     unavailable_reasons: &FxHashMap<PubGrubPackage, Option<UnavailableReason>>,
-    included_versions: &FxHashMap<PackageName, BTreeSet<Version>>,
 ) -> bool {
     let package_terms = if let DerivationTree::Derived(derived) = other {
         derived.terms.get(package)
@@ -941,22 +940,6 @@ fn can_drop_no_versions(
     // "only foo==1.0.0 is available".
     if versions.as_singleton().is_some() {
         return false;
-    }
-
-    // If a previously explained single version is the only published candidate in the parent
-    // range, listing every other release adds no information to its incompatibility.
-    if let DerivationTree::Derived(derived) = other
-        && let Some(Term::Positive(derived_versions)) = derived.terms.get(package)
-        && derived_versions.as_singleton().is_some()
-        && let Some(Term::Positive(required_versions)) = parent_terms.get(package)
-        && covers_included_versions(
-            package,
-            required_versions,
-            derived_versions,
-            included_versions,
-        )
-    {
-        return true;
     }
 
     // If every version of a package is unavailable for the same reason, enumerating gaps
@@ -1008,7 +991,6 @@ fn unavailable_reasons(tree: &ErrorTree) -> FxHashMap<PubGrubPackage, Option<Una
 fn collapse_redundant_no_versions(
     tree: ErrorTree,
     unavailable_reasons: &FxHashMap<PubGrubPackage, Option<UnavailableReason>>,
-    included_versions: &FxHashMap<PackageName, BTreeSet<Version>>,
 ) -> ErrorTree {
     map_derivation_tree(
         tree,
@@ -1021,7 +1003,6 @@ fn collapse_redundant_no_versions(
                     &cause2,
                     &metadata.terms,
                     unavailable_reasons,
-                    included_versions,
                 )
             {
                 return cause2;
@@ -1034,7 +1015,6 @@ fn collapse_redundant_no_versions(
                     &cause1,
                     &metadata.terms,
                     unavailable_reasons,
-                    included_versions,
                 )
             {
                 return cause1;
