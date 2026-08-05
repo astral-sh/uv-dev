@@ -3,6 +3,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use uv_cache::{Cache, Refresh};
+use uv_cli::MetadataOutputFormat;
 use uv_client::BaseClientBuilder;
 use uv_configuration::{ActiveEnvironment, Concurrency, DependencyGroupsWithDefaults, DryRun};
 use uv_lock::{Lock, Metadata, Package};
@@ -28,7 +29,7 @@ use crate::commands::project::{
     WorkspacePython,
 };
 use crate::commands::{ExitStatus, UvError};
-use crate::printer::{Printer, Stdout};
+use crate::printer::{Printer, Stdout, jsonl_result};
 use crate::settings::{FrozenSource, LockCheck, ResolverSettings};
 
 use super::module_owners::collect_module_owners;
@@ -62,6 +63,7 @@ pub(crate) async fn metadata(
     workspace_cache: &WorkspaceCache,
     printer: Printer,
     preview: Preview,
+    output_format: MetadataOutputFormat,
 ) -> Result<ExitStatus> {
     if !preview.is_enabled(PreviewFeature::WorkspaceMetadata) {
         warn_user!(
@@ -307,6 +309,7 @@ pub(crate) async fn metadata(
             preview,
             &malware_settings,
             sync,
+            printer,
         )
         .await
         .context("Failed to collect module owners")?;
@@ -315,7 +318,7 @@ pub(crate) async fn metadata(
             .with_module_owners(module_owners);
     }
 
-    print_metadata(&export, printer)
+    print_metadata(&export, output_format, printer)
 }
 
 fn metadata_for_target(target: InstallTarget<'_>) -> Result<Metadata> {
@@ -337,10 +340,17 @@ fn metadata_for_target(target: InstallTarget<'_>) -> Result<Metadata> {
     }
 }
 
-fn print_metadata(export: &Metadata, printer: Printer) -> Result<ExitStatus> {
+fn print_metadata(
+    export: &Metadata,
+    output_format: MetadataOutputFormat,
+    printer: Printer,
+) -> Result<ExitStatus> {
     if printer.stdout_important() == Stdout::Enabled {
         let mut stdout = BufWriter::new(anstream::stdout().lock());
-        export.write_json(&mut stdout)?;
+        match output_format {
+            MetadataOutputFormat::Json => export.write_json(&mut stdout)?,
+            MetadataOutputFormat::Jsonl => write!(stdout, "{}", jsonl_result(export)?)?,
+        }
         writeln!(stdout)?;
         stdout.flush()?;
     }
