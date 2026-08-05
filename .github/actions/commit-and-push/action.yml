@@ -1,0 +1,163 @@
+name: "Commit and push automation changes"
+description: "Publish selected paths with the canonical Astral automation-bot identity."
+
+inputs:
+  working-directory:
+    description: "The checkout containing the changes; defaults to the current workspace."
+    required: false
+  paths:
+    description: "Newline-separated checkout-relative paths to stage."
+    required: true
+  commit-message:
+    description: "The single-line commit message for the selected changes."
+    required: true
+  ref:
+    description: "The target branch name or complete refs/heads/ ref."
+    required: true
+  repository:
+    description: "The destination repository; defaults to the current repository."
+    required: false
+  github-token:
+    description: "An explicitly scoped token with permission to push the target branch."
+    required: true
+
+outputs:
+  changed:
+    description: "Whether the selected paths produced a new commit."
+    value: ${{ steps.commit.outputs.changed }}
+  commit-sha:
+    description: "The new commit SHA, or an empty string when the selected paths were unchanged."
+    value: ${{ steps.commit.outputs.commit-sha }}
+  ref:
+    description: "The normalized refs/heads/ destination."
+    value: ${{ steps.commit.outputs.ref }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: "Stage and commit selected paths"
+      id: commit
+      shell: bash
+      env:
+        COMMIT_MESSAGE: ${{ inputs.commit-message }}
+        DIRECTORY: ${{ inputs.working-directory || github.workspace }}
+        GIT_CONFIG_GLOBAL: /dev/null
+        GIT_CONFIG_NOSYSTEM: "1"
+        REPOSITORY: ${{ inputs.repository || github.repository }}
+        STAGED_PATHS: ${{ inputs.paths }}
+        TARGET_REF: ${{ inputs.ref }}
+      run: |
+        if [ -z "$COMMIT_MESSAGE" ] ||
+          [[ "$COMMIT_MESSAGE" == *$'\n'* || "$COMMIT_MESSAGE" == *$'\r'* ]] ||
+          ! [[ "$REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] ||
+          ! [[ "$DIRECTORY" =~ ^[A-Za-z0-9_./-]+$ ]] ||
+          [ -z "$STAGED_PATHS" ]; then
+          echo "The automation commit source, destination, or message is invalid." >&2
+          exit 1
+        fi
+
+        case "$TARGET_REF" in
+          refs/heads/*) resolved_ref="$TARGET_REF" ;;
+          refs/*) resolved_ref= ;;
+          *) resolved_ref="refs/heads/$TARGET_REF" ;;
+        esac
+        if ! git check-ref-format "$resolved_ref"; then
+          echo "The automation target must be a valid branch ref." >&2
+          exit 1
+        fi
+
+        resolve_path() {
+          python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$1"
+        }
+        resolved_directory="$(resolve_path "$DIRECTORY")"
+        resolved_runner_temp="$(resolve_path "$RUNNER_TEMP")"
+        resolved_workspace="$(resolve_path "$GITHUB_WORKSPACE")"
+        case "$resolved_directory" in
+          "$resolved_runner_temp"|"$resolved_runner_temp"/*|"$resolved_workspace"|"$resolved_workspace"/*) ;;
+          *)
+            echo "The automation checkout must be inside the runner or workspace." >&2
+            exit 1
+            ;;
+        esac
+
+        if [ ! -d "$resolved_directory" ] ||
+          [ "$(git -C "$resolved_directory" rev-parse --is-inside-work-tree)" != "true" ]; then
+          echo "The automation working directory is not a Git checkout." >&2
+          exit 1
+        fi
+
+        if ! git -C "$resolved_directory" diff --cached --quiet --; then
+          echo "The automation checkout already contains staged changes." >&2
+          exit 1
+        fi
+
+        staged_paths=0
+        while IFS= read -r staged_path || [ -n "$staged_path" ]; do
+          if [ -z "$staged_path" ]; then
+            continue
+          fi
+
+          resolved_path="$(resolve_path "$resolved_directory/$staged_path")"
+          case "$staged_path:$resolved_path" in
+            /*:*|*:"$resolved_directory")
+              echo "Automation paths must identify files inside the checkout." >&2
+              exit 1
+              ;;
+            *:"$resolved_directory"/*) ;;
+            *)
+              echo "An automation path escapes the checkout." >&2
+              exit 1
+              ;;
+          esac
+
+          git -C "$resolved_directory" -c core.hooksPath=/dev/null add -- "$staged_path"
+          staged_paths=$((staged_paths + 1))
+        done <<< "$STAGED_PATHS"
+
+        if [ "$staged_paths" -eq 0 ]; then
+          echo "The automation commit requires at least one staged path." >&2
+          exit 1
+        fi
+
+        {
+          printf 'ref=%s\n' "$resolved_ref"
+          printf 'working-directory=%s\n' "$resolved_directory"
+        } >> "$GITHUB_OUTPUT"
+
+        if git -C "$resolved_directory" diff --cached --quiet --; then
+          echo "The selected automation paths are unchanged."
+          printf 'changed=false\ncommit-sha=\n' >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        git -C "$resolved_directory" diff --cached --check
+        git -C "$resolved_directory" \
+          -c core.hooksPath=/dev/null \
+          -c user.name="astral-automations-bot[bot]" \
+          -c user.email="305554984+astral-automations-bot[bot]@users.noreply.github.com" \
+          commit --message "$COMMIT_MESSAGE"
+
+        {
+          printf 'changed=true\n'
+          printf 'commit-sha=%s\n' "$(git -C "$resolved_directory" rev-parse HEAD)"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: "Push automation commit"
+      if: steps.commit.outputs.changed == 'true'
+      shell: bash
+      env:
+        DIRECTORY: ${{ steps.commit.outputs.working-directory }}
+        GH_TOKEN: ${{ inputs.github-token }}
+        GIT_CONFIG_GLOBAL: /dev/null
+        GIT_CONFIG_NOSYSTEM: "1"
+        REPOSITORY: ${{ inputs.repository || github.repository }}
+        TARGET_REF: ${{ steps.commit.outputs.ref }}
+      run: |
+        if [ -z "$GH_TOKEN" ]; then
+          echo "A scoped GitHub token is required to push automation changes." >&2
+          exit 1
+        fi
+
+        git -C "$DIRECTORY" -c core.hooksPath=/dev/null push \
+          "https://x-access-token:${GH_TOKEN}@github.com/$REPOSITORY.git" \
+          "HEAD:$TARGET_REF"
