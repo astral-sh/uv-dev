@@ -23,7 +23,7 @@ jobs:
       contents: read
       issues: read
     outputs:
-      issue-context: ${{ steps.issue.outputs.context }}
+      issue-context: ${{ steps.issue.outputs.issue-json }}
       result: ${{ steps.triage.outputs.final-message }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -32,32 +32,18 @@ jobs:
 
       - name: "Collect issue context"
         id: issue
+        uses: ./.github/actions/fetch-issue
+        with:
+          issue: ${{ inputs.issue || github.event.issue.number }}
+
+      - name: "Prepare issue triage prompt"
         run: |
-          gh issue view "$ISSUE" \
-            --repo "$GITHUB_REPOSITORY" \
-            --json number,title,body,author,url \
-            > .issue-triage-event.json
-
-          if ! jq --exit-status \
-            --arg repository "$GITHUB_REPOSITORY" \
-            '.url | startswith("https://github.com/\($repository)/issues/")' \
-            .issue-triage-event.json > /dev/null; then
-            echo "The issue must belong to $GITHUB_REPOSITORY." >&2
-            exit 1
-          fi
-
-          jq --raw-output '"context=\(tojson)"' \
-            .issue-triage-event.json >> "$GITHUB_OUTPUT"
-
           {
             printf 'Issue triage for #%s: %s\n\n' \
               "$(jq -r '.number' .issue-triage-event.json)" \
               "$(jq -r '.title | gsub("[\r\n]+"; " ")' .issue-triage-event.json)"
             cat agents/prompts/triage-issue.md
           } > "$RUNNER_TEMP/triage-issue-prompt.md"
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ISSUE: ${{ inputs.issue || github.event.issue.number }}
 
       - name: "Triage issue"
         id: triage

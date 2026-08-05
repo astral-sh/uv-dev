@@ -55,7 +55,7 @@ jobs:
       contents: read
       issues: read
     outputs:
-      issue-number: ${{ steps.issue.outputs.number }}
+      issue-number: ${{ steps.issue.outputs.issue-number }}
       result: ${{ steps.reproduce.outputs.final-message }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -69,24 +69,18 @@ jobs:
 
       - name: "Collect issue context"
         id: issue
+        uses: ./.github/actions/fetch-issue
+        with:
+          issue: ${{ inputs.issue }}
+
+      - name: "Prepare issue reproduction prompt"
         run: |
-          gh issue view "$ISSUE" \
-            --repo "$GITHUB_REPOSITORY" \
-            --json number,title,body,author \
-            > .issue-triage-event.json
-
-          jq --raw-output '"number=\(.number)"' \
-            .issue-triage-event.json >> "$GITHUB_OUTPUT"
-
           {
             printf 'Issue reproduction for #%s: %s\n\n' \
               "$(jq -r '.number' .issue-triage-event.json)" \
               "$(jq -r '.title | gsub("[\r\n]+"; " ")' .issue-triage-event.json)"
             cat agents/prompts/reproduce-bug.md
           } > "$RUNNER_TEMP/reproduce-bug-prompt.md"
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ISSUE: ${{ inputs.issue }}
 
       - name: "Reproduce issue behavior"
         id: reproduce
@@ -216,16 +210,16 @@ jobs:
       - name: "Install required Python versions"
         run: uv python install
 
-      - name: "Collect reproduction context"
+      - name: "Collect issue context"
+        uses: ./.github/actions/fetch-issue
+        with:
+          issue: ${{ inputs.issue }}
+          path: ${{ runner.temp }}/issue-triage-event.json
+
+      - name: "Prepare reproduction context"
         run: |
-          gh issue view "$ISSUE" \
-            --repo "$GITHUB_REPOSITORY" \
-            --json number,title,body,author \
-            > "$RUNNER_TEMP/issue-triage-event.json"
           printf '%s\n' "$REPRODUCTION_RESULT" > "$RUNNER_TEMP/bug-reproduction-result.json"
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ISSUE: ${{ inputs.issue }}
           REPRODUCTION_RESULT: ${{ needs.reproduce.outputs.result }}
 
       - name: "Create integration test"
