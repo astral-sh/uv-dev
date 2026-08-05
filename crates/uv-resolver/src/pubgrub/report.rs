@@ -675,8 +675,8 @@ impl PubGrubReportFormatter<'_> {
         external2: &External<PubGrubPackage, Range<Version>, UnavailableReason>,
     ) -> String {
         match (external1, external2) {
-            // A range-wide incompatibility already explains why the listed versions cannot be
-            // used. Keep singleton inventories because they establish that no alternative exists.
+            // A range-wide incompatibility explains why its available versions cannot be used,
+            // but retain the boundary to other available versions so gaps remain explicit.
             (
                 External::NoVersions(package, unavailable),
                 incompatibility @ External::Custom(other_package, versions, _),
@@ -688,7 +688,38 @@ impl PubGrubReportFormatter<'_> {
                 && unavailable.complement().as_singleton().is_none()
                 && versions.as_singleton().is_none() =>
             {
-                self.format_external(incompatibility)
+                let available = unavailable.complement();
+                let ranges = package
+                    .name()
+                    .and_then(|name| self.included_versions.get(name))
+                    .map(|included_versions| {
+                        summarize_availability_range(&available, versions, included_versions)
+                    })
+                    .unwrap_or_default();
+
+                match ranges.as_slice() {
+                    [] => {
+                        let external1 = self.format_external(external1);
+                        let external2 = self.format_external(external2);
+
+                        format!("{}and {}", padded("", &external1, " "), external2)
+                    }
+                    [range] => format!(
+                        "only {} is available and {}",
+                        self.availability_range(package, range),
+                        self.format_external(incompatibility)
+                    ),
+                    _ => {
+                        let ranges = ranges
+                            .iter()
+                            .map(|range| self.availability_range(package, range))
+                            .join(" or ");
+                        format!(
+                            "only {ranges} are available and {}",
+                            self.format_external(incompatibility)
+                        )
+                    }
+                }
             }
             (
                 External::FromDependencyOf(package1, package_set1, dependency1, dependency_set1),
@@ -2466,6 +2497,45 @@ impl PackageRange<'_> {
             false
         }
     }
+}
+
+/// Summarize available versions while preserving gaps between incompatibility ranges.
+fn summarize_availability_range(
+    available: &Range<Version>,
+    incompatible: &Range<Version>,
+    included_versions: &BTreeSet<Version>,
+) -> Vec<Range<Version>> {
+    let versions = included_versions
+        .iter()
+        .filter(|version| available.contains(version))
+        .collect_vec();
+    let groups = versions
+        .chunk_by(|left, right| incompatible.contains(left) == incompatible.contains(right))
+        .collect_vec();
+    let last_group = groups.len().saturating_sub(1);
+    let multiple_groups = groups.len() > 1;
+
+    groups
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, group)| {
+            let (Some(first), Some(last)) = (group.first(), group.last()) else {
+                return None;
+            };
+            let lower = if multiple_groups && index == 0 {
+                Bound::Unbounded
+            } else {
+                Bound::Included((*first).clone())
+            };
+            let upper = if multiple_groups && index == last_group {
+                Bound::Unbounded
+            } else {
+                Bound::Included((*last).clone())
+            };
+
+            Some(Range::from_range_bounds((lower, upper)))
+        })
+        .collect()
 }
 
 /// Create a range with improved segments for reporting the available versions for a package.

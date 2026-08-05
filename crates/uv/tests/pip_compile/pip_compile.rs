@@ -15392,7 +15392,7 @@ fn invalid_platform() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
       × No solution found when resolving dependencies:
-      ╰─▶ Because open3d<=0.15.2 has no wheels with a matching Python ABI tag (e.g., `cp310`), we can conclude that open3d<=0.15.2 cannot be used.
+      ╰─▶ Because only open3d<=0.15.2 or open3d>=0.16.0 are available and open3d<=0.15.2 has no wheels with a matching Python ABI tag (e.g., `cp310`), we can conclude that open3d<=0.15.2 cannot be used.
           And because open3d>=0.16.0 has no wheels with a matching platform tag (e.g., `manylinux_2_17_x86_64`) and you require open3d, we can conclude that your requirements are unsatisfiable.
 
     hint: You require CPython 3.10 (`cp310`), but we only found wheels for `open3d` (v0.15.2) with the following Python ABI tags: `cp36m`, `cp37m`, `cp38`, `cp39`

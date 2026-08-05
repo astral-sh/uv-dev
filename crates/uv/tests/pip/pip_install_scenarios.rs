@@ -4502,10 +4502,10 @@ fn alternative_dependencies_mixed_unavailability() {
     exit_code: 1 (failure)
     ----- stderr -----
       × No solution found when resolving dependencies:
-      ╰─▶ Because dependency<=1.5.0 was yanked, we can conclude that dependency<=1.5.0 cannot be used.
+      ╰─▶ Because only dependency<=1.5.0 or dependency>=2.0.0 are available and dependency<=1.5.0 was yanked, we can conclude that dependency<=1.5.0 cannot be used.
           And because parent<=1.0.0 depends on dependency<2, we can conclude that parent<=1.0.0 cannot be used. (1)
 
-          Because dependency>=2.0.0 has no usable wheels, we can conclude that dependency>=2.0.0 cannot be used.
+          Because only dependency<=1.5.0 or dependency>=2.0.0 are available and dependency>=2.0.0 has no usable wheels, we can conclude that dependency>=2.0.0 cannot be used.
           And because parent>=2.0.0 depends on dependency>=2, we can conclude that parent>=2.0.0 cannot be used.
           And because we know from (1) that parent<=1.0.0 cannot be used, we can conclude that all versions of parent cannot be used.
           And because you require parent, we can conclude that your requirements are unsatisfiable.
@@ -4657,7 +4657,7 @@ fn mixed_wheel_incompatibilities() {
     exit_code: 1 (failure)
     ----- stderr -----
       × No solution found when resolving dependencies:
-      ╰─▶ Because package<=1.5.0 has no wheels with a matching Python ABI tag (e.g., `cp312`), we can conclude that package<=1.5.0 cannot be used.
+      ╰─▶ Because only package<=1.5.0 or package>=2.0.0 are available and package<=1.5.0 has no wheels with a matching Python ABI tag (e.g., `cp312`), we can conclude that package<=1.5.0 cannot be used.
           And because package>=2.0.0 has no wheels with a matching platform tag (e.g., `manylinux_2_17_x86_64`) and you require package, we can conclude that your requirements are unsatisfiable.
 
     hint: You require CPython 3.12 (`cp312`), but we only found wheels for `package` (v1.5.0) with the following Python ABI tag: `graalpy240_310_native`
