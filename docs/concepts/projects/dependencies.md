@@ -785,7 +785,7 @@ dev = {requires-python = ">=3.12"}
     suppress the preview warning.
 
 Workspace members can include dependency groups defined in the workspace root by using the
-`include-groups` setting in `[tool.uv.dependency-groups]`:
+`include-workspace-groups` setting in `[tool.uv.dependency-groups]`:
 
 ```toml title="pyproject.toml"
 [dependency-groups]
@@ -804,13 +804,20 @@ version = "0.1.0"
 dev = ["pytest"]
 
 [tool.uv.dependency-groups]
-dev = { include-groups = [{ workspace = "lint" }] }
+dev = { include-workspace-groups = ["lint"] }
 ```
 
 When running or syncing the `example` member, its `dev` group includes both `ruff` and `pytest`. The
 workspace group does not need to have the same name as the member's group. If both the member and
 workspace root define a group with the same name, the member's group still takes precedence unless
 it explicitly includes the workspace-root group.
+
+To include a group from another workspace member, use an object with the package and group names:
+
+```toml
+[tool.uv.dependency-groups]
+dev = { include-workspace-groups = ["lint", { package = "other", group = "test" }] }
+```
 
 ### Legacy `dev-dependencies`
 
