@@ -1,0 +1,83 @@
+name: "Fetch GitHub issue"
+description: "Fetch and verify GitHub issue metadata from the expected repository."
+
+inputs:
+  issue:
+    description: "The issue number or GitHub issue URL."
+    required: true
+  repository:
+    description: "The repository containing the issue; defaults to the current repository."
+    required: false
+  github-token:
+    description: "A token with permission to read the issue; defaults to the workflow token."
+    required: false
+  path:
+    description: "A destination inside the workspace or runner temporary directory."
+    default: ".issue-triage-event.json"
+    required: false
+
+outputs:
+  issue-json:
+    description: "The compact, verified GitHub issue JSON."
+    value: ${{ steps.collect.outputs.issue-json }}
+  issue-number:
+    description: "The verified GitHub issue number."
+    value: ${{ steps.collect.outputs.issue-number }}
+  path:
+    description: "The absolute path containing the verified GitHub issue JSON."
+    value: ${{ steps.collect.outputs.path }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: "Collect GitHub issue"
+      id: collect
+      shell: bash
+      env:
+        DESTINATION: ${{ inputs.path }}
+        GH_TOKEN: ${{ inputs.github-token || github.token }}
+        ISSUE: ${{ inputs.issue }}
+        REPOSITORY: ${{ inputs.repository || github.repository }}
+      run: |
+        if ! [[ "$REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] ||
+          ! [[ "$ISSUE" =~ ^([1-9][0-9]*|https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues/[1-9][0-9]*)$ ]] ||
+          ! [[ "$DESTINATION" =~ ^[A-Za-z0-9_./-]+$ ]]; then
+          echo "The GitHub issue source or destination is invalid." >&2
+          exit 1
+        fi
+
+        resolve_path() {
+          python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$1"
+        }
+        resolved_destination="$(resolve_path "$DESTINATION")"
+        resolved_runner_temp="$(resolve_path "$RUNNER_TEMP")"
+        resolved_workspace="$(resolve_path "$GITHUB_WORKSPACE")"
+        case "$resolved_destination" in
+          "$resolved_runner_temp"/*|"$resolved_workspace"/*) ;;
+          *)
+            echo "The GitHub issue destination must be inside the runner or workspace." >&2
+            exit 1
+            ;;
+        esac
+
+        if [ -e "$resolved_destination" ]; then
+          echo "The GitHub issue destination already exists." >&2
+          exit 1
+        fi
+
+        gh issue view "$ISSUE" \
+          --repo "$REPOSITORY" \
+          --json number,title,body,author,url \
+          > "$resolved_destination"
+
+        if ! jq --exit-status --arg repository "$REPOSITORY" '
+          (.number | type == "number" and . > 0)
+          and .url == ("https://github.com/" + $repository + "/issues/" + (.number | tostring))
+        ' "$resolved_destination" > /dev/null; then
+          echo "The GitHub issue does not belong to the expected repository." >&2
+          exit 1
+        fi
+
+        jq --raw-output '"issue-number=\(.number)\nissue-json=\(tojson)"' \
+          "$resolved_destination" >> "$GITHUB_OUTPUT"
+        printf 'path=%s\n' "$resolved_destination" >> "$GITHUB_OUTPUT"
