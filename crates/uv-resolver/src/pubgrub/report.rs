@@ -2570,6 +2570,12 @@ impl std::fmt::Display for PackageRange<'_> {
             return write!(f, "{package} ∅");
         }
 
+        if self.kind == PackageRangeKind::Dependency
+            && let Some(version) = self.range.complement().as_singleton()
+        {
+            return write!(f, "{package}!={version}");
+        }
+
         let segments: Vec<_> = self.range.iter().collect();
         if segments.len() > 1 {
             match self.kind {
