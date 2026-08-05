@@ -1,0 +1,34 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 3573,
+        "title": "Unknown operation system: mingw_x86_64_ucrt",
+        "url": "https://github.com/astral-sh/uv/issues/3573",
+        "state": "open",
+        "reason": "This is the canonical open match. It reports uv venv rejecting an MSYS2/UCRT64 Python with the same exact platform error and explicitly covers both platform recognition and the required bin rather than Scripts virtual-environment layout. Maintainer investigation also confirms MSYS2 Python path-handling complications. The MINGW_PREFIX proposal adds a possible detection mechanism and broader warning policy, but targets the same underlying MSYS2 Python support gap tracked by astral-sh/uv#3573."
+      },
+      {
+        "kind": "issue",
+        "number": 1251,
+        "title": "Support msys2 python",
+        "url": "https://github.com/astral-sh/uv/issues/1251",
+        "state": "closed",
+        "reason": "Historical precursor requesting MSYS2 Python support and identifying assumptions that Windows always uses Scripts rather than bin. It was closed after a maintainer believed handling already existed, without a linked fix; the later reproducible failure remains tracked by astral-sh/uv#3573."
+      },
+      {
+        "kind": "pull_request",
+        "number": 3632,
+        "title": "Add mingw64 system test",
+        "url": "https://github.com/astral-sh/uv/pull/3632",
+        "state": "closed",
+        "reason": "This unmerged pull request explicitly attempted to reproduce astral-sh/uv#3573 in CI. It was closed because the failure was not resolved, so it provides direct evidence that the same MSYS2 compatibility problem was investigated but not fixed."
+      }
+    ],
+    "search_scope": "Authenticated searches covered open and closed issues plus open, closed, and merged pull requests. Literal queries included MINGW_PREFIX, mingw_x86_64_ucrt, Unknown operation system, UV_MSYS2_STRICT, UV_MSYS2_SILENT, MSYSTEM/MSYSTEM_PREFIX, UCRT64, pacman package names, and bin versus Scripts. Conceptual searches covered MSYS2/MinGW/Cygwin Python discovery, GNU-versus-MSVC interpreter probing, Unix-style virtual environments, interpreter provenance, mismatch validation, and warning behavior. Fix-oriented pull-request searches used MSYS2, mingw, cygwin, platform parsing, and virtualenv-layout terms; only the closed reproduction astral-sh/uv#3632 was found, while merged astral-sh/uv#3266 is a general interpreter-discovery rewrite rather than an MSYS2 fix. Also inspected and ruled out as different problems: astral-sh/uv#12686 concerns self-update receipt paths, astral-sh/uv#12801 concerns repeated environment recreation, astral-sh/uv#6699 concerns Windows trampoline crashes, and astral-sh/uv#19702 concerns fish activation PATH conversion."
+  },
+  "type": "duplicate",
+  "type_reason": "astral-sh/uv#3573 already tracks the same underlying requested capability: using MSYS2-provided Python successfully, recognizing its mingw platform, and respecting its Unix-style virtual-environment layout. The new issue proposes MINGW_PREFIX as a specific implementation approach and adds optional guidance and policy ideas, but those additions do not displace the existing canonical compatibility discussion. No evidence indicates a previously fixed regression.",
+  "summary": "astral-sh/uv#3573 is the closest open canonical issue; astral-sh/uv#1251 is its broad historical precursor, and astral-sh/uv#3632 is a closed, unmerged attempt to reproduce the failure in CI."
+}
