@@ -4110,10 +4110,11 @@ fn python_greater_than_current_excluded() {
     exit_code: 1 (failure)
     ----- stderr -----
       × No solution found when resolving dependencies:
-      ╰─▶ Because the current Python version (3.9.[X]) does not satisfy Python>=3.10 and a==2.0.0 depends on Python>=3.10, we can conclude that a==2.0.0 cannot be used. (1)
+      ╰─▶ Because the current Python version (3.9.[X]) does not satisfy Python>=3.10 and a==2.0.0 depends on Python>=3.10, we can conclude that a==2.0.0 cannot be used.
+          And because a==2.0.0 is the only available version satisfying a>=2.0.0,<3.0.0, we can conclude that a>=2.0.0,<3.0.0 cannot be used. (1)
 
           Because the current Python version (3.9.[X]) does not satisfy Python>=3.11 and a==3.0.0 depends on Python>=3.11, we can conclude that a==3.0.0 cannot be used.
-          And because we know from (1) that a==2.0.0 cannot be used, we can conclude that a>=2.0.0,<4.0.0 cannot be used. (2)
+          And because we know from (1) that a>=2.0.0,<3.0.0 cannot be used, we can conclude that a>=2.0.0,<4.0.0 cannot be used. (2)
 
           Because the current Python version (3.9.[X]) does not satisfy Python>=3.12 and a==4.0.0 depends on Python>=3.12, we can conclude that a==4.0.0 cannot be used.
           And because we know from (2) that a>=2.0.0,<4.0.0 cannot be used, we can conclude that a>=2.0.0 cannot be used.
