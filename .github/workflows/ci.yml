@@ -105,6 +105,15 @@ jobs:
     with:
       sha: ${{ github.sha }}
 
+  test-cache:
+    needs:
+      - plan
+      - build-dev-binaries
+    if: ${{ needs.plan.outputs.test-cache == 'true' }}
+    uses: $/.github/workflows/test-cache.yml
+    with:
+      sha: ${{ github.sha }}
+
   test-integration:
     needs:
       - plan
@@ -301,6 +310,7 @@ jobs:
       - check-generated-files
       - test
       - build-dev-binaries
+      - test-cache
     runs-on: ubuntu-slim
     steps:
       - name: "Check required jobs passed"
