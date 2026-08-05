@@ -1,0 +1,66 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 20443,
+        "title": "Reject pylock artifacts with mismatched declared sizes",
+        "url": "https://github.com/astral-sh/uv/pull/20443",
+        "state": "merged",
+        "reason": "Direct source-backed introducer: astral-sh/uv#20443 added serialized size fields to Archive and Revision while retaining the existing cache buckets. Its legacy tests cover new uv reading old four-field entries, but not older uv reading newly written five-field entries."
+      },
+      {
+        "kind": "issue",
+        "number": 8367,
+        "title": "Regression in 0.4.23: data did not match any variant of untagged enum CacheInfoWire",
+        "url": "https://github.com/astral-sh/uv/issues/8367",
+        "state": "closed",
+        "reason": "Canonical earlier discussion of the same trigger: a newer uv writes cache entries that an older uv cannot deserialize. Maintainers concluded that incompatible representations require separate bucket versions."
+      },
+      {
+        "kind": "pull_request",
+        "number": 8386,
+        "title": "Modify cache versioning to support backwards compatibility",
+        "url": "https://github.com/astral-sh/uv/pull/8386",
+        "state": "merged",
+        "reason": "Historical policy fix for astral-sh/uv#8367. It changed the documented guarantee so representations within one bucket version are forward- and backward-compatible, and bumped the affected bucket."
+      },
+      {
+        "kind": "issue",
+        "number": 12274,
+        "title": "uv sync fails due to invalid cache",
+        "url": "https://github.com/astral-sh/uv/issues/12274",
+        "state": "closed",
+        "reason": "Very close prior symptom: mixed uv versions caused Failed to deserialize cache entry followed by array had incorrect length, expected 4 in HttpArchivePointer or LocalArchivePointer handling."
+      },
+      {
+        "kind": "pull_request",
+        "number": 12281,
+        "title": "Make cache errors non-fatal in Planner::build",
+        "url": "https://github.com/astral-sh/uv/pull/12281",
+        "state": "merged",
+        "reason": "Fix for astral-sh/uv#12274 using both graceful handling of archive-pointer cache failures and a cache-version bump, establishing precedent for this failure class."
+      },
+      {
+        "kind": "issue",
+        "number": 19298,
+        "title": "Regression in 0.11.9: `Failed to deserialize cache entry: invalid ID` for IDs written by older uv versions",
+        "url": "https://github.com/astral-sh/uv/issues/19298",
+        "state": "closed",
+        "reason": "Recent analogous regression caused by changing a serialized cache field without bumping sdists-v9. Its direction and exact error differ, but it confirms that an unchanged bucket must retain compatible representations."
+      },
+      {
+        "kind": "pull_request",
+        "number": 19301,
+        "title": "fix(cache): accept legacy ID format from pre-0.11.9 cache entries (#19298)",
+        "url": "https://github.com/astral-sh/uv/pull/19301",
+        "state": "merged",
+        "reason": "Fix for astral-sh/uv#19298 that restored a representation compatible with the unchanged bucket, providing recent fix-oriented precedent."
+      }
+    ],
+    "search_scope": "Decomposed the report into the uv 0.12.0 release boundary; locally built wheel caches; mixed-version/downgrade reads; unchanged wheels-v6 and sdists-v9 identifiers; the Archive four-to-five-field change; commit 69c2b6993; and the exact Failed to deserialize cache entry / array had incorrect length, expected 4 error. Searched all issue and pull-request states using exact fragments and identifiers, then conceptual queries for cache-format changes, bucket bumps, forward/backward compatibility, shared caches, older/newer uv combinations, ArchivePointer failures, invalid-cache recovery, local wheels, and size validation. Fix-oriented searches covered closed reports and merged changes around cache versioning and non-fatal deserialization, and followed referenced issue/PR chains. No open issue or pull request already tracks this uv 0.12.0 regression, and no response pull request references astral-sh/uv#20949. Inspected but excluded astral-sh/uv#8488 because it concerns CacheInfoWire messaging, astral-sh/uv#11043 and astral-sh/uv#11101 because their fix in astral-sh/uv#11105 covers cached metadata rather than the archive-pointer representation here, and astral-sh/uv#54 because it is only a broad historical non-fatal-cache objective."
+  },
+  "type": "bug",
+  "type_reason": "This is an established correctness regression, not a duplicate. Repository source confirms that astral-sh/uv#20443 added serialized size fields while leaving the relevant bucket versions unchanged, and the documented cache contract established by astral-sh/uv#8386 guarantees forward and backward compatibility within a bucket version. The reported older-reader failure therefore violates intended behavior. Historical fixes address analogous manifestations, but no open issue or pull request already tracks this uv 0.12.0 recurrence.",
+  "summary": "No open duplicate was found. The closest direct change is astral-sh/uv#20443; astral-sh/uv#8367 and astral-sh/uv#8386 establish the governing compatibility guarantee, while astral-sh/uv#12274, astral-sh/uv#12281, astral-sh/uv#19298, and astral-sh/uv#19301 document closely related prior regressions and fixes."
+}
