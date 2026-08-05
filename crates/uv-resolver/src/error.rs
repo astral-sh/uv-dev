@@ -728,7 +728,6 @@ impl NoSolutionError {
         let unavailable_reasons = unavailable_reasons(&tree);
         tree = collapse_redundant_no_versions(tree, &unavailable_reasons);
         tree = collapse_equivalent_unavailable_versions(tree, &self.included_versions);
-        tree = collapse_equivalent_dependency_failures(tree, &self.included_versions);
 
         loop {
             let (collapsed, changed) = collapse_redundant_no_versions_tree(tree);
@@ -1094,131 +1093,6 @@ fn covers_included_versions(
     };
 
     covered.contains(first_version) && required_versions.all(|version| covered.contains(version))
-}
-
-struct UnavailableDependency<'a> {
-    package: &'a PubGrubPackage,
-    package_versions: &'a Range<Version>,
-    dependency: &'a PubGrubPackage,
-    dependency_versions: &'a Range<Version>,
-    unavailable_versions: &'a Range<Version>,
-    reason: &'a UnavailableReason,
-}
-
-fn unavailable_dependency(tree: &ErrorTree) -> Option<UnavailableDependency<'_>> {
-    let DerivationTree::Derived(derived) = tree else {
-        return None;
-    };
-
-    let ((
-        dependency @ DerivationTree::External(External::FromDependencyOf(..)),
-        unavailable @ DerivationTree::External(External::Custom(..)),
-    )
-    | (
-        unavailable @ DerivationTree::External(External::Custom(..)),
-        dependency @ DerivationTree::External(External::FromDependencyOf(..)),
-    )) = (&*derived.cause1, &*derived.cause2)
-    else {
-        return None;
-    };
-
-    let DerivationTree::External(External::FromDependencyOf(
-        package,
-        package_versions,
-        dependency,
-        dependency_versions,
-    )) = dependency
-    else {
-        return None;
-    };
-    let DerivationTree::External(External::Custom(
-        unavailable_package,
-        unavailable_versions,
-        reason,
-    )) = unavailable
-    else {
-        return None;
-    };
-
-    (dependency == unavailable_package).then_some(UnavailableDependency {
-        package,
-        package_versions,
-        dependency,
-        dependency_versions,
-        unavailable_versions,
-        reason,
-    })
-}
-
-/// Combine alternative package versions that fail on the same unavailable dependency.
-fn collapse_equivalent_dependency_failures(
-    tree: ErrorTree,
-    included_versions: &FxHashMap<PackageName, BTreeSet<Version>>,
-) -> ErrorTree {
-    map_derivation_tree(
-        tree,
-        DerivationTree::External,
-        |metadata, cause1, cause2| {
-            let Some(first) = unavailable_dependency(&cause1) else {
-                return derived_tree(metadata, cause1, cause2);
-            };
-            let Some(second) = unavailable_dependency(&cause2) else {
-                return derived_tree(metadata, cause1, cause2);
-            };
-
-            if first.package != second.package
-                || first.dependency != second.dependency
-                || first.reason != second.reason
-                || metadata.terms.len() != 1
-            {
-                return derived_tree(metadata, cause1, cause2);
-            }
-
-            let Some(Term::Positive(required_package_versions)) = metadata.terms.get(first.package)
-            else {
-                return derived_tree(metadata, cause1, cause2);
-            };
-            let package_versions = first.package_versions.union(second.package_versions);
-            if !covers_included_versions(
-                first.package,
-                required_package_versions,
-                &package_versions,
-                included_versions,
-            ) {
-                return derived_tree(metadata, cause1, cause2);
-            }
-
-            let dependency_versions = first.dependency_versions.union(second.dependency_versions);
-            let Some((lower, upper)) = dependency_versions.bounding_range() else {
-                return derived_tree(metadata, cause1, cause2);
-            };
-            let dependency_versions = Range::from_range_bounds((lower.cloned(), upper.cloned()));
-            let unavailable_versions = first
-                .unavailable_versions
-                .union(second.unavailable_versions);
-            if !covers_included_versions(
-                first.dependency,
-                &dependency_versions,
-                &unavailable_versions,
-                included_versions,
-            ) {
-                return derived_tree(metadata, cause1, cause2);
-            }
-
-            let dependency = DerivationTree::External(External::FromDependencyOf(
-                first.package.clone(),
-                required_package_versions.clone(),
-                first.dependency.clone(),
-                dependency_versions.clone(),
-            ));
-            let unavailable = DerivationTree::External(External::Custom(
-                first.dependency.clone(),
-                dependency_versions,
-                first.reason.clone(),
-            ));
-            derived_tree(metadata, dependency, unavailable)
-        },
-    )
 }
 
 /// Given a [`DerivationTree`], collapse any derived trees with two `NoVersions` nodes for the same

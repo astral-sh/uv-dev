@@ -4562,13 +4562,16 @@ fn alternative_dependencies_only_no_build() {
     exit_code: 1 (failure)
     ----- stderr -----
       × No solution found when resolving dependencies:
-      ╰─▶ Because all versions of parent depend on dependency and all versions of dependency have no usable wheels, we can conclude that all versions of parent cannot be used.
+      ╰─▶ Because dependency<=1.5.0 has no usable wheels and parent<=1.0.0 depends on dependency<2, we can conclude that parent<=1.0.0 cannot be used. (1)
+
+          Because dependency>=2.0.0 has no usable wheels and parent>=2.0.0 depends on dependency>=2, we can conclude that parent>=2.0.0 cannot be used.
+          And because we know from (1) that parent<=1.0.0 cannot be used, we can conclude that all versions of parent cannot be used.
           And because you require parent, we can conclude that your requirements are unsatisfiable.
 
     hint: Wheels are required for `dependency` because building from source is disabled for `dependency` (i.e., with `--no-build-package dependency`)
     ");
 
-    // Equivalent no-build dependency failures should collapse while preserving the actionable no-build hint.
+    // Distinct dependency ranges and the actionable no-build hint should remain visible without enumerating unavailable releases.
     context.assert_not_installed("parent");
 }
 
@@ -5060,11 +5063,14 @@ fn alternative_dependencies_only_yanked() {
     exit_code: 1 (failure)
     ----- stderr -----
       × No solution found when resolving dependencies:
-      ╰─▶ Because all versions of parent depend on dependency and all versions of dependency were yanked, we can conclude that all versions of parent cannot be used.
+      ╰─▶ Because dependency<=1.5.0 was yanked and parent<=1.0.0 depends on dependency<2, we can conclude that parent<=1.0.0 cannot be used. (1)
+
+          Because dependency>=2.0.0 was yanked and parent>=2.0.0 depends on dependency>=2, we can conclude that parent>=2.0.0 cannot be used.
+          And because we know from (1) that parent<=1.0.0 cannot be used, we can conclude that all versions of parent cannot be used.
           And because you require parent, we can conclude that your requirements are unsatisfiable.
     ");
 
-    // Equivalent yanked dependency failures should collapse without enumerating each parent or dependency release.
+    // Distinct parent dependency ranges should remain visible without enumerating unavailable dependency releases.
     context.assert_not_installed("parent");
 }
 

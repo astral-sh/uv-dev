@@ -14207,7 +14207,10 @@ fn only_binary_unavailable_dependency_versions() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
       × No solution found when resolving dependencies:
-      ╰─▶ Because recommenders>=1.0.0 depends on cornac>=1.1.2,<2 and cornac>=1.1.2,<2 has no usable wheels, we can conclude that recommenders>=1.0.0 cannot be used.
+      ╰─▶ Because cornac>=1.1.2,<2 has no usable wheels and recommenders>=1.0.0,<=1.1.1 depends on cornac>=1.1.2,<2, we can conclude that recommenders>=1.0.0,<=1.1.1 cannot be used. (1)
+
+          Because cornac>=1.15.2,<=1.18.0 has no usable wheels and recommenders>=1.2.0 depends on cornac>=1.15.2,<2, we can conclude that recommenders>=1.2.0 cannot be used.
+          And because we know from (1) that recommenders>=1.0.0,<=1.1.1 cannot be used, we can conclude that recommenders>=1.0.0 cannot be used.
           And because you require recommenders>0.7, we can conclude that your requirements are unsatisfiable.
 
     hint: Wheels are required for `cornac` because building from source is disabled for all packages (i.e., with `--no-build`)
