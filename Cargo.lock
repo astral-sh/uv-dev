@@ -6406,6 +6406,8 @@ dependencies = [
  "nix 0.31.3",
  "owo-colors",
  "rustc-hash",
+ "serde",
+ "serde_json",
  "thiserror",
  "tokio",
  "tracing",

@@ -7,6 +7,8 @@ pub enum PythonListFormat {
     Text,
     /// JSON (for computers).
     Json,
+    /// Newline-delimited JSON, including progress updates.
+    Jsonl,
 }
 
 /// The output format for audit findings.
@@ -18,6 +20,8 @@ pub enum AuditOutputFormat {
     Text,
     /// Display the result in JSON format.
     Json,
+    /// Stream progress updates and the result as newline-delimited JSON.
+    Jsonl,
     /// Display the result in SARIF format.
     Sarif,
 }
@@ -29,6 +33,8 @@ pub enum VersionFormat {
     Text,
     /// Display the version as JSON.
     Json,
+    /// Stream progress updates and the version as newline-delimited JSON.
+    Jsonl,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -39,6 +45,18 @@ pub enum SyncFormat {
     Text,
     /// Display the result in JSON format.
     Json,
+    /// Stream progress updates and the result as newline-delimited JSON.
+    Jsonl,
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+#[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
+pub enum MetadataOutputFormat {
+    /// Display workspace metadata as JSON.
+    #[default]
+    Json,
+    /// Stream progress updates and workspace metadata as newline-delimited JSON.
+    Jsonl,
 }
 
 #[derive(Debug, Default, Clone, Copy)]

@@ -6,6 +6,7 @@ use std::sync::{Arc, LazyLock, Mutex};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use owo_colors::OwoColorize;
 use rustc_hash::FxHashMap;
+use serde::Serialize;
 use uv_console::human_readable_bytes;
 use uv_redacted::DisplaySafeUrl;
 use uv_static::EnvVars;
@@ -16,6 +17,69 @@ use crate::Printer;
 /// non-deterministic, so can't capture them in test output.
 static HAS_UV_INTERNAL__TEST_NO_CLI_PROGRESS: LazyLock<bool> =
     LazyLock::new(|| env::var(EnvVars::UV_INTERNAL__TEST_NO_CLI_PROGRESS).is_ok());
+static JSONL_PROGRESS_LOCK: Mutex<()> = Mutex::new(());
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProgressStatus {
+    Started,
+    Updated,
+    Completed,
+}
+
+#[derive(Debug, Serialize)]
+pub struct JsonlProgressEvent {
+    #[serde(rename = "type")]
+    event_type: &'static str,
+    phase: &'static str,
+    status: ProgressStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revision: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completed: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total: Option<u64>,
+}
+
+impl JsonlProgressEvent {
+    pub fn new(phase: &'static str, status: ProgressStatus) -> Self {
+        Self {
+            event_type: "progress",
+            phase,
+            status,
+            id: None,
+            name: None,
+            version: None,
+            url: None,
+            revision: None,
+            bytes: None,
+            completed: None,
+            total: None,
+        }
+    }
+}
+
+pub fn emit_jsonl_progress(printer: Printer, event: &JsonlProgressEvent) {
+    if !printer.emits_jsonl_progress() {
+        return;
+    }
+
+    if let Ok(event) = serde_json::to_string(event)
+        && let Ok(_guard) = JSONL_PROGRESS_LOCK.lock()
+    {
+        let _ = writeln!(printer.stdout_important(), "{event}");
+    }
+}
 
 #[derive(Debug)]
 pub struct ProgressReporter {
@@ -42,6 +106,8 @@ enum ProgressBarKind {
         progress: ProgressBar,
         /// The download size in bytes, if known.
         size: Option<u64>,
+        /// The operation represented by this progress bar.
+        direction: Direction,
     },
     /// A progress spinner for a task, such as a build.
     Spinner { progress: ProgressBar },
@@ -111,11 +177,21 @@ impl Direction {
             Self::Hash => "Hashing",
         }
     }
+
+    fn phase(self) -> &'static str {
+        match self {
+            Self::Download => "download",
+            Self::Upload => "upload",
+            Self::Extract => "extract",
+            Self::Hash => "hash",
+        }
+    }
 }
 
 impl ProgressReporter {
     pub fn new(root: ProgressBar, multi_progress: MultiProgress, printer: Printer) -> Self {
-        let mode = if env::var(EnvVars::JPY_SESSION_NAME).is_ok() {
+        let mode = if env::var(EnvVars::JPY_SESSION_NAME).is_ok() && !printer.emits_jsonl_progress()
+        {
             // Disable concurrent progress bars when running inside a Jupyter notebook
             // because the Jupyter terminal does not support clearing previous lines.
             // See: https://github.com/astral-sh/uv/issues/3887.
@@ -132,6 +208,10 @@ impl ProgressReporter {
             root,
             mode,
         }
+    }
+
+    pub fn emit_progress(&self, event: &JsonlProgressEvent) {
+        emit_jsonl_progress(self.printer, event);
     }
 
     /// Start reporting a build using the caller's source display.
@@ -161,6 +241,12 @@ impl ProgressReporter {
 
         state.headers += 1;
         state.bars.insert(id, ProgressBarKind::Spinner { progress });
+        if self.printer.emits_jsonl_progress() {
+            let mut event = JsonlProgressEvent::new("build", ProgressStatus::Started);
+            event.id = Some(id);
+            event.name = Some(source.to_string());
+            self.emit_progress(&event);
+        }
         id
     }
 
@@ -184,6 +270,12 @@ impl ProgressReporter {
         if multi_progress.is_hidden() && !*HAS_UV_INTERNAL__TEST_NO_CLI_PROGRESS {
             let _ = writeln!(self.printer.stderr(), "{message}");
         }
+        if self.printer.emits_jsonl_progress() {
+            let mut event = JsonlProgressEvent::new("build", ProgressStatus::Completed);
+            event.id = Some(id);
+            event.name = Some(source.to_string());
+            self.emit_progress(&event);
+        }
         progress.finish_with_message(message);
     }
 
@@ -196,6 +288,7 @@ impl ProgressReporter {
             return 0;
         };
 
+        let event_name = self.printer.emits_jsonl_progress().then(|| name.clone());
         let mut state = state.lock().unwrap();
 
         // Preserve ascending order.
@@ -266,9 +359,19 @@ impl ProgressReporter {
         }
 
         let id = state.id();
-        state
-            .bars
-            .insert(id, ProgressBarKind::Numeric { progress, size });
+        state.bars.insert(
+            id,
+            ProgressBarKind::Numeric {
+                progress,
+                size,
+                direction,
+            },
+        );
+        let mut event = JsonlProgressEvent::new(direction.phase(), ProgressStatus::Started);
+        event.id = Some(id);
+        event.name = event_name;
+        event.total = size;
+        self.emit_progress(&event);
         id
     }
 
@@ -281,8 +384,22 @@ impl ProgressReporter {
         // https://github.com/astral-sh/uv/issues/17090
         // TODO(konsti): Add a debug assert once https://github.com/seanmonstar/reqwest/issues/2884
         // is fixed
-        if let Some(bar) = state.lock().unwrap().bars.get(&id) {
-            bar.inc(bytes);
+        if let Some(ProgressBarKind::Numeric {
+            progress,
+            size,
+            direction,
+        }) = state.lock().unwrap().bars.get(&id)
+        {
+            progress.inc(bytes);
+
+            if self.printer.emits_jsonl_progress() {
+                let mut event = JsonlProgressEvent::new(direction.phase(), ProgressStatus::Updated);
+                event.id = Some(id);
+                event.bytes = Some(bytes);
+                event.completed = Some(progress.position());
+                event.total = *size;
+                self.emit_progress(&event);
+            }
         }
     }
 
@@ -296,7 +413,7 @@ impl ProgressReporter {
         };
 
         let mut state = state.lock().unwrap();
-        if let ProgressBarKind::Numeric { progress, size } = state.bars.remove(&id).unwrap() {
+        if let ProgressBarKind::Numeric { progress, size, .. } = state.bars.remove(&id).unwrap() {
             if multi_progress.is_hidden()
                 && !*HAS_UV_INTERNAL__TEST_NO_CLI_PROGRESS
                 && size.is_none_or(|size| size > 1024 * 1024)
@@ -314,6 +431,15 @@ impl ProgressReporter {
                     .cyan(),
                     progress.message()
                 );
+            }
+            if self.printer.emits_jsonl_progress() {
+                let mut event =
+                    JsonlProgressEvent::new(direction.phase(), ProgressStatus::Completed);
+                event.id = Some(id);
+                event.name = Some(progress.message());
+                event.completed = Some(progress.position());
+                event.total = size;
+                self.emit_progress(&event);
             }
             progress.finish_and_clear();
         } else {
@@ -384,6 +510,13 @@ impl ProgressReporter {
 
         state.headers += 1;
         state.bars.insert(id, ProgressBarKind::Spinner { progress });
+        if self.printer.emits_jsonl_progress() {
+            let mut event = JsonlProgressEvent::new("checkout", ProgressStatus::Started);
+            event.id = Some(id);
+            event.url = Some(url.to_string());
+            event.revision = Some(rev.to_string());
+            self.emit_progress(&event);
+        }
         id
     }
 
@@ -410,6 +543,13 @@ impl ProgressReporter {
         );
         if multi_progress.is_hidden() && !*HAS_UV_INTERNAL__TEST_NO_CLI_PROGRESS {
             let _ = writeln!(self.printer.stderr(), "{message}");
+        }
+        if self.printer.emits_jsonl_progress() {
+            let mut event = JsonlProgressEvent::new("checkout", ProgressStatus::Completed);
+            event.id = Some(id);
+            event.url = Some(url.to_string());
+            event.revision = Some(rev.to_string());
+            self.emit_progress(&event);
         }
         progress.finish_with_message(message);
     }

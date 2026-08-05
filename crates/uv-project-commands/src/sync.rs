@@ -11,7 +11,7 @@ use tracing::warn;
 
 use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
-use uv_command_support::{ExitStatus, Printer, UvError};
+use uv_command_support::{ExitStatus, Printer, UvError, jsonl_result};
 use uv_configuration::{
     ActiveEnvironment, Concurrency, Constraints, DependencyGroups, DryRun, EditableMode,
     ExtrasSpecification, InstallOptions, Modifications, SyncFormat, TargetTriple,
@@ -982,7 +982,7 @@ impl SyncReport {
     fn format(&self, output_format: SyncFormat) -> Option<String> {
         match output_format {
             // This is an intermediate report, when using JSON, it's only rendered at the end
-            SyncFormat::Json => None,
+            SyncFormat::Json | SyncFormat::Jsonl => None,
             SyncFormat::Text => self.to_human_readable_string(),
         }
     }
@@ -1054,7 +1054,7 @@ impl From<(&LockTarget<'_>, &LockMode<'_>, &Outcome<'_>)> for LockReport {
 impl LockReport {
     fn format(&self, output_format: SyncFormat) -> Option<String> {
         match output_format {
-            SyncFormat::Json => None,
+            SyncFormat::Json | SyncFormat::Jsonl => None,
             SyncFormat::Text => self.to_human_readable_string(),
         }
     }
@@ -1084,6 +1084,7 @@ impl Report {
     fn format(&self, output_format: SyncFormat) -> Option<String> {
         match output_format {
             SyncFormat::Json => serde_json::to_string_pretty(self).ok(),
+            SyncFormat::Jsonl => jsonl_result(self).ok(),
             SyncFormat::Text => None,
         }
     }

@@ -1,7 +1,11 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use uv_command_support::{Printer, progress::ProgressReporter};
+use uv_command_support::{
+    Printer,
+    progress::{JsonlProgressEvent, ProgressReporter, ProgressStatus},
+};
 use uv_distribution_types::BuildableSource;
 use uv_distribution_types::VersionOrUrlRef;
 use uv_normalize::PackageName;
@@ -11,12 +15,26 @@ use uv_redacted::DisplaySafeUrl;
 #[derive(Debug)]
 pub struct ResolverReporter {
     reporter: ProgressReporter,
+    started: AtomicBool,
 }
 
 impl ResolverReporter {
+    fn start(&self) {
+        if self.reporter.printer.emits_jsonl_progress()
+            && !self.started.swap(true, Ordering::Relaxed)
+        {
+            self.reporter
+                .emit_progress(&JsonlProgressEvent::new("resolve", ProgressStatus::Started));
+        }
+    }
+
     #[must_use]
     pub(super) fn with_length(self, length: u64) -> Self {
         self.reporter.root.set_length(length);
+        self.start();
+        let mut event = JsonlProgressEvent::new("resolve", ProgressStatus::Updated);
+        event.total = Some(length);
+        self.reporter.emit_progress(&event);
         self
     }
 }
@@ -33,13 +51,16 @@ impl From<Printer> for ResolverReporter {
         );
         root.set_message("Resolving dependencies...");
 
-        let reporter = ProgressReporter::new(root, multi_progress, printer);
-        Self { reporter }
+        Self {
+            reporter: ProgressReporter::new(root, multi_progress, printer),
+            started: AtomicBool::new(false),
+        }
     }
 }
 
 impl uv_resolver::ResolverReporter for ResolverReporter {
     fn on_progress(&self, name: &PackageName, version_or_url: &VersionOrUrlRef) {
+        self.start();
         match version_or_url {
             VersionOrUrlRef::Version(version) => {
                 self.reporter.root.set_message(format!("{name}=={version}"));
@@ -48,10 +69,24 @@ impl uv_resolver::ResolverReporter for ResolverReporter {
                 self.reporter.root.set_message(format!("{name} @ {url}"));
             }
         }
+        if self.reporter.printer.emits_jsonl_progress() {
+            let mut event = JsonlProgressEvent::new("resolve", ProgressStatus::Updated);
+            event.name = Some(name.to_string());
+            match version_or_url {
+                VersionOrUrlRef::Version(version) => event.version = Some(version.to_string()),
+                VersionOrUrlRef::Url(url) => event.url = Some(url.to_string()),
+            }
+            self.reporter.emit_progress(&event);
+        }
     }
 
     fn on_complete(&self) {
+        self.start();
         self.reporter.root.set_message("");
+        self.reporter.emit_progress(&JsonlProgressEvent::new(
+            "resolve",
+            ProgressStatus::Completed,
+        ));
         self.reporter.root.finish_and_clear();
     }
 
