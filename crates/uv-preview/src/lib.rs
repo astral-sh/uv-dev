@@ -463,6 +463,8 @@ pub enum PreviewFeature {
     /// Enables experimental support for [wheel variants](https://peps.python.org/pep-0825/).
     /// Variant wheels are not yet selectable.
     WheelVariants,
+    /// Allows `--output-format jsonl` to stream progress and final JSON output.
+    Jsonl,
 }
 
 impl Display for PreviewFeature {
