@@ -679,14 +679,21 @@ impl PubGrubReportFormatter<'_> {
             // both describe the same sole release.
             (
                 External::NoVersions(package, unavailable),
-                incompatibility @ External::Custom(other_package, versions, _),
+                incompatibility @ External::Custom(other_package, versions, reason),
             )
             | (
-                incompatibility @ External::Custom(other_package, versions, _),
+                incompatibility @ External::Custom(other_package, versions, reason),
                 External::NoVersions(package, unavailable),
             ) if package == other_package
                 && versions.as_singleton().is_some()
-                && unavailable.complement().as_singleton() == versions.as_singleton() =>
+                && unavailable.complement().as_singleton() == versions.as_singleton()
+                && !matches!(
+                    reason,
+                    UnavailableReason::Version(UnavailableVersion::IncompatibleDist(
+                        IncompatibleDist::Wheel(IncompatibleWheel::ExcludeNewer(_))
+                            | IncompatibleDist::Source(IncompatibleSource::ExcludeNewer(_))
+                    ))
+                ) =>
             {
                 let version = self.compatible_range(package, versions).to_string();
                 let explanation = self.format_external(incompatibility);
