@@ -710,7 +710,7 @@ pub struct RunSettings {
     pub max_recursion_depth: u32,
     pub malware_settings: MalwareCheckSettings,
     #[cfg(unix)]
-    pub run_rlimit_nofile: Option<u32>,
+    pub run_resource_limits: Vec<uv_unix::ResourceLimit>,
 }
 
 impl RunSettings {
@@ -879,7 +879,7 @@ impl RunSettings {
             max_recursion_depth: max_recursion_depth.unwrap_or(Self::DEFAULT_MAX_RECURSION_DEPTH),
             malware_settings,
             #[cfg(unix)]
-            run_rlimit_nofile: environment.run_rlimit_nofile,
+            run_resource_limits: environment.run_resource_limits,
         })
     }
 }
