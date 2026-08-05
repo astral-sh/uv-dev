@@ -32,8 +32,9 @@ goblin = { workspace = true }
 thiserror = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
+uv-windows = { workspace = true, features = ["editpe"] }
+
 async_zip = { workspace = true }
-editpe = { workspace = true }
 futures-lite = { workspace = true }
 windows = { workspace = true }
 

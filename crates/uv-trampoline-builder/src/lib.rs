@@ -2,10 +2,6 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::str::Utf8Error;
 
-#[cfg(windows)]
-use editpe::{
-    Image, ResourceData, ResourceDirectory, ResourceEntry, ResourceEntryName, ResourceTable,
-};
 use fs_err::File;
 use thiserror::Error;
 
@@ -231,11 +227,8 @@ pub enum Error {
         err: io::Error,
     },
     #[cfg(windows)]
-    #[error("Failed to parse Windows PE image")]
-    PeRead(#[from] editpe::ImageReadError),
-    #[cfg(windows)]
     #[error("Failed to update Windows PE resources")]
-    PeWrite(#[from] editpe::ImageWriteError),
+    PeWrite(#[from] uv_windows::editpe::Error),
 }
 
 #[allow(clippy::unnecessary_wraps, unused_variables)]
@@ -276,42 +269,7 @@ fn get_launcher_bin(gui: bool) -> Result<&'static [u8], Error> {
 /// Write PE resources into a launcher binary.
 #[cfg(windows)]
 fn write_resources(launcher_data: &[u8], resources: &[(&str, &[u8])]) -> Result<Vec<u8>, Error> {
-    let mut image = Image::parse(launcher_data.to_vec())?;
-
-    let mut resource_directory = image
-        .resource_directory()
-        .cloned()
-        .unwrap_or_else(ResourceDirectory::default);
-    let root = resource_directory.root_mut();
-
-    // Get or create the RT_RCDATA type entry.
-    let rcdata_name = ResourceEntryName::ID(RT_RCDATA);
-    if root.get(rcdata_name.clone()).is_none() {
-        root.insert(
-            rcdata_name.clone(),
-            ResourceEntry::Table(ResourceTable::default()),
-        );
-    }
-    let rcdata_table = root
-        .get_mut(rcdata_name)
-        .and_then(ResourceEntry::as_table_mut)
-        .expect("RT_RCDATA entry was just inserted");
-
-    for (name, data) in resources {
-        let entry_name = ResourceEntryName::from_string(name);
-
-        // Create language table with neutral language (0).
-        let mut language_table = ResourceTable::default();
-        let mut resource_data = ResourceData::default();
-        resource_data.set_data(data.to_vec());
-        language_table.insert(ResourceEntryName::ID(0), ResourceEntry::Data(resource_data));
-
-        rcdata_table.insert(entry_name, ResourceEntry::Table(language_table));
-    }
-
-    image.set_resource_directory(resource_directory)?;
-
-    Ok(image.data().to_vec())
+    uv_windows::editpe::write_resources(launcher_data, RT_RCDATA, resources).map_err(Error::from)
 }
 
 /// Safely read a named resource from a loaded PE image.
@@ -459,10 +417,14 @@ mod test {
     use std::path::PathBuf;
     use std::process::Command;
 
-    use anyhow::Result;
+    use anyhow::{Result, anyhow};
     use assert_cmd::prelude::OutputAssertExt;
     use assert_fs::prelude::PathChild;
     use fs_err::File;
+    use goblin::pe::PE;
+    use goblin::pe::header::{SIZEOF_COFF_HEADER, SIZEOF_PE_MAGIC};
+    use goblin::pe::optional_header::SIZEOF_STANDARD_FIELDS_32;
+    use goblin::pe::resource::RT_RCDATA;
 
     use which::which;
 
@@ -659,6 +621,107 @@ if __name__ == "__main__":
         let error = Launcher::try_from_path(launcher_path.path())
             .expect_err("Empty launcher kind resources should be rejected");
         assert!(matches!(error, super::Error::UnprocessableMetadata));
+
+        Ok(())
+    }
+
+    #[test]
+    fn resource_updates_preserve_pe_headers_and_manifests() -> Result<()> {
+        let launchers: &[(&str, &[u8])] = &[
+            (
+                "i686-console",
+                include_bytes!("../trampolines/uv-trampoline-i686-console.exe"),
+            ),
+            (
+                "i686-gui",
+                include_bytes!("../trampolines/uv-trampoline-i686-gui.exe"),
+            ),
+            (
+                "x86_64-console",
+                include_bytes!("../trampolines/uv-trampoline-x86_64-console.exe"),
+            ),
+            (
+                "x86_64-gui",
+                include_bytes!("../trampolines/uv-trampoline-x86_64-gui.exe"),
+            ),
+            (
+                "aarch64-console",
+                include_bytes!("../trampolines/uv-trampoline-aarch64-console.exe"),
+            ),
+            (
+                "aarch64-gui",
+                include_bytes!("../trampolines/uv-trampoline-aarch64-gui.exe"),
+            ),
+        ];
+
+        for (architecture, launcher) in launchers {
+            let mut launcher = launcher.to_vec();
+            let parsed = PE::parse(&launcher)?;
+            if !parsed.is_64 {
+                let data_address = parsed
+                    .sections
+                    .iter()
+                    .find(|section| section.name().is_ok_and(|name| name == ".data"))
+                    .map(|section| section.virtual_address)
+                    .ok_or_else(|| anyhow!("{architecture} is missing its data section"))?;
+                let base_of_data_offset = parsed.header.dos_header.pe_pointer as usize
+                    + SIZEOF_PE_MAGIC
+                    + SIZEOF_COFF_HEADER
+                    + SIZEOF_STANDARD_FIELDS_32
+                    - size_of::<u32>();
+                launcher[base_of_data_offset..base_of_data_offset + size_of::<u32>()]
+                    .copy_from_slice(&data_address.to_le_bytes());
+            }
+
+            let original = PE::parse(&launcher)?;
+            let original_header = original
+                .header
+                .optional_header
+                .ok_or_else(|| anyhow!("{architecture} is missing its PE header"))?;
+            let original_manifest = original
+                .resource_data
+                .and_then(|resources| resources.manifest_data)
+                .map(|manifest| manifest.data);
+
+            let output = super::write_resources(
+                &launcher,
+                &[
+                    (super::RESOURCE_TRAMPOLINE_KIND, &[1]),
+                    (super::RESOURCE_PYTHON_PATH, b"C:/Python312/python.exe"),
+                ],
+            )?;
+            let updated = PE::parse(&output)?;
+            let updated_header = updated
+                .header
+                .optional_header
+                .ok_or_else(|| anyhow!("{architecture} is missing its updated PE header"))?;
+            let updated_resources = updated
+                .resource_data
+                .ok_or_else(|| anyhow!("{architecture} is missing its resources"))?;
+
+            assert_eq!(
+                updated_header.standard_fields.base_of_data,
+                original_header.standard_fields.base_of_data,
+                "{architecture} changed its PE32 BaseOfData field",
+            );
+            assert_eq!(
+                updated_header.windows_fields.size_of_image
+                    % updated_header.windows_fields.section_alignment,
+                0,
+                "{architecture} has an unaligned SizeOfImage field",
+            );
+            assert_eq!(
+                updated_resources
+                    .manifest_data
+                    .map(|manifest| manifest.data),
+                original_manifest,
+                "{architecture} did not preserve its manifest",
+            );
+            assert!(
+                updated_resources.entries().find_by_id(RT_RCDATA)?.is_some(),
+                "{architecture} is missing its launcher resources",
+            );
+        }
 
         Ok(())
     }
