@@ -7598,7 +7598,7 @@ name = "uv-unix"
 version = "0.0.82"
 dependencies = [
  "nix 0.31.3",
- "rustix 1.1.4",
+ "rustix",
  "thiserror",
  "uv-static",
 ]
