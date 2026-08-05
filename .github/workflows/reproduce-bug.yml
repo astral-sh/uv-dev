@@ -117,14 +117,25 @@ jobs:
       group: issue-context-${{ needs.reproduce.outputs.issue-number }}
       cancel-in-progress: false
     permissions:
+      contents: read
       id-token: write # for the uv-dev issue-context credential broker
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
       - name: "Write reproduction summary"
         run: |
           printf '%s\n%s\n%s\n' '```json' "$REPRODUCTION_RESULT" '```' \
             >> "$GITHUB_STEP_SUMMARY"
         env:
           REPRODUCTION_RESULT: ${{ needs.reproduce.outputs.result }}
+
+      - name: "Load issue context"
+        id: context
+        uses: ./.github/actions/load-issue-context
+        with:
+          issue-number: ${{ needs.reproduce.outputs.issue-number }}
 
       - name: "Get issue context token"
         id: token
@@ -137,15 +148,9 @@ jobs:
             contents: write
 
       - name: "Persist reproduction context"
+        working-directory: ${{ steps.context.outputs.path }}
         run: |
           branch="issue/$ISSUE_NUMBER"
-
-          git init --quiet "$RUNNER_TEMP/issue-context"
-          cd "$RUNNER_TEMP/issue-context"
-          git remote add origin \
-            "https://x-access-token:${GH_TOKEN}@github.com/astral-sh/uv-dev.git"
-          git fetch --quiet origin "refs/heads/$branch"
-          git checkout --quiet FETCH_HEAD
 
           printf '%s\n' "$REPRODUCTION_RESULT" | jq '.' > reproduction.json
           # TODO: Consider letting the reproduction agent update README.md directly.
@@ -157,7 +162,7 @@ jobs:
           } > "$RUNNER_TEMP/README.md"
           cp "$RUNNER_TEMP/README.md" README.md
 
-          git add reproduction.json README.md
+          git -c core.hooksPath=/dev/null add reproduction.json README.md
 
           if git diff --cached --quiet; then
             echo "The existing reproduction context is unchanged."
@@ -165,20 +170,25 @@ jobs:
           fi
 
           git \
+            -c core.hooksPath=/dev/null \
             -c user.name="astral-automations-bot[bot]" \
             -c user.email="305554984+astral-automations-bot[bot]@users.noreply.github.com" \
             commit --message "Update reproduction context for $GITHUB_REPOSITORY#$ISSUE_NUMBER"
-          git push origin "HEAD:refs/heads/$branch"
+          git -c core.hooksPath=/dev/null push \
+            "https://x-access-token:${GH_TOKEN}@github.com/astral-sh/uv-dev.git" \
+            "HEAD:refs/heads/$branch"
 
           printf 'Issue context: https://github.com/astral-sh/uv-dev/tree/%s\n' "$branch" \
             >> "$GITHUB_STEP_SUMMARY"
         env:
+          GIT_CONFIG_GLOBAL: /dev/null
+          GIT_CONFIG_NOSYSTEM: "1"
           GH_TOKEN: ${{ steps.token.outputs.token }}
           ISSUE_NUMBER: ${{ needs.reproduce.outputs.issue-number }}
           REPRODUCTION_RESULT: ${{ needs.reproduce.outputs.result }}
 
   create-integration-test:
-    needs: reproduce
+    needs: [reproduce, report]
     if: >-
       inputs.issue-type != 'question' &&
       needs.reproduce.outputs.result != '' &&
@@ -197,6 +207,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      - name: "Load issue context"
+        id: context
+        uses: ./.github/actions/load-issue-context
+        with:
+          issue-number: ${{ needs.reproduce.outputs.issue-number }}
 
       - name: "Install uv"
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
@@ -219,7 +235,18 @@ jobs:
       - name: "Prepare reproduction context"
         run: |
           printf '%s\n' "$REPRODUCTION_RESULT" > "$RUNNER_TEMP/bug-reproduction-result.json"
+          if ! jq --exit-status \
+            --slurpfile issue "$RUNNER_TEMP/issue-triage-event.json" \
+            '.number == $issue[0].number' "$ISSUE_CONTEXT/issue.json" > /dev/null ||
+            ! jq --exit-status \
+              --slurpfile reproduction "$RUNNER_TEMP/bug-reproduction-result.json" \
+              '. == $reproduction[0] and .reproduction == "reproducible"' \
+              "$ISSUE_CONTEXT/reproduction.json" > /dev/null; then
+            echo "The persisted investigation does not match the reproduced issue." >&2
+            exit 1
+          fi
         env:
+          ISSUE_CONTEXT: ${{ steps.context.outputs.path }}
           REPRODUCTION_RESULT: ${{ needs.reproduce.outputs.result }}
 
       - name: "Create integration test"
