@@ -11,7 +11,8 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::trace;
 
 use uv_distribution_types::{
-    DerivationChain, DistErrorKind, IndexCapabilities, IndexLocations, IndexUrl, RequestedDist,
+    DerivationChain, DistErrorKind, IncompatibleDist, IncompatibleSource, IndexCapabilities,
+    IndexLocations, IndexUrl, RequestedDist,
 };
 use uv_normalize::{ExtraName, InvalidNameError, PackageName};
 use uv_pep440::{LowerBound, Version};
@@ -34,6 +35,7 @@ use crate::python_requirement::PythonRequirement;
 use crate::resolution::ConflictingDistributionError;
 use crate::resolver::{
     MetadataUnavailable, ResolverEnvironment, UnavailablePackage, UnavailableReason,
+    UnavailableVersion,
 };
 use crate::{InMemoryIndex, Options};
 
@@ -934,9 +936,29 @@ fn can_drop_no_versions(
     let versions = versions.complement();
 
     // Retain exclusions of a single version because they produce useful messages like
-    // "only foo==1.0.0 is available". Otherwise, the clause is redundant when the conclusion
-    // covers either all versions or exactly the remaining range.
-    versions.as_singleton().is_none() && (*term == Range::full() || *term == versions)
+    // "only foo==1.0.0 is available".
+    if versions.as_singleton().is_some() {
+        return false;
+    }
+
+    // In a binary-only resolution, once every version in the conclusion is unavailable because
+    // source builds are disabled, enumerating gaps between those versions adds no information.
+    if let DerivationTree::External(External::Custom(
+        other_package,
+        unavailable_versions,
+        UnavailableReason::Version(UnavailableVersion::IncompatibleDist(IncompatibleDist::Source(
+            IncompatibleSource::NoBuild,
+        ))),
+    )) = other
+        && package == other_package
+        && term.subset_of(unavailable_versions)
+    {
+        return true;
+    }
+
+    // Otherwise, the clause is redundant when the conclusion covers either all versions or
+    // exactly the remaining range.
+    *term == Range::full() || *term == versions
 }
 
 fn collapse_redundant_no_versions(tree: ErrorTree) -> ErrorTree {
