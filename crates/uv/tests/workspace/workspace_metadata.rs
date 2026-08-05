@@ -193,6 +193,141 @@ fn workspace_metadata_extra_quiet() {
 }
 
 #[test]
+fn workspace_metadata_jsonl() {
+    let context = uv_test::test_context!("3.12");
+    context.init().arg("foo").assert().success();
+
+    let workspace = context.temp_dir.child("foo");
+
+    uv_snapshot!(context.filters(), context.workspace_metadata()
+        .current_dir(&workspace)
+        .arg("--output-format").arg("jsonl")
+        .arg("--preview-features").arg("workspace-metadata,jsonl"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {"type":"progress","phase":"resolve","status":"started"}
+    {"type":"progress","phase":"resolve","status":"updated","name":"foo","version":"0.1.0"}
+    {"type":"progress","phase":"resolve","status":"completed"}
+    {"type":"result","schema":{"version":"preview"},"workspace_root":"[TEMP_DIR]/foo","workspace":{"path":"[TEMP_DIR]/foo","id":"workspace+[TEMP_DIR]/foo"},"requires_python":">=3.12","conflicts":{"sets":[]},"members":[{"name":"foo","path":"[TEMP_DIR]/foo","id":"foo==0.1.0@editable+[TEMP_DIR]/foo/"}],"resolution":{"foo==0.1.0@editable+[TEMP_DIR]/foo/":{"name":"foo","version":"0.1.0","source":{"editable":"[TEMP_DIR]/foo/"},"kind":"package","dependencies":[]},"workspace+[TEMP_DIR]/foo":{"kind":"workspace","path":"[TEMP_DIR]/foo","dependencies":[]}}}
+
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Resolved 1 package in [TIME]
+    "#
+    );
+}
+
+#[test]
+fn workspace_metadata_jsonl_sync_progress() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig"]
+        "#,
+    )?;
+
+    let output = context
+        .workspace_metadata()
+        .arg("--sync")
+        .arg("--output-format")
+        .arg("jsonl")
+        .arg("--preview-features")
+        .arg("workspace-metadata,jsonl")
+        .output()?;
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8(output.stdout)?;
+    let items = stdout
+        .lines()
+        .map(serde_json::from_str::<serde_json::Value>)
+        .collect::<Result<Vec<_>, _>>()?;
+    let Some((metadata, progress)) = items.split_last() else {
+        anyhow::bail!("expected JSONL progress and a final metadata report");
+    };
+
+    let progress = progress
+        .iter()
+        .map(|event| {
+            serde_json::json!({
+                "phase": event["phase"],
+                "status": event["status"],
+            })
+        })
+        .collect::<Vec<_>>();
+    insta::assert_json_snapshot!(progress, @r#"
+    [
+      {
+        "phase": "resolve",
+        "status": "started"
+      },
+      {
+        "phase": "resolve",
+        "status": "updated"
+      },
+      {
+        "phase": "resolve",
+        "status": "updated"
+      },
+      {
+        "phase": "resolve",
+        "status": "completed"
+      },
+      {
+        "phase": "prepare",
+        "status": "started"
+      },
+      {
+        "phase": "download",
+        "status": "started"
+      },
+      {
+        "phase": "download",
+        "status": "updated"
+      },
+      {
+        "phase": "download",
+        "status": "updated"
+      },
+      {
+        "phase": "download",
+        "status": "completed"
+      },
+      {
+        "phase": "prepare",
+        "status": "updated"
+      },
+      {
+        "phase": "prepare",
+        "status": "completed"
+      },
+      {
+        "phase": "install",
+        "status": "started"
+      },
+      {
+        "phase": "install",
+        "status": "updated"
+      },
+      {
+        "phase": "install",
+        "status": "completed"
+      }
+    ]
+    "#
+    );
+
+    assert_eq!(metadata["type"], "result");
+    assert_eq!(metadata["schema"]["version"], "preview");
+    assert!(metadata.get("environment").is_some());
+
+    Ok(())
+}
+
+#[test]
 fn workspace_metadata_ignores_unusable_environment() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     context.init().arg("foo").assert().success();
