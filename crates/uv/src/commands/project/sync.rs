@@ -57,7 +57,7 @@ use crate::commands::project::{
     script_extra_build_requires, script_specification, update_environment,
 };
 use crate::commands::{ExitStatus, UvError};
-use crate::printer::Printer;
+use crate::printer::{Printer, jsonl_result};
 use crate::settings::{
     FrozenSource, InstallerSettingsRef, LockCheck, LockedSource, ResolverInstallerSettings,
     ResolverSettings,
@@ -1483,7 +1483,7 @@ impl SyncReport {
     fn format(&self, output_format: SyncFormat) -> Option<String> {
         match output_format {
             // This is an intermediate report, when using JSON, it's only rendered at the end
-            SyncFormat::Json => None,
+            SyncFormat::Json | SyncFormat::Jsonl => None,
             SyncFormat::Text => self.to_human_readable_string(),
         }
     }
@@ -1614,7 +1614,7 @@ impl From<(&LockTarget<'_>, &LockMode<'_>, &Outcome)> for LockReport {
 impl LockReport {
     fn format(&self, output_format: SyncFormat) -> Option<String> {
         match output_format {
-            SyncFormat::Json => None,
+            SyncFormat::Json | SyncFormat::Jsonl => None,
             SyncFormat::Text => self.to_human_readable_string(),
         }
     }
@@ -1644,6 +1644,7 @@ impl Report {
     fn format(&self, output_format: SyncFormat) -> Option<String> {
         match output_format {
             SyncFormat::Json => serde_json::to_string_pretty(self).ok(),
+            SyncFormat::Jsonl => jsonl_result(self).ok(),
             SyncFormat::Text => None,
         }
     }

@@ -941,6 +941,143 @@ fn sync_json() -> Result<()> {
 }
 
 #[test]
+fn sync_jsonl() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_python_names()
+        .with_filtered_virtualenv_bin();
+
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig"]
+        "#,
+    )?;
+
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--output-format").arg("jsonl")
+        .arg("--preview-features").arg("jsonl"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {"type":"progress","phase":"resolve","status":"started"}
+    {"type":"progress","phase":"resolve","status":"updated","name":"project","version":"0.1.0"}
+    {"type":"progress","phase":"resolve","status":"updated","name":"iniconfig","version":"2.0.0"}
+    {"type":"progress","phase":"resolve","status":"completed"}
+    {"type":"progress","phase":"prepare","status":"started","total":1}
+    {"type":"progress","phase":"download","status":"started","id":1,"name":"iniconfig","total":5892}
+    {"type":"progress","phase":"download","status":"updated","id":1,"bytes":5892,"completed":5892,"total":5892}
+    {"type":"progress","phase":"download","status":"updated","id":1,"bytes":0,"completed":5892,"total":5892}
+    {"type":"progress","phase":"download","status":"completed","id":1,"name":"iniconfig","completed":5892,"total":5892}
+    {"type":"progress","phase":"prepare","status":"updated","name":"iniconfig==2.0.0","completed":1,"total":1}
+    {"type":"progress","phase":"prepare","status":"completed","completed":1,"total":1}
+    {"type":"progress","phase":"install","status":"started","total":1}
+    {"type":"progress","phase":"install","status":"updated","name":"iniconfig==2.0.0","completed":1,"total":1}
+    {"type":"progress","phase":"install","status":"completed","completed":1,"total":1}
+    {"type":"result","schema":{"version":"preview"},"target":"project","project":{"path":"[TEMP_DIR]/","workspace":{"path":"[TEMP_DIR]/"}},"sync":{"environment":{"path":"[VENV]/","python":{"path":"[VENV]/[BIN]/[PYTHON]","version":"3.12.[X]","implementation":"cpython"}},"action":"check","changes":[{"name":"iniconfig","version":"2.0.0","action":"installed"}]},"lock":{"path":"[TEMP_DIR]/uv.lock","action":"create"},"dry_run":false}
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + iniconfig==2.0.0
+    "#
+    );
+
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--frozen")
+        .arg("--output-format").arg("jsonl"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {"type":"result","schema":{"version":"preview"},"target":"project","project":{"path":"[TEMP_DIR]/","workspace":{"path":"[TEMP_DIR]/"}},"sync":{"environment":{"path":"[VENV]/","python":{"path":"[VENV]/[BIN]/[PYTHON]","version":"3.12.[X]","implementation":"cpython"}},"action":"check","changes":[]},"lock":{"path":"[TEMP_DIR]/uv.lock","action":"use"},"dry_run":false}
+
+    ----- stderr -----
+    warning: The JSONL output format is experimental and the schema may change without warning. Pass `--preview-features jsonl` to disable this warning.
+    Checked 1 package in [TIME]
+    "#
+    );
+
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--quiet")
+        .arg("--frozen")
+        .arg("--output-format").arg("jsonl")
+        .arg("--preview-features").arg("jsonl"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {"type":"result","schema":{"version":"preview"},"target":"project","project":{"path":"[TEMP_DIR]/","workspace":{"path":"[TEMP_DIR]/"}},"sync":{"environment":{"path":"[VENV]/","python":{"path":"[VENV]/[BIN]/[PYTHON]","version":"3.12.[X]","implementation":"cpython"}},"action":"check","changes":[]},"lock":{"path":"[TEMP_DIR]/uv.lock","action":"use"},"dry_run":false}
+    "#
+    );
+
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--no-progress")
+        .arg("--frozen")
+        .arg("--output-format").arg("jsonl")
+        .arg("--preview-features").arg("jsonl"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {"type":"result","schema":{"version":"preview"},"target":"project","project":{"path":"[TEMP_DIR]/","workspace":{"path":"[TEMP_DIR]/"}},"sync":{"environment":{"path":"[VENV]/","python":{"path":"[VENV]/[BIN]/[PYTHON]","version":"3.12.[X]","implementation":"cpython"}},"action":"check","changes":[]},"lock":{"path":"[TEMP_DIR]/uv.lock","action":"use"},"dry_run":false}
+
+    ----- stderr -----
+    Checked 1 package in [TIME]
+    "#
+    );
+
+    Ok(())
+}
+
+#[test]
+fn sync_jsonl_concurrent_install_events() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig", "sniffio"]
+        "#,
+    )?;
+
+    let output = context
+        .sync()
+        .arg("--output-format")
+        .arg("jsonl")
+        .arg("--preview-features")
+        .arg("jsonl")
+        .output()?;
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8(output.stdout)?;
+    let items = stdout
+        .lines()
+        .map(serde_json::from_str::<serde_json::Value>)
+        .collect::<Result<Vec<_>, _>>()?;
+    let Some((report, progress)) = items.split_last() else {
+        anyhow::bail!("expected JSONL progress and a final sync report");
+    };
+
+    let mut installed = progress
+        .iter()
+        .filter(|event| event["phase"] == "install" && event["status"] == "updated")
+        .filter_map(|event| event["name"].as_str().map(str::to_owned))
+        .collect::<Vec<_>>();
+    installed.sort();
+    insta::assert_json_snapshot!(installed, @r#"
+    [
+      "iniconfig==2.0.0",
+      "sniffio==1.3.1"
+    ]
+    "#);
+
+    assert_eq!(report["type"], "result");
+    assert_eq!(report["sync"]["changes"].as_array().map(Vec::len), Some(2));
+
+    Ok(())
+}
+
+#[test]
 fn sync_json_check_outdated_environment() -> Result<()> {
     let context = uv_test::test_context!("3.12")
         .with_filtered_python_names()
