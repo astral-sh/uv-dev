@@ -1346,6 +1346,58 @@ impl EnvVars {
     #[attr_added_in("0.5.19")]
     pub const UV_GIT_LFS: &'static str = "UV_GIT_LFS";
 
+    /// Sets the soft virtual-address-space limit, in bytes, for commands executed by `uv run`.
+    ///
+    /// Only supported on Unix platforms that provide `RLIMIT_AS`.
+    #[attr_added_in("0.12.2")]
+    pub const UV_RUN_RLIMIT_AS: &'static str = "UV_RUN_RLIMIT_AS";
+
+    /// Sets the soft core-file size limit, in bytes, for commands executed by `uv run`.
+    #[attr_added_in("0.12.2")]
+    pub const UV_RUN_RLIMIT_CORE: &'static str = "UV_RUN_RLIMIT_CORE";
+
+    /// Sets the soft CPU-time limit, in seconds, for commands executed by `uv run`.
+    #[attr_added_in("0.12.2")]
+    pub const UV_RUN_RLIMIT_CPU: &'static str = "UV_RUN_RLIMIT_CPU";
+
+    /// Sets the soft data-segment size limit, in bytes, for commands executed by `uv run`.
+    #[attr_added_in("0.12.2")]
+    pub const UV_RUN_RLIMIT_DATA: &'static str = "UV_RUN_RLIMIT_DATA";
+
+    /// Sets the soft file-size limit, in bytes, for commands executed by `uv run`.
+    #[attr_added_in("0.12.2")]
+    pub const UV_RUN_RLIMIT_FSIZE: &'static str = "UV_RUN_RLIMIT_FSIZE";
+
+    /// Sets the soft kqueue-count limit for commands executed by `uv run`.
+    ///
+    /// Only supported on FreeBSD.
+    #[attr_added_in("0.12.2")]
+    pub const UV_RUN_RLIMIT_KQUEUES: &'static str = "UV_RUN_RLIMIT_KQUEUES";
+
+    /// Sets the soft file-lock and lease limit for commands executed by `uv run`.
+    ///
+    /// Only supported on Linux and Android.
+    #[attr_added_in("0.12.2")]
+    pub const UV_RUN_RLIMIT_LOCKS: &'static str = "UV_RUN_RLIMIT_LOCKS";
+
+    /// Sets the soft locked-memory limit, in bytes, for commands executed by `uv run`.
+    ///
+    /// Only supported on Unix platforms that provide `RLIMIT_MEMLOCK`.
+    #[attr_added_in("0.12.2")]
+    pub const UV_RUN_RLIMIT_MEMLOCK: &'static str = "UV_RUN_RLIMIT_MEMLOCK";
+
+    /// Sets the soft POSIX message-queue size limit, in bytes, for commands executed by `uv run`.
+    ///
+    /// Only supported on Linux and Android.
+    #[attr_added_in("0.12.2")]
+    pub const UV_RUN_RLIMIT_MSGQUEUE: &'static str = "UV_RUN_RLIMIT_MSGQUEUE";
+
+    /// Sets the soft scheduling-priority limit for commands executed by `uv run`.
+    ///
+    /// Only supported on Linux and Android.
+    #[attr_added_in("0.12.2")]
+    pub const UV_RUN_RLIMIT_NICE: &'static str = "UV_RUN_RLIMIT_NICE";
+
     /// Sets the soft open-file descriptor limit for commands executed by `uv run`.
     ///
     /// The limit is applied after uv prepares the environment and immediately before the command
@@ -1353,6 +1405,64 @@ impl EnvVars {
     /// applied, uv exits with an error without running the command. Only supported on Unix.
     #[attr_added_in("0.12.2")]
     pub const UV_RUN_RLIMIT_NOFILE: &'static str = "UV_RUN_RLIMIT_NOFILE";
+
+    /// Sets the soft process-count limit for commands executed by `uv run`.
+    ///
+    /// Only supported on Unix platforms that provide `RLIMIT_NPROC`.
+    #[attr_added_in("0.12.2")]
+    pub const UV_RUN_RLIMIT_NPROC: &'static str = "UV_RUN_RLIMIT_NPROC";
+
+    /// Sets the soft pseudoterminal-count limit for commands executed by `uv run`.
+    ///
+    /// Only supported on FreeBSD.
+    #[attr_added_in("0.12.2")]
+    pub const UV_RUN_RLIMIT_NPTS: &'static str = "UV_RUN_RLIMIT_NPTS";
+
+    /// Sets the soft resident-memory size limit, in bytes, for commands executed by `uv run`.
+    ///
+    /// Only supported on Unix platforms that provide `RLIMIT_RSS`.
+    #[attr_added_in("0.12.2")]
+    pub const UV_RUN_RLIMIT_RSS: &'static str = "UV_RUN_RLIMIT_RSS";
+
+    /// Sets the soft real-time scheduling-priority limit for commands executed by `uv run`.
+    ///
+    /// Only supported on Linux and Android.
+    #[attr_added_in("0.12.2")]
+    pub const UV_RUN_RLIMIT_RTPRIO: &'static str = "UV_RUN_RLIMIT_RTPRIO";
+
+    /// Sets the soft real-time CPU-time limit, in microseconds, for commands executed by `uv run`.
+    ///
+    /// Only supported on Linux.
+    #[attr_added_in("0.12.2")]
+    pub const UV_RUN_RLIMIT_RTTIME: &'static str = "UV_RUN_RLIMIT_RTTIME";
+
+    /// Sets the soft socket-buffer size limit, in bytes, for commands executed by `uv run`.
+    ///
+    /// Only supported on FreeBSD and `DragonFly` BSD.
+    #[attr_added_in("0.12.2")]
+    pub const UV_RUN_RLIMIT_SBSIZE: &'static str = "UV_RUN_RLIMIT_SBSIZE";
+
+    /// Sets the soft queued-signal limit for commands executed by `uv run`.
+    ///
+    /// Only supported on Linux and Android.
+    #[attr_added_in("0.12.2")]
+    pub const UV_RUN_RLIMIT_SIGPENDING: &'static str = "UV_RUN_RLIMIT_SIGPENDING";
+
+    /// Sets the soft stack-size limit, in bytes, for commands executed by `uv run`.
+    #[attr_added_in("0.12.2")]
+    pub const UV_RUN_RLIMIT_STACK: &'static str = "UV_RUN_RLIMIT_STACK";
+
+    /// Sets the soft swap-space limit, in bytes, for commands executed by `uv run`.
+    ///
+    /// Only supported on FreeBSD.
+    #[attr_added_in("0.12.2")]
+    pub const UV_RUN_RLIMIT_SWAP: &'static str = "UV_RUN_RLIMIT_SWAP";
+
+    /// Sets the soft virtual-memory limit, in bytes, for commands executed by `uv run`.
+    ///
+    /// Only supported on FreeBSD.
+    #[attr_added_in("0.12.2")]
+    pub const UV_RUN_RLIMIT_VMEM: &'static str = "UV_RUN_RLIMIT_VMEM";
 
     /// Number of times that `uv run` has been recursively invoked. Used to guard against infinite
     /// recursion, e.g., when `uv run`` is used in a script shebang.

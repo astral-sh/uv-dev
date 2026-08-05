@@ -2367,7 +2367,7 @@ async fn run_project(
                 args.max_recursion_depth,
                 args.malware_settings,
                 #[cfg(unix)]
-                args.run_rlimit_nofile,
+                args.run_resource_limits,
             ))
             .await
         }
