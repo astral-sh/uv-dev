@@ -21,3 +21,9 @@ The observable behavior is a correctness failure: trampoline creation can fail d
   Reports the identical uv-trampoline PE-update error and ERROR_OPEN_FAILED on Windows 11; disabling an unspecified security tool resolved it. It lacks the Bitdefender-specific diagnosis of astral-sh/uv#20567.
 - https://github.com/astral-sh/uv/pull/15068 (merged pull request): Use `.rcdata` to store trampoline type + path to python binary
   Introduced the current PE-resource-based trampoline metadata implementation. Its discussion notes the temporary-file write/read/delete round trip, but does not confirm the reported exclusive-open or AV exception-injection mechanism.
+
+## Reproduction
+
+Status: `needs_more_information`
+
+The report identifies Windows 11 and uv 0.11.28, but provides no exact uv command, complete error, BitDefender version/policy/module, or reproducibility rate. The available environment is Linux with uv 0.12.1, so it cannot exercise Windows trampoline creation or BitDefender’s alleged exception injection. Source inspection confirms that Windows trampoline creation writes a temporary executable and invokes BeginUpdateResourceW/UpdateResourceW/EndUpdateResourceW, but that is not behavioral reproduction and does not confirm the claimed access/share flags or AV response. The loop from astral-sh/uv#20567 concerns intermittent AV interference and cannot establish this report’s distinct no-lock/injected-exception claim. A meaningful reproduction needs the exact failing command and stderr, BitDefender GravityZone agent version and enabled policy/modules, plus an API/Process Monitor trace showing the failing Windows call and requested access/share flags; comparison with BitDefender disabled and preferably current uv is also needed.
