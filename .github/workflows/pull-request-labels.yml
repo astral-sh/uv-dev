@@ -76,6 +76,12 @@ jobs:
           prompt-file: "${{ github.workspace }}/agents/prompts/pull-request-labels.md"
           output-schema-file: "${{ github.workspace }}/agents/schemas/pull-request-labels.json"
 
+      - name: "Upload Codex thread"
+        if: always()
+        uses: ./.github/actions/upload-codex-thread
+        with:
+          name: pull-request-labels
+
   report:
     needs: labels
     if: needs.labels.outputs.result != ''
