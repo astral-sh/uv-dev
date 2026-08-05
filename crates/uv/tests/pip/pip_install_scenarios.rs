@@ -4465,6 +4465,218 @@ fn equivalent_dependency_ranges() {
     context.assert_not_installed("c");
 }
 
+/// Alternative parent releases require dependency ranges that fail for different reasons: yanked releases and disabled source builds.
+///
+/// ```text
+/// alternative-dependencies-mixed-unavailability
+/// ├── environment
+/// │   └── python3.12
+/// ├── root
+/// │   └── requires parent
+/// │       ├── satisfied by parent-1.0.0
+/// │       └── satisfied by parent-2.0.0
+/// ├── dependency
+/// │   ├── dependency-1.0.0 (yanked)
+/// │   ├── dependency-1.5.0 (yanked)
+/// │   ├── dependency-2.0.0
+/// │   └── dependency-2.5.0
+/// └── parent
+///     ├── parent-1.0.0
+///     │   └── requires dependency>=1,<2
+///     │       └── unsatisfied: no matching version
+///     └── parent-2.0.0
+///         └── requires dependency>=2,<3
+///             ├── satisfied by dependency-2.0.0
+///             └── satisfied by dependency-2.5.0
+/// ```
+#[test]
+fn alternative_dependencies_mixed_unavailability() {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("wheels/alternative-dependencies-mixed-unavailability.toml");
+
+    uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--only-binary")
+        .arg("dependency")
+        .arg("parent")
+        , @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+      × No solution found when resolving dependencies:
+      ╰─▶ Because only the following versions of dependency are available:
+              dependency<=1.0.0
+              dependency==1.5.0
+              dependency>=2
+          and dependency<=1.5.0 was yanked, we can conclude that dependency<=1.5.0 cannot be used.
+          And because parent<=1.0.0 depends on dependency<2, we can conclude that parent<=1.0.0 cannot be used. (1)
+
+          Because only the following versions of dependency are available:
+              dependency<=2.0.0
+              dependency==2.5.0
+          and dependency>=2.0.0 has no usable wheels, we can conclude that dependency>=2.0.0 cannot be used.
+          And because parent>=2.0.0 depends on dependency>=2, we can conclude that parent>=2.0.0 cannot be used.
+          And because we know from (1) that parent<=1.0.0 cannot be used, we can conclude that all versions of parent cannot be used.
+          And because you require parent, we can conclude that your requirements are unsatisfiable.
+
+    hint: Wheels are required for `dependency` because building from source is disabled for `dependency` (i.e., with `--no-build-package dependency`)
+    ");
+
+    // Distinct yanked and no-build incompatibilities must remain visible, including the no-build hint.
+    context.assert_not_installed("parent");
+}
+
+/// Alternative parent releases require different dependency ranges, but all matching releases must be built from source.
+///
+/// ```text
+/// alternative-dependencies-only-no-build
+/// ├── environment
+/// │   └── python3.12
+/// ├── root
+/// │   └── requires parent
+/// │       ├── satisfied by parent-1.0.0
+/// │       └── satisfied by parent-2.0.0
+/// ├── dependency
+/// │   ├── dependency-1.0.0
+/// │   ├── dependency-1.5.0
+/// │   ├── dependency-2.0.0
+/// │   └── dependency-2.5.0
+/// └── parent
+///     ├── parent-1.0.0
+///     │   └── requires dependency>=1,<2
+///     │       ├── satisfied by dependency-1.0.0
+///     │       └── satisfied by dependency-1.5.0
+///     └── parent-2.0.0
+///         └── requires dependency>=2,<3
+///             ├── satisfied by dependency-2.0.0
+///             └── satisfied by dependency-2.5.0
+/// ```
+#[test]
+fn alternative_dependencies_only_no_build() {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("wheels/alternative-dependencies-only-no-build.toml");
+
+    uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--only-binary")
+        .arg("dependency")
+        .arg("parent")
+        , @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+      × No solution found when resolving dependencies:
+      ╰─▶ Because all versions of parent depend on dependency and all versions of dependency have no usable wheels, we can conclude that all versions of parent cannot be used.
+          And because you require parent, we can conclude that your requirements are unsatisfiable.
+
+    hint: Wheels are required for `dependency` because building from source is disabled for `dependency` (i.e., with `--no-build-package dependency`)
+    ");
+
+    // Equivalent no-build dependency failures should collapse while preserving the actionable no-build hint.
+    context.assert_not_installed("parent");
+}
+
+/// Older parent releases have no usable wheels, while newer releases require a dependency that also has no usable wheels.
+///
+/// ```text
+/// direct-and-transitive-no-build
+/// ├── environment
+/// │   └── python3.12
+/// ├── root
+/// │   └── requires parent
+/// │       ├── satisfied by parent-1.0.0
+/// │       ├── satisfied by parent-1.5.0
+/// │       ├── satisfied by parent-2.0.0
+/// │       └── satisfied by parent-2.5.0
+/// ├── dependency
+/// │   ├── dependency-1.0.0
+/// │   ├── dependency-1.5.0
+/// │   ├── dependency-2.0.0
+/// │   └── dependency-2.5.0
+/// └── parent
+///     ├── parent-1.0.0
+///     ├── parent-1.5.0
+///     ├── parent-2.0.0
+///     │   └── requires dependency>=1,<2
+///     │       ├── satisfied by dependency-1.0.0
+///     │       └── satisfied by dependency-1.5.0
+///     └── parent-2.5.0
+///         └── requires dependency>=2,<3
+///             ├── satisfied by dependency-2.0.0
+///             └── satisfied by dependency-2.5.0
+/// ```
+#[test]
+fn direct_and_transitive_no_build() {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("wheels/direct-and-transitive-no-build.toml");
+
+    uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--only-binary")
+        .arg("parent")
+        .arg("--only-binary")
+        .arg("dependency")
+        .arg("parent")
+        , @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+      × No solution found when resolving dependencies:
+      ╰─▶ Because dependency<=1.5.0 has no usable wheels and parent==2.0.0 depends on dependency<2, we can conclude that parent==2.0.0 cannot be used.
+          And because parent<=1.5.0 has no usable wheels, we can conclude that parent<=2.0.0 cannot be used. (1)
+
+          Because dependency>=2.0.0 has no usable wheels and parent>=2.5.0 depends on dependency>=2, we can conclude that parent>=2.5.0 cannot be used.
+          And because we know from (1) that parent<=2.0.0 cannot be used, we can conclude that all versions of parent cannot be used.
+          And because you require parent, we can conclude that your requirements are unsatisfiable.
+
+    hint: Wheels are required for `parent` because building from source is disabled for `parent` (i.e., with `--no-build-package parent`)
+    hint: Wheels are required for `dependency` because building from source is disabled for `dependency` (i.e., with `--no-build-package dependency`)
+    ");
+
+    // Directly unavailable parent releases must not be reported as though they share an uninspected dependency.
+    context.assert_not_installed("parent");
+}
+
+/// Different releases only provide wheels with incompatible ABI and platform tags.
+///
+/// ```text
+/// mixed-wheel-incompatibilities
+/// ├── environment
+/// │   └── python3.12
+/// ├── root
+/// │   └── requires package
+/// │       ├── satisfied by package-1.0.0
+/// │       ├── satisfied by package-1.5.0
+/// │       ├── satisfied by package-2.0.0
+/// │       └── satisfied by package-2.5.0
+/// └── package
+///     ├── package-1.0.0
+///     ├── package-1.5.0
+///     ├── package-2.0.0
+///     └── package-2.5.0
+/// ```
+#[test]
+fn mixed_wheel_incompatibilities() {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("wheels/mixed-wheel-incompatibilities.toml");
+
+    uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--python-platform=x86_64-manylinux2014")
+        .arg("package")
+        , @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+      × No solution found when resolving dependencies:
+      ╰─▶ Because only the following versions of package are available:
+              package==1.0.0
+              package==1.5.0
+              package==2.0.0
+              package==2.5.0
+          and package<=1.5.0 has no wheels with a matching Python ABI tag (e.g., `cp312`), we can conclude that package<=1.5.0 cannot be used.
+          And because package>=2.0.0 has no wheels with a matching platform tag (e.g., `manylinux_2_17_x86_64`) and you require package, we can conclude that your requirements are unsatisfiable.
+
+    hint: You require CPython 3.12 (`cp312`), but we only found wheels for `package` (v1.5.0) with the following Python ABI tag: `graalpy240_310_native`
+    hint: Wheels are available for `package` (v2.5.0) on the following platform: `macosx_10_0_ppc64`
+    ");
+
+    // Distinct wheel ABI and platform incompatibilities must both remain visible.
+    context.assert_not_installed("package");
+}
+
 /// Both wheels and source distributions are available, and the user has disabled binaries.
 ///
 /// ```text
@@ -4812,6 +5024,95 @@ fn specific_tag_and_default() {
     Installed 1 package in [TIME]
      + a==1.0.0
     ");
+}
+
+/// Alternative parent releases require different ranges of a dependency whose matching releases are all yanked.
+///
+/// ```text
+/// alternative-dependencies-only-yanked
+/// ├── environment
+/// │   └── python3.12
+/// ├── root
+/// │   └── requires parent
+/// │       ├── satisfied by parent-1.0.0
+/// │       └── satisfied by parent-2.0.0
+/// ├── dependency
+/// │   ├── dependency-1.0.0 (yanked)
+/// │   ├── dependency-1.5.0 (yanked)
+/// │   ├── dependency-2.0.0 (yanked)
+/// │   └── dependency-2.5.0 (yanked)
+/// └── parent
+///     ├── parent-1.0.0
+///     │   └── requires dependency>=1,<2
+///     │       └── unsatisfied: no matching version
+///     └── parent-2.0.0
+///         └── requires dependency>=2,<3
+///             └── unsatisfied: no matching version
+/// ```
+#[test]
+fn alternative_dependencies_only_yanked() {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("yanked/alternative-dependencies-only-yanked.toml");
+
+    uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("parent")
+        , @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+      × No solution found when resolving dependencies:
+      ╰─▶ Because all versions of parent depend on dependency and all versions of dependency were yanked, we can conclude that all versions of parent cannot be used.
+          And because you require parent, we can conclude that your requirements are unsatisfiable.
+    ");
+
+    // Equivalent yanked dependency failures should collapse without enumerating each parent or dependency release.
+    context.assert_not_installed("parent");
+}
+
+/// Alternative dependency ranges only contain yanked releases, but an unyanked release exists between the ranges.
+///
+/// ```text
+/// alternative-dependencies-yanked-with-available-gap
+/// ├── environment
+/// │   └── python3.12
+/// ├── root
+/// │   └── requires parent
+/// │       ├── satisfied by parent-1.0.0
+/// │       └── satisfied by parent-2.0.0
+/// ├── dependency
+/// │   ├── dependency-1.0.0 (yanked)
+/// │   ├── dependency-1.5.0 (yanked)
+/// │   ├── dependency-2.5.0
+/// │   ├── dependency-3.0.0 (yanked)
+/// │   └── dependency-3.5.0 (yanked)
+/// └── parent
+///     ├── parent-1.0.0
+///     │   └── requires dependency>=1,<2
+///     │       └── unsatisfied: no matching version
+///     └── parent-2.0.0
+///         └── requires dependency>=3,<4
+///             └── unsatisfied: no matching version
+/// ```
+#[test]
+fn alternative_dependencies_yanked_with_available_gap() {
+    let context = uv_test::test_context!("3.12");
+    let server =
+        PackseServer::new("yanked/alternative-dependencies-yanked-with-available-gap.toml");
+
+    uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("parent")
+        , @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+      × No solution found when resolving dependencies:
+      ╰─▶ Because dependency<=1.5.0 was yanked and parent<=1.0.0 depends on dependency<2, we can conclude that parent<=1.0.0 cannot be used. (1)
+
+          Because dependency>=3.0.0 was yanked and parent>=2.0.0 depends on dependency>=3, we can conclude that parent>=2.0.0 cannot be used.
+          And because we know from (1) that parent<=1.0.0 cannot be used, we can conclude that all versions of parent cannot be used.
+          And because you require parent, we can conclude that your requirements are unsatisfiable.
+    ");
+
+    // An available version between incompatible dependency ranges must not be described as yanked.
+    context.assert_not_installed("parent");
 }
 
 /// The user requires a version of package `a` which only matches yanked versions.

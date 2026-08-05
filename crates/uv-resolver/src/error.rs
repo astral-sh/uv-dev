@@ -1110,16 +1110,16 @@ fn unavailable_dependency(tree: &ErrorTree) -> Option<UnavailableDependency<'_>>
         return None;
     };
 
-    let (dependency, unavailable) = match (&*derived.cause1, &*derived.cause2) {
-        (
-            dependency @ DerivationTree::External(External::FromDependencyOf(..)),
-            unavailable @ DerivationTree::External(External::Custom(..)),
-        )
-        | (
-            unavailable @ DerivationTree::External(External::Custom(..)),
-            dependency @ DerivationTree::External(External::FromDependencyOf(..)),
-        ) => (dependency, unavailable),
-        _ => return None,
+    let ((
+        dependency @ DerivationTree::External(External::FromDependencyOf(..)),
+        unavailable @ DerivationTree::External(External::Custom(..)),
+    )
+    | (
+        unavailable @ DerivationTree::External(External::Custom(..)),
+        dependency @ DerivationTree::External(External::FromDependencyOf(..)),
+    )) = (&*derived.cause1, &*derived.cause2)
+    else {
+        return None;
     };
 
     let DerivationTree::External(External::FromDependencyOf(
