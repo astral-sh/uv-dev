@@ -48,6 +48,8 @@ pub enum VersionFormat {
     Text,
     /// Display the version as JSON.
     Json,
+    /// Stream progress updates and the version as newline-delimited JSON.
+    Jsonl,
 }
 
 #[derive(Debug, Default, Clone, Copy, clap::ValueEnum)]
@@ -57,6 +59,8 @@ pub enum PythonListFormat {
     Text,
     /// JSON (for computers).
     Json,
+    /// Newline-delimited JSON, including progress updates.
+    Jsonl,
 }
 
 #[derive(Debug, Default, Clone, Copy, clap::ValueEnum)]
@@ -66,6 +70,8 @@ pub enum SyncFormat {
     Text,
     /// Display the result in JSON format.
     Json,
+    /// Stream progress updates and the result as newline-delimited JSON.
+    Jsonl,
 }
 
 #[derive(Debug, Default, Clone, Copy, clap::ValueEnum)]
@@ -75,8 +81,19 @@ pub enum AuditOutputFormat {
     Text,
     /// Display the result in JSON format.
     Json,
+    /// Stream progress updates and the result as newline-delimited JSON.
+    Jsonl,
     /// Display the result in SARIF format.
     Sarif,
+}
+
+#[derive(Debug, Default, Clone, Copy, clap::ValueEnum)]
+pub enum MetadataOutputFormat {
+    /// Display workspace metadata as JSON.
+    #[default]
+    Json,
+    /// Stream progress updates and workspace metadata as newline-delimited JSON.
+    Jsonl,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -133,6 +150,41 @@ pub struct Cli {
 
     #[command(flatten)]
     pub top_level: TopLevelArgs,
+}
+
+impl Cli {
+    /// Whether the selected command should stream newline-delimited JSON.
+    pub fn is_jsonl_output(&self) -> bool {
+        match &*self.command {
+            Commands::Project(command) => match &**command {
+                ProjectCommand::Sync(args) => matches!(args.output_format, SyncFormat::Jsonl),
+                ProjectCommand::Version(args) => {
+                    matches!(args.output_format, VersionFormat::Jsonl)
+                }
+                ProjectCommand::Audit(args) => {
+                    matches!(args.audit.output_format, AuditOutputFormat::Jsonl)
+                }
+                _ => false,
+            },
+            Commands::Workspace(WorkspaceNamespace {
+                command: WorkspaceCommand::Metadata(args),
+            }) => matches!(args.output_format, MetadataOutputFormat::Jsonl),
+            Commands::Tool(ToolNamespace {
+                command: ToolCommand::Audit(args),
+            }) => matches!(args.audit.output_format, AuditOutputFormat::Jsonl),
+            Commands::Python(PythonNamespace {
+                command: PythonCommand::List(args),
+            }) => matches!(args.output_format, PythonListFormat::Jsonl),
+            Commands::Self_(SelfNamespace {
+                command:
+                    SelfCommand::Version {
+                        output_format: VersionFormat::Jsonl,
+                        ..
+                    },
+            }) => true,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Parser)]
@@ -7623,6 +7675,10 @@ pub enum WorkspaceCommand {
 }
 #[derive(Args)]
 pub struct MetadataArgs {
+    /// Select the output format.
+    #[arg(long, value_enum, default_value_t = MetadataOutputFormat::default())]
+    pub output_format: MetadataOutputFormat,
+
     /// View metadata for the specified PEP 723 Python script, rather than the current workspace.
     ///
     /// If provided, uv will resolve the dependencies based on the script's inline metadata table,

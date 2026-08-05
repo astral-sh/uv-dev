@@ -3,6 +3,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use uv_cache::{Cache, Refresh};
+use uv_cli::MetadataOutputFormat;
 use uv_client::BaseClientBuilder;
 use uv_configuration::{Concurrency, DependencyGroupsWithDefaults, DryRun};
 use uv_preview::{Preview, PreviewFeature};
@@ -22,7 +23,7 @@ use crate::commands::project::{
     ScriptInterpreter, UniversalState, WorkspacePython,
 };
 use crate::commands::{ExitStatus, UvError, diagnostics};
-use crate::printer::Printer;
+use crate::printer::{Printer, jsonl_result};
 use crate::settings::{FrozenSource, LockCheck, ResolverSettings};
 
 use super::module_owners::collect_module_owners;
@@ -50,6 +51,7 @@ pub(crate) async fn metadata(
     workspace_cache: &WorkspaceCache,
     printer: Printer,
     preview: Preview,
+    output_format: MetadataOutputFormat,
 ) -> Result<ExitStatus> {
     if !preview.is_enabled(PreviewFeature::WorkspaceMetadata) {
         warn_user!(
@@ -237,6 +239,7 @@ pub(crate) async fn metadata(
                     preview,
                     &malware_settings,
                     sync,
+                    printer,
                 )
                 .await
                 .context("Failed to collect module owners")?;
@@ -245,7 +248,7 @@ pub(crate) async fn metadata(
                     .with_module_owners(module_owners);
             }
 
-            print_metadata(&export, printer)
+            print_metadata(&export, output_format, printer)
         }
         Err(err @ ProjectError::LockMismatch(..)) => Err(UvError::user(err).into()),
         Err(ProjectError::Operation(err)) => diagnostics::OperationDiagnostic::default()
@@ -271,8 +274,16 @@ fn metadata_for_target(target: InstallTarget<'_>) -> Result<Metadata> {
     }
 }
 
-fn print_metadata(export: &Metadata, printer: Printer) -> Result<ExitStatus> {
-    writeln!(printer.stdout(), "{}", export.to_json()?)?;
+fn print_metadata(
+    export: &Metadata,
+    output_format: MetadataOutputFormat,
+    printer: Printer,
+) -> Result<ExitStatus> {
+    let output = match output_format {
+        MetadataOutputFormat::Json => export.to_json()?,
+        MetadataOutputFormat::Jsonl => jsonl_result(export)?,
+    };
+    writeln!(printer.stdout(), "{output}")?;
 
     Ok(ExitStatus::Success)
 }

@@ -598,6 +598,32 @@ async fn tool_audit_json() {
 }
 
 #[tokio::test]
+async fn tool_audit_jsonl() {
+    let context = uv_test::test_context!("3.12");
+    let tool_dir = context.temp_dir.child("tools");
+    install_tool(&context, "simple-launcher", true);
+
+    let server = MockServer::start().await;
+    mount_clean_service(&server).await;
+
+    uv_snapshot!(context.filters(), context.tool_audit()
+        .arg("--all")
+        .arg("--output-format")
+        .arg("jsonl")
+        .arg("--service-url")
+        .arg(server.uri())
+        .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks,jsonl")
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str()), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {"type":"progress","phase":"audit","status":"started"}
+    {"type":"progress","phase":"audit","status":"completed"}
+    {"type":"result","schema":{"version":"preview"},"tools":[{"name":"simple-launcher","summary":{"audited_packages":1,"vulnerabilities":0,"adverse_statuses":0},"vulnerabilities":[],"adverse_statuses":[]}]}
+    "#
+    );
+}
+
+#[tokio::test]
 async fn tool_audit_json_preview_warning() {
     let context = uv_test::test_context!("3.12");
     let tool_dir = context.temp_dir.child("tools");

@@ -96,6 +96,22 @@ fn python_list() {
     ");
 }
 
+#[test]
+fn python_list_jsonl() {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+
+    uv_snapshot!(context.filters(), context.python_list()
+        .arg("pypy")
+        .arg("--only-installed")
+        .arg("--output-format").arg("jsonl")
+        .arg("--preview-features").arg("jsonl"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {"type":"result","data":[]}
+    "#
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn python_list_ignores_noncritical_explicit_path_errors() -> Result<()> {

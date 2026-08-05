@@ -1,5 +1,37 @@
 use anstream::{eprint, print};
 use indicatif::ProgressDrawTarget;
+use serde::Serialize;
+
+/// Serialize an object-valued command result as a JSONL event.
+pub(crate) fn jsonl_result<T: Serialize>(result: &T) -> serde_json::Result<String> {
+    #[derive(Serialize)]
+    struct ResultEvent<'a, T> {
+        #[serde(rename = "type")]
+        event_type: &'static str,
+        #[serde(flatten)]
+        result: &'a T,
+    }
+
+    serde_json::to_string(&ResultEvent {
+        event_type: "result",
+        result,
+    })
+}
+
+/// Serialize an array-valued command result as a JSONL event.
+pub(crate) fn jsonl_result_data<T: Serialize>(result: &T) -> serde_json::Result<String> {
+    #[derive(Serialize)]
+    struct ResultEvent<'a, T> {
+        #[serde(rename = "type")]
+        event_type: &'static str,
+        data: &'a T,
+    }
+
+    serde_json::to_string(&ResultEvent {
+        event_type: "result",
+        data: result,
+    })
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Printer {
@@ -13,6 +45,8 @@ pub(crate) enum Printer {
     Verbose,
     /// A printer that prints to standard streams, excluding all progress outputs
     NoProgress,
+    /// A printer that streams progress updates to stdout as newline-delimited JSON.
+    Jsonl,
 }
 
 impl Printer {
@@ -31,6 +65,19 @@ impl Printer {
         }
     }
 
+    /// Enable structured progress unless progress output has been explicitly suppressed.
+    pub(crate) fn with_jsonl_progress(self) -> Self {
+        match self {
+            Self::Default | Self::Verbose | Self::Jsonl => Self::Jsonl,
+            Self::Silent | Self::Quiet | Self::NoProgress => self,
+        }
+    }
+
+    /// Whether progress updates should be streamed as newline-delimited JSON.
+    pub(crate) fn emits_jsonl_progress(self) -> bool {
+        matches!(self, Self::Jsonl)
+    }
+
     /// Return the [`ProgressDrawTarget`] for this printer.
     pub(crate) fn target(self) -> ProgressDrawTarget {
         match self {
@@ -41,6 +88,7 @@ impl Printer {
             // Otherwise, it gets interleaved with debug messages.
             Self::Verbose => ProgressDrawTarget::hidden(),
             Self::NoProgress => ProgressDrawTarget::hidden(),
+            Self::Jsonl => ProgressDrawTarget::hidden(),
         }
     }
 
@@ -53,6 +101,7 @@ impl Printer {
             Self::Default => Stdout::Enabled,
             Self::Verbose => Stdout::Enabled,
             Self::NoProgress => Stdout::Enabled,
+            Self::Jsonl => Stdout::Enabled,
         }
     }
 
@@ -64,6 +113,7 @@ impl Printer {
             Self::Default => Stdout::Enabled,
             Self::Verbose => Stdout::Enabled,
             Self::NoProgress => Stdout::Enabled,
+            Self::Jsonl => Stdout::Enabled,
         }
     }
 
@@ -76,6 +126,7 @@ impl Printer {
             Self::Default => Stderr::Enabled,
             Self::Verbose => Stderr::Enabled,
             Self::NoProgress => Stderr::Enabled,
+            Self::Jsonl => Stderr::Enabled,
         }
     }
 
@@ -87,6 +138,7 @@ impl Printer {
             Self::Default => Stderr::Enabled,
             Self::Verbose => Stderr::Enabled,
             Self::NoProgress => Stderr::Enabled,
+            Self::Jsonl => Stderr::Enabled,
         }
     }
 }

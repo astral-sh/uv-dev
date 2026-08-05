@@ -327,6 +327,8 @@ pub enum PreviewFeature {
     LockfileFormatCheck,
     /// Omit `package.metadata` from `uv.lock`.
     LockWithoutMetadata,
+    /// Allows `--output-format jsonl` to stream progress and final JSON output.
+    Jsonl,
 }
 
 impl Display for PreviewFeature {

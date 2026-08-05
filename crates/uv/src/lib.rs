@@ -525,6 +525,8 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
         }
     }
 
+    let jsonl_output = cli.is_jsonl_output();
+
     // Resolve the cache settings.
     let cache_settings = CacheSettings::resolve(*cli.top_level.cache_args, filesystem.as_ref());
 
@@ -544,12 +546,24 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
 
     // Configure the `Printer`, which controls user-facing output in the CLI.
     let printer = Printer::new(globals.quiet, globals.verbose, globals.no_progress);
+    let printer = if jsonl_output {
+        printer.with_jsonl_progress()
+    } else {
+        printer
+    };
 
     // Configure the `warn!` macros, which control user-facing warnings in the CLI.
     if globals.quiet > 0 {
         uv_warnings::disable();
     } else {
         uv_warnings::enable();
+    }
+
+    if jsonl_output && !globals.preview.is_enabled(PreviewFeature::Jsonl) {
+        warn_user!(
+            "The JSONL output format is experimental and the schema may change without warning. Pass `--preview-features {}` to disable this warning.",
+            PreviewFeature::Jsonl
+        );
     }
 
     anstream::ColorChoice::write_global(globals.color.into());
@@ -2112,6 +2126,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                     &workspace_cache,
                     printer,
                     globals.preview,
+                    args.output_format,
                 ))
                 .await
             }

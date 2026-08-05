@@ -20,7 +20,7 @@ use uv_python::{
 };
 
 use crate::commands::ExitStatus;
-use crate::printer::Printer;
+use crate::printer::{Printer, jsonl_result_data};
 use crate::settings::PythonListKinds;
 
 #[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Ord)]
@@ -232,7 +232,7 @@ pub(crate) async fn list(
     }
 
     match output_format {
-        PythonListFormat::Json => {
+        PythonListFormat::Json | PythonListFormat::Jsonl => {
             let data = include
                 .iter()
                 .map(|(key, uri)| -> Result<_> {
@@ -276,7 +276,12 @@ pub(crate) async fn list(
                     })
                 })
                 .collect::<Result<Vec<_>>>()?;
-            writeln!(printer.stdout(), "{}", serde_json::to_string(&data)?)?;
+            let output = if matches!(output_format, PythonListFormat::Jsonl) {
+                jsonl_result_data(&data)?
+            } else {
+                serde_json::to_string(&data)?
+            };
+            writeln!(printer.stdout(), "{output}")?;
         }
         PythonListFormat::Text => {
             // Compute the width of the first column.

@@ -44,6 +44,7 @@ pub(crate) async fn collect_module_owners(
     preview: Preview,
     malware_settings: &MalwareCheckSettings,
     sync: bool,
+    printer: Printer,
 ) -> Result<BTreeMap<ModuleName, Vec<String>>> {
     let (extras, groups) = target_selection(target);
     let Some(package_ids) = selected_package_ids(target, venv, &extras, &groups, settings)? else {
@@ -88,7 +89,11 @@ pub(crate) async fn collect_module_owners(
             cache,
             workspace_cache,
             DryRun::Disabled,
-            Printer::Silent,
+            if printer.emits_jsonl_progress() {
+                printer
+            } else {
+                Printer::Silent
+            },
             preview,
             malware_settings,
         )
