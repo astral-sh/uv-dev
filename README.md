@@ -27,3 +27,9 @@ This is an established correctness regression, not a duplicate. Repository sourc
   Recent analogous regression caused by changing a serialized cache field without bumping sdists-v9. Its direction and exact error differ, but it confirms that an unchanged bucket must retain compatible representations.
 - https://github.com/astral-sh/uv/pull/19301 (merged pull request): fix(cache): accept legacy ID format from pre-0.11.9 cache entries (#19298)
   Fix for astral-sh/uv#19298 that restored a representation compatible with the unchanged bucket, providing recent fix-oriented precedent.
+
+## Reproduction
+
+Status: `reproducible`
+
+On Linux x86_64 with Python 3.12.3, I built a minimal hatchling wheel, created fresh virtual environments, and used one temporary cache. `uv 0.12.0 pip install ./dist/localpkg-1.0.0-py3-none-any.whl --cache-dir <cache>` succeeded and created a `wheels-v6/.../1.0.0-py3-none-any.rev` entry. Installing the same wheel into a new environment with uv 0.11.1 and the same cache exited 1 with `Failed to deserialize cache entry` and `array had incorrect length, expected 4`. The reverse comparison—uv 0.11.1 writing the cache and uv 0.12.0 reading it—succeeded.
