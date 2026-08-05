@@ -725,7 +725,9 @@ impl NoSolutionError {
         );
 
         // This needs to be applied _after_ simplification of the ranges
-        tree = collapse_redundant_no_versions(tree);
+        let unavailable_reasons = unavailable_reasons(&tree);
+        tree = collapse_redundant_no_versions(tree, &unavailable_reasons);
+        tree = collapse_equivalent_unavailable_versions(tree, &self.included_versions);
 
         loop {
             let (collapsed, changed) = collapse_redundant_no_versions_tree(tree);
@@ -922,6 +924,7 @@ fn can_drop_no_versions(
     versions: &Range<Version>,
     other: &ErrorTree,
     parent_terms: &ErrorTerms,
+    unavailable_reasons: &FxHashMap<PubGrubPackage, Option<UnavailableReason>>,
 ) -> bool {
     let package_terms = if let DerivationTree::Derived(derived) = other {
         derived.terms.get(package)
@@ -934,24 +937,85 @@ fn can_drop_no_versions(
     let versions = versions.complement();
 
     // Retain exclusions of a single version because they produce useful messages like
-    // "only foo==1.0.0 is available". Otherwise, the clause is redundant when the conclusion
-    // covers either all versions or exactly the remaining range.
-    versions.as_singleton().is_none() && (*term == Range::full() || *term == versions)
+    // "only foo==1.0.0 is available".
+    if versions.as_singleton().is_some() {
+        return false;
+    }
+
+    // If every version of a package is unavailable for the same reason, enumerating gaps
+    // between unavailable versions adds no information. Keep the clause when different reasons
+    // must be distinguished, such as incompatible wheel ABI and platform tags.
+    if let DerivationTree::External(External::Custom(other_package, unavailable_versions, reason)) =
+        other
+        && package == other_package
+        && term.subset_of(unavailable_versions)
+        && unavailable_reasons
+            .get(package)
+            .is_some_and(|known_reason| known_reason.as_ref() == Some(reason))
+    {
+        return true;
+    }
+
+    // Otherwise, the clause is redundant when the conclusion covers either all versions or
+    // exactly the remaining range.
+    *term == Range::full() || *term == versions
 }
 
-fn collapse_redundant_no_versions(tree: ErrorTree) -> ErrorTree {
+fn unavailable_reasons(tree: &ErrorTree) -> FxHashMap<PubGrubPackage, Option<UnavailableReason>> {
+    let mut reasons = FxHashMap::default();
+    let mut trees = vec![tree];
+
+    while let Some(tree) = trees.pop() {
+        match tree {
+            DerivationTree::External(External::Custom(package, _, reason)) => {
+                reasons
+                    .entry(package.clone())
+                    .and_modify(|known_reason: &mut Option<UnavailableReason>| {
+                        if known_reason.as_ref() != Some(reason) {
+                            *known_reason = None;
+                        }
+                    })
+                    .or_insert_with(|| Some(reason.clone()));
+            }
+            DerivationTree::Derived(derived) => {
+                trees.push(&derived.cause1);
+                trees.push(&derived.cause2);
+            }
+            DerivationTree::External(_) => {}
+        }
+    }
+
+    reasons
+}
+
+fn collapse_redundant_no_versions(
+    tree: ErrorTree,
+    unavailable_reasons: &FxHashMap<PubGrubPackage, Option<UnavailableReason>>,
+) -> ErrorTree {
     map_derivation_tree(
         tree,
         DerivationTree::External,
         |metadata, cause1, cause2| {
             if let DerivationTree::External(External::NoVersions(package, versions)) = &cause1
-                && can_drop_no_versions(package, versions, &cause2, &metadata.terms)
+                && can_drop_no_versions(
+                    package,
+                    versions,
+                    &cause2,
+                    &metadata.terms,
+                    unavailable_reasons,
+                )
             {
                 return cause2;
             }
 
             if let DerivationTree::External(External::NoVersions(package, versions)) = &cause2
-                && can_drop_no_versions(package, versions, &cause1, &metadata.terms)
+                && can_drop_no_versions(
+                    package,
+                    versions,
+                    &cause1,
+                    &metadata.terms,
+                    unavailable_reasons,
+                )
             {
                 return cause1;
             }
@@ -959,6 +1023,76 @@ fn collapse_redundant_no_versions(tree: ErrorTree) -> ErrorTree {
             derived_tree(metadata, cause1, cause2)
         },
     )
+}
+
+/// Collapse adjacent unavailable-version clauses when together they cover every relevant version.
+fn collapse_equivalent_unavailable_versions(
+    tree: ErrorTree,
+    included_versions: &FxHashMap<PackageName, BTreeSet<Version>>,
+) -> ErrorTree {
+    map_derivation_tree(
+        tree,
+        DerivationTree::External,
+        |metadata, cause1, cause2| {
+            let (
+                DerivationTree::External(External::Custom(package, versions, reason)),
+                DerivationTree::External(External::Custom(
+                    other_package,
+                    other_versions,
+                    other_reason,
+                )),
+            ) = (&cause1, &cause2)
+            else {
+                return derived_tree(metadata, cause1, cause2);
+            };
+
+            if package != other_package || reason != other_reason || metadata.terms.len() != 1 {
+                return derived_tree(metadata, cause1, cause2);
+            }
+
+            let Some(Term::Positive(required_versions)) = metadata.terms.get(package) else {
+                return derived_tree(metadata, cause1, cause2);
+            };
+            let unavailable_versions = versions.union(other_versions);
+            if !covers_included_versions(
+                package,
+                required_versions,
+                &unavailable_versions,
+                included_versions,
+            ) {
+                return derived_tree(metadata, cause1, cause2);
+            }
+
+            DerivationTree::External(External::Custom(
+                package.clone(),
+                required_versions.clone(),
+                reason.clone(),
+            ))
+        },
+    )
+}
+
+/// Return whether every published version in `required` is included in `covered`.
+fn covers_included_versions(
+    package: &PubGrubPackage,
+    required: &Range<Version>,
+    covered: &Range<Version>,
+    included_versions: &FxHashMap<PackageName, BTreeSet<Version>>,
+) -> bool {
+    if required.subset_of(covered) {
+        return true;
+    }
+
+    let Some(versions) = package.name().and_then(|name| included_versions.get(name)) else {
+        return false;
+    };
+
+    let mut required_versions = versions.iter().filter(|version| required.contains(version));
+    let Some(first_version) = required_versions.next() else {
+        return false;
+    };
+
+    covered.contains(first_version) && required_versions.all(|version| covered.contains(version))
 }
 
 /// Given a [`DerivationTree`], collapse any derived trees with two `NoVersions` nodes for the same

@@ -4562,18 +4562,9 @@ fn alternative_dependencies_only_no_build() {
     exit_code: 1 (failure)
     ----- stderr -----
       × No solution found when resolving dependencies:
-      ╰─▶ Because only the following versions of dependency are available:
-              dependency<=1.0.0
-              dependency==1.5.0
-              dependency>=2
-          and dependency<=1.5.0 has no usable wheels, we can conclude that dependency<=1.5.0 cannot be used.
-          And because parent<=1.0.0 depends on dependency<2, we can conclude that parent<=1.0.0 cannot be used. (1)
+      ╰─▶ Because dependency<=1.5.0 has no usable wheels and parent<=1.0.0 depends on dependency<2, we can conclude that parent<=1.0.0 cannot be used. (1)
 
-          Because only the following versions of dependency are available:
-              dependency<=2.0.0
-              dependency==2.5.0
-          and dependency>=2.0.0 has no usable wheels, we can conclude that dependency>=2.0.0 cannot be used.
-          And because parent>=2.0.0 depends on dependency>=2, we can conclude that parent>=2.0.0 cannot be used.
+          Because dependency>=2.0.0 has no usable wheels and parent>=2.0.0 depends on dependency>=2, we can conclude that parent>=2.0.0 cannot be used.
           And because we know from (1) that parent<=1.0.0 cannot be used, we can conclude that all versions of parent cannot be used.
           And because you require parent, we can conclude that your requirements are unsatisfiable.
 
@@ -4628,25 +4619,11 @@ fn direct_and_transitive_no_build() {
     exit_code: 1 (failure)
     ----- stderr -----
       × No solution found when resolving dependencies:
-      ╰─▶ Because only the following versions of parent are available:
-              parent==1.0.0
-              parent>=1.5.0
-          and parent<=1.5.0 has no usable wheels, we can conclude that parent<=1.5.0 cannot be used. (1)
+      ╰─▶ Because dependency<=1.5.0 has no usable wheels and parent==2.0.0 depends on dependency<2, we can conclude that parent==2.0.0 cannot be used.
+          And because parent<=1.5.0 has no usable wheels, we can conclude that parent<=2.0.0 cannot be used. (1)
 
-          Because only the following versions of dependency are available:
-              dependency<=1.0.0
-              dependency==1.5.0
-              dependency>=2
-          and dependency<=1.5.0 has no usable wheels, we can conclude that dependency<=1.5.0 cannot be used.
-          And because parent==2.0.0 depends on dependency<2, we can conclude that parent==2.0.0 cannot be used.
-          And because we know from (1) that parent<=1.5.0 cannot be used, we can conclude that parent<=2.0.0 cannot be used. (2)
-
-          Because only the following versions of dependency are available:
-              dependency<=2.0.0
-              dependency==2.5.0
-          and dependency>=2.0.0 has no usable wheels, we can conclude that dependency>=2.0.0 cannot be used.
-          And because parent>=2.5.0 depends on dependency>=2, we can conclude that parent>=2.5.0 cannot be used.
-          And because we know from (2) that parent<=2.0.0 cannot be used, we can conclude that all versions of parent cannot be used.
+          Because dependency>=2.0.0 has no usable wheels and parent>=2.5.0 depends on dependency>=2, we can conclude that parent>=2.5.0 cannot be used.
+          And because we know from (1) that parent<=2.0.0 cannot be used, we can conclude that all versions of parent cannot be used.
           And because you require parent, we can conclude that your requirements are unsatisfiable.
 
     hint: Wheels are required for `parent` because building from source is disabled for `parent` (i.e., with `--no-build-package parent`)
@@ -5086,18 +5063,9 @@ fn alternative_dependencies_only_yanked() {
     exit_code: 1 (failure)
     ----- stderr -----
       × No solution found when resolving dependencies:
-      ╰─▶ Because only the following versions of dependency are available:
-              dependency<=1.0.0
-              dependency==1.5.0
-              dependency>=2
-          and dependency<=1.5.0 was yanked, we can conclude that dependency<=1.5.0 cannot be used.
-          And because parent<=1.0.0 depends on dependency<2, we can conclude that parent<=1.0.0 cannot be used. (1)
+      ╰─▶ Because dependency<=1.5.0 was yanked and parent<=1.0.0 depends on dependency<2, we can conclude that parent<=1.0.0 cannot be used. (1)
 
-          Because only the following versions of dependency are available:
-              dependency<=2.0.0
-              dependency==2.5.0
-          and dependency>=2.0.0 was yanked, we can conclude that dependency>=2.0.0 cannot be used.
-          And because parent>=2.0.0 depends on dependency>=2, we can conclude that parent>=2.0.0 cannot be used.
+          Because dependency>=2.0.0 was yanked and parent>=2.0.0 depends on dependency>=2, we can conclude that parent>=2.0.0 cannot be used.
           And because we know from (1) that parent<=1.0.0 cannot be used, we can conclude that all versions of parent cannot be used.
           And because you require parent, we can conclude that your requirements are unsatisfiable.
     ");
@@ -5142,18 +5110,9 @@ fn alternative_dependencies_yanked_with_available_gap() {
     exit_code: 1 (failure)
     ----- stderr -----
       × No solution found when resolving dependencies:
-      ╰─▶ Because only the following versions of dependency are available:
-              dependency<=1.0.0
-              dependency==1.5.0
-              dependency>2
-          and dependency<=1.5.0 was yanked, we can conclude that dependency<=1.5.0 cannot be used.
-          And because parent<=1.0.0 depends on dependency<2, we can conclude that parent<=1.0.0 cannot be used. (1)
+      ╰─▶ Because dependency<=1.5.0 was yanked and parent<=1.0.0 depends on dependency<2, we can conclude that parent<=1.0.0 cannot be used. (1)
 
-          Because only the following versions of dependency are available:
-              dependency<=3.0.0
-              dependency==3.5.0
-          and dependency>=3.0.0 was yanked, we can conclude that dependency>=3.0.0 cannot be used.
-          And because parent>=2.0.0 depends on dependency>=3, we can conclude that parent>=2.0.0 cannot be used.
+          Because dependency>=3.0.0 was yanked and parent>=2.0.0 depends on dependency>=3, we can conclude that parent>=2.0.0 cannot be used.
           And because we know from (1) that parent<=1.0.0 cannot be used, we can conclude that all versions of parent cannot be used.
           And because you require parent, we can conclude that your requirements are unsatisfiable.
     ");
