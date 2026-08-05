@@ -3990,6 +3990,92 @@ fn compile_yanked_version_indirect() -> Result<()> {
     Ok(())
 }
 
+/// Collapse alternative dependency requirements when all matching versions fail identically.
+#[test]
+fn compile_yanked_dependency_versions() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let mut scenario = Scenario::empty();
+    scenario.packages.insert(
+        PackageName::from_str("parent")?,
+        Package {
+            versions: BTreeMap::from([
+                (
+                    Version::from_str("1.0.0")?,
+                    PackageMetadata {
+                        requires: vec![Requirement::from_str("dependency>=1,<2")?],
+                        wheel: true,
+                        ..PackageMetadata::default()
+                    },
+                ),
+                (
+                    Version::from_str("2.0.0")?,
+                    PackageMetadata {
+                        requires: vec![Requirement::from_str("dependency>=2,<3")?],
+                        wheel: true,
+                        ..PackageMetadata::default()
+                    },
+                ),
+            ]),
+        },
+    );
+    scenario.packages.insert(
+        PackageName::from_str("dependency")?,
+        Package {
+            versions: BTreeMap::from([
+                (
+                    Version::from_str("1.0.0")?,
+                    PackageMetadata {
+                        wheel: true,
+                        yanked: true,
+                        ..PackageMetadata::default()
+                    },
+                ),
+                (
+                    Version::from_str("1.5.0")?,
+                    PackageMetadata {
+                        wheel: true,
+                        yanked: true,
+                        ..PackageMetadata::default()
+                    },
+                ),
+                (
+                    Version::from_str("2.0.0")?,
+                    PackageMetadata {
+                        wheel: true,
+                        yanked: true,
+                        ..PackageMetadata::default()
+                    },
+                ),
+                (
+                    Version::from_str("2.5.0")?,
+                    PackageMetadata {
+                        wheel: true,
+                        yanked: true,
+                        ..PackageMetadata::default()
+                    },
+                ),
+            ]),
+        },
+    );
+    let server = PackseServer::from_scenario(&scenario);
+
+    let requirements_in = context.temp_dir.child("requirements.in");
+    requirements_in.write_str("parent")?;
+
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .arg("requirements.in")
+        .arg("--index-url")
+        .arg(server.index_url()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+      × No solution found when resolving dependencies:
+      ╰─▶ Because all versions of parent depend on dependency and all versions of dependency were yanked, we can conclude that all versions of parent cannot be used.
+          And because you require parent, we can conclude that your requirements are unsatisfiable.
+    ");
+
+    Ok(())
+}
+
 /// Flask==3.0.0 depends on Werkzeug>=3.0.0. Demonstrate that we can override this
 /// requirement with an incompatible version.
 #[test]
@@ -14196,6 +14282,8 @@ fn only_binary_unavailable_dependency_versions() -> Result<()> {
         .stdin(fs::File::open(requirements_in)?)
         .arg("--python-version")
         .arg("3.12")
+        .arg("--python-platform")
+        .arg("x86_64-manylinux_2_17")
         .arg("--only-binary")
         .arg(":all:")
         .arg("-")
@@ -14205,17 +14293,9 @@ fn only_binary_unavailable_dependency_versions() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
       × No solution found when resolving dependencies:
-      ╰─▶ Because all of:
-              cornac>=1.1.2,<=1.15.1
-              cornac==1.18.0
-           have no usable wheels and cornac>=1.15.2,<=1.17.0 has no usable wheels, we can conclude that cornac>=1.1.2,<2 cannot be used.
-          And because recommenders==1.1.1 depends on cornac>=1.1.2,<2 and recommenders>=1.0.0,<=1.1.0 has no usable wheels, we can conclude that recommenders>=1.0.0,<=1.1.1 cannot be used. (1)
-
-          Because cornac>=1.15.2,<=1.18.0 has no usable wheels and recommenders>=1.2.0 depends on cornac>=1.15.2,<2, we can conclude that recommenders>=1.2.0 cannot be used.
-          And because we know from (1) that recommenders>=1.0.0,<=1.1.1 cannot be used, we can conclude that recommenders>=1.0.0 cannot be used.
+      ╰─▶ Because recommenders>=1.0.0 depends on cornac>=1.1.2,<2 and cornac>=1.1.2,<2 has no usable wheels, we can conclude that recommenders>=1.0.0 cannot be used.
           And because you require recommenders>0.7, we can conclude that your requirements are unsatisfiable.
 
-    hint: Wheels are required for `recommenders` because building from source is disabled for all packages (i.e., with `--no-build`)
     hint: Wheels are required for `cornac` because building from source is disabled for all packages (i.e., with `--no-build`)
     ");
 

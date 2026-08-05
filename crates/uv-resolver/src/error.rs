@@ -11,8 +11,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::trace;
 
 use uv_distribution_types::{
-    DerivationChain, DistErrorKind, IncompatibleDist, IncompatibleSource, IndexCapabilities,
-    IndexLocations, IndexUrl, RequestedDist,
+    DerivationChain, DistErrorKind, IndexCapabilities, IndexLocations, IndexUrl, RequestedDist,
 };
 use uv_normalize::{ExtraName, InvalidNameError, PackageName};
 use uv_pep440::{LowerBound, Version};
@@ -35,7 +34,6 @@ use crate::python_requirement::PythonRequirement;
 use crate::resolution::ConflictingDistributionError;
 use crate::resolver::{
     MetadataUnavailable, ResolverEnvironment, UnavailablePackage, UnavailableReason,
-    UnavailableVersion,
 };
 use crate::{InMemoryIndex, Options};
 
@@ -727,7 +725,10 @@ impl NoSolutionError {
         );
 
         // This needs to be applied _after_ simplification of the ranges
-        tree = collapse_redundant_no_versions(tree);
+        let unavailable_reasons = unavailable_reasons(&tree);
+        tree = collapse_redundant_no_versions(tree, &unavailable_reasons);
+        tree = collapse_equivalent_unavailable_versions(tree, &self.included_versions);
+        tree = collapse_equivalent_dependency_failures(tree, &self.included_versions);
 
         loop {
             let (collapsed, changed) = collapse_redundant_no_versions_tree(tree);
@@ -924,6 +925,7 @@ fn can_drop_no_versions(
     versions: &Range<Version>,
     other: &ErrorTree,
     parent_terms: &ErrorTerms,
+    unavailable_reasons: &FxHashMap<PubGrubPackage, Option<UnavailableReason>>,
 ) -> bool {
     let package_terms = if let DerivationTree::Derived(derived) = other {
         derived.terms.get(package)
@@ -941,17 +943,16 @@ fn can_drop_no_versions(
         return false;
     }
 
-    // In a binary-only resolution, once every version in the conclusion is unavailable because
-    // source builds are disabled, enumerating gaps between those versions adds no information.
-    if let DerivationTree::External(External::Custom(
-        other_package,
-        unavailable_versions,
-        UnavailableReason::Version(UnavailableVersion::IncompatibleDist(IncompatibleDist::Source(
-            IncompatibleSource::NoBuild,
-        ))),
-    )) = other
+    // If every version of a package is unavailable for the same reason, enumerating gaps
+    // between unavailable versions adds no information. Keep the clause when different reasons
+    // must be distinguished, such as incompatible wheel ABI and platform tags.
+    if let DerivationTree::External(External::Custom(other_package, unavailable_versions, reason)) =
+        other
         && package == other_package
         && term.subset_of(unavailable_versions)
+        && unavailable_reasons
+            .get(package)
+            .is_some_and(|known_reason| known_reason.as_ref() == Some(reason))
     {
         return true;
     }
@@ -961,24 +962,261 @@ fn can_drop_no_versions(
     *term == Range::full() || *term == versions
 }
 
-fn collapse_redundant_no_versions(tree: ErrorTree) -> ErrorTree {
+fn unavailable_reasons(tree: &ErrorTree) -> FxHashMap<PubGrubPackage, Option<UnavailableReason>> {
+    let mut reasons = FxHashMap::default();
+    let mut trees = vec![tree];
+
+    while let Some(tree) = trees.pop() {
+        match tree {
+            DerivationTree::External(External::Custom(package, _, reason)) => {
+                reasons
+                    .entry(package.clone())
+                    .and_modify(|known_reason: &mut Option<UnavailableReason>| {
+                        if known_reason.as_ref() != Some(reason) {
+                            *known_reason = None;
+                        }
+                    })
+                    .or_insert_with(|| Some(reason.clone()));
+            }
+            DerivationTree::Derived(derived) => {
+                trees.push(&derived.cause1);
+                trees.push(&derived.cause2);
+            }
+            DerivationTree::External(_) => {}
+        }
+    }
+
+    reasons
+}
+
+fn collapse_redundant_no_versions(
+    tree: ErrorTree,
+    unavailable_reasons: &FxHashMap<PubGrubPackage, Option<UnavailableReason>>,
+) -> ErrorTree {
     map_derivation_tree(
         tree,
         DerivationTree::External,
         |metadata, cause1, cause2| {
             if let DerivationTree::External(External::NoVersions(package, versions)) = &cause1
-                && can_drop_no_versions(package, versions, &cause2, &metadata.terms)
+                && can_drop_no_versions(
+                    package,
+                    versions,
+                    &cause2,
+                    &metadata.terms,
+                    unavailable_reasons,
+                )
             {
                 return cause2;
             }
 
             if let DerivationTree::External(External::NoVersions(package, versions)) = &cause2
-                && can_drop_no_versions(package, versions, &cause1, &metadata.terms)
+                && can_drop_no_versions(
+                    package,
+                    versions,
+                    &cause1,
+                    &metadata.terms,
+                    unavailable_reasons,
+                )
             {
                 return cause1;
             }
 
             derived_tree(metadata, cause1, cause2)
+        },
+    )
+}
+
+/// Collapse adjacent unavailable-version clauses when together they cover every relevant version.
+fn collapse_equivalent_unavailable_versions(
+    tree: ErrorTree,
+    included_versions: &FxHashMap<PackageName, BTreeSet<Version>>,
+) -> ErrorTree {
+    map_derivation_tree(
+        tree,
+        DerivationTree::External,
+        |metadata, cause1, cause2| {
+            let (
+                DerivationTree::External(External::Custom(package, versions, reason)),
+                DerivationTree::External(External::Custom(
+                    other_package,
+                    other_versions,
+                    other_reason,
+                )),
+            ) = (&cause1, &cause2)
+            else {
+                return derived_tree(metadata, cause1, cause2);
+            };
+
+            if package != other_package || reason != other_reason || metadata.terms.len() != 1 {
+                return derived_tree(metadata, cause1, cause2);
+            }
+
+            let Some(Term::Positive(required_versions)) = metadata.terms.get(package) else {
+                return derived_tree(metadata, cause1, cause2);
+            };
+            let unavailable_versions = versions.union(other_versions);
+            if !covers_included_versions(
+                package,
+                required_versions,
+                &unavailable_versions,
+                included_versions,
+            ) {
+                return derived_tree(metadata, cause1, cause2);
+            }
+
+            DerivationTree::External(External::Custom(
+                package.clone(),
+                required_versions.clone(),
+                reason.clone(),
+            ))
+        },
+    )
+}
+
+/// Return whether every published version in `required` is included in `covered`.
+fn covers_included_versions(
+    package: &PubGrubPackage,
+    required: &Range<Version>,
+    covered: &Range<Version>,
+    included_versions: &FxHashMap<PackageName, BTreeSet<Version>>,
+) -> bool {
+    if required.subset_of(covered) {
+        return true;
+    }
+
+    let Some(versions) = package.name().and_then(|name| included_versions.get(name)) else {
+        return false;
+    };
+
+    let mut required_versions = versions.iter().filter(|version| required.contains(version));
+    let Some(first_version) = required_versions.next() else {
+        return false;
+    };
+
+    covered.contains(first_version) && required_versions.all(|version| covered.contains(version))
+}
+
+struct UnavailableDependency<'a> {
+    package: &'a PubGrubPackage,
+    package_versions: &'a Range<Version>,
+    dependency: &'a PubGrubPackage,
+    dependency_versions: &'a Range<Version>,
+    unavailable_versions: &'a Range<Version>,
+    reason: &'a UnavailableReason,
+}
+
+fn unavailable_dependency(tree: &ErrorTree) -> Option<UnavailableDependency<'_>> {
+    let DerivationTree::Derived(derived) = tree else {
+        return None;
+    };
+
+    let (dependency, unavailable) = match (&*derived.cause1, &*derived.cause2) {
+        (
+            dependency @ DerivationTree::External(External::FromDependencyOf(..)),
+            unavailable @ DerivationTree::External(External::Custom(..)),
+        )
+        | (
+            unavailable @ DerivationTree::External(External::Custom(..)),
+            dependency @ DerivationTree::External(External::FromDependencyOf(..)),
+        ) => (dependency, unavailable),
+        _ => return None,
+    };
+
+    let DerivationTree::External(External::FromDependencyOf(
+        package,
+        package_versions,
+        dependency,
+        dependency_versions,
+    )) = dependency
+    else {
+        return None;
+    };
+    let DerivationTree::External(External::Custom(
+        unavailable_package,
+        unavailable_versions,
+        reason,
+    )) = unavailable
+    else {
+        return None;
+    };
+
+    (dependency == unavailable_package).then_some(UnavailableDependency {
+        package,
+        package_versions,
+        dependency,
+        dependency_versions,
+        unavailable_versions,
+        reason,
+    })
+}
+
+/// Combine alternative package versions that fail on the same unavailable dependency.
+fn collapse_equivalent_dependency_failures(
+    tree: ErrorTree,
+    included_versions: &FxHashMap<PackageName, BTreeSet<Version>>,
+) -> ErrorTree {
+    map_derivation_tree(
+        tree,
+        DerivationTree::External,
+        |metadata, cause1, cause2| {
+            let Some(first) = unavailable_dependency(&cause1) else {
+                return derived_tree(metadata, cause1, cause2);
+            };
+            let Some(second) = unavailable_dependency(&cause2) else {
+                return derived_tree(metadata, cause1, cause2);
+            };
+
+            if first.package != second.package
+                || first.dependency != second.dependency
+                || first.reason != second.reason
+                || metadata.terms.len() != 1
+            {
+                return derived_tree(metadata, cause1, cause2);
+            }
+
+            let Some(Term::Positive(required_package_versions)) = metadata.terms.get(first.package)
+            else {
+                return derived_tree(metadata, cause1, cause2);
+            };
+            let package_versions = first.package_versions.union(second.package_versions);
+            if !covers_included_versions(
+                first.package,
+                required_package_versions,
+                &package_versions,
+                included_versions,
+            ) {
+                return derived_tree(metadata, cause1, cause2);
+            }
+
+            let dependency_versions = first.dependency_versions.union(second.dependency_versions);
+            let Some((lower, upper)) = dependency_versions.bounding_range() else {
+                return derived_tree(metadata, cause1, cause2);
+            };
+            let dependency_versions = Range::from_range_bounds((lower.cloned(), upper.cloned()));
+            let unavailable_versions = first
+                .unavailable_versions
+                .union(second.unavailable_versions);
+            if !covers_included_versions(
+                first.dependency,
+                &dependency_versions,
+                &unavailable_versions,
+                included_versions,
+            ) {
+                return derived_tree(metadata, cause1, cause2);
+            }
+
+            let dependency = DerivationTree::External(External::FromDependencyOf(
+                first.package.clone(),
+                required_package_versions.clone(),
+                first.dependency.clone(),
+                dependency_versions.clone(),
+            ));
+            let unavailable = DerivationTree::External(External::Custom(
+                first.dependency.clone(),
+                dependency_versions,
+                first.reason.clone(),
+            ));
+            derived_tree(metadata, dependency, unavailable)
         },
     )
 }
