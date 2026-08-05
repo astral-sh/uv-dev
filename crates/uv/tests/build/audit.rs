@@ -204,6 +204,40 @@ async fn audit_json_no_vulnerabilities() {
     "#);
 }
 
+#[tokio::test]
+async fn audit_jsonl_no_vulnerabilities() {
+    let context = uv_test::test_context!("3.12");
+    let proxy = crate::pypi_proxy::start().await;
+    write_audit_output_project(&context.temp_dir, &proxy.url("/simple"));
+
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/querybatch"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "results": [{"vulns": []}]
+        })))
+        .mount(&server)
+        .await;
+
+    uv_snapshot!(context.filters(), context
+        .audit()
+        .arg("--preview-features")
+        .arg("audit,jsonl")
+        .arg("--output-format")
+        .arg("jsonl")
+        .arg("--frozen")
+        .arg("--service-url")
+        .arg(server.uri()), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {"type":"progress","phase":"audit","status":"started"}
+    {"type":"progress","phase":"audit","status":"completed"}
+    {"type":"result","schema":{"version":"preview"},"summary":{"audited_packages":1,"vulnerabilities":0,"adverse_statuses":0},"vulnerabilities":[],"adverse_statuses":[]}
+    "#
+    );
+}
+
 /// Requesting JSON output warns unless the JSON preview feature is enabled.
 #[tokio::test]
 async fn audit_json_preview_warning() {

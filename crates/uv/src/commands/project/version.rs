@@ -40,7 +40,7 @@ use crate::commands::project::{
     ProjectInterpreter, UniversalState, WorkspacePython, default_dependency_groups,
 };
 use crate::commands::{ExitStatus, diagnostics, project};
-use crate::printer::Printer;
+use crate::printer::{Printer, jsonl_result};
 use crate::settings::{FrozenSource, LockCheck, ResolverInstallerSettings};
 
 /// Display version information for uv itself (`uv self version`)
@@ -58,8 +58,12 @@ pub(crate) fn self_version(
                 writeln!(printer.stdout(), "uv {}", version_info.cyan())?;
             }
         }
-        VersionFormat::Json => {
-            let string = serde_json::to_string_pretty(&version_info)?;
+        VersionFormat::Json | VersionFormat::Jsonl => {
+            let string = if matches!(output_format, VersionFormat::Jsonl) {
+                jsonl_result(&version_info)?
+            } else {
+                serde_json::to_string_pretty(&version_info)?
+            };
             writeln!(printer.stdout(), "{string}")?;
         }
     }
@@ -749,9 +753,13 @@ fn print_version(
                 writeln!(printer.stdout(), "{}", old_version.cyan())?;
             }
         }
-        VersionFormat::Json => {
+        VersionFormat::Json | VersionFormat::Jsonl => {
             let final_version = new_version.unwrap_or(old_version);
-            let string = serde_json::to_string_pretty(&final_version)?;
+            let string = if matches!(output_format, VersionFormat::Jsonl) {
+                jsonl_result(&final_version)?
+            } else {
+                serde_json::to_string_pretty(&final_version)?
+            };
             writeln!(printer.stdout(), "{string}")?;
         }
     }
