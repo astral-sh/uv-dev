@@ -340,6 +340,8 @@ pub enum PreviewFeature {
     MissingExcludeNewerPackageLock,
     /// Allows using `uv export --batch`.
     BatchExport,
+    /// Allows `--output-format jsonl` to stream progress and final JSON output.
+    Jsonl,
 }
 
 impl Display for PreviewFeature {
