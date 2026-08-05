@@ -37624,24 +37624,7 @@ fn lock_supported_environment_wheel_only_package_requires_compatible_wheels() ->
     exit_code: 1 (failure)
     ----- stderr -----
       × No solution found when resolving dependencies for split (markers: sys_platform == 'linux'):
-      ╰─▶ Because only the following versions of pywin32 are available:
-              pywin32==222
-              pywin32==223
-              pywin32==224
-              pywin32==225
-              pywin32==226
-              pywin32==227
-              pywin32==228
-              pywin32==300
-              pywin32==301
-              pywin32==302
-              pywin32==303
-              pywin32==304
-              pywin32==305
-              pywin32==306
-              pywin32==307
-              pywin32==308
-          and pywin32<=305 has no wheels with a matching Python version tag (e.g., `cp312`), we can conclude that pywin32<=305 cannot be used.
+      ╰─▶ Because pywin32<=305 has no wheels with a matching Python version tag (e.g., `cp312`), we can conclude that pywin32<=305 cannot be used.
           And because pywin32>=306 has no Linux-compatible wheels and your project depends on pywin32, we can conclude that your project's requirements are unsatisfiable.
 
     hint: Wheels are available for `pywin32` (v305) with the following Python ABI tags: `cp36m`, `cp37m`, `cp38`, `cp39`, `cp310`, `cp311`
