@@ -6,7 +6,7 @@ requires = ["parent"]
 
 [expected]
 satisfiable = false
-explanation = "Distinct parent dependency ranges should remain visible without enumerating unavailable dependency releases."
+explanation = "Equivalent yanked dependency failures should collapse without enumerating each parent or dependency release."
 
 [packages.parent.versions."1.0.0"]
 requires = ["dependency>=1,<2"]

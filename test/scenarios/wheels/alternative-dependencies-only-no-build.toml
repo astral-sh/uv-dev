@@ -6,7 +6,7 @@ requires = ["parent"]
 
 [expected]
 satisfiable = false
-explanation = "Distinct dependency ranges and the actionable no-build hint should remain visible without enumerating unavailable releases."
+explanation = "Equivalent no-build dependency failures should collapse while preserving the actionable no-build hint."
 
 [packages.parent.versions."1.0.0"]
 requires = ["dependency>=1,<2"]
