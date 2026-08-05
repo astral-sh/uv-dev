@@ -644,27 +644,52 @@ async fn do_lock(
 
     // Collect the conflicts.
     let mut conflicts = target.conflicts()?;
-    if let LockTarget::Workspace(workspace) = target
-        && let Some(groups) = &workspace.pyproject_toml().dependency_groups
-        && let Some(project) = &workspace.pyproject_toml().project
-    {
-        conflicts.expand_transitive_group_includes(&project.name, groups);
+    if let LockTarget::Workspace(workspace) = target {
+        let root_package = workspace
+            .pyproject_toml()
+            .project
+            .as_ref()
+            .map(|project| &project.name);
+        if let Some(package) = root_package
+            && let Some(groups) = &workspace.pyproject_toml().dependency_groups
+        {
+            conflicts.expand_transitive_group_includes(package, groups);
+        }
 
-        for (package, member) in workspace.packages() {
-            if package != &project.name
-                && let Some(groups) = &member.pyproject_toml().dependency_groups
-            {
-                for (group, _) in groups {
-                    for workspace_group in member.pyproject_toml().workspace_group_includes(group) {
-                        conflicts.expand_workspace_group_include(
-                            &project.name,
-                            workspace_group,
-                            package,
-                            group,
-                            groups,
-                        );
+        for _ in 0..workspace.packages().len() {
+            let initial_conflict_count = conflicts.iter().count();
+            for (package, member) in workspace.packages() {
+                if let Some(groups) = &member.pyproject_toml().dependency_groups {
+                    for (group, _) in groups {
+                        for (included_package, included_group) in
+                            member.pyproject_toml().workspace_group_includes(group)
+                        {
+                            let Some(included_package) = included_package.or(root_package) else {
+                                continue;
+                            };
+                            if let Some(included_member) =
+                                workspace.packages().get(included_package)
+                                && let Some(included_groups) =
+                                    &included_member.pyproject_toml().dependency_groups
+                            {
+                                conflicts.expand_transitive_group_includes(
+                                    included_package,
+                                    included_groups,
+                                );
+                            }
+                            conflicts.expand_workspace_group_include(
+                                included_package,
+                                included_group,
+                                package,
+                                group,
+                                groups,
+                            );
+                        }
                     }
                 }
+            }
+            if conflicts.iter().count() == initial_conflict_count {
+                break;
             }
         }
     }

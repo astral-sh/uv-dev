@@ -3458,7 +3458,7 @@ future = [{include-group = "bar", unknown = "value"}]
 workspace = ["c"]
 
 [tool.uv.dependency-groups]
-workspace = {include-groups = [{workspace = "root"}]}
+workspace = {include-workspace-groups = ["root", {package = "other", group = "test"}]}
 "#;
 
         let result = PyProjectToml::from_string(toml.to_string(), "pyproject.toml")
@@ -3466,11 +3466,13 @@ workspace = {include-groups = [{workspace = "root"}]}
 
         let workspace_group = GroupName::from_str("workspace").unwrap();
         let root_group = GroupName::from_str("root").unwrap();
+        let other_package = PackageName::from_str("other").unwrap();
+        let test_group = GroupName::from_str("test").unwrap();
         assert_eq!(
             result
                 .workspace_group_includes(&workspace_group)
                 .collect::<Vec<_>>(),
-            vec![&root_group]
+            vec![(None, &root_group), (Some(&other_package), &test_group)]
         );
 
         let groups = result

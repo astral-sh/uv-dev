@@ -146,7 +146,7 @@
       ]
     },
     "dependency-groups": {
-      "description": "Additional settings for `dependency-groups`.\n\nThis can be used to add `requires-python` constraints to dependency groups or include a\ndependency group from the workspace root.\n\nThis cannot be used to define dependency groups, use the top-level\n`[dependency-groups]` table for that.",
+      "description": "Additional settings for `dependency-groups`.\n\nThis can be used to add `requires-python` constraints to dependency groups or include\ndependency groups from the workspace root and other workspace members.\n\nThis cannot be used to define dependency groups, use the top-level\n`[dependency-groups]` table for that.",
       "anyOf": [
         {
           "$ref": "#/definitions/ToolUvDependencyGroups"
@@ -873,29 +873,14 @@
         }
       ]
     },
-    "DependencyGroupInclude": {
-      "type": "object",
-      "properties": {
-        "workspace": {
-          "description": "The dependency group to include from the workspace root.",
-          "allOf": [
-            {
-              "$ref": "#/definitions/GroupName"
-            }
-          ]
-        }
-      },
-      "additionalProperties": false,
-      "required": ["workspace"]
-    },
     "DependencyGroupSettings": {
       "type": "object",
       "properties": {
-        "include-groups": {
-          "description": "Additional dependency groups to include from the workspace root.",
+        "include-workspace-groups": {
+          "description": "Additional dependency groups to include from the workspace root or its members.",
           "type": "array",
           "items": {
-            "$ref": "#/definitions/DependencyGroupInclude"
+            "$ref": "#/definitions/WorkspaceGroupInclude"
           }
         },
         "requires-python": {
@@ -3041,6 +3026,49 @@
         }
       },
       "additionalProperties": false
+    },
+    "WorkspaceGroupInclude": {
+      "anyOf": [
+        {
+          "description": "A dependency group defined by the workspace root.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/GroupName"
+            }
+          ]
+        },
+        {
+          "description": "A dependency group defined by a named workspace member.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/WorkspacePackageGroupInclude"
+            }
+          ]
+        }
+      ]
+    },
+    "WorkspacePackageGroupInclude": {
+      "type": "object",
+      "properties": {
+        "group": {
+          "description": "The dependency group to include from the workspace member.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/GroupName"
+            }
+          ]
+        },
+        "package": {
+          "description": "The workspace member containing the dependency group.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PackageName"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": ["package", "group"]
     },
     "WorkspaceReference": {
       "description": "A reference to either the current workspace or a workspace discovered from a path.",
