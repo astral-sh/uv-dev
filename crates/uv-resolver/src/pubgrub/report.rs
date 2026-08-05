@@ -675,6 +675,21 @@ impl PubGrubReportFormatter<'_> {
         external2: &External<PubGrubPackage, Range<Version>, UnavailableReason>,
     ) -> String {
         match (external1, external2) {
+            // A range-wide incompatibility already explains why the listed versions cannot be
+            // used. Keep singleton inventories because they establish that no alternative exists.
+            (
+                External::NoVersions(package, unavailable),
+                incompatibility @ External::Custom(other_package, versions, _),
+            )
+            | (
+                incompatibility @ External::Custom(other_package, versions, _),
+                External::NoVersions(package, unavailable),
+            ) if package == other_package
+                && unavailable.complement().as_singleton().is_none()
+                && versions.as_singleton().is_none() =>
+            {
+                self.format_external(incompatibility)
+            }
             (
                 External::FromDependencyOf(package1, package_set1, dependency1, dependency_set1),
                 External::FromDependencyOf(package2, package_set2, dependency2, dependency_set2),
