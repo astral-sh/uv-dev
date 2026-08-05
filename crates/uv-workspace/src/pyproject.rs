@@ -141,16 +141,24 @@ impl PyProjectToml {
         }
     }
 
-    /// Returns the workspace-root dependency groups included by a local group.
-    pub fn workspace_group_includes(&self, group: &GroupName) -> impl Iterator<Item = &GroupName> {
+    /// Returns the workspace dependency groups included by a local group.
+    ///
+    /// A missing package indicates a group defined by the workspace root.
+    pub fn workspace_group_includes(
+        &self,
+        group: &GroupName,
+    ) -> impl Iterator<Item = (Option<&PackageName>, &GroupName)> {
         self.tool
             .as_ref()
             .and_then(|tool| tool.uv.as_ref())
             .and_then(|uv| uv.dependency_groups.as_ref())
             .and_then(|groups| groups.inner().get(group))
             .into_iter()
-            .flat_map(|settings| &settings.include_groups)
-            .map(|include| &include.workspace)
+            .flat_map(|settings| &settings.include_workspace_groups)
+            .map(|include| match include {
+                WorkspaceGroupInclude::Root(group) => (None, group),
+                WorkspaceGroupInclude::Package(include) => (Some(&include.package), &include.group),
+            })
     }
 
     /// Returns the set of conflicts for the project.
@@ -413,8 +421,8 @@ pub struct ToolUv {
 
     /// Additional settings for `dependency-groups`.
     ///
-    /// This can be used to add `requires-python` constraints to dependency groups or include a
-    /// dependency group from the workspace root.
+    /// This can be used to add `requires-python` constraints to dependency groups or include
+    /// dependency groups from the workspace root and other workspace members.
     ///
     /// This cannot be used to define dependency groups, use the top-level
     /// `[dependency-groups]` table for that.
@@ -822,18 +830,31 @@ pub(crate) struct DependencyGroupSettings {
     /// Version of python to require when installing this group
     #[cfg_attr(feature = "schemars", schemars(with = "Option<String>"))]
     pub(crate) requires_python: Option<VersionSpecifiers>,
-    /// Additional dependency groups to include from the workspace root.
+    /// Additional dependency groups to include from the workspace root or its members.
     #[serde(default)]
-    pub(crate) include_groups: Vec<DependencyGroupInclude>,
+    pub(crate) include_workspace_groups: Vec<WorkspaceGroupInclude>,
+}
+
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(test, derive(Serialize))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(untagged)]
+pub(crate) enum WorkspaceGroupInclude {
+    /// A dependency group defined by the workspace root.
+    Root(GroupName),
+    /// A dependency group defined by a named workspace member.
+    Package(WorkspacePackageGroupInclude),
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(test, derive(Serialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
-pub(crate) struct DependencyGroupInclude {
-    /// The dependency group to include from the workspace root.
-    pub(crate) workspace: GroupName,
+pub(crate) struct WorkspacePackageGroupInclude {
+    /// The workspace member containing the dependency group.
+    pub(crate) package: PackageName,
+    /// The dependency group to include from the workspace member.
+    pub(crate) group: GroupName,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
