@@ -675,6 +675,28 @@ impl PubGrubReportFormatter<'_> {
         external2: &External<PubGrubPackage, Range<Version>, UnavailableReason>,
     ) -> String {
         match (external1, external2) {
+            (
+                External::FromDependencyOf(package1, package_set1, dependency1, dependency_set1),
+                External::FromDependencyOf(package2, package_set2, dependency2, dependency_set2),
+            ) if package1 == package2 && package_set1 == package_set2 => {
+                let dependency1 = self.dependency_range(dependency1, dependency_set1);
+                let dependency2 = self.dependency_range(dependency2, dependency_set2);
+
+                if let Some(root) = self.format_root_requires(package1) {
+                    return format!(
+                        "{root} {}and {}",
+                        padded("", &dependency1, " "),
+                        dependency2,
+                    );
+                }
+
+                format!(
+                    "{}",
+                    self.compatible_range(package1, package_set1)
+                        .depends_on(dependency1.package, dependency_set1)
+                        .and(dependency2.package, dependency_set2),
+                )
+            }
             // Avoid repeating the package and version when availability and the incompatibility
             // both describe the same sole release.
             (
@@ -705,28 +727,6 @@ impl PubGrubReportFormatter<'_> {
                 } else {
                     explanation
                 }
-            }
-            (
-                External::FromDependencyOf(package1, package_set1, dependency1, dependency_set1),
-                External::FromDependencyOf(package2, package_set2, dependency2, dependency_set2),
-            ) if package1 == package2 && package_set1 == package_set2 => {
-                let dependency1 = self.dependency_range(dependency1, dependency_set1);
-                let dependency2 = self.dependency_range(dependency2, dependency_set2);
-
-                if let Some(root) = self.format_root_requires(package1) {
-                    return format!(
-                        "{root} {}and {}",
-                        padded("", &dependency1, " "),
-                        dependency2,
-                    );
-                }
-
-                format!(
-                    "{}",
-                    self.compatible_range(package1, package_set1)
-                        .depends_on(dependency1.package, dependency_set1)
-                        .and(dependency2.package, dependency_set2),
-                )
             }
             (.., External::FromDependencyOf(package, _, dependency, _))
                 if Self::is_root(package)
