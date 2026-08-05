@@ -14185,6 +14185,94 @@ fn no_binary_only_binary() -> Result<()> {
     Ok(())
 }
 
+/// Avoid enumerating missing versions when all matching dependency versions lack usable wheels.
+#[test]
+fn only_binary_unavailable_dependency_versions() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let requirements_in = context.temp_dir.child("requirements.in");
+    requirements_in.write_str("recommenders>0.7")?;
+
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .stdin(fs::File::open(requirements_in)?)
+        .arg("--python-version")
+        .arg("3.12")
+        .arg("--python-platform")
+        .arg("x86_64-manylinux_2_17")
+        .arg("--only-binary")
+        .arg(":all:")
+        .arg("-")
+        .arg("--exclude-newer")
+        .arg("2024-06-27")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+      × No solution found when resolving dependencies:
+      ╰─▶ Because only the following versions of cornac are available:
+              cornac<=1.15.2
+              cornac==1.15.3
+              cornac==1.15.4
+              cornac==1.16.0
+              cornac==1.17.0
+              cornac==1.18.0
+              cornac>=2
+          and cornac>=1.15.1,<=1.18.0 has no usable wheels, we can conclude that cornac>=1.15.1,<=1.18.0 cannot be used. (1)
+
+          Because only the following versions of cornac are available:
+              cornac<=1.1.2
+              cornac==1.2.0
+              cornac==1.2.1
+              cornac==1.2.2
+              cornac==1.3.0
+              cornac==1.3.1
+              cornac==1.4.0
+              cornac==1.4.1
+              cornac==1.5.0
+              cornac==1.5.1
+              cornac==1.5.2
+              cornac==1.6.0
+              cornac==1.6.1
+              cornac==1.7.0
+              cornac==1.7.1
+              cornac==1.8.0
+              cornac==1.9.0
+              cornac==1.10.0
+              cornac==1.11.0
+              cornac==1.12.0
+              cornac==1.13.0
+              cornac==1.13.1
+              cornac==1.13.2
+              cornac==1.13.3
+              cornac==1.13.4
+              cornac==1.13.5
+              cornac==1.14.0
+              cornac==1.14.1
+              cornac==1.14.2
+              cornac==1.15.0
+              cornac==1.15.1
+              cornac>=1.15.2
+          and cornac>=1.1.2,<=1.15.0 has no usable wheels, we can conclude that cornac>=1.1.2,<=1.15.0 cannot be used.
+          And because we know from (1) that cornac>=1.15.1,<=1.18.0 cannot be used, we can conclude that cornac>=1.1.2,<2 cannot be used.
+          And because recommenders>=1.0.0,<=1.1.1 depends on cornac>=1.1.2,<2, we can conclude that recommenders>=1.0.0,<=1.1.1 cannot be used. (2)
+
+          Because only the following versions of cornac are available:
+              cornac<=1.15.2
+              cornac==1.15.3
+              cornac==1.15.4
+              cornac==1.16.0
+              cornac==1.17.0
+              cornac==1.18.0
+              cornac>=2
+          and cornac>=1.15.2,<=1.18.0 has no usable wheels, we can conclude that cornac>=1.15.2,<=1.18.0 cannot be used.
+          And because recommenders>=1.2.0 depends on cornac>=1.15.2,<2, we can conclude that recommenders>=1.2.0 cannot be used.
+          And because we know from (2) that recommenders>=1.0.0,<=1.1.1 cannot be used, we can conclude that recommenders>=1.0.0 cannot be used.
+          And because you require recommenders>0.7, we can conclude that your requirements are unsatisfiable.
+
+    hint: Wheels are required for `cornac` because building from source is disabled for all packages (i.e., with `--no-build`)
+    ");
+
+    Ok(())
+}
+
 /// `gunicorn` only depends on `eventlet` via an extra, so the resolution should succeed despite
 /// the nonsensical extra.
 #[test]

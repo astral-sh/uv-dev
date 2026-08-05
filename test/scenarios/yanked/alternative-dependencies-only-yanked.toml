@@ -1,0 +1,27 @@
+name = "alternative-dependencies-only-yanked"
+description = "Alternative parent releases require different ranges of a dependency whose matching releases are all yanked."
+
+[root]
+requires = ["parent"]
+
+[expected]
+satisfiable = false
+explanation = "Distinct parent dependency ranges should remain visible without enumerating unavailable dependency releases."
+
+[packages.parent.versions."1.0.0"]
+requires = ["dependency>=1,<2"]
+
+[packages.parent.versions."2.0.0"]
+requires = ["dependency>=2,<3"]
+
+[packages.dependency.versions."1.0.0"]
+yanked = true
+
+[packages.dependency.versions."1.5.0"]
+yanked = true
+
+[packages.dependency.versions."2.0.0"]
+yanked = true
+
+[packages.dependency.versions."2.5.0"]
+yanked = true
