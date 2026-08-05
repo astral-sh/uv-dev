@@ -1,0 +1,42 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 20567,
+        "title": "uv venv: Windows PE resource error due to Bitdefender Incident Sensor",
+        "url": "https://github.com/astral-sh/uv/issues/20567",
+        "state": "closed",
+        "reason": "Closest prior report: astral-sh/uv#20567 reproduces the same Windows trampoline PE-resource failure with Bitdefender, identifies EndUpdateResourceW as the failing call, and reports ERROR_OPEN_FAILED. It was closed in favor of astral-sh/uv#20792."
+      },
+      {
+        "kind": "issue",
+        "number": 20792,
+        "title": "Windows antivirus/EDR issues",
+        "url": "https://github.com/astral-sh/uv/issues/20792",
+        "state": "open",
+        "reason": "The open AV/EDR tracker contains the reporter’s exact mechanism hypothesis. However, after that comment a maintainer explicitly requested separate issues for new failure modes, so it is related context rather than a clear duplicate target."
+      },
+      {
+        "kind": "issue",
+        "number": 19873,
+        "title": "failt to create venv in windows",
+        "url": "https://github.com/astral-sh/uv/issues/19873",
+        "state": "closed",
+        "reason": "Reports the identical uv-trampoline PE-update error and ERROR_OPEN_FAILED on Windows 11; disabling an unspecified security tool resolved it. It lacks the Bitdefender-specific diagnosis of astral-sh/uv#20567."
+      },
+      {
+        "kind": "pull_request",
+        "number": 15068,
+        "title": "Use `.rcdata` to store trampoline type + path to python binary",
+        "url": "https://github.com/astral-sh/uv/pull/15068",
+        "state": "merged",
+        "reason": "Introduced the current PE-resource-based trampoline metadata implementation. Its discussion notes the temporary-file write/read/delete round trip, but does not confirm the reported exclusive-open or AV exception-injection mechanism."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests using literal terms including EndUpdateResourceW, BeginUpdateResourceW, write_resource, ERROR_OPEN_FAILED, -2147024786, Bitdefender, PE resources, exclusive access, and uv-trampoline. Conceptual searches covered AV/EDR interference, executable inspection and locking, managed-Python launchers, entrypoints, resource sharing, temporary executable mutation, and Windows retry/backoff fixes. Inspected the comments and reference chains for astral-sh/uv#20792, astral-sh/uv#20567, astral-sh/uv#19873, astral-sh/uv#15968, and relevant PRs. astral-sh/uv#18663 was ruled out because it concerns ERROR_NOT_SUPPORTED on NanoServer rather than AV-triggered ERROR_OPEN_FAILED; astral-sh/uv#10288 concerns launch-time latency, and astral-sh/uv#9543 plus astral-sh/uv#10026 retry different filesystem operations. No existing PR addressing this PE-resource transaction was found."
+  },
+  "type": "bug",
+  "type_reason": "The observable behavior is a correctness failure: trampoline creation can fail during normal uv operations on affected Windows systems. Repository source confirms that uv writes a temporary executable and then performs a BeginUpdateResourceW/UpdateResourceW/EndUpdateResourceW transaction, while astral-sh/uv#20567 experimentally isolates the failure to EndUpdateResourceW under Bitdefender. The stronger claims that EndUpdateResourceW reopens without sharing and that Bitdefender actively injects the exception remain reporter hypotheses, not repository-confirmed root causes. This is not classified as a duplicate because the exact prior issue was closed into a broad tracker whose maintainer subsequently invited separate reports for newly distinguished failure modes.",
+  "summary": "astral-sh/uv#20567 is the closest historical report, astral-sh/uv#20792 is the active umbrella tracker, and astral-sh/uv#19873 records the same error with less diagnosis. astral-sh/uv#15068 introduced the relevant PE-resource implementation; no targeted fix PR was found."
+}
