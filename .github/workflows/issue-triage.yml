@@ -76,8 +76,13 @@ jobs:
       group: issue-context-${{ fromJSON(needs.triage.outputs.issue-context).number }}
       cancel-in-progress: false
     permissions:
+      contents: read
       id-token: write # for the cross-repository issue-context credential broker
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
       - name: "Prepare issue context"
         run: |
           printf '%s\n' "$ISSUE_CONTEXT" > "$RUNNER_TEMP/issue.json"
@@ -133,15 +138,14 @@ jobs:
             contents: write
             issues: write
 
-      - name: "Persist issue context"
+      - name: "Initialize issue context"
         run: |
           issue_number="$(jq --raw-output '.number' "$RUNNER_TEMP/issue.json")"
           branch="issue/$issue_number"
 
-          git init --quiet "$RUNNER_TEMP/issue-context"
+          git -c core.hooksPath=/dev/null init --quiet "$RUNNER_TEMP/issue-context"
           cd "$RUNNER_TEMP/issue-context"
-          git remote add origin \
-            "https://x-access-token:${GH_TOKEN}@github.com/astral-sh/uv-dev.git"
+          git -c core.hooksPath=/dev/null remote add origin https://github.com/astral-sh/uv-dev.git
 
           gh issue develop "$issue_number" \
             --repo "$GITHUB_REPOSITORY" \
@@ -151,23 +155,32 @@ jobs:
             --checkout
 
           cp "$RUNNER_TEMP/issue.json" "$RUNNER_TEMP/triage.json" "$RUNNER_TEMP/README.md" .
-          git add issue.json triage.json README.md
-
-          if git diff --cached --quiet; then
-            echo "The existing issue context is unchanged."
-            exit 0
-          fi
-
-          git \
-            -c user.name="github-actions[bot]" \
-            -c user.email="github-actions[bot]@users.noreply.github.com" \
-            commit --message "Update issue context for $GITHUB_REPOSITORY#$issue_number"
-          git push origin "HEAD:refs/heads/$branch"
-
-          printf 'Issue context: https://github.com/astral-sh/uv-dev/tree/%s\n' "$branch" \
-            >> "$GITHUB_STEP_SUMMARY"
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
+          GIT_CONFIG_GLOBAL: /dev/null
+          GIT_CONFIG_NOSYSTEM: "1"
+
+      - name: "Persist issue context"
+        id: persist-context
+        uses: ./.github/actions/commit-and-push
+        with:
+          working-directory: ${{ runner.temp }}/issue-context
+          paths: |
+            issue.json
+            triage.json
+            README.md
+          commit-message: ${{ format('Update issue context for {0}#{1}', github.repository, fromJSON(needs.triage.outputs.issue-context).number) }}
+          ref: ${{ format('issue/{0}', fromJSON(needs.triage.outputs.issue-context).number) }}
+          repository: astral-sh/uv-dev
+          github-token: ${{ steps.token.outputs.token }}
+
+      - name: "Summarize issue context"
+        if: steps.persist-context.outputs.changed == 'true'
+        run: |
+          printf 'Issue context: https://github.com/astral-sh/uv-dev/tree/issue/%s\n' \
+            "$ISSUE_NUMBER" >> "$GITHUB_STEP_SUMMARY"
+        env:
+          ISSUE_NUMBER: ${{ fromJSON(needs.triage.outputs.issue-context).number }}
 
   reproduce-bug:
     needs: [triage, context]

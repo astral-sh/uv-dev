@@ -150,11 +150,9 @@ jobs:
           permissions: |
             contents: write
 
-      - name: "Persist reproduction context"
+      - name: "Prepare reproduction context"
         working-directory: ${{ steps.context.outputs.path }}
         run: |
-          branch="issue/$ISSUE_NUMBER"
-
           printf '%s\n' "$REPRODUCTION_RESULT" | jq '.' > reproduction.json
           # TODO: Consider letting the reproduction agent update README.md directly.
           existing_context="$(awk '/^## Reproduction$/ { exit } { print }' README.md)"
@@ -164,31 +162,29 @@ jobs:
             jq --raw-output '"Status: `\(.reproduction)`\n\n\(.reason)"' reproduction.json
           } > "$RUNNER_TEMP/README.md"
           cp "$RUNNER_TEMP/README.md" README.md
-
-          git -c core.hooksPath=/dev/null add reproduction.json README.md
-
-          if git diff --cached --quiet; then
-            echo "The existing reproduction context is unchanged."
-            exit 0
-          fi
-
-          git \
-            -c core.hooksPath=/dev/null \
-            -c user.name="astral-automations-bot[bot]" \
-            -c user.email="305554984+astral-automations-bot[bot]@users.noreply.github.com" \
-            commit --message "Update reproduction context for $GITHUB_REPOSITORY#$ISSUE_NUMBER"
-          git -c core.hooksPath=/dev/null push \
-            "https://x-access-token:${GH_TOKEN}@github.com/astral-sh/uv-dev.git" \
-            "HEAD:refs/heads/$branch"
-
-          printf 'Issue context: https://github.com/astral-sh/uv-dev/tree/%s\n' "$branch" \
-            >> "$GITHUB_STEP_SUMMARY"
         env:
-          GIT_CONFIG_GLOBAL: /dev/null
-          GIT_CONFIG_NOSYSTEM: "1"
-          GH_TOKEN: ${{ steps.token.outputs.token }}
-          ISSUE_NUMBER: ${{ needs.reproduce.outputs.issue-number }}
           REPRODUCTION_RESULT: ${{ needs.reproduce.outputs.result }}
+
+      - name: "Persist reproduction context"
+        id: persist-context
+        uses: ./.github/actions/commit-and-push
+        with:
+          working-directory: ${{ steps.context.outputs.path }}
+          paths: |
+            reproduction.json
+            README.md
+          commit-message: ${{ format('Update reproduction context for {0}#{1}', github.repository, needs.reproduce.outputs.issue-number) }}
+          ref: ${{ format('issue/{0}', needs.reproduce.outputs.issue-number) }}
+          repository: astral-sh/uv-dev
+          github-token: ${{ steps.token.outputs.token }}
+
+      - name: "Summarize reproduction context"
+        if: steps.persist-context.outputs.changed == 'true'
+        run: |
+          printf 'Issue context: https://github.com/astral-sh/uv-dev/tree/issue/%s\n' \
+            "$ISSUE_NUMBER" >> "$GITHUB_STEP_SUMMARY"
+        env:
+          ISSUE_NUMBER: ${{ needs.reproduce.outputs.issue-number }}
 
   create-integration-test:
     needs: [reproduce, report]
@@ -290,8 +286,8 @@ jobs:
         with:
           name: create-bug-test
 
-      - name: "Commit integration test"
-        id: commit-test
+      - name: "Validate integration test"
+        id: prepare-test
         run: |
           # codex-action rewrites its tracked config to configure the Responses API proxy.
           git restore -- agents/codex/config.toml
@@ -323,12 +319,7 @@ jobs:
           fi
 
           git diff --cached --check
-          issue_number="$(jq --raw-output '.number' "$RUNNER_TEMP/issue-triage-event.json")"
-          git \
-            -c core.hooksPath=/dev/null \
-            -c user.name="github-actions[bot]" \
-            -c user.email="github-actions[bot]@users.noreply.github.com" \
-            commit --message "Add regression test for uv#${issue_number}"
+          git restore --staged -- crates/uv/tests crates/uv-client/tests/it
 
           git_dir="$(git rev-parse --absolute-git-dir)"
           mv "$git_dir/config" "$RUNNER_TEMP/untrusted-git-config"
@@ -338,7 +329,7 @@ jobs:
           CREATE_TEST_SUMMARY: ${{ fromJSON(steps.create-test.outputs.final-message).summary }}
 
       - name: "Get uv-dev token"
-        if: steps.commit-test.outputs.created == 'true'
+        if: steps.prepare-test.outputs.created == 'true'
         id: token
         uses: open-security-tools/ost-simple-sts@9e012247e07c39080fb6a832dbfbcfeacebc19c4
         with:
@@ -349,15 +340,25 @@ jobs:
             contents: write
             pull_requests: write
 
+      - name: "Commit and push integration test"
+        if: steps.prepare-test.outputs.created == 'true'
+        id: commit-test
+        uses: ./.github/actions/commit-and-push
+        with:
+          paths: |
+            crates/uv/tests
+            crates/uv-client/tests/it
+          commit-message: ${{ format('Add regression test for uv#{0}', needs.reproduce.outputs.issue-number) }}
+          ref: ${{ format('zb/reproduce-bug/{0}', needs.reproduce.outputs.issue-number) }}
+          repository: astral-sh/uv-dev
+          github-token: ${{ steps.token.outputs.token }}
+
       - name: "Open draft pull request"
-        if: steps.commit-test.outputs.created == 'true'
+        if: steps.commit-test.outputs.changed == 'true'
         id: open-pr
         run: |
           issue_number="$(jq --raw-output '.number' "$RUNNER_TEMP/issue-triage-event.json")"
           branch="zb/reproduce-bug/${issue_number}"
-          git -c core.hooksPath=/dev/null push \
-            "https://x-access-token:${GH_TOKEN}@github.com/astral-sh/uv-dev.git" \
-            HEAD:"$branch"
           pull_request="$(
             gh pr create \
               --repo astral-sh/uv-dev \
