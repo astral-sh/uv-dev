@@ -1,0 +1,23 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "outcome": {
+      "type": "string",
+      "enum": ["identified", "narrowed", "not_identified"]
+    },
+    "introducing_commit": { "type": ["string", "null"] },
+    "introducing_pull_request": { "type": ["string", "null"] },
+    "last_known_good": { "type": ["string", "null"] },
+    "first_known_bad": { "type": ["string", "null"] },
+    "reason": { "type": "string" }
+  },
+  "required": [
+    "outcome",
+    "introducing_commit",
+    "introducing_pull_request",
+    "last_known_good",
+    "first_known_bad",
+    "reason"
+  ]
+}

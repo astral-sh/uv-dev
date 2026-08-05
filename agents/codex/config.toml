@@ -28,6 +28,27 @@ enabled = true
 "github.com" = "allow"
 "pypi.org" = "allow"
 
+[permissions.diagnose-regression]
+description = "Read-only regression diagnosis with temporary checkouts and registry access."
+extends = ":read-only"
+
+[permissions.diagnose-regression.filesystem]
+":tmpdir" = "write"
+":slash_tmp" = "write"
+
+[permissions.diagnose-regression.network]
+enabled = true
+
+[permissions.diagnose-regression.network.domains]
+"api.github.com" = "allow"
+"crates.io" = "allow"
+"files.pythonhosted.org" = "allow"
+"github.com" = "allow"
+"index.crates.io" = "allow"
+"pypi.org" = "allow"
+"static.crates.io" = "allow"
+"static.rust-lang.org" = "allow"
+
 [permissions.create-bug-test]
 description = "Bug integration-test creation with workspace and dependency-registry access."
 extends = ":workspace"
