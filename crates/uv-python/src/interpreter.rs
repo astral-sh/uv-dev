@@ -11,6 +11,7 @@ use configparser::ini::Ini;
 use fs_err as fs;
 use owo_colors::OwoColorize;
 use same_file::is_same_file;
+use serde::ser::SerializeMap;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::{debug, trace, warn};
@@ -934,7 +935,7 @@ pub enum InterpreterInfoError {
 }
 
 #[expect(clippy::struct_excessive_bools)]
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Deserialize, Clone)]
 struct InterpreterInfo {
     platform: Platform,
     markers: MarkerEnvironment,
@@ -954,6 +955,36 @@ struct InterpreterInfo {
     pointer_size: PointerSize,
     gil_disabled: bool,
     debug_enabled: bool,
+}
+
+impl Serialize for InterpreterInfo {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        // Older uv versions share the interpreter cache bucket and can ignore unknown map entries,
+        // but cannot decode `extension_suffixes` when it is inserted into a positional array.
+        let mut map = serializer.serialize_map(Some(18))?;
+        map.serialize_entry("platform", &self.platform)?;
+        map.serialize_entry("markers", &self.markers)?;
+        map.serialize_entry("scheme", &self.scheme)?;
+        map.serialize_entry("virtualenv", &self.virtualenv)?;
+        map.serialize_entry("manylinux_compatible", &self.manylinux_compatible)?;
+        map.serialize_entry("sys_prefix", &self.sys_prefix)?;
+        map.serialize_entry("sys_base_exec_prefix", &self.sys_base_exec_prefix)?;
+        map.serialize_entry("sys_base_prefix", &self.sys_base_prefix)?;
+        map.serialize_entry("sys_base_executable", &self.sys_base_executable)?;
+        map.serialize_entry("sys_executable", &self.sys_executable)?;
+        map.serialize_entry("sys_path", &self.sys_path)?;
+        map.serialize_entry("site_packages", &self.site_packages)?;
+        map.serialize_entry("stdlib", &self.stdlib)?;
+        map.serialize_entry("extension_suffixes", &self.extension_suffixes)?;
+        map.serialize_entry("standalone", &self.standalone)?;
+        map.serialize_entry("pointer_size", &self.pointer_size)?;
+        map.serialize_entry("gil_disabled", &self.gil_disabled)?;
+        map.serialize_entry("debug_enabled", &self.debug_enabled)?;
+        map.end()
+    }
 }
 
 impl InterpreterInfo {
@@ -1200,11 +1231,18 @@ impl InterpreterInfo {
                         );
                     }
                     Err(err) => {
-                        warn!(
-                            "Broken interpreter cache entry at {}, removing: {err}",
-                            cache_entry.path().user_display()
-                        );
-                        let _ = fs_err::remove_file(cache_entry.path());
+                        if Self::is_legacy_cache_entry(&data) {
+                            trace!(
+                                "Ignoring interpreter cache entry without extension suffixes at {}",
+                                cache_entry.path().user_display()
+                            );
+                        } else {
+                            warn!(
+                                "Broken interpreter cache entry at {}, removing: {err}",
+                                cache_entry.path().user_display()
+                            );
+                            let _ = fs_err::remove_file(cache_entry.path());
+                        }
                     }
                 }
             }
@@ -1231,6 +1269,11 @@ impl InterpreterInfo {
         }
 
         Ok(info)
+    }
+
+    /// Returns whether an interpreter cache entry predates `extension_suffixes`.
+    fn is_legacy_cache_entry(data: &[u8]) -> bool {
+        rmp_serde::from_slice::<CachedByTimestamp<[serde::de::IgnoredAny; 17]>>(data).is_ok()
     }
 }
 
@@ -1335,12 +1378,52 @@ mod tests {
 
     use fs_err as fs;
     use indoc::{formatdoc, indoc};
+    use serde::ser::SerializeSeq;
+    use serde::{Deserialize, Serialize};
     use tempfile::tempdir;
 
-    use uv_cache::Cache;
+    use uv_cache::{Cache, CachedByTimestamp};
+    use uv_cache_info::Timestamp;
     use uv_pep440::Version;
+    use uv_pep508::MarkerEnvironment;
 
     use crate::Interpreter;
+
+    #[derive(Deserialize)]
+    struct LegacyInterpreterReader {
+        markers: MarkerEnvironment,
+        standalone: bool,
+    }
+
+    struct LegacyInterpreterInfo<'a>(&'a super::InterpreterInfo);
+
+    impl Serialize for LegacyInterpreterInfo<'_> {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: serde::Serializer,
+        {
+            let info = self.0;
+            let mut sequence = serializer.serialize_seq(Some(17))?;
+            sequence.serialize_element(&info.platform)?;
+            sequence.serialize_element(&info.markers)?;
+            sequence.serialize_element(&info.scheme)?;
+            sequence.serialize_element(&info.virtualenv)?;
+            sequence.serialize_element(&info.manylinux_compatible)?;
+            sequence.serialize_element(&info.sys_prefix)?;
+            sequence.serialize_element(&info.sys_base_exec_prefix)?;
+            sequence.serialize_element(&info.sys_base_prefix)?;
+            sequence.serialize_element(&info.sys_base_executable)?;
+            sequence.serialize_element(&info.sys_executable)?;
+            sequence.serialize_element(&info.sys_path)?;
+            sequence.serialize_element(&info.site_packages)?;
+            sequence.serialize_element(&info.stdlib)?;
+            sequence.serialize_element(&info.standalone)?;
+            sequence.serialize_element(&info.pointer_size)?;
+            sequence.serialize_element(&info.gil_disabled)?;
+            sequence.serialize_element(&info.debug_enabled)?;
+            sequence.end()
+        }
+    }
 
     #[tokio::test]
     async fn test_cache_invalidation() {
@@ -1421,6 +1504,28 @@ mod tests {
             std::os::unix::fs::PermissionsExt::from_mode(0o770),
         )
         .unwrap();
+
+        let info = super::InterpreterInfo::query(&mocked_interpreter, &cache).unwrap();
+
+        let current = rmp_serde::to_vec(&info).unwrap();
+        let previous = rmp_serde::from_slice::<LegacyInterpreterReader>(&current).unwrap();
+        assert_eq!(
+            previous.markers.python_version().version,
+            Version::from_str("3.12").unwrap()
+        );
+        assert!(!previous.standalone);
+
+        let legacy = rmp_serde::to_vec(&CachedByTimestamp {
+            timestamp: Timestamp::now(),
+            data: LegacyInterpreterInfo(&info),
+        })
+        .unwrap();
+        assert!(super::InterpreterInfo::is_legacy_cache_entry(&legacy));
+        assert!(!super::InterpreterInfo::is_legacy_cache_entry(&current));
+        assert!(!super::InterpreterInfo::is_legacy_cache_entry(
+            b"not a MessagePack interpreter cache entry"
+        ));
+
         let interpreter = Interpreter::query(&mocked_interpreter, &cache).unwrap();
         assert_eq!(
             interpreter.markers.python_version().version,
