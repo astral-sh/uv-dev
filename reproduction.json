@@ -1,0 +1,4 @@
+{
+  "reproduction": "needs_more_information",
+  "reason": "On Linux x86_64 with Python 3.12.3, both uv 0.12.1 and 0.12.2 were tested using an isolated workspace where private-package's `future` extra contained two local packages. `uv add --dev private-package/ --extra dev --extra test --extra future` installed only the three local packages; `uv pip show future` confirmed that the PyPI distribution was absent. Removing the extra and syncing removed only its two local dependencies. The complete original pyproject.toml files, source/index configuration, relevant uv.lock entries, and `uv tree --invert --package future` output are needed to identify what introduced the reported distribution."
+}
