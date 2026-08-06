@@ -4,6 +4,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use anyhow::bail;
 use itertools::Itertools;
 use owo_colors::OwoColorize;
 use tracing::{debug, trace, warn};
@@ -64,7 +65,7 @@ use crate::commands::reporters::{PythonDownloadReporter, ResolverReporter};
 use crate::commands::{capitalize, conjunction, pip};
 use crate::printer::Printer;
 use crate::settings::{
-    FrozenSource, InstallerSettingsRef, LockCheckSource, ResolverInstallerSettings,
+    FrozenSource, InstallerSettingsRef, LockCheck, LockCheckSource, ResolverInstallerSettings,
     ResolverSettings,
 };
 
@@ -138,6 +139,48 @@ impl From<FrozenSource> for MissingLockfileSource {
             FrozenSource::Configuration => Self::FrozenConfiguration,
         }
     }
+}
+
+/// Report lockfile requirements for a Python script without an existing lockfile.
+pub(crate) fn handle_missing_script_lockfile(
+    lock_check: LockCheck,
+    frozen: Option<FrozenSource>,
+) -> anyhow::Result<()> {
+    if let LockCheck::Enabled(lock_check) = lock_check {
+        match lock_check {
+            LockCheckSource::LockedCli | LockCheckSource::Check => {
+                bail!(
+                    "Unable to find lockfile for Python script, but `{lock_check}` was provided. To create a lockfile, run `{}`.",
+                    "uv lock --script".green(),
+                );
+            }
+            LockCheckSource::LockedEnv | LockCheckSource::LockedConfiguration => {
+                warn_user!(
+                    "No lockfile found for Python script (ignoring `{lock_check}`); run `{}` to generate a lockfile",
+                    "uv lock --script".green(),
+                );
+            }
+        }
+    }
+
+    if let Some(frozen_source) = frozen {
+        match frozen_source {
+            FrozenSource::Cli => {
+                bail!(
+                    "Unable to find lockfile for Python script, but `--frozen` was provided. To create a lockfile, run `{}`.",
+                    "uv lock --script".green(),
+                );
+            }
+            FrozenSource::Env | FrozenSource::Configuration => {
+                warn_user!(
+                    "No lockfile found for Python script (ignoring `--frozen`); run `{}` to generate a lockfile",
+                    "uv lock --script".green(),
+                );
+            }
+        }
+    }
+
+    Ok(())
 }
 
 #[derive(thiserror::Error, Debug)]

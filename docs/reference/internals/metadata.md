@@ -3,7 +3,8 @@
 `uv workspace metadata` exports the information uv has about your workspace or PEP 723 script as
 JSON so other tools can use it. In particular, if you want access to the information in a `uv.lock`
 or script lockfile, you should prefer this command's output, as lockfiles are not a stable format we
-guarantee anything about. Pass `--script path/to/script.py` to request metadata for a script.
+guarantee anything about. Pass `--script path/to/script.py` to request metadata for a script. Pass
+`--script -` to read a script from stdin and resolve its dependencies without using a lockfile.
 
 The primary structure is the "resolution" field which contains the dependency graph with exact
 package versions that a `uv.lock` encodes.
