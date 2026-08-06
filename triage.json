@@ -1,0 +1,27 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 18506,
+        "title": "Roadmap: `uv audit`",
+        "url": "https://github.com/astral-sh/uv/issues/18506",
+        "state": "open",
+        "reason": "The canonical audit roadmap contains the original discussion of ignoring a specific vulnerability while no fix exists, but not a global selector. It is related history, not a duplicate."
+      },
+      {
+        "kind": "pull_request",
+        "number": 18737,
+        "title": "uv audit: `--ignore` and `--ignore-until-fixed`",
+        "url": "https://github.com/astral-sh/uv/pull/18737",
+        "state": "merged",
+        "reason": "This introduced the option being extended. It defines additive, explicit vulnerability-ID matching; the current CLI, schema, filtering code, and tests retain that behavior."
+      }
+    ],
+    "search_scope": "Literal searches covered `ignore-until-fixed`, `uv audit`, `ruff audit`, `ALL`, and no-fix terminology. Conceptual searches covered wildcard/global ignores, actionable or fixable vulnerabilities, available fixes, and filtering or suppressing audit findings. Fix-oriented searches inspected the audit roadmap, original audit proposal, merged ignore implementation, and automatic-fix work across issues and pull requests in all states. No existing tracker for the requested global filter was found. astral-sh/uv#19265 concerns pruning stale configured ignores; astral-sh/uv#19428 concerns modifying the lockfile to fix vulnerabilities; astral-sh/uv#18912 concerns direct-dependency filtering; and astral-sh/uv#19981 concerns VEX-based suppressions."
+  },
+  "type": "enhancement",
+  "type_reason": "Current behavior is documented and internally consistent: `--ignore-until-fixed` takes vulnerability IDs, matches those IDs or aliases, and suppresses a match only when its fix-version list is empty. Making one value select every such finding would add a global filtering capability. No existing issue or pull request tracks that exact capability closely enough for duplicate classification.",
+  "summary": "No same-request tracker was found. Open roadmap astral-sh/uv#18506 provides the canonical context, while merged astral-sh/uv#18737 established the per-vulnerability-ID behavior that the proposed global selector would extend.",
+  "draft_response": "Thanks. `--ignore-until-fixed` currently accepts vulnerability IDs, not package names, and suppresses each matching vulnerability only while no fix version is known. There is no wildcard today, so `ALL` would be treated as an unmatched vulnerability ID. We’ll track this as an enhancement to show only findings with known fixes. Before implementation, we need to decide whether that should be represented by a special `ALL` value or an explicit audit filter flag/configuration, since the existing option and schema are defined as lists of vulnerability IDs. Also, the example command should use `uv audit`, not `ruff audit`."
+}
