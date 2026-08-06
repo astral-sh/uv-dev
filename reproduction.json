@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "On Linux x86_64 with uv 0.12.2 and CPython 3.12.3, a sanitized local package index reproduced the requested workflow. `uv add --no-index --find-links ../dist package-a==1.0.2 --constraint ../constraints.txt` selected package-c 1.5.0 and package-d 2.0.5. Then `uv add --no-index --find-links ../dist package-b==1.3.0` retained package-c 1.5.0 despite 1.6.0 being available, added package-b 1.3.0, and updated the incompatible package-d to 2.1.0. The final lock contained exactly the four requested versions. This is supported behavior, not a demonstrated defect."
+}

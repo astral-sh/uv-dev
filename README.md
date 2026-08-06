@@ -6,108 +6,122 @@ Classification: question
 
 ## Summary
 
-The reporter wants to resolve `package_a==1.0.2` under a one-time constraints file, then add
-`package_b==1.3.0` and retain the compatible versions selected in the first step. Their desired
-lock keeps `package_c==1.5.0`, replaces the constraints-only `package_b==1.2.0` with the explicitly
-requested `package_b==1.3.0`, and changes `package_d==2.0.5` to the newly required
-`package_d==2.1.0`. They currently achieve this by mutating an environment with `uv pip install`,
-freezing it, and importing the frozen versions with `uv add -r`.
+The reporter asks how to resolve `package_a==1.0.2` with a one-time constraints file, then add
+`package_b==1.3.0` while retaining compatible versions chosen in the first resolution. The desired
+final lock contains `package_a==1.0.2`, `package_b==1.3.0`, `package_c==1.5.0`, and
+`package_d==2.1.0`.
 
-The project interface already supports this workflow. `uv add -c` applies an external constraints
-file to that invocation's resolution without adding the constraints to `pyproject.toml`. The
-selected versions are stored in `uv.lock`. On a later `uv add`, uv prefers compatible versions from
-the existing lockfile, changing them only when the new requirement is incompatible or an upgrade is
-explicitly requested. Therefore the direct sequence is:
+This can be done directly with the project interface. `uv add -c` applies external constraints to
+that resolution without recording them as project dependencies. A later `uv add` uses compatible
+versions from the existing lockfile as preferences, while replacing a locked version when the new
+requirement is incompatible.
 
-```console
-$ uv init
-$ uv add package_a==1.0.2 -c package_a_constraints-1-0-2.txt
-$ uv add package_b==1.3.0
-```
-
-With the dependency metadata described in the report, this should retain `package_c==1.5.0` and
-move `package_d` to `2.1.0`. A constraints entry does not install a package by itself, so the first
-step's `package_b==1.2.0` entry only has an effect if something in that first resolution requires
-`package_b`. The second command explicitly adds `package_b==1.3.0` after the external constraints
-are no longer active.
-
-If the reported `package_d>=2.0.0<3.0.0` text is literal rather than abbreviated prose, it needs a
-comma: `package_d>=2.0.0,<3.0.0`.
-
-## Draft response
-
-Yes. You can do this directly with the project interface, without installing into an environment,
-freezing it, and importing the result:
-
-```console
-$ uv init
-$ uv add package_a==1.0.2 -c package_a_constraints-1-0-2.txt
-$ uv add package_b==1.3.0
-```
-
-`uv add -c` uses the constraints file for that resolution, but does not persist those constraints
-to `pyproject.toml`. The selected versions are written to `uv.lock`. On the second `uv add`, uv
-prefers compatible versions already in the lockfile, so `package_c==1.5.0` should remain selected;
-`package_d==2.0.5` is incompatible with `package_b`'s `package_d==2.1.0` requirement, so it should
-move to `2.1.0`. This constraints workflow was added in astral-sh/uv#11986 and implemented by
-astral-sh/uv#12209.
-
-Also, if `package_d>=2.0.0<3.0.0` is copied literally from the package metadata, change it to
-`package_d>=2.0.0,<3.0.0`.
+A constraint does not introduce a package by itself. Consequently, `package_b==1.2.0` in the first
+constraints file has no effect because nothing in that first resolution requires `package_b`.
 
 ## Classification
 
-This is a `question`. The report asks whether uv can perform a particular multi-step resolution and
-does not show incorrect behavior. The requested result follows existing, documented behavior:
-external constraints are accepted by `uv add`, and versions in an existing output lockfile are
-preferences that remain selected unless a later requirement makes them incompatible. No new
-capability is required for the described sequence.
+This is a `question`, not a demonstrated uv defect. The report asks whether uv supports a workflow,
+and a targeted reproduction confirms that the existing `uv add --constraint` behavior produces the
+requested result. The issue is not the persistent-constraints enhancement in astral-sh/uv#16508:
+persisting `package_b==1.2.0` into the second resolution would conflict with the requested
+`package_b==1.3.0`.
 
-It is not a duplicate because the closest canonical issue, astral-sh/uv#11986, is a closed feature
-request whose implementation supplies the answer rather than an existing discussion that needs to
-centralize this support question. It is not the persistent-constraints enhancement tracked by
-astral-sh/uv#16508: persistence would keep `package_b==1.2.0` active and conflict with the desired
-second-step `package_b==1.3.0`.
+## Reproduction
+
+Outcome: **reproducible** on Linux x86_64 with uv 0.12.2, CPython 3.12.3, and an isolated temporary
+project, package directory, cache, and virtual environment under `/tmp`.
+
+The local flat package directory contained these sanitized wheels reconstructed from the report:
+
+- `package-a==1.0.2`, depending on `package-c>=1.4.0,<2.0.0` and
+  `package-d>=2.0.0,<3.0.0`.
+- `package-b==1.3.0`, depending on `package-a>=1.0.0`, `package-c>=1.0.0,<2.0.0`, and
+  `package-d==2.1.0`.
+- `package-c==1.5.0` and `package-c==1.6.0`. The extra compatible 1.6.0 distinguishes retention of
+  the first locked version from a fresh highest-version selection.
+- `package-d==2.0.5` and `package-d==2.1.0`.
+
+The constraints file was:
+
+```text
+package-b==1.2.0
+package-c==1.5.0
+package-d==2.0.5
+```
+
+The reproduction commands were:
+
+```console
+$ uv init --bare --python 3.12 project
+$ cd project
+$ uv add --no-index --find-links ../dist package-a==1.0.2 --constraint ../constraints.txt
+$ uv add --no-index --find-links ../dist package-b==1.3.0
+```
+
+The first `uv add` resolved and installed `package-a==1.0.2`, `package-c==1.5.0`, and
+`package-d==2.0.5`. It did not install constraints-only `package-b==1.2.0`, and the generated
+`pyproject.toml` recorded only `package-a==1.0.2`.
+
+The second `uv add` reported:
+
+```text
++ package-b==1.3.0
+- package-d==2.0.5
++ package-d==2.1.0
+```
+
+The final `uv.lock` contained exactly:
+
+```text
+package-a==1.0.2
+package-b==1.3.0
+package-c==1.5.0
+package-d==2.1.0
+```
+
+Thus uv retained the compatible locked `package-c==1.5.0` even though 1.6.0 was available, and
+changed `package-d` because the new direct dependency required 2.1.0.
+
+Existing integration coverage confirms the two underlying behaviors, although no single test
+models this exact two-step graph:
+
+- `crates/uv/tests/project/edit.rs`, `add_requirements_file_constraints`, passes requirements and an
+  external constraints file to `uv add`, then asserts that constrained versions are selected while
+  the constraints are absent from both the project requirements and lockfile constraints.
+- `crates/uv/tests/lock/lock.rs`, `lock_preference`, first locks `iniconfig==1.1.1`, loosens the
+  project requirement, and asserts that 1.1.1 remains selected; it changes to 2.0.0 only when
+  `--upgrade` is requested.
+
+If the report's `package_d>=2.0.0<3.0.0` is literal metadata rather than abbreviated prose, it is
+invalid and needs the comma used above: `package_d>=2.0.0,<3.0.0`.
+
+## Draft response
+
+Yes. You can replace the environment mutation, freeze, and import sequence with:
+
+```console
+$ uv init
+$ uv add package_a==1.0.2 -c package_a_constraints-1-0-2.txt
+$ uv add package_b==1.3.0
+```
+
+The first command applies the constraints for that resolution and writes the selections to
+`uv.lock`, without persisting the constraints in `pyproject.toml`. The second command retains
+compatible locked versions, so `package_c==1.5.0` remains selected, while `package_d` changes from
+2.0.5 to 2.1.0 to satisfy `package_b`. The `package_b==1.2.0` constraint does not install
+`package_b` during the first step because constraints only limit packages that are otherwise
+required.
 
 ## Related
 
-- astral-sh/uv#11986, “Add support for constraints in `uv add`” (closed): This is the canonical
-  issue for the exact capability. It requests `uv add -r requirements.in -c requirements.txt` so a
-  constraints file can seed `uv.lock` without being written to `pyproject.toml`.
-- astral-sh/uv#12209, “Add support for `-c` constraints in `uv add`” (merged): This implemented
-  astral-sh/uv#11986. Its integration test verifies that external constraints control the resolved
-  versions, are not recorded as project requirements or lockfile constraints, and leave a valid
-  lockfile for subsequent project commands.
+- astral-sh/uv#11986, “Add support for constraints in `uv add`” (closed), requested the exact
+  capability to seed `uv.lock` from external constraints without writing them to
+  `pyproject.toml`.
+- astral-sh/uv#12209, “Add support for `-c` constraints in `uv add`” (merged), implemented
+  astral-sh/uv#11986 and added the integration coverage cited above.
 - astral-sh/uv#15020, “uv pip install don't change pyproject.toml and uv.lock. How can i sync this”
-  (closed): This is adjacent to the reporter's current workaround. A maintainer explains that
-  `uv pip install` does not update project metadata or `uv.lock`, recommends `uv add`, and describes
-  `uv pip freeze | uv add --requirements -` only as a simulation when direct `uv add` cannot be
-  used.
-
-## Supporting evidence
-
-- The current `uv add` CLI documentation states that `-c`/`--constraints` files control versions
-  during dependency resolution, are not added to `pyproject.toml`, and are equivalent to pip's
-  constraints option.
-- The migration guide explicitly recommends `uv add -r requirements.in -c requirements.txt` to
-  preserve previously locked versions when producing `uv.lock`.
-- The resolution documentation states that uv prefers versions in an existing `uv.lock`, and that
-  they do not change unless an incompatible version or an explicit upgrade is requested.
-- Source in the lock operation represents a still-usable existing lockfile as version preferences;
-  source in the candidate selector selects a matching lockfile preference before looking for a new
-  candidate.
-
-## Search coverage and exclusions
-
-Searches covered the literal command and file vocabulary (`uv add`, constraints, `uv lock`,
-`pip freeze`, and requirements import), the conceptual behaviors (preserving existing or locked
-versions, dependency preferences, minimal changes, and transitive upgrades), and historical merged
-fixes for project constraint support. Open and closed issues and open, closed, and merged pull
-requests were included.
-
-astral-sh/uv#16508 and astral-sh/uv#12490 were inspected but excluded because they request
-persistent or sync-time external constraints, unlike the one-time first-step constraint needed
-here. astral-sh/uv#14011 was also excluded: despite its similar title about a pinned version during
-`uv add`, its actual issue concerns an isolated build dependency, not reuse of ordinary lockfile
-versions. astral-sh/uv#8585 concerns conditional automation for bumping minimum versions across
-repositories rather than this supported incremental add workflow.
+  (closed), is adjacent to the reporter's workaround: `uv pip install` does not update project
+  metadata or `uv.lock`, while `uv add` does.
+- astral-sh/uv#16508 tracks persistent external constraints, which are not wanted for this
+  two-step resolution because the first-step `package_b==1.2.0` constraint must not remain active.
