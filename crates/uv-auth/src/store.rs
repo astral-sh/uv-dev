@@ -16,7 +16,7 @@ use crate::credentials::Username;
 use crate::matching;
 use crate::persistent::PersistentCredential;
 use crate::service::Service;
-use crate::{Credentials, KeyringProvider};
+use crate::{Credentials, KeyringProvider, Realm};
 
 pub use crate::persistent::AuthScheme;
 
@@ -226,6 +226,18 @@ impl TextCredentialStore {
             username,
         )
         .map_err(|_| LookupError::AmbiguousUsername(url.clone()))
+    }
+
+    /// Return every stored credential belonging to one authentication realm.
+    pub(crate) fn realm_credentials(&self, realm: &Realm) -> Vec<PersistentCredential> {
+        self.credentials
+            .iter()
+            .filter(|((service, _username), _credentials)| Realm::from(service.url()) == *realm)
+            .map(|((service, _username), credentials)| PersistentCredential {
+                service: service.clone(),
+                credentials: credentials.clone(),
+            })
+            .collect()
     }
 
     /// Store credentials for a given service.

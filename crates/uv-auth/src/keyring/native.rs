@@ -149,6 +149,15 @@ pub(super) async fn store(service: &Service, credentials: &Credentials) -> Resul
     .await
 }
 
+/// Load the complete persisted credential snapshot for one authentication realm.
+#[instrument]
+pub(super) async fn load_realm(realm: &Realm) -> Result<Vec<PersistentCredential>, Error> {
+    let guard = acquire_realm_read(realm).await?;
+    platform::load_persisted_credentials(RealmGuardRef::Read(&guard))
+        .await
+        .map(|credentials| credentials.0)
+}
+
 /// Remove credentials for an exact service and username from the platform keyring.
 #[instrument]
 pub(super) async fn remove(service: &Service, username: &str) -> Result<(), Error> {

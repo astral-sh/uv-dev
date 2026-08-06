@@ -6041,6 +6041,7 @@ dependencies = [
  "toml",
  "tracing",
  "url",
+ "uv-cache-key",
  "uv-fs",
  "uv-keyring",
  "uv-netrc",
