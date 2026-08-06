@@ -6,7 +6,9 @@ use uv_fs::LockedFileError;
 use uv_redacted::DisplaySafeUrl;
 use uv_warnings::warn_user_once;
 
+use crate::Realm;
 use crate::credentials::Credentials;
+use crate::persistent::PersistentCredential;
 use crate::service::{Service, ServiceParseError};
 
 mod native;
@@ -335,6 +337,11 @@ impl KeyringProvider {
             backend: KeyringProviderBackend::Dummy(Vec::new()),
         }
     }
+}
+
+/// Load all persisted native credentials for one authentication realm.
+pub(crate) async fn load_native_realm(realm: &Realm) -> Result<Vec<PersistentCredential>, Error> {
+    native::load_realm(realm).await
 }
 
 /// Return the host and optional explicit port used by legacy keyring lookups.

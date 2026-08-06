@@ -17,7 +17,7 @@ use crate::providers::{
 };
 use crate::{
     CredentialsCache, KeyringProvider,
-    cache::{CredentialsCacheScope, FetchUrl, FetchedCredentials},
+    cache::{CredentialsCacheScope, FetchUrl, FetchedCredentials, StoredCredentials},
     credentials::{
         Authentication, AuthenticationError, Credentials, CredentialsFromUrlError, Username,
     },
@@ -294,6 +294,52 @@ impl AuthMiddleware {
     fn cache(&self) -> &CredentialsCache {
         &self.cache
     }
+
+    /// Return cached stored credentials without widening their original service scope.
+    fn cached_stored_credentials(
+        &self,
+        url: &DisplaySafeUrl,
+        username: &Username,
+    ) -> reqwest_middleware::Result<Option<Arc<Authentication>>> {
+        match self.cache().get_stored(url, username) {
+            Ok(credentials) => Ok(credentials),
+            Err(_) if self.preview.is_enabled(PreviewFeature::NativeAuth) => Err(
+                Self::native_store_error(crate::keyring::Error::AmbiguousUsername(url.clone())),
+            ),
+            Err(_) => {
+                debug!("Multiple plaintext credentials match URL {url}");
+                Ok(None)
+            }
+        }
+    }
+
+    /// Load all native credentials for a realm once across clients in this invocation.
+    async fn native_realm_credentials(
+        &self,
+        realm: &Realm,
+    ) -> Result<StoredCredentials, Arc<crate::keyring::Error>> {
+        if let Some(credentials) = self.cache().native_realms.register_or_wait(realm).await {
+            return credentials;
+        }
+
+        let credentials = crate::keyring::load_native_realm(realm)
+            .await
+            .map(StoredCredentials::from)
+            .map_err(Arc::new);
+        self.cache()
+            .native_realms
+            .done(realm.clone(), credentials.clone());
+        credentials
+    }
+
+    /// Preserve explicit native-store failures when surfacing middleware errors.
+    fn native_store_error(error: impl Into<anyhow::Error>) -> Error {
+        Error::Middleware(
+            error
+                .into()
+                .context("Failed to fetch credentials from the native credential store"),
+        )
+    }
 }
 
 #[async_trait::async_trait]
@@ -376,6 +422,13 @@ impl Middleware for AuthMiddleware {
             let credentials = self
                 .cache()
                 .get_url(DisplaySafeUrl::ref_cast(request.url()), &Username::none());
+            let credentials = match credentials {
+                Some(credentials) => Some(credentials),
+                None => self.cached_stored_credentials(
+                    DisplaySafeUrl::ref_cast(request.url()),
+                    &Username::none(),
+                )?,
+            };
             if let Some(credentials) = credentials.as_ref() {
                 request = credentials.authenticate(request).await?;
 
@@ -562,6 +615,9 @@ impl AuthMiddleware {
                 CredentialsCacheScope::Realm => {
                     trace!("Updating cached credentials for {url} to {credentials:?}");
                     self.cache().insert(&url, credentials);
+                }
+                CredentialsCacheScope::Stored(snapshot) => {
+                    self.cache().insert_stored(&url, snapshot);
                 }
                 CredentialsCacheScope::FetchOnly => {}
             }
@@ -830,16 +886,17 @@ impl AuthMiddleware {
             }
 
             // Netrc support based on: <https://github.com/gribouille/netrc>.
-            let provider_credentials = if let Some(credentials) = self.netrc.get().and_then(|netrc| {
-                debug!("Checking netrc for credentials for {url}");
-                Credentials::from_netrc(
-                    netrc,
-                    url,
-                    credentials
-                        .as_ref()
-                        .and_then(|credentials| credentials.username()),
-                )
-            }) {
+            let provider_credentials = if let Some(credentials) =
+                self.netrc.get().and_then(|netrc| {
+                    debug!("Checking netrc for credentials for {url}");
+                    Credentials::from_netrc(
+                        netrc,
+                        url,
+                        credentials
+                            .as_ref()
+                            .and_then(|credentials| credentials.username()),
+                    )
+                }) {
                 debug!("Found credentials in netrc file for {url}");
                 Some(credentials)
             } else {
@@ -869,57 +926,75 @@ impl AuthMiddleware {
             self.text_store.get().await
         };
         let path_sensitive_store_enabled = text_store.is_some() || native_auth_enabled;
-        let store_credentials =
-            if let Some(credentials) = text_store.and_then(|text_store| {
-                debug!("Checking text store for credentials for {url}");
-                match text_store.get_credentials(
-                    url,
-                    credentials
-                        .as_ref()
-                        .and_then(|credentials| credentials.username()),
-                ) {
-                    Ok(credentials) => credentials.cloned(),
-                    Err(err) => {
-                        debug!("Failed to get credentials from text store: {err}");
-                        None
-                    }
+        let realm = Realm::from(url);
+        let store_credentials = if let Some(text_store) = text_store {
+            debug!("Checking text store for credentials for {url}");
+            let snapshot = StoredCredentials::from(text_store.realm_credentials(&realm));
+            match CredentialsCache::select_stored(&snapshot, url, &username) {
+                Ok(Some(credentials)) => {
+                    debug!("Found credentials in plaintext store for {url}");
+                    Some(FetchedCredentials {
+                        credentials,
+                        cache_scope: CredentialsCacheScope::Stored(snapshot),
+                    })
                 }
-            }) {
-                debug!("Found credentials in plaintext store for {url}");
-                Some(credentials)
-            } else if native_auth_enabled {
-                let native_store = KeyringProvider::native();
-                let username = credentials.and_then(|credentials| credentials.username());
-                let display_username =
-                    username.map_or_else(String::new, |username| format!("{username}@"));
-                if let Some(index) = index {
-                    debug!(
-                        "Checking native store for credentials for URL {}{} in index {}",
-                        display_username, url, index.root_url
-                    );
-                } else {
-                    debug!(
-                        "Checking native store for credentials for URL {}{}",
-                        display_username, url
-                    );
+                Ok(None) => None,
+                Err(_) => {
+                    debug!("Multiple plaintext credentials match URL {url}");
+                    None
                 }
-                native_store
-                    .fetch(url, username)
-                    .await
-                    .inspect_err(|err| debug!("Failed to get credentials from native store: {err}"))
-                    .map_err(|err| {
-                        Error::Middleware(anyhow!(err).context(
-                            "Failed to fetch credentials from the native credential store",
-                        ))
-                    })?
+            }
+        } else if native_auth_enabled {
+            let display_username = username
+                .as_deref()
+                .map_or_else(String::new, |username| format!("{username}@"));
+            if let Some(index) = index {
+                debug!(
+                    "Checking native store for credentials for URL {}{} in index {}",
+                    display_username, url, index.root_url
+                );
             } else {
-                None
-            };
+                debug!(
+                    "Checking native store for credentials for URL {}{}",
+                    display_username, url
+                );
+            }
 
-        let store_credentials = store_credentials.map(|credentials| FetchedCredentials {
-            credentials: Arc::new(Authentication::from(credentials)),
-            cache_scope: CredentialsCacheScope::FetchOnly,
-        });
+            let snapshot = self
+                .native_realm_credentials(&realm)
+                .await
+                .inspect_err(|err| debug!("Failed to get credentials from native store: {err}"))
+                .map_err(Self::native_store_error)?;
+            match CredentialsCache::select_stored(&snapshot, url, &username) {
+                Ok(Some(credentials)) => Some(FetchedCredentials {
+                    credentials,
+                    cache_scope: CredentialsCacheScope::Stored(snapshot),
+                }),
+                Ok(None) if username.is_none() => None,
+                Ok(None) => {
+                    let native_store = KeyringProvider::native();
+                    native_store
+                        .fetch(url, username.as_deref())
+                        .await
+                        .inspect_err(|err| {
+                            debug!("Failed to get credentials from native store: {err}");
+                        })
+                        .map_err(Self::native_store_error)?
+                        .map(|credentials| FetchedCredentials {
+                            credentials: Arc::new(Authentication::from(credentials)),
+                            cache_scope: CredentialsCacheScope::FetchOnly,
+                        })
+                }
+                Err(_) => {
+                    return Err(Self::native_store_error(
+                        crate::keyring::Error::AmbiguousUsername(url.clone()),
+                    ));
+                }
+            }
+        } else {
+            None
+        };
+
         if store_credentials.is_some() {
             return Ok(store_credentials);
         }
@@ -2734,6 +2809,16 @@ mod tests {
                 .status(),
             200,
             "Root credentials must not mask a more-specific credential"
+        );
+
+        let requests = server
+            .received_requests()
+            .await
+            .ok_or_else(|| std::io::Error::other("mock server did not record requests"))?;
+        assert_eq!(
+            requests.len(),
+            3,
+            "A more-specific cached credential should avoid a second authentication challenge"
         );
 
         Ok(())
