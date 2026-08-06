@@ -9,6 +9,8 @@ use crate::{Realm, Service, Username, persistent::PersistentCredential};
 
 /// Username for the single JSON entry that stores every credential in a realm.
 const PERSISTED_CREDENTIALS_USERNAME: &str = "uv";
+/// Namespace that keeps JSON collections separate from legacy `uv:<service>` entries.
+const PERSISTED_CREDENTIALS_NAMESPACE: &str = "credentials:";
 
 impl PersistedCredentials {
     /// Return whether the collection is empty.
@@ -37,13 +39,19 @@ impl PersistedCredentials {
 
 /// Return whether a legacy key identifies the persisted realm entry.
 pub(super) fn is_persisted_entry(realm: &Realm, service_name: &str, username: &str) -> bool {
-    username == PERSISTED_CREDENTIALS_USERNAME && service_name == realm.to_string()
+    username == PERSISTED_CREDENTIALS_USERNAME
+        && service_name
+            .strip_prefix(PERSISTED_CREDENTIALS_NAMESPACE)
+            .is_some_and(|service_name| service_name == realm.to_string())
 }
 
 /// Return the keyring entry containing all persisted credentials for a realm.
 fn realm_entry(guard: RealmGuardRef<'_>) -> Result<uv_keyring::Entry, Error> {
     uv_keyring::Entry::new(
-        &format!("{SERVICE_PREFIX}{}", guard.realm()),
+        &format!(
+            "{SERVICE_PREFIX}{PERSISTED_CREDENTIALS_NAMESPACE}{}",
+            guard.realm()
+        ),
         PERSISTED_CREDENTIALS_USERNAME,
     )
     .map_err(Error::Keyring)
@@ -139,11 +147,16 @@ mod tests {
     }
 
     #[test]
-    fn http_scheme_host_persisted_entry_is_not_treated_as_legacy() {
+    fn persisted_realm_entries_do_not_overlap_legacy_service_names() {
         let url = Service::from_str("http://localhost:1234")
             .expect("localhost service URL should be valid");
         let realm = Realm::from(url.url());
         assert!(is_persisted_entry(
+            &realm,
+            "credentials:http://localhost:1234",
+            PERSISTED_CREDENTIALS_USERNAME
+        ));
+        assert!(!is_persisted_entry(
             &realm,
             "http://localhost:1234",
             PERSISTED_CREDENTIALS_USERNAME
@@ -153,7 +166,11 @@ mod tests {
             "localhost:1234",
             PERSISTED_CREDENTIALS_USERNAME
         ));
-        assert!(!is_persisted_entry(&realm, "http://localhost:1234", "user"));
+        assert!(!is_persisted_entry(
+            &realm,
+            "credentials:http://localhost:1234",
+            "user"
+        ));
     }
 
     #[test]
