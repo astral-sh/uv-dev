@@ -201,9 +201,15 @@ fn specifiers_to_ranges(
 
     let mut range = Ranges::full();
     let mut exclusions = Vec::new();
+    let mut has_exclusion = false;
 
     for specifier in specifiers {
         match specifier.operator {
+            Operator::NotEqual | Operator::NotEqualStar if !has_exclusion => {
+                // A single exclusion is common and does not benefit from allocating a batch.
+                range = range.intersection(&convert(specifier));
+                has_exclusion = true;
+            }
             Operator::NotEqual => {
                 exclusions.extend(convert(VersionSpecifier::equals_version(specifier.version)));
             }
@@ -767,6 +773,8 @@ mod tests {
         });
 
         for exclusions in [
+            vec!["!=1.0".to_string()],
+            vec!["!=1.*".to_string()],
             distinct.collect::<Vec<_>>(),
             duplicate.collect(),
             wildcard.collect(),
