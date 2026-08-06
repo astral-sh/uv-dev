@@ -202,15 +202,15 @@ fn specifiers_to_ranges(
     let mut range = Ranges::full();
     let mut exclusions = Vec::new();
 
-    for mut specifier in specifiers {
+    for specifier in specifiers {
         match specifier.operator {
             Operator::NotEqual => {
-                specifier.operator = Operator::Equal;
-                exclusions.extend(convert(specifier));
+                exclusions.extend(convert(VersionSpecifier::equals_version(specifier.version)));
             }
             Operator::NotEqualStar => {
-                specifier.operator = Operator::EqualStar;
-                exclusions.extend(convert(specifier));
+                exclusions.extend(convert(VersionSpecifier::equals_star_version(
+                    specifier.version,
+                )));
             }
             _ => range = range.intersection(&convert(specifier)),
         }
