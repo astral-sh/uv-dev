@@ -346,6 +346,75 @@ async fn native_auth_uses_path_specific_credentials_in_one_client() -> Result<()
 
 #[tokio::test]
 #[cfg(feature = "native-auth")]
+async fn native_auth_ignores_plaintext_credentials() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_real_home();
+    let proxy = crate::pypi_proxy::start().await;
+    let service = proxy.url("/basic-auth/simple");
+    let credentials_directory = context.temp_dir.child("credentials");
+    let _cleanup = NativeCredentialCleanup::new(&context, &[(service.as_str(), "public")]);
+
+    context
+        .auth_login()
+        .arg(&service)
+        .arg("--username")
+        .arg("public")
+        .arg("--password")
+        .arg("outdated-password")
+        .env(
+            EnvVars::UV_CREDENTIALS_DIR,
+            credentials_directory.as_os_str(),
+        )
+        .assert()
+        .success();
+
+    uv_snapshot!(context.filters(), context.auth_login()
+        .arg(&service)
+        .arg("--username")
+        .arg("public")
+        .arg("--password")
+        .arg("heron")
+        .env(EnvVars::UV_CREDENTIALS_DIR, credentials_directory.as_os_str())
+        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: Ignoring plaintext credentials at [TEMP_DIR]/credentials/credentials.toml because native authentication is enabled
+    Stored credentials for public@http://[LOCALHOST]/basic-auth
+    ");
+
+    uv_snapshot!(context.filters(), context.auth_token()
+        .arg(&service)
+        .arg("--username")
+        .arg("public")
+        .env(EnvVars::UV_CREDENTIALS_DIR, credentials_directory.as_os_str())
+        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    heron
+
+    ----- stderr -----
+    warning: Ignoring plaintext credentials at [TEMP_DIR]/credentials/credentials.toml because native authentication is enabled
+    ");
+
+    context
+        .pip_install()
+        .arg("--dry-run")
+        .arg("--no-deps")
+        .arg("--default-index")
+        .arg(proxy.username_url("public", "/basic-auth/simple"))
+        .arg("iniconfig")
+        .env(
+            EnvVars::UV_CREDENTIALS_DIR,
+            credentials_directory.as_os_str(),
+        )
+        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth")
+        .assert()
+        .success();
+
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg(feature = "native-auth")]
 async fn token_native_auth() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[]).with_real_home();
     let proxy = crate::pypi_proxy::start().await;

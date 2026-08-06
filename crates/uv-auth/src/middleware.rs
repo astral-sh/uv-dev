@@ -253,6 +253,9 @@ impl AuthMiddleware {
     /// Configure the [`Preview`] features to use.
     #[must_use]
     pub fn with_preview(mut self, preview: Preview) -> Self {
+        if preview.is_enabled(PreviewFeature::NativeAuth) {
+            crate::store::warn_ignored_plaintext_credentials();
+        }
         self.preview = preview;
         self
     }
@@ -859,9 +862,13 @@ impl AuthMiddleware {
 
         // Text and native stores can scope credentials to a URL path, so consult them for each
         // request instead of retaining every path in the process-wide fetch cache.
-        let text_store = self.text_store.get().await;
-        let path_sensitive_store_enabled =
-            text_store.is_some() || self.preview.is_enabled(PreviewFeature::NativeAuth);
+        let native_auth_enabled = self.preview.is_enabled(PreviewFeature::NativeAuth);
+        let text_store = if native_auth_enabled {
+            None
+        } else {
+            self.text_store.get().await
+        };
+        let path_sensitive_store_enabled = text_store.is_some() || native_auth_enabled;
         let store_credentials = if let Some(credentials) = text_store.and_then(|text_store| {
             debug!("Checking text store for credentials for {url}");
             match text_store.get_credentials(
@@ -879,7 +886,7 @@ impl AuthMiddleware {
         }) {
             debug!("Found credentials in plaintext store for {url}");
             Some(credentials)
-        } else if self.preview.is_enabled(PreviewFeature::NativeAuth) {
+        } else if native_auth_enabled {
             let native_store = KeyringProvider::native();
             let username = credentials.and_then(|credentials| credentials.username());
             let display_username =
