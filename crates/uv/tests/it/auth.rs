@@ -514,14 +514,13 @@ async fn token_native_auth() -> Result<()> {
     heron
     ");
 
-    // Without the username
-    // TODO(zanieb): Add a hint here if we can?
+    // Infer the only matching username.
     uv_snapshot!(context.filters(), context.auth_token()
         .arg(proxy.url("/basic-auth/simple"))
         .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Failed to fetch credentials for http://[LOCALHOST]/basic-auth/simple
+    exit_code: 0 (success)
+    ----- stdout -----
+    heron
     ");
 
     // With a mismatched username
@@ -548,13 +547,13 @@ async fn token_native_auth() -> Result<()> {
     "
     );
 
-    // Retrieve the token without a username
+    // A named user and a token account are ambiguous without an explicit username.
     uv_snapshot!(context.filters(), context.auth_token()
         .arg(proxy.url("/basic-auth/simple"))
         .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
-    exit_code: 0 (success)
-    ----- stdout -----
-    heron
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Multiple credentials found for URL 'http://[LOCALHOST]/basic-auth/simple', specify which username to use
     ");
 
     context
@@ -670,22 +669,22 @@ async fn token_native_auth_realm() -> Result<()> {
     heron
     ");
 
-    // Without the username (defaults to __token__ which wasn't stored)
+    // Infer the only username stored for the realm.
     uv_snapshot!(context.filters(), context.auth_token()
         .arg(proxy.uri())
         .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Failed to fetch credentials for http://[LOCALHOST]/
+    exit_code: 0 (success)
+    ----- stdout -----
+    heron
     ");
 
-    // Without the username (defaults to __token__ which wasn't stored)
+    // Infer the same username for a matching child URL.
     uv_snapshot!(context.filters(), context.auth_token()
         .arg(proxy.url("/basic-auth/simple"))
         .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Failed to fetch credentials for http://[LOCALHOST]/basic-auth/simple
+    exit_code: 0 (success)
+    ----- stdout -----
+    heron
     ");
 
     // With a mismatched username
@@ -723,13 +722,13 @@ async fn token_native_auth_realm() -> Result<()> {
     "
     );
 
-    // Retrieve the token without a username
+    // A named user and a token account are ambiguous without an explicit username.
     uv_snapshot!(context.filters(), context.auth_token()
         .arg(proxy.uri())
         .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
-    exit_code: 0 (success)
-    ----- stdout -----
-    heron
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Multiple credentials found for URL 'http://[LOCALHOST]/', specify which username to use
     ");
 
     context
@@ -913,16 +912,25 @@ async fn logout_native_auth() -> Result<()> {
     "
     );
 
-    // Logout without a username
-    // TODO(zanieb): Add a hint here if we can?
+    // Infer the only matching username during logout.
     uv_snapshot!(context.filters(), context.auth_logout()
         .arg(proxy.url("/basic-auth/simple"))
         .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
-    exit_code: 2 (failure)
+    exit_code: 0 (success)
     ----- stderr -----
-    error: Unable to remove credentials for http://[LOCALHOST]/basic-auth
-      Caused by: No matching entry found in secure storage
+    Removed credentials for public@http://[LOCALHOST]/basic-auth
     ");
+
+    context
+        .auth_login()
+        .arg(proxy.url("/basic-auth/simple"))
+        .arg("--username")
+        .arg("public")
+        .arg("--password")
+        .arg("heron")
+        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth")
+        .assert()
+        .success();
 
     // Logout with a username
     uv_snapshot!(context.filters(), context.auth_logout()
@@ -2019,6 +2027,24 @@ fn native_auth_multiple_users() {
     "
     );
 
+    uv_snapshot!(context.auth_token()
+        .arg(service)
+        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Multiple credentials found for URL 'https://native-users.example.com/', specify which username to use
+    "
+    );
+
+    uv_snapshot!(context.auth_logout()
+        .arg(service)
+        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Multiple credentials found for URL 'https://native-users.example.com/', specify which username to use
+    "
+    );
+
     uv_snapshot!(context.filters(), context.auth_helper()
         .arg("--protocol=bazel")
         .arg("get")
@@ -2059,6 +2085,63 @@ fn native_auth_multiple_users() {
     exit_code: 0 (success)
     ----- stdout -----
     pass2
+    "
+    );
+}
+
+#[test]
+#[cfg(feature = "native-auth")]
+fn native_auth_token_account_is_ambiguous() {
+    let context = uv_test::test_context_with_versions!(&[]).with_real_home();
+    let service = "native-token-ambiguity.example.com";
+    let _cleanup =
+        NativeCredentialCleanup::new(&context, &[(service, "alice"), (service, "__token__")]);
+
+    context
+        .auth_login()
+        .arg(service)
+        .arg("--username")
+        .arg("alice")
+        .arg("--password")
+        .arg("alice-password")
+        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth")
+        .assert()
+        .success();
+    context
+        .auth_login()
+        .arg(service)
+        .arg("--token")
+        .arg("token-password")
+        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth")
+        .assert()
+        .success();
+
+    uv_snapshot!(context.auth_token()
+        .arg(service)
+        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Multiple credentials found for URL 'https://native-token-ambiguity.example.com/', specify which username to use
+    "
+    );
+
+    uv_snapshot!(context.auth_logout()
+        .arg(service)
+        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Multiple credentials found for URL 'https://native-token-ambiguity.example.com/', specify which username to use
+    "
+    );
+
+    uv_snapshot!(context.auth_token()
+        .arg(service)
+        .arg("--username")
+        .arg("__token__")
+        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    token-password
     "
     );
 }
