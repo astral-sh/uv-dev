@@ -869,64 +869,52 @@ impl AuthMiddleware {
             self.text_store.get().await
         };
         let path_sensitive_store_enabled = text_store.is_some() || native_auth_enabled;
-        let store_credentials = if let Some(credentials) = text_store.and_then(|text_store| {
-            debug!("Checking text store for credentials for {url}");
-            match text_store.get_credentials(
-                url,
-                credentials
-                    .as_ref()
-                    .and_then(|credentials| credentials.username()),
-            ) {
-                Ok(credentials) => credentials.cloned(),
-                Err(err) => {
-                    debug!("Failed to get credentials from text store: {err}");
-                    None
-                }
-            }
-        }) {
-            debug!("Found credentials in plaintext store for {url}");
-            Some(credentials)
-        } else if native_auth_enabled {
-            let native_store = KeyringProvider::native();
-            let username = credentials.and_then(|credentials| credentials.username());
-            let display_username =
-                username.map_or_else(String::new, |username| format!("{username}@"));
-            if let Some(index) = index {
-                debug!(
-                    "Checking native store for credentials for URL {}{} in index {}",
-                    display_username, url, index.root_url
-                );
-            } else {
-                debug!(
-                    "Checking native store for credentials for URL {}{}",
-                    display_username, url
-                );
-            }
-            match native_store.fetch(url, username).await {
-                Ok(credentials) => credentials,
-                Err(err) => {
-                    debug!("Failed to get credentials from native store: {err}");
-                    let platform_unavailable = matches!(
-                        &err,
-                        crate::keyring::Error::Keyring(
-                            uv_keyring::Error::PlatformFailure(_)
-                                | uv_keyring::Error::NoStorageAccess(_)
-                        )
-                    );
-                    if username.is_some()
-                        || matches!(&err, crate::keyring::Error::AmbiguousUsername(_))
-                        || !platform_unavailable
-                    {
-                        uv_warnings::warn_user_once!(
-                            "Failed to fetch credentials from the native credential store: {err}"
-                        );
+        let store_credentials =
+            if let Some(credentials) = text_store.and_then(|text_store| {
+                debug!("Checking text store for credentials for {url}");
+                match text_store.get_credentials(
+                    url,
+                    credentials
+                        .as_ref()
+                        .and_then(|credentials| credentials.username()),
+                ) {
+                    Ok(credentials) => credentials.cloned(),
+                    Err(err) => {
+                        debug!("Failed to get credentials from text store: {err}");
+                        None
                     }
-                    None
                 }
-            }
-        } else {
-            None
-        };
+            }) {
+                debug!("Found credentials in plaintext store for {url}");
+                Some(credentials)
+            } else if native_auth_enabled {
+                let native_store = KeyringProvider::native();
+                let username = credentials.and_then(|credentials| credentials.username());
+                let display_username =
+                    username.map_or_else(String::new, |username| format!("{username}@"));
+                if let Some(index) = index {
+                    debug!(
+                        "Checking native store for credentials for URL {}{} in index {}",
+                        display_username, url, index.root_url
+                    );
+                } else {
+                    debug!(
+                        "Checking native store for credentials for URL {}{}",
+                        display_username, url
+                    );
+                }
+                native_store
+                    .fetch(url, username)
+                    .await
+                    .inspect_err(|err| debug!("Failed to get credentials from native store: {err}"))
+                    .map_err(|err| {
+                        Error::Middleware(anyhow!(err).context(
+                            "Failed to fetch credentials from the native credential store",
+                        ))
+                    })?
+            } else {
+                None
+            };
 
         let store_credentials = store_credentials.map(|credentials| FetchedCredentials {
             credentials: Arc::new(Authentication::from(credentials)),

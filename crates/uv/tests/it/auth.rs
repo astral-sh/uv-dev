@@ -415,6 +415,47 @@ async fn native_auth_ignores_plaintext_credentials() -> Result<()> {
 
 #[tokio::test]
 #[cfg(feature = "native-auth")]
+async fn native_auth_reports_ambiguous_package_credentials() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_real_home();
+    let proxy = crate::pypi_proxy::start().await;
+    let service = proxy.url("/basic-auth/simple");
+    let _cleanup = NativeCredentialCleanup::new(
+        &context,
+        &[(service.as_str(), "public"), (service.as_str(), "other")],
+    );
+
+    for (username, password) in [("public", "heron"), ("other", "eagle")] {
+        context
+            .auth_login()
+            .arg(&service)
+            .arg("--username")
+            .arg(username)
+            .arg("--password")
+            .arg(password)
+            .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth")
+            .assert()
+            .success();
+    }
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--dry-run")
+        .arg("--no-deps")
+        .arg("--default-index")
+        .arg(&service)
+        .arg("iniconfig")
+        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to fetch: `http://[LOCALHOST]/basic-auth/simple/iniconfig/`
+      Caused by: Failed to fetch credentials from the native credential store
+      Caused by: Multiple credentials found for URL 'http://[LOCALHOST]/basic-auth/simple/iniconfig/', specify which username to use
+    ");
+
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg(feature = "native-auth")]
 async fn token_native_auth() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[]).with_real_home();
     let proxy = crate::pypi_proxy::start().await;
