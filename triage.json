@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 4742,
+        "title": "`uv tool run` should use already-installed tool (if possible)",
+        "url": "https://github.com/astral-sh/uv/issues/4742",
+        "state": "closed",
+        "reason": "astral-sh/uv#4742 is the original tracker for installed-tool precedence and was closed when that behavior was implemented."
+      },
+      {
+        "kind": "pull_request",
+        "number": 4750,
+        "title": "Use already-installed tools in `uv tool run`",
+        "url": "https://github.com/astral-sh/uv/pull/4750",
+        "state": "merged",
+        "reason": "astral-sh/uv#4750 implemented unversioned installed-tool reuse and tested compatible requests and the `--isolated` opt-out."
+      },
+      {
+        "kind": "pull_request",
+        "number": 10207,
+        "title": "Allow `--constraints` and `--overrides` in `uvx`",
+        "url": "https://github.com/astral-sh/uv/pull/10207",
+        "state": "merged",
+        "reason": "astral-sh/uv#10207 added the receipt-options equality gate. Because `exclude-newer` is persisted in those options, installing with it and running without it bypasses the installed environment."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests using literal terms for `uv tool install`, `uv tool run`, `exclude-newer`, installed versions, and latest-version selection; conceptual terms for uvx, installed-versus-cached precedence, isolation, receipts, configuration mismatches, and reuse; and historical fix terms. astral-sh/uv#15824 was ruled out because it concerns explicit `@latest` cache reuse; astral-sh/uv#17419 concerns deriving an exclusion date; astral-sh/uv#19117 concerns pylock support; and astral-sh/uv#18901 concerns preserving relative timestamps in receipts."
+  },
+  "type": "bug",
+  "type_reason": "Unversioned `uv tool run` is documented and integration-tested to reuse a compatible installed tool. The `--exclude-newer` receipt mismatch bypasses that established path, making this an uncovered regression rather than a new capability or duplicate.",
+  "summary": "astral-sh/uv#4742 and astral-sh/uv#4750 establish the expected installed-tool reuse behavior. astral-sh/uv#10207 later added the implicated receipt-options gate; no existing tracker covers this option-specific failure.",
+  "draft_response": "Thanks for the clear reproduction. An unversioned `uv tool run ty` should reuse the installed tool; only an explicit version request or `--isolated` should bypass it. The current implementation compares the run’s resolver/install options with the installed tool receipt, and `--exclude-newer` is part of that receipt, so installing with it and then running without it skips the installed environment and resolves an ephemeral one. That does not match the documented behavior, so we’ll treat this as a bug. Until it is addressed, invoking the installed `ty` executable directly will use the version selected by `uv tool install`."
+}
