@@ -66,6 +66,7 @@ impl Printer {
     }
 
     /// Enable structured progress unless progress output has been explicitly suppressed.
+    #[must_use]
     pub fn with_jsonl_progress(self) -> Self {
         match self {
             Self::Default | Self::Verbose | Self::Jsonl => Self::Jsonl,

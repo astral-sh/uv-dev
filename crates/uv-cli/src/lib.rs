@@ -18,10 +18,9 @@ use uv_configuration::{
     AddBoundsKind, AnnotationStyle, AuditOutputFormat, AuthorFrom, ColorChoice,
     ExcludeNewerPackageEntry, ExportFormat, ForkStrategy, IndexStrategy, KeyringProviderType,
     ListFormat, MetadataOutputFormat, PackageNameSpecifier, PipCompileFormat, PipInstallFormat,
-    PrereleaseMode,
-    PrereleasePackageEntry, ProjectBuildBackend, PythonListFormat, ResolutionMode, SyncFormat,
-    TargetTriple, TreeFormat, TrustedHost, TrustedPublishing, VersionBump, VersionBumpSpec,
-    VersionControlSystem, VersionFormat,
+    PrereleaseMode, PrereleasePackageEntry, ProjectBuildBackend, PythonListFormat, ResolutionMode,
+    SyncFormat, TargetTriple, TreeFormat, TrustedHost, TrustedPublishing, VersionBump,
+    VersionBumpSpec, VersionControlSystem, VersionFormat,
 };
 use uv_distribution_types::{
     ConfigSettingEntry, ConfigSettingPackageEntry, ExcludeNewerOverride, Index, IndexName,
