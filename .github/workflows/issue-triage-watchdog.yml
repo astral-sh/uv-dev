@@ -1,0 +1,84 @@
+# Retry issue triage when temporary GitHub Actions failures prevent jobs from starting.
+name: "Issue triage watchdog"
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: "issue-triage-watchdog"
+  cancel-in-progress: false
+
+jobs:
+  retry:
+    if: github.repository == 'astral-sh/uv'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+    steps:
+      - name: "Retry transient issue-triage failures"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          since="$(date --utc --date='24 hours ago' +'%Y-%m-%dT%H:%M:%SZ')"
+          runs="$RUNNER_TEMP/failed-issue-triage-runs.tsv"
+
+          gh api \
+            --method GET \
+            --field status=failure \
+            --field created=">=$since" \
+            --field per_page=100 \
+            --paginate \
+            --jq '
+              .workflow_runs[]
+              | select(.event == "issues" and .head_branch == "main" and .run_attempt < 3)
+              | [.id, .run_attempt]
+              | @tsv
+            ' \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/issue-triage.yml/runs" \
+            > "$runs"
+
+          while IFS=$'\t' read -r run_id run_attempt; do
+            [ -n "$run_id" ] || continue
+
+            gh api \
+              --paginate \
+              --slurp \
+              "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/attempts/$run_attempt/jobs" \
+              > "$RUNNER_TEMP/issue-triage-jobs.json"
+
+            if ! jq --exit-status '
+              [ .[].jobs[] | select(.conclusion == "failure") ]
+              | length > 0 and all(
+                  .[];
+                  any(.steps[]?; .name == "Set up job" and .conclusion == "failure")
+                )
+            ' "$RUNNER_TEMP/issue-triage-jobs.json" > /dev/null; then
+              echo "Skipping run $run_id because a failed job progressed beyond setup."
+              continue
+            fi
+
+            if ! gh run view "$run_id" \
+              --repo "$GITHUB_REPOSITORY" \
+              --attempt "$run_attempt" \
+              --log-failed \
+              > "$RUNNER_TEMP/issue-triage-failure.log"; then
+              echo "Skipping run $run_id because its failed-job logs are unavailable."
+              continue
+            fi
+
+            if ! grep -Fq "Failed to resolve action download info" \
+              "$RUNNER_TEMP/issue-triage-failure.log" \
+              || ! grep -Eq "The HTTP request timed out|Service Unavailable|HTTP 50[234]" \
+                "$RUNNER_TEMP/issue-triage-failure.log"; then
+              echo "Skipping run $run_id because the setup failure was not transient."
+              continue
+            fi
+
+            gh run rerun "$run_id" --repo "$GITHUB_REPOSITORY" --failed
+            printf 'Retried issue-triage run %s after transient setup failure.\n' "$run_id"
+          done < "$runs"
