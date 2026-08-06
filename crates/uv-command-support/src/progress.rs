@@ -1,6 +1,7 @@
 use std::env;
 use std::fmt::{self, Write};
 use std::ops::Deref;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
@@ -18,7 +19,9 @@ use crate::Printer;
 static HAS_UV_INTERNAL__TEST_NO_CLI_PROGRESS: LazyLock<bool> =
     LazyLock::new(|| env::var(EnvVars::UV_INTERNAL__TEST_NO_CLI_PROGRESS).is_ok());
 static JSONL_PROGRESS_LOCK: Mutex<()> = Mutex::new(());
+static NEXT_PROGRESS_ID: AtomicUsize = AtomicUsize::new(1);
 
+/// The lifecycle of an operation: started, optionally updated, then completed.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProgressStatus {
@@ -27,26 +30,39 @@ pub enum ProgressStatus {
     Completed,
 }
 
+/// A progress update emitted before a command's final JSONL result.
+///
+/// Concurrent operations are correlated using their process-wide `id`. Top-level
+/// phases omit `id`, since only one instance of each phase is active at a time.
+/// Operations can complete without an intermediate update.
 #[derive(Debug, Serialize)]
 pub struct JsonlProgressEvent {
+    /// Distinguishes progress updates from the final command result.
     #[serde(rename = "type")]
     event_type: &'static str,
+    /// The operation being reported, such as `download`, `build`, or `install`.
     phase: &'static str,
+    /// The operation's current lifecycle state.
     status: ProgressStatus,
+    /// A process-wide identifier shared by all events for one concurrent operation.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<usize>,
+    /// The package, distribution, or source currently being processed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// The selected package version, when available.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
+    /// The source URL associated with a resolution or checkout operation.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+    /// The Git revision associated with a checkout operation.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub revision: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub bytes: Option<u64>,
+    /// Completed bytes for transfers, or completed packages for package phases.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub completed: Option<u64>,
+    /// The fixed total bytes or packages for this operation, when known.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub total: Option<u64>,
 }
@@ -62,7 +78,6 @@ impl JsonlProgressEvent {
             version: None,
             url: None,
             revision: None,
-            bytes: None,
             completed: None,
             total: None,
         }
@@ -132,8 +147,6 @@ struct BarState {
     sizes: Vec<u64>,
     /// A map of progress bars, by ID.
     bars: FxHashMap<usize, ProgressBarKind>,
-    /// A monotonic counter for bar IDs.
-    id: usize,
     /// The maximum length of all bar names encountered.
     max_len: usize,
 }
@@ -144,7 +157,6 @@ impl Default for BarState {
             headers: 0,
             sizes: Vec::default(),
             bars: FxHashMap::default(),
-            id: 0,
             // Avoid resizing the progress bar templates too often by starting with a padding
             // that's wider than most package names.
             max_len: 20,
@@ -153,10 +165,9 @@ impl Default for BarState {
 }
 
 impl BarState {
-    /// Returns a unique ID for a new progress bar.
-    fn id(&mut self) -> usize {
-        self.id += 1;
-        self.id
+    /// Returns a process-wide unique ID for a new progress bar.
+    fn next_id() -> usize {
+        NEXT_PROGRESS_ID.fetch_add(1, Ordering::Relaxed)
     }
 }
 
@@ -225,7 +236,7 @@ impl ProgressReporter {
         };
 
         let mut state = state.lock().unwrap();
-        let id = state.id();
+        let id = BarState::next_id();
 
         let progress = multi_progress.insert_before(
             &self.root,
@@ -358,7 +369,7 @@ impl ProgressReporter {
             progress.finish();
         }
 
-        let id = state.id();
+        let id = BarState::next_id();
         state.bars.insert(
             id,
             ProgressBarKind::Numeric {
@@ -392,10 +403,9 @@ impl ProgressReporter {
         {
             progress.inc(bytes);
 
-            if self.printer.emits_jsonl_progress() {
+            if bytes > 0 && self.printer.emits_jsonl_progress() {
                 let mut event = JsonlProgressEvent::new(direction.phase(), ProgressStatus::Updated);
                 event.id = Some(id);
-                event.bytes = Some(bytes);
                 event.completed = Some(progress.position());
                 event.total = *size;
                 self.emit_progress(&event);
@@ -493,7 +503,7 @@ impl ProgressReporter {
         };
 
         let mut state = state.lock().unwrap();
-        let id = state.id();
+        let id = BarState::next_id();
 
         let progress = multi_progress.insert_before(
             &self.root,
