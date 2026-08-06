@@ -1,7 +1,8 @@
 use std::io::{BufWriter, Write};
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
+use owo_colors::OwoColorize;
 
 use uv_cache::{Cache, Refresh};
 use uv_client::BaseClientBuilder;
@@ -25,9 +26,10 @@ use uv_python_discovery::ProjectPythonRequest;
 use uv_python_discovery::ScriptInterpreter;
 use uv_python_types::{PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest};
 use uv_resolve_operations::loggers::DefaultResolveLogger;
-use uv_scripts::Pep723Script;
+use uv_scripts::{Pep723Item, Pep723ItemRef, Pep723Script};
 use uv_settings::{
-    FrozenSource, LockCheck, MalwareCheckSettings, PythonInstallMirrors, ResolverSettings,
+    FrozenSource, LockCheck, LockedSource, MalwareCheckSettings, PythonInstallMirrors,
+    ResolverSettings,
 };
 use uv_warnings::warn_user;
 use uv_workspace::{DiscoveryOptions, WorkspaceCache};
@@ -53,7 +55,7 @@ pub async fn metadata(
     malware_settings: MalwareCheckSettings,
     settings: ResolverSettings,
     client_builder: BaseClientBuilder<'_>,
-    script: Option<Pep723Script>,
+    script: Option<Pep723Item>,
     python_preference: PythonPreference,
     python_arch: Option<PythonArchitecture>,
     python_downloads: PythonDownloads,
@@ -64,6 +66,17 @@ pub async fn metadata(
     printer: Printer,
     preview: Preview,
 ) -> Result<ExitStatus> {
+    let stdin = match script.as_ref() {
+        Some(Pep723Item::Stdin(_)) => true,
+        Some(Pep723Item::Script(_) | Pep723Item::Remote(..)) | None => false,
+    };
+    let (lock_check, frozen) = if stdin {
+        handle_missing_script_lockfile(lock_check, frozen)?;
+        (LockCheck::Disabled, None)
+    } else {
+        (lock_check, frozen)
+    };
+
     if !preview.is_enabled(PreviewFeature::WorkspaceMetadata) {
         warn_user!(
             "The `uv workspace metadata` command is experimental and may change without warning. Pass `--preview-features {}` to disable this warning.",
@@ -72,26 +85,41 @@ pub async fn metadata(
     }
 
     let project;
-    let source = if let Some(script) = script.as_ref() {
-        MetadataSource::Manifest(LockTarget::Script(script))
-    } else {
-        project = DiscoveredProject::discover(
-            project_dir,
-            &DiscoveryOptions::default(),
-            None,
-            frozen,
-            preview,
-            cache,
-            workspace_cache,
-        )
-        .await?;
-        match &project {
-            DiscoveredProject::Manifest(project) => {
-                MetadataSource::Manifest(LockTarget::Workspace(project.workspace()))
+    let stdin_script;
+    let source = match script.as_ref() {
+        Some(Pep723Item::Script(script)) => MetadataSource::Manifest(LockTarget::Script(script)),
+        Some(Pep723Item::Stdin(metadata)) => {
+            stdin_script = Pep723Script {
+                path: project_dir.join("-"),
+                metadata: metadata.clone(),
+                prelude: String::new(),
+                postlude: String::new(),
+            };
+            MetadataSource::Manifest(LockTarget::Script(&stdin_script))
+        }
+        Some(Pep723Item::Remote(..)) => {
+            bail!("Remote scripts are not supported by `uv workspace metadata`")
+        }
+        None => {
+            project = DiscoveredProject::discover(
+                project_dir,
+                &DiscoveryOptions::default(),
+                None,
+                frozen,
+                preview,
+                cache,
+                workspace_cache,
+            )
+            .await?;
+            match &project {
+                DiscoveredProject::Manifest(project) => {
+                    MetadataSource::Manifest(LockTarget::Workspace(project.workspace()))
+                }
+                DiscoveredProject::Lockfile(workspace) => MetadataSource::Lockfile(workspace),
             }
-            DiscoveredProject::Lockfile(workspace) => MetadataSource::Lockfile(workspace),
         }
     };
+    let script_item = script.as_ref().map(Pep723ItemRef::from);
 
     // Don't enable any groups' requires-python for interpreter discovery.
     let groups = DependencyGroupsWithDefaults::none();
@@ -108,7 +136,7 @@ pub async fn metadata(
             } else {
                 interpreter = match target {
                     LockTarget::Script(script) => ScriptInterpreter::discover(
-                        script.into(),
+                        script_item.unwrap_or_else(|| script.into()),
                         python.as_deref().map(PythonRequest::parse),
                         &client_builder,
                         python_preference,
@@ -156,7 +184,8 @@ pub async fn metadata(
 
                 if let LockCheck::Enabled(lock_check) = lock_check {
                     LockMode::Locked(&interpreter, lock_check)
-                } else if sync.is_none()
+                } else if stdin
+                    || sync.is_none()
                     || (matches!(target, LockTarget::Script(_)) && !target.lock_path().is_file())
                 {
                     LockMode::DryRun(&interpreter)
@@ -179,6 +208,7 @@ pub async fn metadata(
                     preview,
                 )
                 .with_refresh(&refresh)
+                .with_existing_lockfile(!stdin)
                 .execute(target),
             )
             .await
@@ -233,7 +263,7 @@ pub async fn metadata(
                 .into_environment()?
             }
             MetadataSource::Manifest(LockTarget::Script(script)) => ScriptEnvironment::get_or_init(
-                (*script).into(),
+                script_item.unwrap_or_else(|| (*script).into()),
                 python.as_deref().map(PythonRequest::parse),
                 &client_builder,
                 python_preference,
@@ -279,7 +309,11 @@ pub async fn metadata(
                 ProjectInterpreter::discover_existing(workspace.install_path(), active, cache)?
             }
             MetadataSource::Manifest(LockTarget::Script(script)) => {
-                ScriptInterpreter::discover_existing((*script).into(), active, cache)
+                ScriptInterpreter::discover_existing(
+                    script_item.unwrap_or_else(|| (*script).into()),
+                    active,
+                    cache,
+                )
             }
             MetadataSource::Lockfile(workspace) => {
                 ProjectInterpreter::discover_existing(workspace.root(), active, cache)?
@@ -316,6 +350,48 @@ pub async fn metadata(
     }
 
     print_metadata(&export, printer)
+}
+
+/// Report lockfile requirements for a Python script without an existing lockfile.
+fn handle_missing_script_lockfile(
+    lock_check: LockCheck,
+    frozen: Option<FrozenSource>,
+) -> Result<()> {
+    if let LockCheck::Enabled(lock_check) = lock_check {
+        match lock_check {
+            LockedSource::Cli(_) => {
+                bail!(
+                    "Unable to find lockfile for Python script, but `{lock_check}` was provided. To create a lockfile, run `{}`.",
+                    "uv lock --script".green(),
+                );
+            }
+            LockedSource::Env => {
+                warn_user!(
+                    "No lockfile found for Python script (ignoring `{lock_check}`); run `{}` to generate a lockfile",
+                    "uv lock --script".green(),
+                );
+            }
+        }
+    }
+
+    if let Some(frozen_source) = frozen {
+        match frozen_source {
+            FrozenSource::Cli(_) => {
+                bail!(
+                    "Unable to find lockfile for Python script, but `{frozen_source}` was provided. To create a lockfile, run `{}`.",
+                    "uv lock --script".green(),
+                );
+            }
+            FrozenSource::Env => {
+                warn_user!(
+                    "No lockfile found for Python script (ignoring `--frozen`); run `{}` to generate a lockfile",
+                    "uv lock --script".green(),
+                );
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn metadata_for_target(target: InstallTarget<'_>) -> Metadata {
