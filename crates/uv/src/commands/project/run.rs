@@ -73,15 +73,14 @@ use crate::commands::project::lock_target::LockTarget;
 use crate::commands::project::{
     EnvironmentSpecification, LinkErrorReporting, PreferenceLocation, ProjectEnvironment,
     ProjectError, ScriptEnvironment, ScriptInterpreter, UniversalState, WorkspacePython,
-    default_dependency_groups, script_extra_build_requires, script_specification,
-    update_environment, validate_project_requires_python,
+    default_dependency_groups, handle_missing_script_lockfile, script_extra_build_requires,
+    script_specification, update_environment, validate_project_requires_python,
 };
 use crate::commands::reporters::PythonDownloadReporter;
 use crate::commands::{ExitStatus, diagnostics, project, read_env_files};
 use crate::printer::Printer;
 use crate::settings::{
-    FrozenSource, GlobalSettings, LockCheck, LockedSource, ResolverInstallerSettings,
-    ResolverSettings,
+    FrozenSource, GlobalSettings, LockCheck, ResolverInstallerSettings, ResolverSettings,
 };
 
 /// Run a command.
@@ -328,38 +327,7 @@ pub(crate) async fn run(
             // If no lockfile is found, error for `--locked` and `--frozen` when provided
             // via CLI. For environment variables, warn instead to avoid
             // breaking users who set `UV_LOCKED=1` globally.
-            if let LockCheck::Enabled(lock_check) = lock_check {
-                match lock_check {
-                    LockedSource::Cli(_) => {
-                        bail!(
-                            "Unable to find lockfile for Python script, but `{lock_check}` was provided. To create a lockfile, run `{}`.",
-                            "uv lock --script".green(),
-                        );
-                    }
-                    LockedSource::Env => {
-                        warn_user!(
-                            "No lockfile found for Python script (ignoring `{lock_check}`); run `{}` to generate a lockfile",
-                            "uv lock --script".green(),
-                        );
-                    }
-                }
-            }
-            if let Some(frozen_source) = frozen {
-                match frozen_source {
-                    FrozenSource::Cli(_) => {
-                        bail!(
-                            "Unable to find lockfile for Python script, but `{frozen_source}` was provided. To create a lockfile, run `{}`.",
-                            "uv lock --script".green(),
-                        );
-                    }
-                    FrozenSource::Env => {
-                        warn_user!(
-                            "No lockfile found for Python script (ignoring `--frozen`); run `{}` to generate a lockfile",
-                            "uv lock --script".green(),
-                        );
-                    }
-                }
-            }
+            handle_missing_script_lockfile(lock_check, frozen)?;
 
             // Install the script requirements, if necessary. Otherwise, use an isolated environment.
             if let Some(spec) = script_specification(
