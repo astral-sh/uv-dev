@@ -1011,21 +1011,40 @@ impl From<Printer> for AuditReporter {
                 .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]),
         );
         progress.set_message("Auditing dependencies...");
-        emit_jsonl_progress(
-            printer,
-            &JsonlProgressEvent::new("audit", ProgressStatus::Started),
-        );
         Self { printer, progress }
     }
 }
 
 impl AuditReporter {
+    #[must_use]
+    pub(crate) fn with_length(self, length: u64) -> Self {
+        self.progress.set_length(length);
+        let mut event = JsonlProgressEvent::new("audit", ProgressStatus::Started);
+        event.total = Some(length);
+        emit_jsonl_progress(self.printer, &event);
+        self
+    }
+
+    pub(crate) fn on_audit_progress(&self, name: &PackageName, version: &Version) {
+        self.progress.set_message(format!("{name}=={version}"));
+        self.progress.inc(1);
+
+        if self.printer.emits_jsonl_progress() {
+            let mut event = JsonlProgressEvent::new("audit", ProgressStatus::Updated);
+            event.name = Some(name.to_string());
+            event.version = Some(version.to_string());
+            event.completed = Some(self.progress.position());
+            event.total = self.progress.length();
+            emit_jsonl_progress(self.printer, &event);
+        }
+    }
+
     pub(crate) fn on_audit_complete(&self) {
         self.progress.set_message("");
-        emit_jsonl_progress(
-            self.printer,
-            &JsonlProgressEvent::new("audit", ProgressStatus::Completed),
-        );
+        let mut event = JsonlProgressEvent::new("audit", ProgressStatus::Completed);
+        event.completed = Some(self.progress.position());
+        event.total = self.progress.length();
+        emit_jsonl_progress(self.printer, &event);
         self.progress.finish_and_clear();
     }
 }

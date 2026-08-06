@@ -616,8 +616,9 @@ async fn tool_audit_jsonl() {
         .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str()), @r#"
     exit_code: 0 (success)
     ----- stdout -----
-    {"type":"progress","phase":"audit","status":"started"}
-    {"type":"progress","phase":"audit","status":"completed"}
+    {"type":"progress","phase":"audit","status":"started","total":1}
+    {"type":"progress","phase":"audit","status":"updated","name":"simple-launcher","version":"0.1.0","completed":1,"total":1}
+    {"type":"progress","phase":"audit","status":"completed","completed":1,"total":1}
     {"type":"result","schema":{"version":"preview"},"tools":[{"name":"simple-launcher","summary":{"audited_packages":1,"vulnerabilities":0,"adverse_statuses":0},"vulnerabilities":[],"adverse_statuses":[]}]}
     "#
     );
