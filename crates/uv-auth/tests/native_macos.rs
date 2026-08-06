@@ -55,6 +55,43 @@ async fn native_store_migrates_https_legacy_host_credentials()
 }
 
 #[tokio::test]
+async fn native_store_migrates_http_legacy_uv_username_without_collection_collision()
+-> Result<(), Box<dyn std::error::Error>> {
+    let unique = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+    let port = 10_000 + (unique % 50_000) as u16;
+    let service = format!("http://localhost:{port}");
+    let username = "uv";
+    let password = "legacy-password";
+    let legacy = uv_keyring::Entry::new(&format!("uv:{service}"), username)?;
+    legacy.set_password(password).await?;
+    let provider = native_provider().await?;
+    let request = DisplaySafeUrl::parse(&format!("{service}/first"))?;
+    let migrated = DisplaySafeUrl::parse(&format!("{service}/"))?;
+
+    let result = async {
+        let expected = Some(Credentials::basic(
+            Some(username.to_string()),
+            Some(password.to_string()),
+        ));
+        if provider.fetch(&request, Some(username)).await? != expected {
+            return Err(std::io::Error::other("legacy credential was not returned").into());
+        }
+        if !matches!(legacy.get_password().await, Err(uv_keyring::Error::NoEntry)) {
+            return Err(std::io::Error::other("legacy credential was not removed").into());
+        }
+        if provider.fetch(&migrated, Some(username)).await? != expected {
+            return Err(std::io::Error::other("migrated credential was not stored").into());
+        }
+        Ok::<(), Box<dyn std::error::Error>>(())
+    }
+    .await;
+
+    let _ = provider.remove(&migrated, username).await;
+    let _ = legacy.delete_credential().await;
+    result
+}
+
+#[tokio::test]
 async fn native_store_does_not_migrate_http_legacy_host_credentials()
 -> Result<(), Box<dyn std::error::Error>> {
     let unique = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
