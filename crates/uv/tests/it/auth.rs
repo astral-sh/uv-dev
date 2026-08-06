@@ -346,6 +346,43 @@ async fn native_auth_uses_path_specific_credentials_in_one_client() -> Result<()
 
 #[tokio::test]
 #[cfg(feature = "native-auth")]
+async fn native_auth_installs_without_username_in_index_url() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_real_home();
+    let proxy = crate::pypi_proxy::start().await;
+    let index = proxy.url("/basic-auth/simple");
+    let _cleanup = NativeCredentialCleanup::new(&context, &[(index.as_str(), "public")]);
+
+    context
+        .auth_login()
+        .arg(&index)
+        .arg("--username")
+        .arg("public")
+        .arg("--password")
+        .arg("heron")
+        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth")
+        .assert()
+        .success();
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--dry-run")
+        .arg("--no-deps")
+        .arg("--default-index")
+        .arg(&index)
+        .arg("iniconfig")
+        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
+     + iniconfig==2.0.0
+    ");
+
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg(feature = "native-auth")]
 async fn native_auth_ignores_plaintext_credentials() -> Result<()> {
     let context = uv_test::test_context!("3.12").with_real_home();
     let proxy = crate::pypi_proxy::start().await;
