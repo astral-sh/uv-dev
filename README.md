@@ -11,6 +11,12 @@ The reporter installs `ty` with `uv tool install --exclude-newer="1 week" ty`, w
 uv resolves and installs `ty==0.0.68` in an ephemeral environment. The report covers uv 0.12.1
 and 0.12.2 on Ubuntu Server 24.04 with Python 3.14.6.
 
+The reported behavior was reproduced with the installed uv 0.12.2 on Linux. In an isolated tool
+directory and cache, the exact relative cutoff selected `ty==0.0.65`; the subsequent unversioned
+tool run executed `ty==0.0.68`, while the persistent installation remained at 0.0.65. Two controls
+confirmed that ordinary installed-tool reuse still works and that supplying the same cutoff to the
+run reuses 0.0.65.
+
 This conflicts with both the CLI documentation and the tool concepts documentation: an
 unversioned, non-isolated `uv tool run` is supposed to use a compatible tool installed by
 `uv tool install`. The repository's `tool_run_from_install` integration test also asserts this
@@ -20,6 +26,66 @@ No open issue or pull request was found that already tracks the `--exclude-newer
 The closest history is the original installed-tool reuse tracker astral-sh/uv#4742, its
 implementation in astral-sh/uv#4750, and the later receipt-options gate added by
 astral-sh/uv#10207.
+
+## Reproduction
+
+Outcome: reproducible.
+
+Environment:
+
+- uv 0.12.2 (`x86_64-unknown-linux-gnu`)
+- Linux 6.17.0-1020-azure x86_64
+- CPython 3.12.3 at `/usr/bin/python3`
+- Reproduced on 2026-08-06 against the package index available to uv
+- Fresh `UV_TOOL_DIR`, `UV_TOOL_BIN_DIR`, and `UV_CACHE_DIR` below `$RUNNER_TEMP`; managed Python
+  downloads disabled with `UV_PYTHON_DOWNLOADS=never`
+
+Minimal commands, with `$TEST_ROOT` denoting a fresh temporary directory:
+
+```console
+$ export UV_TOOL_DIR="$TEST_ROOT/tools"
+$ export UV_TOOL_BIN_DIR="$TEST_ROOT/bin"
+$ export UV_CACHE_DIR="$TEST_ROOT/cache"
+$ export UV_PYTHON_DOWNLOADS=never
+$ uv tool install --python /usr/bin/python3 --exclude-newer='1 week' ty
+Resolved 1 package in 87ms
+Installed 1 package in 2ms
+ + ty==0.0.65
+Installed 1 executable: ty
+$ "$UV_TOOL_BIN_DIR/ty" --version
+ty 0.0.65
+$ uv tool run --python /usr/bin/python3 ty --version
+Installed 1 package in 1ms
+ty 0.0.68
+$ uv tool list
+ty v0.0.65
+- ty
+```
+
+Thus, the unversioned, non-isolated run did not use the installed 0.0.65 environment and instead
+created or used an ephemeral 0.0.68 environment. The installed tool itself remained unchanged.
+The different Python patch version from the report does not prevent reproduction.
+
+Two targeted controls isolate the relevant condition:
+
+```console
+$ uv tool run --python /usr/bin/python3 --exclude-newer='1 week' ty --version
+ty 0.0.65
+```
+
+With the same cutoff option on the run, uv reused the installed version. In a second fresh tool
+directory, `uv tool install --python /usr/bin/python3 'ty==0.0.65'` followed by the same unversioned
+`uv tool run` also printed `ty 0.0.65`. This shows that installed-tool reuse works in the ordinary
+case and fails for the reported install/run option mismatch.
+
+Existing coverage does not cover this trigger. The integration test
+`crates/uv/tests/tool/tool_run.rs::tool_run_from_install` installs `black==24.1.0` without
+`--exclude-newer` and verifies that unversioned `uv tool run black --version` prints 24.1.0. It
+also covers explicit-version, `--isolated`, and `--with` paths, but it does not install a tool with
+resolver options that are absent from the subsequent run. The observed controls are consistent with
+the reuse gate in `crates/uv/src/commands/tool/run.rs`, which compares current `ToolOptions` with the
+saved receipt before checking installed-package compatibility; `exclude_newer` is part of
+`ToolOptions` in `crates/uv-settings/src/settings.rs`.
 
 ## Draft response
 
@@ -44,19 +110,19 @@ behavior:
 - The current `tool_run_from_install` integration test installs a specific older version and
   verifies that an unversioned tool run uses it.
 
-The current source provides a concrete explanation for the reported trigger. Before reusing an
-installed environment, `get_or_create_environment` requires the run's `ToolOptions` to equal the
-options saved in the installed tool's receipt. `ToolOptions` includes `exclude_newer`. Therefore an
-installation made with `--exclude-newer` and a subsequent run without that option do not pass the
-receipt-options check, even though the installed package satisfies the unconstrained request. uv
-then takes the cached/ephemeral resolution path, where a newer version can be selected.
+The reproduction controls align with the relevant implementation. Before reusing an installed
+environment, `get_or_create_environment` requires the run's `ToolOptions` to equal the options saved
+in the installed tool's receipt. `ToolOptions` includes `exclude_newer`. An installation made with
+`--exclude-newer` and a subsequent run without that option therefore do not pass this gate, even
+though the installed package satisfies the unconstrained request; the observed run used the newer
+ephemeral version.
 
 That equality gate was added by merged astral-sh/uv#10207 while implementing constraints and
 overrides for `uvx`. It postdates the installed-tool reuse implementation. The report is therefore
 an option-specific regression or uncovered edge case in established behavior. It should not be
 centralized in closed astral-sh/uv#4742, and no open tracker for the same regression was found.
 
-## Related issues and pull requests
+## Related
 
 ### astral-sh/uv#4742 — `uv tool run` should use already-installed tool (if possible)
 

@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "On Linux with uv 0.12.2 and CPython 3.12.3, using fresh temporary tool and cache directories, `uv tool install --python /usr/bin/python3 --exclude-newer='1 week' ty` installed ty 0.0.65, but `uv tool run --python /usr/bin/python3 ty --version` ran ty 0.0.68; `uv tool list` still showed 0.0.65 installed. Running with the same `--exclude-newer` option reused 0.0.65, as did an exact 0.0.65 install without the cutoff. Existing test `crates/uv/tests/tool/tool_run.rs::tool_run_from_install` covers ordinary installed-version reuse but not this option mismatch."
+}
