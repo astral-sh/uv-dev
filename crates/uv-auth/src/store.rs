@@ -10,6 +10,7 @@ use uv_redacted::DisplaySafeUrl;
 
 use uv_state::{StateBucket, StateStore};
 use uv_static::EnvVars;
+use uv_warnings::warn_user_once;
 
 use crate::credentials::Username;
 use crate::matching;
@@ -33,6 +34,7 @@ impl AuthBackend {
     pub async fn from_settings(preview: Preview) -> Result<Self, TomlCredentialError> {
         // If preview is enabled, we'll use the system-native store
         if preview.is_enabled(PreviewFeature::NativeAuth) {
+            warn_ignored_plaintext_credentials();
             return Ok(Self::System(KeyringProvider::native()));
         }
 
@@ -52,6 +54,18 @@ impl AuthBackend {
             }
             Err(err) => Err(err),
         }
+    }
+}
+
+/// Warn when native authentication leaves an existing plaintext credential file unused.
+pub(crate) fn warn_ignored_plaintext_credentials() {
+    if let Ok(path) = TextCredentialStore::default_file()
+        && path.is_file()
+    {
+        warn_user_once!(
+            "Ignoring plaintext credentials at {} because native authentication is enabled",
+            path.display()
+        );
     }
 }
 
