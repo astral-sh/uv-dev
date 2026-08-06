@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 15821,
+        "title": "uv cache size",
+        "url": "https://github.com/astral-sh/uv/issues/15821",
+        "state": "closed",
+        "reason": "astral-sh/uv#15821 is the original scripting-oriented request that led to this command, but it did not request human-readable output by default."
+      },
+      {
+        "kind": "pull_request",
+        "number": 16032,
+        "title": "Add a `uv cache size` command",
+        "url": "https://github.com/astral-sh/uv/pull/16032",
+        "state": "merged",
+        "reason": "astral-sh/uv#16032 implemented raw bytes by default with `--human` as the formatted-output option, directly establishing the current interface."
+      },
+      {
+        "kind": "issue",
+        "number": 17884,
+        "title": "Cache tool to show size",
+        "url": "https://github.com/astral-sh/uv/issues/17884",
+        "state": "open",
+        "reason": "astral-sh/uv#17884 is adjacent and contains maintainer confirmation that `uv cache size --human` exists, but it does not request changing the default."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests using literal terms including `uv cache size`, `cache-size`, `--human`, `--bytes`, `raw bytes`, and `human-readable`; conceptual terms including cache usage, disk usage, cache info, machine-readable output, scripting, and output defaults; and fix-oriented searches following astral-sh/uv#15821 to astral-sh/uv#16032. Inspected comments and cross-references. astral-sh/uv#12854 concerns per-package usage, astral-sh/uv#5731 concerns eviction limits, and astral-sh/uv#18779 concerns potentially misleading freed-space accounting, so none tracks this formatting-default request."
+  },
+  "type": "enhancement",
+  "type_reason": "Repository source, tests, documentation, and astral-sh/uv#16032 show that raw bytes are the intentional current default. The issue requests a usability-oriented interface change while preserving machine-readable output, so it is an enhancement rather than a correctness bug. No existing issue or pull request already tracks this change, so it is not a duplicate.",
+  "summary": "No existing item tracks making human-readable output the default. The original request and merged implementation explain the current raw-byte interface, while astral-sh/uv#17884 is only an adjacent cache-size request.",
+  "draft_response": "Thanks for laying out the human and scripting use cases. The current interface comes from astral-sh/uv#16032, which implemented astral-sh/uv#15821 with raw bytes as the default and `--human` for formatted output.\n\nBecause `uv cache size` is still preview-gated, this is the appropriate stage to evaluate changing that interface. Any change should preserve an unambiguous raw-byte mode for scripts. The remaining design decision is whether `--human` stays as a hidden compatibility alias once human-readable output is the default, or is removed before stabilization. Once maintainers agree on that CLI shape, the prepared change can be reviewed against astral-sh/uv#20984."
+}
