@@ -12,7 +12,7 @@ use crate::{commands::ExitStatus, printer::Printer};
 
 /// Logout from a service.
 ///
-/// If no username is provided, defaults to `__token__`.
+/// Native authentication infers a unique matching username; plaintext defaults to `__token__`.
 pub(crate) async fn logout(
     service: Service,
     username: Option<String>,
@@ -40,7 +40,14 @@ pub(crate) async fn logout(
         }
         (Some(cli), None) => cli,
         (None, Some(url)) => url.to_string(),
-        (None, None) => "__token__".to_string(),
+        (None, None) => match &backend {
+            AuthBackend::System(provider) => provider
+                .fetch(&url, None)
+                .await?
+                .and_then(|credentials| credentials.username().map(str::to_string))
+                .unwrap_or_else(|| "__token__".to_string()),
+            AuthBackend::TextStore(..) => "__token__".to_string(),
+        },
     };
     if username.is_empty() {
         bail!("Username cannot be empty");
