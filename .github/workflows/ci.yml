@@ -1,314 +1,115 @@
-name: CI
+name: Namespace workspace startup benchmark
 
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
 
-permissions: {}
+permissions:
+  actions: read
+  contents: read
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref_name }}-${{ github.event.pull_request.number || github.sha }}
-  cancel-in-progress: true
+env:
+  BASE_SHA: fbb0a829a377f1f8fd26bdaf6e4e07364ad0621b
+  HEAD_SHA: 6a5162990712cd583152f93e5b4f4d655219de67
+  BASE_RUN_ID: "31106933122"
+  HEAD_RUN_ID: "31107450883"
+  PREFECT_SHA: baa13ab830c96045672f4588f2d9da992c9a0afd
 
 jobs:
-  plan:
-    uses: $/.github/workflows/plan.yml
+  benchmark:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux 4 cores
+            runner: namespace-profile-ubuntu-24-04-4
+            artifact: uv-linux-libc
+            core-counts: "1 2 4"
+          - name: Linux 8 cores
+            runner: namespace-profile-ubuntu-24-04-8
+            artifact: uv-linux-libc
+            core-counts: "8"
+          - name: Linux 16 cores
+            runner: namespace-profile-ubuntu-24-04-16
+            artifact: uv-linux-libc
+            core-counts: "16"
+          - name: macOS Apple Silicon
+            runner: namespace-profile-macos-15
+            artifact: uv-macos-aarch64
+            core-counts: ""
 
-  check-fmt:
-    uses: $/.github/workflows/check-fmt.yml
-
-  review:
-    needs: plan
-    if: ${{ github.event_name == 'pull_request' && github.repository == 'astral-sh/uv' && github.event.pull_request.head.repo.full_name == github.repository && needs.plan.outputs.review-security == 'true' }}
-    uses: $/.github/workflows/pull-request-security-review.yml
-    secrets: inherit
-    permissions:
-      contents: read
-      id-token: write
-      issues: read
-      pull-requests: read
-
-  check-lint:
-    needs: plan
-    uses: $/.github/workflows/check-lint.yml
-    with:
-      code-changed: ${{ needs.plan.outputs.test-code }}
-      save-rust-cache: ${{ needs.plan.outputs.save-rust-cache }}
-
-  check-docs:
-    needs: plan
-    if: ${{ needs.plan.outputs.run-checks == 'true' }}
-    uses: $/.github/workflows/check-docs.yml
-    secrets: inherit
-
-  check-zizmor:
-    needs: plan
-    if: ${{ needs.plan.outputs.run-checks == 'true' }}
-    uses: $/.github/workflows/check-zizmor.yml
-    permissions:
-      contents: read
-      security-events: write
-
-  check-publish:
-    needs: plan
-    if: ${{ needs.plan.outputs.test-code == 'true' }}
-    uses: $/.github/workflows/check-publish.yml
-
-  check-release:
-    needs: plan
-    if: ${{ needs.plan.outputs.run-checks == 'true' }}
-    uses: $/.github/workflows/check-release.yml
-
-  check-lock:
-    needs: plan
-    if: ${{ needs.plan.outputs.run-checks == 'true' }}
-    uses: $/.github/workflows/check-lock.yml
-
-  check-generated-files:
-    needs: plan
-    if: ${{ needs.plan.outputs.test-code == 'true' }}
-    uses: $/.github/workflows/check-generated-files.yml
-    with:
-      schema-changed: ${{ needs.plan.outputs.check-schema }}
-      save-rust-cache: ${{ needs.plan.outputs.save-rust-cache }}
-
-  test:
-    needs: plan
-    if: ${{ needs.plan.outputs.test-code == 'true' }}
-    uses: $/.github/workflows/test.yml
-    with:
-      save-rust-cache: ${{ needs.plan.outputs.save-rust-cache }}
-      test-macos: ${{ needs.plan.outputs.test-macos }}
-
-  test-windows-trampolines:
-    needs: plan
-    if: ${{ needs.plan.outputs.test-windows-trampoline == 'true' }}
-    uses: $/.github/workflows/test-windows-trampolines.yml
-    with:
-      trampoline-build: ${{ needs.plan.outputs.test-windows-trampoline-check-binary }}
-
-  build-dev-binaries:
-    needs: plan
-    if: ${{ needs.plan.outputs.test-code == 'true' }}
-    uses: $/.github/workflows/build-dev-binaries.yml
-    with:
-      save-rust-cache: ${{ needs.plan.outputs.save-rust-cache }}
-
-  test-smoke:
-    needs:
-      - plan
-      - build-dev-binaries
-    if: ${{ needs.plan.outputs.test-smoke == 'true' }}
-    uses: $/.github/workflows/test-smoke.yml
-    with:
-      sha: ${{ github.sha }}
-
-  test-integration:
-    needs:
-      - plan
-      - build-dev-binaries
-    if: ${{ needs.plan.outputs.test-integration == 'true' }}
-    uses: $/.github/workflows/test-integration.yml
-    secrets: inherit
-    permissions:
-      id-token: write
-    with:
-      sha: ${{ github.sha }}
-
-  test-system:
-    needs:
-      - plan
-      - build-dev-binaries
-    if: ${{ needs.plan.outputs.test-system == 'true' }}
-    uses: $/.github/workflows/test-system.yml
-    with:
-      sha: ${{ github.sha }}
-
-  test-ecosystem:
-    needs:
-      - plan
-      - build-dev-binaries
-    if: ${{ needs.plan.outputs.test-ecosystem == 'true' }}
-    uses: $/.github/workflows/test-ecosystem.yml
-    with:
-      sha: ${{ github.sha }}
-
-  build-release-binaries:
-    needs: plan
-    if: ${{ needs.plan.outputs.build-release-binaries == 'true' }}
-    uses: $/.github/workflows/build-release-binaries.yml
-    secrets: inherit
-
-  build-docker:
-    needs: plan
-    if: ${{ needs.plan.outputs.build-docker == 'true' }}
-    uses: $/.github/workflows/build-docker.yml
-    with:
-      push-dev: ${{ needs.plan.outputs.push-docker == 'true' }}
-    secrets: inherit
-    permissions:
-      contents: read
-      id-token: write
-      packages: write
-      attestations: write
-
-  bench:
-    needs: plan
-    if: ${{ needs.plan.outputs.run-bench == 'true' }}
-    uses: $/.github/workflows/bench.yml
-    secrets: inherit
-    with:
-      save-rust-cache: ${{ needs.plan.outputs.save-rust-cache }}
-
-  # This job cannot be moved into a reusable workflow because it includes coverage for uploading
-  # attestations and PyPI does not support attestations in reusable workflows.
-  test-publish:
-    name: "test uv publish"
-    timeout-minutes: 20
-    needs:
-      - plan
-      - build-dev-binaries
-    runs-on: ubuntu-latest
-    # Only the main repository is a trusted publisher
-    if: ${{ github.repository == 'astral-sh/uv' && github.event.pull_request.head.repo.fork != true && needs.plan.outputs.test-publish == 'true' }}
-    environment:
-      name: uv-test-publish
-      deployment: false
-    env:
-      # No dbus in GitHub Actions
-      PYTHON_KEYRING_BACKEND: keyrings.alt.file.PlaintextKeyring
-      PYTHON_VERSION: 3.12
-    permissions:
-      # For trusted publishing
-      id-token: write
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Checkout benchmark harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
           persist-credentials: false
 
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
-          python-version: "${{ env.PYTHON_VERSION }}"
+          python-version: "3.12"
 
-      - name: "Download binary"
+      - name: Download baseline binary
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: uv-linux-libc-${{ github.sha }}
+          name: ${{ matrix.artifact }}-${{ env.BASE_SHA }}
+          path: ${{ runner.temp }}/baseline
+          run-id: ${{ env.BASE_RUN_ID }}
+          github-token: ${{ github.token }}
 
-      - name: "Prepare binary"
-        run: chmod +x ./uv
-
-      - name: "Build astral-test-pypa-gh-action"
-        shell: bash -eo pipefail {0}
-        run: |
-          # Build a yet unused version of `astral-test-pypa-gh-action`
-          mkdir astral-test-pypa-gh-action
-          cd astral-test-pypa-gh-action
-          ../uv init --package --no-workspace
-          # Get the latest patch version
-          patch_version=$(curl https://test.pypi.org/simple/astral-test-pypa-gh-action/?format=application/vnd.pypi.simple.v1+json | jq --raw-output '[.files[].filename | select(endswith(".tar.gz"))] | last' | grep -oP '(?<=astral_test_pypa_gh_action-0\.1\.)\d+(?=\.tar\.gz)')
-          # Set the current version to one higher (which should be unused)
-          sed -i "s/0.1.0/0.1.$((patch_version + 1))/g" pyproject.toml
-          ../uv build
-
-      - name: "Publish astral-test-pypa-gh-action"
-        uses: pypa/gh-action-pypi-publish@ba38be9e461d3875417946c167d0b5f3d385a247 # v1.14.1
+      - name: Download fixed binary
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          # With this GitHub action, we can't do as rigid checks as with our custom Python script, so we publish more
-          # leniently
-          skip-existing: "true"
-          verbose: "true"
-          repository-url: "https://test.pypi.org/legacy/"
-          packages-dir: "astral-test-pypa-gh-action/dist"
+          name: ${{ matrix.artifact }}-${{ env.HEAD_SHA }}
+          path: ${{ runner.temp }}/fixed
+          run-id: ${{ env.HEAD_RUN_ID }}
+          github-token: ${{ github.token }}
 
-      - name: "Request GitLab OIDC tokens for impersonation"
-        uses: digital-blueprint/gitlab-pipeline-trigger-action@c59b56e9d2688ab42c1304322ac8831a4ef6f7d2 # v1.4.0
-        with:
-          host: gitlab.com
-          id: astral-test-publish/astral-test-gitlab-pypi-tp
-          ref: main
-          trigger_token: ${{ secrets.GITLAB_TEST_PUBLISH_TRIGGER_TOKEN }}
-          access_token: ${{ secrets.GITLAB_TEST_PUBLISH_ACCESS_TOKEN }}
-          download_artifacts: true
-          fail_if_no_artifacts: true
-          download_path: ./gitlab-artifacts
-
-      - name: "Load GitLab OIDC tokens from GitLab job artifacts"
-        id: load-gitlab-oidc-token
+      - name: Prepare pinned Prefect script fixtures
+        shell: bash
         run: |
-          # we expect ./gitlab-artifacts/*/artifacts/pypi-id-token to exist
-          pypi_id_token_file=$(find ./gitlab-artifacts -type f -name pypi-id-token | head -n 1)
-          if [ -z "${pypi_id_token_file}" ]; then
-            echo "No pypi-id-token file found in GitLab artifacts"
-            exit 1
+          chmod +x "$RUNNER_TEMP/baseline/uv" "$RUNNER_TEMP/fixed/uv"
+          curl --fail --silent --show-error --location \
+            "https://raw.githubusercontent.com/PrefectHQ/prefect/$PREFECT_SHA/scripts/all_links_should_be_ok.py" \
+            --output "$RUNNER_TEMP/all_links_should_be_ok.py"
+          curl --fail --silent --show-error --location \
+            "https://raw.githubusercontent.com/PrefectHQ/prefect/$PREFECT_SHA/scripts/wait-for-server.py" \
+            --output "$RUNNER_TEMP/wait-for-server.py"
+
+      - name: Warm script environments
+        shell: bash
+        run: |
+          for script in all_links_should_be_ok.py wait-for-server.py; do
+            "$RUNNER_TEMP/baseline/uv" workspace metadata --sync \
+              --script "$RUNNER_TEMP/$script" \
+              --python "$(command -v python3)" \
+              --cache-dir "$RUNNER_TEMP/uv-cache" \
+              --no-config > /dev/null
+          done
+
+      - name: Compare startup performance
+        shell: bash
+        env:
+          CORE_COUNTS: ${{ matrix.core-counts }}
+        run: |
+          python3 -c 'import os, platform; print({"platform": platform.platform(), "cpu_count": os.cpu_count(), "affinity": sorted(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else None})'
+          if [[ -f /sys/devices/system/cpu/online ]]; then
+            cat /sys/devices/system/cpu/online
           fi
-          GITLAB_PYPI_OIDC_TOKEN=$(cat "${pypi_id_token_file}")
 
-          # we expect ./gitlab-artifacts/*/artifacts/pyx-id-token to exist
-          pyx_id_token_file=$(find ./gitlab-artifacts -type f -name pyx-id-token | head -n 1)
-          if [ -z "${pyx_id_token_file}" ]; then
-            echo "No pyx-id-token file found in GitLab artifacts"
-            exit 1
+          arguments=(
+            --baseline "$RUNNER_TEMP/baseline/uv"
+            --fixed "$RUNNER_TEMP/fixed/uv"
+            --python "$(command -v python3)"
+            --cache-dir "$RUNNER_TEMP/uv-cache"
+            --script "all_links=$RUNNER_TEMP/all_links_should_be_ok.py"
+            --script "prefect=$RUNNER_TEMP/wait-for-server.py"
+            --samples 15
+          )
+          if [[ -n "$CORE_COUNTS" ]]; then
+            read -r -a core_counts <<< "$CORE_COUNTS"
+            arguments+=(--cores "${core_counts[@]}")
           fi
-          GITLAB_PYX_OIDC_TOKEN=$(cat "${pyx_id_token_file}")
-
-          # Add secret masks for the tokens.
-          echo "::add-mask::$GITLAB_PYPI_OIDC_TOKEN"
-          echo "::add-mask::$GITLAB_PYX_OIDC_TOKEN"
-
-          echo "GITLAB_PYPI_OIDC_TOKEN=${GITLAB_PYPI_OIDC_TOKEN}" >> "${GITHUB_OUTPUT}"
-          echo "GITLAB_PYX_OIDC_TOKEN=${GITLAB_PYX_OIDC_TOKEN}" >> "${GITHUB_OUTPUT}"
-
-      - name: "Add password to keyring"
-        run: |
-          # `keyrings.alt` contains the plaintext keyring
-          ./uv tool install --with keyrings.alt keyring
-          echo $UV_TEST_PUBLISH_KEYRING | keyring set https://test.pypi.org/legacy/?astral-test-keyring __token__
-        env:
-          UV_TEST_PUBLISH_KEYRING: ${{ secrets.UV_TEST_PUBLISH_KEYRING }}
-
-      - name: "Add password to uv text store"
-        run: |
-          ./uv auth login https://test.pypi.org/legacy/?astral-test-text-store --token ${UV_TEST_PUBLISH_TEXT_STORE}
-        env:
-          UV_TEST_PUBLISH_TEXT_STORE: ${{ secrets.UV_TEST_PUBLISH_TEXT_STORE }}
-
-      - name: "Publish test packages"
-        # `-p 3.12` prefers the python we just installed over the one locked in `.python_version`.
-        run: ./uv run --no-project -p "${PYTHON_VERSION}" scripts/publish/test_publish.py --uv ./uv all
-        env:
-          RUST_LOG: uv=debug,uv_publish=trace
-          UV_TEST_PUBLISH_TOKEN: ${{ secrets.UV_TEST_PUBLISH_TOKEN }}
-          UV_TEST_PUBLISH_PASSWORD: ${{ secrets.UV_TEST_PUBLISH_PASSWORD }}
-          UV_TEST_PUBLISH_GITLAB_PAT: ${{ secrets.UV_TEST_PUBLISH_GITLAB_PAT }}
-          UV_TEST_PUBLISH_CODEBERG_TOKEN: ${{ secrets.UV_TEST_PUBLISH_CODEBERG_TOKEN }}
-          UV_TEST_PUBLISH_CLOUDSMITH_TOKEN: ${{ secrets.UV_TEST_PUBLISH_CLOUDSMITH_TOKEN }}
-          UV_TEST_PUBLISH_PYX_TOKEN: ${{ secrets.UV_TEST_PUBLISH_PYX_TOKEN }}
-          UV_TEST_PUBLISH_PYTHON_VERSION: ${{ env.PYTHON_VERSION }}
-          UV_TEST_PUBLISH_GITLAB_PYPI_OIDC_TOKEN: ${{ steps.load-gitlab-oidc-token.outputs.GITLAB_PYPI_OIDC_TOKEN }}
-          UV_TEST_PUBLISH_GITLAB_PYX_OIDC_TOKEN: ${{ steps.load-gitlab-oidc-token.outputs.GITLAB_PYX_OIDC_TOKEN }}
-
-  required-checks-passed:
-    name: "all required jobs passed"
-    if: always()
-    needs:
-      - check-fmt
-      - check-lint
-      - check-docs
-      - check-generated-files
-      - test
-      - build-dev-binaries
-    runs-on: ubuntu-slim
-    steps:
-      - name: "Check required jobs passed"
-        run: |
-          failing=$(echo "$NEEDS_JSON" | jq -r 'to_entries[] | select(.value.result != "success" and .value.result != "skipped") | "\(.key): \(.value.result)"')
-          if [ -n "$failing" ]; then
-            echo "$failing"
-            exit 1
-          fi
-        env:
-          NEEDS_JSON: ${{ toJSON(needs) }}
+          python3 .github/scripts/benchmark-workspace-membarrier.py "${arguments[@]}"
