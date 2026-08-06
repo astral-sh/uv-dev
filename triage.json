@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 9011,
+        "title": "Question: What’s the difference between `optional-dependencies` and `dependency-groups` in `pyproject.toml`?",
+        "url": "https://github.com/astral-sh/uv/issues/9011",
+        "state": "closed",
+        "reason": "A maintainer demonstrates the same supported structure: a dependency group can contain `package[extra]` to activate that package’s optional dependencies."
+      },
+      {
+        "kind": "issue",
+        "number": 11937,
+        "title": "Keeping extras when running `uv sync`",
+        "url": "https://github.com/astral-sh/uv/issues/11937",
+        "state": "closed",
+        "reason": "Maintainer comments explain the reported removal behavior: `uv sync` computes the selected dependency set and removes packages that are no longer reachable."
+      },
+      {
+        "kind": "issue",
+        "number": 18965,
+        "title": "uv why  # shows why a package is included",
+        "url": "https://github.com/astral-sh/uv/issues/18965",
+        "state": "closed",
+        "reason": "This discussion identifies `uv tree --invert --package future` as the supported way to determine which dependency introduced an installed package, which is the missing evidence here."
+      }
+    ],
+    "search_scope": "No duplicate was found. Literal searches covered `uv add --extra`, `future`, PyPI installation, optional dependencies, and dependency groups; conceptual searches covered local/path and workspace dependencies, same-name collisions, dependency confusion, unexpected/transitive dependencies, exact sync removal, and reverse dependency inspection. Closed issues and merged pull requests were searched for extras parsing and marker fixes. astral-sh/uv#6279, astral-sh/uv#6324, and merged astral-sh/uv#6395 were inspected but ruled out because they concern invalid leading-underscore or leading-dash extra names being treated incorrectly; `future` is valid and explicitly enabled. astral-sh/uv#20151 was also ruled out because it concerns index-source behavior for a transitive dependency, not an extra name becoming a package requirement."
+  },
+  "type": "question",
+  "type_reason": "The expected parts are established: `--extra future` enables the `future` extra on `private-package`, producing `private-package[dev,future,test]`, and an exact `uv sync` removes dependencies no longer reachable after that extra is removed. Repository semantics and a minimal uv 0.12.1 reproduction do not show a same-named PyPI package being added merely because an extra is named `future`; the report lacks the reverse dependency chain or complete metadata needed to establish incorrect uv behavior.",
+  "summary": "No duplicate was found. The closest discussions document the `package[extra]` dependency-group pattern, exact-sync removal, and the reverse-tree command needed to identify what introduced `future`.",
+  "draft_response": "`--extra future` in this command enables the `future` extra on `private-package`; it does not request a separate distribution named `future`. The generated `private-package[dev,future,test]` entry is expected. After removing that extra, `uv sync` performs an exact sync and removes packages that are no longer reachable, as described in astral-sh/uv#11937.\n\nA PyPI distribution named `future` should not be introduced solely because the extra has that name. Please share the output of `uv tree --invert --package future` and a sanitized complete reproducer, including the relevant `pyproject.toml` files or the `future` package and dependency entries from `uv.lock`. That will show which dependency metadata introduced `future` and whether uv formed an incorrect dependency edge."
+}
