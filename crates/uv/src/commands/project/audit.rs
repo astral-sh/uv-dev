@@ -298,11 +298,11 @@ pub(crate) async fn audit_lock(
         .collect();
     projects.retain(|(_, url)| !flat_index_urls.contains(url));
 
-    let reporter = AuditReporter::from(printer);
     let dependencies: Vec<Dependency> = auditable
         .packages()
         .map(|(name, version)| Dependency::new(name.clone(), version.clone()))
         .collect();
+    let reporter = AuditReporter::from(printer).with_length(dependencies.len() as u64);
     let base_client = client_builder.clone().build()?;
     let registry_client = RegistryClientBuilder::new(client_builder, cache.clone())
         .index_locations(settings.index_locations.clone())
@@ -332,6 +332,9 @@ pub(crate) async fn audit_lock(
     let (osv_findings, status_findings) = tokio::join!(osv_future, status_future);
     let mut findings = osv_findings?;
     findings.extend(status_findings);
+    for dependency in &dependencies {
+        reporter.on_audit_progress(dependency.name(), dependency.version());
+    }
     reporter.on_audit_complete();
 
     let mut matched_ignores = FxHashSet::default();
