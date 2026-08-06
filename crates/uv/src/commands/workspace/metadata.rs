@@ -76,13 +76,17 @@ pub(crate) async fn metadata(
     // Don't enable any groups' requires-python for interpreter discovery.
     let groups = DependencyGroupsWithDefaults::none();
 
+    // Keep an existing environment discovered for locking so it can be reused after resolution.
+    // New environments must not be created until the lock operation has succeeded.
+    let mut environment = None;
+
     // Determine the lock mode.
     let interpreter;
     let mode = if let Some(frozen_source) = frozen {
         LockMode::Frozen(frozen_source.into())
     } else {
         interpreter = match target {
-            LockTarget::Script(script) => ScriptInterpreter::discover(
+            LockTarget::Script(script) => match ScriptInterpreter::discover(
                 script.into(),
                 python.as_deref().map(PythonRequest::parse),
                 &client_builder,
@@ -96,7 +100,14 @@ pub(crate) async fn metadata(
                 printer,
             )
             .await?
-            .into_interpreter(),
+            {
+                ScriptInterpreter::Interpreter(interpreter) => interpreter,
+                ScriptInterpreter::Environment(discovered) => {
+                    let interpreter = discovered.interpreter().clone();
+                    environment = Some(discovered);
+                    interpreter
+                }
+            },
             LockTarget::Workspace(workspace) => {
                 let workspace_python = WorkspacePython::from_request(
                     python.as_deref().map(PythonRequest::parse),
@@ -106,7 +117,7 @@ pub(crate) async fn metadata(
                     config_discovery,
                 )
                 .await?;
-                ProjectInterpreter::discover(
+                match ProjectInterpreter::discover(
                     workspace,
                     &groups,
                     workspace_python,
@@ -124,7 +135,14 @@ pub(crate) async fn metadata(
                     printer,
                 )
                 .await?
-                .into_interpreter()
+                {
+                    ProjectInterpreter::Interpreter(interpreter) => interpreter,
+                    ProjectInterpreter::Environment(discovered) => {
+                        let interpreter = discovered.interpreter().clone();
+                        environment = Some(discovered);
+                        interpreter
+                    }
+                }
             }
         };
 
@@ -174,8 +192,9 @@ pub(crate) async fn metadata(
                 },
             };
             let mut export = metadata_for_target(install_target)?;
-            let environment = if sync.is_some() {
-                Some(match target {
+            let environment = match environment {
+                Some(environment) => Some(environment),
+                None if sync.is_some() => Some(match target {
                     LockTarget::Workspace(workspace) => ProjectEnvironment::get_or_init(
                         workspace,
                         &groups,
@@ -210,16 +229,15 @@ pub(crate) async fn metadata(
                     )
                     .await?
                     .into_environment()?,
-                })
-            } else {
-                match target {
+                }),
+                None => match target {
                     LockTarget::Workspace(workspace) => {
                         ProjectInterpreter::discover_existing(workspace, Some(active), cache)?
                     }
                     LockTarget::Script(script) => {
                         ScriptInterpreter::discover_existing(script.into(), Some(active), cache)
                     }
-                }
+                },
             };
 
             if let Some(environment) = environment {
