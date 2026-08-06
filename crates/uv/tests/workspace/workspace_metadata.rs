@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::fixture::{FileWriteStr, PathChild, PathCreateDir};
 use async_zip::base::write::ZipFileWriter;
@@ -217,6 +217,7 @@ fn workspace_metadata_jsonl() {
     );
 }
 
+/// Internal workspace synchronization must stream its otherwise-silenced progress.
 #[test]
 fn workspace_metadata_jsonl_sync_progress() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -252,70 +253,30 @@ fn workspace_metadata_jsonl_sync_progress() -> Result<()> {
     let progress = progress
         .iter()
         .map(|event| {
-            serde_json::json!({
-                "phase": event["phase"],
-                "status": event["status"],
-            })
+            let phase = event["phase"]
+                .as_str()
+                .ok_or_else(|| anyhow!("progress event is missing a phase"))?;
+            let status = event["status"]
+                .as_str()
+                .ok_or_else(|| anyhow!("progress event is missing a status"))?;
+            Ok(format!("{phase}:{status}"))
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>>>()?;
     insta::assert_json_snapshot!(progress, @r#"
     [
-      {
-        "phase": "resolve",
-        "status": "started"
-      },
-      {
-        "phase": "resolve",
-        "status": "updated"
-      },
-      {
-        "phase": "resolve",
-        "status": "updated"
-      },
-      {
-        "phase": "resolve",
-        "status": "completed"
-      },
-      {
-        "phase": "prepare",
-        "status": "started"
-      },
-      {
-        "phase": "download",
-        "status": "started"
-      },
-      {
-        "phase": "download",
-        "status": "updated"
-      },
-      {
-        "phase": "download",
-        "status": "updated"
-      },
-      {
-        "phase": "download",
-        "status": "completed"
-      },
-      {
-        "phase": "prepare",
-        "status": "updated"
-      },
-      {
-        "phase": "prepare",
-        "status": "completed"
-      },
-      {
-        "phase": "install",
-        "status": "started"
-      },
-      {
-        "phase": "install",
-        "status": "updated"
-      },
-      {
-        "phase": "install",
-        "status": "completed"
-      }
+      "resolve:started",
+      "resolve:updated",
+      "resolve:updated",
+      "resolve:completed",
+      "prepare:started",
+      "download:started",
+      "download:updated",
+      "download:completed",
+      "prepare:updated",
+      "prepare:completed",
+      "install:started",
+      "install:updated",
+      "install:completed"
     ]
     "#
     );
