@@ -698,6 +698,7 @@ impl From<UpperBound> for Bound<Version> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::VersionSpecifiersParseError;
 
     fn range(specifiers: &str) -> Ranges<Version> {
         Ranges::from(specifiers.parse::<VersionSpecifiers>().unwrap())
@@ -708,10 +709,8 @@ mod tests {
     }
 
     #[test]
-    fn batches_exclusions_with_pep440_semantics() {
-        let specifiers = ">=1,<4,!=1.0,!=2.0+local,!=3.*"
-            .parse::<VersionSpecifiers>()
-            .unwrap();
+    fn batches_exclusions_with_pep440_semantics() -> Result<(), VersionSpecifiersParseError> {
+        let specifiers = ">=1,<4,!=1.0,!=2.0+local,!=3.*".parse::<VersionSpecifiers>()?;
         let range = Ranges::from(specifiers);
 
         for (candidate, expected) in [
@@ -726,13 +725,14 @@ mod tests {
         ] {
             assert_eq!(range.contains(&version(candidate)), expected, "{candidate}");
         }
+
+        Ok(())
     }
 
     #[test]
-    fn batches_exclusions_with_release_only_semantics() {
-        let specifiers = ">=1,<6,!=1.0a1,!=2.0+local,!=3.*,!=4.0.post1"
-            .parse::<VersionSpecifiers>()
-            .unwrap();
+    fn batches_exclusions_with_release_only_semantics() -> Result<(), VersionSpecifiersParseError> {
+        let specifiers =
+            ">=1,<6,!=1.0a1,!=2.0+local,!=3.*,!=4.0.post1".parse::<VersionSpecifiers>()?;
         let range = release_specifiers_to_ranges(specifiers);
 
         for (candidate, expected) in [
@@ -748,10 +748,13 @@ mod tests {
         ] {
             assert_eq!(range.contains(&version(candidate)), expected, "{candidate}");
         }
+
+        Ok(())
     }
 
     #[test]
-    fn batched_exclusions_match_sequential_intersection() {
+    fn batched_exclusions_match_sequential_intersection() -> Result<(), VersionSpecifiersParseError>
+    {
         let distinct = (0..256).map(|version| format!("!={version}.0"));
         let duplicate =
             (0..128).flat_map(|version| [format!("!={version}.0"), format!("!={version}.0")]);
@@ -770,9 +773,8 @@ mod tests {
             local.collect(),
             mixed.collect(),
         ] {
-            let specifiers = format!(">=0.dev0,<300,{}", exclusions.join(","))
-                .parse::<VersionSpecifiers>()
-                .unwrap();
+            let specifiers =
+                format!(">=0.dev0,<300,{}", exclusions.join(",")).parse::<VersionSpecifiers>()?;
 
             let expected = specifiers
                 .iter()
@@ -790,6 +792,8 @@ mod tests {
                 });
             assert_eq!(release_specifiers_to_ranges(specifiers), expected);
         }
+
+        Ok(())
     }
 
     #[test]
