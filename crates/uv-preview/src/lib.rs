@@ -331,6 +331,8 @@ pub enum PreviewFeature {
     LockWithoutMetadata,
     /// Uses the new `tar-codec` encoding/decoding backend, instead of `astral-tokio-tar`.
     TarCodec,
+    /// Fetches available CPython downloads from the remote Python release metadata.
+    RemotePythonDownloadMetadata,
 }
 
 impl Display for PreviewFeature {

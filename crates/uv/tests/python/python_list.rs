@@ -648,3 +648,41 @@ fn python_list_with_mirrors() {
     graalpy-3.10.0-[PLATFORM] https://github.com/oracle/graalpython/releases/download/[FILE-PATH]
     ");
 }
+
+/// Download Python version metadata from a remote NDJSON manifest.
+#[tokio::test]
+async fn python_list_remote_ndjson_metadata() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_filtered_python_keys()
+        .with_filtered_latest_python_versions();
+    let server = MockServer::start().await;
+    let platform = uv_platform::Platform::from_env()?.as_cargo_dist_triple();
+    let metadata = serde_json::json!({
+        "version": "3.13.9+20250101",
+        "artifacts": [{
+            "platform": platform,
+            "variant": "install_only",
+            "url": "https://example.com/cpython.tar.gz",
+            "sha256": null,
+        }],
+    });
+    Mock::given(method("GET"))
+        .and(path("/python.ndjson"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(metadata.to_string(), "application/x-ndjson"),
+        )
+        .mount(&server)
+        .await;
+
+    uv_snapshot!(context.filters(), context.python_list()
+        .arg("--python-downloads-json-url")
+        .arg(format!("{}/python.ndjson", server.uri()))
+        .arg("cpython-3.13")
+        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    cpython-3.13.9-[PLATFORM]    <download available>
+    ");
+
+    Ok(())
+}
