@@ -7700,6 +7700,46 @@ fn lock_requires_python_fewest_versions() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_requires_python_environments_order() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2026-08-01T00:00:00Z");
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.11,<3.13"
+        dependencies = ["numpy"]
+
+        [tool.uv]
+        environments = ["python_version == '3.11'", "python_version == '3.12'"]
+        "#,
+    )?;
+
+    uv_snapshot!(context.filters(), context.lock(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    // This incorrectly reuses the Python 3.11 preference for Python 3.12 instead of selecting
+    // NumPy 2.5.1; see astral-sh/uv#20999.
+    uv_snapshot!(context.filters(), context.tree().arg("--locked"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    project v0.1.0
+    └── numpy v2.4.6
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    Ok(())
+}
+
 /// Ensure that `python_version >= '3.10' or python_version < '3.10'` is correctly collapsed to
 /// the full version range. This is _not_ the case under standard PEP 440 semantics, but Python
 /// requirements are evaluated using release-only semantics.
