@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "On Linux x86_64 with uv 0.12.3 and Python 3.12.3, `uv lock -v --cache-dir <temporary-cache>` reproduced the report using the exact configuration. Listing Python 3.11 first locked NumPy 2.4.6 for both forks; reversing the environments locked 2.4.6 for Python 3.11 and 2.5.1 for Python 3.12. `fork-strategy = \"fewest\"` showed the same order dependence, selecting either one or two NumPy versions based solely on list order. Omitting `environments` produced the expected per-Python versions. Fresh temporary projects and caches were used, and the issue-context README was updated."
+}
