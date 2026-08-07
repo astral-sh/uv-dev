@@ -342,6 +342,8 @@ pub enum PreviewFeature {
     BatchExport,
     /// Allows setting minimum libc versions for universal resolutions.
     MinimumLibcVersion,
+    /// Fetches available CPython downloads from the remote Python release metadata.
+    RemotePythonDownloadMetadata,
 }
 
 impl Display for PreviewFeature {
