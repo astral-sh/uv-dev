@@ -338,6 +338,8 @@ pub enum PreviewFeature {
     /// Exclude `exclude-newer-package` entries from the lockfile when not included in the
     /// project's resolved dependencies.
     MissingExcludeNewerPackageLock,
+    /// Fetches available CPython downloads from the remote Python release metadata.
+    RemotePythonDownloadMetadata,
 }
 
 impl Display for PreviewFeature {
