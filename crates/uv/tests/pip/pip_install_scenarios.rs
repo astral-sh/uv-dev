@@ -481,10 +481,7 @@ fn excluded_only_compatible_version() {
               b==1.0.0
               b==3.0.0
 
-          And because you require one of:
-              a<2.0.0
-              a>2.0.0
-          and b>=2.0.0,<3.0.0, we can conclude that your requirements are unsatisfiable.
+          And because you require a!=2.0.0 and b>=2.0.0,<3.0.0, we can conclude that your requirements are unsatisfiable.
     ");
 
     // Only `a==1.2.0` is available since `a==1.0.0` and `a==3.0.0` require incompatible versions of `b`. The user has excluded that version of `a` so resolution fails.
@@ -515,10 +512,7 @@ fn excluded_only_version() {
     exit_code: 1 (failure)
     ----- stderr -----
       × No solution found when resolving dependencies:
-      ╰─▶ Because only a==1.0.0 is available and you require one of:
-              a<1.0.0
-              a>1.0.0
-          we can conclude that your requirements are unsatisfiable.
+      ╰─▶ Because only a==1.0.0 is available and you require a!=1.0.0, we can conclude that your requirements are unsatisfiable.
     ");
 
     // Only `a==1.0.0` is available but the user excluded it.
