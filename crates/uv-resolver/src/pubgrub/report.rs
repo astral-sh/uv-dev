@@ -2,6 +2,7 @@ use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
+use std::iter;
 use std::ops::Bound;
 
 use indexmap::IndexSet;
@@ -438,7 +439,7 @@ impl ReportFormatter<PubGrubPackage, Range<Version>, UnavailableReason>
         external2: &External<PubGrubPackage, Range<Version>, UnavailableReason>,
         current_terms: &Map<PubGrubPackage, Term<Range<Version>>>,
     ) -> String {
-        let external = self.format_both_external(external1, external2);
+        let external = self.format_both_external(external1, external2, current_terms);
         let terms = self.format_terms(current_terms);
 
         format!(
@@ -539,7 +540,7 @@ impl ReportFormatter<PubGrubPackage, Range<Version>, UnavailableReason>
         external: &External<PubGrubPackage, Range<Version>, UnavailableReason>,
         current_terms: &Map<PubGrubPackage, Term<Range<Version>>>,
     ) -> String {
-        let external = self.format_both_external(prior_external, external);
+        let external = self.format_both_external(prior_external, external, current_terms);
         let terms = self.format_terms(current_terms);
 
         format!(
@@ -673,6 +674,7 @@ impl PubGrubReportFormatter<'_> {
         &self,
         external1: &External<PubGrubPackage, Range<Version>, UnavailableReason>,
         external2: &External<PubGrubPackage, Range<Version>, UnavailableReason>,
+        current_terms: &Map<PubGrubPackage, Term<Range<Version>>>,
     ) -> String {
         match (external1, external2) {
             (
@@ -708,6 +710,47 @@ impl PubGrubReportFormatter<'_> {
                     && self.is_single_project_workspace_member(dependency) =>
             {
                 self.format_external(external2)
+            }
+            // When a yanked release is the only candidate in the required range, retain the
+            // availability premise without enumerating irrelevant versions outside that range.
+            (
+                External::NoVersions(package, unavailable),
+                incompatibility @ External::Custom(
+                    other_package,
+                    versions,
+                    UnavailableReason::Version(UnavailableVersion::IncompatibleDist(
+                        IncompatibleDist::Wheel(IncompatibleWheel::Yanked(_))
+                        | IncompatibleDist::Source(IncompatibleSource::Yanked(_)),
+                    )),
+                ),
+            )
+            | (
+                incompatibility @ External::Custom(
+                    other_package,
+                    versions,
+                    UnavailableReason::Version(UnavailableVersion::IncompatibleDist(
+                        IncompatibleDist::Wheel(IncompatibleWheel::Yanked(_))
+                        | IncompatibleDist::Source(IncompatibleSource::Yanked(_)),
+                    )),
+                ),
+                External::NoVersions(package, unavailable),
+            ) if package == other_package
+                && let Some(version) = versions.as_singleton()
+                && let Some(Term::Positive(required)) = current_terms.get(package)
+                && let Some(included_versions) = package
+                    .name()
+                    .and_then(|name| self.included_versions.get(name))
+                && included_versions
+                    .iter()
+                    .filter(|candidate| required.contains(candidate))
+                    .eq(iter::once(version))
+                && unavailable.complement().as_singleton().is_none() =>
+            {
+                format!(
+                    "{} and no other versions satisfy {}",
+                    self.format_external(incompatibility),
+                    self.compatible_range(package, required)
+                )
             }
             _ => {
                 let external1 = self.format_external(external1);
