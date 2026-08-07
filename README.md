@@ -6,85 +6,119 @@ Classification: question
 
 ## Summary
 
-The reporter says that `uv sync` always downloads dependency version 2.0.0 when the project declares
-`redis[hiredis]>=8.1.0`. The report is for uv 0.12.2 on Windows 11 x86-64 with Python 3.12.13 and
-configures the Tsinghua PyPI mirror as the default index.
+The reported mixed installation is reproducible, but uv is not resolving redis to version 2.0.0.
+The project installs both `redis==8.1.0` and `booktype==1.5`; the latter incorrectly contains a
+vendored copy of the `redis` package at version 2.0.0. Both distributions claim paths such as
+`redis/__init__.py` and `redis/client.py`, so installing them together creates a file-install race.
 
-The attachment does not show uv resolving redis 2.0.0. Its project dependency annotation identifies
-redis 8.1.0, while the open `redis/__init__.py` declares `__version__ = '2.0.0'`. That file content
-exactly matches redis 2.0.0, but the adjacent package tree contains modules from modern redis, so the
-visible environment or editor state appears mixed. The public redis 8.1.0 wheel declares
-`__version__ = "8.1.0"` and has distribution metadata version 8.1.0. The Tsinghua simple index lists
-the same wheel with the same SHA-256 hash as PyPI. This rules out the published redis 8.1.0 wheel
-itself declaring version 2.0.0, but it does not establish how the reporter's state arose.
+This explains the screenshot: the environment has `redis-8.1.0.dist-info` and modern redis modules,
+but the displayed `redis/__init__.py` came from booktype's bundled redis 2.0.0. Depending on install
+order, redis 8.1.0 or booktype's old files can win individual overlapping paths.
 
-No duplicate or matching fix was found. The closest repository reports concern metadata remaining
-present while installed package contents are incomplete, but their triggering sequences and final
-file states differ materially.
+## Reproduction
 
-## Draft response
+Outcome: **reproducible** with the installed `uv 0.12.2 (x86_64-unknown-linux-gnu)`, managed CPython
+3.12.13, and the exact Tsinghua index URL shown in the report. The reporter used Windows 11 x86-64;
+the observed collision was reproduced on Linux and concerns pure Python files shared by the same two
+distributions.
 
-The screenshot's dependency annotation shows redis 8.1.0, but the open
-`redis/__init__.py` matches redis 2.0.0. The published redis 8.1.0 wheel contains
-`__version__ = "8.1.0"`, and the configured mirror indexes that same artifact, so the screenshot
-alone does not show uv resolving redis 2.0.0.
+A fresh sync of the complete dependency list visible in the screenshot resolved 120 packages and
+produced the reported state immediately. The essential conflicting requirements reduce to:
 
-Could you reproduce this in a newly created environment and share the complete output of
-`uv sync -vv` and
-`uv run python -c "from importlib.metadata import version; import redis; print(version('redis')); print(redis.__version__); print(redis.__file__)"`?
-Please also report whether `uv cache clean redis` followed by recreating the environment changes the
-result. That will distinguish an on-disk install or cache problem from stale editor state.
+```toml
+[project]
+name = "redis-reproduction"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "booktype>=1.5",
+    "redis[hiredis]>=8.1.0",
+]
+
+[[tool.uv.index]]
+url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple"
+default = true
+```
+
+The following minimal sequence also produced the collision:
+
+```console
+$ uv sync --python 3.12.13 --no-progress
+$ uv sync --reinstall --preview-features detect-module-conflicts --no-progress
+warning: The file `redis/__init__.py` is provided by more than one package, which causes an install race condition and can result in a broken module. Packages containing the file:
+* booktype (booktype-1.5-py3-none-any.whl)
+* redis (redis-8.1.0-py3-none-any.whl)
+```
+
+After that sync, uv's resolved and installed distribution versions were still redis 8.1.0 and
+hiredis 3.4.0, while the import package contained booktype's redis 2.0.0 files:
+
+```console
+$ .venv/bin/python -c "from importlib.metadata import version; print(version('redis')); print(version('hiredis'))"
+8.1.0
+3.4.0
+$ rg '^__version__' .venv/lib/python3.12/site-packages/redis/__init__.py
+6:__version__ = '2.0.0'
+$ .venv/bin/python -c "import redis"
+  File ".../site-packages/redis/client.py", line 53
+    except socket.error, e:
+           ^^^^^^^^^^^^^^^
+SyntaxError: multiple exception types must be parenthesized
+```
+
+The installed `RECORD` files confirm the collision rather than merely suggesting it:
+
+```text
+redis-8.1.0.dist-info/RECORD:redis/__init__.py,...,2929
+booktype-1.5.dist-info/RECORD:redis/__init__.py,...,402
+```
+
+As controls, clean projects containing only `redis[hiredis]>=8.1.0` installed consistently from
+both PyPI and the Tsinghua mirror: distribution metadata and `redis.__version__` both reported
+8.1.0, hiredis 3.4.0 was installed, and `uv pip check` passed. A first install of the reduced
+two-package fixture also happened to leave redis 8.1.0's file in place; reinstalling both packages
+reversed the race and reproduced version 2.0.0.
+
+Existing integration coverage documents this intended warning behavior in
+`crates/uv/tests/pip_install/pip_install.rs`, test `overlapping_packages_warning`: overlapping files
+are installed without a warning by default, while `--preview-features detect-module-conflicts`
+warns that the overlap is an install race which can produce a broken module.
 
 ## Classification
 
-This is classified as a question because the available evidence does not yet establish incorrect uv
-behavior. Confirmed facts are that the dependency asks for redis 8.1.0 or newer, the attachment's
-dependency annotation reports 8.1.0, and the source displayed in the editor is redis 2.0.0's old
-`__init__.py`. The requested redis 8.1.0 artifact is internally consistent on PyPI and the configured
-mirror points to that same artifact.
+This remains classified as a question rather than an uv resolver bug. The reported broken
+environment is real, but the selected redis distribution is 8.1.0. The incompatible 2.0.0 source
+files are supplied by the independently installed booktype 1.5 wheel, whose `RECORD` overlaps the
+redis distribution. uv already has preview-only conflict detection for this condition.
 
-The report does not include `uv sync` output, a reproduction from a new environment, an interpreter
-check of the imported file and both version values, or the sequence that produced the environment.
-An inconsistent environment, cache state, and stale editor content therefore remain distinct
-possibilities; none is a confirmed root cause. If a fresh reproduction demonstrates that uv creates
-the mixed on-disk package, the issue should be reclassified as a bug.
+The practical resolution is to remove `booktype` if it is not the intended package, replace it with
+a distribution that does not bundle redis, or ask booktype's publisher to remove the vendored
+top-level `redis` package. Recreating the environment without booktype produces a consistent redis
+8.1.0 installation.
+
+## Draft response
+
+I can reproduce the mixed files, but uv is resolving redis itself to 8.1.0. `booktype==1.5` also
+ships a top-level `redis` package containing redis 2.0.0, so both installed distributions overwrite
+the same files. That is why the `redis-8.1.0.dist-info` metadata and editor annotation say 8.1.0
+while `redis/__init__.py` can say 2.0.0.
+
+Running `uv sync --reinstall --preview-features detect-module-conflicts` reports the collision
+between booktype and redis directly. Removing or replacing booktype, or having its publisher stop
+bundling the `redis` package, avoids the broken environment.
 
 ## Related
 
-- astral-sh/uv#16468 (open), “uv remove followed by uv add leaves package in incomplete state with
-  missing RECORD file and package files.” This is the closest active report of the same broad state
-  mismatch: distribution metadata remains while the package contents are incomplete, preventing a
-  normal reinstall. Its confirmed trigger is remove followed by add, and its result has missing
-  files and a missing `RECORD`, not the mixture of old and new redis files shown here. The reports
-  are not close enough to centralize without the missing reproduction.
-
-- astral-sh/uv#16116 (closed), “Receive an incomplete environment when trying to install
-  packaging==25.0.” This historical report also had distribution metadata alongside incomplete
-  package contents, and `uv cache clean` repaired it. It reported missing files and a missing-RECORD
-  warning rather than a stale older `__init__.py`, so it is related evidence rather than a duplicate.
+- astral-sh/uv#15357 tracks detection of files provided by multiple distributions, the exact class
+  of collision reproduced here.
+- astral-sh/uv#15253 added the preview `detect-module-conflicts` warning used to confirm this
+  reproduction.
 
 ## Search and supporting evidence
 
-Literal searches covered `redis`, `hiredis`, `redis[hiredis]`, redis 8.1.0, version 2.0.0, and the
-reported wrong-version wording across open and closed issues and open, closed, and merged pull
-requests. Conceptual searches covered resolver candidate selection, custom indexes and mirrors,
-distribution metadata versus package contents, stale or corrupted caches, hard-link behavior,
-incomplete installations, missing `RECORD` files, reinstall behavior, and file or module collisions.
-Fix-oriented searches included closed issues and merged or closed pull requests; no redis-specific
-historical fix or matching pull request was found.
-
-Especially plausible candidates inspected but excluded from the related list were:
-
-- astral-sh/uv#8512 selects versions with incompatible `Requires-Python` metadata from Nexus. Here,
-  the distribution metadata identifies the requested redis version and the discrepancy is in one
-  displayed source file, so the observable behavior differs.
-- astral-sh/uv#15357 and merged astral-sh/uv#13437 track collisions where two different
-  distributions provide the same module; merged astral-sh/uv#15253 placed that warning behind
-  preview. No second distribution providing `redis/__init__.py` is identified here.
-- Closed astral-sh/uv#19430 proposed preserving files claimed by overlapping distributions on
-  uninstall, but was not merged and has the same unestablished collision prerequisite.
-- astral-sh/uv#14479 demonstrates that deliberately editing an installed file hard-linked from uv's
-  cache can corrupt the cached package and survive `--reinstall`; this report gives no comparable
-  file-mutation trigger.
-- astral-sh/uv#10320 and astral-sh/uv#10738 mention `redis[hiredis]` only in unrelated project-build
-  and dependency-sorting reports.
+Repository searches covered redis, hiredis, extras, incomplete installs, and overlapping package
+files. No redis-specific regression or resolver test was found. The directly relevant coverage is
+`overlapping_packages_warning`, which creates two distributions that own the same module file and
+asserts both the default silent behavior and the preview warning. The earlier incomplete-install
+reports astral-sh/uv#16468 and astral-sh/uv#16116 are not the same failure: this reproduction has
+complete metadata and a confirmed second distribution owning and overwriting the affected files.

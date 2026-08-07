@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "Using uv 0.12.2, CPython 3.12.13, the reported Tsinghua index, and dependencies booktype>=1.5 plus redis[hiredis]>=8.1.0, `uv sync` reproduced the mixed installation. Metadata reported redis 8.1.0 and hiredis 3.4.0, but redis/__init__.py reported 2.0.0 and importing redis failed on Python 2 syntax. Conflict detection confirmed that booktype 1.5 bundles Redis 2.0.0 and overwrites files also owned by redis 8.1.0, creating an install race rather than resolving redis to 2.0.0. Redis alone installed correctly from both PyPI and the mirror."
+}
