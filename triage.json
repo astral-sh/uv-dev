@@ -1,0 +1,51 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 12782,
+        "title": "`fork-strategy` `fewest` does not limit versions when combined with `required-environments`",
+        "url": "https://github.com/astral-sh/uv/issues/12782",
+        "state": "open",
+        "reason": "Closest open adjacent report: `fewest` also fails to minimize versions when environment coverage is configured, but it uses `required-environments`, which affects artifact coverage rather than creating the ordered initial forks at issue here."
+      },
+      {
+        "kind": "issue",
+        "number": 9998,
+        "title": "fork-strategy requires-python produces unexpected results with repeated dependencies",
+        "url": "https://github.com/astral-sh/uv/issues/9998",
+        "state": "closed",
+        "reason": "Historical instance where `requires-python` did not produce the intended per-Python versions because forks were solved in the wrong order; it concerned dependency-created forks rather than `tool.uv.environments` initial forks."
+      },
+      {
+        "kind": "pull_request",
+        "number": 10007,
+        "title": "Prefer higher Python lower-bounds when forking",
+        "url": "https://github.com/astral-sh/uv/pull/10007",
+        "state": "merged",
+        "reason": "Fixed astral-sh/uv#9998 by making dynamically created fork ordering respect `fork-strategy`; current source shows that prioritization is not applied when initial forks come from `tool.uv.environments`."
+      },
+      {
+        "kind": "pull_request",
+        "number": 9868,
+        "title": "Introduce a `--fork-strategy` preference mode",
+        "url": "https://github.com/astral-sh/uv/pull/9868",
+        "state": "merged",
+        "reason": "Introduced the setting with the intended contract: default to latest supported versions per Python while `fewest` minimizes versions, establishing that list order should not override the chosen strategy."
+      },
+      {
+        "kind": "pull_request",
+        "number": 4662,
+        "title": "Set fork solution as preference when resolving",
+        "url": "https://github.com/astral-sh/uv/pull/4662",
+        "state": "merged",
+        "reason": "Introduced reuse of completed fork solutions as preferences in later forks for consistency and performance; this is the source-backed mechanism that makes initial-fork order observable in the new report."
+      }
+    ],
+    "search_scope": "Searched all issue states and pull request history using literal terms including `fork-strategy`, `tool.uv.environments`, `required-environments`, `requires-python`, `fewest`, `Solving split`, and resolver preferences, plus conceptual queries for initial forks, fork ordering, preference reuse, minimizing versions, per-Python latest versions, and order-dependent lock output. Comments and cross-reference chains were inspected for astral-sh/uv#12782, astral-sh/uv#9998, astral-sh/uv#7190, astral-sh/uv#4617, astral-sh/uv#4926, astral-sh/uv#5161, astral-sh/uv#5180, astral-sh/uv#17866, and astral-sh/uv#19344 and their linked pull requests. astral-sh/uv#5161 was plausible because requirement order changes a lock, but it concerns general package-priority ambiguity rather than this strategy violation. astral-sh/uv#17866 concerns retaining lockfile preferences when options change, and astral-sh/uv#19344 concerns performance, so both were ruled out."
+  },
+  "type": "bug",
+  "type_reason": "The documented and originally implemented contract says `requires-python` selects the latest compatible version per supported Python and `fewest` minimizes selected versions. Current resolver source converts `tool.uv.environments` entries into ordered initial forks, solves them in list order, and adds each completed solution as preferences for later forks, while strategy-specific ordering is applied only to forks created during dependency resolution. The resulting order-dependent reversal of both strategies is incorrect behavior. No open issue or pull request already tracks this exact initial-fork path, so it is not a duplicate; astral-sh/uv#12782 has a different trigger and mechanism.",
+  "summary": "The report exposes an uncovered initial-fork path in existing fork-strategy behavior. astral-sh/uv#9998 and astral-sh/uv#10007 establish the same need for strategy-aware ordering on dynamically created forks, while astral-sh/uv#12782 is a distinct open `fewest` bug involving `required-environments`.",
+  "draft_response": "Thanks for the focused reproduction. This is a bug: `fork-strategy` should determine whether uv prefers the latest compatible version per Python or the fewest versions, and changing the order of `tool.uv.environments` should not reverse that result.\n\nThe resolver currently creates those configured environments as initial forks in list order, then reuses each completed fork's versions as preferences for the following forks. The strategy-aware ordering added in astral-sh/uv#10007 applies to forks created later during dependency resolution, but not to these initial forks. This is related to, but distinct from, astral-sh/uv#12782, which covers `fewest` with `required-environments`.\n\nThe next step is to add coverage for both environment orders under both strategies, then apply the strategy's fork prioritization to the initial forks as well. The reproduction here is sufficient; no additional information is needed."
+}
