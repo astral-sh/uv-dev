@@ -5145,7 +5145,7 @@ fn package_only_yanked_in_range() {
     exit_code: 1 (failure)
     ----- stderr -----
       × No solution found when resolving dependencies:
-      ╰─▶ Because a==1.0.0 was yanked, we can conclude that a>0.1.0 cannot be used.
+      ╰─▶ Because a==1.0.0 was yanked and no other versions satisfy a>0.1.0, we can conclude that a>0.1.0 cannot be used.
           And because you require a>0.1.0, we can conclude that your requirements are unsatisfiable.
     ");
 
@@ -5324,7 +5324,7 @@ fn transitive_package_only_yanked_in_range() {
     exit_code: 1 (failure)
     ----- stderr -----
       × No solution found when resolving dependencies:
-      ╰─▶ Because b==1.0.0 was yanked, we can conclude that b>0.1 cannot be used.
+      ╰─▶ Because b==1.0.0 was yanked and no other versions satisfy b>0.1, we can conclude that b>0.1 cannot be used.
           And because all versions of a depend on b>0.1 and you require a, we can conclude that your requirements are unsatisfiable.
     ");
 
