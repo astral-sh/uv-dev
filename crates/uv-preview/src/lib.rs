@@ -463,6 +463,8 @@ pub enum PreviewFeature {
     /// Enables experimental support for [wheel variants](https://peps.python.org/pep-0825/).
     /// Variant wheels are not yet selectable.
     WheelVariants,
+    /// Fetches available CPython downloads from the remote Python release metadata.
+    RemotePythonDownloadMetadata,
 }
 
 impl Display for PreviewFeature {
