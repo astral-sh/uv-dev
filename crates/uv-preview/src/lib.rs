@@ -340,6 +340,8 @@ pub enum PreviewFeature {
     MissingExcludeNewerPackageLock,
     /// Allows using `uv export --batch`.
     BatchExport,
+    /// Fetches available CPython downloads from the remote Python release metadata.
+    RemotePythonDownloadMetadata,
 }
 
 impl Display for PreviewFeature {
