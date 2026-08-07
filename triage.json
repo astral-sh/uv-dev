@@ -1,0 +1,27 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 16468,
+        "title": "uv remove followed by uv add leaves package in incomplete state with missing RECORD file and package files",
+        "url": "https://github.com/astral-sh/uv/issues/16468",
+        "state": "open",
+        "reason": "Closest active report of the same broad state mismatch: dist-info metadata remains while package contents are incomplete. Its confirmed remove/add trigger and missing RECORD differ from the mixed old and new redis files shown here, so the reports cannot yet be centralized."
+      },
+      {
+        "kind": "issue",
+        "number": 16116,
+        "title": "Receive an incomplete environment when trying to install packaging==25.0",
+        "url": "https://github.com/astral-sh/uv/issues/16116",
+        "state": "closed",
+        "reason": "A close historical symptom where distribution metadata existed but installed contents were incomplete; clearing uv’s cache fixed it. It involved missing files and a missing-RECORD warning rather than redis 2.0.0’s __init__.py alongside modern redis files."
+      }
+    ],
+    "search_scope": "Literal searches covered redis, hiredis, redis[hiredis], redis 8.1.0, version 2.0.0, and wrong-version wording across issues and pull requests. Conceptual searches covered resolver selection, custom indexes, metadata/content mismatches, stale caches, hard-link behavior, incomplete installs, missing RECORD files, reinstall behavior, and module collisions. Fix-oriented searches inspected closed issues and merged or closed pull requests, including astral-sh/uv#13437, astral-sh/uv#15253, and astral-sh/uv#19430; no redis-specific fix or matching pull request was found. astral-sh/uv#8512 was ruled out because it selects incompatible versions from Nexus; astral-sh/uv#15357 requires collisions between different distributions; astral-sh/uv#14479 requires deliberate mutation of a hard-linked file; astral-sh/uv#10320 and astral-sh/uv#10738 only mention redis[hiredis] in unrelated reports."
+  },
+  "type": "question",
+  "type_reason": "Incorrect uv behavior is not yet established. The attachment shows a redis 8.1.0 dependency annotation but an open redis/__init__.py matching redis 2.0.0. The published redis 8.1.0 wheel contains the correct 8.1.0 source, and the configured mirror indexes the same artifact and hash. Without sync output, a fresh reproduction, an interpreter-based file/version check, or the sequence that created the mixed state, stale editor content, inconsistent environment state, and cache state remain distinguishable possibilities.",
+  "summary": "No duplicate or matching fix was found. astral-sh/uv#16468 and astral-sh/uv#16116 are the closest reports of metadata existing alongside incomplete package contents, but their triggers and resulting file states differ materially.",
+  "draft_response": "The screenshot’s dependency annotation shows redis 8.1.0, but the open redis/__init__.py matches redis 2.0.0. The published redis 8.1.0 wheel contains __version__ = \"8.1.0\", and the configured mirror indexes that same artifact, so the screenshot alone does not show uv resolving redis 2.0.0.\n\nCould you reproduce this in a newly created environment and share the complete output of `uv sync -vv` and `uv run python -c \"from importlib.metadata import version; import redis; print(version('redis')); print(redis.__version__); print(redis.__file__)\"`? Please also report whether `uv cache clean redis` followed by recreating the environment changes the result. That will distinguish an on-disk install or cache problem from stale editor state."
+}
