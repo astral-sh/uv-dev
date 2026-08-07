@@ -504,7 +504,29 @@ impl ReportFormatter<PubGrubPackage, Range<Version>, UnavailableReason>
         external: &External<PubGrubPackage, Range<Version>, UnavailableReason>,
         current_terms: &Map<PubGrubPackage, Term<Range<Version>>>,
     ) -> String {
-        let external = self.format_external(external);
+        let external = if let External::NoVersions(package, unavailable) = external
+            && let Some(Term::Positive(required)) = current_terms.get(package)
+            && let Some(versions) = package
+                .name()
+                .and_then(|name| self.included_versions.get(name))
+        {
+            let mut candidates = versions
+                .iter()
+                .filter(|version| required.contains(version) && !unavailable.contains(version));
+
+            if let (Some(version), None) = (candidates.next(), candidates.next()) {
+                let available = Range::singleton(version.clone());
+                format!(
+                    "{} is the only available version satisfying {}",
+                    self.availability_range(package, &available),
+                    self.compatible_range(package, required)
+                )
+            } else {
+                self.format_external(external)
+            }
+        } else {
+            self.format_external(external)
+        };
         let terms = self.format_terms(current_terms);
 
         format!(
