@@ -14984,7 +14984,7 @@ async fn sync_non_pep625_sdist() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
       × No solution found when resolving dependencies:
-      ╰─▶ Because only basic-package==0.1.0 is available and basic-package==0.1.0 has a non-PEP 625-compliant source distribution filename, we can conclude that all versions of basic-package cannot be used.
+      ╰─▶ Because basic-package==0.1.0 is the only available version and has a non-PEP 625-compliant source distribution filename, we can conclude that all versions of basic-package cannot be used.
           And because your project depends on basic-package, we can conclude that your project's requirements are unsatisfiable.
 
     hint: `basic-package` was found on http://[LOCALHOST]/simple, but not at the requested version (all of:

@@ -697,6 +697,37 @@ impl PubGrubReportFormatter<'_> {
                         .and(dependency2.package, dependency_set2),
                 )
             }
+            // Avoid repeating the package and version when availability and the incompatibility
+            // both describe the same sole release.
+            (
+                External::NoVersions(package, unavailable),
+                incompatibility @ External::Custom(other_package, versions, reason),
+            )
+            | (
+                incompatibility @ External::Custom(other_package, versions, reason),
+                External::NoVersions(package, unavailable),
+            ) if package == other_package
+                && versions.as_singleton().is_some()
+                && unavailable.complement().as_singleton() == versions.as_singleton()
+                && !matches!(
+                    reason,
+                    UnavailableReason::Version(UnavailableVersion::IncompatibleDist(
+                        IncompatibleDist::Wheel(IncompatibleWheel::ExcludeNewer(_))
+                            | IncompatibleDist::Source(IncompatibleSource::ExcludeNewer(_))
+                    ))
+                ) =>
+            {
+                let version = self.compatible_range(package, versions).to_string();
+                let explanation = self.format_external(incompatibility);
+                if let Some(reason) = explanation
+                    .strip_prefix(&version)
+                    .and_then(|reason| reason.strip_prefix(' '))
+                {
+                    format!("{version} is the only available version and {reason}")
+                } else {
+                    explanation
+                }
+            }
             (.., External::FromDependencyOf(package, _, dependency, _))
                 if Self::is_root(package)
                     && self.is_single_project_workspace_member(dependency) =>

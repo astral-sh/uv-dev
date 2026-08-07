@@ -4770,7 +4770,7 @@ fn no_sdist_no_wheels_with_matching_abi() {
     exit_code: 1 (failure)
     ----- stderr -----
       × No solution found when resolving dependencies:
-      ╰─▶ Because only a==1.0.0 is available and a==1.0.0 has no wheels with a matching Python ABI tag (e.g., `cp312`), we can conclude that all versions of a cannot be used.
+      ╰─▶ Because a==1.0.0 is the only available version and has no wheels with a matching Python ABI tag (e.g., `cp312`), we can conclude that all versions of a cannot be used.
           And because you require a, we can conclude that your requirements are unsatisfiable.
 
     hint: You require CPython 3.12 (`cp312`), but we only found wheels for `a` (v1.0.0) with the following Python ABI tag: `graalpy240_310_native`
@@ -4803,7 +4803,7 @@ fn no_sdist_no_wheels_with_matching_platform() {
     exit_code: 1 (failure)
     ----- stderr -----
       × No solution found when resolving dependencies:
-      ╰─▶ Because only a==1.0.0 is available and a==1.0.0 has no wheels with a matching platform tag (e.g., `manylinux_2_17_x86_64`), we can conclude that all versions of a cannot be used.
+      ╰─▶ Because a==1.0.0 is the only available version and has no wheels with a matching platform tag (e.g., `manylinux_2_17_x86_64`), we can conclude that all versions of a cannot be used.
           And because you require a, we can conclude that your requirements are unsatisfiable.
 
     hint: Wheels are available for `a` (v1.0.0) on the following platform: `macosx_10_0_ppc64`
@@ -4836,7 +4836,7 @@ fn no_sdist_no_wheels_with_matching_python() {
     exit_code: 1 (failure)
     ----- stderr -----
       × No solution found when resolving dependencies:
-      ╰─▶ Because only a==1.0.0 is available and a==1.0.0 has no wheels with a matching Python implementation tag (e.g., `cp312`), we can conclude that all versions of a cannot be used.
+      ╰─▶ Because a==1.0.0 is the only available version and has no wheels with a matching Python implementation tag (e.g., `cp312`), we can conclude that all versions of a cannot be used.
           And because you require a, we can conclude that your requirements are unsatisfiable.
 
     hint: You require CPython 3.12 (`cp312`), but we only found wheels for `a` (v1.0.0) with the following Python implementation tag: `graalpy310`
@@ -4870,7 +4870,7 @@ fn no_wheels_no_build() {
     exit_code: 1 (failure)
     ----- stderr -----
       × No solution found when resolving dependencies:
-      ╰─▶ Because only a==1.0.0 is available and a==1.0.0 has no usable wheels, we can conclude that all versions of a cannot be used.
+      ╰─▶ Because a==1.0.0 is the only available version and has no usable wheels, we can conclude that all versions of a cannot be used.
           And because you require a, we can conclude that your requirements are unsatisfiable.
 
     hint: Wheels are required for `a` because building from source is disabled for `a` (i.e., with `--no-build-package a`)
@@ -4962,7 +4962,7 @@ fn only_wheels_no_binary() {
     exit_code: 1 (failure)
     ----- stderr -----
       × No solution found when resolving dependencies:
-      ╰─▶ Because only a==1.0.0 is available and a==1.0.0 has no source distribution, we can conclude that all versions of a cannot be used.
+      ╰─▶ Because a==1.0.0 is the only available version and has no source distribution, we can conclude that all versions of a cannot be used.
           And because you require a, we can conclude that your requirements are unsatisfiable.
 
     hint: A source distribution is required for `a` because using pre-built wheels is disabled for `a` (i.e., with `--no-binary-package a`)
@@ -5179,7 +5179,7 @@ fn package_only_yanked() {
     exit_code: 1 (failure)
     ----- stderr -----
       × No solution found when resolving dependencies:
-      ╰─▶ Because only a==1.0.0 is available and a==1.0.0 was yanked, we can conclude that all versions of a cannot be used.
+      ╰─▶ Because a==1.0.0 is the only available version and was yanked, we can conclude that all versions of a cannot be used.
           And because you require a, we can conclude that your requirements are unsatisfiable.
     ");
 
@@ -5365,7 +5365,7 @@ fn transitive_package_only_yanked() {
     exit_code: 1 (failure)
     ----- stderr -----
       × No solution found when resolving dependencies:
-      ╰─▶ Because only b==1.0.0 is available and b==1.0.0 was yanked, we can conclude that all versions of b cannot be used.
+      ╰─▶ Because b==1.0.0 is the only available version and was yanked, we can conclude that all versions of b cannot be used.
           And because all versions of a depend on b and you require a, we can conclude that your requirements are unsatisfiable.
     ");
 

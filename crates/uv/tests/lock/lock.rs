@@ -37428,7 +37428,7 @@ fn lock_unsupported_wheel_url_requires_python() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
       × No solution found when resolving dependencies:
-      ╰─▶ Because only numpy==2.3.5 is available and numpy==2.3.5 has no wheels with a matching Python version tag (e.g., `cp312`), we can conclude that all versions of numpy cannot be used.
+      ╰─▶ Because numpy==2.3.5 is the only available version and has no wheels with a matching Python version tag (e.g., `cp312`), we can conclude that all versions of numpy cannot be used.
           And because your project depends on numpy, we can conclude that your project's requirements are unsatisfiable.
     ");
 
@@ -37468,7 +37468,7 @@ fn lock_unsupported_wheel_url_supported_platform() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
       × No solution found when resolving dependencies for split (markers: sys_platform == 'win32'):
-      ╰─▶ Because only numpy==2.3.5 is available and numpy==2.3.5 has no Windows-compatible wheels, we can conclude that all versions of numpy cannot be used.
+      ╰─▶ Because numpy==2.3.5 is the only available version and has no Windows-compatible wheels, we can conclude that all versions of numpy cannot be used.
           And because your project depends on numpy, we can conclude that your project's requirements are unsatisfiable.
     ");
 
@@ -37498,7 +37498,7 @@ fn lock_unsupported_wheel_url_required_platform() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
       × No solution found when resolving dependencies:
-      ╰─▶ Because only numpy==2.3.5 is available and numpy==2.3.5 has no Windows-compatible wheels, we can conclude that all versions of numpy cannot be used.
+      ╰─▶ Because numpy==2.3.5 is the only available version and has no Windows-compatible wheels, we can conclude that all versions of numpy cannot be used.
           And because your project depends on numpy, we can conclude that your project's requirements are unsatisfiable.
     ");
 
@@ -37583,7 +37583,7 @@ fn lock_required_environment_cycle_reports_resolution_error() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
       × No solution found when resolving dependencies for split (markers: platform_machine == 'arm64'):
-      ╰─▶ Because a==1.0.0 has no `platform_machine == 'arm64'`-compatible wheels and only a==1.0.0 is available, we can conclude that all versions of a cannot be used.
+      ╰─▶ Because a==1.0.0 is the only available version and has no `platform_machine == 'arm64'`-compatible wheels, we can conclude that all versions of a cannot be used.
           And because pkg-a depends on a and your workspace requires pkg-a, we can conclude that your workspace's requirements are unsatisfiable.
     "
     );
