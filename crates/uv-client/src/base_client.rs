@@ -875,7 +875,7 @@ impl RedirectClientWithMiddleware {
     }
 
     /// Convenience method to make a `HEAD` request to a URL.
-    pub(crate) fn head<U: IntoUrl>(&self, url: U) -> RequestBuilder<'_> {
+    pub fn head<U: IntoUrl>(&self, url: U) -> RequestBuilder<'_> {
         RequestBuilder::new(self.client.head(url), self)
     }
 

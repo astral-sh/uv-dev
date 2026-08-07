@@ -339,12 +339,28 @@ async fn perform_install(
     let mut is_default_install = false;
     let mut is_unspecified_upgrade = false;
     let retry_policy = client_builder.retry_policy();
-    let download_list = ManagedPythonDownloadList::new(
-        &client_builder,
-        cache,
-        python_downloads_json_url.as_deref(),
-    )
-    .await?;
+    let single_download_request = if let [target] = targets.as_slice()
+        && !reinstall
+    {
+        PythonDownloadRequest::from_request(&PythonRequest::parse(target))
+            .map(PythonDownloadRequest::fill)
+            .transpose()?
+    } else {
+        None
+    };
+    let download_list = if let Some(request) = single_download_request.as_ref() {
+        ManagedPythonDownloadList::new_filtered(
+            &client_builder,
+            cache,
+            python_downloads_json_url.as_deref(),
+            Some(request),
+            Some(1),
+        )
+        .await?
+    } else {
+        ManagedPythonDownloadList::new(&client_builder, cache, python_downloads_json_url.as_deref())
+            .await?
+    };
     // Python downloads are performing their own retries to catch stream errors, disable the
     // default retries to avoid the middleware from performing uncontrolled retries.
     let client = client_builder.retries(0).build()?;

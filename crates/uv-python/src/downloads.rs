@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::Display;
+use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::str::FromStr;
@@ -23,7 +24,7 @@ use tokio_util::either::Either;
 use tracing::{debug, instrument};
 use url::Url;
 
-use uv_cache::{Cache, CacheBucket};
+use uv_cache::{Cache, CacheBucket, CacheEntry};
 use uv_cache_key::cache_digest;
 use uv_client::{
     BaseClient, BaseClientBuilder, CacheControl, CachedClient, CachedClientError, ClientBuildError,
@@ -32,7 +33,7 @@ use uv_client::{
 };
 use uv_distribution_filename::{ExtensionError, SourceDistExtension};
 use uv_extract::hash::Hasher;
-use uv_fs::{Simplified, rename_with_retry};
+use uv_fs::{Simplified, rename_with_retry, write_atomic};
 use uv_platform::{self as platform, Arch, Libc, Os, Platform};
 use uv_preview::PreviewFeature;
 use uv_pypi_types::{HashAlgorithm, HashDigest};
@@ -958,6 +959,221 @@ const BUILTIN_PYTHON_DOWNLOADS_JSON: &[u8] =
 /// Default URL for the remote Python download metadata endpoint (NDJSON format).
 const REMOTE_PYTHON_DOWNLOAD_METADATA_URL: &str = "https://raw.githubusercontent.com/astral-sh/versions/refs/heads/main/v1/python-build-standalone.ndjson";
 
+const VERSIONS_CACHE_FILENAME: &str = "python-build-standalone.ndjson";
+const VERSIONS_CACHE_META_FILENAME: &str = "python-build-standalone.meta.json";
+
+#[derive(Debug, Deserialize, Serialize)]
+struct VersionsCacheMeta {
+    content_length: u64,
+    etag: Option<String>,
+}
+
+fn versions_cache_entries(cache: &Cache, url: &DisplaySafeUrl) -> (CacheEntry, CacheEntry) {
+    let shard = cache.shard(
+        CacheBucket::Python,
+        format!("versions/{}", cache_digest(&url.as_str())),
+    );
+    (
+        shard.entry(VERSIONS_CACHE_FILENAME),
+        shard.entry(VERSIONS_CACHE_META_FILENAME),
+    )
+}
+
+async fn read_versions_cache(
+    content_entry: &CacheEntry,
+    meta_entry: &CacheEntry,
+) -> Option<(Vec<u8>, VersionsCacheMeta)> {
+    let metadata = fs_err::tokio::read(meta_entry.path()).await.ok()?;
+    let metadata: VersionsCacheMeta = serde_json::from_slice(&metadata).ok()?;
+    let content = fs_err::tokio::read(content_entry.path()).await.ok()?;
+
+    if content.len() as u64 != metadata.content_length {
+        debug!(
+            "Cached Python downloads metadata length mismatch: expected {}, got {}",
+            metadata.content_length,
+            content.len()
+        );
+        return None;
+    }
+
+    Some((content, metadata))
+}
+
+async fn write_versions_cache(
+    content_entry: &CacheEntry,
+    meta_entry: &CacheEntry,
+    source: &str,
+    content: &[u8],
+    etag: Option<String>,
+) -> Result<(), Error> {
+    // Avoid retaining truncated responses or otherwise invalid manifests.
+    parse_ndjson_bytes(source, content)?;
+
+    let metadata = VersionsCacheMeta {
+        content_length: content.len() as u64,
+        etag,
+    };
+    let metadata = serde_json::to_vec(&metadata)
+        .map_err(|err| io::Error::other(format!("Failed to serialize cache metadata: {err}")))?;
+
+    fs_err::tokio::create_dir_all(content_entry.dir()).await?;
+    write_atomic(content_entry.path(), content).await?;
+    write_atomic(meta_entry.path(), metadata).await?;
+    Ok(())
+}
+
+async fn fetch_ndjson_full(
+    client: &BaseClient,
+    url: &DisplaySafeUrl,
+) -> Result<(Vec<u8>, Option<String>), Error> {
+    let start = Instant::now();
+    let response = client
+        .for_host(url)
+        .get(Url::from(url.clone()))
+        .send()
+        .await
+        .map_err(|err| Error::from_reqwest_middleware(url.clone(), err))?
+        .error_for_status()
+        .map_err(|err| Error::from_reqwest(url.clone(), err, None, start))?;
+    let etag = response
+        .headers()
+        .get(reqwest::header::ETAG)
+        .and_then(|value| value.to_str().ok())
+        .map(ToOwned::to_owned);
+    let content = response
+        .bytes()
+        .await
+        .map_err(|err| Error::from_reqwest(url.clone(), err, None, start))?;
+
+    Ok((content.to_vec(), etag))
+}
+
+async fn fetch_ndjson_cached(
+    client: &BaseClient,
+    url: &DisplaySafeUrl,
+    cache: &Cache,
+) -> Result<Vec<u8>, Error> {
+    let (content_entry, meta_entry) = versions_cache_entries(cache, url);
+    let shard = content_entry.shard();
+    let _lock = shard
+        .lock()
+        .await
+        .map_err(|err| io::Error::other(format!("Failed to lock Python downloads cache: {err}")))?;
+    let cached = read_versions_cache(&content_entry, &meta_entry).await;
+
+    if client.connectivity().is_offline()
+        && let Some((content, _)) = cached
+    {
+        debug!("Using cached Python downloads metadata in offline mode");
+        return Ok(content);
+    }
+
+    if let Some((cached_content, cached_meta)) = &cached {
+        let response = client
+            .for_host(url)
+            .head(Url::from(url.clone()))
+            .send()
+            .await;
+
+        if let Ok(response) = response
+            && let Ok(response) = response.error_for_status()
+        {
+            let current_etag = response
+                .headers()
+                .get(reqwest::header::ETAG)
+                .and_then(|value| value.to_str().ok())
+                .map(ToOwned::to_owned);
+            let current_length = response
+                .headers()
+                .get(reqwest::header::CONTENT_LENGTH)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.parse::<u64>().ok());
+
+            if current_etag.is_some() && current_etag == cached_meta.etag {
+                debug!("Using cached Python downloads metadata with matching ETag");
+                return Ok(cached_content.clone());
+            }
+
+            let incremental = url.as_str() == REMOTE_PYTHON_DOWNLOAD_METADATA_URL;
+            if incremental
+                && current_etag.is_none()
+                && current_length == Some(cached_meta.content_length)
+            {
+                debug!("Using cached Python downloads metadata with unchanged content length");
+                return Ok(cached_content.clone());
+            }
+
+            if incremental
+                && let Some(current_length) = current_length
+                && current_length > cached_meta.content_length
+            {
+                let delta_size = current_length - cached_meta.content_length;
+                let range = format!("bytes=0-{}", delta_size - 1);
+                let response = client
+                    .for_host(url)
+                    .get(Url::from(url.clone()))
+                    .header(reqwest::header::RANGE, range)
+                    .send()
+                    .await;
+
+                if let Ok(response) = response
+                    && response.status() == reqwest::StatusCode::PARTIAL_CONTENT
+                {
+                    let start = Instant::now();
+                    let delta = response
+                        .bytes()
+                        .await
+                        .map_err(|err| Error::from_reqwest(url.clone(), err, None, start))?;
+                    if delta.len() as u64 == delta_size {
+                        let mut combined = delta.to_vec();
+                        combined.extend_from_slice(cached_content);
+
+                        match write_versions_cache(
+                            &content_entry,
+                            &meta_entry,
+                            &url.to_string(),
+                            &combined,
+                            current_etag,
+                        )
+                        .await
+                        {
+                            Ok(()) => return Ok(combined),
+                            Err(err) => {
+                                debug!("Failed to update Python downloads metadata cache: {err}");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    match fetch_ndjson_full(client, url).await {
+        Ok((content, etag)) => {
+            if let Err(err) = write_versions_cache(
+                &content_entry,
+                &meta_entry,
+                &url.to_string(),
+                &content,
+                etag,
+            )
+            .await
+            {
+                debug!("Failed to cache Python downloads metadata: {err}");
+            }
+            Ok(content)
+        }
+        Err(err) => {
+            if let Some((content, _)) = cached {
+                debug!("Using stale cached Python downloads metadata after refresh failed: {err}");
+                Ok(content)
+            } else {
+                Err(err)
+            }
+        }
+    }
+}
+
 pub struct ManagedPythonDownloadList {
     downloads: Vec<ManagedPythonDownload>,
 }
@@ -1315,13 +1531,126 @@ impl ManagedPythonDownloadList {
                 let client = client_builder
                     .build()
                     .map_err(|err| Error::ClientBuild(Box::new(err)))?;
-                fetch_ndjson_from_url(&client, url).await.map_err(|err| {
-                    Error::FetchingPythonDownloadsNdjsonError(url.to_string(), Box::new(err))
-                })?
+                let content = fetch_ndjson_cached(&client, url, cache)
+                    .await
+                    .map_err(|err| {
+                        Error::FetchingPythonDownloadsNdjsonError(url.to_string(), Box::new(err))
+                    })?;
+                parse_ndjson_bytes(&url.to_string(), &content)?
             }
         };
 
         Ok(Self { downloads })
+    }
+
+    /// Load matching Python distributions, stopping after an optional result limit.
+    pub async fn new_filtered(
+        client_builder: &BaseClientBuilder<'_>,
+        cache: &Cache,
+        python_downloads_json_url: Option<&str>,
+        filter: Option<&PythonDownloadRequest>,
+        limit: Option<usize>,
+    ) -> Result<Self, Error> {
+        if let Some(url) = remote_ndjson_url(python_downloads_json_url)? {
+            if limit == Some(1)
+                && let Some(request) = filter
+            {
+                let download =
+                    Self::find_streaming(client_builder, cache, python_downloads_json_url, request)
+                        .await?;
+                return Ok(Self {
+                    downloads: download.into_iter().collect(),
+                });
+            }
+
+            let client = client_builder
+                .build()
+                .map_err(|err| Error::ClientBuild(Box::new(err)))?;
+            let content = fetch_ndjson_cached(&client, &url, cache)
+                .await
+                .map_err(|err| {
+                    Error::FetchingPythonDownloadsNdjsonError(url.to_string(), Box::new(err))
+                })?;
+            let downloads = parse_ndjson_bytes_filtered(
+                &url.to_string(),
+                &content,
+                |download| filter.is_none_or(|request| request.satisfied_by_download(download)),
+                limit,
+            )?;
+            return Ok(Self { downloads });
+        }
+
+        let list = Self::new(client_builder, cache, python_downloads_json_url).await?;
+        if limit == Some(1)
+            && let Some(filter) = filter
+        {
+            return Ok(Self {
+                downloads: list.find(filter).ok().cloned().into_iter().collect(),
+            });
+        }
+
+        let mut downloads = list.downloads;
+        if let Some(filter) = filter {
+            downloads.retain(|download| filter.satisfied_by_download(download));
+        }
+        if let Some(limit) = limit {
+            downloads.truncate(limit);
+        }
+        Ok(Self { downloads })
+    }
+
+    /// Find one matching Python distribution without consuming the whole remote manifest.
+    pub async fn find_streaming(
+        client_builder: &BaseClientBuilder<'_>,
+        cache: &Cache,
+        python_downloads_json_url: Option<&str>,
+        request: &PythonDownloadRequest,
+    ) -> Result<Option<ManagedPythonDownload>, Error> {
+        let Some(url) = remote_ndjson_url(python_downloads_json_url)? else {
+            return Ok(Self::new(client_builder, cache, python_downloads_json_url)
+                .await?
+                .find(request)
+                .ok()
+                .cloned());
+        };
+
+        let client = client_builder
+            .build()
+            .map_err(|err| Error::ClientBuild(Box::new(err)))?;
+        let (content_entry, meta_entry) = versions_cache_entries(cache, &url);
+
+        let find = if read_versions_cache(&content_entry, &meta_entry)
+            .await
+            .is_some()
+        {
+            let content = fetch_ndjson_cached(&client, &url, cache)
+                .await
+                .map_err(|err| {
+                    Error::FetchingPythonDownloadsNdjsonError(url.to_string(), Box::new(err))
+                })?;
+            parse_ndjson_bytes_find(&url.to_string(), &content, |download| {
+                request.satisfied_by_download(download)
+            })?
+        } else {
+            fetch_ndjson_find(&client, &url, |download| {
+                request.satisfied_by_download(download)
+            })
+            .await
+            .map_err(|err| {
+                Error::FetchingPythonDownloadsNdjsonError(url.to_string(), Box::new(err))
+            })?
+        };
+
+        if find.is_some() || request.allows_prereleases() {
+            return Ok(find);
+        }
+
+        let request = request.clone().with_prereleases(true);
+        fetch_ndjson_find(&client, &url, |download| {
+            request.satisfied_by_download(download)
+        })
+        .await
+        .map_err(|err| Error::FetchingPythonDownloadsNdjsonError(url.to_string(), Box::new(err)))
     }
 
     /// Load available Python distributions from the compiled-in list only.
@@ -1334,6 +1663,28 @@ impl ManagedPythonDownloadList {
         let result = parse_json_downloads(json_downloads);
         Ok(Self { downloads: result })
     }
+}
+
+fn remote_ndjson_url(
+    python_downloads_json_url: Option<&str>,
+) -> Result<Option<DisplaySafeUrl>, Error> {
+    if let Some(source) = python_downloads_json_url {
+        if detect_download_list_format(source) != DownloadListFormat::Ndjson {
+            return Ok(None);
+        }
+        return match DisplaySafeUrl::parse(source) {
+            Ok(url) if matches!(url.scheme(), "http" | "https") => Ok(Some(url)),
+            _ => Ok(None),
+        };
+    }
+
+    if uv_preview::is_enabled(PreviewFeature::RemotePythonDownloadMetadata) {
+        return Ok(Some(DisplaySafeUrl::parse(
+            REMOTE_PYTHON_DOWNLOAD_METADATA_URL,
+        )?));
+    }
+
+    Ok(None)
 }
 
 /// Parse the downloads JSON.
@@ -1413,14 +1764,12 @@ async fn fetch_downloads_from_url(
         })
 }
 
-/// Fetch and parse NDJSON Python downloads from a URL, streaming line by line.
-///
-/// TODO(zanieb): This currently collects all downloads into a Vec. For better performance,
-/// we could accept a predicate and early-exit on the first match.
-async fn fetch_ndjson_from_url(
+/// Visit remote Python downloads in manifest order and stop as soon as a match is found.
+async fn fetch_ndjson_streaming<T>(
     client: &BaseClient,
     url: &DisplaySafeUrl,
-) -> Result<Vec<ManagedPythonDownload>, Error> {
+    mut visitor: impl FnMut(ManagedPythonDownload) -> ControlFlow<T>,
+) -> Result<Option<T>, Error> {
     let start = Instant::now();
     let response = client
         .for_host(url)
@@ -1433,70 +1782,122 @@ async fn fetch_ndjson_from_url(
         .error_for_status()
         .map_err(|err| Error::from_reqwest(url.clone(), err, None, start))?;
 
-    // Stream the response line by line
     let mut stream = response.bytes_stream();
     let mut buffer = Vec::new();
-    let mut downloads = Vec::new();
 
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|err| Error::from_reqwest(url.clone(), err, None, start))?;
         buffer.extend_from_slice(&chunk);
 
-        // Process complete lines
-        while let Some(newline_pos) = buffer.iter().position(|&b| b == b'\n') {
-            let line = &buffer[..newline_pos];
-
-            // Skip empty lines
-            if !line.is_empty() {
-                let version_info: NdjsonPythonVersionInfo = serde_json::from_slice(line)
-                    .map_err(|err| Error::InvalidPythonDownloadsNdjsonLine(url.to_string(), err))?;
-
-                downloads.extend(parse_ndjson_version_info(version_info));
+        while let Some(newline_position) = buffer.iter().position(|byte| *byte == b'\n') {
+            if let Some(value) =
+                visit_ndjson_line(&url.to_string(), &buffer[..newline_position], &mut visitor)?
+            {
+                return Ok(Some(value));
             }
-
-            buffer.drain(..=newline_pos);
+            buffer.drain(..=newline_position);
         }
     }
 
-    // Process any remaining data in buffer (in case there's no trailing newline)
-    if !buffer.is_empty() {
-        if buffer.iter().any(|byte| !byte.is_ascii_whitespace()) {
-            let version_info: NdjsonPythonVersionInfo = serde_json::from_slice(&buffer)
-                .map_err(|err| Error::InvalidPythonDownloadsNdjsonLine(url.to_string(), err))?;
+    if let Some(value) = visit_ndjson_line(&url.to_string(), &buffer, &mut visitor)? {
+        return Ok(Some(value));
+    }
 
-            downloads.extend(parse_ndjson_version_info(version_info));
+    Ok(None)
+}
+
+async fn fetch_ndjson_find(
+    client: &BaseClient,
+    url: &DisplaySafeUrl,
+    predicate: impl Fn(&ManagedPythonDownload) -> bool,
+) -> Result<Option<ManagedPythonDownload>, Error> {
+    fetch_ndjson_streaming(client, url, |download| {
+        if predicate(&download) {
+            ControlFlow::Break(download)
+        } else {
+            ControlFlow::Continue(())
+        }
+    })
+    .await
+}
+
+fn visit_ndjson_line<T>(
+    source: &str,
+    line: &[u8],
+    visitor: &mut impl FnMut(ManagedPythonDownload) -> ControlFlow<T>,
+) -> Result<Option<T>, Error> {
+    if line.iter().all(u8::is_ascii_whitespace) {
+        return Ok(None);
+    }
+
+    let version_info: NdjsonPythonVersionInfo = serde_json::from_slice(line)
+        .map_err(|err| Error::InvalidPythonDownloadsNdjsonLine(source.to_string(), err))?;
+    for download in parse_ndjson_version_info(version_info) {
+        if let ControlFlow::Break(value) = visitor(download) {
+            return Ok(Some(value));
         }
     }
 
-    // Sort by key in descending order (newest first)
-    downloads.sort_by(|a, b| Ord::cmp(&b.key, &a.key));
+    Ok(None)
+}
 
-    Ok(downloads)
+fn parse_ndjson_bytes_with<T>(
+    source: &str,
+    content: &[u8],
+    mut visitor: impl FnMut(ManagedPythonDownload) -> ControlFlow<T>,
+) -> Result<Option<T>, Error> {
+    for line in content.split(|byte| *byte == b'\n') {
+        if let Some(value) = visit_ndjson_line(source, line, &mut visitor)? {
+            return Ok(Some(value));
+        }
+    }
+
+    Ok(None)
 }
 
 /// Parse NDJSON content from bytes into a list of [`ManagedPythonDownload`]s.
-fn parse_ndjson_bytes(source: &str, buf: &[u8]) -> Result<Vec<ManagedPythonDownload>, Error> {
+fn parse_ndjson_bytes(source: &str, content: &[u8]) -> Result<Vec<ManagedPythonDownload>, Error> {
     let mut downloads = Vec::new();
-
-    for line in buf.split(|&b| b == b'\n') {
-        if line.is_empty() {
-            continue;
-        }
-
-        if line.iter().all(u8::is_ascii_whitespace) {
-            continue;
-        }
-
-        let version_info: NdjsonPythonVersionInfo = serde_json::from_slice(line)
-            .map_err(|err| Error::InvalidPythonDownloadsNdjsonLine(source.to_string(), err))?;
-
-        downloads.extend(parse_ndjson_version_info(version_info));
-    }
-
-    // Sort by key in descending order (newest first)
+    parse_ndjson_bytes_with(source, content, |download| {
+        downloads.push(download);
+        ControlFlow::<()>::Continue(())
+    })?;
     downloads.sort_by(|a, b| Ord::cmp(&b.key, &a.key));
-
     Ok(downloads)
+}
+
+fn parse_ndjson_bytes_filtered(
+    source: &str,
+    content: &[u8],
+    predicate: impl Fn(&ManagedPythonDownload) -> bool,
+    limit: Option<usize>,
+) -> Result<Vec<ManagedPythonDownload>, Error> {
+    let mut downloads = Vec::new();
+    parse_ndjson_bytes_with(source, content, |download| {
+        if predicate(&download) {
+            downloads.push(download);
+            if limit.is_some_and(|limit| downloads.len() >= limit) {
+                return ControlFlow::Break(());
+            }
+        }
+        ControlFlow::Continue(())
+    })?;
+    downloads.sort_by(|a, b| Ord::cmp(&b.key, &a.key));
+    Ok(downloads)
+}
+
+fn parse_ndjson_bytes_find(
+    source: &str,
+    content: &[u8],
+    predicate: impl Fn(&ManagedPythonDownload) -> bool,
+) -> Result<Option<ManagedPythonDownload>, Error> {
+    parse_ndjson_bytes_with(source, content, |download| {
+        if predicate(&download) {
+            ControlFlow::Break(download)
+        } else {
+            ControlFlow::Continue(())
+        }
+    })
 }
 
 impl ManagedPythonDownload {
@@ -2910,6 +3311,45 @@ mod tests {
         assert_eq!(download.build(), Some("20240101"));
 
         Ok(())
+    }
+
+    #[test]
+    fn test_parse_ndjson_bytes_filtered_stops_at_limit() {
+        let metadata = br#"{"version":"3.12.0+20240101","artifacts":[{"platform":"x86_64-unknown-linux-gnu","variant":"install_only","url":"https://example.com/python.tar.gz","sha256":null}]}
+not valid metadata"#;
+
+        let downloads = parse_ndjson_bytes_filtered("test", metadata, |_| true, Some(1))
+            .expect("the first matching download should stop parsing");
+
+        assert_eq!(downloads.len(), 1);
+        assert_eq!(downloads[0].key().version().to_string(), "3.12.0");
+    }
+
+    #[test]
+    fn test_parse_ndjson_bytes_find_stops_at_match() {
+        let metadata = br#"{"version":"3.12.0+20240101","artifacts":[{"platform":"x86_64-unknown-linux-gnu","variant":"install_only","url":"https://example.com/python.tar.gz","sha256":null}]}
+not valid metadata"#;
+
+        let download = parse_ndjson_bytes_find("test", metadata, |_| true)
+            .expect("the first matching download should stop parsing")
+            .expect("the metadata should contain a matching download");
+
+        assert_eq!(download.key().version().to_string(), "3.12.0");
+    }
+
+    #[test]
+    fn test_versions_cache_entries_are_scoped_to_url() {
+        let cache = Cache::temp().expect("a temporary cache should be created");
+        let first_url = DisplaySafeUrl::parse("https://one.example.com/python.ndjson")
+            .expect("the first URL should be valid");
+        let second_url = DisplaySafeUrl::parse("https://two.example.com/python.ndjson")
+            .expect("the second URL should be valid");
+
+        let (first_content, first_metadata) = versions_cache_entries(&cache, &first_url);
+        let (second_content, second_metadata) = versions_cache_entries(&cache, &second_url);
+
+        assert_ne!(first_content.path(), second_content.path());
+        assert_ne!(first_metadata.path(), second_metadata.path());
     }
 
     #[test]
