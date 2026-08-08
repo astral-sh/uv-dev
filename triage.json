@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 18679,
+        "title": "Make `uv self update` fetch the manifest from the mirror first",
+        "url": "https://github.com/astral-sh/uv/pull/18679",
+        "state": "merged",
+        "reason": "This implementation made the official updater prefer the Astral mirror and use the canonical raw manifest only as fallback. A successful but stale mirror response resolves 0.12.2 without triggering fallback."
+      },
+      {
+        "kind": "issue",
+        "number": 18503,
+        "title": "Fetch release assets from `releases.astral.sh` first",
+        "url": "https://github.com/astral-sh/uv/issues/18503",
+        "state": "closed",
+        "reason": "This tracker records the completed move of self-update release metadata to the Astral mirror. The new report is a failure of that completed path, not a duplicate request."
+      },
+      {
+        "kind": "issue",
+        "number": 18701,
+        "title": "`uv self update` failing to resolve latest uv version",
+        "url": "https://github.com/astral-sh/uv/issues/18701",
+        "state": "closed",
+        "reason": "It affects the same resolution stage, but its request failed with `invalid peer certificate: UnknownIssuer` and `--system-certs` worked. Here the request succeeds and returns a valid but stale manifest."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests using literal combinations of `self update`, `latest version`, `newest`, `0.12.2`, `0.12.3`, `system-certs`, the manifest URL, and `Resolved self-update target`. Conceptual and fix-oriented searches covered stale or delayed releases, version manifests, mirrors, Windows, proxies, rate limits, and historical self-update fixes. Followed the implementation chain through astral-sh/uv#18503, astral-sh/uv#18674, and astral-sh/uv#18679. Inspected but ruled out astral-sh/uv#5514 (macOS hang), astral-sh/uv#16309 (installer-stage failure), astral-sh/uv#18592 (antivirus removal), and astral-sh/uv#15073 (rate-limit diagnostic)."
+  },
+  "type": "bug",
+  "type_reason": "The official updater's preferred manifest omitted the published, non-prerelease 0.12.3 release and incorrectly identified 0.12.2 as latest. The canonical manifest already contained 0.12.3, and no open issue or pull request was found tracking this stale-mirror incident.",
+  "summary": "The official Astral mirror was stale while the canonical manifest was current. astral-sh/uv#18679 and astral-sh/uv#18503 define the affected metadata path; astral-sh/uv#18701 is a distinct certificate failure.",
+  "draft_response": "Thanks for the trace. It confirms that uv successfully fetches the official mirrored version manifest, but that manifest currently ends at 0.12.2 even though 0.12.3 is published; the canonical manifest already contains 0.12.3. This is different from astral-sh/uv#18701, so `--system-certs` would not affect it. The next step is to restore or refresh the mirrored manifest. Until then, you can install 0.12.3 using the version-specific Windows installer from the 0.12.3 release."
+}
