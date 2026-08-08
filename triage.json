@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 19832,
+        "title": "`uv lock` errors if `.venv` is not valid",
+        "url": "https://github.com/astral-sh/uv/issues/19832",
+        "state": "open",
+        "reason": "astral-sh/uv#19832 is the canonical match: same reporter, command, `.venv/<version>` layout, exact error, workaround, expected fallback, and proposed `--active` alternative."
+      },
+      {
+        "kind": "pull_request",
+        "number": 19833,
+        "title": "Added flag for whether to fail on invalid environments during project interpreter discovery",
+        "url": "https://github.com/astral-sh/uv/pull/19833",
+        "state": "open",
+        "reason": "astral-sh/uv#19833 proposes fixing astral-sh/uv#19832 directly by letting `uv lock` fall back to global or managed interpreter discovery when `.venv` is invalid."
+      },
+      {
+        "kind": "pull_request",
+        "number": 20333,
+        "title": "Allow fallback to interpreter discovery for non-venv .venv directory",
+        "url": "https://github.com/astral-sh/uv/pull/20333",
+        "state": "closed",
+        "reason": "astral-sh/uv#20333 was an earlier implementation of the same fallback for astral-sh/uv#19832; its author closed it without review comments."
+      },
+      {
+        "kind": "pull_request",
+        "number": 11189,
+        "title": "Add support for respecting `VIRTUAL_ENV` in project commands via `--active`",
+        "url": "https://github.com/astral-sh/uv/pull/11189",
+        "state": "merged",
+        "reason": "astral-sh/uv#11189 introduced `--active` for environment-mutating project commands but explicitly left `uv lock` using `active = false`, establishing the current capability boundary."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests for literal combinations of `uv lock`, `.venv`, `--active`, and the exact invalid-environment error; conceptual terms covering interpreter discovery, fallback, active environments, `VIRTUAL_ENV`, and `UV_PROJECT_ENVIRONMENT`; and historical fixes. Followed astral-sh/uv#19832’s references to astral-sh/uv#19833, astral-sh/uv#20333, and astral-sh/uv#13235, and inspected the `--active` history in astral-sh/uv#11189. Ruled out astral-sh/uv#19885 because its same error came from an accidental Docker copy during `uv sync`, astral-sh/uv#11219 because its trigger was concurrent environment creation, and astral-sh/uv#17780 because it concerns sync-target versus project-root discovery semantics."
+  },
+  "type": "duplicate",
+  "type_reason": "astral-sh/uv#19832 already tracks the identical `uv lock` failure and explicitly proposes `--active` as an alternative remedy. The new issue presents the flag as a temporary solution for that open issue and adds no distinct trigger or capability, so duplicate takes precedence over enhancement.",
+  "summary": "astral-sh/uv#19832 is the canonical issue. astral-sh/uv#19833 is its open proposed fix, while astral-sh/uv#20333 records a closed alternative implementation and astral-sh/uv#11189 establishes the existing `--active` behavior.",
+  "draft_response": "Thanks. This request is already covered by astral-sh/uv#19832: it reports the same `uv lock` failure for a non-virtual-environment `.venv`, including the version-subdirectory layout, and already identifies `--active` as one possible remedy. There is also an open proposed fix in astral-sh/uv#19833 to have `uv lock` fall back to normal interpreter discovery instead of requiring a CLI bypass. Let’s keep the behavior and solution discussion on astral-sh/uv#19832, so I’ll close this as a duplicate."
+}
