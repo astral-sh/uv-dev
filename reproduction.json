@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "Using the official uv 0.12.2 Linux binary in an isolated standalone-style installation, `uv self update --no-cache --no-progress -v` resolved `uv==0.12.2`, reported it as latest, and remained on 0.12.2. `--system-certs` behaved identically. The preferred Astral manifest’s newest entry was 0.12.2 and included the reported Windows target, while the canonical manifest’s newest entry was 0.12.3. The findings were recorded in the issue-context README."
+}

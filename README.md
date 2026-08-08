@@ -7,15 +7,16 @@ Classification: bug
 ## Summary
 
 On Windows, uv 0.12.2 reports that it is already the latest version instead of updating to the
-published 0.12.3 release. The supplied trace shows a successful request to the official mirrored
-version manifest at `https://releases.astral.sh/github/versions/main/v1/uv.ndjson`, followed by
-`Resolved self-update target to uv==0.12.2`. This is not a certificate or connection failure.
+published 0.12.3 release. A targeted reproduction with the official uv 0.12.2 Linux binary produced
+the same result: the updater successfully requested the official mirrored version manifest at
+`https://releases.astral.sh/github/versions/main/v1/uv.ndjson`, resolved `uv==0.12.2`, and left the
+binary on 0.12.2. This is not a certificate or connection failure.
 
 The release and metadata state confirms the incorrect behavior:
 
 - uv 0.12.3 is a non-draft, non-prerelease GitHub release published at 2026-08-07 16:34:42 UTC and
   includes an `x86_64-pc-windows-msvc` artifact in the canonical version manifest.
-- At 2026-08-08 11:11 UTC, the official Astral mirror returned a valid manifest whose first and
+- At 2026-08-08 11:15 UTC, the official Astral mirror returned a valid manifest whose first and
   newest entry was 0.12.2. Its `Last-Modified` header was 2026-08-05 19:24:11 UTC, before the 0.12.3
   release, and it contained no 0.12.3 entry.
 - At the same time, the canonical manifest at
@@ -24,6 +25,60 @@ The release and metadata state confirms the incorrect behavior:
 The current implementation prefers the Astral mirror and falls back to the canonical manifest when
 fetching or parsing fails. Because the stale mirrored manifest is valid and contains a matching
 Windows artifact for 0.12.2, uv accepts it and never reaches the current canonical manifest.
+
+## Reproduction
+
+Outcome: **reproducible**.
+
+The reproduction used an isolated temporary directory, the official uv 0.12.2
+`x86_64-unknown-linux-gnu` release archive, and a temporary standalone-install receipt pointing at
+that binary. No checkout files or existing installation state were changed. With credentials
+removed from the subprocess environment, the meaningful commands were:
+
+```console
+$ uv --version
+uv 0.12.2 (x86_64-unknown-linux-gnu)
+
+$ uv self update --no-cache --no-progress -v
+info: Checking for updates...
+DEBUG Using official public self-update path
+DEBUG Resolved self-update target to `uv==0.12.2`
+success: You're already on version v0.12.2 of uv (the latest version).
+
+$ uv --version
+uv 0.12.2 (x86_64-unknown-linux-gnu)
+```
+
+Adding `--system-certs` produced the same resolution and latest-version message. A `--dry-run`
+lookup also produced the same result.
+
+At the time of reproduction, inspecting the first entry of each official manifest showed:
+
+```text
+https://releases.astral.sh/github/versions/main/v1/uv.ndjson
+version = 0.12.2; date = 2026-08-05T19:22:56Z; x86_64-pc-windows-msvc artifact = present
+
+https://raw.githubusercontent.com/astral-sh/versions/main/v1/uv.ndjson
+version = 0.12.3; date = 2026-08-07T16:34:42Z; x86_64-pc-windows-msvc artifact = present
+```
+
+The executable reproduction ran on Linux rather than the reporter's Windows
+10.0.26200.8973/x86_64 environment. That does not account for the discrepancy: the same stale
+mirror entry contains an artifact for the reported `x86_64-pc-windows-msvc` target, and the
+reporter's trace independently shows the same successful request and `uv==0.12.2` resolution.
+Python 3.14.7 is not involved in self-update version selection.
+
+There is no existing test for a valid but stale preferred manifest returning an older latest
+version than the canonical fallback. Relevant coverage is:
+
+- `crates/uv/tests/it/self_update.rs::check_self_update` exercises an end-to-end self-update but
+  only asserts that the resulting binary runs; it does not compare preferred and canonical
+  manifests or assert the selected version.
+- `crates/uv-bin-install/src/lib.rs::test_manifest_falls_back_on_404` and
+  `test_manifest_falls_back_on_parse_error` verify fallback for failed or invalid mirror responses.
+- `crates/uv-bin-install/src/lib.rs::test_manifest_no_matching_version_does_not_fallback` verifies
+  that a valid mirror response with no constrained match does not query the canonical URL. None of
+  these tests covers a successful stale response for an unconstrained latest-version lookup.
 
 ## Draft response
 
@@ -37,9 +92,10 @@ with the version-specific Windows installer from the 0.12.3 release.
 
 ## Classification
 
-This is a bug. The command successfully obtains official metadata but incorrectly says 0.12.2 is
-the latest version after 0.12.3 was published. Repository code and the two live manifests establish
-the stale preferred metadata source; no network or certificate hypothesis is needed.
+This is a bug. The targeted command successfully obtains official metadata but incorrectly says
+0.12.2 is the latest version after 0.12.3 was published. The command output, the two live manifests,
+and the fallback implementation confirm that the successful stale preferred response produces the
+observed selection; no network or certificate hypothesis is needed.
 
 This is not a duplicate. Searches found no open issue or pull request already tracking the stale
 0.12.3 mirror incident. The closest historical issue, astral-sh/uv#18701, failed before any manifest
@@ -85,8 +141,8 @@ reports a valid official manifest lagging behind a published release.
 
 ## Supporting evidence
 
-- The reporter's trace successfully receives the mirror response, then logs
-  `Resolved self-update target to uv==0.12.2` and the incorrect latest-version message.
+- Both the reporter's trace and the isolated reproduction successfully receive the mirror response,
+  then log `Resolved self-update target to uv==0.12.2` and the incorrect latest-version message.
 - The 0.12.3 release was published roughly 18.5 hours before astral-sh/uv#21007 was opened, so this
   is not a report filed during the release publication itself.
 - The mirrored manifest remained at 0.12.2 and retained an August 5 modification time when checked
