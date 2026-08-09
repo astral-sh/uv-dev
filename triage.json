@@ -1,0 +1,59 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 1528,
+        "title": "uv pip compile does not find a package that pip-compile does (nltk==3.6)",
+        "url": "https://github.com/astral-sh/uv/issues/1528",
+        "state": "closed",
+        "reason": "Closest prior report: NLTK 3.6 used `Requires-Python: >=3.5.*`, matching the same metadata field and invalid specifier without the newly reported whitespace."
+      },
+      {
+        "kind": "pull_request",
+        "number": 1507,
+        "title": "Fix trailing commas on `Requires-Python` in HTML indexes ",
+        "url": "https://github.com/astral-sh/uv/pull/1507",
+        "state": "merged",
+        "reason": "Routed index `Requires-Python` values through `LenientVersionSpecifiers`, contributing to the resolution of astral-sh/uv#1528. It concerns an HTML metadata boundary rather than wheel METADATA."
+      },
+      {
+        "kind": "issue",
+        "number": 1477,
+        "title": "uv pip install fails with comparator on wildcard version specifier",
+        "url": "https://github.com/astral-sh/uv/issues/1477",
+        "state": "closed",
+        "reason": "Canonical issue for the same wildcard-comparator parser error, including a third-party dependency-metadata reproduction. It distinguishes strict user input from lenient metadata parsing."
+      },
+      {
+        "kind": "pull_request",
+        "number": 1529,
+        "title": "pypi-types: fix lenient requirement parsing",
+        "url": "https://github.com/astral-sh/uv/pull/1529",
+        "state": "merged",
+        "reason": "Documents why uv repairs invalid ordered-comparison wildcards in third-party metadata and expanded the current regex, but did not support whitespace after the operator."
+      },
+      {
+        "kind": "issue",
+        "number": 1402,
+        "title": "Confusing error if uv thinks `requires-python` is invalid",
+        "url": "https://github.com/astral-sh/uv/issues/1402",
+        "state": "closed",
+        "reason": "An earlier `Requires-Python: >=3.*` failure involving the same repair mechanism. It differs because it concerns a major-only wildcard without whitespace."
+      },
+      {
+        "kind": "pull_request",
+        "number": 1410,
+        "title": "Add fix-up for invalid star comparison with major-only version",
+        "url": "https://github.com/astral-sh/uv/pull/1410",
+        "state": "merged",
+        "reason": "Expanded the same repair and tests to another common wildcard-comparison variant, but did not add operator-version whitespace support."
+      }
+    ],
+    "search_scope": "Literal searches covered `LenientRequirements`, `LenientRequirement`, `>= 3.5.*`, `>=1.9.*`, the exact wildcard-operator error, and the fixup diagnostic. Conceptual searches covered invalid or lenient `Requires-Python` and dependency metadata, PEP 440 wildcard comparisons, version-specifier whitespace, comparator wildcards, and parser fixups. Fix-oriented searches examined closed issues, merged pull requests, comments, reference chains, and `lenient_requirement.rs` history. Open and closed issues and open, closed, and merged pull requests were searched; no open tracker covers this whitespace trigger. astral-sh/uv#8326 was ruled out because it concerns bare `==*` in user-authored dependencies. astral-sh/uv#2546 and astral-sh/uv#2550 concern fixup ordering for a no-whitespace `Requires-Dist` value."
+  },
+  "type": "bug",
+  "type_reason": "`Requires-Python` metadata is intentionally parsed through `LenientVersionSpecifiers`, which repairs ordered-comparison wildcards such as `>=1.9.*`. Its regex requires the version to immediately follow the operator, so `>= 3.5.*` incorrectly falls through despite being the same malformed specifier. This is an uncovered correctness case in intended behavior, not a new capability, duplicate, or demonstrated regression.",
+  "summary": "No open duplicate was found. astral-sh/uv#1528 is the exact no-whitespace `Requires-Python` analogue; astral-sh/uv#1507, astral-sh/uv#1477, and astral-sh/uv#1529 establish the lenient metadata path and repair policy, while astral-sh/uv#1402 and astral-sh/uv#1410 show precedent for extending the repair to syntactic variants.",
+  "draft_response": "Thanks for the concrete corpus data. This is a bug in the existing lenient metadata repair. uv intentionally normalizes ordered-comparison wildcards from third-party metadata: astral-sh/uv#1528 reported the same `Requires-Python: >=3.5.*` form without whitespace, astral-sh/uv#1507 routed index `Requires-Python` values through the lenient parser, and astral-sh/uv#1529 documents the corresponding repair policy for dependency metadata. The current regex and tests only cover inputs where the version immediately follows the operator, so `Requires-Python: >= 3.5.*` falls through even though it is the same malformed specifier. The next step is to extend that repair for operator-version whitespace and add coverage for both `LenientVersionSpecifiers` and `LenientRequirement`, including a compound value such as `>= 3.6.*, <3.8.*`. astral-sh/uv#8326 is about bare `==*` in user-authored requirements and does not cover this case."
+}
