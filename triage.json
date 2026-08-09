@@ -1,0 +1,27 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 20832,
+        "title": "Resolve requirements-file find-links relative to the file",
+        "url": "https://github.com/astral-sh/uv/pull/20832",
+        "state": "merged",
+        "reason": "The exact historical fix: it resolves existing relative `--find-links` paths against the containing requirements file and adds `uv pip install -r` integration coverage."
+      },
+      {
+        "kind": "issue",
+        "number": 13239,
+        "title": "Change relative path behaviors for `requirements` files",
+        "url": "https://github.com/astral-sh/uv/issues/13239",
+        "state": "open",
+        "reason": "The broader requirements-file relative-path design tracker referenced by astral-sh/uv#20832. It does not specifically track this reported regression."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests using the exact error, `--find-links`, requirements files, both pip commands, relative/containing-file path semantics, local directories, file URLs, and the 0.12 release range. Inspected the strongest issue/PR chains. Ruled out astral-sh/uv#7113 and astral-sh/uv#9681 because their directories were missing; astral-sh/uv#8057 because it concerned argument splitting for paths containing spaces; astral-sh/uv#14367 because it concerned remote URL normalization and redirects; and astral-sh/uv#20786 because it concerned local HTML files."
+  },
+  "type": "bug",
+  "type_reason": "The behavior was intentionally implemented by astral-sh/uv#20832 and released in 0.12.1, so its return would be a regression. No open issue or pull request tracks that regression, making this a bug rather than a duplicate. The official Linux 0.12.3 binary did not reproduce the failure, so the macOS-specific trigger remains unconfirmed.",
+  "summary": "astral-sh/uv#20832 is the exact historical fix, with astral-sh/uv#13239 as its broader design tracker. No open duplicate was found, and nearby same-error reports have different triggers.",
+  "draft_response": "Thanks for the report. astral-sh/uv#20832 is intended to cover this exact case and includes `uv pip install -r` coverage for a relative `--find-links` directory. I also tried the minimal `uv pip compile` example with the published 0.12.3 Linux binary; both the equals and whitespace forms continued past URL parsing. Since your macOS result differs, could you rerun the example in a fresh temporary directory and include `uv --version --verbose`, `pwd`, `ls -ld requirements.in private_wheels`, and `python -c 'from pathlib import Path; print(repr(Path(\"requirements.in\").read_text())); print(Path(\"private_wheels\").resolve(), Path(\"private_wheels\").exists())'`? That should reveal whether this is platform-specific or depends on an unrecorded path/input detail."
+}
