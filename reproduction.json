@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "On uv 0.12.3 (Linux x86_64, CPython 3.12.3), `uv pip install --target <temp-target> --no-index badstar-1.0.0-py3-none-any.whl` failed for a minimal wheel containing `Requires-Python: >= 3.5.*`, reporting `Operator >= cannot be used with a wildcard version specifier`. An otherwise identical control wheel containing `Requires-Python: >=3.5.*` installed successfully. Existing unit tests in `crates/uv-pypi-types/src/lenient_requirement.rs` cover only the no-whitespace form; no matching integration coverage was found."
+}
