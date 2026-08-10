@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 18214,
+        "title": "Centralised environment storage",
+        "url": "https://github.com/astral-sh/uv/pull/18214",
+        "state": "merged",
+        "reason": "astral-sh/uv#18214 introduced the preview feature and deliberately maintained `.venv` as a compatibility pointer for activation and tool discovery. Its design states that link-creation failure is non-fatal."
+      },
+      {
+        "kind": "pull_request",
+        "number": 19912,
+        "title": "Support centralised environments in `uv venv`",
+        "url": "https://github.com/astral-sh/uv/pull/19912",
+        "state": "merged",
+        "reason": "astral-sh/uv#19912 extended centralized environments to pathless `uv venv` invocations and added integration coverage expecting success when `.venv` publication fails."
+      },
+      {
+        "kind": "pull_request",
+        "number": 20022,
+        "title": "Support `.venv` as a file containing a path fallback mechanism for centralised project environments",
+        "url": "https://github.com/astral-sh/uv/pull/20022",
+        "state": "merged",
+        "reason": "astral-sh/uv#20022 added a `.venv` path-file fallback when a symlink or junction cannot be created. It still modifies the project directory, so it does not provide the requested opt-out."
+      },
+      {
+        "kind": "issue",
+        "number": 1495,
+        "title": "Add an option to store virtual environments in a centralized location outside projects",
+        "url": "https://github.com/astral-sh/uv/issues/1495",
+        "state": "closed",
+        "reason": "astral-sh/uv#1495 originated centralized environment storage and includes discussion both supporting the compatibility symlink and describing cases where even that symlink is unwanted. It was closed by astral-sh/uv#18214 and does not separately track an opt-out."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests for `centralized-project-envs`, `centralized project envs`, `.venv symlink`, disabling or suppressing venv links, read-only project roots, `uv venv`, and the warning fragments `Failed to create link to project environment` and `Failed to write the environment path`. Conceptual searches covered centralized or external project environments and IDE compatibility pointers. Fix-oriented review followed astral-sh/uv#1495 through astral-sh/uv#18214, astral-sh/uv#19912, and astral-sh/uv#20022 and compared their comments, current source, documentation, tests, and merge timing. astral-sh/uv#20247 was ruled out because it requests named shared environments; astral-sh/uv#20060 concerns explicit environment selection; astral-sh/uv#7642 concerns HPC placement; and astral-sh/uv#20433 concerns discovery of already broken symlinks rather than failure to publish a new compatibility link."
+  },
+  "type": "enhancement",
+  "type_reason": "The primary request is a new option to suppress all project-local `.venv` publication. Existing behavior intentionally creates that compatibility reference, and no setting currently disables it. The claimed read-only failure would be a bug if reproduced, but current source, documentation, and integration coverage specify that failure to create both the link and fallback path file is non-fatal; the report lacks the version, error output, platform, and reproduction needed to establish a current correctness failure. This is not a duplicate of closed astral-sh/uv#1495 because that issue was resolved by implementing centralized storage with the compatibility link rather than tracking an opt-out from it.",
+  "summary": "The closest references are the originating centralized-storage issue and the three merged pull requests that introduced the feature, extended it to `uv venv`, and added the path-file fallback. None currently tracks a mode that leaves no `.venv` reference in the project.",
+  "draft_response": "The `.venv` link is currently intentional: centralized environments use it as a compatibility pointer so activation, editors, and other tools can discover the project environment. When a link cannot be created, current uv should fall back to a `.venv` path file; if that also cannot be written, uv is intended to continue using the cached environment directly. This behavior was added across astral-sh/uv#18214, astral-sh/uv#19912, and astral-sh/uv#20022.\n\nAn option to omit the project-local reference entirely would be a new capability, and this issue can track that request. Tools relying on `.venv` would not discover the environment in that mode.\n\nThe `uv venv` failure on a read-only project is not expected from the current implementation. Could you provide the uv version, operating system and filesystem, exact command, complete output, and a minimal reproduction? That will show whether the non-fatal fallback has a bug or the failure occurs at a different step."
+}
