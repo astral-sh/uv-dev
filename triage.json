@@ -1,0 +1,27 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 2253,
+        "title": "Nexus doesn't return a `Last-Modified` header",
+        "url": "https://github.com/astral-sh/uv/issues/2253",
+        "state": "open",
+        "reason": "Canonical match: it covers failed 304 validator matching, contains the identical warning, and records that returning the original ETag on the 304 eliminates the fallback request."
+      },
+      {
+        "kind": "pull_request",
+        "number": 2218,
+        "title": "Fallback to fresh request on non-validating 304",
+        "url": "https://github.com/astral-sh/uv/pull/2218",
+        "state": "merged",
+        "reason": "Explains the second unconditional GET: uv intentionally retries without validators when a 304 cannot be matched safely to its cached response."
+      }
+    ],
+    "search_scope": "Literal and conceptual searches covered the exact warning, If-None-Match, ETag, 304, conditional GET, revalidation, Last-Modified, devpi, Simple API caching, and the repository's cache, registry, and compatibility vocabulary across open and closed issues and open, closed, and merged pull requests. Current source confirms that uv accepts matching strong ETag or Last-Modified validators and rejects weak ETags. astral-sh/uv#1754 was inspected but excluded because it reports the older downstream Missing Content-Type failure, which astral-sh/uv#2218 fixed by adding the current fallback. No later fix changing this behavior was found."
+  },
+  "type": "duplicate",
+  "type_reason": "astral-sh/uv#2253 already contains the same warning, HTTP-cache mechanism, repository-server integration scenario, and working resolution, so discussion can be centralized there. The different server and Simple API URL do not change the underlying validator-matching requirement.",
+  "summary": "astral-sh/uv#2253 is the canonical discussion; astral-sh/uv#2218 explains the fallback GET. A 304 should repeat the same strong ETag returned by the cached 200 response, or provide a matching Last-Modified validator.",
+  "draft_response": "This is the same validator-matching behavior covered by astral-sh/uv#2253. uv stores a strong ETag from the original 200 response and sends it as If-None-Match when revalidating. For uv to reuse the cached body, the 304 response should include the same strong ETag value; weak ETags are not supported. A matching Last-Modified value can also validate the response.\n\nThe second GET without If-None-Match is the fallback added in astral-sh/uv#2218: when uv cannot associate the 304 with its cached response safely, it fetches a complete response. Please make devpi return the original strong ETag on both the 200 and 304 responses. If it already does, please share the response headers from the initial 200, the conditional request, and the 304, with authorization and private URL data removed."
+}
