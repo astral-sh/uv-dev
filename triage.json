@@ -1,0 +1,27 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 15803,
+        "title": "Add config to allow connection errors when searching across indexes",
+        "url": "https://github.com/astral-sh/uv/issues/15803",
+        "state": "open",
+        "reason": "astral-sh/uv#15803 matches the private-index-only-on-VPN trigger and requests an opt-in setting to ignore its connection error and continue with another index."
+      },
+      {
+        "kind": "issue",
+        "number": 16301,
+        "title": "Feature request: Add option to ignore missing/unavailable indexes",
+        "url": "https://github.com/astral-sh/uv/issues/16301",
+        "state": "open",
+        "reason": "astral-sh/uv#16301 tracks the broader unavailable-index fallback capability; its discussion includes the same off-site private-index retry delay."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests using literal terms including extra-index-url, retries, UV_HTTP_RETRIES, pip.ini, private index, timeout, VPN, unavailable, and unreachable. Conceptual searches covered connection-error suppression, optional indexes, fallback, failover, mirrors, and alternative URLs. Fix-oriented searches covered timeout changes, nested retries, and 404 handling. astral-sh/uv#7924 was ruled out because it concerns overriding index configuration; astral-sh/uv#14996 and astral-sh/uv#17274 fix different retry-related bugs. No pull request implements this request."
+  },
+  "type": "duplicate",
+  "type_reason": "astral-sh/uv#15803 already tracks the same underlying request and triggering condition. uv supports globally disabling retries through UV_HTTP_RETRIES, but making an unreachable configured index optional remains an enhancement tracked there.",
+  "summary": "The requested fallback for an off-VPN private index is already tracked by astral-sh/uv#15803, with astral-sh/uv#16301 covering the broader unavailable-index case.",
+  "draft_response": "uv already supports `UV_HTTP_RETRIES=0` globally, which disables HTTP retries, but that only shortens the failure path; it does not make an unreachable configured index optional. The request to ignore an index connection failure and continue with another index is already tracked in astral-sh/uv#15803, with the broader missing or unavailable index case discussed in astral-sh/uv#16301. Let's centralize the behavior discussion in astral-sh/uv#15803."
+}
