@@ -1,0 +1,27 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 18550,
+        "title": "Upgrade reqwest to 0.13",
+        "url": "https://github.com/astral-sh/uv/pull/18550",
+        "state": "merged",
+        "reason": "This originating change introduced system-certs while retaining native-tls as an identical compatibility alias. It does not address one global configuration file being consumed by both pre-0.11 and current uv versions."
+      },
+      {
+        "kind": "pull_request",
+        "number": 18705,
+        "title": "Mark `--native-tls` and `UV_NATIVE_TLS` as deprecated",
+        "url": "https://github.com/astral-sh/uv/pull/18705",
+        "state": "merged",
+        "reason": "This follow-up deliberately added deprecation warnings. Its discussion does not consider version-pinned consumers of one shared uv.toml, so it is causal context rather than a duplicate."
+      }
+    ],
+    "search_scope": "Literal searches covered native-tls, system-certs, UV_NATIVE_TLS, the exact removal warning, unknown-field failures, uv.toml, and pinned versions. Conceptual searches covered shared/global configuration, older-version compatibility, ignored unknown settings, and version-aware migration. Open and closed issues and open, closed-unmerged, and merged pull requests were searched, including referenced discussion chains. No existing issue tracks this migration gap. astral-sh/uv#18689 was inspected but ruled out as canonical because it only requested documentation of UV_NATIVE_TLS deprecation."
+  },
+  "type": "enhancement",
+  "type_reason": "Current behavior is intentional: system-certs was introduced in uv 0.11, native-tls remains an identical legacy alias, and current uv deliberately warns on that alias. The report identifies a real compatibility gap for one global uv.toml read by pre-0.11 and current binaries, but no present TLS behavior is broken and removal has not occurred. A warning-free, backward-compatible migration mechanism would improve existing configuration behavior.",
+  "summary": "No duplicate was found. astral-sh/uv#18550 introduced the rename while preserving native-tls as an alias, and astral-sh/uv#18705 intentionally added its warning; neither handles configuration shared with pre-0.11 pinned uv versions.",
+  "draft_response": "Thanks for calling out the shared-configuration case. astral-sh/uv#18550 introduced system-certs in uv 0.11 while retaining native-tls with identical behavior, and astral-sh/uv#18705 added the deprecation warning. There is currently no single uv.toml key that is both recognized by pre-0.11 uv and warning-free in current uv: native-tls remains compatible, but current versions warn on it. We’ll treat this as an enhancement to the migration behavior and use this issue to decide whether the legacy alias and warning policy need to change before native-tls can be removed."
+}
