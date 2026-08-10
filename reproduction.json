@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "With uv 0.12.3 on Linux x86_64 using CPython 3.12.3, a dependency-free project declaring `requires-python = \">=3.10, !=3.11.*, !=3.12.*, <3.14\"` and running `UV_CACHE_DIR=\"$PWD/cache\" uv lock --offline --no-config` produced `uv.lock` with `requires-python = \">=3.10, <3.14\"`. A control with only `!=3.11.*` preserved the exclusion. Existing test `lock_requires_python_not_equal` in `crates/uv/tests/lock/lock.rs` covers exact exclusions plus one wildcard-minor exclusion, but not two consecutive wildcard-minor exclusions."
+}
