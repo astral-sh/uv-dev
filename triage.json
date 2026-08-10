@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 7862,
+        "title": "requires-python specification not correctly resolved",
+        "url": "https://github.com/astral-sh/uv/issues/7862",
+        "state": "closed",
+        "reason": "Historical bug in the same `uv lock` intersection path: a valid `!=` hole became contradictory bounds. The closed case used one exact exclusion, not two consecutive wildcard exclusions."
+      },
+      {
+        "kind": "pull_request",
+        "number": 7897,
+        "title": "Fix handling of != intersections in `requires-python`",
+        "url": "https://github.com/astral-sh/uv/pull/7897",
+        "state": "merged",
+        "reason": "The fix for astral-sh/uv#7862 changed `RequiresPython::intersection` to prevent exclusions from being lost or converted into contradictory bounds."
+      },
+      {
+        "kind": "pull_request",
+        "number": 8060,
+        "title": "Add gap-preserving range-to-PEP 440 routine",
+        "url": "https://github.com/astral-sh/uv/pull/8060",
+        "state": "merged",
+        "reason": "This follow-up introduced the current conversion routine. It preserves exact and single-minor holes but explicitly drops unsupported wider gaps, which closely explains the consecutive-wildcard case."
+      },
+      {
+        "kind": "issue",
+        "number": 20816,
+        "title": "`project.requires-python` not handled correctly",
+        "url": "https://github.com/astral-sh/uv/issues/20816",
+        "state": "closed",
+        "reason": "Adjacent context confirming `!=X.Y.*` is the recommended syntax for skipping one minor. Unlike the new report, it does not involve two consecutive exclusions."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and all pull request states using the exact specifiers, `requires-python`, `uv.lock`, ignored/simplified exclusions, wildcard exclusions, unsupported gaps, non-contiguous Python support, range normalization/intersection, and `[tool.uv].environments`. Fix-oriented searches followed astral-sh/uv#7862 through astral-sh/uv#7897 and astral-sh/uv#8060. astral-sh/uv#6031 was ruled out because it concerns `uv pip compile --universal` not reading project bounds; astral-sh/uv#6064 and astral-sh/uv#6176 concern resolver forks and markers; astral-sh/uv#15995 concerns `pylock.toml` interpreter-derived bounds."
+  },
+  "type": "bug",
+  "type_reason": "The valid PEP 440 constraint is widened, changing the supported Python versions. Source confirms workspace intersection reconstructs specifiers from ranges and drops unsupported gaps. Historical fixes covered exact and single-minor holes but not two consecutive wildcard exclusions, and no open tracker covers this case.",
+  "summary": "This is an uncovered correctness case in exclusion-preserving `requires-python` normalization, closely related to the closed astral-sh/uv#7862 fix chain but not a duplicate.",
+  "draft_response": "Thanks, this is a bug. The constraint is valid and `uv lock` should not widen it. This is in the same conversion path previously addressed by astral-sh/uv#7862, astral-sh/uv#7897, and astral-sh/uv#8060, but that work does not cover two consecutive wildcard exclusions: they become one wider gap that the current conversion drops. Keeping this issue open for that uncovered case is appropriate. Your `[tool.uv].environments` setting is a valid workaround; the next implementation step is an integration regression test for this exact constraint followed by preserving the gap during workspace `requires-python` intersection."
+}
