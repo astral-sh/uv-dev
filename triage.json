@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 13402,
+        "title": "Collision with pyenv when `uv python pin <version>`",
+        "url": "https://github.com/astral-sh/uv/issues/13402",
+        "state": "closed",
+        "reason": "Closest historical report: the same pyenv shim exit 127 and first-PATH-executable error. Maintainers explained that uv skips this error during discovery and resurfaces it only if no suitable interpreter is found. That report did not establish a later runnable match and became unreproducible for `uv python pin` in 0.7.13."
+      },
+      {
+        "kind": "pull_request",
+        "number": 10716,
+        "title": "Show non-critical Python discovery errors if no other interpreter is found",
+        "url": "https://github.com/astral-sh/uv/pull/10716",
+        "state": "merged",
+        "reason": "Introduced the current policy of retaining the first non-critical query failure and reporting it only after discovery finds no usable interpreter."
+      },
+      {
+        "kind": "issue",
+        "number": 15667,
+        "title": "`uv python list` errors with `Exec format error` on non-native installation",
+        "url": "https://github.com/astral-sh/uv/issues/15667",
+        "state": "open",
+        "reason": "Also concerns an unexecutable PATH candidate, but its spawn/I/O failure occurs during exhaustive `uv python list`; astral-sh/uv#21047 involves a process returning status 127 during selection and asserts that a later matching candidate exists."
+      },
+      {
+        "kind": "pull_request",
+        "number": 15315,
+        "title": "Skip interpreters that are not found on query",
+        "url": "https://github.com/astral-sh/uv/pull/15315",
+        "state": "merged",
+        "reason": "Related precedent for ignoring an existing pyenv-win shim that cannot be queried, although it handles a not-found spawn error rather than exit 127."
+      }
+    ],
+    "search_scope": "Searched exact diagnostic fragments, exit 127, and pyenv command-not-found shims, plus conceptual terms for unusable PATH candidates, non-critical discovery errors, continued scanning, version-specific lookup, and download fallback across open and closed issues and open, closed, and merged pull requests. Inspected the strongest candidates, comments, and linked fixes, including astral-sh/uv#13402, astral-sh/uv#15667, astral-sh/uv#10898, astral-sh/uv#12155, and astral-sh/uv#4709. astral-sh/uv#4709 and astral-sh/uv#5148 were ruled out because they address locating version-named executables after runnable defaults have the wrong version. astral-sh/uv#10898 and astral-sh/uv#10908 concern download fallback and are less direct because downloads are disabled here."
+  },
+  "type": "bug",
+  "type_reason": "Failing instead of selecting a later PATH interpreter satisfying the explicit Python 3.13 request is incorrect. Current source treats nonzero query status as non-critical and continues scanning, returning the retained error only if no usable interpreter is found. Thus the exact claimed mechanism is unconfirmed and needs a verbose trace. This is not a duplicate of astral-sh/uv#13402 because that report lacked a later runnable match and its command-specific reproduction was reported fixed; astral-sh/uv#15667 follows a different critical spawn/I/O path.",
+  "summary": "No existing issue exactly tracks failure to select a later runnable matching interpreter after a PATH shim exits 127. astral-sh/uv#13402 is the closest historical report, while astral-sh/uv#10716 explains that such failures should already be skipped until discovery exhausts usable candidates.",
+  "draft_response": "Thanks for the reproduction. A query that exits nonzero is currently treated as a non-critical discovery error: uv should continue scanning and only surface the first such error if it finds no interpreter satisfying the request. That behavior was introduced in astral-sh/uv#10716, and astral-sh/uv#13402 shows the same pyenv exit-127 diagnostic when no matching runnable interpreter was found.\n\nCould you provide the complete output from the failing command with `-vv`, along with `type -a python3.13 python3 python` and the successful `--version` output for the later Python 3.13 executable? The standalone reproduction creates the failing shim but does not show the later 3.13 candidate, so those details are needed to determine why discovery is not considering or accepting it. This differs from astral-sh/uv#15667, where spawning a foreign-architecture executable fails before it can return a status."
+}
