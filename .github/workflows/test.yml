@@ -147,7 +147,7 @@ jobs:
     timeout-minutes: 20
     # Only run macOS tests on main without opt-in
     if: ${{ inputs.test-macos == 'true' }}
-    runs-on: namespace-profile-macos-15
+    runs-on: depot-macos-26
     name: "cargo test on macos"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

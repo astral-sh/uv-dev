@@ -172,7 +172,7 @@ jobs:
   build-binary-macos-aarch64:
     name: "macos aarch64"
     timeout-minutes: 10
-    runs-on: namespace-profile-macos-15
+    runs-on: depot-macos-26
     env:
       RUSTC_BOOTSTRAP: 1
     steps:

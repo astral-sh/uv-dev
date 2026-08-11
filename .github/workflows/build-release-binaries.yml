@@ -87,7 +87,7 @@ jobs:
 
   macos-x86_64:
     name: x86_64-apple-darwin
-    runs-on: namespace-profile-macos-15
+    runs-on: depot-macos-26
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -159,7 +159,7 @@ jobs:
 
   macos-aarch64:
     name: aarch64-apple-darwin
-    runs-on: namespace-profile-macos-15
+    runs-on: depot-macos-26
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
