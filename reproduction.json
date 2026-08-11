@@ -1,0 +1,4 @@
+{
+  "reproduction": "not_reproducible",
+  "reason": "Using uv 0.12.3 on Linux x86_64, I placed an exit-127 `python` shim first on PATH and Python 3.13.15 later, then ran `UV_PYTHON_DOWNLOADS=never uv -vv run --no-project --python 3.13 probe.py`. uv logged `Skipping bad interpreter`, selected the later Python, ran successfully, and exited 0. Removing Python 3.13 reproduced the reported error only after uv continued scanning and rejected Python 3.12 as incompatible. Related coverage includes `crates/uv/tests/pip_install/pip_install.rs::install_incompatible_python_version_interpreter_broken_in_path` and `crates/uv/tests/pip_compile/pip_compile.rs::compile_fallback_interpreter_broken_in_path`; neither directly tests `uv run` selecting a later matching interpreter. Reproducing the macOS-specific report requires complete `-vv` output, `type -a python3.13 python3 python`, and versions/paths for the claimed later Python 3.13 executables."
+}
