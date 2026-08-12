@@ -1127,6 +1127,7 @@ async fn do_lock(
             if let Some(packages) = upgrade.packages() {
                 let missing = packages
                     .iter()
+                    .filter(|package| package.as_str() != "python")
                     .filter(|package| {
                         previous.as_ref().is_none_or(|previous| {
                             !previous
