@@ -14,6 +14,39 @@ const DEFAULT_CLIENT_ID: &str = "uv";
 const DEFAULT_SCOPE: &str = "openid";
 const DEFAULT_POLL_INTERVAL: u64 = 5;
 
+/// The OAuth metadata and refresh token associated with persisted bearer credentials.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct OidcSession {
+    /// The authorization server that issued these credentials.
+    issuer: Url,
+
+    /// The endpoint that exchanges refresh tokens for access tokens.
+    token_endpoint: Url,
+
+    /// The public OAuth client identifier used for the authorization flow.
+    client_id: String,
+
+    /// The space-separated scopes requested during device authorization.
+    scope: String,
+
+    /// The refresh token returned by the authorization server.
+    refresh_token: String,
+}
+
+impl std::fmt::Debug for OidcSession {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("OidcSession")
+            .field("issuer", &self.issuer)
+            .field("token_endpoint", &self.token_endpoint)
+            .field("client_id", &self.client_id)
+            .field("scope", &self.scope)
+            .field("refresh_token", &"****")
+            .finish()
+    }
+}
+
 /// `OpenID` Connect configuration for a package index.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -83,6 +116,10 @@ pub struct DeviceTokenResponse {
     /// The number of seconds before the access token expires.
     #[serde(default)]
     pub expires_in: Option<u64>,
+
+    /// The refresh token returned when the requested scopes permit offline access.
+    #[serde(default)]
+    pub refresh_token: Option<String>,
 
     /// The OAuth error returned while authorization is incomplete or unsuccessful.
     #[serde(default)]
@@ -184,6 +221,27 @@ fn resolve_endpoint(issuer: &Url, endpoint: &str) -> Result<Url, OidcError> {
     issuer.join(endpoint).map_err(|error| {
         OidcError::DeviceAuthorizationFailed(format!("Invalid endpoint URL: {error}"))
     })
+}
+
+/// Return the session associated with a successful device authorization, if refresh is supported.
+pub fn session(
+    issuer: &Url,
+    discovery: &OidcDiscoveryDocument,
+    client_id: Option<&str>,
+    scope: Option<&str>,
+    refresh_token: Option<String>,
+) -> Result<Option<OidcSession>, OidcError> {
+    let Some(refresh_token) = refresh_token else {
+        return Ok(None);
+    };
+
+    Ok(Some(OidcSession {
+        issuer: issuer.clone(),
+        token_endpoint: resolve_endpoint(issuer, &discovery.token_endpoint)?,
+        client_id: client_id.unwrap_or(DEFAULT_CLIENT_ID).to_string(),
+        scope: scope.unwrap_or(DEFAULT_SCOPE).to_string(),
+        refresh_token,
+    }))
 }
 
 /// Request a device code and user verification instructions.

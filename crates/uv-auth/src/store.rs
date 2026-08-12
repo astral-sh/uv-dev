@@ -14,6 +14,7 @@ use uv_static::EnvVars;
 
 use crate::credentials::{Password, Token, Username};
 use crate::index::is_path_prefix;
+use crate::oidc::OidcSession;
 use crate::realm::Realm;
 use crate::service::Service;
 use crate::{Credentials, KeyringProvider};
@@ -137,6 +138,8 @@ struct TomlCredential {
     service: Service,
     /// The credentials for this entry.
     credentials: Credentials,
+    /// Refresh metadata associated with bearer credentials, if available.
+    oidc: Option<OidcSession>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -159,6 +162,9 @@ struct TomlCredentialWire {
         rename = "expires-at"
     )]
     expires_at: Option<jiff::Timestamp>,
+    /// Refresh metadata associated with bearer credentials, if available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    oidc: Option<OidcSession>,
 }
 
 impl From<TomlCredential> for TomlCredentialWire {
@@ -171,6 +177,7 @@ impl From<TomlCredential> for TomlCredentialWire {
                 password,
                 token: None,
                 expires_at: None,
+                oidc: None,
             },
             Credentials::Bearer { token } => {
                 let expires_at = token.expires_at();
@@ -183,6 +190,7 @@ impl From<TomlCredential> for TomlCredentialWire {
                         String::from_utf8(token.into_bytes()).expect("Token is valid UTF-8"),
                     ),
                     expires_at,
+                    oidc: value.oidc,
                 }
             }
         }
@@ -212,6 +220,7 @@ impl TryFrom<TomlCredentialWire> for TomlCredential {
                 Ok(Self {
                     service: value.service,
                     credentials,
+                    oidc: None,
                 })
             }
             AuthScheme::Bearer => {
@@ -241,6 +250,7 @@ impl TryFrom<TomlCredentialWire> for TomlCredential {
                 Ok(Self {
                     service: value.service,
                     credentials,
+                    oidc: value.oidc,
                 })
             }
         }
@@ -258,6 +268,7 @@ struct TomlCredentials {
 #[derive(Debug, Default)]
 pub struct TextCredentialStore {
     credentials: FxHashMap<(Service, Username), Credentials>,
+    oidc_sessions: FxHashMap<Service, OidcSession>,
 }
 
 impl TextCredentialStore {
@@ -293,22 +304,23 @@ impl TextCredentialStore {
         let content = fs::read_to_string(path)?;
         let credentials: TomlCredentials = toml::from_str(&content)?;
 
-        let credentials: FxHashMap<(Service, Username), Credentials> = credentials
-            .credentials
-            .into_iter()
-            .map(|credential| {
-                let username = match &credential.credentials {
-                    Credentials::Basic { username, .. } => username.clone(),
-                    Credentials::Bearer { .. } => Username::none(),
-                };
-                (
-                    (credential.service.clone(), username),
-                    credential.credentials,
-                )
-            })
-            .collect();
+        let mut entries = FxHashMap::default();
+        let mut oidc_sessions = FxHashMap::default();
+        for credential in credentials.credentials {
+            let username = match &credential.credentials {
+                Credentials::Basic { username, .. } => username.clone(),
+                Credentials::Bearer { .. } => Username::none(),
+            };
+            if let Some(session) = credential.oidc {
+                oidc_sessions.insert(credential.service.clone(), session);
+            }
+            entries.insert((credential.service, username), credential.credentials);
+        }
 
-        Ok(Self { credentials })
+        Ok(Self {
+            credentials: entries,
+            oidc_sessions,
+        })
     }
 
     /// Read credentials from a file.
@@ -333,12 +345,23 @@ impl TextCredentialStore {
         path: P,
         _lock: LockedFile,
     ) -> Result<(), TomlCredentialError> {
-        let credentials = self
-            .credentials
+        let Self {
+            credentials,
+            mut oidc_sessions,
+        } = self;
+        let credentials = credentials
             .into_iter()
-            .map(|((service, _username), credentials)| TomlCredential {
-                service,
-                credentials,
+            .map(|((service, _username), credentials)| {
+                let oidc = if matches!(credentials, Credentials::Bearer { .. }) {
+                    oidc_sessions.remove(&service)
+                } else {
+                    None
+                };
+                TomlCredential {
+                    service,
+                    credentials,
+                    oidc,
+                }
             })
             .collect::<Vec<_>>();
 
@@ -427,13 +450,33 @@ impl TextCredentialStore {
             Credentials::Basic { username, .. } => username.clone(),
             Credentials::Bearer { .. } => Username::none(),
         };
+        if matches!(credentials, Credentials::Bearer { .. }) {
+            self.oidc_sessions.remove(&service);
+        }
         self.credentials.insert((service, username), credentials)
+    }
+
+    /// Store bearer credentials and their associated OAuth refresh session.
+    pub fn insert_oidc(
+        &mut self,
+        service: Service,
+        credentials: Credentials,
+        session: OidcSession,
+    ) -> Option<Credentials> {
+        let previous = self.insert(service.clone(), credentials);
+        self.oidc_sessions.insert(service, session);
+        previous
     }
 
     /// Remove credentials for a given service.
     pub fn remove(&mut self, service: Service, username: Username) -> Option<Credentials> {
         // Remove the specific credential for this service and username
-        self.credentials.remove(&(service, username))
+        let key = (service, username);
+        let credentials = self.credentials.remove(&key);
+        if matches!(credentials, Some(Credentials::Bearer { .. })) {
+            self.oidc_sessions.remove(&key.0);
+        }
+        credentials
     }
 }
 
@@ -458,6 +501,7 @@ mod tests {
                         username: Username::new(Some("user1".to_string())),
                         password: Some(Password::new("pass1".to_string())),
                     },
+                    oidc: None,
                 },
                 TomlCredential {
                     service: Service::from_str("https://test.org").unwrap(),
@@ -465,6 +509,7 @@ mod tests {
                         username: Username::new(Some("user2".to_string())),
                         password: Some(Password::new("pass2".to_string())),
                     },
+                    oidc: None,
                 },
             ],
         };
@@ -493,6 +538,7 @@ mod tests {
                     b"access-token".to_vec(),
                     expires_at,
                 ),
+                oidc: None,
             }],
         };
 
