@@ -43,7 +43,7 @@ use std::str::FromStr;
 use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::instrument;
 use unscanny::{Pattern, Scanner};
-use url::Url;
+use url::{ParseError, Url};
 
 #[cfg(feature = "http")]
 use uv_client::{BaseClient, ClientBuildError};
@@ -53,7 +53,7 @@ use uv_distribution_types::{
     Requirement, UnresolvedRequirement, UnresolvedRequirementSpecification,
 };
 use uv_fs::{Simplified, normalize_path};
-use uv_pep508::{Pep508Error, RequirementOrigin, VerbatimUrl, expand_env_vars};
+use uv_pep508::{Pep508Error, RequirementOrigin, VerbatimUrl, VerbatimUrlError, expand_env_vars};
 use uv_pypi_types::VerbatimParsedUrl;
 #[cfg(feature = "http")]
 use uv_redacted::DisplaySafeUrl;
@@ -835,13 +835,24 @@ fn parse_entry(
         let expanded = expand_env_vars(given.as_ref());
         let requirements_dir = std::path::absolute(working_dir.join(requirements_dir))
             .map_err(RequirementsTxtParserError::Io)?;
-        let url = VerbatimUrl::from_url_or_path(expanded.as_ref(), Some(&requirements_dir))
-            .map_err(|err| RequirementsTxtParserError::Url {
-                source: err,
-                url: given.to_string(),
-                start,
-                end: s.cursor(),
-            })?;
+        let path = requirements_dir.join(expanded.as_ref());
+        let url = if path.exists() {
+            VerbatimUrl::from_absolute_path(&path)
+        } else {
+            match VerbatimUrl::parse_url(expanded.as_ref()) {
+                Ok(url) => Ok(url),
+                Err(VerbatimUrlError::Url(DisplaySafeUrlError::Url(
+                    ParseError::RelativeUrlWithoutBase,
+                ))) => VerbatimUrl::from_absolute_path(&path),
+                Err(err) => Err(err),
+            }
+        }
+        .map_err(|err| RequirementsTxtParserError::Url {
+            source: err,
+            url: given.to_string(),
+            start,
+            end: s.cursor(),
+        })?;
         RequirementsTxtStatement::FindLinks(url.with_given(given))
     } else if s.eat_if("--no-binary") {
         let given = parse_value("--no-binary", content, s, |c: char| !is_terminal(c))?;
