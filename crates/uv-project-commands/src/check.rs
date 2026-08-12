@@ -732,7 +732,7 @@ pub async fn check(
                 cache,
                 Some(&reporter),
                 install_mirrors.mirrors(),
-                install_mirrors.python_downloads_json_url.as_deref(),
+                install_mirrors.python_downloads_json_url(),
             )
             .await?;
             Some(installation.interpreter().python_minor_version())

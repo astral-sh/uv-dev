@@ -195,7 +195,7 @@ pub async fn pip_sync(
             &cache,
             Some(&reporter),
             install_mirrors.mirrors(),
-            install_mirrors.python_downloads_json_url.as_deref(),
+            install_mirrors.python_downloads_json_url(),
         )
         .await?;
         report_interpreter(&installation, true, printer)?;
