@@ -956,6 +956,9 @@ fn parse_requirement_and_hashes(
 ) -> Result<(RequirementsTxtRequirement, Vec<String>), RequirementsTxtParserError> {
     // PEP 508 requirement
     let start = s.cursor();
+    let mut continued_requirement = None::<String>;
+    let mut segment_start = start;
+
     // Termination: s.eat() eventually becomes None
     let (end, has_hashes) = loop {
         let end = s.cursor();
@@ -969,7 +972,8 @@ fn parse_requirement_and_hashes(
             break (end, false);
         }
         // ... or `--hash`, an escaped newline or a comment separated by whitespace ...
-        if !eat_wrappable_whitespace(s).is_empty() {
+        let whitespace = eat_wrappable_whitespace(s);
+        if !whitespace.is_empty() {
             if s.after().starts_with("--") {
                 break (end, true);
             } else if s.eat_if('#') {
@@ -979,6 +983,23 @@ fn parse_requirement_and_hashes(
                 }
                 break (end, false);
             }
+
+            // Keep ordinary whitespace intact, but join physical lines at the continuations
+            // already recognized by the requirements-file scanner.
+            for (offset, _) in whitespace.match_indices('\\') {
+                let continuation_start = end + offset;
+                continued_requirement
+                    .get_or_insert_with(String::new)
+                    .push_str(&content[segment_start..continuation_start]);
+
+                segment_start = continuation_start
+                    + if whitespace[offset..].starts_with("\\\r\n") {
+                        3
+                    } else {
+                        2
+                    };
+            }
+
             continue;
         }
         // ... or the end of the file, which works like the end of line
@@ -987,7 +1008,13 @@ fn parse_requirement_and_hashes(
         }
     };
 
-    let requirement = &content[start..end];
+    let requirement = if let Some(mut requirement) = continued_requirement {
+        requirement.push_str(&content[segment_start..end]);
+        Cow::Owned(requirement)
+    } else {
+        Cow::Borrowed(&content[start..end])
+    };
+    let requirement = requirement.as_ref();
 
     // If the requirement looks like a `requirements.txt` file (with a missing `-r`), raise an
     // error.
