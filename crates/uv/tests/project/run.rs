@@ -5590,6 +5590,19 @@ fn exit_status_signal_diagnostic() -> Result<()> {
 
     uv_snapshot!(context.filters(), context.run().arg(terminated.path()), @"
     exit_code: 143 (failure)
+    ----- stderr -----
+    Process terminated by signal 15 (SIGTERM)
+    ");
+
+    // Fatal diagnostics remain visible in quiet mode, but fully silent mode suppresses them.
+    uv_snapshot!(context.filters(), context.run().arg("--quiet").arg(terminated.path()), @"
+    exit_code: 143 (failure)
+    ----- stderr -----
+    Process terminated by signal 15 (SIGTERM)
+    ");
+
+    uv_snapshot!(context.filters(), context.run().arg("--quiet").arg("--quiet").arg(terminated.path()), @"
+    exit_code: 143 (failure)
     ");
 
     let exited = context.temp_dir.child("exited.py");
