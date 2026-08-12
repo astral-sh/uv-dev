@@ -7,7 +7,7 @@ use console::Term;
 use owo_colors::OwoColorize;
 use tokio::sync::Semaphore;
 use tracing::{debug, info, trace};
-use uv_auth::Credentials;
+use uv_auth::{ArtifactRegistryProvider, Credentials};
 use uv_cache::Cache;
 use uv_client::{
     AuthIntegration, BaseClient, BaseClientBuilder, RedirectPolicy, RegistryClientBuilder,
@@ -383,6 +383,26 @@ enum Prompt {
     Disabled,
 }
 
+fn trusted_publishing_for_registry(
+    publish_url: &DisplaySafeUrl,
+    trusted_publishing: TrustedPublishing,
+) -> TrustedPublishing {
+    if ArtifactRegistryProvider::is_artifact_registry(publish_url)
+        && matches!(trusted_publishing, TrustedPublishing::Automatic)
+    {
+        TrustedPublishing::Never
+    } else {
+        trusted_publishing
+    }
+}
+
+fn should_skip_prompt(
+    artifact_registry_credentials: bool,
+    keyring_provider: KeyringProviderType,
+) -> bool {
+    artifact_registry_credentials && keyring_provider == KeyringProviderType::Disabled
+}
+
 /// Unify the different possible source for username and password information.
 ///
 /// Possible credential sources are environment variables, the CLI, the URL, the keyring, trusted
@@ -451,7 +471,7 @@ async fn gather_credentials(
         username.as_deref(),
         password.as_deref(),
         keyring_provider,
-        trusted_publishing,
+        trusted_publishing_for_registry(&publish_url, trusted_publishing),
         &publish_url,
         oidc_client,
     )
@@ -464,10 +484,28 @@ async fn gather_credentials(
         TrustedPublishResult::Ignored(err) => Some(err),
     };
 
+    let artifact_registry_credentials = if username.is_none()
+        && password.is_none()
+        && keyring_provider == KeyringProviderType::Disabled
+        && ArtifactRegistryProvider::is_artifact_registry(&publish_url)
+    {
+        ArtifactRegistryProvider::default()
+            .has_credentials_for(&publish_url)
+            .await
+    } else {
+        false
+    };
+
     let (username, mut password) = if username.is_none() && password.is_none() {
-        match prompt {
-            Prompt::Enabled => prompt_username_and_password()?,
-            Prompt::Disabled => (None, None),
+        // Skip prompting when a built-in provider has credentials; the auth middleware will handle
+        // authentication.
+        if should_skip_prompt(artifact_registry_credentials, keyring_provider) {
+            (None, None)
+        } else {
+            match prompt {
+                Prompt::Enabled => prompt_username_and_password()?,
+                Prompt::Disabled => (None, None),
+            }
         }
     } else {
         (username, password)
@@ -484,6 +522,7 @@ async fn gather_credentials(
     if username.is_none()
         && password.is_none()
         && keyring_provider == KeyringProviderType::Disabled
+        && !artifact_registry_credentials
         && let Some(err) = trusted_publishing_status
     {
         // The user has configured something incorrectly:
@@ -662,5 +701,32 @@ mod tests {
             err.to_string(),
             @"The password can't be set both in the publish URL and in the CLI"
         );
+    }
+
+    #[test]
+    fn artifact_registry_skips_automatic_trusted_publishing() {
+        let artifact_registry =
+            DisplaySafeUrl::from_str("https://us-central1-python.pkg.dev/project/index").unwrap();
+        let other_registry = DisplaySafeUrl::from_str("https://example.com").unwrap();
+
+        assert_eq!(
+            trusted_publishing_for_registry(&artifact_registry, TrustedPublishing::Automatic),
+            TrustedPublishing::Never
+        );
+        assert_eq!(
+            trusted_publishing_for_registry(&artifact_registry, TrustedPublishing::Always),
+            TrustedPublishing::Always
+        );
+        assert_eq!(
+            trusted_publishing_for_registry(&other_registry, TrustedPublishing::Automatic),
+            TrustedPublishing::Automatic
+        );
+    }
+
+    #[test]
+    fn artifact_registry_only_skips_prompt_with_credentials() {
+        assert!(!should_skip_prompt(false, KeyringProviderType::Disabled));
+        assert!(should_skip_prompt(true, KeyringProviderType::Disabled));
+        assert!(!should_skip_prompt(true, KeyringProviderType::Subprocess));
     }
 }
