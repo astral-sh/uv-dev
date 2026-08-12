@@ -4447,6 +4447,7 @@ fn edit_no_sync_active_environment_mismatch() -> Result<()> {
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
     Creating virtual environment at: .venv
     Resolved 1 package in [TIME]
+    Checked in [TIME]
     ");
 
     assert!(context.venv.exists());
