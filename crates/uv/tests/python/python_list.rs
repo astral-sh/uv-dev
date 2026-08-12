@@ -167,11 +167,9 @@ fn python_list_ignores_non_native_search_path_interpreters() -> Result<()> {
     uv_snapshot!(context.filters(), context.python_list()
         .arg("--only-installed")
         .env(EnvVars::UV_PYTHON_SEARCH_PATH, &python_search_path), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Failed to inspect Python interpreter from first executable in the search path at `foreign-bin/python`
-     Caused by: Failed to query Python interpreter at `[TEMP_DIR]/foreign-bin/python`
-     Caused by: Bad CPU type in executable (os error 86)
+    exit_code: 0 (success)
+    ----- stdout -----
+    cpython-3.12.[X]-[PLATFORM] [PYTHON-3.12]
     ");
 
     uv_snapshot!(context.filters(), context.python_find()
