@@ -14,7 +14,7 @@ use uv_static::EnvVars;
 
 use crate::credentials::{Password, Token, Username};
 use crate::index::is_path_prefix;
-use crate::oidc::OidcSession;
+use crate::oidc::{OidcError, OidcSession};
 use crate::realm::Realm;
 use crate::service::Service;
 use crate::{Credentials, KeyringProvider};
@@ -89,6 +89,8 @@ pub enum TomlCredentialError {
     CredentialsDirError,
     #[error("Token is not valid unicode")]
     TokenNotUnicode(#[from] std::string::FromUtf8Error),
+    #[error(transparent)]
+    Oidc(#[from] OidcError),
 }
 
 impl TomlCredentialError {
@@ -101,7 +103,8 @@ impl TomlCredentialError {
             | Self::BasicAuthError(_)
             | Self::BearerAuthError(_)
             | Self::CredentialsDirError
-            | Self::TokenNotUnicode(_) => None,
+            | Self::TokenNotUnicode(_)
+            | Self::Oidc(_) => None,
         }
     }
 }
@@ -468,6 +471,55 @@ impl TextCredentialStore {
         previous
     }
 
+    /// Refresh expired bearer credentials for the most specific matching OAuth session.
+    pub(crate) async fn refresh_oidc_credentials(
+        &self,
+        url: &DisplaySafeUrl,
+        client: &reqwest_middleware::ClientWithMiddleware,
+    ) -> Result<Option<Credentials>, TomlCredentialError> {
+        let path = Self::default_file()?;
+        self.refresh_oidc_credentials_at(&path, url, client).await
+    }
+
+    async fn refresh_oidc_credentials_at(
+        &self,
+        path: &Path,
+        url: &DisplaySafeUrl,
+        client: &reqwest_middleware::ClientWithMiddleware,
+    ) -> Result<Option<Credentials>, TomlCredentialError> {
+        let request_realm = Realm::from(url);
+        let Some(service) = self
+            .oidc_sessions
+            .keys()
+            .filter(|service| {
+                Realm::from(service.url().deref()) == request_realm
+                    && is_path_prefix(service.url().path(), url.path())
+            })
+            .max_by_key(|service| service.url().path().len())
+            .cloned()
+        else {
+            return Ok(None);
+        };
+
+        // Hold the credential-store lock across the exchange because refresh tokens can rotate
+        // and a second process must never attempt to reuse the now-invalidated token.
+        let (mut store, lock) = Self::read(path).await?;
+        if let Some(credentials) = store.credentials.get(&(service.clone(), Username::none()))
+            && !credentials.is_expired()
+        {
+            return Ok(Some(credentials.clone()));
+        }
+
+        let Some(session) = store.oidc_sessions.get(&service).cloned() else {
+            return Ok(None);
+        };
+        let (credentials, session) = session.refresh(client).await?;
+        store.insert_oidc(service, credentials.clone(), session);
+        store.write(path, lock)?;
+
+        Ok(Some(credentials))
+    }
+
     /// Remove credentials for a given service.
     pub fn remove(&mut self, service: Service, username: Username) -> Option<Credentials> {
         // Remove the specific credential for this service and username
@@ -487,7 +539,11 @@ mod tests {
     use std::time::Duration;
 
     use insta::assert_snapshot;
+    use reqwest_middleware::ClientBuilder;
+    use serde_json::json;
     use tempfile::NamedTempFile;
+    use wiremock::matchers::{body_string_contains, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
 
@@ -601,6 +657,71 @@ mod tests {
 
         let url = DisplaySafeUrl::parse("https://example.com/package").unwrap();
         assert!(store.get_credentials(&url, None).unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_oidc_refresh_serializes_token_rotation() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .and(body_string_contains("refresh_token=original-refresh"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "access_token": "renewed-access",
+                "token_type": "Bearer",
+                "expires_in": 3600,
+                "refresh_token": "rotated-refresh",
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let file = NamedTempFile::new()?;
+        let service = Service::from_str(&server.uri())?;
+        let mut initial = TextCredentialStore::default();
+        initial.insert_oidc(
+            service.clone(),
+            Credentials::bearer_with_expiration(
+                b"expired-access".to_vec(),
+                jiff::Timestamp::now() - Duration::from_mins(1),
+            ),
+            serde_json::from_value(json!({
+                "issuer": server.uri(),
+                "token-endpoint": format!("{}/token", server.uri()),
+                "client-id": "public-client",
+                "scope": "openid offline_access",
+                "refresh-token": "original-refresh",
+            }))?,
+        );
+        initial.write(file.path(), TextCredentialStore::lock(file.path()).await?)?;
+
+        let (store, lock) = TextCredentialStore::read(file.path()).await?;
+        drop(lock);
+        let url = DisplaySafeUrl::parse(&format!("{}/simple/package", server.uri()))?;
+        let client = ClientBuilder::new(reqwest::Client::new()).build();
+        let (first, second) = tokio::join!(
+            store.refresh_oidc_credentials_at(file.path(), &url, &client),
+            store.refresh_oidc_credentials_at(file.path(), &url, &client),
+        );
+
+        assert_eq!(
+            first?.and_then(|credentials| credentials.bearer_token().map(<[u8]>::to_vec)),
+            Some(b"renewed-access".to_vec())
+        );
+        assert_eq!(
+            second?.and_then(|credentials| credentials.bearer_token().map(<[u8]>::to_vec)),
+            Some(b"renewed-access".to_vec())
+        );
+
+        let (refreshed, _lock) = TextCredentialStore::read(file.path()).await?;
+        let session = refreshed
+            .oidc_sessions
+            .get(&service)
+            .expect("The refreshed OAuth session should be persisted");
+        let session = serde_json::to_value(session)?;
+        assert_eq!(session["refresh-token"], "rotated-refresh");
+
+        Ok(())
     }
 
     #[test]
