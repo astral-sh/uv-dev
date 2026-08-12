@@ -476,9 +476,10 @@ impl TextCredentialStore {
     /// Remove credentials for a given service.
     pub fn remove(&mut self, service: Service, username: Username) -> Option<Credentials> {
         // Remove the specific credential for this service and username
-        let credentials = self.credentials.remove(&(service.clone(), username));
+        let key = (service, username);
+        let credentials = self.credentials.remove(&key);
         if matches!(credentials, Some(Credentials::Bearer { .. })) {
-            self.oidc_sessions.remove(&service);
+            self.oidc_sessions.remove(&key.0);
         }
         credentials
     }
