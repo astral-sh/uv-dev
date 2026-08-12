@@ -1,10 +1,11 @@
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
-use assert_fs::fixture::PathChild;
+use assert_fs::fixture::{ChildPath, PathChild};
 use fs_err as fs;
+use indoc::{formatdoc, indoc};
 use insta::assert_snapshot;
 use uv_static::EnvVars;
-use uv_test::uv_snapshot;
+use uv_test::{TestContext, uv_snapshot};
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
     matchers::{method, path},
@@ -204,6 +205,155 @@ async fn tool_list_outdated_respects_configured_index() -> Result<()> {
     black v24.2.0 [latest: 99.0.0]
     - black
     - blackd
+    ");
+
+    Ok(())
+}
+
+fn install_local_example_tool(context: &TestContext) -> Result<(ChildPath, ChildPath)> {
+    let tool_dir = context.temp_dir.child("tools");
+    let bin_dir = context.temp_dir.child("bin");
+    let project = context.temp_dir.child("example-tool");
+    let package = project.child("src").child("example_tool");
+
+    fs::create_dir_all(&package)?;
+    fs::write(
+        project.child("pyproject.toml"),
+        indoc! {r#"
+            [project]
+            name = "example-tool"
+            version = "1.0.0"
+            requires-python = ">=3.12"
+
+            [project.scripts]
+            example-tool = "example_tool:main"
+
+            [build-system]
+            requires = ["uv_build>=0.7,<10000"]
+            build-backend = "uv_build"
+        "#},
+    )?;
+    fs::write(
+        package.child("__init__.py"),
+        indoc! {r#"
+            def main():
+                print("example")
+        "#},
+    )?;
+
+    context
+        .tool_install()
+        .arg("--offline")
+        .arg(project.path())
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
+        .assert()
+        .success();
+
+    Ok((tool_dir, bin_dir))
+}
+
+#[tokio::test]
+async fn tool_list_outdated_respects_configured_no_index() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_filtered_exe_suffix();
+    let (tool_dir, bin_dir) = install_local_example_tool(&context)?;
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/simple/example-tool/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            r#"{
+                "meta": { "api-version": "1.1" },
+                "name": "example-tool",
+                "files": [{
+                    "filename": "example_tool-2.0.0-py3-none-any.whl",
+                    "url": "example_tool-2.0.0-py3-none-any.whl",
+                    "hashes": {},
+                    "upload-time": "2024-03-24T00:00:00Z"
+                }]
+            }"#,
+            "application/vnd.pypi.simple.v1+json",
+        ))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let config = context.temp_dir.child("uv.toml");
+    fs::write(
+        &config,
+        formatdoc! {r#"
+            no-index = true
+
+            [[index]]
+            name = "local"
+            url = "{}/simple"
+            default = true
+        "#, server.uri()},
+    )?;
+
+    uv_snapshot!(context.filters(), context.tool_list()
+        .arg("--outdated")
+        .arg("--config-file")
+        .arg(config.as_os_str())
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn tool_list_outdated_respects_configured_legacy_indexes() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_filtered_exe_suffix();
+    let (tool_dir, bin_dir) = install_local_example_tool(&context)?;
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/extra/example-tool/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            r#"{
+                "meta": { "api-version": "1.1" },
+                "name": "example-tool",
+                "files": [{
+                    "filename": "example_tool-2.0.0-py3-none-any.whl",
+                    "url": "example_tool-2.0.0-py3-none-any.whl",
+                    "hashes": {},
+                    "upload-time": "2024-03-24T00:00:00Z"
+                }]
+            }"#,
+            "application/vnd.pypi.simple.v1+json",
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/default/example-tool/"))
+        .respond_with(ResponseTemplate::new(404))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let config = context.temp_dir.child("uv.toml");
+    fs::write(
+        &config,
+        formatdoc! {r#"
+            index-url = "{0}/default"
+            extra-index-url = ["{0}/extra"]
+        "#, server.uri()},
+    )?;
+
+    uv_snapshot!(context.filters(), context.tool_list()
+        .arg("--outdated")
+        .arg("--config-file")
+        .arg(config.as_os_str())
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    example-tool v1.0.0 [latest: 2.0.0]
+    - example-tool
     ");
 
     Ok(())
