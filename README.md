@@ -6,69 +6,114 @@ Classification: question
 
 ## Summary
 
-The reporter is using uv 0.12.2 on Linux with Python 3.14. Their partial `pyproject.toml`
-defines `dev` and `airflow` dependency groups. They report that
-`uv tree --group dev --depth 1` displays dependencies from both groups and expect it to display
-only `dev`.
+The reporter uses uv 0.12.2 on Linux with Python 3.14. Their partial `pyproject.toml`
+defines `dev` and `airflow` dependency groups, and they report that
+`uv tree --group dev --depth 1` displays both groups instead of only `dev`.
 
-The command uses the additive group-selection flag. Repository help text describes `--group` as
-including a named group, while `--only-group` includes only the named groups, omits the project and
-its regular dependencies, and implies `--no-default-groups`. The nearby `uv tree` integration test
-also shows that `--group foo` retains the default `dev` group, whereas `--only-group bar` restricts
-the group selection to `bar`.
+This behavior is reproducible when `airflow` is a configured default group, but it is the intended
+additive behavior of `--group`, not evidence that the option is ignored. `--group dev` adds `dev` to
+the project's default groups. `--only-group dev` is the restrictive form and implies
+`--no-default-groups`.
 
-The provided configuration is incomplete, so it does not establish why `airflow` is selected in
-this specific project. In the absence of a `tool.uv.default-groups` setting, uv's project default is
-the `dev` group; the omitted project or workspace configuration is therefore needed only if
-`airflow` still appears with the restrictive command.
+The issue omits the complete `[tool.uv]` configuration, so it does not establish whether the
+reporter's project explicitly makes `airflow` a default group. With only the dependency-group
+definitions shown in the report, uv defaults to `dev` and does not display `airflow`.
+
+## Reproduction
+
+Outcome: `reproducible` as additive default-group selection.
+
+The reproduction used the installed `uv 0.12.3 (x86_64-unknown-linux-gnu)` on Linux x86_64. The
+available interpreter was CPython 3.12.3, and `--python-version 3.14` was supplied to use the
+reporter's Python version for tree filtering. All project files, the lockfile, and the uv cache were
+kept under `/tmp`.
+
+Minimal `pyproject.toml`:
+
+```toml
+[project]
+name = "group-tree-reproduction"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = []
+
+[dependency-groups]
+dev = ["typing-extensions==4.15.0"]
+airflow = ["iniconfig==2.1.0"]
+
+[tool.uv]
+default-groups = ["airflow"]
+```
+
+The reported command reproduced both selected groups:
+
+```console
+$ uv tree --group dev --depth 1 --python-version 3.14
+group-tree-reproduction v0.1.0
+├── iniconfig v2.1.0 (group: airflow)
+└── typing-extensions v4.15.0 (group: dev)
+```
+
+Both restrictive forms displayed only `dev`:
+
+```console
+$ uv tree --only-group dev --depth 1 --python-version 3.14
+group-tree-reproduction v0.1.0
+└── typing-extensions v4.15.0 (group: dev)
+
+$ uv tree --no-default-groups --group dev --depth 1 --python-version 3.14
+group-tree-reproduction v0.1.0
+└── typing-extensions v4.15.0 (group: dev)
+```
+
+After removing `[tool.uv].default-groups`, the original `--group dev` command also displayed only
+`dev`; the mere presence of an `airflow` dependency group does not select it.
+
+Existing integration coverage is in `crates/uv/tests/project/tree.rs`, test `group`. Its fixture
+defines the implicit default `dev` group plus non-default `foo` and `bar` groups. Its snapshots show
+that bare `uv tree` includes `dev`, `uv tree --group foo` includes both `dev` and `foo`, and
+`uv tree --only-group bar` includes only `bar`. The test therefore directly covers the additive
+versus restrictive distinction, although it does not use a custom `default-groups` value.
 
 ## Draft response
 
-`--group` is additive: it includes the named group alongside the project's default groups. To
-display only `dev`, use `uv tree --only-group dev --depth 1`; `--only-group` also disables the
-default groups.
+`--group` is additive: it includes the named group alongside the project's default groups. To show
+only `dev`, use `uv tree --only-group dev --depth 1`. Equivalently, use
+`uv tree --no-default-groups --group dev --depth 1` if retaining the project dependencies is useful.
 
-If `airflow` still appears with that command, please provide the complete `pyproject.toml`
-(including `[tool.uv]` and any workspace configuration) and the full tree output so we can
-reproduce it.
+If `airflow` still appears with `--only-group dev`, please provide the complete `pyproject.toml`
+(including `[tool.uv]` and workspace configuration) and the full tree output.
 
 ## Classification
 
-Classify this as a `question`. The source, CLI help, documentation, and integration snapshots all
-establish that `--group` is intentionally additive and that `--only-group` is the existing
-restrictive interface. The report does not show `--only-group` behaving incorrectly, and the
-partial `pyproject.toml` is insufficient to establish that a non-default group is selected despite
-the configured defaults. If a complete reproduction shows that `--only-group dev` also includes
-`airflow`, that would instead establish a bug.
+Classify this as a `question`. The CLI help and the observed behavior establish that `--group` is
+additive, while `--only-group` is the existing restrictive interface. The reproduction explains
+how both groups can appear when `airflow` is a default group; it does not show a failure of group
+selection. If the reporter can show that `--only-group dev` also includes `airflow`, that would be a
+different result requiring the complete project or workspace configuration.
 
-This is not a duplicate of the closest open discussion. astral-sh/uv#19973 questions the overall
-asymmetry of `uv tree`'s group and extra flags, but it explicitly recognizes the current standard
-default-group semantics and does not report failure of the restrictive option.
+This is not a duplicate of astral-sh/uv#19973. That issue questions the overall asymmetry of
+`uv tree` group and extra flags, but it recognizes the current default-group semantics rather than
+reporting a failure of the restrictive option.
 
 ## Related
 
 - astral-sh/uv#19973 (open issue), “`uv tree`'s flags for extra/groups are weird”: the closest
-  ongoing design discussion. It confirms that `uv tree` currently uses standard additive and
-  default-group semantics while questioning the broader extras/groups asymmetry. It does not track
-  a failure of `--only-group`.
+  ongoing design discussion. It confirms the current additive and default-group semantics while
+  questioning the broader interface.
 - astral-sh/uv#8338 (merged pull request), “Add `--group`, `--only-group`, and `--only-dev` support
-  to `uv tree`”: introduced both the additive `--group` option and the restrictive `--only-group`
-  option, directly establishing the intended distinction.
+  to `uv tree`”: introduced the additive `--group` option and restrictive `--only-group` option.
 - astral-sh/uv#12526 (closed issue), “uv tree with --only-group doesn't show full depth”: a
-  historical correctness bug in the restrictive mode. It concerned missing transitive dependencies
-  and was fixed by astral-sh/uv#12560; it differs from this report, which invokes `--group`.
+  historical bug involving missing transitive dependencies in restrictive mode, fixed by
+  astral-sh/uv#12560. It differs from this report, which invokes `--group`.
 
 ## Search and supporting evidence
 
-Literal searches covered `uv tree --group`, `tree --group`, `tree group dev`, `--group` with the
-reported group names, and dependency-group terminology. Conceptual searches covered group-only
-selection, filtering, default groups, selected groups, all groups, and dependency-tree output.
-Searches included open and closed issues and open, closed, and merged pull requests. Fix-oriented
-inspection covered astral-sh/uv#8338, astral-sh/uv#12526, astral-sh/uv#12560,
-astral-sh/uv#10890, and astral-sh/uv#11224.
+The implementation resolves dependency-group arguments and then adds the project's default groups
+for `uv tree`. The command help describes `--group` as “Include dependencies from the specified
+dependency group” and `--only-group` as “Only include dependencies from the specified dependency
+group.” The long help further states that `--only-group` implies `--no-default-groups`.
 
-astral-sh/uv#19976 was inspected and ruled out because it concerns inconsistent `--depth` behavior
-for scripts and workspace-group roots, not group selection. astral-sh/uv#19327 was also ruled out:
-it concerned optional-extra edges leaking between shared package nodes and was fixed by
-astral-sh/uv#19332. astral-sh/uv#19975 concerns dependency-group-only projects failing without a
-`project` table, so it does not match this report either.
+Related searches also ruled out astral-sh/uv#19976 (depth behavior for scripts and workspace-group
+roots), astral-sh/uv#19327 and its fix astral-sh/uv#19332 (optional-extra edges shared between package
+nodes), and astral-sh/uv#19975 (dependency-group-only projects without a `project` table).

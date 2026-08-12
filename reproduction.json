@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "On Linux x86_64 with installed uv 0.12.3, a temporary project with `dev`, `airflow`, and `tool.uv.default-groups = [\"airflow\"]` reproduced the output: `uv tree --group dev --depth 1 --python-version 3.14` showed both groups. `--only-group dev` showed only `dev`. Without the default-groups setting, the reported command showed only `dev`, so the reporter’s complete configuration is needed to confirm why `airflow` is selected. `crates/uv/tests/project/tree.rs::group` covers these additive versus restrictive semantics."
+}
