@@ -665,23 +665,27 @@ password = "pass2"
         assert_eq!(cred.password(), Some("testpass"));
 
         // Test saving
-        let temp_output = NamedTempFile::new().unwrap();
+        // Close the destination handle before replacing it; Windows does not permit renaming
+        // another file over an open `NamedTempFile`.
+        let temp_output = NamedTempFile::new().unwrap().into_temp_path();
         store
             .write(
-                temp_output.path(),
-                TextCredentialStore::lock(temp_file.path()).await.unwrap(),
+                &temp_output,
+                TextCredentialStore::lock(&temp_output).await.unwrap(),
             )
             .unwrap();
 
-        let content = fs::read_to_string(temp_output.path()).unwrap();
+        let content = fs::read_to_string(&temp_output).unwrap();
         assert!(content.contains("example.com"));
         assert!(content.contains("testuser"));
     }
 
     #[tokio::test]
     async fn test_credential_store_replaces_existing_file_atomically() {
-        let file = NamedTempFile::new().expect("Credential file should be created");
-        fs::write(file.path(), "previous credentials").expect("Existing credentials should write");
+        let file = NamedTempFile::new()
+            .expect("Credential file should be created")
+            .into_temp_path();
+        fs::write(&file, "previous credentials").expect("Existing credentials should write");
 
         let mut store = TextCredentialStore::default();
         store.insert(
@@ -690,14 +694,14 @@ password = "pass2"
         );
         store
             .write(
-                file.path(),
-                TextCredentialStore::lock(file.path())
+                &file,
+                TextCredentialStore::lock(&file)
                     .await
                     .expect("Credential lock should be acquired"),
             )
             .expect("Credential file should be replaced atomically");
 
-        let content = fs::read_to_string(file.path()).expect("New credential file should exist");
+        let content = fs::read_to_string(&file).expect("New credential file should exist");
         assert!(content.contains("replacement-token"));
         assert!(!content.contains("previous credentials"));
 
@@ -705,7 +709,7 @@ password = "pass2"
         {
             use std::os::unix::fs::PermissionsExt;
 
-            let permissions = fs::metadata(file.path())
+            let permissions = fs::metadata(&file)
                 .expect("Credential file metadata should be readable")
                 .permissions();
             assert_eq!(permissions.mode() & 0o777, 0o600);
