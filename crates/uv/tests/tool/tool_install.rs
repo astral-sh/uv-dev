@@ -3104,7 +3104,7 @@ fn tool_install_no_entrypoints() {
 
 /// A failed forced installation must not remove another tool's existing executable.
 #[test]
-fn tool_install_failure_preserves_existing_additional_entrypoints() -> Result<()> {
+fn tool_install_failure_preserves_existing_additional_entrypoints() {
     let context = uv_test::test_context!("3.13").with_filtered_exe_suffix();
     let tool_dir = context.temp_dir.child("tools");
     let bin_dir = context.temp_dir.child("bin");
@@ -3163,8 +3163,6 @@ fn tool_install_failure_preserves_existing_additional_entrypoints() -> Result<()
     ----- stdout -----
     Hi from the simple launcher!
     ");
-
-    Ok(())
 }
 
 /// Test that a failed tool installation removes entrypoints installed from additional packages.
