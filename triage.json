@@ -1,0 +1,27 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 16555,
+        "title": "Allow explicit values with `uv version --bump`",
+        "url": "https://github.com/astral-sh/uv/pull/16555",
+        "state": "merged",
+        "reason": "Direct implementation provenance: astral-sh/uv#16555 introduced the custom parser and exact diagnostic via `clap::Error::raw`. It implemented explicit bump values and does not track this formatting defect."
+      },
+      {
+        "kind": "issue",
+        "number": 16427,
+        "title": "Allow setting a custom value for `uv version --bump`",
+        "url": "https://github.com/astral-sh/uv/issues/16427",
+        "state": "closed",
+        "reason": "This enhancement led to astral-sh/uv#16555. It concerns custom bump values and syntax, not missing styling or a trailing newline."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests using the exact diagnostic, `uv version --bump`, invalid bump/component terms, color, styling, newline, prompt concatenation, CLI argument formatting, clap, custom/value parsers, raw errors, and the `error messages` label. Fix-oriented searches covered the issue number and historical merged changes. astral-sh/uv#6298 was inspected and ruled out because it tracks the broader version command, not malformed diagnostics. No existing tracker covers the reported defect."
+  },
+  "type": "bug",
+  "type_reason": "An invalid CLI value produces malformed user-facing output. Current source contains the exact diagnostic and constructs it as a raw clap error. No existing issue or pull request tracks the same defect, and no prior fix was found.",
+  "summary": "No duplicate was found. astral-sh/uv#16555 is the direct implementation history, while astral-sh/uv#16427 is the associated feature request.",
+  "draft_response": "Thanks for the clear reproduction. This is a bug. The invalid component goes through the custom `--bump` parser added in astral-sh/uv#16555, and that path currently constructs a raw clap error. We also lack integration coverage for an unknown bump component. A focused PR would be welcome; please add a regression test for `uv version --bump foo` covering the trailing newline and forced-color styling, then render the parser error consistently with other CLI argument errors."
+}
