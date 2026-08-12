@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 19833,
+        "title": "Added flag for whether to fail on invalid environments during project interpreter discovery",
+        "url": "https://github.com/astral-sh/uv/pull/19833",
+        "state": "open",
+        "reason": "Direct proposed fix for astral-sh/uv#19832: for `uv lock` only, treat an invalid project environment as unavailable and fall back to interpreter discovery."
+      },
+      {
+        "kind": "issue",
+        "number": 21009,
+        "title": "Add `--active` flag for `uv lock`",
+        "url": "https://github.com/astral-sh/uv/issues/21009",
+        "state": "closed",
+        "reason": "Reproduces the same failure and proposes the reporter’s alternative `--active` workaround. A maintainer rejected that direction and closed it because astral-sh/uv#19832 is the canonical tracker."
+      },
+      {
+        "kind": "pull_request",
+        "number": 21010,
+        "title": "Added `--active` flag for `uv lock` command",
+        "url": "https://github.com/astral-sh/uv/pull/21010",
+        "state": "open",
+        "reason": "Implements the alternative bypass from astral-sh/uv#21009 for the same nested `.venv` reproduction, but the linked maintainer decision favors ignoring an invalid environment during locking instead."
+      }
+    ],
+    "search_scope": "Searched issues and pull requests using the exact error fragments, `uv lock` plus `.venv` and virtual-environment terms, interpreter discovery and fallback vocabulary, active-environment terms, and multiple or nested environment concepts. Inspected linked chains for astral-sh/uv#19832, astral-sh/uv#21009, astral-sh/uv#9423, astral-sh/uv#13235, and their pull requests. astral-sh/uv#9423 and merged astral-sh/uv#9427 were ruled out because they concern `uv sync` and an empty mounted directory; astral-sh/uv#13986 and astral-sh/uv#11219 involve invalid partial environments caused by deletion or concurrency; astral-sh/uv#9906 concerns named-environment workflows but not `uv lock` failing."
+  },
+  "type": "bug",
+  "type_reason": "Repository source confirms that `uv lock` calls project interpreter discovery, which inspects `.venv`; a nonempty directory without a Python executable is returned as an invalid-project-environment error before global or managed Python fallback. Locking does not synchronize that environment, and a maintainer explicitly stated it should not fail in this case. No older canonical report tracks this exact bug; astral-sh/uv#19833 was opened in response to it, so it does not make the issue a duplicate.",
+  "summary": "This is the canonical bug report for `uv lock` failing on a nonempty invalid `.venv`. astral-sh/uv#19833 directly proposes the intended fallback behavior. The later active-environment issue astral-sh/uv#21009 was closed in favor of this report, while its implementation astral-sh/uv#21010 remains open but follows the direction maintainers declined.",
+  "draft_response": "Thanks for the clear reproduction. `uv lock` should not fail just because the project environment path exists but is not a valid virtual environment; locking can fall back to a compatible system or managed Python without synchronizing `.venv`. We’ll keep astral-sh/uv#19832 as the canonical tracker. astral-sh/uv#19833 is the open proposed fix for that behavior. We do not plan to add `--active` as the workaround; astral-sh/uv#21009 was closed in favor of fixing the invalid-environment handling directly."
+}

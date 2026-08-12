@@ -1,21 +1,67 @@
-# Issue context
+# `uv lock` errors if `.venv` is not valid
 
-Issue: owner/repository#number
+Issue: astral-sh/uv#19832
 
-Classification: bug, enhancement, duplicate, or question
+Classification: bug
 
 ## Summary
 
-Describe the reported behavior or requested capability and summarize the most important findings.
+`uv lock` fails when the project environment path, normally `.venv`, exists as a file or as a
+nonempty directory that is not itself a virtual environment. The minimal reproduction places an
+unrelated file in `.venv`; the reporter's real layout uses `.venv` as a container for separate
+Python-version environments. In both cases, locking stops with an invalid-environment error instead
+of discovering a compatible system or managed Python.
+
+This is the canonical report for that behavior. The direct proposed fix is astral-sh/uv#19833. A
+later request to bypass the failure with `uv lock --active`, astral-sh/uv#21009, was closed because a
+maintainer preferred fixing the invalid-environment behavior here.
 
 ## Draft response
 
-Draft a proposed reply for maintainer review.
+Thanks for the clear reproduction. `uv lock` should not fail just because the project environment
+path exists but is not a valid virtual environment; locking can fall back to a compatible system or
+managed Python without synchronizing `.venv`. We'll keep astral-sh/uv#19832 as the canonical
+tracker. astral-sh/uv#19833 is the open proposed fix for that behavior. We do not plan to add
+`--active` as the workaround; astral-sh/uv#21009 was closed in favor of fixing the
+invalid-environment handling directly.
 
 ## Classification
 
-Explain why the selected classification fits, distinguishing confirmed findings from hypotheses.
+This is a bug. The current project interpreter discovery code checks the configured project
+environment before falling back to another Python. A nonempty directory with no Python executable,
+or a project environment path that is not a directory, produces an error from that check. `uv lock`
+uses this discovery path even though it does not synchronize the project environment. A maintainer
+also stated in astral-sh/uv#21009 that `uv lock` should not fail when the environment is invalid.
+
+No earlier issue was found that canonically tracks this exact `uv lock` failure. astral-sh/uv#19833
+was opened in response to this report, so its existence does not make astral-sh/uv#19832 a
+duplicate.
 
 ## Related
 
-List related issues or pull requests, explain their relationship, or state that none were found.
+- astral-sh/uv#19833 (open pull request) — Directly proposes making `uv lock` treat an invalid
+  project environment as unavailable, allowing interpreter discovery to fall back to a system or
+  managed Python. It explicitly closes astral-sh/uv#19832.
+- astral-sh/uv#21009 (closed issue) — Reproduces the same failure with versioned environments nested
+  under `.venv` and requests the reporter's alternative `--active` bypass. A maintainer rejected
+  that direction and closed it because astral-sh/uv#19832 is sufficient as the canonical tracker.
+- astral-sh/uv#21010 (open pull request) — Implements the `--active` bypass proposed by
+  astral-sh/uv#21009 for the same reproduction. It differs from the preferred direction recorded by
+  the maintainer, which is to ignore an invalid environment during locking.
+
+## Supporting evidence
+
+Literal searches covered the full error text and its distinctive fragments, including “Project
+virtual environment directory,” “not a valid Python environment,” and “no Python executable was
+found.” Conceptual searches covered `uv lock` interpreter discovery, fallback to system or managed
+Python, active environments, nested or multiple virtual environments, and invalid project
+environment paths. Searches included open and closed issues and open, closed, and merged pull
+requests.
+
+The strongest linked chains were inspected through their issue comments and associated pull
+requests. astral-sh/uv#9423 and merged astral-sh/uv#9427 concern `uv sync` with an empty mounted
+directory, not `uv lock` with a deliberately nonempty directory. astral-sh/uv#13986 and
+astral-sh/uv#11219 produce similar invalid-environment errors after interrupted deletion or
+concurrent creation, but their triggers and affected operations differ. astral-sh/uv#13235 concerns
+`uv run --no-sync` invalidating an incompatible environment. astral-sh/uv#9906 discusses workflows
+for multiple named environments but does not report this locking failure.
