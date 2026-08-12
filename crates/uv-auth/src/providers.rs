@@ -30,6 +30,9 @@ use crate::realm::{Realm, RealmRef};
 /// The username expected by Google Artifact Registry when using an `OAuth2` access token.
 const GOOGLE_ARTIFACT_REGISTRY_USERNAME: &str = "oauth2accesstoken";
 
+/// The hostname suffix used by Google Artifact Registry's Python package repositories.
+const GOOGLE_ARTIFACT_REGISTRY_PYTHON_HOST_SUFFIX: &str = "-python.pkg.dev";
+
 /// The environment variable containing the path to explicit Google Application Default
 /// Credentials.
 const GOOGLE_APPLICATION_CREDENTIALS: &str = "GOOGLE_APPLICATION_CREDENTIALS";
@@ -189,7 +192,7 @@ impl ArtifactRegistryProvider {
         url.scheme() == "https"
             && url
                 .host_str()
-                .is_some_and(|host| host.ends_with(".pkg.dev"))
+                .is_some_and(|host| host.ends_with(GOOGLE_ARTIFACT_REGISTRY_PYTHON_HOST_SUFFIX))
     }
 
     /// Returns `true` if the username is compatible with Google Artifact Registry credentials.
@@ -662,6 +665,22 @@ mod tests {
         assert_eq!(
             provider
                 .credentials_for(&Url::parse("https://python.pkg.dev.example.com/simple").unwrap())
+                .await,
+            None
+        );
+        assert_eq!(
+            provider
+                .credentials_for(
+                    &Url::parse("https://us-central1-docker.pkg.dev/project/image").unwrap()
+                )
+                .await,
+            None
+        );
+        assert_eq!(
+            provider
+                .credentials_for(
+                    &Url::parse("https://us-central1-python.pkg.dev.evil.example/simple").unwrap()
+                )
                 .await,
             None
         );
