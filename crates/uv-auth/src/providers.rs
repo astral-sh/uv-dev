@@ -40,6 +40,9 @@ const GOOGLE_CLOUD_SDK_CONFIG: &str = "CLOUDSDK_CONFIG";
 /// Refresh Google Artifact Registry credentials periodically, since access tokens are short-lived.
 const GOOGLE_ARTIFACT_REGISTRY_CACHE_DURATION: Duration = Duration::from_mins(1);
 
+/// Refresh active `gcloud` credentials before an in-flight request can outlive its access token.
+const GOOGLE_ARTIFACT_REGISTRY_TOKEN_REFRESH_BUFFER: Duration = Duration::from_secs(10);
+
 /// Avoid waiting indefinitely for Application Default Credentials from the metadata server.
 const GOOGLE_ARTIFACT_REGISTRY_ADC_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -342,6 +345,7 @@ impl ArtifactRegistryProvider {
         let cache_duration = token_expiry
             .duration_since(now)
             .unsigned_abs()
+            .saturating_sub(GOOGLE_ARTIFACT_REGISTRY_TOKEN_REFRESH_BUFFER)
             .min(GOOGLE_ARTIFACT_REGISTRY_CACHE_DURATION);
         Some((
             Self::credentials_from_token(credential.access_token?)?,
@@ -837,6 +841,28 @@ mod tests {
                 br#"{"credential":{"access_token":"test-token","token_expiry":"2000-05-29T00:00:00Z"}}"#
             ),
             None
+        );
+    }
+
+    #[test]
+    fn test_artifact_registry_credentials_refresh_before_gcloud_token_expiry() {
+        let token_expiry = jiff::Timestamp::now()
+            .checked_add(Duration::from_secs(20))
+            .expect("Token expiry should fit in a timestamp");
+        let output = serde_json::json!({
+            "credential": {
+                "access_token": "test-token",
+                "token_expiry": token_expiry.to_string(),
+            },
+        });
+
+        let (_, cache_duration) =
+            ArtifactRegistryProvider::credentials_from_gcloud_output(output.to_string().as_bytes())
+                .expect("Google Cloud SDK credentials should load");
+
+        assert!(
+            cache_duration < Duration::from_secs(15),
+            "Credentials should be refreshed before the token expires, got {cache_duration:?}"
         );
     }
 
