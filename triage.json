@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 16231,
+        "title": "uv sync --inexact removes `.venv` and recreates it. It was not the case before.",
+        "url": "https://github.com/astral-sh/uv/issues/16231",
+        "state": "closed",
+        "reason": "Closest prior report: it has the identical version-conflict diagnostic and recreation sequence. However, astral-sh/uv#16231 involved a copied environment with mismatched Python patch versions; it did not report that recreation retained the old interpreter."
+      },
+      {
+        "kind": "issue",
+        "number": 16218,
+        "title": "failed to remove directory `/app/.venv`: Resource busy",
+        "url": "https://github.com/astral-sh/uv/issues/16218",
+        "state": "closed",
+        "reason": "Related to the removal failure, but its fix addressed a busy mount-point directory, not permission denial while deleting `.venv/CACHEDIR.TAG`."
+      },
+      {
+        "kind": "pull_request",
+        "number": 19928,
+        "title": "Reapply \"Fix transparent Python upgrades in project environments\"",
+        "url": "https://github.com/astral-sh/uv/pull/19928",
+        "state": "merged",
+        "reason": "Establishes that environments backed by uv-managed minor-version links should survive patch upgrades. This report instead uses `/usr/local/bin/python3.12`, so that mechanism does not directly cover it."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests for the exact version-conflict, VIRTUAL_ENV, CACHEDIR.TAG, permission, and recreation diagnostics, plus conceptual terms involving pyvenv.cfg metadata, patch upgrades, system interpreters, copied or mounted environments, and active/project path mismatches. Fix-oriented searches covered transparent-upgrade and version_info changes. astral-sh/uv#19100 and astral-sh/uv#19102 concern exact patch pins following managed links; astral-sh/uv#19920, astral-sh/uv#19925, and astral-sh/uv#1689 concern pyvenv.cfg formatting; astral-sh/uv#7073 concerns an unnecessary warning under --no-sync."
+  },
+  "type": "bug",
+  "type_reason": "uv selects `/usr/local/bin/python3.12` as CPython 3.12.13 and recreates the environment from it, but `uv run python --version` still reports 3.12.2, leaving the mismatch in place for every subsequent run. No open issue or pull request tracks this same outcome, and the closest closed report had a materially different copied-environment setup.",
+  "summary": "astral-sh/uv#16231 has the same mismatch diagnostic but a different copied-environment cause. astral-sh/uv#16218 covers a distinct mount removal failure, while astral-sh/uv#19928 applies only to uv-managed transparent upgrades. None tracks recreation continuing to execute the old Python patch.",
+  "draft_response": "The log confirms that uv recreates `.venv` because its interpreter reports Python 3.12.2 while the environment metadata records 3.12.13. What remains unexplained is why recreating it from `/usr/local/bin/python3.12`, which uv identifies as 3.12.13, still leaves `uv run python --version` reporting 3.12.2.\n\nCould you share the output, immediately after recreation, of `/usr/local/bin/python3.12 -c 'import sys; print(sys.version); print(sys.executable); print(sys._base_executable)'`, the equivalent command using `.venv/bin/python`, `readlink -f .venv/bin/python`, and `cat .venv/pyvenv.cfg`? Please also say whether the repository or `.venv` is copied or mounted, and provide the owner and mode of `.venv` and `.venv/CACHEDIR.TAG`.\n\nastral-sh/uv#16231 has the same conflict message, but involved copying an environment between container stages with different Python patch versions. This report also shows different active and project locations under `/mnt/hdd/Toolkits/Tools/AutotestServices` and `/mnt/hdd/Repositories/autotests_git`; the VIRTUAL_ENV warning is expected when those differ. Use `--active` only if the active environment is intentionally the target."
+}
