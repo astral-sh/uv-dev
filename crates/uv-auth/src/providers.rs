@@ -563,7 +563,7 @@ impl Default for AzureArtifactsProvider {
 
 impl AzureArtifactsProvider {
     /// Returns whether the URL identifies an Azure Artifacts Python package feed.
-    pub fn is_azure_artifacts(url: &Url) -> bool {
+    fn is_azure_artifacts(url: &Url) -> bool {
         url.scheme() == "https"
             && url.host_str().is_some_and(|host| {
                 host == "pkgs.dev.azure.com" || host.ends_with(".pkgs.visualstudio.com")
@@ -575,7 +575,7 @@ impl AzureArtifactsProvider {
     }
 
     /// Returns credentials for Azure Artifacts, if available from the Azure CLI.
-    pub(crate) async fn credentials_for(&self, url: &Url) -> Option<Credentials> {
+    async fn credentials_for(&self, url: &Url) -> Option<Credentials> {
         if !Self::is_azure_artifacts(url) {
             return None;
         }
@@ -590,11 +590,6 @@ impl AzureArtifactsProvider {
             }
         })
         .await
-    }
-
-    /// Returns whether credentials are available for Azure Artifacts.
-    pub async fn has_credentials_for(&self, url: &Url) -> bool {
-        self.credentials_for(url).await.is_some()
     }
 
     async fn credentials_from_cli() -> Option<(Credentials, Duration)> {
