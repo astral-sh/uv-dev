@@ -327,8 +327,8 @@ struct GatheredCredentials {
 impl GatheredCredentials {
     /// Unify the different possible sources for username and password information.
     ///
-    /// Possible credential sources are environment variables, the CLI, the URL, the keyring, or trusted
-    /// publishing.
+    /// Possible credential sources are environment variables, the CLI, the URL, the keyring, trusted
+    /// publishing, or a built-in provider.
     ///
     /// The username can come from, in order:
     ///
