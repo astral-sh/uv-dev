@@ -1083,67 +1083,9 @@ async fn fetch_ndjson_cached(
                 .get(reqwest::header::ETAG)
                 .and_then(|value| value.to_str().ok())
                 .map(ToOwned::to_owned);
-            let current_length = response
-                .headers()
-                .get(reqwest::header::CONTENT_LENGTH)
-                .and_then(|value| value.to_str().ok())
-                .and_then(|value| value.parse::<u64>().ok());
-
             if current_etag.is_some() && current_etag == cached_meta.etag {
                 debug!("Using cached Python downloads metadata with matching ETag");
                 return Ok(cached_content.clone());
-            }
-
-            let incremental = url.as_str() == REMOTE_PYTHON_DOWNLOAD_METADATA_URL;
-            if incremental
-                && current_etag.is_none()
-                && current_length == Some(cached_meta.content_length)
-            {
-                debug!("Using cached Python downloads metadata with unchanged content length");
-                return Ok(cached_content.clone());
-            }
-
-            if incremental
-                && let Some(current_length) = current_length
-                && current_length > cached_meta.content_length
-            {
-                let delta_size = current_length - cached_meta.content_length;
-                let range = format!("bytes=0-{}", delta_size - 1);
-                let response = client
-                    .for_host(url)
-                    .get(Url::from(url.clone()))
-                    .header(reqwest::header::RANGE, range)
-                    .send()
-                    .await;
-
-                if let Ok(response) = response
-                    && response.status() == reqwest::StatusCode::PARTIAL_CONTENT
-                {
-                    let start = Instant::now();
-                    let delta = response
-                        .bytes()
-                        .await
-                        .map_err(|err| Error::from_reqwest(url.clone(), err, None, start))?;
-                    if delta.len() as u64 == delta_size {
-                        let mut combined = delta.to_vec();
-                        combined.extend_from_slice(cached_content);
-
-                        match write_versions_cache(
-                            &content_entry,
-                            &meta_entry,
-                            &url.to_string(),
-                            &combined,
-                            current_etag,
-                        )
-                        .await
-                        {
-                            Ok(()) => return Ok(combined),
-                            Err(err) => {
-                                debug!("Failed to update Python downloads metadata cache: {err}");
-                            }
-                        }
-                    }
-                }
             }
         }
     }
@@ -1618,8 +1560,10 @@ impl ManagedPythonDownloadList {
             .build()
             .map_err(|err| Error::ClientBuild(Box::new(err)))?;
         let (content_entry, meta_entry) = versions_cache_entries(cache, &url);
+        let prerelease_request =
+            (!request.allows_prereleases()).then(|| request.clone().with_prereleases(true));
 
-        let find = if read_versions_cache(&content_entry, &meta_entry)
+        if read_versions_cache(&content_entry, &meta_entry)
             .await
             .is_some()
         {
@@ -1628,29 +1572,31 @@ impl ManagedPythonDownloadList {
                 .map_err(|err| {
                     Error::FetchingPythonDownloadsNdjsonError(url.to_string(), Box::new(err))
                 })?;
-            parse_ndjson_bytes_find(&url.to_string(), &content, |download| {
-                request.satisfied_by_download(download)
-            })?
-        } else {
-            fetch_ndjson_find(&client, &url, |download| {
-                request.satisfied_by_download(download)
-            })
-            .await
-            .map_err(|err| {
-                Error::FetchingPythonDownloadsNdjsonError(url.to_string(), Box::new(err))
-            })?
-        };
-
-        if find.is_some() || request.allows_prereleases() {
-            return Ok(find);
+            let mut prerelease = None;
+            let found = parse_ndjson_bytes_with(&url.to_string(), &content, |download| {
+                select_download(
+                    request,
+                    prerelease_request.as_ref(),
+                    &mut prerelease,
+                    download,
+                )
+            })?;
+            return Ok(found.or(prerelease));
         }
 
-        let request = request.clone().with_prereleases(true);
-        fetch_ndjson_find(&client, &url, |download| {
-            request.satisfied_by_download(download)
+        let mut prerelease = None;
+        let found = fetch_ndjson_streaming(&client, &url, |download| {
+            select_download(
+                request,
+                prerelease_request.as_ref(),
+                &mut prerelease,
+                download,
+            )
         })
         .await
-        .map_err(|err| Error::FetchingPythonDownloadsNdjsonError(url.to_string(), Box::new(err)))
+        .map_err(|err| Error::FetchingPythonDownloadsNdjsonError(url.to_string(), Box::new(err)))?;
+
+        Ok(found.or(prerelease))
     }
 
     /// Load available Python distributions from the compiled-in list only.
@@ -1806,19 +1752,23 @@ async fn fetch_ndjson_streaming<T>(
     Ok(None)
 }
 
-async fn fetch_ndjson_find(
-    client: &BaseClient,
-    url: &DisplaySafeUrl,
-    predicate: impl Fn(&ManagedPythonDownload) -> bool,
-) -> Result<Option<ManagedPythonDownload>, Error> {
-    fetch_ndjson_streaming(client, url, |download| {
-        if predicate(&download) {
-            ControlFlow::Break(download)
-        } else {
-            ControlFlow::Continue(())
-        }
-    })
-    .await
+fn select_download(
+    request: &PythonDownloadRequest,
+    prerelease_request: Option<&PythonDownloadRequest>,
+    prerelease: &mut Option<ManagedPythonDownload>,
+    download: ManagedPythonDownload,
+) -> ControlFlow<ManagedPythonDownload> {
+    if request.satisfied_by_download(&download) {
+        return ControlFlow::Break(download);
+    }
+
+    if prerelease.is_none()
+        && prerelease_request.is_some_and(|request| request.satisfied_by_download(&download))
+    {
+        *prerelease = Some(download);
+    }
+
+    ControlFlow::Continue(())
 }
 
 fn visit_ndjson_line<T>(
@@ -1872,6 +1822,10 @@ fn parse_ndjson_bytes_filtered(
     predicate: impl Fn(&ManagedPythonDownload) -> bool,
     limit: Option<usize>,
 ) -> Result<Vec<ManagedPythonDownload>, Error> {
+    if limit == Some(0) {
+        return Ok(Vec::new());
+    }
+
     let mut downloads = Vec::new();
     parse_ndjson_bytes_with(source, content, |download| {
         if predicate(&download) {
@@ -1884,20 +1838,6 @@ fn parse_ndjson_bytes_filtered(
     })?;
     downloads.sort_by(|a, b| Ord::cmp(&b.key, &a.key));
     Ok(downloads)
-}
-
-fn parse_ndjson_bytes_find(
-    source: &str,
-    content: &[u8],
-    predicate: impl Fn(&ManagedPythonDownload) -> bool,
-) -> Result<Option<ManagedPythonDownload>, Error> {
-    parse_ndjson_bytes_with(source, content, |download| {
-        if predicate(&download) {
-            ControlFlow::Break(download)
-        } else {
-            ControlFlow::Continue(())
-        }
-    })
 }
 
 impl ManagedPythonDownload {
@@ -3314,27 +3254,106 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_ndjson_bytes_filtered_stops_at_limit() {
-        let metadata = br#"{"version":"3.12.0+20240101","artifacts":[{"platform":"x86_64-unknown-linux-gnu","variant":"install_only","url":"https://example.com/python.tar.gz","sha256":null}]}
-not valid metadata"#;
+    fn test_parse_ndjson_bytes_filtered_stops_at_limit() -> Result<(), Error> {
+        let metadata = indoc! {r#"
+            {"version":"3.12.0+20240101","artifacts":[{"platform":"x86_64-unknown-linux-gnu","variant":"install_only","url":"https://example.com/python.tar.gz","sha256":null}]}
+            not valid metadata
+        "#};
 
-        let downloads = parse_ndjson_bytes_filtered("test", metadata, |_| true, Some(1))
-            .expect("the first matching download should stop parsing");
+        let downloads =
+            parse_ndjson_bytes_filtered("test", metadata.as_bytes(), |_| true, Some(1))?;
 
         assert_eq!(downloads.len(), 1);
         assert_eq!(downloads[0].key().version().to_string(), "3.12.0");
+
+        assert!(
+            parse_ndjson_bytes_filtered("test", metadata.as_bytes(), |_| true, Some(0))?.is_empty()
+        );
+
+        Ok(())
     }
 
     #[test]
-    fn test_parse_ndjson_bytes_find_stops_at_match() {
-        let metadata = br#"{"version":"3.12.0+20240101","artifacts":[{"platform":"x86_64-unknown-linux-gnu","variant":"install_only","url":"https://example.com/python.tar.gz","sha256":null}]}
-not valid metadata"#;
+    fn test_parse_ndjson_bytes_with_stops_at_match() -> Result<(), Error> {
+        let metadata = indoc! {r#"
+            {"version":"3.12.0+20240101","artifacts":[{"platform":"x86_64-unknown-linux-gnu","variant":"install_only","url":"https://example.com/python.tar.gz","sha256":null}]}
+            not valid metadata
+        "#};
 
-        let download = parse_ndjson_bytes_find("test", metadata, |_| true)
-            .expect("the first matching download should stop parsing")
-            .expect("the metadata should contain a matching download");
+        let download = parse_ndjson_bytes_with("test", metadata.as_bytes(), ControlFlow::Break)?;
 
-        assert_eq!(download.key().version().to_string(), "3.12.0");
+        assert_eq!(
+            download
+                .map(|download| download.key().version().to_string())
+                .as_deref(),
+            Some("3.12.0")
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_select_download_prefers_stable_over_prerelease() -> Result<(), Error> {
+        let metadata = indoc! {r#"
+            {"version":"3.13.0rc1+20240101","artifacts":[{"platform":"x86_64-unknown-linux-gnu","variant":"install_only","url":"https://example.com/prerelease.tar.gz","sha256":null}]}
+            {"version":"3.13.0+20240101","artifacts":[{"platform":"x86_64-unknown-linux-gnu","variant":"install_only","url":"https://example.com/stable.tar.gz","sha256":null}]}
+        "#};
+        let request = PythonDownloadRequest::from_str("cpython-3.13-linux-x86_64-gnu")?;
+        let prerelease_request = request.clone().with_prereleases(true);
+        let mut prerelease = None;
+
+        let found = parse_ndjson_bytes_with("test", metadata.as_bytes(), |download| {
+            select_download(
+                &request,
+                Some(&prerelease_request),
+                &mut prerelease,
+                download,
+            )
+        })?;
+
+        assert_eq!(
+            found
+                .map(|download| download.key().version().to_string())
+                .as_deref(),
+            Some("3.13.0")
+        );
+        assert_eq!(
+            prerelease
+                .map(|download| download.key().version().to_string())
+                .as_deref(),
+            Some("3.13.0rc1")
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_select_download_falls_back_to_prerelease() -> Result<(), Error> {
+        let metadata = indoc! {r#"
+            {"version":"3.13.0rc1+20240101","artifacts":[{"platform":"x86_64-unknown-linux-gnu","variant":"install_only","url":"https://example.com/prerelease.tar.gz","sha256":null}]}
+        "#};
+        let request = PythonDownloadRequest::from_str("cpython-3.13-linux-x86_64-gnu")?;
+        let prerelease_request = request.clone().with_prereleases(true);
+        let mut prerelease = None;
+
+        let found = parse_ndjson_bytes_with("test", metadata.as_bytes(), |download| {
+            select_download(
+                &request,
+                Some(&prerelease_request),
+                &mut prerelease,
+                download,
+            )
+        })?;
+
+        assert!(found.is_none());
+        assert_eq!(
+            prerelease
+                .map(|download| download.key().version().to_string())
+                .as_deref(),
+            Some("3.13.0rc1")
+        );
+
+        Ok(())
     }
 
     #[test]

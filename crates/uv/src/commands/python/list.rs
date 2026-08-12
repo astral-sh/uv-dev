@@ -8,6 +8,7 @@ use anyhow::Result;
 use itertools::Either;
 use owo_colors::OwoColorize;
 use rustc_hash::FxHashSet;
+use url::Url;
 use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
 use uv_fs::Simplified;
@@ -113,11 +114,12 @@ pub(crate) async fn list(
 
     let mut output = BTreeSet::new();
     if let Some(download_request) = &download_request {
-        let remote_metadata = python_downloads_json_url
-            .as_deref()
-            .is_some_and(|source| source.ends_with(".ndjson"))
-            || (python_downloads_json_url.is_none()
-                && uv_preview::is_enabled_explicitly(PreviewFeature::RemotePythonDownloadMetadata));
+        let remote_metadata = python_downloads_json_url.as_deref().is_some_and(|source| {
+            Url::parse(source).is_ok_and(|url| {
+                matches!(url.scheme(), "http" | "https") && url.path().ends_with(".ndjson")
+            })
+        }) || (python_downloads_json_url.is_none()
+            && uv_preview::is_enabled_explicitly(PreviewFeature::RemotePythonDownloadMetadata));
         let limit = if remote_metadata && !all_versions && !all_platforms && !all_arches {
             Some(50)
         } else {
