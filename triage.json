@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 3957,
+        "title": "Add a uv build backend",
+        "url": "https://github.com/astral-sh/uv/issues/3957",
+        "state": "closed",
+        "reason": "The canonical backend discussion establishes that uv_build is separately distributable and usable without uv, while uv can integrate with it through fast paths."
+      },
+      {
+        "kind": "issue",
+        "number": 15000,
+        "title": "Better handling of multiple uv-build versions for repackagers / distros",
+        "url": "https://github.com/astral-sh/uv/issues/15000",
+        "state": "open",
+        "reason": "The closest ongoing discussion of upper-bound costs and intentional downstream removal or bypass of uv_build bounds; it targets repackager compatibility rather than warning suppression."
+      },
+      {
+        "kind": "issue",
+        "number": 20860,
+        "title": "uv build's fast path for uv_build ignores both the declared version specifier and --build-constraints/--require-hashes",
+        "url": "https://github.com/astral-sh/uv/issues/20860",
+        "state": "open",
+        "reason": "This adjacent report documents the bundled uv_build fast path and confirms that the running uv version can affect local backend selection; it tracks constraint and hash enforcement rather than suppressing this warning."
+      }
+    ],
+    "search_scope": "Literal searches covered the full warning, build_system.requires, uv_build, the proposed UV_NO_BUILD_UPPER_BOUND_WARNING identifier, mise, suppression, disabling, and pinning. Conceptual searches covered bundled/direct/fast-path backends, standalone PEP 517 backend distribution, build-system constraints, warning configuration, and upper-bound policy. Fix-oriented review covered merged backend and warning-history changes plus the open hashes/constraints fix. astral-sh/uv#20128 and astral-sh/uv#14724 were inspected but ruled out: the former concerned a false warning for in-tree wrapper backends, while the latter only standardized upper-bound formatting."
+  },
+  "type": "enhancement",
+  "type_reason": "The warning matches documented and source-implemented policy: build-system.requires governs standalone and future source-distribution builds, whereas a mise pin controls only the local uv executable. The request is for a new suppression mechanism, no existing issue or pull request tracks that capability, and the issue currently carries the enhancement label.",
+  "summary": "No duplicate was found. astral-sh/uv#3957 establishes the separate-backend architecture, astral-sh/uv#15000 discusses upper-bound friction, and astral-sh/uv#20860 clarifies the limited role of uv’s bundled fast path; none requests this suppression control.",
+  "draft_response": "Thanks. Pinning the uv executable with mise does not make the build-system requirement redundant. uv can use its bundled uv_build backend as a fast path for compatible local builds, but uv_build is also a standalone PEP 517 backend, and other build frontends will install the version declared in build-system.requires. That declaration also travels with the source tree or source distribution, while the mise pin generally does not, so an unbounded requirement can select a future breaking uv_build release when the project is built elsewhere.\n\nAn environment-controlled opt-out would therefore be a new escape hatch rather than a correction to the warning. We can use this issue to consider that enhancement. For now, the supported way to silence the warning is to record a compatible upper bound in build-system.requires."
+}
