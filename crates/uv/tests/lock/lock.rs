@@ -25417,7 +25417,18 @@ fn lock_incompatible_python_version_without_interpreter() -> Result<()> {
     uv_snapshot!(context.filters(), context.lock().arg("--offline").arg("--no-python-downloads"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: No interpreter found for Python 3.7 in managed installations or search path
+    error: The Python request `3.7` from `.python-version` is incompatible with the project's Python requirement: `>=3.12` (from `project.requires-python`)
+    Use `uv python pin` to update the `.python-version` file to a compatible version
+    ");
+
+    // Version ranges that cannot satisfy the project should also avoid downloads.
+    python_version.write_str(">=3.7,<3.9")?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--offline").arg("--no-python-downloads"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: The Python request `>=3.7,<3.9` from `.python-version` is incompatible with the project's Python requirement: `>=3.12` (from `project.requires-python`)
+    Use `uv python pin` to update the `.python-version` file to a compatible version
     ");
 
     // An explicit request takes precedence over the incompatible pin.

@@ -205,6 +205,18 @@ pub(crate) enum ProjectError {
     },
 
     #[error(
+        "The Python request `{request}` from `{python_request}` is incompatible with the project's Python requirement: `{requires_python}`{}\nUse `uv python pin` to update the `.python-version` file to a compatible version",
+        format_optional_requires_python_sources(requires_python_sources, *workspace),
+    )]
+    DotPythonVersionRequestProjectIncompatibility {
+        python_request: String,
+        request: String,
+        requires_python: RequiresPython,
+        requires_python_sources: Box<RequiresPythonSources>,
+        workspace: bool,
+    },
+
+    #[error(
         "The resolved Python interpreter (Python {_0}) is incompatible with the project's Python requirement: `{_1}`{}",
         format_optional_requires_python_sources(_2, *_3)
     )]
@@ -1490,19 +1502,56 @@ impl ProjectInterpreter {
         let reporter = PythonDownloadReporter::single(printer);
 
         // Locate the Python interpreter to use in the environment.
-        let python = PythonInstallation::find_or_download(
-            python_request.as_ref(),
-            EnvironmentPreference::OnlySystem,
-            python_preference,
-            python_downloads,
-            client_builder,
-            cache,
-            Some(&reporter),
-            install_mirrors.python_install_mirror.as_deref(),
-            install_mirrors.pypy_install_mirror.as_deref(),
-            install_mirrors.python_downloads_json_url.as_deref(),
-        )
-        .await?;
+        let python = if let PythonRequestSource::DotPythonVersion(file) = &source
+            && let Some(python_request) = python_request.as_ref()
+            && let Some(requires_python) = requires_python.as_ref()
+            && !python_request.intersects_requires_python(requires_python)
+        {
+            match PythonInstallation::find_existing(
+                python_request,
+                EnvironmentPreference::OnlySystem,
+                python_preference,
+                cache,
+            ) {
+                Ok(python) => python,
+                Err(uv_python::Error::MissingPython(..)) => {
+                    let conflicting_requires = workspace
+                        .requires_python(groups)?
+                        .into_iter()
+                        .filter(|(.., requires)| {
+                            !python_request.intersects_requires_python(
+                                &RequiresPython::from_specifiers(requires.clone()),
+                            )
+                        })
+                        .collect::<RequiresPythonSources>();
+
+                    return Err(
+                        ProjectError::DotPythonVersionRequestProjectIncompatibility {
+                            python_request: file.path().user_display().to_string(),
+                            request: python_request.to_canonical_string().into_owned(),
+                            requires_python: requires_python.clone(),
+                            requires_python_sources: Box::new(conflicting_requires),
+                            workspace: workspace.packages().len() > 1,
+                        },
+                    );
+                }
+                Err(error) => return Err(error.into()),
+            }
+        } else {
+            PythonInstallation::find_or_download(
+                python_request.as_ref(),
+                EnvironmentPreference::OnlySystem,
+                python_preference,
+                python_downloads,
+                client_builder,
+                cache,
+                Some(&reporter),
+                install_mirrors.python_install_mirror.as_deref(),
+                install_mirrors.pypy_install_mirror.as_deref(),
+                install_mirrors.python_downloads_json_url.as_deref(),
+            )
+            .await?
+        };
 
         if centralized {
             let root =
