@@ -265,7 +265,7 @@ pub(crate) enum ProjectError {
     #[error("Environment marker is empty")]
     EmptyEnvironment,
 
-    #[error("Project virtual environment directory `{0}` cannot be used because {1}")]
+    #[error("Project environment directory `{0}` cannot be used because {1}")]
     InvalidProjectEnvironmentDir(PathBuf, String),
 
     #[error("Failed to parse `uv.lock`")]
@@ -1029,8 +1029,7 @@ fn check_environment_compatibility(
         environment.interpreter().clone(),
     )) {
         trace!(
-            "The virtual environment's Python interpreter meets the Python preference: `{}`",
-            python_preference
+            "The {kind} environment's Python interpreter meets the Python preference: `{python_preference}`"
         );
     } else {
         return Err(EnvironmentIncompatibilityError::PythonPreference(
