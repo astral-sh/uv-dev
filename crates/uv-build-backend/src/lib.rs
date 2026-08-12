@@ -484,7 +484,7 @@ mod tests {
     use fs_err::File;
     use futures_lite::future::block_on;
     use indoc::indoc;
-    use insta::assert_snapshot;
+    use insta::{allow_duplicates, assert_snapshot};
     use itertools::Itertools;
     use regex::regex;
     use sha2::Digest;
@@ -713,18 +713,22 @@ mod tests {
     /// platform-independent deterministic builds.
     #[test]
     fn built_by_uv_building() {
-        built_by_uv_building_with_backend(
-            &[],
-            "1d9ce1ce63195fbee07314c0b595ba9e063670da8d10c252c351b21e94e3f508",
-        );
+        allow_duplicates! {
+            built_by_uv_building_with_backend(
+                &[],
+                "1d9ce1ce63195fbee07314c0b595ba9e063670da8d10c252c351b21e94e3f508",
+            );
+        }
     }
 
     #[test]
     fn built_by_uv_building_tar_codec() {
-        built_by_uv_building_with_backend(
-            &[PreviewFeature::TarCodec],
-            "88540014e8884fff1d6479c0c7315fcf497ba2a46f6db5c9f6e04f64a8620dcc",
-        );
+        allow_duplicates! {
+            built_by_uv_building_with_backend(
+                &[PreviewFeature::TarCodec],
+                "88540014e8884fff1d6479c0c7315fcf497ba2a46f6db5c9f6e04f64a8620dcc",
+            );
+        }
     }
 
     fn built_by_uv_building_with_backend(
