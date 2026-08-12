@@ -52,6 +52,13 @@ const GOOGLE_ARTIFACT_REGISTRY_ADC_TIMEOUT: Duration = Duration::from_secs(10);
 /// Avoid waiting indefinitely for credentials from the `gcloud` CLI.
 const GOOGLE_ARTIFACT_REGISTRY_GCLOUD_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// The Google Cloud SDK launcher available on the current platform.
+const GOOGLE_CLOUD_SDK_EXECUTABLE: &str = if cfg!(windows) {
+    "gcloud.cmd"
+} else {
+    "gcloud"
+};
+
 /// A provider for authentication credentials for Google Artifact Registry.
 #[derive(Clone, Debug)]
 pub struct ArtifactRegistryProvider {
@@ -200,7 +207,7 @@ impl ArtifactRegistryProvider {
     /// Returns credentials for Google Artifact Registry, if available.
     ///
     /// This follows the lookup order of Google's `keyrings.google-artifactregistry-auth` package:
-    /// Application Default Credentials are preferred, then active `gcloud` credentials on Unix.
+    /// Application Default Credentials are preferred, then active `gcloud` credentials.
     pub(crate) async fn credentials_for(&self, url: &Url) -> Option<Credentials> {
         if !Self::is_artifact_registry(url) {
             return None;
@@ -287,14 +294,7 @@ impl ArtifactRegistryProvider {
     }
 
     async fn credentials_from_gcloud() -> Option<(Credentials, Duration)> {
-        if cfg!(windows) {
-            // The Google Cloud SDK launcher on Windows is a `.cmd` script, which requires shell
-            // execution. Keep Application Default Credentials support, but skip this fallback for now.
-            debug!("Skipping Google Artifact Registry credentials from `gcloud` on Windows");
-            return None;
-        }
-
-        let mut command = Command::new("gcloud");
+        let mut command = Command::new(GOOGLE_CLOUD_SDK_EXECUTABLE);
         command
             .args(["config", "config-helper", "--format=json(credential)"])
             .stdin(Stdio::null())
@@ -912,12 +912,15 @@ mod tests {
         );
     }
 
-    #[cfg(windows)]
-    #[tokio::test]
-    async fn test_artifact_registry_credentials_from_gcloud_unsupported_on_windows() {
+    #[test]
+    fn test_artifact_registry_gcloud_launcher() {
         assert_eq!(
-            ArtifactRegistryProvider::credentials_from_gcloud().await,
-            None
+            GOOGLE_CLOUD_SDK_EXECUTABLE,
+            if cfg!(windows) {
+                "gcloud.cmd"
+            } else {
+                "gcloud"
+            }
         );
     }
 
