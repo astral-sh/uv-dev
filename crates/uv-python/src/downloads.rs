@@ -1041,13 +1041,21 @@ fn parse_version_with_build(s: &str) -> Result<(PythonVersion, Option<&str>), Er
 ///
 /// Variants can be: `install_only`, `install_only_stripped`, `freethreaded+pgo+lto+full`, etc.
 fn parse_ndjson_variant(variant: &str) -> Option<PythonVariant> {
-    // Skip debug builds
-    if variant.contains("debug") {
-        return None;
+    let debug = variant.split('+').any(|option| option == "debug");
+    let freethreaded = variant
+        .split('+')
+        .any(|option| matches!(option, "freethreaded" | "shared-freethreaded"));
+
+    if debug && (variant.contains("full") || variant.contains("install_only")) {
+        return Some(if freethreaded {
+            PythonVariant::FreethreadedDebug
+        } else {
+            PythonVariant::Debug
+        });
     }
 
     // Handle freethreaded builds - accept both install_only and optimized full variants
-    if variant.contains("freethreaded") {
+    if freethreaded {
         // Accept freethreaded variants (prefer pgo+lto+full as it's the most optimized)
         if variant.contains("pgo") && variant.contains("lto") {
             return Some(PythonVariant::Freethreaded);
@@ -1098,10 +1106,27 @@ fn parse_ndjson_artifact(
     artifact: NdjsonPythonArtifact,
 ) -> Option<ManagedPythonDownload> {
     // Parse the variant to determine if this is a build we want
-    let python_variant = parse_ndjson_variant(&artifact.variant)?;
+    let mut python_variant = parse_ndjson_variant(&artifact.variant)?;
+    let mut platform = artifact.platform.as_str();
+    for (suffix, suffix_variant) in [
+        ("-debug", PythonVariant::Debug),
+        ("-freethreaded", PythonVariant::Freethreaded),
+    ] {
+        if let Some(stripped) = platform.strip_suffix(suffix) {
+            platform = stripped;
+            python_variant = match (python_variant, suffix_variant) {
+                (PythonVariant::Freethreaded, PythonVariant::Debug)
+                | (PythonVariant::Debug, PythonVariant::Freethreaded) => {
+                    PythonVariant::FreethreadedDebug
+                }
+                (PythonVariant::Default, variant) => variant,
+                (variant, _) => variant,
+            };
+        }
+    }
 
     // Parse the platform triple using the centralized Platform parser
-    let platform = match Platform::from_cargo_dist_triple(&artifact.platform) {
+    let platform = match Platform::from_cargo_dist_triple(platform) {
         Ok(platform) => platform,
         Err(e) => {
             debug!(
@@ -1218,7 +1243,7 @@ impl ManagedPythonDownloadList {
             } else {
                 Source::Path(Cow::Borrowed(Path::new(url_or_path)))
             }
-        } else if uv_preview::is_enabled(PreviewFeature::RemotePythonDownloadMetadata) {
+        } else if uv_preview::is_enabled_explicitly(PreviewFeature::RemotePythonDownloadMetadata) {
             // Preview flag enabled - use default remote metadata endpoint
             let url = DisplaySafeUrl::parse(REMOTE_PYTHON_DOWNLOAD_METADATA_URL)
                 .expect("default NDJSON URL should be valid");
@@ -2815,9 +2840,14 @@ mod tests {
             Some(PythonVariant::Freethreaded)
         );
 
-        // debug variants should be skipped
-        assert_eq!(parse_ndjson_variant("debug+full"), None);
-        assert_eq!(parse_ndjson_variant("freethreaded+debug+full"), None);
+        assert_eq!(
+            parse_ndjson_variant("debug+full"),
+            Some(PythonVariant::Debug)
+        );
+        assert_eq!(
+            parse_ndjson_variant("freethreaded+debug+full"),
+            Some(PythonVariant::FreethreadedDebug)
+        );
 
         // full variants without install_only should be skipped
         assert_eq!(parse_ndjson_variant("pgo+lto+full"), None);
@@ -2863,7 +2893,7 @@ mod tests {
                 },
                 NdjsonPythonArtifact {
                     platform: "x86_64-unknown-linux-gnu".to_string(),
-                    variant: "debug+full".to_string(), // Should be skipped
+                    variant: "debug+full".to_string(),
                     url: "https://example.com/python-debug.tar.gz".to_string(),
                     sha256: Some("ghi789".to_string()),
                 },
@@ -2872,8 +2902,12 @@ mod tests {
 
         let downloads = parse_ndjson_version_info(version_info);
 
-        // Should have 2 downloads (debug variant is skipped)
-        assert_eq!(downloads.len(), 2);
+        assert_eq!(downloads.len(), 3);
+        assert!(
+            downloads
+                .iter()
+                .any(|download| download.key().variant() == &PythonVariant::Debug)
+        );
 
         // All downloads should have the same version and build
         for download in &downloads {
@@ -2896,5 +2930,21 @@ mod tests {
 
         let download = parse_ndjson_artifact(&version, build, artifact).unwrap();
         assert_eq!(download.key().variant(), &PythonVariant::Freethreaded);
+    }
+
+    #[test]
+    fn test_parse_ndjson_artifact_platform_debug_suffix() {
+        let version = PythonVersion::from_str("3.13.0").expect("version should be valid");
+        let artifact = NdjsonPythonArtifact {
+            platform: "aarch64-apple-darwin-debug".to_string(),
+            variant: "install_only".to_string(),
+            url: "https://example.com/python-debug.tar.gz".to_string(),
+            sha256: None,
+        };
+
+        let download = parse_ndjson_artifact(&version, None, artifact)
+            .expect("platform-specific debug artifact should be retained");
+
+        assert_eq!(download.key().variant(), &PythonVariant::Debug);
     }
 }
