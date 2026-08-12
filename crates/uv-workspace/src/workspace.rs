@@ -1859,7 +1859,7 @@ async fn find_workspace(
         let pyproject_toml = PyProjectToml::from_string(contents, &pyproject_path)
             .map_err(|err| WorkspaceErrorKind::Toml(pyproject_path.clone(), Box::new(err)))?;
 
-        return if let Some(workspace) = pyproject_toml
+        if let Some(workspace) = pyproject_toml
             .tool
             .as_ref()
             .and_then(|tool| tool.uv.as_ref())
@@ -1882,13 +1882,14 @@ async fn find_workspace(
             }
 
             // We found a workspace root.
-            Ok(Some((
+            return Ok(Some((
                 workspace_root.to_path_buf(),
                 workspace.clone(),
                 pyproject_toml,
-            )))
+            )));
         } else if pyproject_toml.project.is_some() {
-            // We're in a directory of another project, e.g. tests or examples.
+            // We're in a directory of another project, e.g., tests, examples, or a nested
+            // workspace member.
             // Example:
             // ```
             // albatross
@@ -1903,22 +1904,21 @@ async fn find_workspace(
             //     └── albatross
             //         └── __init__.py
             // ```
-            // The current project is the example (non-workspace) `bird-feeder` in `albatross`,
-            // we ignore all `albatross` is doing and any potential workspace it might be
-            // contained in.
+            // The current project is the example (non-workspace) `bird-feeder` in `albatross`.
+            // Keep searching in case both projects belong to a workspace farther up; a parent
+            // workspace can only claim `bird-feeder` when it explicitly includes that path.
             debug!(
                 "Project is contained in non-workspace project: `{}`",
                 workspace_root.simplified_display()
             );
-            Ok(None)
         } else {
             // We require that a `project.toml` file either declares a workspace or a project.
             warn!(
                 "`pyproject.toml` does not contain a `project` table: `{}`",
                 pyproject_path.simplified_display()
             );
-            Ok(None)
-        };
+            return Ok(None);
+        }
     }
 
     Ok(None)

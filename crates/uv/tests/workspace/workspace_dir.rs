@@ -130,7 +130,7 @@ fn workspace_dir_nested_member() -> Result<()> {
     uv_snapshot!(context.filters(), context.workspace_dir().current_dir(&nested), @"
     exit_code: 0 (success)
     ----- stdout -----
-    [TEMP_DIR]/workspace/a/b
+    [TEMP_DIR]/workspace
     ");
 
     uv_snapshot!(context.filters(), context.workspace_dir().current_dir(&standalone), @"
@@ -149,11 +149,11 @@ fn workspace_dir_nested_member() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    Resolved 1 package in [TIME]
+    Resolved 3 packages in [TIME]
     ");
 
-    assert!(nested.child("uv.lock").exists());
-    assert!(!workspace.child("uv.lock").exists());
+    assert!(workspace.child("uv.lock").exists());
+    assert!(!nested.child("uv.lock").exists());
 
     Ok(())
 }
