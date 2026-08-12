@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 7889,
+        "title": "Add --resolution=local or similar to help projects supporting wide ranges of Python versions",
+        "url": "https://github.com/astral-sh/uv/issues/7889",
+        "state": "open",
+        "reason": "Tracks the same request for project commands to resolve only for the selected Python and platform without temporarily changing the project's broad requires-python metadata."
+      },
+      {
+        "kind": "issue",
+        "number": 16070,
+        "title": "Need for universal resolution when running `uv run --python 3.xx`?",
+        "url": "https://github.com/astral-sh/uv/issues/16070",
+        "state": "open",
+        "reason": "Reports the same universal-resolution failure despite selecting one Python version, although its trigger is a temporary nightly package index rather than an air-gapped mirror."
+      },
+      {
+        "kind": "issue",
+        "number": 18745,
+        "title": "[question] How does `uv pip compile --universal` determine the maximal Python version?",
+        "url": "https://github.com/astral-sh/uv/issues/18745",
+        "state": "open",
+        "reason": "Provides adjacent maintainer-confirmed context that uv does not compute a general maximum Python version; it does not itself track the requested local project-resolution mode."
+      }
+    ],
+    "search_scope": "Searched literal fragments including the resolver hint, python_full_version >= '3.15', keyring, and pywin32-ctypes; conceptual terms covering local/non-universal resolution, selected or current Python, .python-version, requires-python overrides, supported environments, global uv.toml, and offline or air-gapped operation; and closed issues and merged pull requests concerning Python 3.15, custom indexes, forking, and late Requires-Python metadata. Inspected candidate comments and reference chains. astral-sh/uv#19911 and merged astral-sh/uv#20586 were ruled out: they fix failure to fork when Requires-Python metadata is learned late, whereas this report shows an unsatisfied universal dependency branch. No pull request implementing local project resolution was found."
+  },
+  "type": "duplicate",
+  "type_reason": "astral-sh/uv#7889 already tracks the same underlying capability: limiting project-mode resolution to the selected Python and platform so users need not rewrite requires-python. The air-gapped trigger and proposed .python-version or global-configuration interfaces add context but do not require a separate discussion. The observed universal resolution is documented behavior, so this is not an established regression.",
+  "summary": "astral-sh/uv#7889 is the canonical matching request, while astral-sh/uv#16070 demonstrates the same behavior for uv run --python and astral-sh/uv#18745 supplies related upper-range context.",
+  "draft_response": "Thanks for clarifying that this occurs during `uv sync` and `uv run`. Project commands currently perform a universal resolution over the Python versions declared by `requires-python`; `.python-version` selects the interpreter but does not narrow that resolution.\n\nThe request for a local resolution mode based on the selected Python and platform, without changing the project's `requires-python`, is already tracked in astral-sh/uv#7889. A closely related `uv run --python` example is in astral-sh/uv#16070, so let's centralize the feature discussion in astral-sh/uv#7889.\n\nToday, `[tool.uv].environments` can narrow resolution with a Python marker, but it is project configuration and is not accepted in a global `uv.toml`. It therefore does not provide the local or global override requested here."
+}
