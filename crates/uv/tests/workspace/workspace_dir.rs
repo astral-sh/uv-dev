@@ -81,8 +81,10 @@ fn workspace_dir_nested_member() -> Result<()> {
     let nested = member.child("b");
     let standalone = member.child("standalone");
     let excluded = member.child("excluded");
+    let standalone_parent = workspace.child("standalone-parent");
+    let nested_standalone = standalone_parent.child("nested");
 
-    for project in [&nested, &standalone, &excluded] {
+    for project in [&nested, &standalone, &excluded, &nested_standalone] {
         fs_err::create_dir_all(project)?;
     }
 
@@ -93,7 +95,7 @@ fn workspace_dir_nested_member() -> Result<()> {
         requires-python = ">=3.12"
 
         [tool.uv.workspace]
-        members = ["a", "a/b", "a/excluded"]
+        members = ["a", "a/b", "a/excluded", "standalone-parent/nested"]
         exclude = ["a/excluded"]
     "#})?;
     member.child("pyproject.toml").write_str(indoc! {r#"
@@ -120,6 +122,22 @@ fn workspace_dir_nested_member() -> Result<()> {
         version = "0.1.0"
         requires-python = ">=3.12"
     "#})?;
+    standalone_parent
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+            [project]
+            name = "standalone-parent"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+        "#})?;
+    nested_standalone
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+            [project]
+            name = "nested-standalone"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+        "#})?;
 
     uv_snapshot!(context.filters(), context.workspace_dir().current_dir(&member), @"
     exit_code: 0 (success)
@@ -145,11 +163,17 @@ fn workspace_dir_nested_member() -> Result<()> {
     [TEMP_DIR]/workspace/a/excluded
     ");
 
+    uv_snapshot!(context.filters(), context.workspace_dir().current_dir(&nested_standalone), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/workspace/standalone-parent/nested
+    ");
+
     uv_snapshot!(context.filters(), context.lock().arg("--offline").current_dir(&nested), @"
     exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    Resolved 3 packages in [TIME]
+    Resolved 4 packages in [TIME]
     ");
 
     assert!(workspace.child("uv.lock").exists());

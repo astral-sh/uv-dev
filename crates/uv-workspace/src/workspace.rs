@@ -1832,6 +1832,8 @@ async fn find_workspace(
         return Ok(None);
     }
 
+    let mut intermediate_projects: Vec<&Path> = Vec::new();
+
     // Skip 1 to ignore the current project itself.
     for workspace_root in project_root
         .ancestors()
@@ -1881,6 +1883,22 @@ async fn find_workspace(
                 return Ok(None);
             }
 
+            // A project nested inside a standalone project must not inherit an outer workspace
+            // solely because its own path matches a member glob. Only cross an intermediate
+            // project when it belongs to the same workspace as the current project.
+            for intermediate_project in &intermediate_projects {
+                if !is_included_in_workspace(intermediate_project, workspace_root, workspace)?
+                    || is_excluded_from_workspace(intermediate_project, workspace_root, workspace)?
+                {
+                    debug!(
+                        "Found workspace root `{}`, but intermediate project `{}` is not a member",
+                        workspace_root.simplified_display(),
+                        intermediate_project.simplified_display()
+                    );
+                    return Ok(None);
+                }
+            }
+
             // We found a workspace root.
             return Ok(Some((
                 workspace_root.to_path_buf(),
@@ -1911,6 +1929,7 @@ async fn find_workspace(
                 "Project is contained in non-workspace project: `{}`",
                 workspace_root.simplified_display()
             );
+            intermediate_projects.push(workspace_root);
         } else {
             // We require that a `project.toml` file either declares a workspace or a project.
             warn!(
