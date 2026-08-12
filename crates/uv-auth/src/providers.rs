@@ -62,6 +62,15 @@ const GOOGLE_CLOUD_SDK_EXECUTABLE: &str = if cfg!(windows) {
     "gcloud"
 };
 
+/// The Microsoft Entra application ID for Azure DevOps, including Azure Artifacts.
+const AZURE_DEVOPS_RESOURCE: &str = "499b84ac-1321-427f-aa17-267ca6975798";
+
+/// Refresh Azure Artifacts credentials before an in-flight token can expire.
+const AZURE_ARTIFACTS_REFRESH_BUFFER: Duration = Duration::from_secs(30);
+
+/// The Azure CLI launcher available on the current platform.
+const AZURE_CLI_EXECUTABLE: &str = if cfg!(windows) { "az.cmd" } else { "az" };
+
 /// How widely credentials for a managed registry may be cached.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RegistryCredentialScope {
@@ -76,6 +85,8 @@ pub(crate) enum RegistryCredentialScope {
 pub enum RegistryAuthProvider {
     /// Google Artifact Registry authentication.
     Google(ArtifactRegistryProvider),
+    /// Azure Artifacts authentication.
+    Azure(AzureArtifactsProvider),
 }
 
 impl RegistryAuthProvider {
@@ -92,24 +103,28 @@ impl RegistryAuthProvider {
     pub(crate) async fn credentials_for(&self, url: &Url) -> Option<Credentials> {
         match self {
             Self::Google(provider) => provider.credentials_for(url).await,
+            Self::Azure(provider) => provider.credentials_for(url).await,
         }
     }
 
     pub(crate) fn supports_username(&self, username: Option<&str>) -> bool {
         match self {
             Self::Google(_) => ArtifactRegistryProvider::supports_username(username),
+            Self::Azure(_) => username.is_none(),
         }
     }
 
     pub(crate) fn name(&self) -> &'static str {
         match self {
             Self::Google(_) => "Google Artifact Registry",
+            Self::Azure(_) => "Azure Artifacts",
         }
     }
 
     pub(crate) fn cache_scope(&self) -> RegistryCredentialScope {
         match self {
             Self::Google(_) => RegistryCredentialScope::Realm,
+            Self::Azure(_) => RegistryCredentialScope::Realm,
         }
     }
 }
@@ -120,16 +135,25 @@ impl From<ArtifactRegistryProvider> for RegistryAuthProvider {
     }
 }
 
+impl From<AzureArtifactsProvider> for RegistryAuthProvider {
+    fn from(provider: AzureArtifactsProvider) -> Self {
+        Self::Azure(provider)
+    }
+}
+
 /// Built-in registry providers shared by an authentication middleware.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct RegistryAuthProviders {
     artifact_registry: ArtifactRegistryProvider,
+    azure_artifacts: AzureArtifactsProvider,
 }
 
 impl RegistryAuthProviders {
     pub(crate) fn provider_for(&self, url: &Url) -> Option<RegistryAuthProvider> {
         if ArtifactRegistryProvider::is_artifact_registry(url) {
             Some(RegistryAuthProvider::from(self.artifact_registry.clone()))
+        } else if AzureArtifactsProvider::is_azure_artifacts(url) {
+            Some(RegistryAuthProvider::from(self.azure_artifacts.clone()))
         } else {
             None
         }
@@ -138,6 +162,11 @@ impl RegistryAuthProviders {
     #[cfg(test)]
     pub(crate) fn set_artifact_registry_provider(&mut self, provider: ArtifactRegistryProvider) {
         self.artifact_registry = provider;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_azure_artifacts_provider(&mut self, provider: AzureArtifactsProvider) {
+        self.azure_artifacts = provider;
     }
 }
 
@@ -503,6 +532,147 @@ impl ArtifactRegistryProvider {
     }
 }
 
+/// A provider for authentication credentials for Azure Artifacts.
+#[derive(Clone, Debug)]
+pub struct AzureArtifactsProvider {
+    credentials: Arc<Mutex<Option<CachedRegistryCredentials>>>,
+}
+
+#[derive(Deserialize)]
+struct AzureCliToken {
+    #[serde(rename = "accessToken")]
+    access_token: String,
+    expires_on: i64,
+    #[serde(rename = "tokenType")]
+    token_type: Option<String>,
+}
+
+/// The shared Azure Artifacts provider.
+static AZURE_ARTIFACTS_PROVIDER: LazyLock<AzureArtifactsProvider> =
+    LazyLock::new(|| AzureArtifactsProvider {
+        credentials: Arc::new(Mutex::new(None)),
+    });
+
+impl Default for AzureArtifactsProvider {
+    fn default() -> Self {
+        AZURE_ARTIFACTS_PROVIDER.clone()
+    }
+}
+
+impl AzureArtifactsProvider {
+    /// Returns whether the URL identifies an Azure Artifacts Python package feed.
+    pub fn is_azure_artifacts(url: &Url) -> bool {
+        url.scheme() == "https"
+            && url.host_str().is_some_and(|host| {
+                host == "pkgs.dev.azure.com" || host.ends_with(".pkgs.visualstudio.com")
+            })
+            && url.path_segments().is_some_and(|mut segments| {
+                segments.any(|segment| segment == "_packaging")
+                    && segments.any(|segment| segment == "pypi")
+            })
+    }
+
+    /// Returns credentials for Azure Artifacts, if available from the Azure CLI.
+    pub(crate) async fn credentials_for(&self, url: &Url) -> Option<Credentials> {
+        if !Self::is_azure_artifacts(url) {
+            return None;
+        }
+
+        cached_registry_credentials(&self.credentials, async {
+            if let Some((credentials, cache_duration)) = Self::credentials_from_cli().await {
+                debug!("Found Azure Artifacts credentials from the Azure CLI");
+                (Some(credentials), cache_duration)
+            } else {
+                debug!("No Azure Artifacts credentials found");
+                (None, REGISTRY_CREDENTIAL_CACHE_DURATION)
+            }
+        })
+        .await
+    }
+
+    /// Returns whether credentials are available for Azure Artifacts.
+    pub async fn has_credentials_for(&self, url: &Url) -> bool {
+        self.credentials_for(url).await.is_some()
+    }
+
+    async fn credentials_from_cli() -> Option<(Credentials, Duration)> {
+        Self::credentials_from_cli_command(OsStr::new(AZURE_CLI_EXECUTABLE)).await
+    }
+
+    async fn credentials_from_cli_command(program: &OsStr) -> Option<(Credentials, Duration)> {
+        let output = registry_credential_command_output(
+            program,
+            &[
+                "account",
+                "get-access-token",
+                "--resource",
+                AZURE_DEVOPS_RESOURCE,
+                "--output",
+                "json",
+            ],
+            "az account get-access-token",
+        )
+        .await?;
+        Self::credentials_from_cli_output(&output)
+    }
+
+    fn credentials_from_cli_output(output: &[u8]) -> Option<(Credentials, Duration)> {
+        let token = serde_json::from_slice::<AzureCliToken>(output)
+            .inspect_err(|err| {
+                debug!("Failed to parse credentials from the Azure CLI: {err}");
+            })
+            .ok()?;
+        if token.access_token.trim().is_empty()
+            || token
+                .token_type
+                .as_deref()
+                .is_some_and(|token_type| !token_type.eq_ignore_ascii_case("bearer"))
+        {
+            debug!("Ignoring invalid Azure CLI access token");
+            return None;
+        }
+
+        let expires_at = Timestamp::from_second(token.expires_on)
+            .inspect_err(|err| {
+                debug!("Failed to parse Azure CLI access token expiration: {err}");
+            })
+            .ok()?;
+        let Some(cache_duration) =
+            registry_credential_cache_duration(expires_at, AZURE_ARTIFACTS_REFRESH_BUFFER)
+        else {
+            debug!("Ignoring expired Azure CLI access token");
+            return None;
+        };
+        if cache_duration.is_zero() {
+            debug!("Ignoring Azure CLI access token that is about to expire");
+            return None;
+        }
+
+        Some((
+            Credentials::bearer(token.access_token.into_bytes()),
+            cache_duration,
+        ))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_cached_credentials(credentials: Option<Credentials>) -> Self {
+        Self {
+            credentials: Arc::new(Mutex::new(Some(CachedRegistryCredentials {
+                credentials,
+                expires_at: Instant::now() + REGISTRY_CREDENTIAL_CACHE_DURATION,
+            }))),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn cache_credentials(&self, credentials: Option<Credentials>) {
+        *self.credentials.lock().await = Some(CachedRegistryCredentials {
+            credentials,
+            expires_at: Instant::now() + REGISTRY_CREDENTIAL_CACHE_DURATION,
+        });
+    }
+}
+
 /// The [`Realm`] for the Hugging Face platform.
 static HUGGING_FACE_REALM: LazyLock<Realm> = LazyLock::new(|| {
     let url = Url::parse("https://huggingface.co").expect("Failed to parse Hugging Face URL");
@@ -756,6 +926,18 @@ mod tests {
         assert_eq!(provider.cache_scope(), RegistryCredentialScope::Realm);
         assert!(provider.supports_username(None));
         assert!(provider.supports_username(Some("oauth2accesstoken")));
+        assert!(!provider.supports_username(Some("another-user")));
+
+        let azure_registry = Url::parse(
+            "https://pkgs.dev.azure.com/organization/project/_packaging/feed/pypi/simple/",
+        )
+        .expect("Azure Artifacts URL should parse");
+        let provider = RegistryAuthProvider::for_url(&azure_registry)
+            .expect("Azure Artifacts should have a built-in provider");
+
+        assert_eq!(provider.name(), "Azure Artifacts");
+        assert_eq!(provider.cache_scope(), RegistryCredentialScope::Realm);
+        assert!(provider.supports_username(None));
         assert!(!provider.supports_username(Some("another-user")));
 
         let other_registry =
@@ -1111,6 +1293,153 @@ mod tests {
                     Some("oauth2accesstoken".to_string()),
                     Some("test-token".to_string())
                 ),
+                REGISTRY_CREDENTIAL_CACHE_DURATION
+            ))
+        );
+    }
+
+    #[test]
+    fn test_azure_artifacts_host() {
+        for url in [
+            "https://pkgs.dev.azure.com/organization/project/_packaging/feed/pypi/simple/",
+            "https://organization.pkgs.visualstudio.com/project/_packaging/feed/pypi/upload/",
+        ] {
+            assert!(
+                AzureArtifactsProvider::is_azure_artifacts(&Url::parse(url).unwrap()),
+                "Failed to match Azure Artifacts URL: {url}"
+            );
+        }
+
+        for url in [
+            "http://pkgs.dev.azure.com/organization/_packaging/feed/pypi/simple/",
+            "https://pkgs.dev.azure.com.example.com/organization/_packaging/feed/pypi/simple/",
+            "https://pkgs.visualstudio.com/organization/_packaging/feed/pypi/simple/",
+            "https://pkgs.dev.azure.com/organization/_packaging/feed/npm/registry/",
+            "https://pkgs.dev.azure.com/organization/project",
+            "https://dev.azure.com/organization/project",
+            "https://example.com/organization/_packaging/feed/pypi/simple/",
+        ] {
+            assert!(
+                !AzureArtifactsProvider::is_azure_artifacts(&Url::parse(url).unwrap()),
+                "Should not match non-Azure Artifacts URL: {url}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_azure_artifacts_credentials_from_cache() {
+        let credentials = Credentials::bearer(b"test-token".to_vec());
+        let provider = AzureArtifactsProvider::with_cached_credentials(Some(credentials.clone()));
+
+        assert_eq!(
+            provider
+                .credentials_for(
+                    &Url::parse(
+                        "https://pkgs.dev.azure.com/organization/project/_packaging/feed/pypi/simple/"
+                    )
+                    .unwrap()
+                )
+                .await,
+            Some(credentials)
+        );
+        assert_eq!(
+            provider
+                .credentials_for(&Url::parse("https://example.com/simple/").unwrap())
+                .await,
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn test_azure_artifacts_credentials_caches_missing_credentials() {
+        let provider = AzureArtifactsProvider::with_cached_credentials(None);
+
+        assert_eq!(
+            provider
+                .credentials_for(
+                    &Url::parse(
+                        "https://pkgs.dev.azure.com/organization/project/_packaging/feed/pypi/simple/"
+                    )
+                    .unwrap()
+                )
+                .await,
+            None
+        );
+    }
+
+    #[test]
+    fn test_azure_artifacts_credentials_from_cli_output() {
+        assert_eq!(
+            AzureArtifactsProvider::credentials_from_cli_output(
+                br#"{"accessToken":"test-token","expires_on":4102444800,"tokenType":"Bearer"}"#
+            ),
+            Some((
+                Credentials::bearer(b"test-token".to_vec()),
+                REGISTRY_CREDENTIAL_CACHE_DURATION
+            ))
+        );
+
+        for output in [
+            br#"{"accessToken":"","expires_on":4102444800}"#.as_slice(),
+            br#"{"accessToken":"   ","expires_on":4102444800}"#.as_slice(),
+            br#"{"accessToken":"test-token","expires_on":946684800}"#.as_slice(),
+            br#"{"accessToken":"test-token","expires_on":4102444800,"tokenType":"Basic"}"#
+                .as_slice(),
+            br#"{"accessToken":"test-token"}"#.as_slice(),
+        ] {
+            assert_eq!(
+                AzureArtifactsProvider::credentials_from_cli_output(output),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn test_azure_artifacts_credentials_refresh_before_expiration() {
+        let expires_on = Timestamp::now().as_second() + 15;
+        let output = format!(
+            r#"{{"accessToken":"test-token","expires_on":{expires_on},"tokenType":"Bearer"}}"#
+        );
+
+        assert_eq!(
+            AzureArtifactsProvider::credentials_from_cli_output(output.as_bytes()),
+            None
+        );
+    }
+
+    #[test]
+    fn test_azure_artifacts_cli_launcher() {
+        assert_eq!(
+            AZURE_CLI_EXECUTABLE,
+            if cfg!(windows) { "az.cmd" } else { "az" }
+        );
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn test_azure_artifacts_credentials_from_windows_cli_launcher() {
+        let directory = tempfile::tempdir().expect("Azure CLI test directory should exist");
+        let executable = directory.path().join("az.cmd");
+        fs_err::write(
+            &executable,
+            [
+                "@echo off",
+                r#"if not "%~1"=="account" exit /b 1"#,
+                r#"if not "%~2"=="get-access-token" exit /b 1"#,
+                r#"if not "%~3"=="--resource" exit /b 1"#,
+                r#"if not "%~4"=="499b84ac-1321-427f-aa17-267ca6975798" exit /b 1"#,
+                r#"if not "%~5"=="--output" exit /b 1"#,
+                r#"if not "%~6"=="json" exit /b 1"#,
+                r#"echo {"accessToken":"test-token","expires_on":4102444800,"tokenType":"Bearer"}"#,
+            ]
+            .join("\r\n"),
+        )
+        .expect("Azure CLI test launcher should be written");
+
+        assert_eq!(
+            AzureArtifactsProvider::credentials_from_cli_command(executable.as_os_str()).await,
+            Some((
+                Credentials::bearer(b"test-token".to_vec()),
                 REGISTRY_CREDENTIAL_CACHE_DURATION
             ))
         );

@@ -7,9 +7,9 @@ description: Using uv with Azure Artifacts for installing and publishing Python 
 
 uv can install packages from
 [Azure Artifacts](https://learn.microsoft.com/en-us/azure/devops/artifacts/start-using-azure-artifacts?view=azure-devops&tabs=nuget%2Cnugetserver),
-either by using a
+using the [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/), a
 [Personal Access Token](https://learn.microsoft.com/en-us/azure/devops/organizations/accounts/use-personal-access-tokens-to-authenticate?view=azure-devops&tabs=Windows)
-(PAT), or using the [`keyring`](https://github.com/jaraco/keyring) package.
+(PAT), or the [`keyring`](https://github.com/jaraco/keyring) package.
 
 To use Azure Artifacts, add the index to your project:
 
@@ -18,6 +18,30 @@ To use Azure Artifacts, add the index to your project:
 name = "private-registry"
 url = "https://pkgs.dev.azure.com/<ORGANIZATION>/<PROJECT>/_packaging/<FEED>/pypi/simple/"
 ```
+
+## Authenticate with the Azure CLI
+
+uv automatically retrieves Microsoft Entra access tokens from the Azure CLI when accessing Azure
+Artifacts. Install the Azure CLI and sign in:
+
+```bash
+az login
+```
+
+After signing in, uv can install packages from the index without configuring additional credentials
+or a keyring provider:
+
+```bash
+uv add <PACKAGE>
+```
+
+uv requests tokens for the Azure DevOps resource and refreshes them before they expire. The Azure
+CLI also supports signing in with a service principal or managed identity; see the
+[Azure DevOps authentication documentation](https://learn.microsoft.com/en-us/azure/devops/cli/entra-tokens?view=azure-devops)
+for details.
+
+Explicit credentials and an explicitly configured keyring provider take precedence over Azure CLI
+authentication.
 
 ## Authenticate with an Azure access token
 
@@ -88,7 +112,8 @@ url = "https://pkgs.dev.azure.com/<ORGANIZATION>/<PROJECT>/_packaging/<FEED>/pyp
 publish-url = "https://pkgs.dev.azure.com/<ORGANIZATION>/<PROJECT>/_packaging/<FEED>/pypi/upload/"
 ```
 
-Then, configure credentials (if not using keyring):
+If the Azure CLI is signed in, uv can publish without configuring additional credentials. Otherwise,
+configure credentials if not using keyring:
 
 ```console
 $ export UV_PUBLISH_USERNAME=dummy

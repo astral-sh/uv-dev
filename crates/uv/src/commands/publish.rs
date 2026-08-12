@@ -771,4 +771,34 @@ mod tests {
             TrustedPublishing::Automatic
         );
     }
+
+    #[test]
+    fn azure_artifacts_skips_automatic_trusted_publishing() {
+        let azure_artifacts = DisplaySafeUrl::from_str(
+            "https://pkgs.dev.azure.com/organization/project/_packaging/feed/pypi/upload/",
+        )
+        .unwrap();
+        let other_azure_registry = DisplaySafeUrl::from_str(
+            "https://pkgs.dev.azure.com/organization/project/_packaging/feed/npm/registry/",
+        )
+        .unwrap();
+        let other_registry = DisplaySafeUrl::from_str("https://example.com").unwrap();
+
+        assert_eq!(
+            trusted_publishing_for_registry(&azure_artifacts, TrustedPublishing::Automatic),
+            TrustedPublishing::Never
+        );
+        assert_eq!(
+            trusted_publishing_for_registry(&azure_artifacts, TrustedPublishing::Always),
+            TrustedPublishing::Always
+        );
+        assert_eq!(
+            trusted_publishing_for_registry(&other_azure_registry, TrustedPublishing::Automatic),
+            TrustedPublishing::Automatic
+        );
+        assert_eq!(
+            trusted_publishing_for_registry(&other_registry, TrustedPublishing::Automatic),
+            TrustedPublishing::Automatic
+        );
+    }
 }
