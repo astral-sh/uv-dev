@@ -998,7 +998,7 @@ jobs:
           credentials_json: "${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}"
 
       - name: "Run GCP registry test with built-in authentication"
-        run: ./uv run --no-project -p "${PYTHON_VERSION}" scripts/registries-test.py --uv ./uv --color always --auth-method ambient
+        run: ./uv run --locked --python "${PYTHON_VERSION}" --no-build --script scripts/registries-test.py --uv ./uv --color always --auth-method ambient
         env:
           RUST_LOG: uv=debug
           UV_TEST_GCP_URL: ${{ secrets.UV_TEST_GCP_URL }}
@@ -1007,7 +1007,7 @@ jobs:
         uses: "google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db"
 
       - name: "Run GCP registry test with gcloud authentication"
-        run: env -u GOOGLE_APPLICATION_CREDENTIALS ./uv run --no-project -p "${PYTHON_VERSION}" scripts/registries-test.py --uv ./uv --color always --auth-method ambient
+        run: env -u GOOGLE_APPLICATION_CREDENTIALS ./uv run --locked --python "${PYTHON_VERSION}" --no-build --script scripts/registries-test.py --uv ./uv --color always --auth-method ambient
         env:
           RUST_LOG: uv=debug
           UV_TEST_GCP_URL: ${{ secrets.UV_TEST_GCP_URL }}
