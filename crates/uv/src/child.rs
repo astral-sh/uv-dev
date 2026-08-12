@@ -279,6 +279,7 @@ pub(crate) async fn run_to_completion(
     // child by the console. There's not a clear programmatic way to forward the signal anyway.
     #[cfg(not(unix))]
     let status = {
+        let _ = printer;
         let _ctrl_c_handler =
             tokio::spawn(async { while tokio::signal::ctrl_c().await.is_ok() {} });
         handle.wait().await?
