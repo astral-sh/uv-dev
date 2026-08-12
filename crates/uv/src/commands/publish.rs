@@ -6,7 +6,7 @@ use console::Term;
 use owo_colors::OwoColorize;
 use tokio::sync::Semaphore;
 use tracing::{debug, info, trace};
-use uv_auth::{ArtifactRegistryProvider, Credentials, PyxTokenStore};
+use uv_auth::{Credentials, PyxTokenStore, RegistryAuthProvider};
 use uv_cache::Cache;
 use uv_client::{
     AuthIntegration, BaseClient, BaseClientBuilder, RedirectPolicy, RegistryClientBuilder,
@@ -432,7 +432,7 @@ fn trusted_publishing_for_registry(
     publish_url: &DisplaySafeUrl,
     trusted_publishing: TrustedPublishing,
 ) -> TrustedPublishing {
-    if ArtifactRegistryProvider::is_artifact_registry(publish_url)
+    if RegistryAuthProvider::for_url(publish_url).is_some()
         && matches!(trusted_publishing, TrustedPublishing::Automatic)
     {
         TrustedPublishing::Never
@@ -517,18 +517,16 @@ async fn gather_credentials(
     )
     .await?;
 
-    let artifact_registry_credentials = if username.is_none()
+    let registry_credentials = if username.is_none()
         && password.is_none()
         && !matches!(
             &trusted_publishing_token,
             TrustedPublishResult::Configured(..)
         )
         && keyring_provider == KeyringProviderType::Disabled
-        && ArtifactRegistryProvider::is_artifact_registry(&publish_url)
+        && let Some(provider) = RegistryAuthProvider::for_url(&publish_url)
     {
-        ArtifactRegistryProvider::default()
-            .has_credentials_for(&publish_url)
-            .await
+        provider.has_credentials_for(&publish_url).await
     } else {
         false
     };
@@ -540,7 +538,7 @@ async fn gather_credentials(
             if username.is_none() && password.is_none() {
                 // Skip prompting when a built-in provider has credentials; the auth middleware
                 // will handle authentication.
-                if token_store.is_known_url(&publish_url) || artifact_registry_credentials {
+                if token_store.is_known_url(&publish_url) || registry_credentials {
                     (None, None)
                 } else {
                     match prompt {
@@ -565,7 +563,7 @@ async fn gather_credentials(
         && password.is_none()
         && keyring_provider == KeyringProviderType::Disabled
         && !token_store.is_known_url(&publish_url)
-        && !artifact_registry_credentials
+        && !registry_credentials
     {
         if let TrustedPublishResult::Ignored(err) = trusted_publishing_token {
             // The user has configured something incorrectly:
