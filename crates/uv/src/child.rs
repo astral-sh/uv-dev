@@ -2,13 +2,17 @@ use tokio::process::Child;
 use tracing::debug;
 
 use crate::commands::ExitStatus;
+use crate::printer::Printer;
 
 /// Wait for the child process to complete, handling signals and error codes.
 ///
 /// Note that this registers handles to ignore some signals in the parent process. This is safe as
 /// long as the command is the last thing that runs in this process; otherwise, we'd need to restore
 /// the default signal handlers after the command completes.
-pub(crate) async fn run_to_completion(mut handle: Child) -> anyhow::Result<ExitStatus> {
+pub(crate) async fn run_to_completion(
+    mut handle: Child,
+    printer: Printer,
+) -> anyhow::Result<ExitStatus> {
     // On Unix, the terminal driver will send SIGINT to the active process group when a user presses
     // `Ctrl-C`. In general, this means that uv should ignore SIGINT, allowing the child process to
     // cleanly exit instead. If uv forwarded the SIGINT immediately, the child process would receive
@@ -275,6 +279,7 @@ pub(crate) async fn run_to_completion(mut handle: Child) -> anyhow::Result<ExitS
     // child by the console. There's not a clear programmatic way to forward the signal anyway.
     #[cfg(not(unix))]
     let status = {
+        let _ = printer;
         let _ctrl_c_handler =
             tokio::spawn(async { while tokio::signal::ctrl_c().await.is_ok() {} });
         handle.wait().await?
@@ -292,16 +297,42 @@ pub(crate) async fn run_to_completion(mut handle: Child) -> anyhow::Result<ExitS
     } else {
         #[cfg(unix)]
         {
+            use std::fmt::Write;
             use std::os::unix::process::ExitStatusExt;
+
+            use nix::sys::signal::Signal;
+
             debug!("Command exited with signal: {:?}", status.signal());
             // Following https://tldp.org/LDP/abs/html/exitcodes.html, a fatal signal n gets the
             // exit code 128+n
-            if let Some(mapped_code) = status
-                .signal()
-                .and_then(|signal| u8::try_from(signal).ok())
-                .and_then(|signal| 128u8.checked_add(signal))
-            {
-                return Ok(ExitStatus::External(mapped_code));
+            if let Some(signal) = status.signal() {
+                // Avoid turning an ordinary Ctrl-C interruption into a diagnostic.
+                if signal != Signal::SIGINT as i32 {
+                    let core_dumped = if status.core_dumped() {
+                        " (core dumped)"
+                    } else {
+                        ""
+                    };
+
+                    if let Ok(signal_name) = Signal::try_from(signal) {
+                        writeln!(
+                            printer.stderr_important(),
+                            "Process terminated by signal {signal} ({signal_name}){core_dumped}"
+                        )?;
+                    } else {
+                        writeln!(
+                            printer.stderr_important(),
+                            "Process terminated by signal {signal}{core_dumped}"
+                        )?;
+                    }
+                }
+
+                if let Some(mapped_code) = u8::try_from(signal)
+                    .ok()
+                    .and_then(|signal| 128u8.checked_add(signal))
+                {
+                    return Ok(ExitStatus::External(mapped_code));
+                }
             }
         }
         Ok(ExitStatus::Failure)
