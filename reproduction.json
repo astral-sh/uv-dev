@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "On Linux x86_64 with installed uv 0.12.3, running `uv version --bump foo` in an empty temporary directory exits 2, writes nothing to stdout, and emits exactly 35 stderr bytes: `error: invalid bump component `foo`` with no ANSI styling or trailing newline. A pseudo-terminal control using `uv version --bump` was styled and newline-terminated. Python 3.12.3 versus the reported 3.14.6 is immaterial because failure occurs during CLI parsing. The issue-context README was updated."
+}
