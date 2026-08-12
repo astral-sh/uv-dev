@@ -14,7 +14,7 @@ use uv_static::EnvVars;
 use uv_warnings::owo_colors::OwoColorize;
 
 #[cfg(test)]
-use crate::providers::{ArtifactRegistryProvider, AzureArtifactsProvider};
+use crate::providers::{ArtifactRegistryProvider, AzureArtifactsProvider, RegistryAuthProvider};
 use crate::providers::{
     AzureEndpointProvider, GcsEndpointProvider, HuggingFaceProvider, RegistryAuthProviders,
     S3EndpointProvider,
@@ -1825,6 +1825,133 @@ mod tests {
             .authenticate(Request::new(Method::GET, url))
             .await?;
         assert_eq!(Credentials::from_request(&request)?, Some(credentials));
+
+        Ok(())
+    }
+
+    #[test(tokio::test)]
+    async fn test_azure_artifacts_credentials_preserve_text_store_credentials_across_feeds()
+    -> Result<(), Error> {
+        let azure_url = Url::parse(
+            "https://pkgs.dev.azure.com/first-organization/project/_packaging/feed/pypi/simple/",
+        )?;
+        let explicit_url = Url::parse(
+            "https://pkgs.dev.azure.com/second-organization/project/_packaging/feed/pypi/simple/",
+        )?;
+        let explicit_credentials = Credentials::basic(
+            Some("user".to_string()),
+            Some("explicit-password".to_string()),
+        );
+        let mut store = TextCredentialStore::default();
+        store.insert(
+            crate::Service::try_from(explicit_url.to_string())?,
+            explicit_credentials.clone(),
+        );
+
+        let provider = AzureArtifactsProvider::with_cached_credentials(Some(Credentials::bearer(
+            b"test-token".to_vec(),
+        )));
+        let middleware = AuthMiddleware::new()
+            .with_cache(CredentialsCache::new())
+            .with_text_store(Some(store))
+            .with_azure_artifacts_provider(provider.clone());
+
+        middleware.cache().insert(
+            DisplaySafeUrl::ref_cast(&azure_url),
+            Arc::new(Authentication::from(RegistryAuthProvider::from(provider))),
+        );
+
+        assert!(
+            middleware
+                .cache()
+                .get_realm(Realm::from(&explicit_url), Username::none())
+                .is_none(),
+            "Azure Artifacts credentials should not be cached for the shared host"
+        );
+        assert!(
+            middleware
+                .cache()
+                .get_url(DisplaySafeUrl::ref_cast(&azure_url), &Username::none())
+                .is_some(),
+            "Azure Artifacts credentials should remain cached for their feed"
+        );
+
+        let authentication = middleware
+            .fetch_credentials(
+                None,
+                DisplaySafeUrl::ref_cast(&explicit_url),
+                None,
+                AuthPolicy::Auto,
+            )
+            .await?
+            .expect("Explicit credentials for another feed should take precedence");
+        let request = authentication
+            .authenticate(Request::new(Method::GET, explicit_url))
+            .await?;
+        assert_eq!(
+            Credentials::from_request(&request)?,
+            Some(explicit_credentials)
+        );
+
+        Ok(())
+    }
+
+    #[test(tokio::test)]
+    async fn test_azure_artifacts_credentials_ignore_other_feed_cached_credentials()
+    -> Result<(), Error> {
+        let explicit_url = Url::parse(
+            "https://pkgs.dev.azure.com/first-organization/project/_packaging/feed/pypi/simple/",
+        )?;
+        let azure_url = Url::parse(
+            "https://pkgs.dev.azure.com/second-organization/project/_packaging/feed/pypi/simple/",
+        )?;
+        let explicit_credentials = Credentials::basic(
+            Some("user".to_string()),
+            Some("explicit-password".to_string()),
+        );
+        let azure_credentials = Credentials::bearer(b"test-token".to_vec());
+        let middleware = AuthMiddleware::new()
+            .with_cache(CredentialsCache::new())
+            .with_azure_artifacts_provider(AzureArtifactsProvider::with_cached_credentials(Some(
+                azure_credentials.clone(),
+            )));
+
+        middleware.cache().insert(
+            DisplaySafeUrl::ref_cast(&explicit_url),
+            Arc::new(Authentication::from(explicit_credentials)),
+        );
+
+        assert!(
+            middleware
+                .cache()
+                .get_realm(Realm::from(&azure_url), Username::none())
+                .is_none(),
+            "Explicit Azure Artifacts credentials should not be cached for the shared host"
+        );
+        assert!(
+            middleware
+                .cache()
+                .get_url(DisplaySafeUrl::ref_cast(&explicit_url), &Username::none())
+                .is_some(),
+            "Explicit Azure Artifacts credentials should remain cached for their feed"
+        );
+
+        let authentication = middleware
+            .fetch_credentials(
+                None,
+                DisplaySafeUrl::ref_cast(&azure_url),
+                None,
+                AuthPolicy::Auto,
+            )
+            .await?
+            .expect("Azure CLI credentials should be used for another feed");
+        let request = authentication
+            .authenticate(Request::new(Method::GET, azure_url))
+            .await?;
+        assert_eq!(
+            Credentials::from_request(&request)?,
+            Some(azure_credentials)
+        );
 
         Ok(())
     }

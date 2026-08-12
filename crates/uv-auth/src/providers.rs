@@ -124,7 +124,7 @@ impl RegistryAuthProvider {
     pub(crate) fn cache_scope(&self) -> RegistryCredentialScope {
         match self {
             Self::Google(_) => RegistryCredentialScope::Realm,
-            Self::Azure(_) => RegistryCredentialScope::Realm,
+            Self::Azure(_) => RegistryCredentialScope::UrlOnly,
         }
     }
 }
@@ -936,7 +936,7 @@ mod tests {
             .expect("Azure Artifacts should have a built-in provider");
 
         assert_eq!(provider.name(), "Azure Artifacts");
-        assert_eq!(provider.cache_scope(), RegistryCredentialScope::Realm);
+        assert_eq!(provider.cache_scope(), RegistryCredentialScope::UrlOnly);
         assert!(provider.supports_username(None));
         assert!(!provider.supports_username(Some("another-user")));
 
