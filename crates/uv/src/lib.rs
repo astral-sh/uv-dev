@@ -1343,6 +1343,7 @@ async fn run_with_workspace_cache(
                 args.out_dir,
                 args.sdist,
                 args.wheel,
+                args.wheel_from,
                 args.list,
                 args.build_logs,
                 args.gitignore,

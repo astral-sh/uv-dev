@@ -8,7 +8,7 @@ mod wheel;
 pub(crate) use metadata::PyProjectToml;
 pub use metadata::check_direct_build;
 pub use settings::{BuildBackendSettings, WheelDataIncludes};
-pub use source_dist::{build_source_dist, list_source_dist};
+pub use source_dist::{build_source_dist, build_source_dist_for_wheel, list_source_dist};
 use uv_warnings::warn_user_once;
 pub use wheel::{build_editable, build_wheel, list_wheel, metadata};
 

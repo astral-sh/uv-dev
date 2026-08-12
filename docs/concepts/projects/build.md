@@ -39,6 +39,11 @@ You can limit `uv build` to building a source distribution with `uv build --sdis
 distribution with `uv build --wheel`, or build both distributions from source with
 `uv build --sdist --wheel`.
 
+To build only a wheel while still validating that it can be built from a source distribution, run
+`uv build --wheel --wheel-from source-distribution`. The intermediate source distribution is not
+retained in the output directory. Use `--wheel-from source-tree` to explicitly select a direct wheel
+build instead.
+
 ## Build constraints
 
 `uv build` accepts `--build-constraint`, which can be used to constrain the versions of any build

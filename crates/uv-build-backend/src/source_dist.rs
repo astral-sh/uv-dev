@@ -28,12 +28,50 @@ use uv_preview::PreviewFeature;
 use uv_warnings::warn_user_once;
 use walkdir::WalkDir;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SourceDistPurpose {
+    Distribution,
+    Wheel,
+}
+
 /// Build a source distribution from the source tree and place it in the output directory.
 pub fn build_source_dist(
     source_tree: &Path,
     source_dist_directory: &Path,
     uv_version: &str,
     show_warnings: bool,
+) -> Result<SourceDistFilename, Error> {
+    build_source_dist_impl(
+        source_tree,
+        source_dist_directory,
+        uv_version,
+        show_warnings,
+        SourceDistPurpose::Distribution,
+    )
+}
+
+/// Build a temporary source distribution that will only be used to construct a wheel.
+pub fn build_source_dist_for_wheel(
+    source_tree: &Path,
+    source_dist_directory: &Path,
+    uv_version: &str,
+    show_warnings: bool,
+) -> Result<SourceDistFilename, Error> {
+    build_source_dist_impl(
+        source_tree,
+        source_dist_directory,
+        uv_version,
+        show_warnings,
+        SourceDistPurpose::Wheel,
+    )
+}
+
+fn build_source_dist_impl(
+    source_tree: &Path,
+    source_dist_directory: &Path,
+    uv_version: &str,
+    show_warnings: bool,
+    purpose: SourceDistPurpose,
 ) -> Result<SourceDistFilename, Error> {
     let pyproject_toml = PyProjectToml::parse(&source_tree.join("pyproject.toml"))?;
     let filename = SourceDistFilename {
@@ -50,10 +88,10 @@ pub fn build_source_dist(
     let temp_file = uv_fs::tempfile_in(source_dist_directory)?;
     if uv_preview::is_enabled(PreviewFeature::TarCodec) {
         let writer = TarCodecGzWriter::new(temp_file.as_file(), &source_dist_path);
-        write_source_dist(source_tree, writer, uv_version, show_warnings)?;
+        write_source_dist(source_tree, writer, uv_version, show_warnings, purpose)?;
     } else {
         let writer = TokioTarGzWriter::new(temp_file.as_file(), &source_dist_path);
-        write_source_dist(source_tree, writer, uv_version, show_warnings)?;
+        write_source_dist(source_tree, writer, uv_version, show_warnings, purpose)?;
     }
     temp_file
         .persist(&source_dist_path)
@@ -76,7 +114,13 @@ pub fn list_source_dist(
     };
     let mut files = FileList::new();
     let writer = ListWriter::new(&mut files);
-    write_source_dist(source_tree, writer, uv_version, show_warnings)?;
+    write_source_dist(
+        source_tree,
+        writer,
+        uv_version,
+        show_warnings,
+        SourceDistPurpose::Distribution,
+    )?;
     Ok((filename, files))
 }
 
@@ -206,9 +250,14 @@ fn write_source_dist(
     mut writer: impl DirectoryWriter,
     uv_version: &str,
     show_warnings: bool,
+    purpose: SourceDistPurpose,
 ) -> Result<SourceDistFilename, Error> {
     let pyproject_toml = PyProjectToml::parse(&source_tree.join("pyproject.toml"))?;
-    for warning in pyproject_toml.check_source_distribution(uv_version) {
+    let warnings = match purpose {
+        SourceDistPurpose::Distribution => pyproject_toml.check_source_distribution(uv_version),
+        SourceDistPurpose::Wheel => pyproject_toml.check_build_system(uv_version),
+    };
+    for warning in warnings {
         warn_user_once!("{warning}");
     }
     let settings = pyproject_toml

@@ -547,6 +547,9 @@ pub enum Commands {
     /// and `uv build --sdist --wheel` can be used to build both distributions
     /// from source.
     ///
+    /// `uv build --wheel --wheel-from source-distribution` can be used to build
+    /// only the wheel while first building an intermediate source distribution.
+    ///
     /// If passed a source distribution, `uv build --wheel` will build a wheel
     /// from the source distribution.
     #[command(
@@ -2890,6 +2893,15 @@ pub struct PipDebugArgs {
     abi: Option<String>,
 }
 
+/// The source used to build a wheel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum WheelSource {
+    /// Build the wheel from a source distribution.
+    SourceDistribution,
+    /// Build the wheel directly from the source tree.
+    SourceTree,
+}
+
 #[derive(Args)]
 pub struct BuildArgs {
     /// The directory from which distributions should be built, or a source
@@ -2931,6 +2943,14 @@ pub struct BuildArgs {
     /// Build a binary distribution ("wheel") from the given directory.
     #[arg(long)]
     pub wheel: bool,
+
+    /// Select whether to build the wheel from a source tree or a source distribution.
+    ///
+    /// When `source-distribution` is selected with `--wheel` but without `--sdist`, uv first
+    /// builds a temporary source distribution and builds the wheel from it. The source
+    /// distribution is not retained in the output directory.
+    #[arg(long, value_enum, requires = "wheel")]
+    pub wheel_from: Option<WheelSource>,
 
     /// When using the uv build backend, list the files that would be included when building.
     ///

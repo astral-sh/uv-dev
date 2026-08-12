@@ -434,6 +434,29 @@ fn build_wheel() -> Result<()> {
         .child("project-0.1.0-py3-none-any.whl")
         .assert(predicate::path::is_file());
 
+    // Build only the wheel, but use an intermediate source distribution.
+    uv_snapshot!(&filters, context.build()
+        .arg("--wheel")
+        .arg("--wheel-from")
+        .arg("source-distribution")
+        .arg("--out-dir")
+        .arg("wheel-from-sdist")
+        .current_dir(&project), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Building source distribution...
+    Building wheel from source distribution...
+    Successfully built wheel-from-sdist/project-0.1.0-py3-none-any.whl
+    ");
+    project
+        .child("wheel-from-sdist")
+        .child("project-0.1.0.tar.gz")
+        .assert(predicate::path::missing());
+    project
+        .child("wheel-from-sdist")
+        .child("project-0.1.0-py3-none-any.whl")
+        .assert(predicate::path::is_file());
+
     Ok(())
 }
 
@@ -556,6 +579,19 @@ fn build_wheel_from_sdist() -> Result<()> {
     ----- stderr -----
     error: Failed to build `[TEMP_DIR]/project/dist/project-0.1.0.tar.gz`
       Caused by: Building an `--sdist` from a source distribution is not supported
+    ");
+
+    // Error if a source tree is requested when the input is a source distribution.
+    uv_snapshot!(&filters, context.build()
+        .arg("./dist/project-0.1.0.tar.gz")
+        .arg("--wheel")
+        .arg("--wheel-from")
+        .arg("source-tree")
+        .current_dir(&project), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to build `[TEMP_DIR]/project/dist/project-0.1.0.tar.gz`
+      Caused by: Cannot build a wheel from a source tree when the input is a source distribution
     ");
 
     // Build the wheel from the sdist.
@@ -2220,6 +2256,103 @@ fn build_fast_path_unbounded_backend() -> Result<()> {
     warning: `build_system.requires = ["uv-build"]` is missing an upper bound on the `uv_build` version such as `<[NEXT_BREAKING]`. Without bounding the `uv_build` version, the source distribution will break when a future, breaking version of `uv_build` is released.
     Successfully built project/dist/project-0.1.0.tar.gz
     "#);
+
+    Ok(())
+}
+
+/// Build a wheel from an intermediate source distribution without retaining the archive.
+#[test]
+fn build_fast_path_wheel_from_source_distribution() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let filters = context
+        .filters()
+        .into_iter()
+        .chain([(r"such as `<\d+\.\d+`", "such as `<[NEXT_BREAKING]`")])
+        .collect::<Vec<_>>();
+    let project = context.temp_dir.child("project");
+
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = ["uv-build"]
+        build-backend = "uv_build"
+    "#})?;
+    project.child("src/project/__init__.py").touch()?;
+
+    uv_snapshot!(&filters, context.build()
+        .arg("project")
+        .arg("--wheel")
+        .arg("--wheel-from")
+        .arg("source-distribution"), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Building source distribution...
+    Building wheel from source distribution...
+    Successfully built project/dist/project-0.1.0-py3-none-any.whl
+    ");
+    project
+        .child("dist")
+        .child("project-0.1.0.tar.gz")
+        .assert(predicate::path::missing());
+    project
+        .child("dist")
+        .child("project-0.1.0-py3-none-any.whl")
+        .assert(predicate::path::is_file());
+
+    uv_snapshot!(&filters, context.build()
+        .arg("project")
+        .arg("--wheel")
+        .arg("--wheel-from")
+        .arg("source-tree")
+        .arg("--out-dir")
+        .arg("direct"), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Building wheel...
+    Successfully built direct/project-0.1.0-py3-none-any.whl
+    ");
+    context
+        .temp_dir
+        .child("direct")
+        .child("project-0.1.0.tar.gz")
+        .assert(predicate::path::missing());
+    context
+        .temp_dir
+        .child("direct")
+        .child("project-0.1.0-py3-none-any.whl")
+        .assert(predicate::path::is_file());
+
+    // Keep warning when the selected source distribution will be emitted.
+    uv_snapshot!(&filters, context.build()
+        .arg("project")
+        .arg("--sdist")
+        .arg("--wheel")
+        .arg("--wheel-from")
+        .arg("source-distribution")
+        .arg("--out-dir")
+        .arg("both"), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Building source distribution...
+    warning: `build_system.requires = ["uv-build"]` is missing an upper bound on the `uv_build` version such as `<[NEXT_BREAKING]`. Without bounding the `uv_build` version, the source distribution will break when a future, breaking version of `uv_build` is released.
+    Building wheel from source distribution...
+    Successfully built both/project-0.1.0.tar.gz
+    Successfully built both/project-0.1.0-py3-none-any.whl
+    "#);
+    context
+        .temp_dir
+        .child("both")
+        .child("project-0.1.0.tar.gz")
+        .assert(predicate::path::is_file());
+    context
+        .temp_dir
+        .child("both")
+        .child("project-0.1.0-py3-none-any.whl")
+        .assert(predicate::path::is_file());
 
     Ok(())
 }

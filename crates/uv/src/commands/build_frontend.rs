@@ -12,6 +12,7 @@ use tracing::{debug, instrument};
 
 use uv_build_backend::check_direct_build;
 use uv_cache::{Cache, CacheBucket};
+use uv_cli::WheelSource;
 use uv_client::{BaseClientBuilder, FlatIndexClient, RegistryClientBuilder};
 use uv_configuration::{
     BuildIsolation, BuildKind, BuildOptions, BuildOutput, Concurrency, Constraints,
@@ -184,6 +185,7 @@ pub(crate) async fn build_frontend(
     output_dir: Option<PathBuf>,
     sdist: bool,
     wheel: bool,
+    wheel_from: Option<WheelSource>,
     list: bool,
     build_logs: bool,
     gitignore: bool,
@@ -213,6 +215,7 @@ pub(crate) async fn build_frontend(
         output_dir.as_deref(),
         sdist,
         wheel,
+        wheel_from,
         list,
         build_logs,
         gitignore,
@@ -262,6 +265,7 @@ async fn build_impl(
     output_dir: Option<&Path>,
     sdist: bool,
     wheel: bool,
+    wheel_from: Option<WheelSource>,
     list: bool,
     build_logs: bool,
     gitignore: bool,
@@ -482,6 +486,7 @@ async fn build_impl(
             build_options,
             sdist,
             wheel,
+            wheel_from,
             list,
             dependency_metadata,
             *link_mode,
@@ -558,6 +563,7 @@ async fn build_package(
     build_options: &BuildOptions,
     sdist: bool,
     wheel: bool,
+    wheel_from: Option<WheelSource>,
     list: bool,
     dependency_metadata: &DependencyMetadata,
     link_mode: LinkMode,
@@ -716,7 +722,7 @@ async fn build_package(
     prepare_output_directory(&output_dir, gitignore).await?;
 
     // Determine the build plan.
-    let plan = BuildPlan::determine(&source, sdist, wheel).map_err(Error::BuildPlan)?;
+    let plan = BuildPlan::determine(&source, sdist, wheel, wheel_from).map_err(Error::BuildPlan)?;
 
     // Check if the build backend is matching uv version that allows calling in the uv build backend
     // directly.
@@ -774,14 +780,39 @@ async fn build_package(
 
     let mut build_results = Vec::new();
     match plan {
-        BuildPlan::SdistToWheel => {
+        BuildPlan::SdistToWheel | BuildPlan::SdistToWheelOnly => {
+            let source_distribution_output = if matches!(plan, BuildPlan::SdistToWheelOnly) {
+                SourceDistributionOutput::Intermediate
+            } else {
+                SourceDistributionOutput::Artifact
+            };
+            let intermediate_directory = if matches!(
+                source_distribution_output,
+                SourceDistributionOutput::Intermediate
+            ) {
+                Some(tempfile::tempdir_in(
+                    cache.bucket(CacheBucket::SourceDistributions),
+                )?)
+            } else {
+                None
+            };
+            let sdist_output_dir = intermediate_directory
+                .as_ref()
+                .map_or(output_dir.as_ref(), |directory| directory.path());
+
             // Even when listing files, we still need to build the source distribution for the wheel
             // build.
-            if list {
+            if list
+                && matches!(
+                    source_distribution_output,
+                    SourceDistributionOutput::Artifact
+                )
+            {
                 let sdist_list = build_sdist(
                     source.path(),
-                    &output_dir,
+                    sdist_output_dir,
                     build_action,
+                    source_distribution_output,
                     &source,
                     printer,
                     "source distribution",
@@ -797,8 +828,9 @@ async fn build_package(
             }
             let sdist_build = build_sdist(
                 source.path(),
-                &output_dir,
+                sdist_output_dir,
                 build_action.force_build(),
+                source_distribution_output,
                 &source,
                 printer,
                 "source distribution",
@@ -810,10 +842,15 @@ async fn build_package(
                 build_output,
             )
             .await?;
-            build_results.push(sdist_build.clone());
+            if matches!(
+                source_distribution_output,
+                SourceDistributionOutput::Artifact
+            ) {
+                build_results.push(sdist_build.clone());
+            }
 
             // Extract the source distribution into a temporary directory.
-            let path = output_dir.join(sdist_build.raw_filename());
+            let path = sdist_output_dir.join(sdist_build.raw_filename());
             let reader = fs_err::tokio::File::open(&path).await?;
             let ext = SourceDistExtension::from_path(path.as_path())
                 .map_err(|err| Error::InvalidSourceDistExt(path.user_display().to_string(), err))?;
@@ -850,6 +887,7 @@ async fn build_package(
                 source.path(),
                 &output_dir,
                 build_action,
+                SourceDistributionOutput::Artifact,
                 &source,
                 printer,
                 "source distribution",
@@ -887,6 +925,7 @@ async fn build_package(
                 source.path(),
                 &output_dir,
                 build_action,
+                SourceDistributionOutput::Artifact,
                 &source,
                 printer,
                 "source distribution",
@@ -975,6 +1014,12 @@ enum BuildAction {
     Pep517,
 }
 
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum SourceDistributionOutput {
+    Artifact,
+    Intermediate,
+}
+
 impl BuildAction {
     /// If in list mode, still build the distribution.
     fn force_build(self) -> Self {
@@ -993,6 +1038,7 @@ async fn build_sdist(
     source_tree: &Path,
     output_dir: &Path,
     action: BuildAction,
+    source_distribution_output: SourceDistributionOutput,
     source: &AnnotatedSource<'_>,
     printer: Printer,
     build_kind_message: &str,
@@ -1038,13 +1084,21 @@ async fn build_sdist(
             let source_tree = source_tree.to_path_buf();
             let output_dir_ = output_dir.to_path_buf();
             let sources_enabled = sources.is_none();
-            let filename = tokio::task::spawn_blocking(move || {
-                uv_build_backend::build_source_dist(
+            let filename = tokio::task::spawn_blocking(move || match source_distribution_output {
+                SourceDistributionOutput::Artifact => uv_build_backend::build_source_dist(
                     &source_tree,
                     &output_dir_,
                     uv_version::version(),
                     sources_enabled,
-                )
+                ),
+                SourceDistributionOutput::Intermediate => {
+                    uv_build_backend::build_source_dist_for_wheel(
+                        &source_tree,
+                        &output_dir_,
+                        uv_version::version(),
+                        sources_enabled,
+                    )
+                }
             })
             .await??
             .to_string();
@@ -1422,6 +1476,9 @@ enum BuildPlan {
     /// Build a source distribution from source, then build the wheel from the source distribution.
     SdistToWheel,
 
+    /// Build a temporary source distribution from source, then build only the wheel from it.
+    SdistToWheelOnly,
+
     /// Build a source distribution from source.
     Sdist,
 
@@ -1436,12 +1493,24 @@ enum BuildPlan {
 }
 
 impl BuildPlan {
-    fn determine(source: &AnnotatedSource, sdist: bool, wheel: bool) -> Result<Self> {
+    fn determine(
+        source: &AnnotatedSource,
+        sdist: bool,
+        wheel: bool,
+        wheel_from: Option<WheelSource>,
+    ) -> Result<Self> {
         Ok(match &source.source {
             Source::File(_) => {
                 // We're building from a file, which must be a source distribution.
                 match (sdist, wheel) {
-                    (false, true) => Self::WheelFromSdist,
+                    (false, true) => {
+                        if matches!(wheel_from, Some(WheelSource::SourceTree)) {
+                            return Err(anyhow::anyhow!(
+                                "Cannot build a wheel from a source tree when the input is a source distribution"
+                            ));
+                        }
+                        Self::WheelFromSdist
+                    }
                     (false, false) => {
                         return Err(anyhow::anyhow!(
                             "Pass `--wheel` explicitly to build a wheel from a source distribution"
@@ -1458,9 +1527,21 @@ impl BuildPlan {
                 // We're building from a directory.
                 match (sdist, wheel) {
                     (false, false) => Self::SdistToWheel,
-                    (false, true) => Self::Wheel,
+                    (false, true) => {
+                        if matches!(wheel_from, Some(WheelSource::SourceDistribution)) {
+                            Self::SdistToWheelOnly
+                        } else {
+                            Self::Wheel
+                        }
+                    }
                     (true, false) => Self::Sdist,
-                    (true, true) => Self::SdistAndWheel,
+                    (true, true) => {
+                        if matches!(wheel_from, Some(WheelSource::SourceDistribution)) {
+                            Self::SdistToWheel
+                        } else {
+                            Self::SdistAndWheel
+                        }
+                    }
                 }
             }
         })
