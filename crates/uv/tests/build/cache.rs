@@ -362,11 +362,10 @@ fn cache_init_read_only_git_marker() -> Result<()> {
     let marker = context.cache_dir.child("sdists-v9/.git");
     let _guard = ReadOnlyDirectoryGuard::new(marker.path())?;
 
-    uv_snapshot!(context.filters(), context.python_find(), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Failed to initialize cache at `[CACHE_DIR]/`
-      Caused by: failed to open file `[CACHE_DIR]/sdists-v9/.git`: Permission denied (os error 13)
+    uv_snapshot!(context.filters(), context.python_find().arg("--system"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [PYTHON-3.12]
     ");
 
     Ok(())

@@ -473,11 +473,12 @@ impl Cache {
             .join(CacheBucket::SourceDistributions.to_str())
             .join(".git");
         match fs_err::OpenOptions::new()
-            .create(true)
             .write(true)
+            .create_new(true)
             .open(&phony_git)
         {
             Ok(_) => {}
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
             // Handle read-only caches including sandboxed environments.
             Err(err) if err.kind() == io::ErrorKind::ReadOnlyFilesystem => {
                 if !phony_git.exists() {
