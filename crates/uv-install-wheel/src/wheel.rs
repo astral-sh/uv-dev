@@ -227,12 +227,30 @@ impl<'wheel> ValidatedWheel<'wheel> {
 }
 
 fn validate_data_script_destination(target: &Path, scripts: &Path) -> Result<(), Error> {
-    let Some(name) = target
-        .strip_prefix(scripts)
-        .ok()
-        .filter(|relative| relative.components().count() == 1)
-        .and_then(Path::to_str)
-    else {
+    let Some(parent) = target.parent() else {
+        return Ok(());
+    };
+
+    // Scripts directories can resolve case-insensitively on these platforms, even when their
+    // lexical paths use different casing.
+    let parent_matches = if cfg!(any(windows, target_os = "macos")) {
+        parent.components().count() == scripts.components().count()
+            && parent
+                .components()
+                .zip(scripts.components())
+                .all(|(actual, expected)| {
+                    actual
+                        .as_os_str()
+                        .eq_ignore_ascii_case(expected.as_os_str())
+                })
+    } else {
+        parent == scripts
+    };
+    if !parent_matches {
+        return Ok(());
+    }
+
+    let Some(name) = target.file_name().and_then(|name| name.to_str()) else {
         return Ok(());
     };
 
