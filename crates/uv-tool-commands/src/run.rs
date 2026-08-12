@@ -831,7 +831,7 @@ async fn get_or_create_environment(
         cache,
         Some(&reporter),
         install_mirrors.mirrors(),
-        install_mirrors.python_downloads_json_url.as_deref(),
+        install_mirrors.python_downloads_json_url(),
     )
     .await?
     .into_interpreter();

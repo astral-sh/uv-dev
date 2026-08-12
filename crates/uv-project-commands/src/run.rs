@@ -871,7 +871,7 @@ pub async fn run(
                     &cache,
                     Some(&download_reporter),
                     install_mirrors.mirrors(),
-                    install_mirrors.python_downloads_json_url.as_deref(),
+                    install_mirrors.python_downloads_json_url(),
                 )
                 .await?;
 

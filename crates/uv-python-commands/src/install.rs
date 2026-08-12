@@ -342,7 +342,7 @@ async fn perform_install(
     let download_list = ManagedPythonDownloadList::new(
         &client_builder,
         cache,
-        install_mirrors.python_downloads_json_url.as_deref(),
+        install_mirrors.python_downloads_json_url(),
     )
     .await?;
     // Python downloads are performing their own retries to catch stream errors, disable the

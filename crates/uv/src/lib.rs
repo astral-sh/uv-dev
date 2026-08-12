@@ -53,7 +53,9 @@ use uv_python_types::PythonRequest;
 use uv_requirements::{GroupsSpecification, RequirementsSource};
 use uv_requirements_txt::RequirementsTxtRequirement;
 use uv_scripts::{Pep723Error, Pep723Item, Pep723Script};
-use uv_settings::{Combine, EnvironmentOptions, FilesystemOptions, Options};
+use uv_settings::{
+    Combine, EnvironmentOptions, FilesystemOptions, Options, resolve_python_downloads_json_url,
+};
 use uv_static::EnvVars;
 use uv_threads::{RAYON_PARALLELISM, min_stack_size};
 use uv_warnings::{warn_user, warn_user_once};
@@ -1990,7 +1992,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                     config_discovery,
                     globals.python_preference,
                     globals.python_arch,
-                    args.python_downloads_json_url.as_deref(),
+                    resolve_python_downloads_json_url(args.python_downloads_json_url.as_deref()),
                     &client_builder.subcommand(vec!["python".to_owned(), "find".to_owned()]),
                     &cache,
                     &workspace_cache,

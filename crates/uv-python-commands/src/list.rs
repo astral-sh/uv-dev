@@ -121,7 +121,7 @@ pub async fn list(
         let download_list = ManagedPythonDownloadList::new(
             client_builder,
             cache,
-            install_mirrors.python_downloads_json_url.as_deref(),
+            install_mirrors.python_downloads_json_url(),
         )
         .await?;
 
