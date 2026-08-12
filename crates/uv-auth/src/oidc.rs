@@ -5,10 +5,15 @@ use std::time::{Duration, Instant};
 use base64::Engine;
 use base64::prelude::BASE64_URL_SAFE_NO_PAD;
 use rand::RngCore as _;
+use reqwest::header::{CONTENT_TYPE, HeaderValue};
+use reqwest::{Method, Request};
+use reqwest_middleware::ClientWithMiddleware;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tracing::debug;
 use url::Url;
+
+use crate::Credentials;
 
 const DEFAULT_CLIENT_ID: &str = "uv";
 const DEFAULT_SCOPE: &str = "openid";
@@ -44,6 +49,71 @@ impl std::fmt::Debug for OidcSession {
             .field("scope", &self.scope)
             .field("refresh_token", &"****")
             .finish()
+    }
+}
+
+impl OidcSession {
+    /// Exchange the refresh token for a fresh access token and persist token rotation.
+    pub(crate) async fn refresh(
+        &self,
+        client: &ClientWithMiddleware,
+    ) -> Result<(Credentials, Self), OidcError> {
+        let body = url::form_urlencoded::Serializer::new(String::new())
+            .extend_pairs([
+                ("grant_type", "refresh_token"),
+                ("refresh_token", self.refresh_token.as_str()),
+                ("client_id", self.client_id.as_str()),
+                ("scope", self.scope.as_str()),
+            ])
+            .finish();
+        let mut request = Request::new(Method::POST, self.token_endpoint.clone());
+        request.headers_mut().insert(
+            CONTENT_TYPE,
+            HeaderValue::from_static("application/x-www-form-urlencoded"),
+        );
+        *request.body_mut() = Some(body.into());
+        let response = client.execute(request).await?;
+
+        if !response.status().is_success() {
+            return Err(OidcError::TokenRefreshFailed(format!(
+                "token endpoint returned {}",
+                response.status()
+            )));
+        }
+
+        let response = response.json::<DeviceTokenResponse>().await?;
+        if let Some(error) = response.error {
+            return Err(OidcError::TokenRefreshFailed(error));
+        }
+        if response
+            .token_type
+            .as_deref()
+            .is_some_and(|token_type| !token_type.eq_ignore_ascii_case("bearer"))
+        {
+            return Err(OidcError::TokenRefreshFailed(
+                "authorization server returned a non-bearer access token".to_string(),
+            ));
+        }
+        let Some(access_token) = response.access_token else {
+            return Err(OidcError::TokenRefreshFailed(
+                "authorization server did not return an access token".to_string(),
+            ));
+        };
+
+        let credentials = if let Some(expires_in) = response.expires_in {
+            let expires_at = jiff::Timestamp::now()
+                .checked_add(Duration::from_secs(expires_in))
+                .map_err(|error| OidcError::TokenRefreshFailed(error.to_string()))?;
+            Credentials::bearer_with_expiration(access_token.into_bytes(), expires_at)
+        } else {
+            Credentials::bearer(access_token.into_bytes())
+        };
+
+        let mut session = self.clone();
+        if let Some(refresh_token) = response.refresh_token {
+            session.refresh_token = refresh_token;
+        }
+        Ok((credentials, session))
     }
 }
 
@@ -151,8 +221,14 @@ pub enum OidcError {
     #[error("Authorization denied by user")]
     AccessDenied,
 
+    #[error("OAuth token refresh failed: {0}")]
+    TokenRefreshFailed(String),
+
     #[error(transparent)]
     Request(#[from] reqwest::Error),
+
+    #[error(transparent)]
+    Middleware(#[from] reqwest_middleware::Error),
 }
 
 fn default_poll_interval() -> u64 {
@@ -343,5 +419,81 @@ pub async fn poll_for_token(
             }
             None => return Ok(response),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use reqwest_middleware::ClientBuilder;
+    use serde_json::json;
+    use wiremock::matchers::{body_string_contains, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    use super::*;
+
+    #[tokio::test]
+    async fn refresh_rotates_tokens() -> Result<(), Box<dyn std::error::Error>> {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .and(body_string_contains("grant_type=refresh_token"))
+            .and(body_string_contains("refresh_token=original-refresh"))
+            .and(body_string_contains("client_id=public-client"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "access_token": "renewed-access",
+                "token_type": "Bearer",
+                "expires_in": 3600,
+                "refresh_token": "rotated-refresh",
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let session = OidcSession {
+            issuer: Url::parse(&server.uri())?,
+            token_endpoint: Url::parse(&format!("{}/token", server.uri()))?,
+            client_id: "public-client".to_string(),
+            scope: "openid offline_access".to_string(),
+            refresh_token: "original-refresh".to_string(),
+        };
+        let client = ClientBuilder::new(reqwest::Client::new()).build();
+        let (credentials, refreshed) = session.refresh(&client).await?;
+
+        assert_eq!(
+            credentials.bearer_token(),
+            Some(b"renewed-access".as_slice())
+        );
+        assert_eq!(refreshed.refresh_token, "rotated-refresh");
+        assert!(!credentials.is_expired());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn refresh_preserves_unrotated_token() -> Result<(), Box<dyn std::error::Error>> {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "access_token": "renewed-access",
+                "token_type": "Bearer",
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let session = OidcSession {
+            issuer: Url::parse(&server.uri())?,
+            token_endpoint: Url::parse(&format!("{}/token", server.uri()))?,
+            client_id: "public-client".to_string(),
+            scope: "openid".to_string(),
+            refresh_token: "original-refresh".to_string(),
+        };
+        let client = ClientBuilder::new(reqwest::Client::new()).build();
+        let (_, refreshed) = session.refresh(&client).await?;
+
+        assert_eq!(refreshed.refresh_token, "original-refresh");
+
+        Ok(())
     }
 }

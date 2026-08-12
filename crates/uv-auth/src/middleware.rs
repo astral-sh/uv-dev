@@ -14,10 +14,10 @@ use uv_static::EnvVars;
 use uv_warnings::owo_colors::OwoColorize;
 
 #[cfg(test)]
-use crate::providers::{ArtifactRegistryProvider, AzureArtifactsProvider, RegistryAuthProvider};
+use crate::providers::{ArtifactRegistryProvider, AzureArtifactsProvider};
 use crate::providers::{
-    AzureEndpointProvider, GcsEndpointProvider, HuggingFaceProvider, RegistryAuthProviders,
-    S3EndpointProvider,
+    AzureEndpointProvider, GcsEndpointProvider, HuggingFaceProvider, RegistryAuthProvider,
+    RegistryAuthProviders, S3EndpointProvider,
 };
 use crate::pyx::{DEFAULT_TOLERANCE_SECS, PyxTokenStore};
 use crate::{
@@ -984,6 +984,11 @@ impl AuthMiddleware {
         } {
             debug!("Found credentials in keyring for {url}");
             Some(credentials)
+        } else if let Some(credentials) =
+            self.refresh_oidc_credentials(url, requested_username).await
+        {
+            debug!("Refreshed OAuth credentials in plaintext store for {url}");
+            Some(credentials)
         } else {
             None
         };
@@ -1021,6 +1026,33 @@ impl AuthMiddleware {
 
         debug!("Found {} credentials for {url}", provider.name());
         Some(Arc::new(Authentication::from(provider)))
+    }
+
+    async fn refresh_oidc_credentials(
+        &self,
+        url: &DisplaySafeUrl,
+        requested_username: Option<&str>,
+    ) -> Option<Credentials> {
+        if requested_username.is_some()
+            || self.keyring.is_some()
+            || self.preview.is_enabled(PreviewFeature::NativeAuth)
+            || matches!(
+                self.registry_auth_providers.provider_for(url),
+                Some(RegistryAuthProvider::Google(_))
+            )
+        {
+            return None;
+        }
+
+        let store = self.text_store.get().await?;
+        let client = self.base_client.as_ref()?;
+        match store.refresh_oidc_credentials(url, client).await {
+            Ok(credentials) => credentials,
+            Err(error) => {
+                warn!("Failed to refresh OAuth credentials for {url}: {error}");
+                None
+            }
+        }
     }
 }
 
