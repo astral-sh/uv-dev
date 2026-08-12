@@ -1,12 +1,14 @@
 #![expect(clippy::disallowed_types)]
 
-use anyhow::Result;
+use anyhow::{Context, Result, anyhow};
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::{fixture::ChildPath, prelude::*};
 use indoc::{formatdoc, indoc};
 use insta::assert_snapshot;
 use predicates::{prelude::predicate, str::contains};
 use serde_json::json;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use uv_fs::copy_dir_all;
 use uv_python::PYTHON_VERSION_FILENAME;
@@ -1411,6 +1413,80 @@ fn run_with() -> Result<()> {
     Checked 2 packages in [TIME]
       × No solution found when resolving `--with` dependencies:
       ╰─▶ Because there are no versions of add and you require add, we can conclude that your requirements are unsatisfiable.
+    ");
+
+    Ok(())
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn run_with_copied_python() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.13", "3.12"]);
+    let [(_, python_3_13), (_, python_3_12)] = context.python_versions.as_slice() else {
+        return Err(anyhow!("expected Python 3.13 and 3.12 interpreters"));
+    };
+    let python_3_13_root = python_3_13
+        .parent()
+        .and_then(Path::parent)
+        .context("Python interpreter must be in a bin directory")?
+        .to_path_buf();
+
+    context
+        .venv()
+        .arg("--python")
+        .arg("3.13")
+        .assert()
+        .success();
+
+    // Match a virtual environment created with copies, where `python` differs from the `python3`
+    // alias next to it.
+    let virtualenv_bin = context.venv.join("bin");
+    let copied_python = virtualenv_bin.join("python");
+    fs_err::remove_file(&copied_python)?;
+    fs_err::copy(python_3_13, &copied_python)?;
+    fs_err::copy(
+        python_3_13_root.join("lib/libpython3.13.so.1.0"),
+        context.venv.join("lib/libpython3.13.so.1.0"),
+    )?;
+    let python_3_12_wrapper = context.temp_dir.child("python3-wrapper");
+    python_3_12_wrapper.write_str(&formatdoc! {r#"
+        #!/bin/sh
+        exec "{}" "$@"
+        "#, python_3_12.display()})?;
+    let mut permissions = fs_err::metadata(&python_3_12_wrapper)?.permissions();
+    permissions.set_mode(0o755);
+    fs_err::set_permissions(&python_3_12_wrapper, permissions)?;
+    let python_alias = virtualenv_bin.join("python3");
+    fs_err::remove_file(&python_alias)?;
+    fs_err::os::unix::fs::symlink(&python_3_12_wrapper, &python_alias)?;
+
+    // The copied interpreter itself is Python 3.13.
+    uv_snapshot!(context.filters(), context.python_command()
+        .arg("-c")
+        .arg("import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    3.13
+    ");
+
+    // `uv run --with` incorrectly prefers the adjacent Python 3.12 alias over the active copied
+    // Python 3.13 interpreter; see astral-sh/uv#21077.
+    uv_snapshot!(context.filters(), context.run()
+        .env(EnvVars::VIRTUAL_ENV, context.venv.as_os_str())
+        .arg("--with")
+        .arg("iniconfig")
+        .arg("python")
+        .arg("-c")
+        .arg("import iniconfig, sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    3.12
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + iniconfig==2.0.0
     ");
 
     Ok(())
