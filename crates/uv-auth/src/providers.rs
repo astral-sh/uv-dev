@@ -8,6 +8,8 @@ use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result};
+use azure_core::credentials::TokenCredential;
+use azure_identity::DeveloperToolsCredential;
 use http::header::AUTHORIZATION;
 use jiff::{Timestamp, civil::DateTime, tz::TimeZone};
 use reqsign::aws::DefaultSigner as AwsDefaultSigner;
@@ -581,7 +583,10 @@ impl AzureArtifactsProvider {
         }
 
         cached_registry_credentials(&self.credentials, async {
-            if let Some((credentials, cache_duration)) = Self::credentials_from_cli().await {
+            if let Some((credentials, cache_duration)) = Self::credentials_from_sdk().await {
+                debug!("Found Azure Artifacts credentials through the Azure Identity SDK");
+                (Some(credentials), cache_duration)
+            } else if let Some((credentials, cache_duration)) = Self::credentials_from_cli().await {
                 debug!("Found Azure Artifacts credentials from the Azure CLI");
                 (Some(credentials), cache_duration)
             } else {
@@ -594,6 +599,34 @@ impl AzureArtifactsProvider {
 
     async fn credentials_from_cli() -> Option<(Credentials, Duration)> {
         Self::credentials_from_cli_command(OsStr::new(AZURE_CLI_EXECUTABLE)).await
+    }
+
+    /// Use the Azure SDK developer chain before falling back to legacy Azure CLI parsing.
+    async fn credentials_from_sdk() -> Option<(Credentials, Duration)> {
+        let provider = DeveloperToolsCredential::new(None)
+            .inspect_err(|error| {
+                debug!("Failed to initialize Azure Identity developer credentials: {error}");
+            })
+            .ok()?;
+        let scope = format!("{AZURE_DEVOPS_RESOURCE}/.default");
+        let token = provider
+            .get_token(&[&scope], None)
+            .await
+            .inspect_err(|error| {
+                debug!("Failed to acquire Azure Identity developer credentials: {error}");
+            })
+            .ok()?;
+        let expires_at = Timestamp::from_second(token.expires_on.unix_timestamp()).ok()?;
+        let cache_duration =
+            registry_credential_cache_duration(expires_at, AZURE_ARTIFACTS_REFRESH_BUFFER)?;
+        if cache_duration.is_zero() || token.token.secret().trim().is_empty() {
+            return None;
+        }
+
+        Some((
+            Credentials::bearer(token.token.secret().as_bytes().to_vec()),
+            cache_duration,
+        ))
     }
 
     async fn credentials_from_cli_command(program: &OsStr) -> Option<(Credentials, Duration)> {
