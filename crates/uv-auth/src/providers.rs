@@ -113,14 +113,11 @@ impl ProvideCredential for ArtifactRegistryCredentialProvider {
         }
 
         if let Some(path) = google_cloud_sdk_adc_path(context) {
-            match context.file_read(&path).await {
-                Ok(content) => {
-                    return reqsign::google::StaticCredentialProvider::new(
-                        String::from_utf8_lossy(&content).into_owned(),
-                    )
-                    .provide_credential(context)
-                    .await;
-                }
+            match reqsign::google::FileCredentialProvider::new(path)
+                .provide_credential(context)
+                .await
+            {
+                Ok(credentials) => return Ok(credentials),
                 Err(err) if error_is_not_found(&err) => {}
                 Err(err) => return Err(err),
             }
@@ -823,6 +820,30 @@ mod tests {
         assert_eq!(
             google_cloud_sdk_adc_path(&home_directory),
             Some(application_default_credentials("/home/.config"))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_artifact_registry_credentials_fail_closed_for_cloud_sdk_adc() {
+        let context = Context::new()
+            .with_env(StaticEnv {
+                envs: HashMap::from([(
+                    GOOGLE_CLOUD_SDK_CONFIG.to_string(),
+                    "/cloud-sdk".to_string(),
+                )]),
+                home_dir: None,
+            })
+            .with_file_read(TestFileRead::new(HashMap::from([(
+                cloud_sdk_credentials_path(),
+                br#"{"type":"not_a_google_credential"}"#.to_vec(),
+            )])));
+
+        assert!(
+            ArtifactRegistryCredentialProvider
+                .provide_credential(&context)
+                .await
+                .is_err(),
+            "Invalid Cloud SDK application default credentials must not fall back to another identity"
         );
     }
 
