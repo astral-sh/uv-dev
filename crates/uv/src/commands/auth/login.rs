@@ -350,7 +350,11 @@ async fn oidc_device_flow(
     };
     match backend {
         AuthBackend::System(provider) => {
-            if !provider.store(service.url(), &credentials).await? {
+            if let Some(session) = session {
+                provider
+                    .store_oidc_session(service.url(), &credentials, &session)
+                    .await?;
+            } else if !provider.store(service.url(), &credentials).await? {
                 bail!("The native authentication backend does not support bearer tokens");
             }
         }

@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 
@@ -367,14 +368,18 @@ impl TextCredentialStore {
 
         let toml_creds = TomlCredentials { credentials };
         let content = toml::to_string_pretty(&toml_creds)?;
-        fs::create_dir_all(
-            path.as_ref()
-                .parent()
-                .ok_or(TomlCredentialError::CredentialsDirError)?,
-        )?;
+        let directory = path
+            .as_ref()
+            .parent()
+            .ok_or(TomlCredentialError::CredentialsDirError)?;
+        fs::create_dir_all(directory)?;
 
-        // TODO(zanieb): We should use an atomic write here
-        fs::write(path, content)?;
+        // `NamedTempFile` defaults to owner-only permissions on Unix, unlike the general-purpose
+        // `uv_fs::write_atomic_sync`, which deliberately creates world-readable files.
+        let mut temporary = tempfile::Builder::new().tempfile_in(directory)?;
+        temporary.write_all(content.as_bytes())?;
+        temporary.as_file().sync_all()?;
+        uv_fs::persist_with_retry_sync(temporary, path.as_ref())?;
         Ok(())
     }
 
@@ -660,17 +665,55 @@ password = "pass2"
         assert_eq!(cred.password(), Some("testpass"));
 
         // Test saving
-        let temp_output = NamedTempFile::new().unwrap();
+        // Close the destination handle before replacing it; Windows does not permit renaming
+        // another file over an open `NamedTempFile`.
+        let temp_output = NamedTempFile::new().unwrap().into_temp_path();
         store
             .write(
-                temp_output.path(),
-                TextCredentialStore::lock(temp_file.path()).await.unwrap(),
+                &temp_output,
+                TextCredentialStore::lock(&temp_output).await.unwrap(),
             )
             .unwrap();
 
-        let content = fs::read_to_string(temp_output.path()).unwrap();
+        let content = fs::read_to_string(&temp_output).unwrap();
         assert!(content.contains("example.com"));
         assert!(content.contains("testuser"));
+    }
+
+    #[tokio::test]
+    async fn test_credential_store_replaces_existing_file_atomically() {
+        let file = NamedTempFile::new()
+            .expect("Credential file should be created")
+            .into_temp_path();
+        fs::write(&file, "previous credentials").expect("Existing credentials should write");
+
+        let mut store = TextCredentialStore::default();
+        store.insert(
+            Service::from_str("https://example.com/private").expect("Service URL should parse"),
+            Credentials::bearer(b"replacement-token".to_vec()),
+        );
+        store
+            .write(
+                &file,
+                TextCredentialStore::lock(&file)
+                    .await
+                    .expect("Credential lock should be acquired"),
+            )
+            .expect("Credential file should be replaced atomically");
+
+        let content = fs::read_to_string(&file).expect("New credential file should exist");
+        assert!(content.contains("replacement-token"));
+        assert!(!content.contains("previous credentials"));
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let permissions = fs::metadata(&file)
+                .expect("Credential file metadata should be readable")
+                .permissions();
+            assert_eq!(permissions.mode() & 0o777, 0o600);
+        }
     }
 
     #[test]
