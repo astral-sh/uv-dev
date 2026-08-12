@@ -744,7 +744,9 @@ async fn do_lock(
             warn_user_once!(
                 "The workspace `requires-python` value (`{requires_python}`) does not contain a lower bound. Add a lower bound to indicate the minimum compatible Python version (e.g., `{default}`)."
             );
-        } else if requires_python.is_exact_without_patch() {
+        } else if matches!(target, LockTarget::Script(_))
+            && requires_python.is_exact_without_patch()
+        {
             warn_user_once!(
                 "The workspace `requires-python` value (`{requires_python}`) contains an exact match without a patch version. When omitted, the patch version is implicitly `0` (e.g., `{requires_python}.0`). Did you mean `{requires_python}.*`?"
             );
