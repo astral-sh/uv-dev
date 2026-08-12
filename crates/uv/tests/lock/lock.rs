@@ -6615,6 +6615,82 @@ fn lock_requires_python_upper() -> Result<()> {
     Ok(())
 }
 
+/// Lock a workspace whose Python requirements intersect at one exact version.
+#[cfg(all(feature = "test-universal", feature = "test-python-patch"))]
+#[test]
+fn lock_requires_python_exact_workspace_intersection() -> Result<()> {
+    let context = uv_test::test_context!("3.13.0");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+            [project]
+            name = "root"
+            version = "1.0.0"
+            requires-python = ">=3.13"
+
+            [tool.uv.workspace]
+            members = ["member"]
+        "#})?;
+
+    let member = context.temp_dir.child("member");
+    member.create_dir_all()?;
+    member.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "member"
+        version = "1.0.0"
+        requires-python = "<=3.13, <4"
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: The workspace `requires-python` value (`==3.13`) contains an exact match without a patch version. When omitted, the patch version is implicitly `0` (e.g., `==3.13.0`). Did you mean `==3.13.*`?
+    Resolved 2 packages in [TIME]
+    ");
+
+    Ok(())
+}
+
+/// Lock a workspace member with an explicitly exact Python requirement.
+#[cfg(all(feature = "test-universal", feature = "test-python-patch"))]
+#[test]
+fn lock_requires_python_exact_workspace_member() -> Result<()> {
+    let context = uv_test::test_context!("3.13.0");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+            [project]
+            name = "root"
+            version = "1.0.0"
+            requires-python = ">=3.13"
+
+            [tool.uv.workspace]
+            members = ["member"]
+        "#})?;
+
+    let member = context.temp_dir.child("member");
+    member.create_dir_all()?;
+    member.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "member"
+        version = "1.0.0"
+        requires-python = "==3.13"
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: The workspace `requires-python` value (`==3.13`) contains an exact match without a patch version. When omitted, the patch version is implicitly `0` (e.g., `==3.13.0`). Did you mean `==3.13.*`?
+    Resolved 2 packages in [TIME]
+    ");
+
+    Ok(())
+}
+
 /// Lock a requirement from PyPI with an exact Python bound.
 #[cfg(all(feature = "test-universal", feature = "test-python-patch"))]
 #[test]
