@@ -160,7 +160,7 @@ impl Token {
 
     fn is_expired(&self) -> bool {
         self.expires_at.is_some_and(|expires_at| {
-            expires_at <= jiff::Timestamp::now() + ACCESS_TOKEN_EXPIRATION_BUFFER
+            crate::refresh::expires_within(expires_at, ACCESS_TOKEN_EXPIRATION_BUFFER)
         })
     }
 }
