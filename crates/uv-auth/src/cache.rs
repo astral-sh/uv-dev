@@ -152,9 +152,15 @@ impl CredentialsCache {
             return;
         }
 
-        // Providers on shared registry hosts can require credentials to remain URL-scoped.
-        let url_only = RegistryAuthProvider::for_url(url)
-            .is_some_and(|provider| provider.cache_scope() == RegistryCredentialScope::UrlOnly);
+        // Persisted OAuth sessions are bound to a package service, even when their host does
+        // not have a built-in registry provider. Never promote those credentials to the realm.
+        let scoped_service = match credentials.as_ref() {
+            Authentication::Oidc { service, .. } => Some(service.url().clone()),
+            _ => None,
+        };
+        let url_only = scoped_service.is_some()
+            || RegistryAuthProvider::for_url(url)
+                .is_some_and(|provider| provider.cache_scope() == RegistryCredentialScope::UrlOnly);
         if !url_only {
             // Insert an entry for requests including the username.
             let username = credentials.to_username();
@@ -169,7 +175,7 @@ impl CredentialsCache {
 
         // Insert an entry for the URL.
         let mut urls = self.urls.write().unwrap();
-        urls.insert(url, credentials);
+        urls.insert(scoped_service.as_ref().unwrap_or(url), credentials);
     }
 
     /// Private interface to update a realm cache entry.
@@ -420,6 +426,49 @@ mod tests {
             cache.get_realm(Realm::from(&url), Username::none()),
             Some(credentials)
         );
+    }
+
+    #[test]
+    fn test_oidc_credentials_remain_scoped_to_their_package_service() {
+        for (service_path, other_path) in [("team-a", "team-b"), ("team-b", "team-a")] {
+            let service_url = DisplaySafeUrl::parse(&format!(
+                "https://registry.example.com/{service_path}/simple/"
+            ))
+            .expect("OAuth package service URL should parse");
+            let package_url = DisplaySafeUrl::parse(&format!(
+                "https://registry.example.com/{service_path}/simple/example/"
+            ))
+            .expect("OAuth package URL should parse");
+            let other_url = DisplaySafeUrl::parse(&format!(
+                "https://registry.example.com/{other_path}/simple/example/"
+            ))
+            .expect("Other package service URL should parse");
+            let service = crate::Service::try_from(service_url.clone())
+                .expect("OAuth package service should normalize");
+            let credentials = Arc::new(Authentication::Oidc {
+                service,
+                credentials: Credentials::bearer(b"service-scoped-token".to_vec()),
+            });
+            let cache = CredentialsCache::default();
+
+            cache.insert(&package_url, credentials.clone());
+
+            assert_eq!(
+                cache.get_url(&service_url, &Username::none()),
+                Some(credentials.clone()),
+                "OAuth credentials should remain available throughout their package service"
+            );
+            assert_eq!(
+                cache.get_url(&other_url, &Username::none()),
+                None,
+                "OAuth credentials for {service_path} must not authenticate {other_path}"
+            );
+            assert_eq!(
+                cache.get_realm(Realm::from(&other_url), Username::none()),
+                None,
+                "OAuth credentials for {service_path} must never enter the shared realm cache"
+            );
+        }
     }
 
     #[test]

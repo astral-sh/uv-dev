@@ -16,7 +16,7 @@ use url::Url;
 use crate::Credentials;
 
 const DEFAULT_CLIENT_ID: &str = "uv";
-const DEFAULT_SCOPE: &str = "openid";
+const DEFAULT_SCOPE: &str = "openid offline_access";
 const DEFAULT_POLL_INTERVAL: u64 = 5;
 
 /// The OAuth metadata and refresh token associated with persisted bearer credentials.
@@ -131,6 +131,8 @@ pub struct OidcConfig {
     pub client_id: Option<String>,
 
     /// The space-separated OAuth scopes to request.
+    ///
+    /// Include `offline_access` when the provider requires it to issue refresh tokens.
     #[serde(default)]
     pub scope: Option<String>,
 }

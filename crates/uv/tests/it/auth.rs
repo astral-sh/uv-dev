@@ -1063,7 +1063,7 @@ async fn login_oidc_device_flow() -> Result<()> {
     Mock::given(method("POST"))
         .and(path("/oauth/device/code"))
         .and(body_string_contains("client_id=uv"))
-        .and(body_string_contains("scope=openid"))
+        .and(body_string_contains("scope=openid+offline_access"))
         .and(body_string_contains("code_challenge_method=S256"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "device_code": "device-code",

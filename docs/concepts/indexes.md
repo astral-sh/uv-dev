@@ -231,11 +231,12 @@ authenticate = "always"
 [tool.uv.index.oidc]
 issuer = "https://login.microsoftonline.com/<TENANT_ID>/v2.0"
 client-id = "d5a56ea4-7369-46b8-a538-c370805301bf"
-scope = "499b84ac-1321-427f-aa17-267ca6975798/.default"
+scope = "499b84ac-1321-427f-aa17-267ca6975798/.default offline_access"
 ```
 
 The `--issuer`, `--client-id`, and `--scope` options on `uv auth login` override the corresponding
-index settings. See the [authentication CLI documentation](./authentication/cli.md) for details.
+index settings. Include `offline_access` when the identity provider requires it to issue a refresh
+token. See the [authentication CLI documentation](./authentication/cli.md) for details.
 
 ### Ignoring error codes
 

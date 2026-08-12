@@ -737,11 +737,19 @@ impl AuthMiddleware {
         let username = Username::from(
             credentials.map(|credentials| credentials.username().unwrap_or_default().to_string()),
         );
+        let oidc_service = self
+            .text_store
+            .get()
+            .await
+            .and_then(|store| store.oidc_service_for(url))
+            .cloned();
 
         // Fetches can be expensive, so we will only run them _once_ per realm or index URL and username combination
         // All other requests for the same realm or index URL will wait until the first one completes
         let key = if let Some(index) = index {
             (FetchUrl::Index(index.url.clone()), username)
+        } else if let Some(service) = &oidc_service {
+            (FetchUrl::Index(service.url().clone()), username)
         } else {
             (FetchUrl::Realm(Realm::from(&**url)), username)
         };
@@ -837,6 +845,7 @@ impl AuthMiddleware {
         }
 
         // If this is a known URL, authenticate it via the token store.
+        let mut scoped_service = None;
         let credentials = if let Some(credentials) = async {
             let base_client = self.base_client.as_ref()?;
             let token_store = self.pyx_token_store.as_ref()?;
@@ -904,6 +913,9 @@ impl AuthMiddleware {
             }
         }) {
             debug!("Found credentials in plaintext store for {url}");
+            if matches!(credentials, Credentials::Bearer { .. }) {
+                scoped_service.clone_from(&oidc_service);
+            }
             Some(credentials)
         } else if let Some(credentials) = {
             if self.preview.is_enabled(PreviewFeature::NativeAuth) {
@@ -988,12 +1000,21 @@ impl AuthMiddleware {
             self.refresh_oidc_credentials(url, requested_username).await
         {
             debug!("Refreshed OAuth credentials in plaintext store for {url}");
+            scoped_service.clone_from(&oidc_service);
             Some(credentials)
         } else {
             None
         };
 
-        let credentials = credentials.map(Authentication::from).map(Arc::new);
+        let credentials = credentials
+            .map(|credentials| match scoped_service {
+                Some(service) => Authentication::Oidc {
+                    service,
+                    credentials,
+                },
+                None => Authentication::from(credentials),
+            })
+            .map(Arc::new);
 
         // Register the fetch for this key. Built-in registry credentials are checked separately
         // because their providers have expiry-aware caches for both hits and misses.
@@ -1058,7 +1079,13 @@ impl AuthMiddleware {
 
 fn tracing_url(request: &Request, credentials: Option<&Authentication>) -> DisplaySafeUrl {
     let mut url = DisplaySafeUrl::from_url(request.url().clone());
-    if let Some(Authentication::Credentials(creds)) = credentials {
+    if let Some(
+        Authentication::Credentials(creds)
+        | Authentication::Oidc {
+            credentials: creds, ..
+        },
+    ) = credentials
+    {
         if let Some(username) = creds.username() {
             let _ = url.set_username(username);
         }
