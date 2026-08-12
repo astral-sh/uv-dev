@@ -1019,7 +1019,18 @@ async fn get_or_create_environment(
                     .get_tool_receipt(&requirement.name)
                     .ok()
                     .flatten()
-                    .is_some_and(|receipt| ToolOptions::from(options) == *receipt.options())
+                    .is_some_and(|receipt| {
+                        let mut options = options;
+                        // A run without an explicit index can reuse the installed tool's index,
+                        // while other stored resolver options must still match the invocation.
+                        if options.indexes.index.is_none() {
+                            options.indexes.index =
+                                ResolverInstallerOptions::from(receipt.options().clone())
+                                    .indexes
+                                    .index;
+                        }
+                        ToolOptions::from(options) == *receipt.options()
+                    })
                 {
                     let ResolverInstallerSettings {
                         resolver:

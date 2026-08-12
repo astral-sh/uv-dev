@@ -544,7 +544,7 @@ fn tool_run_from_install_with_index() {
         .assert()
         .success();
 
-    // Omitting the installation index incorrectly discards the installed environment.
+    // Omitting the installation index still reuses the installed environment.
     uv_snapshot!(context.filters(), context.tool_run()
         .arg("--from")
         .arg("simple-launcher")
@@ -554,12 +554,9 @@ fn tool_run_from_install_with_index() {
         .env_remove(EnvVars::UV_INDEX_URL)
         .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
         .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str()), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-      × No solution found when resolving tool dependencies:
-      ╰─▶ Because simple-launcher was not found in the cache and you require simple-launcher, we can conclude that your requirements are unsatisfiable.
-
-    hint: Packages were unavailable because the network was disabled. When the network is disabled, registry packages may only be read from the cache.
+    exit_code: 0 (success)
+    ----- stdout -----
+    Hi from the simple launcher!
     ");
 
     // Repeating the installation index reuses the installed environment.
