@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 20225,
+        "title": "Stabilize preview features for uv 0.12",
+        "url": "https://github.com/astral-sh/uv/pull/20225",
+        "state": "merged",
+        "reason": "Direct version-specific match: it intentionally made uv 0.12 always rewrite the sdist `pyproject.toml`, retain `pyproject.toml.orig`, and remove TOML 1.1 detection."
+      },
+      {
+        "kind": "pull_request",
+        "number": 18741,
+        "title": "Add TOML v1.1 -> v1.0 backwards compatibility for source distributions",
+        "url": "https://github.com/astral-sh/uv/pull/18741",
+        "state": "merged",
+        "reason": "This introduced the behavior. Its review explicitly considered writing `.orig` only when rewriting was necessary, but chose consistent normalization and preservation instead."
+      },
+      {
+        "kind": "issue",
+        "number": 20185,
+        "title": "uv 0.12 preview stabilization tracking issue",
+        "url": "https://github.com/astral-sh/uv/issues/20185",
+        "state": "closed",
+        "reason": "Tracks the deliberate stabilization of `toml-backwards-compatibility` for the reported uv 0.12 release."
+      },
+      {
+        "kind": "issue",
+        "number": 20049,
+        "title": "Warn when `pyproject.toml` uses TOML 1.1 syntax (e.g. multi-line inline tables) that Python's `tomllib` can't parse",
+        "url": "https://github.com/astral-sh/uv/issues/20049",
+        "state": "open",
+        "reason": "Adjacent discussion confirming uv_build’s rewrite strategy; it differs by requesting diagnostics for actual TOML 1.1 syntax used with other build backends."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests using literal queries for `pyproject.toml.orig`, `author`/`authors`, TOML 1.1, and `uv build --sdist`, plus conceptual and fix-oriented queries for sdist normalization, TOML downgrade compatibility, disabling rewrites, omitting backups, and uv 0.12 stabilization. Inspected candidate bodies, comments, reviews, diffs, references, and current source. No existing item requests omission of `.orig` for TOML 1.0 inputs. astral-sh/uv#18055 was ruled out because `.orig` is merely a local diff filename there; unrelated astral-sh/uv#19832 and astral-sh/uv#21061 were also ruled out."
+  },
+  "type": "enhancement",
+  "type_reason": "The extra file is intentional uv 0.12 behavior, not evidence that the shown TOML 1.0-compatible field was detected as TOML 1.1. astral-sh/uv#20225 deliberately removed syntax detection and made normalization plus preservation unconditional. Omitting `.orig` for compatible input would therefore change established behavior rather than fix a parser defect, and no existing item tracks that change closely enough for duplicate classification.",
+  "summary": "uv 0.12 intentionally serializes every uv_build sdist root `pyproject.toml` to TOML 1.0-compatible syntax and preserves the input as `pyproject.toml.orig`. astral-sh/uv#18741 introduced this behavior, and astral-sh/uv#20225 made it unconditional; the author entry did not trigger TOML 1.1 detection.",
+  "draft_response": "The presence of `pyproject.toml.orig` does not mean this field was interpreted as TOML 1.1. In uv 0.12, uv_build unconditionally rewrites the source distribution’s root `pyproject.toml` to TOML 1.0-compatible syntax and preserves the input as `pyproject.toml.orig`. That behavior was introduced in astral-sh/uv#18741 and made the default in astral-sh/uv#20225. The shown value is valid TOML 1.0 syntax, although the standardized PEP 621 metadata key is `project.authors` (plural). Omitting `.orig` for already-compatible inputs would be a change to the stabilized behavior rather than a parser fix. If the extra file causes a concrete interoperability problem, please share the affected tool and error so we can assess that impact."
+}
