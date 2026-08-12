@@ -117,7 +117,7 @@ pub(crate) async fn list(
             .as_deref()
             .is_some_and(|source| source.ends_with(".ndjson"))
             || (python_downloads_json_url.is_none()
-                && uv_preview::is_enabled(PreviewFeature::RemotePythonDownloadMetadata));
+                && uv_preview::is_enabled_explicitly(PreviewFeature::RemotePythonDownloadMetadata));
         let limit = if remote_metadata && !all_versions && !all_platforms && !all_arches {
             Some(50)
         } else {

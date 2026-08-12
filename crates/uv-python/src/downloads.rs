@@ -1600,7 +1600,7 @@ impl ManagedPythonDownloadList {
     }
 
     /// Find one matching Python distribution without consuming the whole remote manifest.
-    pub async fn find_streaming(
+    async fn find_streaming(
         client_builder: &BaseClientBuilder<'_>,
         cache: &Cache,
         python_downloads_json_url: Option<&str>,
@@ -1678,7 +1678,7 @@ fn remote_ndjson_url(
         };
     }
 
-    if uv_preview::is_enabled(PreviewFeature::RemotePythonDownloadMetadata) {
+    if uv_preview::is_enabled_explicitly(PreviewFeature::RemotePythonDownloadMetadata) {
         return Ok(Some(DisplaySafeUrl::parse(
             REMOTE_PYTHON_DOWNLOAD_METADATA_URL,
         )?));
