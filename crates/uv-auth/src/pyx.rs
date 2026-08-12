@@ -8,8 +8,6 @@ use etcetera::BaseStrategy;
 use reqwest_middleware::ClientWithMiddleware;
 use tracing::debug;
 use url::Url;
-use uv_fs::{LockedFile, LockedFileMode};
-
 use uv_cache_key::CanonicalUrl;
 use uv_redacted::{DisplaySafeUrl, DisplaySafeUrlError};
 use uv_small_str::SmallString;
@@ -147,7 +145,7 @@ impl PyxTokens {
                 let now = jiff::Timestamp::now();
                 if exp < now {
                     Err(ExpiredTokenReason::Expired(exp))
-                } else if exp < now + Duration::from_secs(tolerance_secs) {
+                } else if crate::refresh::expires_within(exp, Duration::from_secs(tolerance_secs)) {
                     Err(ExpiredTokenReason::ExpiringSoon(exp))
                 } else {
                     Ok(exp)
@@ -464,7 +462,7 @@ impl PyxTokenStore {
         let lock_path = self.lock_path(&tokens);
 
         // Acquire a lock to prevent concurrent refresh attempts for this token
-        let _lock = LockedFile::acquire(&lock_path, LockedFileMode::Exclusive, "pyx refresh")
+        let _lock = crate::refresh::acquire_token_lock(&lock_path, "pyx refresh")
             .await
             .map_err(|err| TokenStoreError::Io(io::Error::other(err.to_string())))?;
 

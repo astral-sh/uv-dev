@@ -5,7 +5,7 @@ use fs_err as fs;
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use uv_fs::{LockedFile, LockedFileError, LockedFileMode};
+use uv_fs::{LockedFile, LockedFileError};
 use uv_preview::{Preview, PreviewFeature};
 use uv_redacted::DisplaySafeUrl;
 
@@ -299,7 +299,7 @@ impl TextCredentialStore {
             fs::create_dir_all(parent)?;
         }
         let lock = path.with_added_extension("lock");
-        Ok(LockedFile::acquire(lock, LockedFileMode::Exclusive, "credentials store").await?)
+        Ok(crate::refresh::acquire_token_lock(&lock, "credentials store").await?)
     }
 
     /// Read credentials from a file.
