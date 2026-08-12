@@ -836,9 +836,12 @@ fn parse_entry(
         let requirements_dir = std::path::absolute(working_dir.join(requirements_dir))
             .map_err(RequirementsTxtParserError::Io)?;
         let path = requirements_dir.join(expanded.as_ref());
+        // Existing directories such as `https:links` take precedence over URL parsing.
         let url = if path.exists() {
             VerbatimUrl::from_absolute_path(&path)
         } else {
+            // Preserve uppercase URL schemes and only interpret a relative URL without
+            // a base as a missing local path.
             match VerbatimUrl::parse_url(expanded.as_ref()) {
                 Ok(url) => Ok(url),
                 Err(VerbatimUrlError::Url(DisplaySafeUrlError::Url(
