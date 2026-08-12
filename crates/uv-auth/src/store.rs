@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 
@@ -367,14 +368,18 @@ impl TextCredentialStore {
 
         let toml_creds = TomlCredentials { credentials };
         let content = toml::to_string_pretty(&toml_creds)?;
-        fs::create_dir_all(
-            path.as_ref()
-                .parent()
-                .ok_or(TomlCredentialError::CredentialsDirError)?,
-        )?;
+        let directory = path
+            .as_ref()
+            .parent()
+            .ok_or(TomlCredentialError::CredentialsDirError)?;
+        fs::create_dir_all(directory)?;
 
-        // Preserve the existing credential file if the process exits during refresh-token rotation.
-        uv_fs::write_atomic_sync(path, content.as_bytes())?;
+        // `NamedTempFile` defaults to owner-only permissions on Unix, unlike the general-purpose
+        // `uv_fs::write_atomic_sync`, which deliberately creates world-readable files.
+        let mut temporary = tempfile::Builder::new().tempfile_in(directory)?;
+        temporary.write_all(content.as_bytes())?;
+        temporary.as_file().sync_all()?;
+        uv_fs::persist_with_retry_sync(temporary, path.as_ref())?;
         Ok(())
     }
 
@@ -695,6 +700,16 @@ password = "pass2"
         let content = fs::read_to_string(file.path()).expect("New credential file should exist");
         assert!(content.contains("replacement-token"));
         assert!(!content.contains("previous credentials"));
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let permissions = fs::metadata(file.path())
+                .expect("Credential file metadata should be readable")
+                .permissions();
+            assert_eq!(permissions.mode() & 0o777, 0o600);
+        }
     }
 
     #[test]
