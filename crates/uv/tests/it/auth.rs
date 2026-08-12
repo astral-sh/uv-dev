@@ -5,7 +5,7 @@ use indoc::formatdoc;
 use insta::allow_duplicates;
 use serde_json::json;
 use uv_static::EnvVars;
-use wiremock::matchers::{body_string_contains, method, path};
+use wiremock::matchers::{body_string_contains, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use uv_test::uv_snapshot;
@@ -1343,6 +1343,102 @@ async fn login_oidc_persists_refresh_session() -> Result<()> {
     ");
 
     insta::assert_snapshot!(fs_err::read_to_string(credentials_path)?, @"credential = []");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn install_refreshes_expired_oidc_credentials() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let issuer = MockServer::start().await;
+    let registry = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .and(body_string_contains("grant_type=refresh_token"))
+        .and(body_string_contains(
+            "refresh_token=expired-session-refresh",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": "refreshed-access-token",
+            "token_type": "Bearer",
+            "expires_in": 3600,
+            "refresh_token": "rotated-refresh-token",
+        })))
+        .expect(1)
+        .mount(&issuer)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/simple/refresh-example/"))
+        .and(header("authorization", "Bearer refreshed-access-token"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw("<html><body></body></html>", "text/html"),
+        )
+        .expect(1)
+        .up_to_n_times(1)
+        .mount(&registry)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/simple/refresh-example/"))
+        .respond_with(ResponseTemplate::new(401))
+        .mount(&registry)
+        .await;
+
+    let credentials_path = context.temp_dir.child("credentials.toml");
+    credentials_path.write_str(&formatdoc! {
+        r#"
+        [[credential]]
+        service = "{}/"
+        scheme = "bearer"
+        token = "expired-access-token"
+        expires-at = "2000-01-01T00:00:00Z"
+
+        [credential.oidc]
+        issuer = "{}/"
+        token-endpoint = "{}/token"
+        client-id = "public-client"
+        scope = "openid offline_access"
+        refresh-token = "expired-session-refresh"
+        "#,
+        registry.uri(),
+        issuer.uri(),
+        issuer.uri(),
+    })?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--dry-run")
+        .arg("--no-deps")
+        .arg("--index-url")
+        .arg(format!("{}/simple/", registry.uri()))
+        .arg("refresh-example==1.0.0")
+        .env(EnvVars::UV_CREDENTIALS_DIR, context.temp_dir.as_os_str()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+      × No solution found when resolving dependencies:
+      ╰─▶ Because there is no version of refresh-example==1.0.0 and you require refresh-example==1.0.0, we can conclude that your requirements are unsatisfiable.
+    ");
+
+    let credentials = fs_err::read_to_string(&credentials_path)?;
+    let mut filters = context.filters();
+    filters.push((r#"expires-at = "[^"]+""#, r#"expires-at = "[TIMESTAMP]""#));
+    insta::with_settings!({ filters => filters }, {
+        insta::assert_snapshot!(credentials, @r#"
+        [[credential]]
+        service = "http://[LOCALHOST]/"
+        scheme = "bearer"
+        token = "refreshed-access-token"
+        expires-at = "[TIMESTAMP]"
+
+        [credential.oidc]
+        issuer = "http://[LOCALHOST]/"
+        token-endpoint = "http://[LOCALHOST]/token"
+        client-id = "public-client"
+        scope = "openid offline_access"
+        refresh-token = "rotated-refresh-token"
+        "#);
+    });
 
     Ok(())
 }
