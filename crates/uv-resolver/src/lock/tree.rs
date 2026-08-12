@@ -1058,6 +1058,7 @@ impl JsonGraph {
             }
         };
         let roots = builder.roots(target);
+        builder.restore_standalone_markers(&roots);
         let members = builder.members(target);
         let resolution = builder.finish();
 
@@ -1080,6 +1081,7 @@ struct JsonGraphBuilder<'tree, 'env> {
     tree: &'tree TreeDisplay<'env>,
     workspace_root: PortablePathBuf,
     resolution: BTreeMap<String, MetadataNode>,
+    dependencies: Vec<(String, String, MarkerTree, bool)>,
 }
 
 impl<'tree, 'env> JsonGraphBuilder<'tree, 'env> {
@@ -1088,6 +1090,7 @@ impl<'tree, 'env> JsonGraphBuilder<'tree, 'env> {
             tree,
             workspace_root,
             resolution: BTreeMap::new(),
+            dependencies: Vec::new(),
         }
     }
 
@@ -1124,7 +1127,7 @@ impl<'tree, 'env> JsonGraphBuilder<'tree, 'env> {
             extra_id.clone(),
             JsonLink::Optional(extra.clone()),
         );
-        self.add_link(extra_id.clone(), package, JsonLink::Dependency(None));
+        self.add_link(extra_id.clone(), package, JsonLink::IntrinsicDependency);
         extra_id
     }
 
@@ -1187,7 +1190,7 @@ impl<'tree, 'env> JsonGraphBuilder<'tree, 'env> {
         };
         let marker = self.marker(edge);
         for target in self.dependency_targets(target, edge.extras()) {
-            self.add_link(source.clone(), target, JsonLink::Dependency(marker.clone()));
+            self.add_link(source.clone(), target, JsonLink::Dependency(marker));
         }
     }
 
@@ -1220,11 +1223,7 @@ impl<'tree, 'env> JsonGraphBuilder<'tree, 'env> {
                 for (package, edge) in edges {
                     let marker = self.marker(edge);
                     for package in self.dependency_targets(package, edge.extras()) {
-                        self.add_link(
-                            script.clone(),
-                            package,
-                            JsonLink::Dependency(marker.clone()),
-                        );
+                        self.add_link(script.clone(), package, JsonLink::Dependency(marker));
                     }
                 }
             }
@@ -1237,25 +1236,26 @@ impl<'tree, 'env> JsonGraphBuilder<'tree, 'env> {
                     let group = self.ensure_workspace_group(group);
                     let marker = self.marker(edge);
                     for package in self.dependency_targets(package, edge.extras()) {
-                        self.add_link(group.clone(), package, JsonLink::Dependency(marker.clone()));
+                        self.add_link(group.clone(), package, JsonLink::Dependency(marker));
                     }
                 }
             }
         }
     }
 
-    fn marker(&self, edge: &Edge<'_>) -> Option<String> {
-        self.tree
-            .lock
-            .simplify_environment(edge.marker().pep508())
-            .try_to_string()
+    fn marker(&self, edge: &Edge<'_>) -> MarkerTree {
+        self.tree.lock.simplify_environment(edge.marker().pep508())
     }
 
     fn add_link(&mut self, source: String, target: String, link: JsonLink) {
         // `optional_dependencies` and `dependency_groups` advertise related nodes; they are not
         // dependency edges. Keep those relationships attached to their owner when inverting the
         // graph, and reverse only actual dependencies.
-        let (source, target) = if self.tree.invert && matches!(&link, JsonLink::Dependency(_)) {
+        let (source, target) = if self.tree.invert
+            && matches!(
+                &link,
+                JsonLink::Dependency(_) | JsonLink::IntrinsicDependency
+            ) {
             (target, source)
         } else {
             (source, target)
@@ -1265,13 +1265,78 @@ impl<'tree, 'env> JsonGraphBuilder<'tree, 'env> {
         };
         match link {
             JsonLink::Dependency(marker) => {
-                node.add_resolution_dependency(target, marker);
+                self.dependencies.push((source, target, marker, true));
+            }
+            JsonLink::IntrinsicDependency => {
+                self.dependencies
+                    .push((source, target, MarkerTree::TRUE, false));
             }
             JsonLink::Optional(name) => {
                 node.add_optional_dependency(name, target);
             }
             JsonLink::Group(name) => {
                 node.add_dependency_group(name, target);
+            }
+        }
+    }
+
+    /// Restore the parent reachability omitted from contextual lockfile dependency markers.
+    ///
+    /// Edges in the serialized graph can be evaluated independently, while their locked markers
+    /// are simplified assuming that the parent package has already been reached. Propagate the
+    /// selected roots through the projected graph, merging alternate paths until cycles converge,
+    /// before attaching each parent's standalone marker to its outgoing dependencies.
+    fn restore_standalone_markers(&mut self, roots: &[JsonRoot]) {
+        let mut reachability = FxHashMap::default();
+        let mut outgoing = FxHashMap::<&str, Vec<(&str, MarkerTree)>>::default();
+        for (source, target, marker, _) in &self.dependencies {
+            outgoing
+                .entry(source.as_str())
+                .or_default()
+                .push((target.as_str(), *marker));
+        }
+
+        let mut queue = VecDeque::new();
+        for root in roots {
+            if reachability
+                .insert(root.id.as_str(), MarkerTree::TRUE)
+                .is_none()
+            {
+                queue.push_back(root.id.as_str());
+            }
+        }
+
+        while let Some(source) = queue.pop_front() {
+            let parent_reachability = reachability[source];
+            for (target, marker) in outgoing.get(source).into_iter().flatten() {
+                let marker = parent_reachability.and(*marker);
+                let changed = if let Some(existing) = reachability.get_mut(target) {
+                    let previous = *existing;
+                    *existing = existing.or(marker);
+                    *existing != previous
+                } else {
+                    reachability.insert(*target, marker);
+                    true
+                };
+
+                if changed {
+                    queue.push_back(*target);
+                }
+            }
+        }
+
+        for (source, target, marker, restore_parent_reachability) in &self.dependencies {
+            let standalone_marker = if *restore_parent_reachability {
+                let parent_reachability = reachability
+                    .get(source.as_str())
+                    .copied()
+                    .unwrap_or(MarkerTree::TRUE);
+                marker.and(parent_reachability)
+            } else {
+                *marker
+            };
+            if let Some(node) = self.resolution.get_mut(source) {
+                node.add_resolution_dependency(target.clone(), standalone_marker.try_to_string());
             }
         }
     }
@@ -1425,7 +1490,8 @@ impl<'tree, 'env> JsonGraphBuilder<'tree, 'env> {
 }
 
 enum JsonLink {
-    Dependency(Option<String>),
+    Dependency(MarkerTree),
+    IntrinsicDependency,
     Optional(ExtraName),
     Group(GroupName),
 }
