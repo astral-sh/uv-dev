@@ -132,17 +132,24 @@ fn google_cloud_sdk_adc_path(context: &Context) -> Option<String> {
         .filter(|path| !path.is_empty())
     {
         PathBuf::from(path)
-    } else if let Some(path) = context.env_var("APPDATA").filter(|path| !path.is_empty()) {
-        PathBuf::from(path).join("gcloud")
-    } else if let Some(path) = context
-        .env_var("XDG_CONFIG_HOME")
+    } else if let Some(path) = cfg!(windows)
+        .then(|| context.env_var(EnvVars::APPDATA))
+        .flatten()
         .filter(|path| !path.is_empty())
     {
         PathBuf::from(path).join("gcloud")
-    } else if let Some(path) = context.env_var("HOME").filter(|path| !path.is_empty()) {
-        PathBuf::from(path).join(".config").join("gcloud")
+    } else if let Some(path) = context
+        .env_var(EnvVars::XDG_CONFIG_HOME)
+        .filter(|path| !path.is_empty())
+    {
+        PathBuf::from(path).join("gcloud")
     } else {
-        return None;
+        let path = context
+            .env_var(EnvVars::HOME)
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| context.home_dir())?;
+        path.join(".config").join("gcloud")
     };
 
     Some(
@@ -739,6 +746,60 @@ mod tests {
                 .expect("Credentials should contain service account")
                 .client_email,
             "test@example.iam.gserviceaccount.com"
+        );
+    }
+
+    #[test]
+    fn test_artifact_registry_cloud_sdk_adc_paths() {
+        let application_default_credentials = |config_dir: &str| {
+            PathBuf::from(config_dir)
+                .join("gcloud")
+                .join("application_default_credentials.json")
+                .to_string_lossy()
+                .into_owned()
+        };
+
+        let explicit_cloud_sdk_config = Context::new().with_env(StaticEnv {
+            envs: HashMap::from([
+                (
+                    GOOGLE_CLOUD_SDK_CONFIG.to_string(),
+                    "/cloud-sdk".to_string(),
+                ),
+                (EnvVars::APPDATA.to_string(), "/app-data".to_string()),
+                (EnvVars::XDG_CONFIG_HOME.to_string(), "/xdg".to_string()),
+                (EnvVars::HOME.to_string(), "/home".to_string()),
+            ]),
+            home_dir: None,
+        });
+        assert_eq!(
+            google_cloud_sdk_adc_path(&explicit_cloud_sdk_config),
+            Some(cloud_sdk_credentials_path())
+        );
+
+        let platform_config = Context::new().with_env(StaticEnv {
+            envs: HashMap::from([
+                (EnvVars::APPDATA.to_string(), "/app-data".to_string()),
+                (EnvVars::XDG_CONFIG_HOME.to_string(), "/xdg".to_string()),
+                (EnvVars::HOME.to_string(), "/home".to_string()),
+            ]),
+            home_dir: None,
+        });
+        assert_eq!(
+            google_cloud_sdk_adc_path(&platform_config),
+            Some(application_default_credentials(if cfg!(windows) {
+                "/app-data"
+            } else {
+                "/xdg"
+            }))
+        );
+
+        let home_directory = Context::new().with_env(StaticEnv {
+            envs: HashMap::new(),
+            home_dir: Some(PathBuf::from("/home")),
+        });
+        assert_eq!(
+            google_cloud_sdk_adc_path(&home_directory),
+            Some(application_default_credentials("/home/.config"))
         );
     }
 
