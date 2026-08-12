@@ -339,6 +339,7 @@ async fn oidc_device_flow(
         bail!("The device authorization server did not return an access token");
     };
 
+    let session = oidc::session(issuer, discovery, client_id, scope, response.refresh_token)?;
     let credentials = if let Some(expires_in) = response.expires_in {
         let expires_at = jiff::Timestamp::now()
             .checked_add(Duration::from_secs(expires_in))
@@ -354,7 +355,11 @@ async fn oidc_device_flow(
             }
         }
         AuthBackend::TextStore(mut store, lock) => {
-            store.insert(service.clone(), credentials);
+            if let Some(session) = session {
+                store.insert_oidc(service.clone(), credentials, session);
+            } else {
+                store.insert(service.clone(), credentials);
+            }
             store.write(TextCredentialStore::default_file()?, lock)?;
         }
     }

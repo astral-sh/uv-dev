@@ -1256,6 +1256,98 @@ async fn login_oidc_index_configuration() -> Result<()> {
 }
 
 #[tokio::test]
+async fn login_oidc_persists_refresh_session() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    let issuer = MockServer::start().await;
+    let service = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/.well-known/openid-configuration"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "issuer": issuer.uri(),
+            "device_authorization_endpoint": "/device",
+            "token_endpoint": "/token",
+        })))
+        .expect(1)
+        .mount(&issuer)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/device"))
+        .and(body_string_contains("scope=packages%3Aread+offline_access"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "device_code": "device-code",
+            "user_code": "ABCD-1234",
+            "verification_uri": "https://login.example.com/device",
+            "expires_in": 60,
+            "interval": 0,
+        })))
+        .expect(1)
+        .mount(&issuer)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": "access-token",
+            "token_type": "Bearer",
+            "expires_in": 3600,
+            "refresh_token": "refresh-token",
+        })))
+        .expect(1)
+        .mount(&issuer)
+        .await;
+
+    uv_snapshot!(context.filters(), context.auth_login()
+        .arg(service.uri())
+        .arg("--issuer")
+        .arg(issuer.uri())
+        .arg("--client-id")
+        .arg("public-client")
+        .arg("--scope")
+        .arg("packages:read offline_access")
+        .env(EnvVars::UV_CREDENTIALS_DIR, context.temp_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Open https://login.example.com/device and enter code: ABCD-1234
+    Stored credentials for http://[LOCALHOST]/
+    ");
+
+    let credentials_path = context.temp_dir.child("credentials.toml");
+    let credentials = fs_err::read_to_string(&credentials_path)?;
+    let mut filters = context.filters();
+    filters.push((r#"expires-at = "[^"]+""#, r#"expires-at = "[TIMESTAMP]""#));
+    insta::with_settings!({ filters => filters }, {
+        insta::assert_snapshot!(credentials, @r#"
+        [[credential]]
+        service = "http://[LOCALHOST]/"
+        scheme = "bearer"
+        token = "access-token"
+        expires-at = "[TIMESTAMP]"
+
+        [credential.oidc]
+        issuer = "http://[LOCALHOST]/"
+        token-endpoint = "http://[LOCALHOST]/token"
+        client-id = "public-client"
+        scope = "packages:read offline_access"
+        refresh-token = "refresh-token"
+        "#);
+    });
+
+    uv_snapshot!(context.filters(), context.auth_logout()
+        .arg(service.uri())
+        .env(EnvVars::UV_CREDENTIALS_DIR, context.temp_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Removed credentials for http://[LOCALHOST]/
+    ");
+
+    insta::assert_snapshot!(fs_err::read_to_string(credentials_path)?, @"credential = []");
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn login_oidc_explicit_issuer_discovery_fails() {
     let context = uv_test::test_context_with_versions!(&[]);
     let server = MockServer::start().await;
