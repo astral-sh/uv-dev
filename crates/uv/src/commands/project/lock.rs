@@ -24,7 +24,7 @@ use uv_distribution_types::{
 use uv_git::ResolvedRepositoryReference;
 use uv_git_types::GitOid;
 use uv_normalize::{GroupName, PackageName};
-use uv_pep440::Version;
+use uv_pep440::{Operator, Version};
 use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::{ConflictKind, Conflicts, SupportedEnvironments};
 use uv_python::{
@@ -745,9 +745,35 @@ async fn do_lock(
                 "The workspace `requires-python` value (`{requires_python}`) does not contain a lower bound. Add a lower bound to indicate the minimum compatible Python version (e.g., `{default}`)."
             );
         } else if requires_python.is_exact_without_patch() {
-            warn_user_once!(
-                "The workspace `requires-python` value (`{requires_python}`) contains an exact match without a patch version. When omitted, the patch version is implicitly `0` (e.g., `{requires_python}.0`). Did you mean `{requires_python}.*`?"
-            );
+            match target {
+                LockTarget::Workspace(workspace) => {
+                    let groups = DependencyGroupsWithDefaults::none();
+                    for ((package, group), specifiers) in workspace.requires_python(&groups)? {
+                        for specifier in &specifiers[..] {
+                            if matches!(specifier.operator(), Operator::Equal)
+                                && specifier.version().release().len() == 2
+                            {
+                                warn_user_once!(
+                                    "The `requires-python` specifier (`{specifier}`) in `{package}{group}` \
+                                    contains an exact match without a patch version. When omitted, the patch \
+                                    version is implicitly `0` (e.g., `{specifier}.0`). Did you mean \
+                                    `{specifier}.*`?",
+                                    group = if let Some(group) = group.as_ref() {
+                                        format!(":{group}")
+                                    } else {
+                                        String::new()
+                                    },
+                                );
+                            }
+                        }
+                    }
+                }
+                LockTarget::Script(_) => {
+                    warn_user_once!(
+                        "The workspace `requires-python` value (`{requires_python}`) contains an exact match without a patch version. When omitted, the patch version is implicitly `0` (e.g., `{requires_python}.0`). Did you mean `{requires_python}.*`?"
+                    );
+                }
+            }
         }
         requires_python
     } else {

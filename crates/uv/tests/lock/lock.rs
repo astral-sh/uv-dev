@@ -6646,7 +6646,6 @@ fn lock_requires_python_exact_workspace_intersection() -> Result<()> {
     uv_snapshot!(context.filters(), context.lock().arg("--offline"), @r"
     exit_code: 0 (success)
     ----- stderr -----
-    warning: The workspace `requires-python` value (`==3.13`) contains an exact match without a patch version. When omitted, the patch version is implicitly `0` (e.g., `==3.13.0`). Did you mean `==3.13.*`?
     Resolved 2 packages in [TIME]
     ");
 
@@ -6684,7 +6683,7 @@ fn lock_requires_python_exact_workspace_member() -> Result<()> {
     uv_snapshot!(context.filters(), context.lock().arg("--offline"), @r"
     exit_code: 0 (success)
     ----- stderr -----
-    warning: The workspace `requires-python` value (`==3.13`) contains an exact match without a patch version. When omitted, the patch version is implicitly `0` (e.g., `==3.13.0`). Did you mean `==3.13.*`?
+    warning: The `requires-python` specifier (`==3.13`) in `member` contains an exact match without a patch version. When omitted, the patch version is implicitly `0` (e.g., `==3.13.0`). Did you mean `==3.13.*`?
     Resolved 2 packages in [TIME]
     ");
 
@@ -6713,7 +6712,7 @@ fn lock_requires_python_exact() -> Result<()> {
     uv_snapshot!(context.filters(), context.lock(), @r"
     exit_code: 0 (success)
     ----- stderr -----
-    warning: The workspace `requires-python` value (`==3.13`) contains an exact match without a patch version. When omitted, the patch version is implicitly `0` (e.g., `==3.13.0`). Did you mean `==3.13.*`?
+    warning: The `requires-python` specifier (`==3.13`) in `warehouse` contains an exact match without a patch version. When omitted, the patch version is implicitly `0` (e.g., `==3.13.0`). Did you mean `==3.13.*`?
     Resolved 2 packages in [TIME]
     ");
 
@@ -6758,7 +6757,7 @@ fn lock_requires_python_exact() -> Result<()> {
     uv_snapshot!(context.filters(), context.lock().arg("--locked"), @r###"
     exit_code: 0 (success)
     ----- stderr -----
-    warning: The workspace `requires-python` value (`==3.13`) contains an exact match without a patch version. When omitted, the patch version is implicitly `0` (e.g., `==3.13.0`). Did you mean `==3.13.*`?
+    warning: The `requires-python` specifier (`==3.13`) in `warehouse` contains an exact match without a patch version. When omitted, the patch version is implicitly `0` (e.g., `==3.13.0`). Did you mean `==3.13.*`?
     Resolved 2 packages in [TIME]
     "###);
 
