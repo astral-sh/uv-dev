@@ -624,6 +624,27 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         source: &BuildableSource<'_>,
         hashes: HashPolicy<'_>,
     ) -> Result<ArchiveMetadata, Error> {
+        // Enforce index hash requirements before resolving metadata can execute a build backend.
+        if let Some(SourceDist::Registry(registry)) = source.as_dist()
+            && let Some(algorithm) = self
+                .build_context
+                .locations()
+                .hash_algorithm_for(&registry.index)
+            && !registry
+                .file
+                .hashes
+                .iter()
+                .any(|hash| hash.algorithm == algorithm)
+        {
+            return Err(Error::MissingHashes {
+                distribution: format!(
+                    "{source} ({} does not provide the {algorithm} hash required by index {})",
+                    registry.file.filename,
+                    registry.index.without_credentials()
+                ),
+            });
+        }
+
         // If the metadata was provided by the user directly, prefer it.
         if let Some(dist) = source.as_dist() {
             if let Some(metadata) = self
