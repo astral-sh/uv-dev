@@ -723,7 +723,9 @@ class GraalPyFinder(Finder):
 
 def filter_cpython_versions(downloads: list[PythonDownload]) -> list[PythonDownload]:
     """Keep recent CPython patches while retaining all other implementations."""
-    groups: dict[tuple[int, str, str, str, Variant | None], list[PythonDownload]] = {}
+    groups: dict[
+        tuple[int, int, PlatformTripleKey, Variant | None], list[PythonDownload]
+    ] = {}
     other_downloads: list[PythonDownload] = []
 
     for download in downloads:
@@ -732,10 +734,9 @@ def filter_cpython_versions(downloads: list[PythonDownload]) -> list[PythonDownl
             continue
 
         group = (
+            download.version.major,
             download.version.minor,
-            download.triple.arch.key(),
-            download.triple.platform,
-            download.triple.libc,
+            download.triple.key(),
             download.variant,
         )
         groups.setdefault(group, []).append(download)

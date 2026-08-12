@@ -2416,18 +2416,13 @@ mod tests {
         let mut request = PythonDownloadRequest::default()
             .with_version(VersionRequest::from_str("3.12").unwrap())
             .with_implementation(ImplementationName::CPython);
+        request.build = Some("20240814".to_string());
 
         let client_builder = uv_client::BaseClientBuilder::default();
         let cache = uv_cache::Cache::temp().expect("failed to create temp cache");
         let download_list = ManagedPythonDownloadList::new(&client_builder, &cache, None)
             .await
             .unwrap();
-        let expected_build = download_list
-            .iter_all()
-            .find(|download| request.satisfied_by_download(download))
-            .and_then(ManagedPythonDownload::build)
-            .expect("embedded Python 3.12 download should have a build");
-        request.build = Some(expected_build.to_string());
 
         let downloads: Vec<_> = download_list
             .iter_all()
@@ -2439,7 +2434,7 @@ mod tests {
             "Should find at least one matching download"
         );
         for download in downloads {
-            assert_eq!(download.build(), Some(expected_build));
+            assert_eq!(download.build(), Some("20240814"));
         }
     }
 
