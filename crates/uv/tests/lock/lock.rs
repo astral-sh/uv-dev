@@ -25424,7 +25424,6 @@ fn lock_incompatible_python_version_without_interpreter() -> Result<()> {
     uv_snapshot!(context.filters(), context.lock().arg("--offline").arg("--python").arg("3.12"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
     Resolved 1 package in [TIME]
     ");
 
@@ -25434,7 +25433,6 @@ fn lock_incompatible_python_version_without_interpreter() -> Result<()> {
     uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
     Resolved 1 package in [TIME]
     ");
 
