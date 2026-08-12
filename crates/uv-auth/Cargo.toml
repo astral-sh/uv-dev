@@ -36,6 +36,7 @@ etcetera = { workspace = true }
 fs-err = { workspace = true, features = ["tokio"] }
 http = { workspace = true }
 jiff = { workspace = true }
+oauth2 = { workspace = true }
 percent-encoding = { workspace = true }
 rand = { workspace = true }
 reqsign = { workspace = true }
