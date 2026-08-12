@@ -1,0 +1,4 @@
+{
+  "reproduction": "needs_more_information",
+  "reason": "Using isolated caches on Linux x86_64 with CPython 3.12.3, both uv 0.12.2 and 0.12.3 behaved correctly. After syncing/running identical console-script projects A and B, removing A, and running `uv run --project B/slack-watcher stale-demo`, uv used B’s cached interpreter and script; A remained absent. Five additional create/sync/run/delete cycles sharing the cache also did not trigger the behavior. Since the report likewise could not reproduce from scratch, the missing trigger requires a failing cache entry with decoded interpreter paths/timestamp, its lookup filename, B’s absolute/canonical interpreter paths and `pyvenv.cfg`, plus path-reuse or concurrent-operation history. No integration test directly covers cross-project interpreter-cache reuse after deleting one project."
+}
