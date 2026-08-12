@@ -1395,6 +1395,81 @@ fn json_output_depth_with_extra_context() -> Result<()> {
 }
 
 #[test]
+fn json_output_dependency_edges_include_parent_reachability() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["parent; sys_platform == 'linux'"]
+    "#})?;
+
+    context.temp_dir.child("uv.lock").write_str(indoc! {r#"
+        version = 1
+        revision = 3
+        requires-python = ">=3.12"
+
+        [[package]]
+        name = "child"
+        version = "0.1.0"
+        source = { registry = "https://pypi.org/simple" }
+
+        [[package]]
+        name = "parent"
+        version = "0.1.0"
+        source = { registry = "https://pypi.org/simple" }
+        dependencies = [
+            { name = "child" },
+        ]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "parent", marker = "sys_platform == 'linux'" },
+        ]
+    "#})?;
+
+    let output = context
+        .tree()
+        .arg("--frozen")
+        .arg("--offline")
+        .arg("--universal")
+        .arg("--preview-features")
+        .arg("json-output")
+        .arg("--format")
+        .arg("json")
+        .output()?;
+    output.clone().assert().success();
+
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    let resolution = report["resolution"]
+        .as_object()
+        .context("dependency graph resolution should be an object")?;
+    let parent = resolution
+        .values()
+        .find(|node| node["name"] == "parent" && node["kind"] == "package")
+        .context("parent should be included in the dependency graph")?;
+
+    assert_json_snapshot!(parent["dependencies"], @r#"
+    [
+      {
+        "id": "child==0.1.0@registry+https://pypi.org/simple",
+        "marker": "sys_platform == 'linux'"
+      }
+    ]
+    "#);
+
+    Ok(())
+}
+
+#[test]
 fn nested_platform_dependencies() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
