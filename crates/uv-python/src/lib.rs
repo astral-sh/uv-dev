@@ -1,5 +1,6 @@
 //! Find requested Python interpreters and query interpreters for information.
 use thiserror::Error;
+use uv_shell::shlex_posix;
 
 #[cfg(test)]
 use uv_static::EnvVars;
@@ -146,7 +147,7 @@ impl std::fmt::Display for MissingPythonHint {
                     f,
                     "A managed Python download is available{}, but Python downloads are set to 'manual', use `uv python install {}` to install the required version",
                     Self::for_request(request),
-                    request.to_canonical_string(),
+                    shlex_posix(request.to_canonical_string().as_ref()),
                 )
             }
             Self::DownloadsNever(request) => {
