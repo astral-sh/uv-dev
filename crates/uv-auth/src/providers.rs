@@ -771,8 +771,8 @@ mod tests {
 
     #[test]
     fn test_artifact_registry_cloud_sdk_adc_paths() {
-        let application_default_credentials = |config_dir: &str| {
-            PathBuf::from(config_dir)
+        let application_default_credentials = |config_dir: PathBuf| {
+            config_dir
                 .join("gcloud")
                 .join("application_default_credentials.json")
                 .to_string_lossy()
@@ -806,11 +806,9 @@ mod tests {
         });
         assert_eq!(
             google_cloud_sdk_adc_path(&platform_config),
-            Some(application_default_credentials(if cfg!(windows) {
-                "/app-data"
-            } else {
-                "/xdg"
-            }))
+            Some(application_default_credentials(PathBuf::from(
+                if cfg!(windows) { "/app-data" } else { "/xdg" }
+            )))
         );
 
         let home_directory = Context::new().with_env(StaticEnv {
@@ -819,7 +817,9 @@ mod tests {
         });
         assert_eq!(
             google_cloud_sdk_adc_path(&home_directory),
-            Some(application_default_credentials("/home/.config"))
+            Some(application_default_credentials(
+                PathBuf::from("/home").join(".config")
+            ))
         );
     }
 
