@@ -9,6 +9,9 @@ use crate::credentials::Credentials;
 /// Service name prefix for storing credentials in a keyring.
 static UV_SERVICE_PREFIX: &str = "uv:";
 
+/// Account used for OAuth bearer sessions stored in the system keyring.
+const OIDC_SESSION_ACCOUNT: &str = "__uv_oidc_session__";
+
 /// A backend for retrieving credentials from a keyring.
 ///
 /// See pip's implementation for reference
@@ -25,6 +28,12 @@ pub enum Error {
 
     #[error("The '{0}' keyring provider does not support storing credentials")]
     StoreUnsupported(&'static str),
+
+    #[error("The '{0}' keyring provider does not support secure OAuth sessions")]
+    OAuthSessionUnsupported(&'static str),
+
+    #[error(transparent)]
+    OAuthSession(#[from] serde_json::Error),
 
     #[error("The '{0}' keyring provider does not support removing credentials")]
     RemoveUnsupported(&'static str),
@@ -133,6 +142,34 @@ impl KeyringProvider {
         let entry = uv_keyring::Entry::new(&prefixed_service, username)?;
         entry.set_password(password).await?;
         Ok(())
+    }
+
+    /// Persist an OAuth bearer session in the platform-native secure credential store.
+    ///
+    /// The complete service URL is retained so adjacent Azure feeds cannot share secrets.
+    pub async fn store_oidc_session(
+        &self,
+        url: &DisplaySafeUrl,
+        credentials: &Credentials,
+        session: &crate::oidc::OidcSession,
+    ) -> Result<(), Error> {
+        if !matches!(self.backend, KeyringProviderBackend::Native) {
+            return Err(Error::OAuthSessionUnsupported(self.backend.name()));
+        }
+        let Some(access_token) = credentials.bearer_token() else {
+            return Err(Error::OAuthSessionUnsupported(self.backend.name()));
+        };
+
+        let payload = serde_json::json!({
+            "access-token": String::from_utf8_lossy(access_token),
+            "session": session,
+        });
+        self.store_native(
+            url.without_credentials().as_str(),
+            OIDC_SESSION_ACCOUNT,
+            &serde_json::to_string(&payload)?,
+        )
+        .await
     }
 
     /// Remove credentials for the given [`DisplaySafeUrl`] and username from the keyring.

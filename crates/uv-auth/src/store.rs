@@ -373,8 +373,8 @@ impl TextCredentialStore {
                 .ok_or(TomlCredentialError::CredentialsDirError)?,
         )?;
 
-        // TODO(zanieb): We should use an atomic write here
-        fs::write(path, content)?;
+        // Preserve the existing credential file if the process exits during refresh-token rotation.
+        uv_fs::write_atomic_sync(path, content.as_bytes())?;
         Ok(())
     }
 
@@ -671,6 +671,30 @@ password = "pass2"
         let content = fs::read_to_string(temp_output.path()).unwrap();
         assert!(content.contains("example.com"));
         assert!(content.contains("testuser"));
+    }
+
+    #[tokio::test]
+    async fn test_credential_store_replaces_existing_file_atomically() {
+        let file = NamedTempFile::new().expect("Credential file should be created");
+        fs::write(file.path(), "previous credentials").expect("Existing credentials should write");
+
+        let mut store = TextCredentialStore::default();
+        store.insert(
+            Service::from_str("https://example.com/private").expect("Service URL should parse"),
+            Credentials::bearer(b"replacement-token".to_vec()),
+        );
+        store
+            .write(
+                file.path(),
+                TextCredentialStore::lock(file.path())
+                    .await
+                    .expect("Credential lock should be acquired"),
+            )
+            .expect("Credential file should be replaced atomically");
+
+        let content = fs::read_to_string(file.path()).expect("New credential file should exist");
+        assert!(content.contains("replacement-token"));
+        assert!(!content.contains("previous credentials"));
     }
 
     #[test]
