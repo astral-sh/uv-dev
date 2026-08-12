@@ -346,7 +346,7 @@ impl Default for ArtifactRegistryProvider {
 
 impl ArtifactRegistryProvider {
     /// Returns `true` if the URL is for Google Artifact Registry.
-    pub(crate) fn is_artifact_registry(url: &Url) -> bool {
+    fn is_artifact_registry(url: &Url) -> bool {
         url.scheme() == "https"
             && url
                 .host_str()
