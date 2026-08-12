@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result};
 use http::header::AUTHORIZATION;
-use jiff::Timestamp;
+use jiff::{Timestamp, civil::DateTime, tz::TimeZone};
 use reqsign::aws::DefaultSigner as AwsDefaultSigner;
 use reqsign::azure::DefaultSigner as AzureDefaultSigner;
 use reqsign::google::Credential as GoogleCredential;
@@ -542,7 +542,9 @@ pub struct AzureArtifactsProvider {
 struct AzureCliToken {
     #[serde(rename = "accessToken")]
     access_token: String,
-    expires_on: i64,
+    expires_on: Option<i64>,
+    #[serde(rename = "expiresOn")]
+    legacy_expires_on: Option<String>,
     #[serde(rename = "tokenType")]
     token_type: Option<String>,
 }
@@ -632,11 +634,22 @@ impl AzureArtifactsProvider {
             return None;
         }
 
-        let expires_at = Timestamp::from_second(token.expires_on)
-            .inspect_err(|err| {
-                debug!("Failed to parse Azure CLI access token expiration: {err}");
-            })
-            .ok()?;
+        // Prefer the UTC timestamp; Azure CLI versions before 2.54 only provide a local datetime.
+        let expires_at = if let Some(expires_on) = token.expires_on {
+            Timestamp::from_second(expires_on)
+        } else if let Some(expires_on) = token.legacy_expires_on {
+            expires_on
+                .parse::<DateTime>()
+                .and_then(|expires_on| expires_on.to_zoned(TimeZone::system()))
+                .map(|expires_on| expires_on.timestamp())
+        } else {
+            debug!("Azure CLI access token is missing an expiration");
+            return None;
+        }
+        .inspect_err(|err| {
+            debug!("Failed to parse Azure CLI access token expiration: {err}");
+        })
+        .ok()?;
         let Some(cache_duration) =
             registry_credential_cache_duration(expires_at, AZURE_ARTIFACTS_REFRESH_BUFFER)
         else {
@@ -1392,6 +1405,39 @@ mod tests {
                 None
             );
         }
+    }
+
+    #[test]
+    fn test_azure_artifacts_credentials_from_legacy_cli_output() {
+        assert_eq!(
+            AzureArtifactsProvider::credentials_from_cli_output(
+                br#"{"accessToken":"test-token","expiresOn":"2100-01-01 00:00:00.000000","tokenType":"Bearer"}"#
+            ),
+            Some((
+                Credentials::bearer(b"test-token".to_vec()),
+                REGISTRY_CREDENTIAL_CACHE_DURATION
+            ))
+        );
+
+        for output in [
+            br#"{"accessToken":"test-token","expiresOn":"invalid"}"#.as_slice(),
+            br#"{"accessToken":"test-token","expiresOn":"2000-01-01 00:00:00.000000"}"#.as_slice(),
+        ] {
+            assert_eq!(
+                AzureArtifactsProvider::credentials_from_cli_output(output),
+                None
+            );
+        }
+
+        assert_eq!(
+            AzureArtifactsProvider::credentials_from_cli_output(
+                br#"{"accessToken":"test-token","expires_on":4102444800,"expiresOn":"invalid"}"#
+            ),
+            Some((
+                Credentials::bearer(b"test-token".to_vec()),
+                REGISTRY_CREDENTIAL_CACHE_DURATION
+            ))
+        );
     }
 
     #[test]
