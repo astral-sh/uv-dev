@@ -4,6 +4,11 @@ use std::time::{Duration, Instant};
 
 use base64::Engine;
 use base64::prelude::BASE64_URL_SAFE_NO_PAD;
+use oauth2::basic::BasicClient;
+use oauth2::{
+    AuthType, ClientId, DeviceAuthorizationUrl, HttpRequest, Scope,
+    StandardDeviceAuthorizationResponse, TokenUrl,
+};
 use rand::RngCore as _;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -116,6 +121,9 @@ pub enum OidcError {
 
     #[error(transparent)]
     Request(#[from] reqwest::Error),
+
+    #[error(transparent)]
+    Http(#[from] http::Error),
 }
 
 fn default_poll_interval() -> u64 {
@@ -196,32 +204,55 @@ pub async fn device_authorize(
     scope: Option<&str>,
 ) -> Result<DeviceAuthorizationResponse, OidcError> {
     let endpoint = resolve_endpoint(issuer, &discovery.device_authorization_endpoint)?;
-    let client_id = client_id.unwrap_or(DEFAULT_CLIENT_ID);
-    let scope = scope.unwrap_or(DEFAULT_SCOPE);
+    let token_endpoint = resolve_endpoint(issuer, &discovery.token_endpoint)?;
+    let oauth = BasicClient::new(ClientId::new(
+        client_id.unwrap_or(DEFAULT_CLIENT_ID).to_string(),
+    ))
+    .set_auth_type(AuthType::RequestBody)
+    .set_device_authorization_url(
+        DeviceAuthorizationUrl::new(endpoint.to_string())
+            .map_err(|error| OidcError::DeviceAuthorizationFailed(error.to_string()))?,
+    )
+    .set_token_uri(
+        TokenUrl::new(token_endpoint.to_string())
+            .map_err(|error| OidcError::DeviceAuthorizationFailed(error.to_string()))?,
+    );
 
-    let response = client
-        .post(endpoint)
-        .form(&[
-            ("client_id", client_id),
-            ("scope", scope),
-            ("code_challenge", &challenge.code_challenge),
-            ("code_challenge_method", "S256"),
-        ])
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        return Err(OidcError::DeviceAuthorizationFailed(format!(
-            "status {status}: {body}"
-        )));
+    let mut authorization = oauth
+        .exchange_device_code()
+        .add_extra_param("code_challenge", challenge.code_challenge.as_str())
+        .add_extra_param("code_challenge_method", "S256");
+    for requested_scope in scope.unwrap_or(DEFAULT_SCOPE).split_whitespace() {
+        authorization = authorization.add_scope(Scope::new(requested_scope.to_string()));
     }
 
-    response.json().await.map_err(|error| {
-        OidcError::DeviceAuthorizationFailed(format!(
-            "Failed to parse device authorization response: {error}"
-        ))
+    let send = |request: HttpRequest| async move {
+        let response = client
+            .request(request.method().clone(), request.uri().to_string())
+            .headers(request.headers().clone())
+            .body(request.body().clone())
+            .send()
+            .await?;
+        let mut builder = http::Response::builder().status(response.status());
+        for (name, value) in response.headers() {
+            builder = builder.header(name, value);
+        }
+        Ok::<_, OidcError>(builder.body(response.bytes().await?.to_vec())?)
+    };
+    let response: StandardDeviceAuthorizationResponse = authorization
+        .request_async(&send)
+        .await
+        .map_err(|error| OidcError::DeviceAuthorizationFailed(error.to_string()))?;
+
+    Ok(DeviceAuthorizationResponse {
+        device_code: response.device_code().secret().clone(),
+        user_code: response.user_code().secret().clone(),
+        verification_uri: response.verification_uri().to_string(),
+        verification_uri_complete: response
+            .verification_uri_complete()
+            .map(|uri| uri.secret().clone()),
+        expires_in: response.expires_in().as_secs(),
+        interval: response.interval().as_secs(),
     })
 }
 
