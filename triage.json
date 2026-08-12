@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 19973,
+        "title": "`uv tree`'s flags for extra/groups are weird",
+        "url": "https://github.com/astral-sh/uv/issues/19973",
+        "state": "open",
+        "reason": "Closest ongoing design discussion. It confirms the current additive/default-group semantics while questioning the broader extras/groups asymmetry; it does not report `--only-group` failing."
+      },
+      {
+        "kind": "pull_request",
+        "number": 8338,
+        "title": "Add `--group`, `--only-group`, and `--only-dev` support to `uv tree`",
+        "url": "https://github.com/astral-sh/uv/pull/8338",
+        "state": "merged",
+        "reason": "Introduced the distinct additive `--group` and restrictive `--only-group` interfaces."
+      },
+      {
+        "kind": "issue",
+        "number": 12526,
+        "title": "uv tree with --only-group doesn't show full depth",
+        "url": "https://github.com/astral-sh/uv/issues/12526",
+        "state": "closed",
+        "reason": "Historical `--only-group` correctness bug fixed by astral-sh/uv#12560. It concerned missing transitive dependencies, whereas this report invokes `--group`."
+      }
+    ],
+    "search_scope": "Literal searches covered `uv tree --group`, `tree --group`, `tree group dev`, the reported group names, and dependency-group terminology. Conceptual searches covered group-only selection, filtering, defaults, all groups, and tree output across open and closed issues and open, closed, and merged pull requests. Fix-oriented inspection covered astral-sh/uv#8338, astral-sh/uv#12526, astral-sh/uv#12560, astral-sh/uv#10890, and astral-sh/uv#11224. astral-sh/uv#19976, astral-sh/uv#19327, and astral-sh/uv#19975 were ruled out because they concern depth semantics, optional-extra rendering, and dependency-group-only projects, respectively."
+  },
+  "type": "question",
+  "type_reason": "Source, CLI help, documentation, and integration snapshots establish that `--group` is additive and `--only-group` is restrictive. The partial configuration does not establish a failure of `--only-group`, so this is a usage clarification unless a complete reproduction demonstrates otherwise.",
+  "summary": "No existing issue tracks a matching failure of `uv tree --only-group dev`. astral-sh/uv#19973 is the closest design discussion, while astral-sh/uv#8338 establishes the intended distinction between the two flags.",
+  "draft_response": "`--group` is additive: it includes the named group alongside the project's default groups. To display only `dev`, use `uv tree --only-group dev --depth 1`; `--only-group` also disables the default groups. If `airflow` still appears with that command, please provide the complete `pyproject.toml` (including `[tool.uv]` and any workspace configuration) and the full tree output so we can reproduce it."
+}
