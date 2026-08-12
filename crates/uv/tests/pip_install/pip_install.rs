@@ -7907,6 +7907,16 @@ fn find_links_relative_to_requirements_file() -> Result<()> {
             .join("test/links/ok-1.0.0-py3-none-any.whl"),
         links_dir.child("ok-1.0.0-py3-none-any.whl").path(),
     )?;
+    let working_directory_links = context.temp_dir.child("links");
+    working_directory_links.create_dir_all()?;
+    fs::copy(
+        context
+            .workspace_root
+            .join("test/links/ok-2.0.0-py3-none-any.whl"),
+        working_directory_links
+            .child("ok-2.0.0-py3-none-any.whl")
+            .path(),
+    )?;
     requirements_dir
         .child("requirements.txt")
         .write_str(indoc! {r"
@@ -7955,10 +7965,12 @@ fn find_links_relative_to_working_directory() -> Result<()> {
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("-r")
         .arg("requirements/requirements.txt"), @"
-    exit_code: 2 (failure)
+    exit_code: 0 (success)
     ----- stderr -----
-    error: Failed to read `--find-links` directory: [TEMP_DIR]/requirements/links
-      Caused by: [OS ERROR 2]
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + ok==1.0.0
     "
     );
 
