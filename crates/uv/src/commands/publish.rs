@@ -701,6 +701,8 @@ mod tests {
     fn artifact_registry_skips_automatic_trusted_publishing() {
         let artifact_registry =
             DisplaySafeUrl::from_str("https://us-central1-python.pkg.dev/project/index").unwrap();
+        let other_google_registry =
+            DisplaySafeUrl::from_str("https://us-central1-docker.pkg.dev/project/image").unwrap();
         let other_registry = DisplaySafeUrl::from_str("https://example.com").unwrap();
 
         assert_eq!(
@@ -710,6 +712,10 @@ mod tests {
         assert_eq!(
             trusted_publishing_for_registry(&artifact_registry, TrustedPublishing::Always),
             TrustedPublishing::Always
+        );
+        assert_eq!(
+            trusted_publishing_for_registry(&other_google_registry, TrustedPublishing::Automatic),
+            TrustedPublishing::Automatic
         );
         assert_eq!(
             trusted_publishing_for_registry(&other_registry, TrustedPublishing::Automatic),
