@@ -1122,6 +1122,31 @@ async fn do_lock(
                 lock
             };
 
+            // An upgrade target is valid if it appeared in either resolution: an existing
+            // dependency can disappear during the upgrade, and a new dependency can appear.
+            if let Some(packages) = upgrade.packages() {
+                let missing = packages
+                    .iter()
+                    .filter(|package| {
+                        previous.as_ref().is_none_or(|previous| {
+                            !previous
+                                .packages()
+                                .iter()
+                                .any(|locked| locked.name() == *package)
+                        }) && !lock
+                            .packages()
+                            .iter()
+                            .any(|resolved| resolved.name() == *package)
+                    })
+                    .collect::<BTreeSet<_>>();
+
+                for package in missing {
+                    warn_user!(
+                        "Package `{package}` requested for upgrade is not present in the project dependencies"
+                    );
+                }
+            }
+
             let unchanged = if let Some(check_lockfile_contents) = check_lockfile_contents {
                 previous.is_some() && check_lockfile_contents == lock.to_toml()?.as_str()
             } else {
