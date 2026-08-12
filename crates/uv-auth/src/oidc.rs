@@ -19,19 +19,19 @@ const DEFAULT_POLL_INTERVAL: u64 = 5;
 #[serde(rename_all = "kebab-case")]
 pub struct OidcSession {
     /// The authorization server that issued these credentials.
-    pub issuer: Url,
+    issuer: Url,
 
     /// The endpoint that exchanges refresh tokens for access tokens.
-    pub token_endpoint: Url,
+    token_endpoint: Url,
 
     /// The public OAuth client identifier used for the authorization flow.
-    pub client_id: String,
+    client_id: String,
 
     /// The space-separated scopes requested during device authorization.
-    pub scope: String,
+    scope: String,
 
     /// The refresh token returned by the authorization server.
-    pub refresh_token: String,
+    refresh_token: String,
 }
 
 impl std::fmt::Debug for OidcSession {

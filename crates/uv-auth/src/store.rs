@@ -468,11 +468,6 @@ impl TextCredentialStore {
         previous
     }
 
-    /// Return the OAuth refresh session for a service, if one was persisted.
-    pub fn oidc_session(&self, service: &Service) -> Option<&OidcSession> {
-        self.oidc_sessions.get(service)
-    }
-
     /// Remove credentials for a given service.
     pub fn remove(&mut self, service: Service, username: Username) -> Option<Credentials> {
         // Remove the specific credential for this service and username
