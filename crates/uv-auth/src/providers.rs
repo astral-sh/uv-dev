@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::error::Error as _;
+use std::ffi::OsStr;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::{Arc, LazyLock};
@@ -294,7 +295,11 @@ impl ArtifactRegistryProvider {
     }
 
     async fn credentials_from_gcloud() -> Option<(Credentials, Duration)> {
-        let mut command = Command::new(GOOGLE_CLOUD_SDK_EXECUTABLE);
+        Self::credentials_from_gcloud_command(OsStr::new(GOOGLE_CLOUD_SDK_EXECUTABLE)).await
+    }
+
+    async fn credentials_from_gcloud_command(program: &OsStr) -> Option<(Credentials, Duration)> {
+        let mut command = Command::new(program);
         command
             .args(["config", "config-helper", "--format=json(credential)"])
             .stdin(Stdio::null())
@@ -921,6 +926,36 @@ mod tests {
             } else {
                 "gcloud"
             }
+        );
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn test_artifact_registry_credentials_from_windows_gcloud_launcher() {
+        let directory = tempfile::tempdir().expect("Google Cloud SDK test directory should exist");
+        let executable = directory.path().join("gcloud.cmd");
+        fs_err::write(
+            &executable,
+            [
+                "@echo off",
+                r#"if not "%~1"=="config" exit /b 1"#,
+                r#"if not "%~2"=="config-helper" exit /b 1"#,
+                r#"if not "%~3"=="--format=json(credential)" exit /b 1"#,
+                r#"echo {"credential":{"access_token":"test-token","token_expiry":"2099-05-29T00:00:00Z"}}"#,
+            ]
+            .join("\r\n"),
+        )
+        .expect("Google Cloud SDK test launcher should be written");
+
+        assert_eq!(
+            ArtifactRegistryProvider::credentials_from_gcloud_command(executable.as_os_str()).await,
+            Some((
+                Credentials::basic(
+                    Some("oauth2accesstoken".to_string()),
+                    Some("test-token".to_string())
+                ),
+                GOOGLE_ARTIFACT_REGISTRY_CACHE_DURATION
+            ))
         );
     }
 
