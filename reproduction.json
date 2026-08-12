@@ -1,0 +1,4 @@
+{
+  "reproduction": "needs_more_information",
+  "reason": "With uv 0.12.3 and isolated CPython 3.12.2/3.12.13 installations, the reported mismatch triggered one recreation; subsequent `uv sync` and `uv run` reused `.venv` and ran Python 3.12.13. The active-environment warning also did not cause a loop. Existing test `crates/uv/tests/sync/sync.rs::sync_when_virtual_environment_incompatible_with_interpreter` covers this one-time recovery. Reproducing the loop requires details about `/usr/local/bin/python3.12` links/install history, mounts or copied environments, post-recreation `pyvenv.cfg` and interpreter values, and file ownership/modes. The issue-context README was updated."
+}

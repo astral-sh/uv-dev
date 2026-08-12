@@ -1,87 +1,128 @@
-# UV recreates the venv on every run.
+# UV recreates the venv on every run
 
 Issue: astral-sh/uv#21066
 
-Classification: bug
+Classification: bug report; reproduction needs more information
 
 ## Summary
 
-On Ubuntu 22.04 with uv 0.12.3, `uv run` and `uv sync` repeatedly remove and recreate the project
-`.venv`. The verbose log says the environment interpreter reports Python 3.12.2 while the
-environment was created with 3.12.13. uv then discovers `/usr/local/bin/python3.12` as CPython
-3.12.13 and recreates the environment from it, but `uv run python --version` still reports Python
-3.12.2. The unresolved, incorrect behavior is that recreation does not eliminate the mismatch, so
-the next invocation repeats it.
+On Ubuntu 22.04 amd64 with uv 0.12.3, the report says consecutive `uv sync` and `uv run`
+invocations remove and recreate the project `.venv`. The log shows that `.venv` runs Python 3.12.2
+while its `pyvenv.cfg` records 3.12.13. uv then discovers `/usr/local/bin/python3.12` as CPython
+3.12.13, recreates `.venv` from that executable, but `uv run python --version` reportedly still
+prints Python 3.12.2. That last transition is the unexplained part of the report.
 
-The report also contains two secondary observations. One invocation has an active environment at
-`/mnt/hdd/Toolkits/Tools/AutotestServices/.venv` while the project being operated on is under
-`/mnt/hdd/Repositories/autotests_git`; uv warns when `VIRTUAL_ENV` and the project environment are
-different. Removal of the latter environment then fails because the process cannot delete
-`.venv/CACHEDIR.TAG` (`Permission denied (os error 13)`). That permission failure can prevent
-recovery, but it does not by itself explain why a successfully recreated environment still runs
-Python 3.12.2.
-
-## Draft response
-
-The log confirms that uv recreates `.venv` because the interpreter in it reports Python 3.12.2
-while the environment metadata says it was created with 3.12.13. What is not yet explained is why
-recreating it from `/usr/local/bin/python3.12`, which uv identifies as 3.12.13, still leaves
-`uv run python --version` reporting 3.12.2.
-
-Could you run the following immediately after one recreation and share the output:
-`/usr/local/bin/python3.12 -c 'import sys; print(sys.version); print(sys.executable); print(sys._base_executable)'`,
-`.venv/bin/python -c 'import sys; print(sys.version); print(sys.executable); print(sys._base_executable)'`,
-`readlink -f .venv/bin/python`, and `cat .venv/pyvenv.cfg`? Please also say whether `.venv` or the
-repository is copied or mounted, and share the owner and mode of `.venv` and
-`.venv/CACHEDIR.TAG`; the permission error means the current process cannot remove that file.
-
-astral-sh/uv#16231 shows the same version-conflict message, but that case involved copying a
-virtual environment between container stages with different Python patch versions. The paths in
-this report also show an active environment under `/mnt/hdd/Toolkits/Tools/AutotestServices` while
-another run operates under `/mnt/hdd/Repositories/autotests_git`; the `VIRTUAL_ENV` warning is
-expected when those are different. Use `--active` only if the active environment is intentionally
-the target.
+The report also shows a separate invocation in `/mnt/hdd/Repositories/autotests_git` while
+`VIRTUAL_ENV` points to `/mnt/hdd/Toolkits/Tools/AutotestServices/.venv`. uv warns that it will
+ignore that different active environment, then cannot delete the project environment's
+`.venv/CACHEDIR.TAG` because of a permission error.
 
 ## Classification
 
-This is a bug because the supplied `uv run python --version` output establishes a recreation loop:
-uv selects `/usr/local/bin/python3.12` as 3.12.13, recreates the project environment, and the
-resulting command still runs 3.12.2. The repository code confirms that the recorded-versus-running
-interpreter conflict is what makes project environment compatibility fail and triggers recreation.
-The report does not yet establish why the new environment executes the older patch, and the
-permission problem may have a separate environmental cause.
+Keep this classified as a bug report, but the reported recreation loop is not yet confirmed by a
+targeted reproduction. A version conflict between the running interpreter and `pyvenv.cfg` is
+expected to trigger one recovery recreation. In the isolated tests below, that recreation repairs
+the environment and subsequent commands reuse it.
 
-This is not a duplicate. No open issue or pull request found in the searches tracks a freshly
-recreated environment continuing to execute the old Python patch. The closest closed report,
-astral-sh/uv#16231, involved a virtual environment copied between container stages and was resolved
-by ensuring the stage and final Python patch versions matched.
+The supplied output demonstrates the claimed loop but does not reveal why an environment newly
+linked to `/usr/local/bin/python3.12`, which uv identifies as 3.12.13, executes 3.12.2. The current
+evidence does not establish a uv root cause. Relevant omitted details include the type and link
+targets of the system interpreter, how it was installed or upgraded, whether the interpreter or
+project is on a copied or mounted filesystem, and the new environment's `pyvenv.cfg` and Python
+runtime values immediately after recreation. The `CACHEDIR.TAG` error is consistent with
+filesystem permissions but its ownership and mode are also omitted.
+
+## Reproduction
+
+Outcome: `needs_more_information`.
+
+The targeted reproduction used the installed `uv 0.12.3 (x86_64-unknown-linux-gnu)`, matching the
+report, on Ubuntu 24.04 x86_64. CPython 3.12.2 and 3.12.13, the project, the Python installation
+directory, and all uv caches were isolated under `$RUNNER_TEMP`. The minimal project was:
+
+```toml
+[project]
+name = "issue-21066-mismatch"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = []
+```
+
+with `.python-version` containing `3.12`. The reported initial mismatch was reconstructed by
+creating `.venv` with 3.12.2 and changing only its `version_info` from 3.12.2 to 3.12.13. A separate
+3.12.13 interpreter was placed first on `PATH`, then the following commands were run:
+
+```console
+$ uv venv --python "$PYTHON_3122" .venv
+$ PATH="$(dirname "$PYTHON_31213"):$PATH" uv sync -v
+$ PATH="$(dirname "$PYTHON_31213"):$PATH" uv sync -v
+$ PATH="$(dirname "$PYTHON_31213"):$PATH" uv run -v python --version
+```
+
+The first `uv sync` produced the same key diagnostic as the report:
+
+```text
+The interpreter in the project environment has a different version (3.12.2) than it was created with (3.12.13)
+Using CPython 3.12.13 interpreter at: .../bin/python3.12
+Removed virtual environment at: .venv
+Creating virtual environment at: .venv
+```
+
+The second `uv sync` did not remove or create `.venv`; it reported that the environment satisfied
+the Python 3.12 request. `uv run python --version` printed `Python 3.12.13`, `pyvenv.cfg` recorded
+`version_info = 3.12.13`, and `.venv/bin/python` resolved to the selected 3.12.13 executable. An
+ordinary environment created directly with 3.12.13 was likewise reused by two consecutive
+`uv run -v python --version` invocations.
+
+A second-project variant set `VIRTUAL_ENV` to the first project's `.venv`. It reproduced the
+reported warning that the active and project environments differ, but uv created the second
+project's own 3.12.13 environment once and reused it on the next `uv sync`. The warning therefore
+does not reproduce the loop. A stale-interpreter-cache variant also did not reproduce it: after an
+interpreter at a fixed path was replaced, uv's Unix `ctime` check invalidated the cache and uv
+re-queried the executable at its actual version.
+
+Existing integration coverage is
+`crates/uv/tests/sync/sync.rs::sync_when_virtual_environment_incompatible_with_interpreter`. It
+creates a Python 3.12 environment, makes both the legacy `version` field and the current
+`version_info` field incompatible in turn, asserts that `uv sync` removes and recreates the
+environment, and asserts that the recreated `pyvenv.cfg` records the actual 3.12 interpreter.
+This covers one-time recovery from the mismatch, not a newly recreated environment continuing to
+run the old patch version.
+
+To construct the reported loop rather than only its initial state, the following evidence is still
+needed immediately after one successful recreation and before another uv invocation:
+
+```console
+$ /usr/local/bin/python3.12 -I -c 'import sys; print(sys.version); print(sys.executable); print(sys._base_executable); print(sys.prefix); print(sys.base_prefix)'
+$ .venv/bin/python -I -c 'import sys; print(sys.version); print(sys.executable); print(sys._base_executable); print(sys.prefix); print(sys.base_prefix)'
+$ readlink -f /usr/local/bin/python3.12
+$ readlink -f .venv/bin/python
+$ cat .venv/pyvenv.cfg
+$ stat -c '%N %i %s %y %z %U:%G %a' /usr/local/bin/python3.12 .venv .venv/bin/python .venv/CACHEDIR.TAG
+$ findmnt -T /usr/local/bin/python3.12
+$ findmnt -T .venv
+```
+
+Maintainers also need to know how `/usr/local/bin/python3.12` was installed or updated, whether the
+repository or `.venv` is copied between machines, images, or stages, and whether either relevant
+path is a bind mount, network mount, or shared volume. Two complete consecutive `uv -vv` logs from
+the same working directory, plus the result with a fresh temporary `UV_CACHE_DIR`, would
+distinguish a persistent interpreter/link problem from cached discovery. Ownership and mode of the
+second project's `.venv` and `CACHEDIR.TAG` are needed to investigate the separate deletion error.
 
 ## Related
 
-- astral-sh/uv#16231 — Closed issue with the identical interpreter-version conflict and
-  remove/create sequence. Its environment had been copied between container stages with different
-  Python patch versions; unlike astral-sh/uv#21066, it did not show a freshly recreated environment
-  continuing to run the older interpreter.
-- astral-sh/uv#16218 — Closed issue about environment recreation failing when `.venv` was a busy
-  Docker mount point. Its fix avoided treating failure to remove the now-empty mount directory as
-  fatal; it does not cover permission denial while deleting the child `.venv/CACHEDIR.TAG` here.
-- astral-sh/uv#19928 — Merged pull request establishing that project environments backed by
-  uv-managed minor-version links should survive transparent patch upgrades. The interpreter in
-  astral-sh/uv#21066 is discovered at `/usr/local/bin/python3.12`, so that managed-Python mechanism
-  does not directly cover this report.
+- astral-sh/uv#16231 — Closed report with the same version-conflict and remove/create sequence.
+  Its environment was copied between container stages with different Python patch versions; it did
+  not show a freshly recreated environment continuing to execute the older patch.
+- astral-sh/uv#16218 — Closed report about environment recreation failing when `.venv` was a busy
+  Docker mount point. Its fix does not cover permission denial while deleting a child
+  `.venv/CACHEDIR.TAG`.
+- astral-sh/uv#19928 — Merged change establishing that project environments backed by uv-managed
+  minor-version links survive transparent patch upgrades. astral-sh/uv#21066 instead discovers a
+  system interpreter at `/usr/local/bin/python3.12`.
 
-## Search evidence
-
-Searches covered open and closed issues and open, closed, and merged pull requests. Literal queries
-used the interpreter-version conflict, `VIRTUAL_ENV` warning, `CACHEDIR.TAG`, permission denial, and
-remove/create messages. Conceptual queries covered repeated environment recreation, `pyvenv.cfg`
-metadata, Python patch upgrades, system interpreters, copied or mounted environments, and active
-versus project environment paths. Fix-oriented searches checked recent transparent-upgrade and
-`version_info` changes.
-
-astral-sh/uv#19100 and its fix astral-sh/uv#19102 were ruled out because they concern an exact patch
-pin incorrectly following an uv-managed mutable minor-version link. astral-sh/uv#19920,
-astral-sh/uv#19925, and astral-sh/uv#1689 concern `pyvenv.cfg` formatting or truncation observed by
-pre-commit, not a recreated environment whose interpreter remains on the old patch.
-astral-sh/uv#7073 concerns an unnecessary warning for `--no-sync`; this report invokes `sync` and
-`run` and shows different active and project locations.
+Searches in the retained issue context covered open and closed issues and pull requests using the
+exact conflict, `VIRTUAL_ENV`, `CACHEDIR.TAG`, permission, and recreation diagnostics, plus copied
+or mounted environments, system interpreters, `pyvenv.cfg`, and patch upgrades. No related item
+establishes the unexplained post-recreation 3.12.2 result in astral-sh/uv#21066.
