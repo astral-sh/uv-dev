@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Result, bail};
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::fixture::PathChild;
 use fs_err as fs;
@@ -192,22 +192,28 @@ async fn tool_list_outdated_respects_configured_index() -> Result<()> {
         .arg(config_file.as_os_str()), @"
     exit_code: 0 (success)
     ");
-    assert!(server.received_requests().await.unwrap().is_empty());
+    if let Some(received_requests) = server.received_requests().await {
+        assert!(received_requests.is_empty());
+    } else {
+        bail!("mock server request recording is unavailable");
+    }
 
     for config in [
-        format!(
-            "[[index]]\nname = \"ordinary\"\nurl = \"{}/simple\"\ndefault = true\n",
-            server.uri()
-        ),
+        formatdoc! {r#"
+            [[index]]
+            name = "ordinary"
+            url = "{}/simple"
+            default = true
+        "#, server.uri()},
         format!("index-url = \"{}/simple\"\n", server.uri()),
-        format!(
-            "index-url = \"{0}/unused\"\nextra-index-url = [\"{0}/simple\"]\n",
-            server.uri()
-        ),
-        format!(
-            "no-index = true\nfind-links = [\"{}/flat\"]\n",
-            server.uri()
-        ),
+        formatdoc! {r#"
+            index-url = "{0}/unused"
+            extra-index-url = ["{0}/simple"]
+        "#, server.uri()},
+        formatdoc! {r#"
+            no-index = true
+            find-links = ["{}/flat"]
+        "#, server.uri()},
     ] {
         fs::write(&config_file, config)?;
         allow_duplicates! {
