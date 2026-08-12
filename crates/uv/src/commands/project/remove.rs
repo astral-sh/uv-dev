@@ -243,7 +243,7 @@ pub(crate) async fn remove(
                     python_downloads,
                     &install_mirrors,
                     ProjectEnvironmentPolicy::Optional,
-                    active,
+                    active.or(Some(false)),
                     cache,
                     printer,
                 )

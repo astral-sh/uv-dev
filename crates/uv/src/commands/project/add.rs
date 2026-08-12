@@ -299,7 +299,7 @@ pub(crate) async fn add(
                 python_downloads,
                 &install_mirrors,
                 ProjectEnvironmentPolicy::Optional,
-                active,
+                active.or(Some(false)),
                 cache,
                 printer,
             )

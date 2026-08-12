@@ -4392,7 +4392,6 @@ fn edit_no_sync_active_environment_mismatch() -> Result<()> {
         .env(EnvVars::VIRTUAL_ENV, "active"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    warning: `VIRTUAL_ENV=active` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
     Resolved 2 packages in [TIME]
     ");
@@ -4407,12 +4406,50 @@ fn edit_no_sync_active_environment_mismatch() -> Result<()> {
         .env(EnvVars::VIRTUAL_ENV, "active"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    warning: `VIRTUAL_ENV=active` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
     Resolved 1 package in [TIME]
     ");
 
     assert!(!context.venv.exists());
+
+    context
+        .venv()
+        .arg("active")
+        .arg("--python")
+        .arg("3.12")
+        .assert()
+        .success();
+
+    // An explicitly requested active environment still determines the interpreter.
+    uv_snapshot!(context.filters(), context
+        .add()
+        .arg("./ok-1.0.0-py3-none-any.whl")
+        .arg("--no-sync")
+        .arg("--offline")
+        .arg("--active")
+        .env(EnvVars::VIRTUAL_ENV, "active"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    assert!(!context.venv.exists());
+
+    // Commands that synchronize the project environment must retain the mismatch warning.
+    uv_snapshot!(context.filters(), context
+        .remove()
+        .arg("ok")
+        .arg("--offline")
+        .env(EnvVars::VIRTUAL_ENV, "active"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: `VIRTUAL_ENV=active` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Creating virtual environment at: .venv
+    Resolved 1 package in [TIME]
+    ");
+
+    assert!(context.venv.exists());
 
     Ok(())
 }
