@@ -338,6 +338,9 @@ async fn oidc_device_flow(
     let Some(access_token) = response.access_token else {
         bail!("The device authorization server did not return an access token");
     };
+    if access_token.trim().is_empty() {
+        bail!("The device authorization server returned an empty access token");
+    }
 
     let session = oidc::session(issuer, discovery, client_id, scope, response.refresh_token)?;
     let credentials = if let Some(expires_in) = response.expires_in {
