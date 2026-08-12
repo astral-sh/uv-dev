@@ -6739,6 +6739,8 @@ fn sync_custom_environment_path() -> Result<()> {
 }
 
 /// A non-virtual Python installation selected as the project environment must not be replaced.
+/// Windows virtual environment launchers cannot run without `pyvenv.cfg`.
+#[cfg(unix)]
 #[test]
 fn sync_custom_non_virtual_project_environment() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
