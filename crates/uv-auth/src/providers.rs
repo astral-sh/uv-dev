@@ -8,6 +8,8 @@ use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result};
+use azure_core::credentials::TokenCredential;
+use azure_identity::{ManagedIdentityCredential, WorkloadIdentityCredential};
 use http::header::AUTHORIZATION;
 use jiff::{Timestamp, civil::DateTime, tz::TimeZone};
 use reqsign::aws::DefaultSigner as AwsDefaultSigner;
@@ -64,6 +66,9 @@ const GOOGLE_CLOUD_SDK_EXECUTABLE: &str = if cfg!(windows) {
 
 /// The Microsoft Entra application ID for Azure DevOps, including Azure Artifacts.
 const AZURE_DEVOPS_RESOURCE: &str = "499b84ac-1321-427f-aa17-267ca6975798";
+
+/// Opt in to ambient Azure managed identity for package feeds.
+const UV_AZURE_MANAGED_IDENTITY: &str = "UV_AZURE_MANAGED_IDENTITY";
 
 /// Refresh Azure Artifacts credentials before an in-flight token can expire.
 const AZURE_ARTIFACTS_REFRESH_BUFFER: Duration = Duration::from_secs(30);
@@ -581,7 +586,15 @@ impl AzureArtifactsProvider {
         }
 
         cached_registry_credentials(&self.credentials, async {
-            if let Some((credentials, cache_duration)) = Self::credentials_from_cli().await {
+            if let Some((credentials, cache_duration)) = Self::credentials_from_workload().await {
+                debug!("Found Azure Artifacts credentials from an Azure workload identity");
+                (Some(credentials), cache_duration)
+            } else if let Some((credentials, cache_duration)) =
+                Self::credentials_from_managed_identity().await
+            {
+                debug!("Found Azure Artifacts credentials from an Azure managed identity");
+                (Some(credentials), cache_duration)
+            } else if let Some((credentials, cache_duration)) = Self::credentials_from_cli().await {
                 debug!("Found Azure Artifacts credentials from the Azure CLI");
                 (Some(credentials), cache_duration)
             } else {
@@ -594,6 +607,46 @@ impl AzureArtifactsProvider {
 
     async fn credentials_from_cli() -> Option<(Credentials, Duration)> {
         Self::credentials_from_cli_command(OsStr::new(AZURE_CLI_EXECUTABLE)).await
+    }
+
+    async fn credentials_from_workload() -> Option<(Credentials, Duration)> {
+        std::env::var_os("AZURE_FEDERATED_TOKEN_FILE")?;
+
+        let provider = WorkloadIdentityCredential::new(None).ok()?;
+        Self::credentials_from_identity(provider.as_ref()).await
+    }
+
+    async fn credentials_from_managed_identity() -> Option<(Credentials, Duration)> {
+        std::env::var(UV_AZURE_MANAGED_IDENTITY)
+            .ok()
+            .filter(|value| value == "1" || value.eq_ignore_ascii_case("true"))?;
+
+        let provider = ManagedIdentityCredential::new(None).ok()?;
+        Self::credentials_from_identity(provider.as_ref()).await
+    }
+
+    async fn credentials_from_identity(
+        provider: &(dyn TokenCredential + Send + Sync),
+    ) -> Option<(Credentials, Duration)> {
+        let scope = format!("{AZURE_DEVOPS_RESOURCE}/.default");
+        let token = provider
+            .get_token(&[&scope], None)
+            .await
+            .inspect_err(|error| {
+                debug!("Azure workload identity did not return Artifacts credentials: {error}");
+            })
+            .ok()?;
+        let expires_at = Timestamp::from_second(token.expires_on.unix_timestamp()).ok()?;
+        let cache_duration =
+            registry_credential_cache_duration(expires_at, AZURE_ARTIFACTS_REFRESH_BUFFER)?;
+        if cache_duration.is_zero() || token.token.secret().trim().is_empty() {
+            return None;
+        }
+
+        Some((
+            Credentials::bearer(token.token.secret().as_bytes().to_vec()),
+            cache_duration,
+        ))
     }
 
     async fn credentials_from_cli_command(program: &OsStr) -> Option<(Credentials, Duration)> {
