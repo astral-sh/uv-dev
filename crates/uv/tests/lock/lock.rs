@@ -25427,7 +25427,7 @@ fn lock_incompatible_python_version_without_interpreter() -> Result<()> {
     uv_snapshot!(context.filters(), context.lock().arg("--offline").arg("--no-python-downloads"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: The Python request `>=3.7,<3.9` from `.python-version` is incompatible with the project's Python requirement: `>=3.12` (from `project.requires-python`)
+    error: The Python request `>=3.7, <3.9` from `.python-version` is incompatible with the project's Python requirement: `>=3.12` (from `project.requires-python`)
     Use `uv python pin` to update the `.python-version` file to a compatible version
     ");
 
