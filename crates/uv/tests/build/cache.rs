@@ -5,6 +5,8 @@ use std::process::Command;
 
 #[cfg(unix)]
 use uv_fs::create_symlink;
+#[cfg(unix)]
+use uv_test::ReadOnlyDirectoryGuard;
 use uv_test::{get_bin, uv_snapshot};
 
 /// When the active cache directory is inside an explicit build source, we should warn and continue
@@ -301,8 +303,6 @@ fn cache_project_inside_cache_no_cache() -> Result<()> {
 #[test]
 #[cfg(unix)]
 fn cache_init_failure() -> Result<()> {
-    use uv_test::ReadOnlyDirectoryGuard;
-
     let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -349,6 +349,24 @@ fn cache_init_failure() -> Result<()> {
     ----- stderr -----
     error: Failed to initialize cache at `[CACHE_DIR]`
       Caused by: failed to create directory `[CACHE_DIR]`: Permission denied (os error 13)
+    ");
+
+    Ok(())
+}
+
+/// Existing Git markers in the source distribution cache do not need write permissions.
+#[test]
+#[cfg(unix)]
+fn cache_init_read_only_git_marker() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let marker = context.cache_dir.child("sdists-v9/.git");
+    let _guard = ReadOnlyDirectoryGuard::new(marker.path())?;
+
+    uv_snapshot!(context.filters(), context.python_find(), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to initialize cache at `[CACHE_DIR]/`
+      Caused by: failed to open file `[CACHE_DIR]/sdists-v9/.git`: Permission denied (os error 13)
     ");
 
     Ok(())
