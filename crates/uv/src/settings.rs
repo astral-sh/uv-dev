@@ -26,7 +26,7 @@ use uv_cli::{
 use uv_cli::{
     AuthorFrom, BuildArgs, BuildOptionsArgs, CheckArgs, ExcludeNewerArgs, ExportArgs, FormatArgs,
     HashCheckingArgs, PackageExcludeNewerArgs, PublishArgs, PythonDirArgs, RegistryClientArgs,
-    ResolverArgs, ResolverInstallerArgs, ToolUpgradeArgs,
+    ResolverArgs, ResolverInstallerArgs, ToolUpgradeArgs, WheelSource,
     options::{
         Flag, FlagSource, check_conflicts, flag, resolve_flag, resolve_flag_pair,
         resolver_installer_options, resolver_options,
@@ -4116,6 +4116,7 @@ pub(crate) struct BuildSettings {
     pub(crate) out_dir: Option<PathBuf>,
     pub(crate) sdist: bool,
     pub(crate) wheel: bool,
+    pub(crate) wheel_from: Option<WheelSource>,
     pub(crate) list: bool,
     pub(crate) build_logs: bool,
     pub(crate) gitignore: bool,
@@ -4144,6 +4145,7 @@ impl BuildSettings {
             all_packages,
             sdist,
             wheel,
+            wheel_from,
             list,
             force_pep517,
             clear,
@@ -4189,6 +4191,7 @@ impl BuildSettings {
             out_dir,
             sdist,
             wheel,
+            wheel_from,
             list,
             build_logs: flag(build_logs, no_build_logs, "build-logs")?.unwrap_or(true),
             force_pep517,
