@@ -43,7 +43,7 @@ use std::str::FromStr;
 use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::instrument;
 use unscanny::{Pattern, Scanner};
-use url::Url;
+use url::{ParseError, Url};
 
 #[cfg(feature = "http")]
 use uv_client::{BaseClient, ClientBuildError};
@@ -53,7 +53,7 @@ use uv_distribution_types::{
     Requirement, UnresolvedRequirement, UnresolvedRequirementSpecification,
 };
 use uv_fs::{Simplified, normalize_path};
-use uv_pep508::{Pep508Error, RequirementOrigin, VerbatimUrl, expand_env_vars};
+use uv_pep508::{Pep508Error, RequirementOrigin, VerbatimUrl, VerbatimUrlError, expand_env_vars};
 use uv_pypi_types::VerbatimParsedUrl;
 #[cfg(feature = "http")]
 use uv_redacted::DisplaySafeUrl;
@@ -833,28 +833,29 @@ fn parse_entry(
             .map(Cow::Owned)
             .unwrap_or(Cow::Borrowed(given));
         let expanded = expand_env_vars(given.as_ref());
-        let url = if let Some(path) = std::path::absolute(requirements_dir.join(expanded.as_ref()))
-            .ok()
-            .filter(|path| path.exists())
-        {
-            VerbatimUrl::from_absolute_path(path).map_err(|err| {
-                RequirementsTxtParserError::VerbatimUrl {
-                    source: err,
-                    url: given.to_string(),
-                    start,
-                    end: s.cursor(),
-                }
-            })?
+        let requirements_dir = std::path::absolute(working_dir.join(requirements_dir))
+            .map_err(RequirementsTxtParserError::Io)?;
+        let path = requirements_dir.join(expanded.as_ref());
+        // Existing directories such as `https:links` take precedence over URL parsing.
+        let url = if path.exists() {
+            VerbatimUrl::from_absolute_path(&path)
         } else {
-            VerbatimUrl::parse_url(expanded.as_ref()).map_err(|err| {
-                RequirementsTxtParserError::Url {
-                    source: err,
-                    url: given.to_string(),
-                    start,
-                    end: s.cursor(),
-                }
-            })?
-        };
+            // Preserve uppercase URL schemes and only interpret a relative URL without
+            // a base as a missing local path.
+            match VerbatimUrl::parse_url(expanded.as_ref()) {
+                Ok(url) => Ok(url),
+                Err(VerbatimUrlError::Url(DisplaySafeUrlError::Url(
+                    ParseError::RelativeUrlWithoutBase,
+                ))) => VerbatimUrl::from_absolute_path(&path),
+                Err(err) => Err(err),
+            }
+        }
+        .map_err(|err| RequirementsTxtParserError::Url {
+            source: err,
+            url: given.to_string(),
+            start,
+            end: s.cursor(),
+        })?;
         RequirementsTxtStatement::FindLinks(url.with_given(given))
     } else if s.eat_if("--no-binary") {
         let given = parse_value("--no-binary", content, s, |c: char| !is_terminal(c))?;
