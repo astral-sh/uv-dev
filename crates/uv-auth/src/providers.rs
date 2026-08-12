@@ -346,7 +346,7 @@ impl Default for ArtifactRegistryProvider {
 
 impl ArtifactRegistryProvider {
     /// Returns `true` if the URL is for Google Artifact Registry.
-    pub fn is_artifact_registry(url: &Url) -> bool {
+    pub(crate) fn is_artifact_registry(url: &Url) -> bool {
         url.scheme() == "https"
             && url
                 .host_str()
@@ -354,7 +354,7 @@ impl ArtifactRegistryProvider {
     }
 
     /// Returns `true` if the username is compatible with Google Artifact Registry credentials.
-    pub(crate) fn supports_username(username: Option<&str>) -> bool {
+    fn supports_username(username: Option<&str>) -> bool {
         username.is_none_or(|username| username == GOOGLE_ARTIFACT_REGISTRY_USERNAME)
     }
 
@@ -362,7 +362,7 @@ impl ArtifactRegistryProvider {
     ///
     /// This follows the lookup order of Google's `keyrings.google-artifactregistry-auth` package:
     /// Application Default Credentials are preferred, then active `gcloud` credentials.
-    pub(crate) async fn credentials_for(&self, url: &Url) -> Option<Credentials> {
+    async fn credentials_for(&self, url: &Url) -> Option<Credentials> {
         if !Self::is_artifact_registry(url) {
             return None;
         }
@@ -390,11 +390,6 @@ impl ArtifactRegistryProvider {
             }
         })
         .await
-    }
-
-    /// Returns `true` if credentials are available for Google Artifact Registry.
-    pub async fn has_credentials_for(&self, url: &Url) -> bool {
-        self.credentials_for(url).await.is_some()
     }
 
     async fn credentials_from_adc(&self, url: &Url) -> Option<Credentials> {
