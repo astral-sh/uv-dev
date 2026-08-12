@@ -12848,6 +12848,7 @@ fn lock_upgrade_package_missing() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
+    warning: Package `missing` requested for upgrade is not present in the project dependencies
     ");
 
     // Existing packages are valid upgrade targets.
@@ -12857,14 +12858,17 @@ fn lock_upgrade_package_missing() -> Result<()> {
     Resolved 1 package in [TIME]
     ");
 
-    // Missing packages should be reported in a deterministic order.
+    // Missing packages are reported in order; the Python interpreter is not a package.
     uv_snapshot!(context.filters(), context.lock()
         .arg("--upgrade-package").arg("zeta")
         .arg("--upgrade-package").arg("alpha")
-        .arg("--upgrade-package").arg("project"), @"
+        .arg("--upgrade-package").arg("project")
+        .arg("--upgrade-package").arg("python"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
+    warning: Package `alpha` requested for upgrade is not present in the project dependencies
+    warning: Package `zeta` requested for upgrade is not present in the project dependencies
     ");
 
     // Synchronization also resolves the requested upgrade targets.
@@ -12872,6 +12876,7 @@ fn lock_upgrade_package_missing() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
+    warning: Package `missing` requested for upgrade is not present in the project dependencies
     Checked in [TIME]
     ");
 
