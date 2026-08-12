@@ -1,0 +1,51 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 18510,
+        "title": "Interpreter cache pollution by system-site-packages venvs",
+        "url": "https://github.com/astral-sh/uv/issues/18510",
+        "state": "open",
+        "reason": "Closest current report: `uv run` reuses stale `interpreter-v4` metadata after a virtual environment is deleted and recreated, and clearing that bucket fixes it. Its confirmed `system-site-packages` trigger differs from astral-sh/uv#21062."
+      },
+      {
+        "kind": "pull_request",
+        "number": 18537,
+        "title": "Invalidate interpreter cache when pyvenv.cfg changes",
+        "url": "https://github.com/astral-sh/uv/pull/18537",
+        "state": "open",
+        "reason": "Open fix for astral-sh/uv#18510 that adds `pyvenv.cfg` freshness to interpreter caching. It does not establish a fix for metadata crossing two distinct absolute project paths."
+      },
+      {
+        "kind": "issue",
+        "number": 13444,
+        "title": "uv add fails due to interpreter-v4 cache missing invalidation",
+        "url": "https://github.com/astral-sh/uv/issues/13444",
+        "state": "open",
+        "reason": "Demonstrates stale per-venv interpreter metadata surviving deletion and recreation when venvs share a base interpreter, with deletion of `interpreter-v4` as the workaround. Its observed effect and trigger differ."
+      },
+      {
+        "kind": "issue",
+        "number": 14160,
+        "title": "`run_groups_requires_python` flakes with `Removed virtual environment at ...`",
+        "url": "https://github.com/astral-sh/uv/issues/14160",
+        "state": "closed",
+        "reason": "Historical `uv run` failure where cached data reported the wrong Python and caused unnecessary environment recreation, closely matching the failure class but not the current cross-project trigger."
+      },
+      {
+        "kind": "pull_request",
+        "number": 14331,
+        "title": "Include the canonical path in the interpreter query cache key",
+        "url": "https://github.com/astral-sh/uv/pull/14331",
+        "state": "merged",
+        "reason": "Fixed astral-sh/uv#14160 by including the canonical path alongside the absolute path in the interpreter cache key. astral-sh/uv#21062 occurs on a version containing this fix, so it may expose a new cache association failure."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and pull requests using literal terms including `interpreter-v4`, `query_cached`, `uv run --project`, console scripts, `No such file or directory`, `UV_PROJECT_ENVIRONMENT`, `--no-cache`, `sys_prefix`, `sys_executable`, and worktrees. Conceptual searches covered stale interpreter metadata, wrong environments, cache pollution and invalidation, venv recreation, shared or symlinked interpreters, path collisions, and concurrency. Fix-oriented review included interpreter source history, astral-sh/uv#14331, and astral-sh/uv#18537. astral-sh/uv#11454, astral-sh/uv#13198, astral-sh/uv#18163, astral-sh/uv#18166, astral-sh/uv#17780, astral-sh/uv#13883, and astral-sh/uv#14153 were inspected but ruled out because their relocation, shebang, platform, discovery, or concurrency conditions do not match cross-project cached metadata."
+  },
+  "type": "bug",
+  "type_reason": "Selecting and recreating an unrelated deleted project environment is incorrect behavior. Existing cache-pollution reports have different confirmed triggers, while the earlier wrong-interpreter collision was fixed by astral-sh/uv#14331. Because this occurs afterward and across distinct paths, it should be tracked as a bug rather than treated as a confirmed duplicate.",
+  "summary": "Existing reports establish stale interpreter-cache reuse after venv replacement, and a historical wrong-interpreter collision was fixed by adding the canonical path to the key. No existing item exactly matches the reported cross-project, distinct-path selection.",
+  "draft_response": "This is incorrect behavior: `uv run --project` should not select or recreate an environment belonging to a different project path.\n\nThere are related interpreter-cache bugs in astral-sh/uv#13444 and astral-sh/uv#18510, and astral-sh/uv#18537 is adding `pyvenv.cfg` invalidation for the latter. Those cases reuse stale metadata after replacing a venv at the same path. We also previously fixed a wrong-interpreter cache collision in astral-sh/uv#14331 by including both absolute and canonical interpreter paths in the key. The evidence here does not yet show that either mechanism explains metadata crossing from A to B, so this should remain separate.\n\nBefore clearing the affected cache again, could you attach a redacted full trace from one failing invocation, the path and decoded contents of the cache entry reported as the hit, and the `readlink`/`realpath` results plus `pyvenv.cfg` for B's `.venv/bin/python3`? The cache-entry filename and its `sys_executable`, `sys_prefix`, `sys_path`, and timestamp fields would help distinguish a wrong-key lookup from a wrong payload. Please remove private URLs or other sensitive values."
+}
