@@ -656,7 +656,7 @@ async fn run_with_workspace_cache(
             command: AuthCommand::Login(args),
         }) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = settings::AuthLoginSettings::resolve(args);
+            let args = settings::AuthLoginSettings::resolve(args, filesystem.as_ref());
             show_settings!(args);
 
             commands::auth_login(
@@ -664,6 +664,9 @@ async fn run_with_workspace_cache(
                 args.username,
                 args.password,
                 args.token,
+                args.issuer,
+                args.client_id,
+                args.scope,
                 client_builder,
                 printer,
                 globals.preview,

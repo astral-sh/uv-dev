@@ -65,13 +65,33 @@ pub(crate) async fn token(
             .fetch(url, Some(&username))
             .await
             .ok_or_else(|| anyhow::anyhow!("Failed to fetch credentials for {display_url}"))?,
-        AuthBackend::TextStore(store, _lock) => store
-            .get_credentials(url, Some(&username))?
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("Failed to fetch credentials for {display_url}"))?,
+        AuthBackend::TextStore(store, _lock) => {
+            let direct = store.get_credentials(url, Some(&username))?.cloned();
+            // Bearer credentials are stored without a username. When the caller
+            // didn't pass `--username` (defaulted to `__token__`), look up
+            // credentials under no username and only accept the result if it is
+            // a [`Credentials::Bearer`] -- otherwise we'd surface another user's
+            // basic-auth password under a tokenless lookup.
+            let fallback = if username == "__token__" && direct.is_none() {
+                store
+                    .get_credentials(url, None)?
+                    .filter(|credentials| matches!(credentials, Credentials::Bearer { .. }))
+                    .cloned()
+            } else {
+                None
+            };
+            direct
+                .or(fallback)
+                .ok_or_else(|| anyhow::anyhow!("Failed to fetch credentials for {display_url}"))?
+        }
     };
 
-    let Some(password) = credentials.password() else {
+    let token_value = if let Some(password) = credentials.password() {
+        password
+    } else if let Some(token) = credentials.bearer_token() {
+        std::str::from_utf8(token)
+            .map_err(|error| anyhow::anyhow!("Stored bearer token is not valid UTF-8: {error}"))?
+    } else {
         bail!(
             "No {} found for {display_url}",
             if username != "__token__" {
@@ -82,7 +102,7 @@ pub(crate) async fn token(
         );
     };
 
-    writeln!(printer.stdout(), "{password}")?;
+    writeln!(printer.stdout(), "{token_value}")?;
     Ok(ExitStatus::Success)
 }
 

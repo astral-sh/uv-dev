@@ -34,6 +34,41 @@ will not yet be used for Git requests.
 
     The credentials will not be validated, i.e., incorrect credentials will not fail.
 
+## Logging in with OIDC device authorization
+
+For indexes that support OpenID Connect, `uv auth login` can authenticate using the OAuth 2.0 Device
+Authorization Grant ([RFC 8628](https://datatracker.ietf.org/doc/html/rfc8628)). When no
+`--username`, `--password`, or `--token` is provided, uv probes
+`<url>/.well-known/openid-configuration` and, if device authorization endpoints are advertised, runs
+the device flow:
+
+```console
+$ uv auth login https://my-registry.example.com
+Open https://my-registry.example.com/device and enter code: WDJB-MJHT
+```
+
+uv attempts to open the verification URL in your browser; if that fails, you can open the URL
+manually and enter the code. Once authorization completes, the resulting bearer token is stored in
+the credential store and used for subsequent requests to that origin. If the authorization server
+provides an expiration time, uv records it and stops using the token shortly before it expires. Run
+`uv auth login` again to obtain a new token.
+
+For indexes whose OIDC provider lives on a different domain than the package index (e.g., Azure
+DevOps Artifacts uses Microsoft Entra), the issuer URL, client ID, and scope can be supplied via
+flags or under [`[tool.uv.index.oidc]`](../indexes.md#authenticating-via-oidc-device-authorization).
+For example, with Azure Artifacts:
+
+```console
+$ uv auth login https://pkgs.dev.azure.com \
+    --issuer https://login.microsoftonline.com/<TENANT_ID>/v2.0 \
+    --client-id d5a56ea4-7369-46b8-a538-c370805301bf \
+    --scope 499b84ac-1321-427f-aa17-267ca6975798/.default
+```
+
+CLI flags take precedence over any matching `[[tool.uv.index]]` configuration. If `--issuer` is
+provided but discovery fails, uv reports an error rather than falling back to the username/password
+prompt.
+
 ## Logging out of a service
 
 To remove credentials, use the `uv auth logout` command:

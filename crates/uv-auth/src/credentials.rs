@@ -3,6 +3,7 @@ use std::fmt;
 use std::io::Read;
 use std::io::Write;
 use std::str::{FromStr, Utf8Error};
+use std::time::Duration;
 
 use base64::prelude::BASE64_STANDARD;
 use base64::read::DecoderReader;
@@ -24,6 +25,9 @@ use uv_static::EnvVars;
 use crate::providers::RegistryAuthProvider;
 
 const AZURE_STORAGE_VERSION: &str = "2023-11-03";
+
+/// Avoid using an access token that could expire while a request is in flight.
+pub(crate) const ACCESS_TOKEN_EXPIRATION_BUFFER: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Credentials {
@@ -114,26 +118,50 @@ impl fmt::Debug for Password {
 
 #[derive(Clone, PartialEq, Eq, Ord, PartialOrd, Hash, Default, Deserialize)]
 #[serde(transparent)]
-pub struct Token(Vec<u8>);
+pub struct Token {
+    bytes: Vec<u8>,
+    #[serde(skip)]
+    expires_at: Option<jiff::Timestamp>,
+}
 
 impl Token {
     pub(crate) fn new(token: Vec<u8>) -> Self {
-        Self(token)
+        Self {
+            bytes: token,
+            expires_at: None,
+        }
+    }
+
+    pub(crate) fn with_expiration(token: Vec<u8>, expires_at: jiff::Timestamp) -> Self {
+        Self {
+            bytes: token,
+            expires_at: Some(expires_at),
+        }
+    }
+
+    pub(crate) fn expires_at(&self) -> Option<jiff::Timestamp> {
+        self.expires_at
     }
 
     /// Return the [`Token`] as a byte slice.
     fn as_slice(&self) -> &[u8] {
-        self.0.as_slice()
+        self.bytes.as_slice()
     }
 
     /// Convert the [`Token`] into its underlying [`Vec<u8>`].
     pub(crate) fn into_bytes(self) -> Vec<u8> {
-        self.0
+        self.bytes
     }
 
     /// Return whether the [`Token`] is empty.
     fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.bytes.is_empty()
+    }
+
+    fn is_expired(&self) -> bool {
+        self.expires_at.is_some_and(|expires_at| {
+            expires_at <= jiff::Timestamp::now() + ACCESS_TOKEN_EXPIRATION_BUFFER
+        })
     }
 }
 
@@ -157,6 +185,13 @@ impl Credentials {
     pub fn bearer(token: Vec<u8>) -> Self {
         Self::Bearer {
             token: Token::new(token),
+        }
+    }
+
+    /// Create bearer credentials that expire at the given timestamp.
+    pub fn bearer_with_expiration(token: Vec<u8>, expires_at: jiff::Timestamp) -> Self {
+        Self::Bearer {
+            token: Token::with_expiration(token, expires_at),
         }
     }
 
@@ -185,6 +220,21 @@ impl Credentials {
         match self {
             Self::Basic { password, .. } => password.as_ref().map(Password::as_str),
             Self::Bearer { .. } => None,
+        }
+    }
+
+    /// Return the bearer token, if these credentials use bearer authentication.
+    pub fn bearer_token(&self) -> Option<&[u8]> {
+        match self {
+            Self::Basic { .. } => None,
+            Self::Bearer { token } => Some(token.as_slice()),
+        }
+    }
+
+    pub(crate) fn is_expired(&self) -> bool {
+        match self {
+            Self::Basic { .. } => false,
+            Self::Bearer { token } => token.is_expired(),
         }
     }
 

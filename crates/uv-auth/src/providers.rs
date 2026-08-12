@@ -26,7 +26,7 @@ use uv_static::EnvVars;
 use uv_warnings::warn_user_once;
 
 use crate::Credentials;
-use crate::credentials::Token;
+use crate::credentials::{ACCESS_TOKEN_EXPIRATION_BUFFER, Token};
 use crate::index::is_path_prefix;
 use crate::realm::{Realm, RealmRef};
 
@@ -64,9 +64,6 @@ const GOOGLE_CLOUD_SDK_EXECUTABLE: &str = if cfg!(windows) {
 
 /// The Microsoft Entra application ID for Azure DevOps, including Azure Artifacts.
 const AZURE_DEVOPS_RESOURCE: &str = "499b84ac-1321-427f-aa17-267ca6975798";
-
-/// Refresh Azure Artifacts credentials before an in-flight token can expire.
-const AZURE_ARTIFACTS_REFRESH_BUFFER: Duration = Duration::from_secs(30);
 
 /// The Azure CLI launcher available on the current platform.
 const AZURE_CLI_EXECUTABLE: &str = if cfg!(windows) { "az.cmd" } else { "az" };
@@ -646,7 +643,7 @@ impl AzureArtifactsProvider {
         })
         .ok()?;
         let Some(cache_duration) =
-            registry_credential_cache_duration(expires_at, AZURE_ARTIFACTS_REFRESH_BUFFER)
+            registry_credential_cache_duration(expires_at, ACCESS_TOKEN_EXPIRATION_BUFFER)
         else {
             debug!("Ignoring expired Azure CLI access token");
             return None;

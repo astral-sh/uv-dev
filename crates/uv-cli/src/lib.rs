@@ -10,6 +10,7 @@ use clap::builder::{PossibleValue, Styles, TypedValueParser, ValueParserFactory}
 use clap::error::ErrorKind;
 use clap::{Args, Parser, Subcommand};
 use clap::{ValueEnum, ValueHint};
+use url::Url;
 
 use uv_audit::VulnerabilityServiceFormat;
 use uv_auth::Service;
@@ -6510,6 +6511,20 @@ pub struct AuthLoginArgs {
         env = EnvVars::UV_KEYRING_PROVIDER,
     )]
     pub keyring_provider: Option<KeyringProviderType>,
+
+    /// The `OpenID` Connect issuer to use for device authorization.
+    ///
+    /// When omitted, uv attempts discovery at the service URL.
+    #[arg(long, value_hint = ValueHint::Url, conflicts_with_all = ["username", "password", "token"])]
+    pub issuer: Option<Url>,
+
+    /// The OAuth client identifier to use for device authorization.
+    #[arg(long, conflicts_with_all = ["username", "password", "token"])]
+    pub client_id: Option<String>,
+
+    /// The OAuth scopes to request during device authorization.
+    #[arg(long, conflicts_with_all = ["username", "password", "token"])]
+    pub scope: Option<String>,
 }
 
 #[derive(Args)]

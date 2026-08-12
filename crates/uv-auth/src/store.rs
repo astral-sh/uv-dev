@@ -152,6 +152,13 @@ struct TomlCredentialWire {
     password: Option<Password>,
     /// The token to use. Only allowed with [`AuthScheme::Bearer`].
     token: Option<String>,
+    /// The expiration time for a bearer access token, if any.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "expires-at"
+    )]
+    expires_at: Option<jiff::Timestamp>,
 }
 
 impl From<TomlCredential> for TomlCredentialWire {
@@ -163,14 +170,21 @@ impl From<TomlCredential> for TomlCredentialWire {
                 scheme: AuthScheme::Basic,
                 password,
                 token: None,
+                expires_at: None,
             },
-            Credentials::Bearer { token } => Self {
-                service: value.service,
-                username: Username::new(None),
-                scheme: AuthScheme::Bearer,
-                password: None,
-                token: Some(String::from_utf8(token.into_bytes()).expect("Token is valid UTF-8")),
-            },
+            Credentials::Bearer { token } => {
+                let expires_at = token.expires_at();
+                Self {
+                    service: value.service,
+                    username: Username::new(None),
+                    scheme: AuthScheme::Bearer,
+                    password: None,
+                    token: Some(
+                        String::from_utf8(token.into_bytes()).expect("Token is valid UTF-8"),
+                    ),
+                    expires_at,
+                }
+            }
         }
     }
 }
@@ -211,13 +225,18 @@ impl TryFrom<TomlCredentialWire> for TomlCredential {
                         BearerAuthError::UnexpectedPassword,
                     ));
                 }
-                if value.token.is_none() {
+                let Some(token) = value.token else {
                     return Err(TomlCredentialError::BearerAuthError(
                         BearerAuthError::MissingToken,
                     ));
-                }
+                };
+                let token = token.into_bytes();
                 let credentials = Credentials::Bearer {
-                    token: Token::new(value.token.unwrap().into_bytes()),
+                    token: if let Some(expires_at) = value.expires_at {
+                        Token::with_expiration(token, expires_at)
+                    } else {
+                        Token::new(token)
+                    },
                 };
                 Ok(Self {
                     service: value.service,
@@ -349,19 +368,23 @@ impl TextCredentialStore {
         // Perform an exact lookup first
         // TODO(zanieb): Consider adding `DisplaySafeUrlRef` so we can avoid this clone
         // TODO(zanieb): We could also return early here if we can't normalize to a `Service`
-        if let Ok(url_service) = Service::try_from(url.clone()) {
-            if let Some(credential) = self
+        if let Ok(url_service) = Service::try_from(url.clone())
+            && let Some(credential) = self
                 .credentials
                 .get(&(url_service, Username::from(username.map(str::to_string))))
-            {
-                return Ok(Some(credential));
-            }
+            && !credential.is_expired()
+        {
+            return Ok(Some(credential));
         }
 
         // If that fails, iterate through to find a prefix match
         let mut best: Option<(usize, &Service, &Credentials)> = None;
 
         for ((service, stored_username), credential) in &self.credentials {
+            if credential.is_expired() {
+                continue;
+            }
+
             let service_realm = Realm::from(service.url().deref());
 
             // Only consider services in the same realm
@@ -418,7 +441,9 @@ impl TextCredentialStore {
 mod tests {
     use std::io::Write;
     use std::str::FromStr;
+    use std::time::Duration;
 
+    use insta::assert_snapshot;
     use tempfile::NamedTempFile;
 
     use super::*;
@@ -456,6 +481,80 @@ mod tests {
             parsed.credentials[1].service.to_string(),
             "https://test.org/"
         );
+    }
+
+    #[test]
+    fn test_bearer_expiration_toml_serialization() {
+        let expires_at = jiff::Timestamp::from_second(4_102_444_800).unwrap();
+        let credentials = TomlCredentials {
+            credentials: vec![TomlCredential {
+                service: Service::from_str("https://example.com").unwrap(),
+                credentials: Credentials::bearer_with_expiration(
+                    b"access-token".to_vec(),
+                    expires_at,
+                ),
+            }],
+        };
+
+        let serialized = toml::to_string_pretty(&credentials).unwrap();
+        assert_snapshot!(serialized, @r#"
+        [[credential]]
+        service = "https://example.com/"
+        scheme = "bearer"
+        token = "access-token"
+        expires-at = "2100-01-01T00:00:00Z"
+        "#);
+
+        let parsed: TomlCredentials = toml::from_str(&serialized).unwrap();
+        assert_eq!(
+            parsed.credentials[0].credentials,
+            credentials.credentials[0].credentials
+        );
+    }
+
+    #[test]
+    fn test_expired_bearer_credentials_are_ignored() {
+        let mut store = TextCredentialStore::default();
+        let expired_service = Service::from_str("https://example.com/api/v1").unwrap();
+        store.insert(
+            expired_service.clone(),
+            Credentials::bearer_with_expiration(
+                b"expired-token".to_vec(),
+                jiff::Timestamp::now() - Duration::from_secs(1),
+            ),
+        );
+
+        let exact_url = DisplaySafeUrl::parse("https://example.com/api/v1").unwrap();
+        assert!(store.get_credentials(&exact_url, None).unwrap().is_none());
+
+        let general_credentials = Credentials::bearer(b"unexpired-token".to_vec());
+        store.insert(
+            Service::from_str("https://example.com/api").unwrap(),
+            general_credentials.clone(),
+        );
+
+        let nested_url = DisplaySafeUrl::parse("https://example.com/api/v1/package").unwrap();
+        assert_eq!(
+            store.get_credentials(&nested_url, None).unwrap(),
+            Some(&general_credentials)
+        );
+        assert!(store.remove(expired_service, Username::none()).is_some());
+    }
+
+    #[test]
+    fn test_expiring_bearer_credentials_are_ignored() {
+        let mut store = TextCredentialStore::default();
+        let service = Service::from_str("https://example.com").unwrap();
+        store.insert(
+            service,
+            Credentials::bearer_with_expiration(
+                b"expiring-token".to_vec(),
+                jiff::Timestamp::now() + Duration::from_secs(15),
+            ),
+        );
+
+        let url = DisplaySafeUrl::parse("https://example.com/package").unwrap();
+        assert!(store.get_credentials(&url, None).unwrap().is_none());
     }
 
     #[test]
