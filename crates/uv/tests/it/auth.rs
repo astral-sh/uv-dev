@@ -1,8 +1,12 @@
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::{fixture::PathChild, prelude::FileWriteStr};
+use indoc::formatdoc;
 use insta::allow_duplicates;
+use serde_json::json;
 use uv_static::EnvVars;
+use wiremock::matchers::{body_string_contains, method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use uv_test::uv_snapshot;
 
@@ -1037,6 +1041,258 @@ async fn login_text_store() {
     exit_code: 0 (success)
     ----- stderr -----
     Stored credentials for testuser@http://localhost/
+    ");
+}
+
+#[tokio::test]
+async fn login_oidc_device_flow() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/.well-known/openid-configuration"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "issuer": server.uri(),
+            "device_authorization_endpoint": "/oauth/device/code",
+            "token_endpoint": "/oauth/token",
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/oauth/device/code"))
+        .and(body_string_contains("client_id=uv"))
+        .and(body_string_contains("scope=openid"))
+        .and(body_string_contains("code_challenge_method=S256"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "device_code": "device-code",
+            "user_code": "ABCD-1234",
+            "verification_uri": "https://login.example.com/device",
+            "verification_uri_complete": "https://login.example.com/device?code=ABCD-1234",
+            "expires_in": 60,
+            "interval": 0,
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .and(body_string_contains("device_code=device-code"))
+        .and(body_string_contains("client_id=uv"))
+        .and(body_string_contains("code_verifier="))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": "oidc-access-token",
+            "token_type": "Bearer",
+            "expires_in": 3600,
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    uv_snapshot!(context.filters(), context.auth_login()
+        .arg(server.uri())
+        .env(EnvVars::UV_CREDENTIALS_DIR, context.temp_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Open https://login.example.com/device and enter code: ABCD-1234
+    Stored credentials for http://[LOCALHOST]/
+    ");
+
+    let credentials_path = context.temp_dir.child("credentials.toml");
+    let credentials = fs_err::read_to_string(&credentials_path)?;
+    let mut filters = context.filters();
+    filters.push((r#"expires-at = "[^"]+""#, r#"expires-at = "[TIMESTAMP]""#));
+    insta::with_settings!({ filters => filters }, {
+        insta::assert_snapshot!(credentials, @r#"
+        [[credential]]
+        service = "http://[LOCALHOST]/"
+        scheme = "bearer"
+        token = "oidc-access-token"
+        expires-at = "[TIMESTAMP]"
+        "#);
+    });
+
+    uv_snapshot!(context.filters(), context.auth_token()
+        .arg(server.uri())
+        .env(EnvVars::UV_CREDENTIALS_DIR, context.temp_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    oidc-access-token
+    ");
+
+    uv_snapshot!(context.filters(), context.auth_helper()
+        .arg("--protocol=bazel")
+        .arg("get")
+        .env(EnvVars::UV_CREDENTIALS_DIR, context.temp_dir.as_os_str()),
+        input = &json!({ "uri": format!("{}/simple/package/", server.uri()) }).to_string(),
+        @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {"headers":{"Authorization":["Bearer oidc-access-token"]}}
+
+    ----- stderr -----
+    warning: The `uv auth helper` command is experimental and may change without warning. Pass `--preview-features auth-helper` to disable this warning
+    "#);
+
+    let mut expired_credentials: toml::Value = toml::from_str(&credentials)?;
+    expired_credentials["credential"][0]["expires-at"] =
+        toml::Value::String("2000-01-01T00:00:00Z".to_string());
+    fs_err::write(
+        &credentials_path,
+        toml::to_string_pretty(&expired_credentials)?,
+    )?;
+
+    uv_snapshot!(context.filters(), context.auth_token()
+        .arg(server.uri())
+        .env(EnvVars::UV_CREDENTIALS_DIR, context.temp_dir.as_os_str()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to fetch credentials for http://[LOCALHOST]/
+    ");
+
+    uv_snapshot!(context.filters(), context.auth_logout()
+        .arg(server.uri())
+        .env(EnvVars::UV_CREDENTIALS_DIR, context.temp_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Removed credentials for http://[LOCALHOST]/
+    ");
+
+    uv_snapshot!(context.filters(), context.auth_token()
+        .arg(server.uri())
+        .env(EnvVars::UV_CREDENTIALS_DIR, context.temp_dir.as_os_str()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to fetch credentials for http://[LOCALHOST]/
+    ");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn login_oidc_index_configuration() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    let issuer = MockServer::start().await;
+    let service = MockServer::start().await;
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {
+            r#"
+        [[tool.uv.index]]
+        name = "private"
+        url = "{}/simple"
+        authenticate = "always"
+
+        [tool.uv.index.oidc]
+        issuer = "{}"
+        client-id = "configured-client"
+        scope = "packages:read"
+        "#,
+            service.uri(),
+            issuer.uri(),
+        })?;
+
+    Mock::given(method("GET"))
+        .and(path("/.well-known/openid-configuration"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "issuer": issuer.uri(),
+            "device_authorization_endpoint": "/device",
+            "token_endpoint": "/token",
+        })))
+        .expect(1)
+        .mount(&issuer)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/device"))
+        .and(body_string_contains("client_id=configured-client"))
+        .and(body_string_contains("scope=packages%3Aread"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "device_code": "configured-device-code",
+            "user_code": "WXYZ-9876",
+            "verification_uri": "https://login.example.com/device",
+            "expires_in": 60,
+            "interval": 0,
+        })))
+        .expect(1)
+        .mount(&issuer)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .and(body_string_contains("client_id=configured-client"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": "configured-access-token",
+            "token_type": "Bearer",
+        })))
+        .expect(1)
+        .mount(&issuer)
+        .await;
+
+    uv_snapshot!(context.filters(), context.auth_login().arg(service.uri()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Open https://login.example.com/device and enter code: WXYZ-9876
+    Stored credentials for http://[LOCALHOST]/
+    ");
+
+    uv_snapshot!(context.filters(), context.auth_token().arg(service.uri()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    configured-access-token
+    ");
+
+    uv_snapshot!(context.filters(), context.auth_token().arg(issuer.uri()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to fetch credentials for http://[LOCALHOST]/
+    ");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn login_oidc_explicit_issuer_discovery_fails() {
+    let context = uv_test::test_context_with_versions!(&[]);
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/.well-known/openid-configuration"))
+        .respond_with(ResponseTemplate::new(404))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    uv_snapshot!(context.filters(), context.auth_login()
+        .arg(server.uri())
+        .arg("--issuer")
+        .arg(server.uri()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: OIDC discovery failed at `http://[LOCALHOST]/`. Ensure the server exposes `/.well-known/openid-configuration`.
+    ");
+}
+
+#[tokio::test]
+async fn login_oidc_implicit_discovery_falls_back() {
+    let context = uv_test::test_context_with_versions!(&[]);
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/.well-known/openid-configuration"))
+        .respond_with(ResponseTemplate::new(404))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    uv_snapshot!(context.filters(), context.auth_login().arg(server.uri()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: No username provided; did you mean to provide `--username` or `--token`?
     ");
 }
 

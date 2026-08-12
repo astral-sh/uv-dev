@@ -1083,6 +1083,17 @@
             }
           ]
         },
+        "oidc": {
+          "description": "`OpenID` Connect configuration for device authorization.\n\n```toml\n[[tool.uv.index]]\nname = \"private\"\nurl = \"https://packages.example.com/simple\"\n\n[tool.uv.index.oidc]\nissuer = \"https://login.example.com\"\nclient-id = \"my-public-client\"\nscope = \"openid packages:read\"\n```",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/OidcConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "publish-url": {
           "description": "The URL of the upload endpoint.\n\nWhen using `uv publish --index <name>`, this URL is used for publishing.\n\nA configuration for the default index PyPI would look as follows:\n\n```toml\n[[tool.uv.index]]\nname = \"pypi\"\nurl = \"https://pypi.org/simple\"\npublish-url = \"https://upload.pypi.org/legacy/\"\n```",
           "anyOf": [
@@ -1224,6 +1235,28 @@
           }
         }
       ]
+    },
+    "OidcConfig": {
+      "description": "`OpenID` Connect configuration for a package index.",
+      "type": "object",
+      "properties": {
+        "client-id": {
+          "description": "The public OAuth client identifier.",
+          "type": ["string", "null"],
+          "default": null
+        },
+        "issuer": {
+          "description": "The `OpenID` Connect issuer to use for endpoint discovery.",
+          "type": ["string", "null"],
+          "format": "uri",
+          "default": null
+        },
+        "scope": {
+          "description": "The space-separated OAuth scopes to request.",
+          "type": ["string", "null"],
+          "default": null
+        }
+      }
     },
     "Override": {
       "description": "An override, either global or scoped to a specific package version.",

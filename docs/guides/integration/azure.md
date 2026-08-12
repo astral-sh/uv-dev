@@ -7,7 +7,7 @@ description: Using uv with Azure Artifacts for installing and publishing Python 
 
 uv can install packages from
 [Azure Artifacts](https://learn.microsoft.com/en-us/azure/devops/artifacts/start-using-azure-artifacts?view=azure-devops&tabs=nuget%2Cnugetserver),
-using the [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/), a
+using the [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/), OIDC device authorization, a
 [Personal Access Token](https://learn.microsoft.com/en-us/azure/devops/organizations/accounts/use-personal-access-tokens-to-authenticate?view=azure-devops&tabs=Windows)
 (PAT), or the [`keyring`](https://github.com/jaraco/keyring) package.
 
@@ -61,6 +61,41 @@ export UV_INDEX_PRIVATE_REGISTRY_PASSWORD="$AZURE_ARTIFACTS_TOKEN"
 !!! note
 
     `PRIVATE_REGISTRY` should match the name of the index defined in your `pyproject.toml`.
+
+## Authenticate with OIDC device authorization
+
+For interactive use, `uv auth login` can obtain a bearer token from Microsoft Entra using the
+[OAuth 2.0 Device Authorization Grant](https://datatracker.ietf.org/doc/html/rfc8628). Microsoft
+publishes a public app registration for Azure Artifacts (the same one used by their official
+[`artifacts-credprovider`](https://github.com/microsoft/artifacts-credprovider)), so no app
+registration is required.
+
+Configure the index with the Microsoft Entra issuer, client ID, and scope:
+
+```toml title="pyproject.toml"
+[[tool.uv.index]]
+name = "private-registry"
+url = "https://pkgs.dev.azure.com/<ORGANIZATION>/<PROJECT>/_packaging/<FEED>/pypi/simple/"
+authenticate = "always"
+
+[tool.uv.index.oidc]
+issuer = "https://login.microsoftonline.com/<TENANT_ID>/v2.0"
+client-id = "d5a56ea4-7369-46b8-a538-c370805301bf"
+scope = "499b84ac-1321-427f-aa17-267ca6975798/.default"
+```
+
+Then run `uv auth login` against the Azure DevOps origin. uv will display a code, open
+`https://microsoft.com/devicelogin` in your browser, and store the resulting bearer token after you
+complete the flow:
+
+```console
+$ uv auth login https://pkgs.dev.azure.com
+$ uv pip install <package>
+```
+
+The same parameters can be passed via `--issuer`, `--client-id`, and `--scope` flags if you'd rather
+not commit them to your project configuration. Device-flow tokens take precedence while valid; when
+they expire, uv falls back to the Azure CLI if Azure CLI credentials are available.
 
 ## Authenticate with `keyring` and `artifacts-keyring`
 

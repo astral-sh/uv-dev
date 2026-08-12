@@ -1040,6 +1040,7 @@ fn tracing_url(request: &Request, credentials: Option<&Authentication>) -> Displ
 #[cfg(test)]
 mod tests {
     use std::io::Write;
+    use std::time::Duration;
 
     use http::Method;
     use reqwest::Client;
@@ -1952,6 +1953,78 @@ mod tests {
             Credentials::from_request(&request)?,
             Some(azure_credentials)
         );
+
+        Ok(())
+    }
+
+    #[test(tokio::test)]
+    async fn test_azure_artifacts_credentials_preserve_unexpired_text_store_bearer()
+    -> Result<(), Error> {
+        let url = Url::parse(
+            "https://pkgs.dev.azure.com/organization/project/_packaging/feed/pypi/simple/",
+        )?;
+        let mut store = TextCredentialStore::default();
+        store.insert(
+            crate::Service::try_from(url.to_string())?,
+            Credentials::bearer_with_expiration(
+                b"device-flow-token".to_vec(),
+                jiff::Timestamp::now() + Duration::from_mins(1),
+            ),
+        );
+
+        let middleware = AuthMiddleware::new()
+            .with_cache(CredentialsCache::new())
+            .with_text_store(Some(store))
+            .with_azure_artifacts_provider(AzureArtifactsProvider::with_cached_credentials(Some(
+                Credentials::bearer(b"azure-cli-token".to_vec()),
+            )));
+
+        let authentication = middleware
+            .fetch_credentials(None, DisplaySafeUrl::ref_cast(&url), None, AuthPolicy::Auto)
+            .await?
+            .expect("Unexpired device-flow credentials should take precedence");
+        let request = authentication
+            .authenticate(Request::new(Method::GET, url))
+            .await?;
+        assert_eq!(
+            Credentials::from_request(&request)?,
+            Some(Credentials::bearer(b"device-flow-token".to_vec()))
+        );
+
+        Ok(())
+    }
+
+    #[test(tokio::test)]
+    async fn test_azure_artifacts_credentials_ignore_expired_text_store_bearer() -> Result<(), Error>
+    {
+        let url = Url::parse(
+            "https://pkgs.dev.azure.com/organization/project/_packaging/feed/pypi/simple/",
+        )?;
+        let mut store = TextCredentialStore::default();
+        store.insert(
+            crate::Service::try_from(url.to_string())?,
+            Credentials::bearer_with_expiration(
+                b"expired-device-flow-token".to_vec(),
+                jiff::Timestamp::now() - Duration::from_secs(1),
+            ),
+        );
+
+        let credentials = Credentials::bearer(b"azure-cli-token".to_vec());
+        let middleware = AuthMiddleware::new()
+            .with_cache(CredentialsCache::new())
+            .with_text_store(Some(store))
+            .with_azure_artifacts_provider(AzureArtifactsProvider::with_cached_credentials(Some(
+                credentials.clone(),
+            )));
+
+        let authentication = middleware
+            .fetch_credentials(None, DisplaySafeUrl::ref_cast(&url), None, AuthPolicy::Auto)
+            .await?
+            .expect("Expired device-flow credentials should fall back to Azure CLI credentials");
+        let request = authentication
+            .authenticate(Request::new(Method::GET, url))
+            .await?;
+        assert_eq!(Credentials::from_request(&request)?, Some(credentials));
 
         Ok(())
     }

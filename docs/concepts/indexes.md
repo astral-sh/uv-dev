@@ -212,6 +212,31 @@ authenticate = "always"
 When `authenticate` is set to `always`, uv will eagerly search for credentials and error if
 credentials cannot be found.
 
+### Authenticating via OIDC device authorization
+
+For indexes that support OpenID Connect, uv can authenticate using the OAuth 2.0 Device
+Authorization Grant ([RFC 8628](https://datatracker.ietf.org/doc/html/rfc8628)). When
+`uv auth login <url>` is invoked without explicit credentials, uv discovers the authorization
+endpoints, displays a verification URL and user code, and stores the resulting bearer token.
+
+When the identity provider is hosted separately from the index, configure its issuer, public client
+identifier, and requested scopes on the index:
+
+```toml hl_lines="6 7 8 9"
+[[tool.uv.index]]
+name = "azure-feed"
+url = "https://pkgs.dev.azure.com/<ORGANIZATION>/<PROJECT>/_packaging/<FEED>/pypi/simple/"
+authenticate = "always"
+
+[tool.uv.index.oidc]
+issuer = "https://login.microsoftonline.com/<TENANT_ID>/v2.0"
+client-id = "d5a56ea4-7369-46b8-a538-c370805301bf"
+scope = "499b84ac-1321-427f-aa17-267ca6975798/.default"
+```
+
+The `--issuer`, `--client-id`, and `--scope` options on `uv auth login` override the corresponding
+index settings. See the [authentication CLI documentation](./authentication/cli.md) for details.
+
 ### Ignoring error codes
 
 When using the [first-index strategy](#searching-across-multiple-indexes), uv will stop searching

@@ -1,6 +1,7 @@
 use std::fmt::Write;
+use std::time::Duration;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use console::Term;
 use owo_colors::OwoColorize;
 use url::Url;
@@ -8,7 +9,7 @@ use uuid::Uuid;
 
 use uv_auth::{
     AccessToken, AuthBackend, Credentials, PyxJwt, PyxOAuthTokens, PyxTokenStore, PyxTokens,
-    Service, TextCredentialStore, is_default_pyx_domain,
+    Service, TextCredentialStore, is_default_pyx_domain, oidc,
 };
 use uv_client::{AuthIntegration, BaseClient, BaseClientBuilder};
 use uv_distribution_types::IndexUrl;
@@ -27,6 +28,9 @@ pub(crate) async fn login(
     username: Option<String>,
     password: Option<String>,
     token: Option<String>,
+    issuer: Option<Url>,
+    client_id: Option<String>,
+    scope: Option<String>,
     client_builder: BaseClientBuilder<'_>,
     printer: Printer,
     preview: Preview,
@@ -70,8 +74,40 @@ pub(crate) async fn login(
         None => (service, url),
     };
 
-    // Extract credentials from URL if present
     let url_credentials = Credentials::from_url(&url)?;
+
+    if username.is_none() && password.is_none() && token.is_none() && url_credentials.is_none() {
+        let client = client_builder
+            .auth_integration(AuthIntegration::NoAuthMiddleware)
+            .build()?;
+        let discovery_url = issuer.as_ref().unwrap_or(service.url());
+
+        if let Some(discovery) = oidc::discover(client.raw_client(), discovery_url).await? {
+            if matches!(&backend, AuthBackend::System(_)) {
+                bail!("The native authentication backend does not support bearer tokens");
+            }
+
+            return oidc_device_flow(
+                &discovery,
+                client.raw_client(),
+                discovery_url,
+                &service,
+                backend,
+                client_id.as_deref(),
+                scope.as_deref(),
+                printer,
+            )
+            .await;
+        }
+
+        if issuer.is_some() || client_id.is_some() || scope.is_some() {
+            bail!(
+                "OIDC discovery failed at `{discovery_url}`. Ensure the server exposes \
+                 `/.well-known/openid-configuration`."
+            );
+        }
+    }
+
     let url_username = url_credentials.as_ref().and_then(|c| c.username());
     let url_password = url_credentials.as_ref().and_then(|c| c.password());
 
@@ -244,4 +280,95 @@ pub(crate) async fn pyx_login_with_browser(
     store.write(&credentials).await?;
 
     Ok(AccessToken::from(credentials))
+}
+
+/// Perform the OAuth device authorization flow and persist the resulting bearer token.
+async fn oidc_device_flow(
+    discovery: &oidc::OidcDiscoveryDocument,
+    client: &reqwest::Client,
+    issuer: &Url,
+    service: &Service,
+    backend: AuthBackend,
+    client_id: Option<&str>,
+    scope: Option<&str>,
+    printer: Printer,
+) -> Result<ExitStatus> {
+    let challenge = oidc::generate_pkce();
+    let authorization =
+        oidc::device_authorize(client, issuer, discovery, &challenge, client_id, scope).await?;
+
+    writeln!(
+        printer.stderr(),
+        "Open {} and enter code: {}",
+        authorization.verification_uri.cyan().bold(),
+        authorization.user_code.bold(),
+    )?;
+
+    if Term::stderr().is_term() {
+        let browser_url = authorization
+            .verification_uri_complete
+            .as_deref()
+            .unwrap_or(&authorization.verification_uri);
+        if open::that(browser_url).is_err() {
+            writeln!(
+                printer.stderr(),
+                "Could not open the browser automatically; open the URL above manually."
+            )?;
+        }
+    }
+
+    let response = oidc::poll_for_token(
+        client,
+        issuer,
+        discovery,
+        &authorization,
+        &challenge,
+        client_id,
+    )
+    .await?;
+
+    if response
+        .token_type
+        .as_deref()
+        .is_some_and(|token_type| !token_type.eq_ignore_ascii_case("bearer"))
+    {
+        bail!("The device authorization server returned a non-bearer access token");
+    }
+
+    let Some(access_token) = response.access_token else {
+        bail!("The device authorization server did not return an access token");
+    };
+
+    let credentials = if let Some(expires_in) = response.expires_in {
+        let expires_at = jiff::Timestamp::now()
+            .checked_add(Duration::from_secs(expires_in))
+            .context("Invalid access token expiration returned by the authorization server")?;
+        Credentials::bearer_with_expiration(access_token.into_bytes(), expires_at)
+    } else {
+        Credentials::bearer(access_token.into_bytes())
+    };
+    match backend {
+        AuthBackend::System(provider) => {
+            if !provider.store(service.url(), &credentials).await? {
+                bail!("The native authentication backend does not support bearer tokens");
+            }
+        }
+        AuthBackend::TextStore(mut store, lock) => {
+            store.insert(service.clone(), credentials);
+            store.write(TextCredentialStore::default_file()?, lock)?;
+        }
+    }
+
+    writeln!(
+        printer.stderr(),
+        "Stored credentials for {}",
+        service
+            .url()
+            .without_credentials()
+            .to_string()
+            .bold()
+            .cyan()
+    )?;
+
+    Ok(ExitStatus::Success)
 }

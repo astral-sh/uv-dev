@@ -13,6 +13,8 @@ pub use realm::{Realm, RealmRef};
 pub use service::Service;
 pub use store::{AuthBackend, TextCredentialStore, TomlCredentialError};
 
+pub mod oidc;
+
 mod access_token;
 mod cache;
 mod credentials;
