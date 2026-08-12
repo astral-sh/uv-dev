@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "Reproduced astral-sh/uv#21077 on Linux x86_64 with uv 0.12.2 and 0.12.3. A copied Python 3.13.15 venv whose adjacent `python3` alias is Python 3.12.3 still reports Python 3.13 directly, but `VIRTUAL_ENV=$PWD/copied/.venv PATH=$PWD/copied/.venv/bin:$PATH uv run --with ipython ipython --version` selects Python 3.12 for the cached environment and fails with `ModuleNotFoundError: No module named 'IPython'`. A symlinked venv from `python3.13 -m venv` succeeds and prints IPython 9.16.1."
+}
