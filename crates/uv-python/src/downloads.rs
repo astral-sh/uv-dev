@@ -1438,7 +1438,7 @@ impl ManagedPythonDownloadList {
             Source::BuiltIn
         };
 
-        let downloads = match source {
+        let mut downloads = match source {
             Source::BuiltIn => parse_json_downloads(parse_downloads_json(
                 BUILTIN_PYTHON_DOWNLOADS_JSON,
                 "EMBEDDED IN THE BINARY".to_owned(),
@@ -1482,6 +1482,13 @@ impl ManagedPythonDownloadList {
             }
         };
 
+        if python_downloads_json_url.is_none()
+            && uv_preview::is_enabled_explicitly(PreviewFeature::RemotePythonDownloadMetadata)
+        {
+            downloads.extend(Self::embedded_non_cpython_downloads(None)?);
+            downloads.sort_by(|a, b| Ord::cmp(&b.key, &a.key));
+        }
+
         Ok(Self { downloads })
     }
 
@@ -1494,6 +1501,21 @@ impl ManagedPythonDownloadList {
         limit: Option<usize>,
     ) -> Result<Self, Error> {
         if let Some(url) = remote_ndjson_url(python_downloads_json_url)? {
+            let use_embedded_downloads = python_downloads_json_url.is_none();
+            if use_embedded_downloads
+                && filter.is_some_and(|request| {
+                    request.implementation().is_some_and(|implementation| {
+                        *implementation != ImplementationName::CPython
+                    }) || request.os.as_ref().is_some_and(Os::is_emscripten)
+                })
+            {
+                let mut downloads = Self::embedded_non_cpython_downloads(filter)?;
+                if let Some(limit) = limit {
+                    downloads.truncate(limit);
+                }
+                return Ok(Self { downloads });
+            }
+
             if limit == Some(1)
                 && let Some(request) = filter
             {
@@ -1513,12 +1535,16 @@ impl ManagedPythonDownloadList {
                 .map_err(|err| {
                     Error::FetchingPythonDownloadsNdjsonError(url.to_string(), Box::new(err))
                 })?;
-            let downloads = parse_ndjson_bytes_filtered(
+            let mut downloads = parse_ndjson_bytes_filtered(
                 &url.to_string(),
                 &content,
                 |download| filter.is_none_or(|request| request.satisfied_by_download(download)),
                 limit,
             )?;
+            if use_embedded_downloads {
+                downloads.extend(Self::embedded_non_cpython_downloads(filter)?);
+                downloads.sort_by(|a, b| Ord::cmp(&b.key, &a.key));
+            }
             return Ok(Self { downloads });
         }
 
@@ -1608,6 +1634,25 @@ impl ManagedPythonDownloadList {
             })?;
         let result = parse_json_downloads(json_downloads);
         Ok(Self { downloads: result })
+    }
+
+    /// Retain implementations not represented in the `python-build-standalone` manifest.
+    fn embedded_non_cpython_downloads(
+        filter: Option<&PythonDownloadRequest>,
+    ) -> Result<Vec<ManagedPythonDownload>, Error> {
+        let downloads = Self::new_only_embedded()?
+            .downloads
+            .into_iter()
+            .filter(|download| {
+                !matches!(
+                    download.key().implementation().as_ref(),
+                    LenientImplementationName::Known(ImplementationName::CPython)
+                )
+            })
+            .filter(|download| filter.is_none_or(|request| request.satisfied_by_download(download)))
+            .collect();
+
+        Ok(downloads)
     }
 }
 
@@ -3249,6 +3294,48 @@ mod tests {
         let download = &downloads[1];
         assert_eq!(download.key().version().to_string(), "3.11.5");
         assert_eq!(download.build(), Some("20240101"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_embedded_non_cpython_downloads_preserve_alternative_implementations()
+    -> Result<(), Error> {
+        let downloads = ManagedPythonDownloadList::embedded_non_cpython_downloads(None)?;
+
+        for implementation in [
+            ImplementationName::PyPy,
+            ImplementationName::GraalPy,
+            ImplementationName::Pyodide,
+        ] {
+            assert!(
+                downloads.iter().any(|download| {
+                    download.key().implementation().as_ref()
+                        == &LenientImplementationName::Known(implementation)
+                }),
+                "missing embedded {implementation} downloads"
+            );
+        }
+
+        assert!(downloads.iter().all(|download| {
+            download.key().implementation().as_ref()
+                != &LenientImplementationName::Known(ImplementationName::CPython)
+        }));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_embedded_non_cpython_downloads_filter_requested_implementation() -> Result<(), Error> {
+        let request = PythonDownloadRequest::from_str("pypy-3.10")?;
+        let downloads = ManagedPythonDownloadList::embedded_non_cpython_downloads(Some(&request))?;
+
+        assert!(!downloads.is_empty());
+        assert!(
+            downloads
+                .iter()
+                .all(|download| request.satisfied_by_download(download))
+        );
 
         Ok(())
     }
