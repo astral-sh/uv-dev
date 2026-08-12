@@ -68,15 +68,16 @@ pub struct Interpreter {
 impl Interpreter {
     /// Detect the interpreter info for the given Python executable.
     pub fn query(executable: impl AsRef<Path>, cache: &Cache) -> Result<Self, Error> {
-        Self::query_with_cache(executable.as_ref(), cache, false)
+        Self::query_with_cache(executable, cache, false)
     }
 
-    /// Query the interpreter directly and update its cached metadata.
-    pub fn query_fresh(executable: impl AsRef<Path>, cache: &Cache) -> Result<Self, Error> {
-        Self::query_with_cache(executable.as_ref(), cache, true)
-    }
-
-    fn query_with_cache(executable: &Path, cache: &Cache, refresh: bool) -> Result<Self, Error> {
+    /// Detect interpreter info, optionally refreshing its cached metadata.
+    pub fn query_with_cache(
+        executable: impl AsRef<Path>,
+        cache: &Cache,
+        refresh: bool,
+    ) -> Result<Self, Error> {
+        let executable = executable.as_ref();
         let info = InterpreterInfo::query_cached(executable, cache, refresh)?;
 
         debug_assert!(
@@ -1343,8 +1344,10 @@ fn python_home(interpreter: &Path) -> Option<PathBuf> {
 mod tests {
     use std::str::FromStr;
 
+    use anyhow::Result;
     use fs_err as fs;
     use indoc::{formatdoc, indoc};
+    use serde_json::Value;
     use tempfile::tempdir;
 
     use uv_cache::Cache;
@@ -1352,11 +1355,8 @@ mod tests {
 
     use crate::Interpreter;
 
-    #[tokio::test]
-    async fn test_cache_invalidation() {
-        let mock_dir = tempdir().unwrap();
-        let mocked_interpreter = mock_dir.path().join("python");
-        let json = indoc! {r##"
+    fn mocked_interpreter_response() -> &'static str {
+        indoc! {r##"
         {
             "result": "success",
             "platform": {
@@ -1413,7 +1413,14 @@ mod tests {
             "gil_disabled": true,
             "debug_enabled": false
         }
-    "##};
+    "##}
+    }
+
+    #[tokio::test]
+    async fn test_cache_invalidation() {
+        let mock_dir = tempdir().unwrap();
+        let mocked_interpreter = mock_dir.path().join("python");
+        let json = mocked_interpreter_response();
 
         let cache = Cache::temp().unwrap().init().await.unwrap();
 
@@ -1449,5 +1456,58 @@ mod tests {
             interpreter.markers.python_version().version,
             Version::from_str("3.13").unwrap()
         );
+    }
+
+    #[tokio::test]
+    async fn test_cache_refresh_with_unchanged_executable() -> Result<()> {
+        let mock_dir = tempdir()?;
+        let mocked_interpreter = mock_dir.path().join("python");
+        let response_file = mock_dir.path().join("response.json");
+
+        let mut response = serde_json::from_str::<Value>(mocked_interpreter_response())?;
+        response["sys_executable"] = serde_json::to_value(&mocked_interpreter)?;
+        fs::write(&response_file, serde_json::to_vec(&response)?)?;
+        fs::write(
+            &mocked_interpreter,
+            formatdoc! {r#"
+                #!/bin/sh
+                cat "{}"
+            "#, response_file.display()},
+        )?;
+        fs::set_permissions(
+            &mocked_interpreter,
+            std::os::unix::fs::PermissionsExt::from_mode(0o770),
+        )?;
+
+        let cache = Cache::temp()?.init().await?;
+        let original_version = Version::from_str("3.12.0")?;
+        let updated_version = Version::from_str("3.12.13")?;
+
+        assert_eq!(
+            Interpreter::query(&mocked_interpreter, &cache)?.python_version(),
+            &original_version
+        );
+
+        response["markers"]["implementation_version"] = "3.12.13".into();
+        response["markers"]["python_full_version"] = "3.12.13".into();
+        fs::write(&response_file, serde_json::to_vec(&response)?)?;
+
+        assert_eq!(
+            Interpreter::query(&mocked_interpreter, &cache)?.python_version(),
+            &original_version,
+            "an unchanged executable should retain its cached interpreter metadata"
+        );
+        assert_eq!(
+            Interpreter::query_with_cache(&mocked_interpreter, &cache, true)?.python_version(),
+            &updated_version,
+            "refreshing should query the interpreter despite its unchanged executable"
+        );
+        assert_eq!(
+            Interpreter::query(&mocked_interpreter, &cache)?.python_version(),
+            &updated_version,
+            "refreshing should persist the updated interpreter metadata"
+        );
+
+        Ok(())
     }
 }
