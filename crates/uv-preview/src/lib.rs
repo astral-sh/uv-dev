@@ -134,6 +134,12 @@ pub fn is_enabled(flag: PreviewFeature) -> bool {
     get().is_enabled(flag)
 }
 
+/// Check whether a feature was selected individually instead of by enabling all previews.
+pub fn is_enabled_explicitly(flag: PreviewFeature) -> bool {
+    let preview = get();
+    preview.is_enabled(flag) && !preview.all_enabled()
+}
+
 /// Functions for unit tests, do not use from normal code!
 #[cfg(feature = "testing")]
 pub mod test {
@@ -599,8 +605,10 @@ mod tests {
                 test::with_features(&[PreviewFeature::Pylock, PreviewFeature::WorkspaceMetadata]);
             assert!(!is_enabled(PreviewFeature::InitProjectFlag));
             assert!(is_enabled(PreviewFeature::Pylock));
+            assert!(is_enabled_explicitly(PreviewFeature::Pylock));
             assert!(is_enabled(PreviewFeature::WorkspaceMetadata));
             assert!(!is_enabled(PreviewFeature::AuthHelper));
+            assert!(!is_enabled_explicitly(PreviewFeature::AuthHelper));
         }
         {
             let _guard =
@@ -610,6 +618,20 @@ mod tests {
             assert!(!is_enabled(PreviewFeature::WorkspaceMetadata));
             assert!(is_enabled(PreviewFeature::AuthHelper));
         }
+    }
+
+    #[test]
+    fn test_all_preview_features_are_not_explicit() {
+        let features = PreviewFeature::metadata()
+            .iter()
+            .map(|(feature, _, _)| *feature)
+            .collect::<Vec<_>>();
+        let _guard = test::with_features(&features);
+
+        assert!(is_enabled(PreviewFeature::RemotePythonDownloadMetadata));
+        assert!(!is_enabled_explicitly(
+            PreviewFeature::RemotePythonDownloadMetadata
+        ));
     }
 
     #[test]
