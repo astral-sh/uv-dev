@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 use std::error::Error as _;
 use std::ffi::OsStr;
+use std::future::Future;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::{Arc, LazyLock};
@@ -8,6 +9,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result};
 use http::header::AUTHORIZATION;
+use jiff::Timestamp;
 use reqsign::aws::DefaultSigner as AwsDefaultSigner;
 use reqsign::azure::DefaultSigner as AzureDefaultSigner;
 use reqsign::google::Credential as GoogleCredential;
@@ -41,8 +43,8 @@ const GOOGLE_APPLICATION_CREDENTIALS: &str = "GOOGLE_APPLICATION_CREDENTIALS";
 /// The environment variable containing the path to the Google Cloud SDK configuration directory.
 const GOOGLE_CLOUD_SDK_CONFIG: &str = "CLOUDSDK_CONFIG";
 
-/// Refresh Google Artifact Registry credentials periodically, since access tokens are short-lived.
-const GOOGLE_ARTIFACT_REGISTRY_CACHE_DURATION: Duration = Duration::from_mins(1);
+/// Refresh managed registry credentials periodically, since access tokens are short-lived.
+const REGISTRY_CREDENTIAL_CACHE_DURATION: Duration = Duration::from_mins(1);
 
 /// Refresh active `gcloud` credentials before an in-flight request can outlive its access token.
 const GOOGLE_ARTIFACT_REGISTRY_TOKEN_REFRESH_BUFFER: Duration = Duration::from_secs(10);
@@ -50,8 +52,8 @@ const GOOGLE_ARTIFACT_REGISTRY_TOKEN_REFRESH_BUFFER: Duration = Duration::from_s
 /// Avoid waiting indefinitely for Application Default Credentials from the metadata server.
 const GOOGLE_ARTIFACT_REGISTRY_ADC_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Avoid waiting indefinitely for credentials from the `gcloud` CLI.
-const GOOGLE_ARTIFACT_REGISTRY_GCLOUD_TIMEOUT: Duration = Duration::from_secs(10);
+/// Avoid waiting indefinitely for credentials from an external command.
+const REGISTRY_CREDENTIAL_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The Google Cloud SDK launcher available on the current platform.
 const GOOGLE_CLOUD_SDK_EXECUTABLE: &str = if cfg!(windows) {
@@ -60,17 +62,168 @@ const GOOGLE_CLOUD_SDK_EXECUTABLE: &str = if cfg!(windows) {
     "gcloud"
 };
 
+/// How widely credentials for a managed registry may be cached.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RegistryCredentialScope {
+    /// Credentials can be reused across the registry host.
+    Realm,
+    /// Credentials must remain scoped to the matching registry URL.
+    UrlOnly,
+}
+
+/// A built-in provider for credentials used by a Python package registry.
+#[derive(Clone, Debug)]
+pub enum RegistryAuthProvider {
+    /// Google Artifact Registry authentication.
+    Google(ArtifactRegistryProvider),
+}
+
+impl RegistryAuthProvider {
+    /// Returns the built-in authentication provider for a registry URL, if one is available.
+    pub fn for_url(url: &Url) -> Option<Self> {
+        RegistryAuthProviders::default().provider_for(url)
+    }
+
+    /// Returns whether credentials are available for the registry.
+    pub async fn has_credentials_for(&self, url: &Url) -> bool {
+        self.credentials_for(url).await.is_some()
+    }
+
+    pub(crate) async fn credentials_for(&self, url: &Url) -> Option<Credentials> {
+        match self {
+            Self::Google(provider) => provider.credentials_for(url).await,
+        }
+    }
+
+    pub(crate) fn supports_username(&self, username: Option<&str>) -> bool {
+        match self {
+            Self::Google(_) => ArtifactRegistryProvider::supports_username(username),
+        }
+    }
+
+    pub(crate) fn name(&self) -> &'static str {
+        match self {
+            Self::Google(_) => "Google Artifact Registry",
+        }
+    }
+
+    pub(crate) fn cache_scope(&self) -> RegistryCredentialScope {
+        match self {
+            Self::Google(_) => RegistryCredentialScope::Realm,
+        }
+    }
+}
+
+impl From<ArtifactRegistryProvider> for RegistryAuthProvider {
+    fn from(provider: ArtifactRegistryProvider) -> Self {
+        Self::Google(provider)
+    }
+}
+
+/// Built-in registry providers shared by an authentication middleware.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct RegistryAuthProviders {
+    artifact_registry: ArtifactRegistryProvider,
+}
+
+impl RegistryAuthProviders {
+    pub(crate) fn provider_for(&self, url: &Url) -> Option<RegistryAuthProvider> {
+        if ArtifactRegistryProvider::is_artifact_registry(url) {
+            Some(RegistryAuthProvider::from(self.artifact_registry.clone()))
+        } else {
+            None
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_artifact_registry_provider(&mut self, provider: ArtifactRegistryProvider) {
+        self.artifact_registry = provider;
+    }
+}
+
 /// A provider for authentication credentials for Google Artifact Registry.
 #[derive(Clone, Debug)]
 pub struct ArtifactRegistryProvider {
     signer: Option<GoogleDefaultSigner>,
-    credentials: Arc<Mutex<Option<CachedArtifactRegistryCredentials>>>,
+    credentials: Arc<Mutex<Option<CachedRegistryCredentials>>>,
 }
 
 #[derive(Clone, Debug)]
-struct CachedArtifactRegistryCredentials {
+struct CachedRegistryCredentials {
     credentials: Option<Credentials>,
     expires_at: Instant,
+}
+
+/// Fetch and cache both successful and unsuccessful managed registry credential lookups.
+async fn cached_registry_credentials<F>(
+    cache: &Mutex<Option<CachedRegistryCredentials>>,
+    fetch: F,
+) -> Option<Credentials>
+where
+    F: Future<Output = (Option<Credentials>, Duration)>,
+{
+    let mut cached_credentials = cache.lock().await;
+    if let Some(credentials) = cached_credentials
+        .as_ref()
+        .filter(|credentials| credentials.expires_at > Instant::now())
+    {
+        return credentials.credentials.clone();
+    }
+
+    let (credentials, cache_duration) = fetch.await;
+    *cached_credentials = Some(CachedRegistryCredentials {
+        credentials: credentials.clone(),
+        expires_at: Instant::now() + cache_duration,
+    });
+    credentials
+}
+
+/// Determine how long a token can be reused before its provider must refresh it.
+fn registry_credential_cache_duration(
+    expires_at: Timestamp,
+    refresh_buffer: Duration,
+) -> Option<Duration> {
+    let now = Timestamp::now();
+    if expires_at <= now {
+        return None;
+    }
+
+    Some(
+        expires_at
+            .duration_since(now)
+            .unsigned_abs()
+            .saturating_sub(refresh_buffer)
+            .min(REGISTRY_CREDENTIAL_CACHE_DURATION),
+    )
+}
+
+/// Run an external registry credential helper without accepting interactive input.
+async fn registry_credential_command_output(
+    program: &OsStr,
+    arguments: &[&str],
+    command_name: &str,
+) -> Option<Vec<u8>> {
+    let mut command = Command::new(program);
+    command
+        .args(arguments)
+        .stdin(Stdio::null())
+        .kill_on_drop(true);
+    let output = tokio::time::timeout(REGISTRY_CREDENTIAL_COMMAND_TIMEOUT, command.output())
+        .await
+        .inspect_err(|_| {
+            debug!("Timed out retrieving credentials from {command_name}");
+        })
+        .ok()?
+        .inspect_err(|err| {
+            debug!("Failed to run {command_name}: {err}");
+        })
+        .ok()?;
+    if !output.status.success() {
+        debug!("{command_name} exited with status {}", output.status);
+        return None;
+    }
+
+    Some(output.stdout)
 }
 
 #[derive(Debug, Deserialize)]
@@ -214,42 +367,29 @@ impl ArtifactRegistryProvider {
             return None;
         }
 
-        let mut cached_credentials = self.credentials.lock().await;
-        if let Some(credentials) = cached_credentials
-            .as_ref()
-            .filter(|credentials| credentials.expires_at > Instant::now())
-        {
-            return credentials.credentials.clone();
-        }
-
-        let explicit_adc =
-            std::env::var_os(GOOGLE_APPLICATION_CREDENTIALS).is_some_and(|path| !path.is_empty());
-        let (credentials, cache_duration) = if let Some(credentials) =
-            self.credentials_from_adc(url).await
-        {
-            debug!(
-                "Found Google Artifact Registry credentials from Application Default Credentials"
-            );
-            (Some(credentials), GOOGLE_ARTIFACT_REGISTRY_CACHE_DURATION)
-        } else if explicit_adc {
-            debug!(
-                "Skipping Google Artifact Registry credentials from gcloud because explicit Application Default Credentials are configured"
-            );
-            (None, GOOGLE_ARTIFACT_REGISTRY_CACHE_DURATION)
-        } else if let Some((credentials, cache_duration)) = Self::credentials_from_gcloud().await {
-            debug!("Found Google Artifact Registry credentials from gcloud");
-            (Some(credentials), cache_duration)
-        } else {
-            debug!("No Google Artifact Registry credentials found");
-            (None, GOOGLE_ARTIFACT_REGISTRY_CACHE_DURATION)
-        };
-
-        *cached_credentials = Some(CachedArtifactRegistryCredentials {
-            credentials: credentials.clone(),
-            expires_at: Instant::now() + cache_duration,
-        });
-
-        credentials
+        cached_registry_credentials(&self.credentials, async {
+            let explicit_adc = std::env::var_os(GOOGLE_APPLICATION_CREDENTIALS)
+                .is_some_and(|path| !path.is_empty());
+            if let Some(credentials) = self.credentials_from_adc(url).await {
+                debug!(
+                    "Found Google Artifact Registry credentials from Application Default Credentials"
+                );
+                (Some(credentials), REGISTRY_CREDENTIAL_CACHE_DURATION)
+            } else if explicit_adc {
+                debug!(
+                    "Skipping Google Artifact Registry credentials from gcloud because explicit Application Default Credentials are configured"
+                );
+                (None, REGISTRY_CREDENTIAL_CACHE_DURATION)
+            } else if let Some((credentials, cache_duration)) = Self::credentials_from_gcloud().await
+            {
+                debug!("Found Google Artifact Registry credentials from gcloud");
+                (Some(credentials), cache_duration)
+            } else {
+                debug!("No Google Artifact Registry credentials found");
+                (None, REGISTRY_CREDENTIAL_CACHE_DURATION)
+            }
+        })
+        .await
     }
 
     /// Returns `true` if credentials are available for Google Artifact Registry.
@@ -299,33 +439,13 @@ impl ArtifactRegistryProvider {
     }
 
     async fn credentials_from_gcloud_command(program: &OsStr) -> Option<(Credentials, Duration)> {
-        let mut command = Command::new(program);
-        command
-            .args(["config", "config-helper", "--format=json(credential)"])
-            .stdin(Stdio::null())
-            .kill_on_drop(true);
-        let output =
-            tokio::time::timeout(GOOGLE_ARTIFACT_REGISTRY_GCLOUD_TIMEOUT, command.output())
-                .await
-                .inspect_err(|_| {
-                    debug!(
-                        "Timed out retrieving Google Artifact Registry credentials from `gcloud`"
-                    );
-                })
-                .ok()?
-                .inspect_err(|err| {
-                    debug!("Failed to run `gcloud config config-helper`: {err}");
-                })
-                .ok()?;
-        if !output.status.success() {
-            debug!(
-                "`gcloud config config-helper` exited with status {}",
-                output.status
-            );
-            return None;
-        }
-
-        Self::credentials_from_gcloud_output(&output.stdout)
+        let output = registry_credential_command_output(
+            program,
+            &["config", "config-helper", "--format=json(credential)"],
+            "gcloud config config-helper",
+        )
+        .await?;
+        Self::credentials_from_gcloud_output(&output)
     }
 
     fn credentials_from_gcloud_output(output: &[u8]) -> Option<(Credentials, Duration)> {
@@ -337,21 +457,18 @@ impl ArtifactRegistryProvider {
         let credential = config.credential?;
         let token_expiry = credential
             .token_expiry?
-            .parse::<jiff::Timestamp>()
+            .parse::<Timestamp>()
             .inspect_err(|err| {
                 debug!("Failed to parse credentials from `gcloud config config-helper`: {err}");
             })
             .ok()?;
-        let now = jiff::Timestamp::now();
-        if token_expiry <= now {
-            debug!("Ignoring expired credentials from `gcloud config config-helper`");
+        let Some(cache_duration) = registry_credential_cache_duration(
+            token_expiry,
+            GOOGLE_ARTIFACT_REGISTRY_TOKEN_REFRESH_BUFFER,
+        ) else {
+            debug!("Ignoring expired Google Artifact Registry credentials");
             return None;
-        }
-        let cache_duration = token_expiry
-            .duration_since(now)
-            .unsigned_abs()
-            .saturating_sub(GOOGLE_ARTIFACT_REGISTRY_TOKEN_REFRESH_BUFFER)
-            .min(GOOGLE_ARTIFACT_REGISTRY_CACHE_DURATION);
+        };
         Some((
             Self::credentials_from_token(credential.access_token?)?,
             cache_duration,
@@ -379,9 +496,9 @@ impl ArtifactRegistryProvider {
 
     #[cfg(test)]
     pub(crate) async fn cache_missing_credentials(&self) {
-        *self.credentials.lock().await = Some(CachedArtifactRegistryCredentials {
+        *self.credentials.lock().await = Some(CachedRegistryCredentials {
             credentials: None,
-            expires_at: Instant::now() + GOOGLE_ARTIFACT_REGISTRY_CACHE_DURATION,
+            expires_at: Instant::now() + REGISTRY_CREDENTIAL_CACHE_DURATION,
         });
     }
 
@@ -633,6 +750,51 @@ mod tests {
             .into_owned()
     }
 
+    #[test]
+    fn test_registry_auth_provider() {
+        let registry = Url::parse("https://us-central1-python.pkg.dev/project/private/simple/")
+            .expect("Google Artifact Registry URL should parse");
+        let provider = RegistryAuthProvider::for_url(&registry)
+            .expect("Google Artifact Registry should have a built-in provider");
+
+        assert_eq!(provider.name(), "Google Artifact Registry");
+        assert_eq!(provider.cache_scope(), RegistryCredentialScope::Realm);
+        assert!(provider.supports_username(None));
+        assert!(provider.supports_username(Some("oauth2accesstoken")));
+        assert!(!provider.supports_username(Some("another-user")));
+
+        let other_registry =
+            Url::parse("https://example.com/simple/").expect("Other registry URL should parse");
+        assert!(RegistryAuthProvider::for_url(&other_registry).is_none());
+    }
+
+    #[test]
+    fn test_registry_credential_cache_duration() {
+        let now = Timestamp::now();
+        let expired = now
+            .checked_sub(Duration::from_secs(1))
+            .expect("Expired timestamp should fit");
+        let expiring = now
+            .checked_add(Duration::from_secs(5))
+            .expect("Expiring timestamp should fit");
+        let long_lived = now
+            .checked_add(Duration::from_hours(1))
+            .expect("Long-lived timestamp should fit");
+
+        assert_eq!(
+            registry_credential_cache_duration(expired, Duration::from_secs(10)),
+            None
+        );
+        assert_eq!(
+            registry_credential_cache_duration(expiring, Duration::from_secs(10)),
+            Some(Duration::ZERO)
+        );
+        assert_eq!(
+            registry_credential_cache_duration(long_lived, Duration::from_secs(10)),
+            Some(REGISTRY_CREDENTIAL_CACHE_DURATION)
+        );
+    }
+
     #[tokio::test]
     async fn test_artifact_registry_credentials_from_adc() {
         let provider = ArtifactRegistryProvider::with_signer(
@@ -872,7 +1034,7 @@ mod tests {
                     Some("oauth2accesstoken".to_string()),
                     Some("test-token".to_string())
                 ),
-                GOOGLE_ARTIFACT_REGISTRY_CACHE_DURATION
+                REGISTRY_CREDENTIAL_CACHE_DURATION
             ))
         );
         assert_eq!(
@@ -897,7 +1059,7 @@ mod tests {
 
     #[test]
     fn test_artifact_registry_credentials_refresh_before_gcloud_token_expiry() {
-        let token_expiry = jiff::Timestamp::now()
+        let token_expiry = Timestamp::now()
             .checked_add(Duration::from_secs(20))
             .expect("Token expiry should fit in a timestamp");
         let output = serde_json::json!({
@@ -954,7 +1116,7 @@ mod tests {
                     Some("oauth2accesstoken".to_string()),
                     Some("test-token".to_string())
                 ),
-                GOOGLE_ARTIFACT_REGISTRY_CACHE_DURATION
+                REGISTRY_CREDENTIAL_CACHE_DURATION
             ))
         );
     }

@@ -13,8 +13,10 @@ use uv_redacted::DisplaySafeUrl;
 use uv_static::EnvVars;
 use uv_warnings::owo_colors::OwoColorize;
 
+#[cfg(test)]
+use crate::providers::ArtifactRegistryProvider;
 use crate::providers::{
-    ArtifactRegistryProvider, AzureEndpointProvider, GcsEndpointProvider, HuggingFaceProvider,
+    AzureEndpointProvider, GcsEndpointProvider, HuggingFaceProvider, RegistryAuthProviders,
     S3EndpointProvider,
 };
 use crate::pyx::{DEFAULT_TOLERANCE_SECS, PyxTokenStore};
@@ -201,8 +203,8 @@ pub struct AuthMiddleware {
     pyx_token_store: Option<PyxTokenStore>,
     /// Tokens to use for persistent credentials.
     pyx_token_state: Mutex<TokenState>,
-    /// Provider for Google Artifact Registry credentials.
-    artifact_registry_provider: ArtifactRegistryProvider,
+    /// Built-in providers for package registry credentials.
+    registry_auth_providers: RegistryAuthProviders,
     /// Cached S3 credentials to avoid running the credential helper multiple times.
     s3_credential_state: Mutex<S3CredentialState>,
     /// Cached GCS credentials to avoid running the credential helper multiple times.
@@ -231,7 +233,7 @@ impl AuthMiddleware {
             base_client: None,
             pyx_token_store: None,
             pyx_token_state: Mutex::new(TokenState::Uninitialized),
-            artifact_registry_provider: ArtifactRegistryProvider::default(),
+            registry_auth_providers: RegistryAuthProviders::default(),
             s3_credential_state: Mutex::new(S3CredentialState::Uninitialized),
             gcs_credential_state: Mutex::new(GcsCredentialState::Uninitialized),
             azure_credential_state: Mutex::new(AzureCredentialState::Uninitialized),
@@ -329,7 +331,8 @@ impl AuthMiddleware {
     #[must_use]
     #[cfg(test)]
     fn with_artifact_registry_provider(mut self, provider: ArtifactRegistryProvider) -> Self {
-        self.artifact_registry_provider = provider;
+        self.registry_auth_providers
+            .set_artifact_registry_provider(provider);
         self
     }
 
@@ -744,7 +747,7 @@ impl AuthMiddleware {
             );
 
             return Ok(self
-                .fetch_artifact_registry_credentials(url, requested_username)
+                .fetch_registry_credentials(url, requested_username)
                 .await);
         }
 
@@ -978,8 +981,8 @@ impl AuthMiddleware {
 
         let credentials = credentials.map(Authentication::from).map(Arc::new);
 
-        // Register the fetch for this key. Google Artifact Registry credentials are checked
-        // separately because the provider has its own expiry-aware cache for both hits and misses.
+        // Register the fetch for this key. Built-in registry credentials are checked separately
+        // because their providers have expiry-aware caches for both hits and misses.
         self.cache().fetches.done(key, credentials.clone());
 
         if credentials.is_some() {
@@ -987,31 +990,28 @@ impl AuthMiddleware {
         }
 
         Ok(self
-            .fetch_artifact_registry_credentials(url, requested_username)
+            .fetch_registry_credentials(url, requested_username)
             .await)
     }
 
-    async fn fetch_artifact_registry_credentials(
+    async fn fetch_registry_credentials(
         &self,
         url: &DisplaySafeUrl,
         requested_username: Option<&str>,
     ) -> Option<Arc<Authentication>> {
-        if self.keyring.is_none()
-            && ArtifactRegistryProvider::is_artifact_registry(url)
-            && ArtifactRegistryProvider::supports_username(requested_username)
-            && self
-                .artifact_registry_provider
-                .credentials_for(url)
-                .await
-                .is_some()
-        {
-            debug!("Found Google Artifact Registry credentials for {url}");
-            Some(Arc::new(Authentication::from(
-                self.artifact_registry_provider.clone(),
-            )))
-        } else {
-            None
+        if self.keyring.is_some() {
+            return None;
         }
+
+        let provider = self.registry_auth_providers.provider_for(url)?;
+        if !provider.supports_username(requested_username)
+            || provider.credentials_for(url).await.is_none()
+        {
+            return None;
+        }
+
+        debug!("Found {} credentials for {url}", provider.name());
+        Some(Arc::new(Authentication::from(provider)))
     }
 }
 

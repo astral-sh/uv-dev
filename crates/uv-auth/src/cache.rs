@@ -12,6 +12,7 @@ use uv_once_map::OnceMap;
 use uv_redacted::DisplaySafeUrl;
 
 use crate::credentials::{Authentication, CredentialsFromUrlError, Username};
+use crate::providers::{RegistryAuthProvider, RegistryCredentialScope};
 use crate::{Credentials, Realm};
 
 type FxOnceMap<K, V> = OnceMap<K, V, BuildHasherDefault<FxHasher>>;
@@ -151,17 +152,22 @@ impl CredentialsCache {
             return;
         }
 
-        // Insert an entry for requests including the username
-        let username = credentials.to_username();
-        if username.is_some() {
-            let realm = (Realm::from(url), username);
-            self.insert_realm(realm, &credentials);
+        // Providers on shared registry hosts can require credentials to remain URL-scoped.
+        let url_only = RegistryAuthProvider::for_url(url)
+            .is_some_and(|provider| provider.cache_scope() == RegistryCredentialScope::UrlOnly);
+        if !url_only {
+            // Insert an entry for requests including the username.
+            let username = credentials.to_username();
+            if username.is_some() {
+                let realm = (Realm::from(url), username);
+                self.insert_realm(realm, &credentials);
+            }
+
+            // Insert an entry for requests with no username.
+            self.insert_realm((Realm::from(url), Username::none()), &credentials);
         }
 
-        // Insert an entry for requests with no username
-        self.insert_realm((Realm::from(url), Username::none()), &credentials);
-
-        // Insert an entry for the URL
+        // Insert an entry for the URL.
         let mut urls = self.urls.write().unwrap();
         urls.insert(url, credentials);
     }
@@ -366,6 +372,54 @@ mod tests {
 
         let url = Url::parse("https://example.com/foobar").unwrap();
         assert_eq!(trie.get(&url), None);
+    }
+
+    #[test]
+    fn test_registry_credentials_preserve_realm_scope() {
+        let first_index = DisplaySafeUrl::parse(
+            "https://us-central1-python.pkg.dev/first-project/private/simple/",
+        )
+        .expect("Google Artifact Registry URL should parse");
+        let second_index = DisplaySafeUrl::parse(
+            "https://us-central1-python.pkg.dev/second-project/private/simple/",
+        )
+        .expect("Google Artifact Registry URL should parse");
+        let credentials = Arc::new(Authentication::from(Credentials::basic(
+            Some("user".to_string()),
+            Some("password".to_string()),
+        )));
+        let cache = CredentialsCache::default();
+
+        cache.insert(&first_index, credentials.clone());
+
+        assert_eq!(
+            cache.get_url(&first_index, &Username::none()),
+            Some(credentials.clone())
+        );
+        assert_eq!(cache.get_url(&second_index, &Username::none()), None);
+        assert_eq!(
+            cache.get_realm(Realm::from(&second_index), Username::none()),
+            Some(credentials),
+            "Google Artifact Registry should retain its existing realm-scoped credentials"
+        );
+    }
+
+    #[test]
+    fn test_non_registry_credentials_remain_cached_for_realm() {
+        let url = DisplaySafeUrl::parse("https://example.com/simple/")
+            .expect("Registry URL should parse");
+        let credentials = Arc::new(Authentication::from(Credentials::basic(
+            Some("user".to_string()),
+            Some("password".to_string()),
+        )));
+        let cache = CredentialsCache::default();
+
+        cache.insert(&url, credentials.clone());
+
+        assert_eq!(
+            cache.get_realm(Realm::from(&url), Username::none()),
+            Some(credentials)
+        );
     }
 
     #[test]
