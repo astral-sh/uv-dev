@@ -1588,6 +1588,85 @@ mod tests {
     }
 
     #[test(tokio::test)]
+    async fn test_artifact_registry_credentials_accept_explicit_google_username()
+    -> Result<(), Error> {
+        let password = "test-token";
+        let url = Url::parse("https://us-central1-python.pkg.dev/project/index/simple")?;
+        let middleware = AuthMiddleware::new()
+            .with_cache(CredentialsCache::new())
+            .with_artifact_registry_provider(ArtifactRegistryProvider::with_signer(
+                reqsign::google::default_signer("artifactregistry.googleapis.com")
+                    .with_credential_provider(reqsign::google::TokenCredentialProvider::new(
+                        password,
+                    )),
+            ));
+        let credentials = Authentication::from(Credentials::basic(
+            Some("oauth2accesstoken".to_string()),
+            None,
+        ));
+
+        let authentication = middleware
+            .fetch_credentials(
+                Some(&credentials),
+                DisplaySafeUrl::ref_cast(&url),
+                None,
+                AuthPolicy::Auto,
+            )
+            .await?
+            .expect("Google credentials should support the explicit OAuth token username");
+        let request = authentication
+            .authenticate(Request::new(Method::GET, url))
+            .await?;
+
+        assert_eq!(
+            Credentials::from_request(&request)?,
+            Some(Credentials::basic(
+                Some("oauth2accesstoken".to_string()),
+                Some(password.to_string()),
+            ))
+        );
+
+        Ok(())
+    }
+
+    #[test(tokio::test)]
+    async fn test_artifact_registry_credentials_prefer_netrc() -> Result<(), Error> {
+        let url = Url::parse("https://us-central1-python.pkg.dev/project/index/simple")?;
+        let mut netrc_file = NamedTempFile::new()?;
+        writeln!(
+            netrc_file,
+            "machine us-central1-python.pkg.dev login user password netrc-token"
+        )?;
+        let middleware = AuthMiddleware::new()
+            .with_cache(CredentialsCache::new())
+            .with_netrc(Netrc::from_file(netrc_file.path()).ok())
+            .with_artifact_registry_provider(ArtifactRegistryProvider::with_signer(
+                reqsign::google::default_signer("artifactregistry.googleapis.com")
+                    .with_credential_provider(reqsign::google::TokenCredentialProvider::new(
+                        "google-token",
+                    )),
+            ));
+
+        let authentication = middleware
+            .fetch_credentials(None, DisplaySafeUrl::ref_cast(&url), None, AuthPolicy::Auto)
+            .await?
+            .expect("Configured netrc credentials should take precedence");
+        let request = authentication
+            .authenticate(Request::new(Method::GET, url))
+            .await?;
+
+        assert_eq!(
+            Credentials::from_request(&request)?,
+            Some(Credentials::basic(
+                Some("user".to_string()),
+                Some("netrc-token".to_string()),
+            ))
+        );
+
+        Ok(())
+    }
+
+    #[test(tokio::test)]
     async fn test_artifact_registry_credentials_retry_missing_credentials() -> Result<(), Error> {
         let url = Url::parse("https://us-central1-python.pkg.dev/project/index/simple")?;
         let provider = ArtifactRegistryProvider::with_signer(
