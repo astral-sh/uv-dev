@@ -221,34 +221,35 @@ class CPythonFinder(Finder):
     async def _fetch_downloads(self) -> list[PythonDownload]:
         """Fetch all CPython downloads from the NDJSON release index."""
         logger.info("Fetching CPython release index")
-        resp = await self.client.get(self.NDJSON_URL)
-        resp.raise_for_status()
-
         downloads_by_version: dict[Version, list[PythonDownload]] = {}
 
-        for line in resp.text.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-
-            record = json.loads(line)
-            # Parse "3.11.15+20260303" → version="3.11.15", release=20260303
-            version_str, _, date_str = record["version"].partition("+")
-            version = Version.from_str(version_str)
-            release = int(date_str)
-
-            # Sort artifacts to ensure deterministic results
-            for artifact in sorted(record["artifacts"], key=lambda a: a["url"]):
-                download = self._parse_ndjson_artifact(version, release, artifact)
-                if download is None:
+        async with self.client.stream("GET", self.NDJSON_URL) as response:
+            response.raise_for_status()
+            async for line in response.aiter_lines():
+                line = line.strip()
+                if not line:
                     continue
-                if (
-                    download.release < CPYTHON_MUSL_STATIC_RELEASE_END
-                    and download.triple.libc == "musl"
-                ):
-                    continue
-                logger.debug("Found %s (%s)", download.key(), download.filename)
-                downloads_by_version.setdefault(download.version, []).append(download)
+
+                record = json.loads(line)
+                # Parse "3.11.15+20260303" → version="3.11.15", release=20260303
+                version_str, _, date_str = record["version"].partition("+")
+                version = Version.from_str(version_str)
+                release = int(date_str)
+
+                # Sort artifacts to ensure deterministic results
+                for artifact in sorted(record["artifacts"], key=lambda a: a["url"]):
+                    download = self._parse_ndjson_artifact(version, release, artifact)
+                    if download is None:
+                        continue
+                    if (
+                        download.release < CPYTHON_MUSL_STATIC_RELEASE_END
+                        and download.triple.libc == "musl"
+                    ):
+                        continue
+                    logger.debug("Found %s (%s)", download.key(), download.filename)
+                    downloads_by_version.setdefault(download.version, []).append(
+                        download
+                    )
 
         # Collapse CPython variants to a single flavor per triple and variant
         downloads = []
