@@ -218,18 +218,21 @@ impl PythonInstallation {
             return Err(err);
         };
 
-        let download_list =
-            ManagedPythonDownloadList::new(client_builder, cache, python_downloads_json_url)
-                .await?;
+        let filled_download_request = download_request.clone().fill();
+        let download_list = ManagedPythonDownloadList::new_filtered(
+            client_builder,
+            cache,
+            python_downloads_json_url,
+            filled_download_request.as_ref().ok(),
+            Some(1),
+        )
+        .await?;
 
         let downloads_enabled = preference.allows_managed()
             && python_downloads.is_automatic()
             && client_builder.connectivity.is_online();
 
-        let download = download_request
-            .clone()
-            .fill()
-            .map(|request| download_list.find(&request));
+        let download = filled_download_request.map(|request| download_list.find(&request));
 
         // Regardless of whether downloads are enabled, we want to determine if the download is
         // available to power error messages. However, if downloads aren't enabled, we don't want to
@@ -538,9 +541,19 @@ impl PythonInstallation {
             return Ok(());
         }
 
-        let download_list =
-            ManagedPythonDownloadList::new(client_builder, cache, python_downloads_json_url)
-                .await?;
+        let Ok(download_request) = PythonDownloadRequest::try_from(&self.interpreter().key())
+        else {
+            return Ok(());
+        };
+        let download_request = download_request.with_prereleases(false);
+        let download_list = ManagedPythonDownloadList::new_filtered(
+            client_builder,
+            cache,
+            python_downloads_json_url,
+            Some(&download_request),
+            Some(1),
+        )
+        .await?;
         self.warn_if_outdated_prerelease(request, &download_list);
 
         Ok(())
