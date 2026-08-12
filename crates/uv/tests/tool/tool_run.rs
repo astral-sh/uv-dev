@@ -521,6 +521,86 @@ fn tool_run_from_install() {
 }
 
 #[test]
+fn tool_run_from_install_with_index() {
+    let context = uv_test::test_context!("3.12");
+    let tool_dir = context.temp_dir.child("tools");
+    let bin_dir = context.temp_dir.child("bin");
+    let wheel = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    let index = "https://private.invalid/simple";
+
+    // Install the local wheel while recording the index used for resolution.
+    context
+        .tool_install()
+        .arg("--index")
+        .arg(index)
+        .arg(&wheel)
+        .env(EnvVars::UV_OFFLINE, "true")
+        .env(EnvVars::UV_NO_CONFIG, "true")
+        .env_remove(EnvVars::UV_INDEX_URL)
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
+        .assert()
+        .success();
+
+    // Omitting the installation index incorrectly discards the installed environment.
+    uv_snapshot!(context.filters(), context.tool_run()
+        .arg("--from")
+        .arg("simple-launcher")
+        .arg("simple_launcher")
+        .env(EnvVars::UV_OFFLINE, "true")
+        .env(EnvVars::UV_NO_CONFIG, "true")
+        .env_remove(EnvVars::UV_INDEX_URL)
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+      × No solution found when resolving tool dependencies:
+      ╰─▶ Because simple-launcher was not found in the cache and you require simple-launcher, we can conclude that your requirements are unsatisfiable.
+
+    hint: Packages were unavailable because the network was disabled. When the network is disabled, registry packages may only be read from the cache.
+    ");
+
+    // Repeating the installation index reuses the installed environment.
+    uv_snapshot!(context.filters(), context.tool_run()
+        .arg("--index")
+        .arg(index)
+        .arg("--from")
+        .arg("simple-launcher")
+        .arg("simple_launcher")
+        .env(EnvVars::UV_OFFLINE, "true")
+        .env(EnvVars::UV_NO_CONFIG, "true")
+        .env_remove(EnvVars::UV_INDEX_URL)
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Hi from the simple launcher!
+    ");
+
+    // An explicitly different index must continue to require a new resolution.
+    uv_snapshot!(context.filters(), context.tool_run()
+        .arg("--index")
+        .arg("https://different.invalid/simple")
+        .arg("--from")
+        .arg("simple-launcher")
+        .arg("simple_launcher")
+        .env(EnvVars::UV_OFFLINE, "true")
+        .env(EnvVars::UV_NO_CONFIG, "true")
+        .env_remove(EnvVars::UV_INDEX_URL)
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+      × No solution found when resolving tool dependencies:
+      ╰─▶ Because simple-launcher was not found in the cache and you require simple-launcher, we can conclude that your requirements are unsatisfiable.
+
+    hint: Packages were unavailable because the network was disabled. When the network is disabled, registry packages may only be read from the cache.
+    ");
+}
+
+#[test]
 fn tool_run_from_install_constraints() {
     let context = uv_test::test_context!("3.12").with_filtered_counts();
     let tool_dir = context.temp_dir.child("tools");
