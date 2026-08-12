@@ -96,14 +96,18 @@ pub(crate) fn help(query: &[String], printer: Printer, no_pager: bool) -> Result
     let is_terminal = std::io::stdout().is_terminal();
     let should_page = !no_pager && !is_root && is_terminal;
 
-    if should_page && let Some(pager) = Pager::try_from_env() {
+    let paged = if should_page && let Some(pager) = Pager::try_from_env() {
         let query = query.join(" ");
         if want_color && pager.supports_colors() {
-            pager.spawn(format!("{}: {query}", "uv help".bold()), &help_ansi)?;
+            pager.spawn(format!("{}: {query}", "uv help".bold()), &help_ansi)?
         } else {
-            pager.spawn(format!("uv help: {query}"), &help_plain)?;
+            pager.spawn(format!("uv help: {query}"), &help_plain)?
         }
     } else {
+        false
+    };
+
+    if !paged {
         if want_color {
             writeln!(printer.stdout(), "{help_ansi}")?;
         } else {
@@ -331,7 +335,7 @@ impl FromStr for Pager {
 
 impl Pager {
     /// Display `contents` using the pager.
-    fn spawn(self, heading: String, contents: impl Display) -> Result<()> {
+    fn spawn(self, heading: String, contents: impl Display) -> Result<bool> {
         use std::io::Write;
 
         let command = self
@@ -362,10 +366,10 @@ impl Pager {
             let _ = stdin.write_all(contents.as_bytes());
         });
 
-        drop(child.wait());
+        let status = child.wait()?;
         drop(writer.join());
 
-        Ok(())
+        Ok(status.success())
     }
 
     /// Get a pager to use and its path, if available.

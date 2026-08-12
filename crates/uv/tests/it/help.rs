@@ -1198,6 +1198,13 @@ fn help_with_failing_pager() {
         .env(EnvVars::PAGER, "false")
         .env(EnvVars::NO_COLOR, "1"), @"
     exit_code: 0 (success)
+    ----- stdout -----
+    Display documentation for a command
+
+    Usage: uv help [OPTIONS] [COMMAND]...
+
+    Options:
+      --no-pager Disable pager when printing help
     ");
 
     uv_snapshot!(context.filters(), context
@@ -1213,6 +1220,26 @@ fn help_with_failing_pager() {
     ----- stdout -----
     uv help: help
 
+    Display documentation for a command
+
+    Usage: uv help [OPTIONS] [COMMAND]...
+
+    Options:
+      --no-pager Disable pager when printing help
+    ");
+
+    uv_snapshot!(context.filters(), context
+        .python_command()
+        .arg("-c")
+        .arg(terminal)
+        .arg(&command)
+        .arg("help")
+        .arg("help")
+        .arg("--no-pager")
+        .env(EnvVars::PAGER, "false")
+        .env(EnvVars::NO_COLOR, "1"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
     Display documentation for a command
 
     Usage: uv help [OPTIONS] [COMMAND]...
