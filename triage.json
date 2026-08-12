@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 18120,
+        "title": "`uv tool upgrade` says \"Nothing to upgrade\" when index auth is invalid",
+        "url": "https://github.com/astral-sh/uv/issues/18120",
+        "state": "closed",
+        "reason": "Closest prior user-visible failure: uv reported a successful no-op when authentication prevented determining upgrades. Its trigger was index resolution, not InstalledTools enumeration."
+      },
+      {
+        "kind": "pull_request",
+        "number": 18246,
+        "title": "Promote authentication policy when saving tool receipts",
+        "url": "https://github.com/astral-sh/uv/pull/18246",
+        "state": "merged",
+        "reason": "Fixed astral-sh/uv#18120 so inability to query the required index becomes an error instead of “Nothing to upgrade”; it does not change tool-directory enumeration."
+      },
+      {
+        "kind": "issue",
+        "number": 7294,
+        "title": "uv tool upgrade --all should not stop if an upgrade fails",
+        "url": "https://github.com/astral-sh/uv/issues/7294",
+        "state": "closed",
+        "reason": "Related failure-semantics discussion: maintainers agreed the command should report failures and return a failing status after attempting all tools. It assumes enumeration succeeded."
+      },
+      {
+        "kind": "pull_request",
+        "number": 7333,
+        "title": "Allow `uv tool upgrade --all` to continue on individual upgrade failure",
+        "url": "https://github.com/astral-sh/uv/pull/7333",
+        "state": "merged",
+        "reason": "Implemented reporting and failure status for per-tool errors, but the initial InstalledTools::tools() call remains outside that handling."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests for “Nothing to upgrade,” the exact invalid-name diagnostic, uv tool upgrade --all, UV_TOOL_DIR, installed_tools, unwrap_or_default, malformed or corrupt tool directories and receipts, enumeration failures, swallowed errors, and exit-status handling. Inspected astral-sh/uv#18120, astral-sh/uv#18246, astral-sh/uv#7294, and astral-sh/uv#7333. Ruled out astral-sh/uv#8276 because version pins cause its valid no-op; astral-sh/uv#18522 and astral-sh/uv#18586 because they concern inconsistent outdated-list settings; and astral-sh/uv#19630 because it concerns corrupt-receipt recovery after enumeration. No existing tracker covers this exact error suppression."
+  },
+  "type": "bug",
+  "type_reason": "Source confirms that the all-tools path converts an InstalledTools::tools() error into an empty vector with unwrap_or_default, then prints “Nothing to upgrade” and returns success. uv tool list propagates the same enumeration error. The resulting message and exit status are incorrect, and no existing issue or pull request tracks the same underlying problem.",
+  "summary": "No duplicate was found. Historical work corrected similar false no-op behavior during index resolution and established failure handling after tools are enumerated, but neither covers failure during initial InstalledTools enumeration.",
+  "draft_response": "Thanks for the focused reproduction. The current all-tools path does convert an error from InstalledTools::tools() into an empty tool set, then reports “Nothing to upgrade” and exits successfully; uv tool list propagates the same enumeration error. That message and status are incorrect. We should propagate the enumeration error in uv tool upgrade --all and add an integration snapshot covering an invalid entry in UV_TOOL_DIR."
+}
