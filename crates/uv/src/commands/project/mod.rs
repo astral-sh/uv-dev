@@ -28,7 +28,7 @@ use uv_fs::{CWD, LockedFile, LockedFileError, LockedFileMode, Simplified, verbat
 use uv_git::ResolvedRepositoryReference;
 use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
 use uv_normalize::{DEV_DEPENDENCIES, DefaultGroups, ExtraName, GroupName, PackageName};
-use uv_pep440::{Operator, TildeVersionSpecifier, Version, VersionSpecifiers};
+use uv_pep440::{TildeVersionSpecifier, Version, VersionSpecifiers};
 use uv_pep508::MarkerTreeContents;
 use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::{ConflictItem, ConflictKind, ConflictSet, Conflicts};
@@ -599,24 +599,6 @@ pub(crate) fn find_requires_python(
         return Ok(None);
     }
     for ((package, group), specifiers) in &requires_python {
-        for specifier in &specifiers[..] {
-            if matches!(specifier.operator(), Operator::Equal)
-                && specifier.version().release().len() == 2
-            {
-                warn_user_once!(
-                    "The `requires-python` specifier (`{specifier}`) in `{package}{group}` \
-                    contains an exact match without a patch version. When omitted, the patch \
-                    version is implicitly `0` (e.g., `{specifier}.0`). Did you mean \
-                    `{specifier}.*`?",
-                    group = if let Some(group) = group {
-                        format!(":{group}")
-                    } else {
-                        String::new()
-                    },
-                );
-            }
-        }
-
         if let [spec] = &specifiers[..] {
             if let Some(spec) = TildeVersionSpecifier::from_specifier_ref(spec) {
                 if spec.has_patch() {
