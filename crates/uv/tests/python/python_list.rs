@@ -684,5 +684,15 @@ async fn python_list_remote_ndjson_metadata() -> Result<()> {
     cpython-3.13.9-[PLATFORM]    <download available>
     ");
 
+    uv_snapshot!(context.filters(), context.python_list()
+        .arg("--python-downloads-json-url")
+        .arg(format!("{}/python.ndjson?token=test", server.uri()))
+        .arg("cpython-3.13")
+        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    cpython-3.13.9-[PLATFORM]    <download available>
+    ");
+
     Ok(())
 }
