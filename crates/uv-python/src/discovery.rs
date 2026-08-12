@@ -946,9 +946,21 @@ impl Error {
             // When querying the Python interpreter fails, we will only raise errors that demonstrate that something is broken
             // If the Python interpreter returned a bad response, we'll continue searching for one that works
             Self::Query(err, _, source) => match &**err {
-                InterpreterError::Encode(_)
-                | InterpreterError::Io(_)
-                | InterpreterError::SpawnFailed { .. } => true,
+                InterpreterError::Encode(_) | InterpreterError::Io(_) => true,
+                InterpreterError::SpawnFailed { path, err } => {
+                    if matches!(
+                        source,
+                        PythonSource::SearchPath | PythonSource::SearchPathFirst
+                    ) {
+                        debug!(
+                            "Skipping unexecutable interpreter at {} from {source}: {err}",
+                            path.display()
+                        );
+                        false
+                    } else {
+                        true
+                    }
+                }
                 InterpreterError::UnexpectedResponse(UnexpectedResponseError { path, .. })
                 | InterpreterError::StatusCode(StatusCodeError { path, .. }) => {
                     debug!(
@@ -3720,7 +3732,7 @@ fn split_wheel_tag_release_version(version: Version) -> Version {
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::Cell, path::PathBuf, str::FromStr};
+    use std::{cell::Cell, io, path::PathBuf, str::FromStr};
 
     use assert_fs::{TempDir, prelude::*};
     use target_lexicon::{Aarch64Architecture, Architecture};
@@ -3733,6 +3745,7 @@ mod tests {
         discovery::{PythonRequest, VersionRequest},
         downloads::{ArchRequest, PythonDownloadRequest},
         implementation::ImplementationName,
+        interpreter::Error as InterpreterError,
     };
     use uv_platform::{Arch, Libc, Os};
 
@@ -3762,6 +3775,36 @@ mod tests {
         assert_eq!(pulls.get(), 1);
 
         Ok(())
+    }
+
+    #[test]
+    fn interpreter_spawn_failures_are_noncritical_only_on_search_path() {
+        for source in [
+            PythonSource::SearchPath,
+            PythonSource::SearchPathFirst,
+            PythonSource::ProvidedPath,
+            PythonSource::ActiveEnvironment,
+            PythonSource::Managed,
+        ] {
+            let path = PathBuf::from("python");
+            let error = Error::Query(
+                Box::new(InterpreterError::SpawnFailed {
+                    path: path.clone(),
+                    err: io::Error::other("unsupported executable format"),
+                }),
+                path,
+                source,
+            );
+
+            assert_eq!(
+                error.is_critical(),
+                !matches!(
+                    source,
+                    PythonSource::SearchPath | PythonSource::SearchPathFirst
+                ),
+                "unexpected criticality for {source}",
+            );
+        }
     }
 
     #[test]
