@@ -22,6 +22,7 @@ use uv_netrc::Netrc;
 use uv_redacted::DisplaySafeUrl;
 use uv_static::EnvVars;
 
+use crate::Service;
 use crate::providers::RegistryAuthProvider;
 
 const AZURE_STORAGE_VERSION: &str = "2023-11-03";
@@ -453,6 +454,12 @@ pub(crate) enum Authentication {
     /// HTTP Basic or Bearer Authentication credentials.
     Credentials(Credentials),
 
+    /// OAuth credentials that must remain bound to the package service that issued them.
+    Oidc {
+        service: Service,
+        credentials: Credentials,
+    },
+
     /// AWS Signature Version 4 signing.
     AwsSigner(AwsDefaultSigner),
 
@@ -493,6 +500,16 @@ impl PartialEq for Authentication {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Credentials(a), Self::Credentials(b)) => a == b,
+            (
+                Self::Oidc {
+                    service: left_service,
+                    credentials: left_credentials,
+                },
+                Self::Oidc {
+                    service: right_service,
+                    credentials: right_credentials,
+                },
+            ) => left_service == right_service && left_credentials == right_credentials,
             (Self::AwsSigner(..), Self::AwsSigner(..)) => true,
             (Self::GcsSigner(..), Self::GcsSigner(..)) => true,
             (Self::AzureSigner(..), Self::AzureSigner(..)) => true,
@@ -538,7 +555,9 @@ impl Authentication {
     /// Return the password used for authentication, if any.
     pub(crate) fn password(&self) -> Option<&str> {
         match self {
-            Self::Credentials(credentials) => credentials.password(),
+            Self::Credentials(credentials) | Self::Oidc { credentials, .. } => {
+                credentials.password()
+            }
             Self::AwsSigner(..)
             | Self::GcsSigner(..)
             | Self::AzureSigner(..)
@@ -549,7 +568,9 @@ impl Authentication {
     /// Return the username used for authentication, if any.
     pub(crate) fn username(&self) -> Option<&str> {
         match self {
-            Self::Credentials(credentials) => credentials.username(),
+            Self::Credentials(credentials) | Self::Oidc { credentials, .. } => {
+                credentials.username()
+            }
             Self::AwsSigner(..)
             | Self::GcsSigner(..)
             | Self::AzureSigner(..)
@@ -560,7 +581,9 @@ impl Authentication {
     /// Return the username used for authentication, if any.
     pub(crate) fn as_username(&self) -> Cow<'_, Username> {
         match self {
-            Self::Credentials(credentials) => credentials.as_username(),
+            Self::Credentials(credentials) | Self::Oidc { credentials, .. } => {
+                credentials.as_username()
+            }
             Self::AwsSigner(..)
             | Self::GcsSigner(..)
             | Self::AzureSigner(..)
@@ -571,7 +594,9 @@ impl Authentication {
     /// Return the username used for authentication, if any.
     pub(crate) fn to_username(&self) -> Username {
         match self {
-            Self::Credentials(credentials) => credentials.to_username(),
+            Self::Credentials(credentials) | Self::Oidc { credentials, .. } => {
+                credentials.to_username()
+            }
             Self::AwsSigner(..)
             | Self::GcsSigner(..)
             | Self::AzureSigner(..)
@@ -582,7 +607,9 @@ impl Authentication {
     /// Return `true` if the object contains a means of authenticating.
     pub(crate) fn is_authenticated(&self) -> bool {
         match self {
-            Self::Credentials(credentials) => credentials.is_authenticated(),
+            Self::Credentials(credentials) | Self::Oidc { credentials, .. } => {
+                credentials.is_authenticated()
+            }
             Self::AwsSigner(..)
             | Self::GcsSigner(..)
             | Self::AzureSigner(..)
@@ -593,7 +620,9 @@ impl Authentication {
     /// Return `true` if the object contains no credentials.
     pub(crate) fn is_empty(&self) -> bool {
         match self {
-            Self::Credentials(credentials) => credentials.is_empty(),
+            Self::Credentials(credentials) | Self::Oidc { credentials, .. } => {
+                credentials.is_empty()
+            }
             Self::AwsSigner(..)
             | Self::GcsSigner(..)
             | Self::AzureSigner(..)
@@ -609,7 +638,9 @@ impl Authentication {
         mut request: Request,
     ) -> Result<Request, AuthenticationError> {
         match self {
-            Self::Credentials(credentials) => Ok(credentials.authenticate(request)),
+            Self::Credentials(credentials) | Self::Oidc { credentials, .. } => {
+                Ok(credentials.authenticate(request))
+            }
             Self::AwsSigner(signer) => {
                 // Build an `http::Request` from the `reqwest::Request`.
                 let uri = Uri::from_str(request.url().as_str())?;

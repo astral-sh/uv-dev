@@ -16,7 +16,7 @@ use url::Url;
 use crate::Credentials;
 
 const DEFAULT_CLIENT_ID: &str = "uv";
-const DEFAULT_SCOPE: &str = "openid";
+const DEFAULT_SCOPE: &str = "openid offline_access";
 const DEFAULT_POLL_INTERVAL: u64 = 5;
 
 /// The OAuth metadata and refresh token associated with persisted bearer credentials.
@@ -58,6 +58,14 @@ impl OidcSession {
         &self,
         client: &ClientWithMiddleware,
     ) -> Result<(Credentials, Self), OidcError> {
+        validate_endpoint(&self.issuer, "issuer")?;
+        validate_endpoint(&self.token_endpoint, "token endpoint")?;
+        if self.refresh_token.trim().is_empty() {
+            return Err(OidcError::TokenRefreshFailed(
+                "authorization server returned an empty refresh token".to_string(),
+            ));
+        }
+
         let body = url::form_urlencoded::Serializer::new(String::new())
             .extend_pairs([
                 ("grant_type", "refresh_token"),
@@ -99,6 +107,11 @@ impl OidcSession {
                 "authorization server did not return an access token".to_string(),
             ));
         };
+        if access_token.trim().is_empty() {
+            return Err(OidcError::TokenRefreshFailed(
+                "authorization server returned an empty access token".to_string(),
+            ));
+        }
 
         let credentials = if let Some(expires_in) = response.expires_in {
             let expires_at = jiff::Timestamp::now()
@@ -111,6 +124,11 @@ impl OidcSession {
 
         let mut session = self.clone();
         if let Some(refresh_token) = response.refresh_token {
+            if refresh_token.trim().is_empty() {
+                return Err(OidcError::TokenRefreshFailed(
+                    "authorization server returned an empty refresh token".to_string(),
+                ));
+            }
             session.refresh_token = refresh_token;
         }
         Ok((credentials, session))
@@ -131,6 +149,8 @@ pub struct OidcConfig {
     pub client_id: Option<String>,
 
     /// The space-separated OAuth scopes to request.
+    ///
+    /// Include `offline_access` when the provider requires it to issue refresh tokens.
     #[serde(default)]
     pub scope: Option<String>,
 }
@@ -254,6 +274,8 @@ pub async fn discover(
     client: &reqwest::Client,
     issuer: &Url,
 ) -> Result<Option<OidcDiscoveryDocument>, OidcError> {
+    validate_endpoint(issuer, "issuer")?;
+
     let mut discovery_url = issuer.clone();
     if !discovery_url.path().ends_with('/') {
         discovery_url.set_path(&format!("{}/", discovery_url.path()));
@@ -283,6 +305,16 @@ pub async fn discover(
 
     match response.json::<OidcDiscoveryDocument>().await {
         Ok(document) => {
+            let advertised_issuer = Url::parse(&document.issuer).map_err(|error| {
+                OidcError::DeviceAuthorizationFailed(format!("Invalid issuer URL: {error}"))
+            })?;
+            validate_endpoint(&advertised_issuer, "advertised issuer")?;
+            if advertised_issuer.origin() != issuer.origin() {
+                return Err(OidcError::DeviceAuthorizationFailed(
+                    "Discovery metadata advertised an issuer from a different authority"
+                        .to_string(),
+                ));
+            }
             debug!("Discovered OpenID Connect issuer {}", document.issuer);
             Ok(Some(document))
         }
@@ -293,10 +325,28 @@ pub async fn discover(
     }
 }
 
+fn validate_endpoint(endpoint: &Url, description: &str) -> Result<(), OidcError> {
+    let is_loopback = match endpoint.host() {
+        Some(url::Host::Domain("localhost")) => true,
+        Some(url::Host::Ipv4(address)) => address.is_loopback(),
+        Some(url::Host::Ipv6(address)) => address.is_loopback(),
+        _ => false,
+    };
+    if endpoint.scheme() == "https" || endpoint.scheme() == "http" && is_loopback {
+        Ok(())
+    } else {
+        Err(OidcError::DeviceAuthorizationFailed(format!(
+            "The OAuth {description} must use HTTPS outside localhost"
+        )))
+    }
+}
+
 fn resolve_endpoint(issuer: &Url, endpoint: &str) -> Result<Url, OidcError> {
-    issuer.join(endpoint).map_err(|error| {
+    let endpoint = issuer.join(endpoint).map_err(|error| {
         OidcError::DeviceAuthorizationFailed(format!("Invalid endpoint URL: {error}"))
-    })
+    })?;
+    validate_endpoint(&endpoint, "authorization endpoint")?;
+    Ok(endpoint)
 }
 
 /// Return the session associated with a successful device authorization, if refresh is supported.
@@ -310,6 +360,11 @@ pub fn session(
     let Some(refresh_token) = refresh_token else {
         return Ok(None);
     };
+    if refresh_token.trim().is_empty() {
+        return Err(OidcError::DeviceAuthorizationFailed(
+            "The authorization server returned an empty refresh token".to_string(),
+        ));
+    }
 
     Ok(Some(OidcSession {
         issuer: issuer.clone(),
@@ -431,6 +486,31 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn endpoint_validation_requires_https_outside_localhost()
+    -> Result<(), Box<dyn std::error::Error>> {
+        assert!(
+            validate_endpoint(&Url::parse("https://login.example.com/token")?, "token").is_ok()
+        );
+        assert!(validate_endpoint(&Url::parse("http://localhost:3000/token")?, "token").is_ok());
+        assert!(validate_endpoint(&Url::parse("http://127.0.0.1:3000/token")?, "token").is_ok());
+        assert!(validate_endpoint(&Url::parse("http://[::1]:3000/token")?, "token").is_ok());
+        assert!(
+            validate_endpoint(&Url::parse("http://login.example.com/token")?, "token").is_err()
+        );
+
+        // Identity providers such as Google legitimately host token endpoints separately.
+        assert!(
+            resolve_endpoint(
+                &Url::parse("https://accounts.google.com")?,
+                "https://oauth2.googleapis.com/token",
+            )
+            .is_ok()
+        );
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn refresh_rotates_tokens() -> Result<(), Box<dyn std::error::Error>> {
         let server = MockServer::start().await;
@@ -493,6 +573,87 @@ mod tests {
         let (_, refreshed) = session.refresh(&client).await?;
 
         assert_eq!(refreshed.refresh_token, "original-refresh");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn refresh_rejects_empty_access_token() -> Result<(), Box<dyn std::error::Error>> {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "access_token": " ",
+                "token_type": "Bearer",
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let session = OidcSession {
+            issuer: Url::parse(&server.uri())?,
+            token_endpoint: Url::parse(&format!("{}/token", server.uri()))?,
+            client_id: "public-client".to_string(),
+            scope: "openid offline_access".to_string(),
+            refresh_token: "original-refresh".to_string(),
+        };
+        let client = ClientBuilder::new(reqwest::Client::new()).build();
+
+        assert!(matches!(
+            session.refresh(&client).await,
+            Err(OidcError::TokenRefreshFailed(message)) if message.contains("empty access token")
+        ));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn refresh_rejects_empty_rotated_token() -> Result<(), Box<dyn std::error::Error>> {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "access_token": "renewed-access",
+                "token_type": "Bearer",
+                "refresh_token": " ",
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let session = OidcSession {
+            issuer: Url::parse(&server.uri())?,
+            token_endpoint: Url::parse(&format!("{}/token", server.uri()))?,
+            client_id: "public-client".to_string(),
+            scope: "openid offline_access".to_string(),
+            refresh_token: "original-refresh".to_string(),
+        };
+        let client = ClientBuilder::new(reqwest::Client::new()).build();
+
+        assert!(matches!(
+            session.refresh(&client).await,
+            Err(OidcError::TokenRefreshFailed(message)) if message.contains("empty refresh token")
+        ));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn refresh_rejects_non_local_http_token_endpoint()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let session = OidcSession {
+            issuer: Url::parse("https://login.example.com")?,
+            token_endpoint: Url::parse("http://login.example.com/token")?,
+            client_id: "public-client".to_string(),
+            scope: "openid offline_access".to_string(),
+            refresh_token: "original-refresh".to_string(),
+        };
+        let client = ClientBuilder::new(reqwest::Client::new()).build();
+
+        assert!(matches!(
+            session.refresh(&client).await,
+            Err(OidcError::DeviceAuthorizationFailed(message)) if message.contains("HTTPS")
+        ));
 
         Ok(())
     }

@@ -471,6 +471,18 @@ impl TextCredentialStore {
         previous
     }
 
+    /// Return the most specific OAuth package service that applies to this URL.
+    pub(crate) fn oidc_service_for(&self, url: &DisplaySafeUrl) -> Option<&Service> {
+        let request_realm = Realm::from(url);
+        self.oidc_sessions
+            .keys()
+            .filter(|service| {
+                Realm::from(service.url().deref()) == request_realm
+                    && is_path_prefix(service.url().path(), url.path())
+            })
+            .max_by_key(|service| service.url().path().len())
+    }
+
     /// Refresh expired bearer credentials for the most specific matching OAuth session.
     pub(crate) async fn refresh_oidc_credentials(
         &self,
@@ -487,17 +499,7 @@ impl TextCredentialStore {
         url: &DisplaySafeUrl,
         client: &reqwest_middleware::ClientWithMiddleware,
     ) -> Result<Option<Credentials>, TomlCredentialError> {
-        let request_realm = Realm::from(url);
-        let Some(service) = self
-            .oidc_sessions
-            .keys()
-            .filter(|service| {
-                Realm::from(service.url().deref()) == request_realm
-                    && is_path_prefix(service.url().path(), url.path())
-            })
-            .max_by_key(|service| service.url().path().len())
-            .cloned()
-        else {
+        let Some(service) = self.oidc_service_for(url).cloned() else {
             return Ok(None);
         };
 
