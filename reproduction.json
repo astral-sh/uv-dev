@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "With uv 0.12.3 on Linux x86_64, an isolated UV_TOOL_DIR containing `tool backup` caused `uv tool list` to report the invalid package-name error and exit 2, while `uv tool upgrade --all` printed `Nothing to upgrade` and exited 0. Python was not invoked. Existing tool upgrade tests cover empty directories and malformed receipts, but not this enumeration failure. The issue-context README was updated."
+}
