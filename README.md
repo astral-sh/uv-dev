@@ -49,6 +49,54 @@ duplicate.
   astral-sh/uv#21009 for the same reproduction. It differs from the preferred direction recorded by
   the maintainer, which is to ignore an invalid environment during locking.
 
+## Reproduction
+
+Outcome: **reproducible**.
+
+The report's minimal case was reconstructed under `$RUNNER_TEMP` with all uv cache and managed
+Python paths confined to the same temporary directory. The installed executable was uv 0.12.3
+(`x86_64-unknown-linux-gnu`) on Ubuntu Linux x86_64, with system CPython 3.12.3 available at
+`/usr/bin/python3`. The reporter used uv 0.11.19 on Arch Linux x86_64 and did not provide a Python
+version.
+
+The temporary project contained:
+
+```toml
+[project]
+name = "example"
+version = "0"
+requires-python = ">=3"
+```
+
+An otherwise unrelated nonempty `.venv` was then created and locking was run in the isolated
+environment:
+
+```console
+mkdir .venv
+touch .venv/bad
+env -u VIRTUAL_ENV \
+  UV_CACHE_DIR="$CASE/cache" \
+  UV_PYTHON_INSTALL_DIR="$CASE/python" \
+  UV_PYTHON_DOWNLOADS=never \
+  uv lock
+```
+
+`uv lock` exited with status 2 and the reported error:
+
+```text
+error: Project virtual environment directory `$CASE/.venv` cannot be used because it is not a valid Python environment (no Python executable was found)
+```
+
+As a control, renaming `.venv` and rerunning the same command succeeded, selected
+`/usr/bin/python3`, and resolved the one-package project. This confirms that the invalid `.venv`,
+not an unavailable compatible interpreter or the project metadata, triggers the observed failure.
+
+No integration test under `crates/uv/tests/lock/` currently covers locking with a nonempty invalid
+project environment. The nearby `crates/uv/tests/sync/sync.rs` test
+`sync_invalid_environment` uses the same kind of invalid `.venv`, but it asserts that `uv sync`
+fails to protect unrelated directory contents; it does not cover the reported `uv lock` fallback
+behavior.
+
 ## Supporting evidence
 
 Literal searches covered the full error text and its distinctive fragments, including “Project

@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "On Linux x86_64 with installed uv 0.12.3 and CPython 3.12.3, a minimal project with `requires-python = \">=3\"` and a nonempty invalid `.venv` (`mkdir .venv && touch .venv/bad`) caused `uv lock` to exit 2 with the reported “no Python executable was found” error. With the same isolated cache, managed-Python directory, and downloads disabled, renaming `.venv` made `uv lock` succeed using `/usr/bin/python3`. The reported behavior is therefore reproduced and persists beyond the reporter’s uv 0.11.19."
+}
