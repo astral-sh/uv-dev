@@ -362,7 +362,7 @@ fn cache_init_read_only_git_marker() -> Result<()> {
     let marker = context.cache_dir.child("sdists-v9/.git");
     let _guard = ReadOnlyDirectoryGuard::new(marker.path())?;
 
-    uv_snapshot!(context.filters(), context.python_find(), @"
+    uv_snapshot!(context.filters(), context.python_find().arg("--system"), @"
     exit_code: 0 (success)
     ----- stdout -----
     [PYTHON-3.12]
