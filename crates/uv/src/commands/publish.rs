@@ -383,6 +383,7 @@ enum Prompt {
     Disabled,
 }
 
+/// Skip automatic trusted publishing for registries with their own built-in authentication.
 fn trusted_publishing_for_registry(
     publish_url: &DisplaySafeUrl,
     trusted_publishing: TrustedPublishing,
@@ -396,17 +397,10 @@ fn trusted_publishing_for_registry(
     }
 }
 
-fn should_skip_prompt(
-    artifact_registry_credentials: bool,
-    keyring_provider: KeyringProviderType,
-) -> bool {
-    artifact_registry_credentials && keyring_provider == KeyringProviderType::Disabled
-}
-
-/// Unify the different possible source for username and password information.
+/// Unify the different possible sources for username and password information.
 ///
 /// Possible credential sources are environment variables, the CLI, the URL, the keyring, trusted
-/// publishing or a prompt.
+/// publishing, a built-in provider, or a prompt.
 ///
 /// The username can come from, in order:
 ///
@@ -417,7 +411,7 @@ fn should_skip_prompt(
 ///     overrides the environment variable
 /// - If trusted publishing is available, it is `__token__`
 /// - (We currently do not read the username from the keyring)
-/// - If stderr is a tty, prompt the user
+/// - If stderr is a tty and no built-in provider has credentials, prompt the user
 ///
 /// The password can come from, in order:
 ///
@@ -428,10 +422,10 @@ fn should_skip_prompt(
 ///     the environment variable
 /// - If the keyring is enabled, the keyring entry for the URL and username
 /// - If trusted publishing is available, the trusted publishing token
-/// - If stderr is a tty, prompt the user
+/// - If stderr is a tty and no built-in provider has credentials, prompt the user
 ///
-/// If no credentials are found, the auth middleware does a final check for cached credentials and
-/// otherwise errors without sending the request.
+/// If no explicit credentials are found, the auth middleware checks cached credentials and built-in
+/// providers before failing without sending the request.
 ///
 /// Returns the publish URL and [`PublishingCredentials`].
 async fn gather_credentials(
@@ -499,7 +493,7 @@ async fn gather_credentials(
     let (username, mut password) = if username.is_none() && password.is_none() {
         // Skip prompting when a built-in provider has credentials; the auth middleware will handle
         // authentication.
-        if should_skip_prompt(artifact_registry_credentials, keyring_provider) {
+        if artifact_registry_credentials {
             (None, None)
         } else {
             match prompt {
@@ -721,12 +715,5 @@ mod tests {
             trusted_publishing_for_registry(&other_registry, TrustedPublishing::Automatic),
             TrustedPublishing::Automatic
         );
-    }
-
-    #[test]
-    fn artifact_registry_only_skips_prompt_with_credentials() {
-        assert!(!should_skip_prompt(false, KeyringProviderType::Disabled));
-        assert!(should_skip_prompt(true, KeyringProviderType::Disabled));
-        assert!(!should_skip_prompt(true, KeyringProviderType::Subprocess));
     }
 }
