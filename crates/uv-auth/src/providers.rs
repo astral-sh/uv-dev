@@ -354,7 +354,7 @@ impl ArtifactRegistryProvider {
     }
 
     fn credentials_from_token(token: String) -> Option<Credentials> {
-        if token.is_empty() {
+        if token.trim().is_empty() {
             return None;
         }
 
@@ -879,6 +879,12 @@ mod tests {
         assert_eq!(
             ArtifactRegistryProvider::credentials_from_gcloud_output(
                 br#"{"credential":{"access_token":"test-token","token_expiry":"2000-05-29T00:00:00Z"}}"#
+            ),
+            None
+        );
+        assert_eq!(
+            ArtifactRegistryProvider::credentials_from_gcloud_output(
+                br#"{"credential":{"access_token":"   ","token_expiry":"2099-05-29T00:00:00Z"}}"#
             ),
             None
         );
