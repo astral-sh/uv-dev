@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 8879,
+        "title": "Creating venvs from uv python installtions creates broken venvs",
+        "url": "https://github.com/astral-sh/uv/issues/8879",
+        "state": "open",
+        "reason": "Closest copied-environment trigger: it covers both `--copies` and `venv.create(symlinks=False)`. It differs because the copied uv-managed interpreter itself cannot start, while astral-sh/uv#21077 fails only in `uv run --with`."
+      },
+      {
+        "kind": "issue",
+        "number": 12140,
+        "title": "Discrepancy in environment creation between projects and `uv run`",
+        "url": "https://github.com/astral-sh/uv/issues/12140",
+        "state": "open",
+        "reason": "Documents the same `uv run --with` ephemeral-overlay subsystem, but concerns package visibility rather than selecting another Python from a copied environment."
+      },
+      {
+        "kind": "issue",
+        "number": 21066,
+        "title": "UV recreates the venv on every run.",
+        "url": "https://github.com/astral-sh/uv/issues/21066",
+        "state": "open",
+        "reason": "Also reports conflicting virtual-environment interpreter metadata, but maintainers identified stale cache data and `--refresh` resolves it. The copied-versus-symlinked trigger in astral-sh/uv#21077 is distinct."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests for `venv.create`, copied executables, `--copies`, `ModuleNotFoundError`, `uv run --with`, active `VIRTUAL_ENV`, base executables, `sys._base_executable`, ephemeral overlays, interpreter caches, symlink resolution, and wrong shebangs. No matching pull request or canonical tracker was found. astral-sh/uv#19563 was ruled out because `UV_PYTHON` explicitly selected the system interpreter; astral-sh/uv#13198 concerns `uv pip install --prefix`; astral-sh/uv#21075 and astral-sh/uv#21062 concern launcher-context cache pollution."
+  },
+  "type": "bug",
+  "type_reason": "The activated Python 3.13 environment works directly, but `uv run --with` executes through Python 3.9 and cannot import the requested dependency. Source confirms that this path derives a base interpreter for cached and ephemeral environments; copied environments can expose a different unversioned `sys._base_executable`, although the exact CentOS path still needs confirmation. No existing tracker covers the same failure.",
+  "summary": "No duplicate was found. The closest issues separately cover copied interpreters, `uv run --with` overlays, and stale interpreter metadata.",
+  "draft_response": "Thanks for the reproducer. `uv run --with` should preserve the Python 3.13 interpreter selected by the active environment here; using Python 3.9 and then failing to import the requested dependency is a bug.\n\nThe copied-versus-symlinked distinction is relevant because the `--with` path derives a base interpreter for its cached requirements environment and temporary overlay. A copied standard-library environment can report a different, unversioned `sys._base_executable`, but we should confirm the exact paths on this system before assigning that as the root cause. Could you share `uv run -vv --with ipython ipython`, the values of `sys.version`, `sys.executable`, `sys._base_executable`, `sys.prefix`, and `sys.base_prefix` from the activated environment, and `.venv/pyvenv.cfg`? That should provide what we need for a regression test."
+}
