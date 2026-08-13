@@ -1,0 +1,47 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "outcome": {
+      "type": "string",
+      "enum": ["improved", "no_change"]
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "patterns": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "criterion": {
+            "type": "string",
+            "enum": [
+              "issue_understanding",
+              "correctness",
+              "regression_coverage",
+              "scope",
+              "maintainability"
+            ]
+          },
+          "issue_numbers": {
+            "type": "array",
+            "minItems": 2,
+            "items": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": ["criterion", "issue_numbers", "summary"]
+      }
+    }
+  },
+  "required": ["outcome", "summary", "patterns"]
+}

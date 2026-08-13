@@ -68,6 +68,40 @@ enabled = true
 "static.crates.io" = "allow"
 "static.rust-lang.org" = "allow"
 
+[permissions.evaluate-bug-fix]
+description = "Read-only bug-fix evaluation with temporary build and registry access."
+extends = ":read-only"
+
+[permissions.evaluate-bug-fix.filesystem]
+":tmpdir" = "write"
+
+[permissions.evaluate-bug-fix.network]
+enabled = true
+
+[permissions.evaluate-bug-fix.network.domains]
+"api.github.com" = "allow"
+"crates.io" = "allow"
+"files.pythonhosted.org" = "allow"
+"github.com" = "allow"
+"index.crates.io" = "allow"
+"pypi.org" = "allow"
+"static.crates.io" = "allow"
+"static.rust-lang.org" = "allow"
+
+[permissions.improve-bug-fix-quality]
+description = "Bug-fix automation improvement with workspace and GitHub API access."
+extends = ":workspace"
+
+[permissions.improve-bug-fix-quality.filesystem]
+":tmpdir" = "write"
+
+[permissions.improve-bug-fix-quality.network]
+enabled = true
+
+[permissions.improve-bug-fix-quality.network.domains]
+"api.github.com" = "allow"
+"github.com" = "allow"
+
 [permissions.pull-request-review]
 description = "Pull request review with workspace and GitHub API access."
 extends = ":workspace"
