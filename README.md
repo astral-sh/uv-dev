@@ -84,6 +84,44 @@ lowering receives that directory for relative requirements and sources, while
 `Pep723ItemRef::indexes` returns the inline index definitions as parsed. The targeted command above,
 rather than this source-level asymmetry, is the evidence for the reproduced behavior.
 
+## Fix
+
+Outcome: **fixed** in the checkout.
+
+The parent regression test at `crates/uv/tests/project/run.rs`,
+`run_pep723_script_relative_flat_index`, was first run unchanged and passed while asserting the
+undesirable exit code 2 and `elsewhere/links` lookup. Its snapshot was then changed to require a
+successful installation of `ok==1.0.0`; before the production change, that desired assertion failed
+with the reported `Failed to read --find-links directory: [TEMP_DIR]/elsewhere/links` error.
+
+The production fix has two deliberately scoped parts:
+
+- File-backed PEP 723 `FilesystemOptions` are rebased against the script's directory before they
+  are combined with discovered configuration. This gives the resolver and installer a stable local
+  index location while leaving stdin and remote-script behavior unchanged.
+- The inline indexes passed to non-workspace requirement and extra-build-dependency lowering are
+  cloned and rebased against `Pep723ItemRef::directory`. This ensures a named source records the
+  same script-relative index URL instead of retaining the caller's working-directory interpretation.
+
+Successful focused debug-profile validation:
+
+```console
+$ cargo test --package uv --test project run_pep723_script_relative_flat_index
+test run::run_pep723_script_relative_flat_index ... ok
+
+$ cargo test --package uv --test project run_pep723_script_index
+test run::run_pep723_script_index ... ok
+
+$ cargo test --package uv --test project run_pep723_script_no_sources_package
+test run::run_pep723_script_no_sources_package ... ok
+
+$ cargo fmt --all --check
+```
+
+The nearby HTTPS-index test and package-scoped source-disabling test confirm that existing PEP 723
+index behavior remains intact. Formatting and `git diff --check` also pass. Only the parent test and
+the affected production files are modified.
+
 ## Draft response
 
 Thanks for the clear reproduction. I reproduced this with uv 0.12.3 on Linux: the script succeeds
@@ -120,3 +158,5 @@ The checkout was searched for PEP 723 script indexes, relative flat indexes, `--
 and script index path lowering. The three tests listed in the reproduction section are the closest
 coverage; none combines a file-backed PEP 723 script, a relative flat index, and invocation from a
 different working directory.
+
+Pull request: https://github.com/astral-sh/uv-dev/pull/705

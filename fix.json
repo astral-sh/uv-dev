@@ -1,0 +1,12 @@
+{
+  "outcome": "fixed",
+  "summary": "Rebased file-backed PEP 723 indexes against the script directory in settings and source lowering; updated the parent regression test to require successful installation.",
+  "validation": [
+    "cargo test --package uv --test project run_pep723_script_relative_flat_index",
+    "cargo test --package uv --test project run_pep723_script_index",
+    "cargo test --package uv --test project run_pep723_script_no_sources_package",
+    "cargo fmt --all --check",
+    "git diff --check"
+  ],
+  "pull_request": "https://github.com/astral-sh/uv-dev/pull/705"
+}
