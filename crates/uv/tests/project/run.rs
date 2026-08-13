@@ -8,6 +8,8 @@ use insta::assert_snapshot;
 use predicates::{prelude::predicate, str::contains};
 use serde_json::json;
 use std::path::Path;
+#[cfg(unix)]
+use std::process::Command;
 use uv_fs::copy_dir_all;
 use uv_python::PYTHON_VERSION_FILENAME;
 use uv_static::EnvVars;
@@ -1442,6 +1444,98 @@ fn run_with() -> Result<()> {
     ");
 
     Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn run_with_copied_virtualenv_uses_matching_base_interpreter() {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.11"]);
+    let newer_python = &context.python_versions[0].1;
+    let older_python = &context.python_versions[1].1;
+    let base = context.temp_dir.child("base");
+
+    Command::new(newer_python)
+        .arg("-c")
+        .arg(indoc! {r#"
+            import pathlib
+            import subprocess
+            import sys
+            import sysconfig
+
+            base = pathlib.Path(sys.argv[1])
+            older_python = pathlib.Path(sys.argv[2])
+            newer_python = pathlib.Path(sys.argv[3])
+            environment = pathlib.Path(sys.argv[4])
+
+            scripts = base / "bin"
+            scripts.mkdir(parents=True)
+            (scripts / "python").symlink_to(older_python)
+            (scripts / "python3").symlink_to(older_python)
+            (scripts / "python3.12").symlink_to(newer_python)
+
+            library_directory = pathlib.Path(sysconfig.get_config_var("LIBDIR"))
+            (base / "lib").symlink_to(library_directory, target_is_directory=True)
+
+            subprocess.check_call([
+                str(scripts / "python3.12"),
+                "-m",
+                "venv",
+                "--copies",
+                "--without-pip",
+                str(environment),
+            ])
+
+            library = sysconfig.get_config_var("LDLIBRARY")
+            if library:
+                source = library_directory / library
+                if source.exists():
+                    (environment / "lib" / library).symlink_to(source)
+            "#})
+        .arg(base.path())
+        .arg(older_python)
+        .arg(newer_python)
+        .arg(context.venv.path())
+        .assert()
+        .success();
+
+    let mut command = context.run();
+    command
+        .env(EnvVars::VIRTUAL_ENV, context.venv.path())
+        .arg("--with")
+        .arg("iniconfig")
+        .arg("python")
+        .arg("-c")
+        .arg(indoc! {r#"
+            import importlib.metadata
+            import platform
+
+            print(platform.python_version())
+            print(importlib.metadata.version("iniconfig"))
+            "#});
+
+    uv_snapshot!(context.filters(), &mut command, @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    3.12.[X]
+    2.0.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + iniconfig==2.0.0
+    ");
+
+    // Reusing cached interpreter metadata must still recover the correct base executable.
+    uv_snapshot!(context.filters(), &mut command, @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    3.12.[X]
+    2.0.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
 }
 
 #[test]
