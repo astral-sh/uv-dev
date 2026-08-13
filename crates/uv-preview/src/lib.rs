@@ -281,7 +281,7 @@ pub enum PreviewFeature {
     /// output and a machine-readable byte count; enabling this feature silences the preview
     /// warning.
     CacheSize,
-    /// Cache cleanup reports the physical disk space reclaimed, accounting for hardlinks and
+    /// Cache size and cleanup report physical disk usage, accounting for hardlinks and
     /// copy-on-write clones on macOS and Linux. If an entry's allocated size cannot be measured, uv
     /// reports a lower bound; other platforms continue to use a coarser estimate. See [clearing the
     /// cache](./cache.md#clearing-the-cache) for details.
