@@ -6,72 +6,117 @@ Classification: bug
 
 ## Summary
 
-The report demonstrates that `uv run --offline /path/to/main.py` interprets a relative local flat
-index declared in `main.py`'s PEP 723 metadata against the process working directory. The same
-script succeeds when invoked from its own directory, but from another directory it attempts to read
-that directory's `./links` and fails with `Failed to read --find-links directory`. The expected
-behavior is for `./links` to refer to the directory beside `main.py`, independent of where the user
-invokes `uv run`.
+The reported behavior is reproducible with uv 0.12.3. A file-backed PEP 723 script can install a
+dependency from a relative flat index when run from the script's directory, but running that same
+script by path from a sibling directory makes uv look for the index under the caller's current
+working directory. The script's dependency metadata therefore changes meaning based on the
+invocation directory.
 
-No existing issue or pull request tracks this exact PEP 723 runtime case. The closest precedent is
-merged astral-sh/uv#10827, which fixed the analogous behavior for relative indexes and find-links
-loaded from `pyproject.toml` and `uv.toml`. Open astral-sh/uv#15055 concerns the separate problem of
-serializing relative flat indexes as absolute paths in `uv.lock`. Merged astral-sh/uv#9208 added
-PEP 723 index support, but its test uses an HTTPS index and does not exercise relative local paths.
+The closest precedent is merged astral-sh/uv#10827, which fixed analogous resolution of relative
+indexes and find-links paths from `pyproject.toml` and `uv.toml`. Open astral-sh/uv#15055 concerns
+lockfile serialization of relative flat indexes, which is distinct from this runtime path-selection
+behavior. Merged astral-sh/uv#9208 added PEP 723 index support, but the existing runtime test uses an
+HTTPS index and does not exercise relative filesystem paths.
+
+## Reproduction
+
+Outcome: **reproducible**.
+
+Environment used:
+
+- uv 0.12.3 (`x86_64-unknown-linux-gnu`), the same uv release reported in astral-sh/uv#21096
+- Linux x86_64; the report used Darwin 25.5.0 arm64
+- System Python 3.12.3; the report used Python 3.14.0
+- Separate temporary uv caches for each invocation, with every fixture, environment, and cache
+  under `/tmp`
+
+The minimal fixture consisted of `scripts/main.py`, a locally generated pure-Python wheel at
+`scripts/links/localdemo-1.0.0-py3-none-any.whl`, and an empty sibling directory named `elsewhere`.
+The relevant inline metadata was:
+
+```python
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["localdemo"]
+#
+# [[tool.uv.index]]
+# name = "local"
+# url = "./links"
+# format = "flat"
+#
+# [tool.uv.sources]
+# localdemo = { index = "local" }
+# ///
+```
+
+After creating that fixture, the two targeted commands were equivalent to:
+
+```console
+$ cd /tmp/uv-21096/scripts
+$ UV_CACHE_DIR=/tmp/uv-21096/cache-script uv run --offline --python /usr/bin/python3 main.py
+Installed 1 package in 0.43ms
+loaded from local flat index
+
+$ cd /tmp/uv-21096/elsewhere
+$ UV_CACHE_DIR=/tmp/uv-21096/cache-elsewhere uv run --offline --python /usr/bin/python3 /tmp/uv-21096/scripts/main.py
+error: Failed to read `--find-links` directory: /tmp/uv-21096/elsewhere/links
+  Caused by: No such file or directory (os error 2)
+```
+
+The first command exited 0, installed the generated wheel, and imported it successfully. The second
+command exited 2 and named `elsewhere/links` in the error. This directly observes that `./links` was
+resolved from the process working directory rather than from the directory containing `main.py`.
+
+Existing integration tests do not cover this runtime combination:
+
+- `crates/uv/tests/project/run.rs`, `run_pep723_script_index`, verifies that a PEP 723 script can
+  resolve through a named HTTPS index, but it uses no relative path and runs `main.py` from its
+  containing directory.
+- `crates/uv/tests/lock/lock.rs`, `lock_find_links_relative_url`, verifies a relative flat index in
+  `pyproject.toml`, not inline script metadata.
+- `crates/uv/tests/project/edit.rs`, `add_index_with_existing_relative_path_in_script`, verifies
+  rewriting an index path while editing a script outside the working directory with `--frozen`; it
+  does not resolve or run a dependency from that inline index.
+
+Source inspection is consistent with the observation but is not needed to infer it:
+`Pep723ItemRef::directory` computes a file-backed script's containing directory, and dependency
+lowering receives that directory for relative requirements and sources, while
+`Pep723ItemRef::indexes` returns the inline index definitions as parsed. The targeted command above,
+rather than this source-level asymmetry, is the evidence for the reproduced behavior.
 
 ## Draft response
 
-Thanks for the clear reproduction. This is a bug: a relative index declared in a file-backed PEP
-723 block should be resolved from the script's directory, just as relative index and find-links
-paths in `pyproject.toml` and `uv.toml` are resolved from their containing configuration file. The
-current script-index path does not apply that rebasing. I could not find an existing issue or pull
-request tracking this specific PEP 723 case. A focused regression test should run the script by path
-from another working directory and verify that its relative flat index is still loaded from beside
-the script.
+Thanks for the clear reproduction. I reproduced this with uv 0.12.3 on Linux: the script succeeds
+from its own directory, but when invoked by path from a sibling directory uv tries to read that
+sibling's `links` directory and exits with the reported `--find-links` error. Existing PEP 723 index
+coverage uses an HTTPS URL, while existing relative flat-index coverage uses `pyproject.toml`, so
+this specific runtime case is not covered.
 
 ## Classification
 
-This is a correctness bug, not a request for new functionality. The meaning of metadata embedded in
-a file should not change merely because the caller invokes that file from a different directory,
-and the reproduction shows a valid local index becoming an unrelated missing path.
+This is a correctness bug rather than a feature request. A relative index embedded in a file-backed
+script should be stable when the same script is invoked from another directory. The observed error
+also matches uv's established handling for file-backed `pyproject.toml` and `uv.toml` configuration,
+whose relative index and find-links paths are based on the containing configuration file.
 
-The checkout supports the reported mechanism. `Pep723ItemRef::directory` computes the containing
-directory for a file-backed script, and dependency lowering receives that directory for relative
-requirements and sources. In contrast, `Pep723ItemRef::indexes` returns the parsed script indexes
-without calling `Index::relative_to` with the script directory. File-backed `pyproject.toml` and
-`uv.toml` options do receive this rebasing when loaded. This asymmetry matches the exact path in the
-reported error.
-
-This is not a duplicate. astral-sh/uv#10827 fixed the analogous behavior only for filesystem
-configuration, astral-sh/uv#15055 tracks lockfile representation rather than runtime path
-resolution, and no open issue or pull request tracks PEP 723 relative-index rebasing. It is also not
-a regression of a known PEP 723 fix: the original script-index coverage in astral-sh/uv#9208 tested
-only an HTTPS URL.
+This is not a duplicate of the closest related reports. astral-sh/uv#10827 addressed filesystem
+configuration rather than PEP 723 metadata, and astral-sh/uv#15055 tracks portable lockfile
+representation rather than choosing the runtime base directory. The original PEP 723 index work in
+astral-sh/uv#9208 did not test a local relative index.
 
 ## Related
 
-- astral-sh/uv#10827 (merged pull request) — The closest precedent. It fixed the same
-  `Failed to read --find-links directory` class of failure for relative paths in `pyproject.toml`
-  and `uv.toml` by resolving them against the containing configuration file. Its stated scope and
-  implementation did not include PEP 723 script metadata.
-- astral-sh/uv#15055 (open issue) — Also concerns a relative `format = "flat"` index, but its
-  failure is that `uv.lock` stores an absolute path and loses portability. It does not track choosing
-  the wrong base directory while running a script.
-- astral-sh/uv#9208 (merged pull request) — Added support for `[[tool.uv.index]]` in PEP 723
-  scripts. Its regression test establishes the subsystem but uses `https://test.pypi.org/simple`,
-  so it could not catch local path rebasing errors.
+- astral-sh/uv#10827 (merged pull request) — Fixed relative index and find-links paths from
+  `pyproject.toml` and `uv.toml` by resolving them against the containing configuration file; its
+  scope did not include PEP 723 script metadata.
+- astral-sh/uv#15055 (open issue) — Concerns an absolute path being stored in `uv.lock` for a
+  relative flat index, not current-working-directory resolution while running a script.
+- astral-sh/uv#9208 (merged pull request) — Added `[[tool.uv.index]]` support in PEP 723 scripts;
+  its runtime test uses `https://test.pypi.org/simple`.
 
 ## Search coverage
 
-Literal and conceptual searches covered PEP 723 and inline script metadata, `uv run` with a script
-path, `[[tool.uv.index]]`, `format = "flat"`, `--find-links`, the exact read-directory error,
-relative and local indexes, and current-working-directory versus script- or configuration-directory
-resolution. Searches included open and closed issues and open, closed, and merged pull requests,
-including historical fixes for script indexes, config-relative find-links, target workspace
-discovery, and lockfile path preservation.
-
-astral-sh/uv#11302 and merged astral-sh/uv#17423 were inspected but concern workspace and virtual
-environment discovery from the script target. Open astral-sh/uv#12193 is specifically about
-shebang/project discovery and command-line option paths. Closed astral-sh/uv#18687 concerns reading
-configuration from an inaccessible current directory. These share the broader `uv run` invocation
-shape but not the PEP 723 index-rebasing defect, so they are not listed as closest related items.
+The checkout was searched for PEP 723 script indexes, relative flat indexes, `--find-links` errors,
+and script index path lowering. The three tests listed in the reproduction section are the closest
+coverage; none combines a file-backed PEP 723 script, a relative flat index, and invocation from a
+different working directory.

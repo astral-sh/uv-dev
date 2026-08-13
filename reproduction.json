@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "Using uv 0.12.3 on Linux x86_64 with Python 3.12.3, I created a PEP 723 script and local flat index entirely under /tmp. From the script directory, `uv run --offline --python /usr/bin/python3 main.py` exited 0 and imported the local wheel. From a sibling directory, `uv run --offline --python /usr/bin/python3 /tmp/.../scripts/main.py` exited 2 with `Failed to read --find-links directory: /tmp/.../elsewhere/links`, confirming that `./links` was resolved against the current working directory. Separate temporary caches were used. Existing tests cover PEP 723 HTTPS indexes (`crates/uv/tests/project/run.rs`, `run_pep723_script_index`) and relative flat indexes in pyproject.toml (`crates/uv/tests/lock/lock.rs`, `lock_find_links_relative_url`), but not this combination."
+}
