@@ -286,3 +286,30 @@ jobs:
       parent-head-sha: ${{ needs.reproduce-bug.outputs.head-sha }}
       runner: ubuntu-latest
     secrets: inherit
+
+  evaluate-bug-fix:
+    needs:
+      - reproduce-bug
+      - fix-bug
+    if: >-
+      needs.fix-bug.outputs.result != '' &&
+      fromJSON(needs.fix-bug.outputs.result).outcome == 'fixed' &&
+      needs.fix-bug.outputs.pull-request != '' &&
+      needs.fix-bug.outputs.head-ref != '' &&
+      needs.fix-bug.outputs.head-sha != ''
+    permissions:
+      contents: read
+      id-token: write
+      issues: read
+    uses: $/.github/workflows/evaluate-bug-fix.yml
+    with:
+      issue-number: ${{ needs.reproduce-bug.outputs.issue-number }}
+      fix-result: ${{ needs.fix-bug.outputs.result }}
+      parent-pull-request: ${{ needs.reproduce-bug.outputs.pull-request }}
+      parent-head-ref: ${{ needs.reproduce-bug.outputs.head-ref }}
+      parent-head-sha: ${{ needs.reproduce-bug.outputs.head-sha }}
+      fix-pull-request: ${{ needs.fix-bug.outputs.pull-request }}
+      fix-head-ref: ${{ needs.fix-bug.outputs.head-ref }}
+      fix-head-sha: ${{ needs.fix-bug.outputs.head-sha }}
+      runner: ubuntu-latest
+    secrets: inherit
