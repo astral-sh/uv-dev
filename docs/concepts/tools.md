@@ -4,52 +4,49 @@ Tools are Python packages that provide command-line interfaces.
 
 !!! note
 
-    See the [tools guide](../guides/tools.md) for an introduction to working with the tools
-    interface — this document discusses details of tool management.
+    The [tools guide](../guides/tools.md) introduces the tools interface. This document describes
+    tool management.
 
 ## The `uv tool` interface
 
-uv includes a dedicated interface for interacting with tools. Tools can be invoked without
-installation using `uv tool run`, in which case their dependencies are installed in a temporary
-virtual environment isolated from the current project.
+uv provides a dedicated interface for tools. The `uv tool run` command runs a tool without a
+persistent installation. It installs dependencies in a temporary virtual environment separate from
+the current project.
 
-Because it is very common to run tools without installing them, a `uvx` alias is provided for
-`uv tool run` — the two commands are exactly equivalent. For brevity, the documentation will mostly
-refer to `uvx` instead of `uv tool run`.
+The `uvx` alias is equivalent to `uv tool run`. The documentation primarily uses `uvx` because the
+alias is shorter.
 
-Tools can also be installed with `uv tool install`, in which case their executables are
-[available on the `PATH`](#tool-executables) — an isolated virtual environment is still used, but it
-is not removed when the command completes.
+The `uv tool install` command installs tools with executables
+[available on the `PATH`](#tool-executables). It uses an isolated virtual environment that remains
+after the command completes.
 
 ## Execution vs installation
 
-In most cases, executing a tool with `uvx` is more appropriate than installing the tool. Installing
-the tool is useful if you need the tool to be available to other programs on your system, e.g., if
-some script you do not control requires the tool, or if you are in a Docker image and want to make
-the tool available to users.
+In most cases, use `uvx` instead of installing a tool. Install a tool when other programs must
+access it. For example, an external script might require the tool, or users might need it in a
+Docker image.
 
 ## Tool environments
 
-When running a tool with `uvx`, a virtual environment is stored in the uv cache directory and is
-treated as disposable, i.e., if you run `uv cache clean` the environment will be deleted. The
-environment is only cached to reduce the overhead of repeated invocations. If the environment is
-removed, a new one will be created automatically.
+The `uvx` command stores a disposable virtual environment in the uv cache directory. The
+`uv cache clean` command deletes this environment. uv caches the environment to reduce the cost of
+repeated commands. If the environment does not exist, uv automatically creates a new one.
 
-When installing a tool with `uv tool install`, a virtual environment is created in the
-[uv tools directory](../reference/storage.md#tools). The environment will not be removed unless the
-tool is uninstalled. If the environment is manually deleted, the tool will fail to run.
+The `uv tool install` command creates a virtual environment in the
+[uv tools directory](../reference/storage.md#tools). The environment remains until the tool is
+uninstalled. If the environment is manually deleted, the tool cannot run.
 
 !!! important
 
-    Tool environments are _not_ intended to be mutated directly. It is strongly recommended never to
-    mutate a tool environment manually, e.g., with a `pip` operation.
+    Do _not_ change tool environments directly. For example, do not run a `pip` operation inside a
+    tool environment.
 
 ## Tool versions
 
-Unless a specific version is requested, `uv tool install` will install the latest available of the
-requested tool. `uvx` will use the latest available version of the requested tool _on the first
-invocation_. After that, `uvx` will use the cached version of the tool unless a different version is
-requested, the cache is pruned, or the cache is refreshed.
+Unless a specific version is requested, `uv tool install` installs the latest available tool
+version. The `uvx` command uses the latest available version _on the first invocation_. Later
+commands use the cached version unless the request specifies another version or the cache is cleaned
+or refreshed.
 
 For example, to run a specific version of Ruff:
 
@@ -58,14 +55,14 @@ $ uvx ruff@0.6.0 --version
 ruff 0.6.0
 ```
 
-A subsequent invocation of `uvx` will use the latest, not the cached, version.
+A later `uvx` command without a version uses the latest version instead of the cached version:
 
 ```console
 $ uvx ruff --version
 ruff 0.6.2
 ```
 
-But, if a new version of Ruff was released, it would not be used unless the cache was refreshed.
+If another Ruff version is released later, uv does not use it until the cache is refreshed.
 
 To request the latest version of Ruff and refresh the cache, use the `@latest` suffix:
 
@@ -74,15 +71,15 @@ $ uvx ruff@latest --version
 0.6.2
 ```
 
-Once a tool is installed with `uv tool install`, `uvx` will use the installed version by default.
+If `uv tool install` installs a tool, `uvx` uses the installed version by default.
 
-For example, after installing an older version of Ruff:
+For example, install an older version of Ruff:
 
 ```console
 $ uv tool install ruff==0.5.0
 ```
 
-The version of `ruff` and `uvx ruff` is the same:
+The `ruff` and `uvx ruff` commands then use the same version:
 
 ```console
 $ ruff --version
@@ -91,23 +88,21 @@ $ uvx ruff --version
 ruff 0.5.0
 ```
 
-However, you can ignore the installed version by requesting the latest version explicitly, e.g.:
+To ignore the installed version, explicitly request the latest version:
 
 ```console
 $ uvx ruff@latest --version
 0.6.2
 ```
 
-Or, by using the `--isolated` flag, which will avoid refreshing the cache but ignore the installed
-version:
+Alternatively, use `--isolated` to ignore the installed version without refreshing the cache:
 
 ```console
 $ uvx --isolated ruff --version
 0.6.2
 ```
 
-`uv tool install` will also respect the `{package}@{version}` and `{package}@latest` specifiers, as
-in:
+The `uv tool install` command also accepts the `{package}@{version}` and `{package}@latest` forms:
 
 ```console
 $ uv tool install ruff@latest
@@ -116,10 +111,10 @@ $ uv tool install ruff@0.6.0
 
 ## Upgrading tools
 
-Tool environments may be upgraded via `uv tool upgrade`, or re-created entirely via subsequent
-`uv tool install` operations.
+The `uv tool upgrade` command upgrades tool environments. The `uv tool install` command can also
+re-create them.
 
-To upgrade all packages in a tool environment
+To upgrade all packages in a tool environment:
 
 ```console
 $ uv tool upgrade black
@@ -131,27 +126,27 @@ To upgrade a single package in a tool environment:
 $ uv tool upgrade black --upgrade-package click
 ```
 
-Tool upgrades will respect the version constraints provided when installing the tool. For example,
-`uv tool install black >=23,<24` followed by `uv tool upgrade black` will upgrade Black to the
-latest version in the range `>=23,<24`.
+Tool upgrades preserve the version constraints from installation. For example,
+`uv tool install black >=23,<24` followed by `uv tool upgrade black` upgrades Black to the latest
+version in the `>=23,<24` range.
 
-To instead replace the version constraints, reinstall the tool with `uv tool install`:
+To replace the version constraints, reinstall the tool with `uv tool install`:
 
 ```console
 $ uv tool install black>=24
 ```
 
-Similarly, tool upgrades will retain the settings provided when installing the tool. For example,
-`uv tool install black --prerelease allow` followed by `uv tool upgrade black` will retain the
-`--prerelease allow` setting.
+Tool upgrades also preserve settings from installation. For example,
+`uv tool install black --prerelease allow` followed by `uv tool upgrade black` preserves
+`--prerelease allow`.
 
 !!! note
 
-    Tool upgrades will reinstall the tool executables, even if they have not changed.
+    Tool upgrades reinstall tool executables, even if the executables have not changed.
 
 To reinstall packages during upgrade, use the `--reinstall` and `--reinstall-package` options.
 
-To reinstall all packages in a tool environment
+To reinstall all packages in a tool environment:
 
 ```console
 $ uv tool upgrade black --reinstall
@@ -165,43 +160,41 @@ $ uv tool upgrade black --reinstall-package click
 
 ## Including additional dependencies
 
-Additional packages can be included during tool execution:
+To include additional packages when a tool runs:
 
 ```console
 $ uvx --with <extra-package> <tool>
 ```
 
-And, during tool installation:
+To include additional packages when a tool is installed:
 
 ```console
 $ uv tool install --with <extra-package> <tool-package>
 ```
 
-The `--with` option can be provided multiple times to include additional packages.
+Repeat `--with` to include multiple additional packages.
 
-The `--with` option supports package specifications, so a specific version can be requested:
+The `--with` option accepts package specifications. To request a specific version:
 
 ```console
 $ uvx --with <extra-package>==<version> <tool-package>
 ```
 
-The `-w` shorthand can be used in place of the `--with` option:
+The `-w` option is a shorter form of `--with`:
 
 ```console
 $ uvx -w <extra-package> <tool-package>
 ```
 
-If the requested version conflicts with the requirements of the tool package, package resolution
-will fail and the command will error.
+If the requested version conflicts with the tool requirements, package resolution and the command
+fail.
 
 ## Installing executables from additional packages
 
-When installing a tool, you may want to include executables from additional packages in the same
-tool environment. This is useful when you have related tools that work together or when you want to
-install multiple executables that share dependencies.
+Tool environments can include executables from additional packages. This supports related tools or
+multiple executables that share dependencies.
 
-The `--with-executables-from` option allows you to specify additional packages whose executables
-should be installed alongside the main tool:
+Use `--with-executables-from` to install executables from additional packages with the main tool:
 
 ```console
 $ uv tool install --with-executables-from <package1>,<package2> <tool-package>
@@ -213,70 +206,67 @@ For example, to install Ansible along with executables from `ansible-core` and `
 $ uv tool install --with-executables-from ansible-core,ansible-lint ansible
 ```
 
-This will install all executables from the `ansible`, `ansible-core`, and `ansible-lint` packages
-into the same tool environment, making them all available on the `PATH`.
+This command installs executables from `ansible`, `ansible-core`, and `ansible-lint` in the same
+tool environment. All executables are available on `PATH`.
 
-The `--with-executables-from` option can be combined with other installation options:
+The `--with-executables-from` option also works with other installation options:
 
 ```console
 $ uv tool install --with-executables-from ansible-core --with mkdocs-material ansible
 ```
 
-Note that `--with-executables-from` differs from `--with` in that:
+The `--with-executables-from` and `--with` options differ:
 
-- `--with` includes additional packages as dependencies but does not install their executables
-- `--with-executables-from` includes both the packages as dependencies and installs their
-  executables
+- `--with` includes additional packages as dependencies but does not install their executables.
+- `--with-executables-from` includes the packages as dependencies and installs their executables.
 
 ## Python versions
 
-Each tool environment is linked to a specific Python version. This uses the same Python version
-[discovery logic](./python-versions.md#discovery-of-python-versions) as other virtual environments
-created by uv, but will ignore non-global Python version requests like `.python-version` files and
-the `requires-python` value from a `pyproject.toml`.
+Each tool environment uses a specific Python version. It uses the same
+[discovery logic](./python-versions.md#discovery-of-python-versions) as other uv virtual
+environments. However, it ignores local version requests, such as `.python-version` files and the
+`requires-python` value in `pyproject.toml`.
 
-The `--python` option can be used to request a specific version. See the
-[Python version](./python-versions.md) documentation for more details.
+The `--python` option requests a specific version. See the [Python version](./python-versions.md)
+documentation for details.
 
-If the Python version used by a tool is _uninstalled_, the tool environment will be broken and the
-tool may be unusable.
+If the Python version for a tool is _uninstalled_, the tool environment breaks and the tool might
+not run.
 
 ## Tool executables
 
-Tool executables include all console entry points, script entry points, and binary scripts provided
-by a Python package. Tool executables are symlinked into the
-[executable directory](../reference/storage.md#tool-executables) on Unix and copied on Windows.
+Tool executables include console entry points, script entry points, and binary scripts from a Python
+package. On Unix, uv links these executables into the
+[executable directory](../reference/storage.md#tool-executables). On Windows, uv copies them.
 
 !!! note
 
-    Executables provided by dependencies of tool packages are not installed.
+    uv does not install executables from tool dependencies.
 
-The [executable directory](../reference/storage.md#executable-directory) must be in the `PATH`
-variable for tool executables to be available from the shell. If it is not in the `PATH`, a warning
-will be displayed. The `uv tool update-shell` command can be used to add the executable directory to
-the `PATH` in common shell configuration files.
+The [executable directory](../reference/storage.md#executable-directory) must appear in `PATH` for
+the shell to find tool executables. If the directory is absent, uv displays a warning. The
+`uv tool update-shell` command adds the directory to `PATH` in common shell configuration files.
 
 ### Overwriting executables
 
-Installation of tools will not overwrite executables in the executable directory that were not
-previously installed by uv. For example, if `pipx` has been used to install a tool,
-`uv tool install` will fail. The `--force` flag can be used to override this behavior.
+When uv installs a tool, it does not overwrite executables that another program installed. For
+example, if `pipx` installed a tool, `uv tool install` fails. The `--force` flag overrides this
+behavior.
 
 ## Relationship to `uv run`
 
-The invocation `uv tool run <name>` (or `uvx <name>`) is nearly equivalent to:
+The `uv tool run <name>` and `uvx <name>` commands are almost equivalent to:
 
 ```console
 $ uv run --no-project --with <name> -- <name>
 ```
 
-However, there are a couple notable differences when using uv's tool interface:
+The tool interface has these differences:
 
-- The `--with` option is not needed — the required package is inferred from the command name.
-- The temporary environment is cached in a dedicated location.
-- The `--no-project` flag is not needed — tools are always run isolated from the project.
-- If a tool is already installed, `uv tool run` will use the installed version but `uv run` will
-  not.
+- The `--with` option is not necessary because uv identifies the package from the command name.
+- uv caches the temporary environment in a dedicated location.
+- The `--no-project` flag is not necessary because tools always run separately from the project.
+- If a tool is already installed, `uv tool run` uses the installed version, but `uv run` does not.
 
-If the tool should not be isolated from the project, e.g., when running `pytest` or `mypy`, then
-`uv run` should be used instead of `uv tool run`.
+If a tool requires the project environment, use `uv run` instead of `uv tool run`. For example,
+`pytest` and `mypy` often require the project environment.

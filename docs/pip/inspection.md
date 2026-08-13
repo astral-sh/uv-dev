@@ -2,19 +2,19 @@
 
 ## Listing installed packages
 
-To list all the packages in the environment:
+List all packages in the environment:
 
 ```console
 $ uv pip list
 ```
 
-To list the packages in a JSON format:
+List the packages in JSON format:
 
 ```console
 $ uv pip list --format json
 ```
 
-To list all the packages in the environment in a `requirements.txt` format:
+List all packages in `requirements.txt` format:
 
 ```console
 $ uv pip freeze
@@ -22,20 +22,19 @@ $ uv pip freeze
 
 ## Inspecting a package
 
-To show information about an installed package, e.g., `numpy`:
+Show information about an installed package, such as `numpy`:
 
 ```console
 $ uv pip show numpy
 ```
 
-Multiple packages can be inspected at once.
+Specify multiple packages to inspect them in the same command.
 
 ## Verifying an environment
 
-It is possible to install packages with conflicting requirements into an environment if installed in
-multiple steps.
+Installing packages in separate steps can create conflicting requirements in an environment.
 
-To check for conflicts or missing dependencies in the environment:
+Check the environment for conflicts or missing dependencies:
 
 ```console
 $ uv pip check

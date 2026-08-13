@@ -1,14 +1,13 @@
 ---
 title: JFrog Artifactory
-description: Using uv with JFrog Artifactory for installing and publishing Python packages.
+description: Install and publish Python packages with uv and JFrog Artifactory.
 ---
 
 # JFrog Artifactory
 
-uv can install packages from JFrog Artifactory, either by using a username and password or a JWT
-token.
+Use a username and password or a JWT token to install packages from JFrog Artifactory.
 
-To use it, add the index to your project:
+Add the index to your project:
 
 ```toml title="pyproject.toml"
 [[tool.uv.index]]
@@ -32,7 +31,8 @@ $ export UV_INDEX_PRIVATE_REGISTRY_PASSWORD="$JFROG_JWT_TOKEN"
 
 !!! note
 
-    Replace `PRIVATE_REGISTRY` in the environment variable names with the actual index name defined in your `pyproject.toml`.
+    Replace `PRIVATE_REGISTRY` in the environment variable names with the index name in your
+    `pyproject.toml`.
 
 ## Publishing packages
 
@@ -47,9 +47,8 @@ publish-url = "https://<organization>.jfrog.io/artifactory/api/pypi/<repository>
 
 !!! important
 
-    If you use `--token "$JFROG_TOKEN"` or `UV_PUBLISH_TOKEN` with JFrog, you will receive a
-    401 Unauthorized error as JFrog requires an empty username but uv passes `__token__` for as
-    the username when `--token` is used.
+    The `--token "$JFROG_TOKEN"` option and `UV_PUBLISH_TOKEN` cause a 401 Unauthorized error with
+    JFrog. JFrog requires an empty username, but uv uses `__token__` as the username with `--token`.
 
 To authenticate, pass your token as the password and set the username to an empty string:
 
@@ -57,7 +56,7 @@ To authenticate, pass your token as the password and set the username to an empt
 $ uv publish --index <index_name> -u "" -p "$JFROG_TOKEN"
 ```
 
-Alternatively, you can set environment variables:
+You can also set environment variables:
 
 ```console
 $ export UV_PUBLISH_USERNAME=""
@@ -67,4 +66,5 @@ $ uv publish --index private-registry
 
 !!! note
 
-    The publish environment variables (`UV_PUBLISH_USERNAME` and `UV_PUBLISH_PASSWORD`) do not include the index name.
+    The publish environment variables, `UV_PUBLISH_USERNAME` and `UV_PUBLISH_PASSWORD`, do not include
+    the index name.

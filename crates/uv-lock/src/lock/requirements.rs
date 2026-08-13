@@ -94,13 +94,17 @@ pub(super) fn normalize_collection<T: Ord, N: From<Vec<T>> + IntoIterator<Item =
     }
 }
 
-/// Put a [`Requirement`] from a lockfile or current configuration into a comparable form.
+/// Normalize a [`Requirement`] from a lockfile or current configuration for comparison.
 ///
-/// Resolve local paths against the workspace root, strip credentials and origin metadata, and
-/// simplify markers against [`RequiresPython`]. Clear the dependency-group scope, which is not
-/// serialized in the lockfile; callers compare dependency groups and package overrides separately.
+/// Perform these steps:
 ///
-/// Version constraints are combined separately by the collection normalizers.
+/// 1. Resolve local paths relative to the workspace root.
+/// 2. Remove credentials and origin metadata.
+/// 3. Simplify markers with [`RequiresPython`].
+/// 4. Clear the dependency-group scope because the lockfile does not contain it. Callers compare
+///    dependency groups and package overrides separately.
+///
+/// The collection normalizers combine version constraints separately.
 pub(super) fn normalize_requirement(
     mut requirement: Requirement,
     root: &Path,

@@ -2,19 +2,19 @@
 
 ## Storage directories
 
-uv uses the following high-level directories for storage.
+uv stores data in the following directories.
 
-For each location, uv checks for the existence of environment variables in the given order and uses
-the first path found.
+For each location, uv checks environment variables in the listed order. It uses the first available
+path.
 
-The paths of storage directories are platform-specific. uv follows the
+Storage directory paths depend on the platform. uv follows the
 [XDG](https://specifications.freedesktop.org/basedir-spec/latest/) conventions on Linux and macOS
 and the [Known Folder](https://learn.microsoft.com/en-us/windows/win32/shell/known-folders) scheme
 on Windows.
 
 ### Temporary directory
 
-The temporary directory is used for ephemeral data.
+The temporary directory stores short-lived data.
 
 === "Unix"
 
@@ -29,7 +29,7 @@ The temporary directory is used for ephemeral data.
 
 ### Cache directory
 
-The cache directory is used for data that is disposable, but is useful to be long-lived.
+The cache directory stores reusable data that uv can discard.
 
 === "Unix"
 
@@ -43,7 +43,7 @@ The cache directory is used for data that is disposable, but is useful to be lon
 
 ### Persistent data directory
 
-The persistent data directory is used for non-disposable data.
+The persistent data directory stores data that uv must keep.
 
 === "Unix"
 
@@ -58,7 +58,7 @@ The persistent data directory is used for non-disposable data.
 
 ### Configuration directories
 
-The configuration directories are used to store changes to uv's settings.
+The configuration directories store changes to uv's settings.
 
 User-level configuration
 
@@ -86,8 +86,7 @@ System-level configuration
 
 ### Executable directory
 
-The executable directory is used to store files that can be run by the user, i.e., a directory that
-should be on the `PATH`.
+The executable directory stores files that users can run. This directory should be on the `PATH`.
 
 === "Unix"
 
@@ -105,102 +104,103 @@ should be on the `PATH`.
 
 ### Dependency cache
 
-uv uses a local cache to avoid re-downloading and re-building dependencies.
+uv uses a local cache to avoid downloading and building dependencies again.
 
-By default, the cache is stored in the [cache directory](#cache-directory) but it can be overridden
-via command line arguments, environment variables, or settings as detailed in
-[the cache documentation](../concepts/cache.md#cache-directory). When the cache is disabled, the
-cache will be stored in a [temporary directory](#temporary-directory).
+By default, uv stores the cache in the [cache directory](#cache-directory). Command-line arguments,
+environment variables, or settings can change this location, as described in
+[the cache documentation](../concepts/cache.md#cache-directory). When caching is disabled, uv uses a
+[temporary directory](#temporary-directory).
 
-Use `uv cache dir` to show the current cache directory path.
+The `uv cache dir` command shows the current cache directory path.
 
 !!! important
 
-    For optimal performance, the cache directory needs to be on the same filesystem as virtual
-    environments.
+    For best performance, the cache directory and virtual environments must be on the same
+    filesystem.
 
 ### Python versions
 
-uv can install managed [Python versions](../concepts/python-versions.md), e.g., with
+uv installs managed [Python versions](../concepts/python-versions.md) with commands such as
 `uv python install`.
 
-By default, Python versions managed by uv are stored in a `python/` subdirectory of the
+By default, uv stores managed Python versions in a `python/` subdirectory of the
 [persistent data directory](#persistent-data-directory), e.g., `~/.local/share/uv/python`.
 
-Use `uv python dir` to show the Python installation directory.
+The `uv python dir` command shows the Python installation directory.
 
-Use the `UV_PYTHON_INSTALL_DIR` environment variable to override the installation directory.
+The `UV_PYTHON_INSTALL_DIR` environment variable changes the installation directory.
 
 !!! note
 
-    Changing where Python is installed will not be automatically reflected in existing virtual environments; they will keep referring to the old location, and will need to be updated manually (e.g. by re-creating them).
+    Changing the Python installation directory does not update existing virtual environments. They
+    still refer to the previous location and must be updated manually, for example, by recreating
+    them.
 
 ### Python executables
 
 uv installs executables for [Python versions](#python-versions), e.g., `python3.13`.
 
-By default, Python executables are stored in the [executable directory](#executable-directory).
+By default, uv stores Python executables in the [executable directory](#executable-directory).
 
-Use `uv python dir --bin` to show the Python executable directory.
+The `uv python dir --bin` command shows the Python executable directory.
 
-Use the `UV_PYTHON_BIN_DIR` environment variable to override the Python executable directory.
+The `UV_PYTHON_BIN_DIR` environment variable changes the Python executable directory.
 
 ### Tools
 
-uv can install Python packages as [command-line tools](../concepts/tools.md) using
-`uv tool install`.
+uv installs Python packages as [command-line tools](../concepts/tools.md) with `uv tool install`.
 
-By default, tools are installed in a `tools/` subdirectory of the
+By default, uv installs tools in a `tools/` subdirectory of the
 [persistent data directory](#persistent-data-directory), e.g., `~/.local/share/uv/tools`.
 
-Use `uv tool dir` to show the tool installation directory.
+The `uv tool dir` command shows the tool installation directory.
 
-Use the `UV_TOOL_DIR` environment variable to configure the installation directory.
+The `UV_TOOL_DIR` environment variable configures the installation directory.
 
 ### Tool executables
 
 uv installs executables for installed [tools](#tools), e.g., `ruff`.
 
-By default, tool executables are stored in the [executable directory](#executable-directory).
+By default, uv stores tool executables in the [executable directory](#executable-directory).
 
-Use `uv tool dir --bin` to show the tool executable directory.
+The `uv tool dir --bin` command shows the tool executable directory.
 
-Use the `UV_TOOL_BIN_DIR` environment variable to configure the tool executable directory.
+The `UV_TOOL_BIN_DIR` environment variable configures the tool executable directory.
 
 ### The uv executable
 
-When using uv's [standalone installer](./installer.md) to install uv, the `uv` and `uvx` executables
-are installed into the [executable directory](#executable-directory).
+The uv [standalone installer](./installer.md) installs the `uv` and `uvx` executables in the
+[executable directory](#executable-directory).
 
-Use the `UV_INSTALL_DIR` environment variable to configure uv's installation directory.
+The `UV_INSTALL_DIR` environment variable configures uv's installation directory.
 
 ### Configuration files
 
-uv's behavior can be configured through TOML files.
+TOML files configure uv's behavior.
 
-Configuration files are discovered in the [configuration directories](#configuration-directories).
+uv discovers these files in the [configuration directories](#configuration-directories).
 
-For more details, see the [configuration files documentation](../concepts/configuration-files.md).
+The [configuration files documentation](../concepts/configuration-files.md) provides more details.
 
 ### Project virtual environments
 
-When working on [projects](../concepts/projects/index.md), uv creates a dedicated virtual
-environment for each project.
+uv creates a separate virtual environment for each [project](../concepts/projects/index.md).
 
-By default, project virtual environments are created in `.venv` in the project or workspace root,
-i.e., next to the `pyproject.toml`.
+By default, uv creates project virtual environments in `.venv` at the project or workspace root,
+next to `pyproject.toml`.
 
-Use the `UV_PROJECT_ENVIRONMENT` environment variable to override this location. For more details,
-see the
-[projects environment documentation](../concepts/projects/config.md#project-environment-path).
+The `UV_PROJECT_ENVIRONMENT` environment variable changes this location. The
+[projects environment documentation](../concepts/projects/config.md#project-environment-path)
+provides more details.
 
 With the [`centralized-project-envs` preview feature](../concepts/preview.md), uv stores default
-project environments in the [cache directory](#cache-directory). They can be removed by
-`uv cache clean` or `uv cache prune` and are recreated when next needed. See the
+project environments in the [cache directory](#cache-directory). The `uv cache clean` and
+`uv cache prune` commands can remove these environments. uv recreates them when needed. The
 [centralized project environments](../concepts/projects/layout.md#centralized-project-environments)
-documentation for details.
+documentation provides more details.
 
 ### Script virtual environments
 
-When running [scripts with inline metadata](../guides/scripts.md), uv creates a dedicated virtual
-environment for each script in the [cache directory](#cache-directory).
+uv creates a separate virtual environment for each
+[script with inline metadata](../guides/scripts.md). It stores these environments in the
+[cache directory](#cache-directory).
