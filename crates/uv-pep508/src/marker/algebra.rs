@@ -1,10 +1,9 @@
-//! This module implements marker tree operations using Algebraic Decision Diagrams (ADD).
+//! Marker tree operations that use Algebraic Decision Diagrams (ADD).
 //!
-//! An ADD is a tree of decision nodes as well as two terminal nodes, `true` and `false`. Marker
-//! variables are represented as decision nodes. The edge from a decision node to it's child
-//! represents a particular assignment of a value to that variable. Depending on the type of
-//! variable, an edge can be represented by binary values or a disjoint set of ranges, as opposed
-//! to a traditional Binary Decision Diagram.
+//! An ADD contains decision nodes and two terminal nodes, `true` and `false`. Each decision node
+//! represents a marker variable. An edge to a child assigns a value to that variable. Depending on
+//! the variable, an edge contains a binary value or a disjoint set of ranges. This differs from a
+//! traditional Binary Decision Diagram.
 //!
 //! For example, the marker `python_version > '3.7' and os_name == 'Linux'` creates the following
 //! marker tree:
@@ -18,32 +17,28 @@
 //!   (<= '3.7') -> FALSE
 //! ```
 //!
-//! Specifically, a marker tree is represented as a Reduced Ordered ADD. An ADD is ordered if
-//! different variables appear in the same order on all paths from the root. Additionally, an ADD
-//! is reduced if:
-//! - Isomorphic nodes are merged.
-//! - Nodes with isomorphic children are eliminated.
+//! Marker trees use Reduced Ordered ADDs. An ADD is ordered when variables appear in the same
+//! order on every path from the root. An ADD is reduced when:
+//! - It merges isomorphic nodes.
+//! - It removes nodes with isomorphic children.
 //!
-//! These two rules provide an important guarantee for marker trees: marker trees are canonical for
-//! a given marker function and variable ordering. Because variable ordering is defined at compile-time,
-//! this means any functionally equivalent marker trees are normalized upon construction. Importantly,
-//! this means that we can identify trivially true marker trees, as well as unsatisfiable marker trees.
-//! This provides important information to the resolver when forking.
+//! These rules make marker trees canonical for each marker function and variable order. The
+//! variable order is fixed at compile time, so construction normalizes equivalent marker trees.
+//! This identifies always-true and unsatisfiable marker trees. The resolver uses this information
+//! when it forks.
 //!
-//! ADDs provide polynomial time operations such as conjunction and negation, which is important as marker
-//! trees are combined during universal resolution. Because ADDs solve the SAT problem, constructing an
-//! arbitrary ADD can theoretically take exponential time in the worst case. However, in practice, marker trees
-//! have a limited number of variables and user-provided marker trees are typically very simple.
+//! ADD operations, such as conjunction and negation, take polynomial time. Universal resolution
+//! uses these operations to combine marker trees. Because ADDs solve the SAT problem, constructing
+//! an arbitrary ADD can take exponential time in the worst case. In practice, marker trees have
+//! few variables, and user-provided marker trees are usually simple.
 //!
-//! Additionally, the implementation in this module uses complemented edges, meaning a marker tree and
-//! it's complement are represented by the same node internally. This allows cheap constant-time marker
-//! tree negation. It also allows us to only implement a single operation for both `AND` and `OR`, implementing
-//! the other in terms of its De Morgan Complement.
+//! Complemented edges let a marker tree and its complement share one internal node. Negating a
+//! marker tree therefore takes constant time. The implementation needs only one operation for `AND`
+//! and `OR`; it derives the other from its De Morgan complement.
 //!
-//! ADDs are created and managed through the global [`Interner`]. A given ADD is referenced through
-//! a [`NodeId`], which represents a potentially complemented reference to a [`Node`] in the interner,
-//! or a terminal `true`/`false` node. Interning allows the reduction rule that isomorphic nodes are
-//! merged to be applied globally.
+//! The global [`Interner`] creates and manages ADDs. A [`NodeId`] references a [`Node`] in the
+//! interner or a terminal `true` or `false` node. This reference can be complemented. Interning
+//! merges isomorphic nodes across all marker trees.
 
 use std::cmp::Ordering;
 use std::fmt;
@@ -72,15 +67,14 @@ pub(crate) static INTERNER: LazyLock<Interner> = LazyLock::new(Interner::default
 
 /// An interner for decision nodes.
 ///
-/// Interning decision nodes allows isomorphic nodes to be automatically merged.
-/// It also allows nodes to cheaply compared.
+/// Interning merges isomorphic decision nodes and makes node comparisons inexpensive.
 #[derive(Default)]
 pub(crate) struct Interner {
     pub(crate) shared: InternerShared,
     state: Mutex<InternerState>,
 }
 
-/// The shared part of an [`Interner`], which can be accessed without a lock.
+/// The shared [`Interner`] state that does not require a lock.
 #[derive(Default)]
 pub(crate) struct InternerShared {
     /// A list of unique [`Node`]s.
@@ -90,12 +84,11 @@ pub(crate) struct InternerShared {
 /// The mutable [`Interner`] state, stored behind a lock.
 #[derive(Default)]
 struct InternerState {
-    /// A map from a [`Node`] to a unique [`NodeId`], representing an index
-    /// into [`InternerShared`].
+    /// Maps each [`Node`] to a unique [`NodeId`] index in [`InternerShared`].
     unique: FxHashMap<Node, NodeId>,
 
     /// A cache for `AND` operations between two nodes.
-    /// Note that `OR` is implemented in terms of `AND`.
+    /// The `OR` operation uses `AND`.
     cache: FxHashMap<(NodeId, NodeId), NodeId>,
 
     /// The [`NodeId`] for the disjunction of known, mutually incompatible markers.
@@ -110,8 +103,7 @@ impl InternerShared {
 }
 
 impl Interner {
-    /// Locks the interner state, returning a guard that can be used to perform marker
-    /// operations.
+    /// Locks the interner state and returns a guard for marker operations.
     pub(crate) fn lock(&self) -> InternerGuard<'_> {
         InternerGuard {
             state: self.state.lock().unwrap(),
@@ -132,9 +124,8 @@ impl InternerGuard<'_> {
         let mut node = Node { var, children };
         let mut first = node.children.nodes().next().unwrap();
 
-        // With a complemented edge representation, there are two ways to represent the same node:
-        // complementing the root and all children edges results in the same node. To ensure markers
-        // are canonical, the first child edge is never complemented.
+        // Complementing the root and every child edge produces an equivalent node. Never
+        // complement the first child edge, so each marker keeps one canonical representation.
         let mut flipped = false;
         if first.is_complement() {
             node = node.not();
@@ -142,8 +133,7 @@ impl InternerGuard<'_> {
             flipped = true;
         }
 
-        // Reduction: If all children refer to the same node, we eliminate the parent node
-        // and just return the child.
+        // Reduction: If every child references the same node, return that node without the parent.
         if node.children.nodes().all(|node| node == first) {
             return if flipped { first.not() } else { first };
         }
@@ -165,8 +155,7 @@ impl InternerGuard<'_> {
     /// Returns a decision node for a single marker expression.
     pub(crate) fn expression(&mut self, expr: MarkerExpression) -> NodeId {
         let (var, children) = match expr {
-            // A variable representing the output of a version key. Edges correspond
-            // to disjoint version ranges.
+            // A version-key variable. Its edges contain disjoint version ranges.
             MarkerExpression::Version { key, specifier } => match key {
                 MarkerValueVersion::ImplementationVersion => (
                     Variable::Version(CanonicalMarkerValueVersion::ImplementationVersion),
@@ -187,8 +176,7 @@ impl InternerGuard<'_> {
                     }
                 }
             },
-            // A variable representing the output of a version key. Edges correspond
-            // to disjoint version ranges.
+            // A version-key variable. Its edges contain disjoint version ranges.
             MarkerExpression::VersionIn {
                 key,
                 versions,
@@ -213,16 +201,13 @@ impl InternerGuard<'_> {
                     }
                 }
             },
-            // The `in` and `contains` operators are a bit different than other operators.
-            // In particular, they do not represent a particular value for the corresponding
-            // variable, and can overlap. For example, `'nux' in os_name` and `os_name == 'Linux'`
-            // can both be `true` in the same marker environment, and so cannot be represented by
-            // the same variable. Because of this, we represent `in` and `contains`, as well as
-            // their negations, as distinct variables, unrelated to the range of a given key.
+            // The `in` and `contains` operators do not select one value and can overlap. For
+            // example, `'nux' in os_name` and `os_name == 'Linux'` can both be `true` in the same
+            // marker environment. One variable cannot represent both expressions. Represent these
+            // operators and their negations as separate variables outside the key's value range.
             //
-            // Note that in the presence of the `in` operator, we may not be able to simplify
-            // some marker trees to a constant `true` or `false`. For example, it is not trivial to
-            // detect that `os_name == 'Windows' and os_name in 'Linux'` is unsatisfiable.
+            // The `in` operator can prevent simplification to a constant `true` or `false`. For
+            // example, `os_name == 'Windows' and os_name in 'Linux'` is not obviously unsatisfiable.
             MarkerExpression::String {
                 key,
                 operator: MarkerOperator::In,
@@ -267,8 +252,7 @@ impl InternerGuard<'_> {
                 },
                 Edges::from_bool(false),
             ),
-            // A variable representing the output of a string key. Edges correspond
-            // to disjoint string ranges.
+            // A string-key variable. Its edges contain disjoint string ranges.
             MarkerExpression::String {
                 key,
                 operator,
@@ -279,14 +263,12 @@ impl InternerGuard<'_> {
                 // The `platform` module is "primarily intended for diagnostic information to be
                 // read by humans."
                 //
-                // We only normalize when we can confidently guarantee that the values are
-                // exactly equivalent. For example, we normalize `platform_system == 'Windows'`
-                // to `sys_platform == 'win32'`, but we do not normalize `platform_system == 'FreeBSD'`
-                // to `sys_platform == 'freebsd'`, since FreeBSD typically includes a major version
-                // in its `sys.platform` output.
+                // Normalize only when both values are exactly equivalent. For example, normalize
+                // `platform_system == 'Windows'` to `sys_platform == 'win32'`. Do not normalize
+                // `platform_system == 'FreeBSD'` to `sys_platform == 'freebsd'`, because FreeBSD
+                // usually includes a major version in its `sys.platform` output.
                 //
-                // For cases that aren't normalized, we do our best to encode known-incompatible
-                // values in `exclusions`.
+                // Record known incompatible values that cannot be normalized in `exclusions`.
                 //
                 // See: https://discuss.python.org/t/clarify-usage-of-platform-system/70900
                 let (key, value) = match (key, value.as_ref()) {
@@ -326,7 +308,7 @@ impl InternerGuard<'_> {
                 Variable::List(pair),
                 Edges::from_bool(operator == ContainerOperator::In),
             ),
-            // A variable representing the existence or absence of a particular extra.
+            // A variable that records whether a specific extra exists.
             MarkerExpression::Extra {
                 name: MarkerValueExtra::Extra(extra),
                 operator: ExtraOperator::Equal,
@@ -353,8 +335,7 @@ impl InternerGuard<'_> {
 
     /// Returns a decision node representing the disjunction of two nodes.
     fn or(&mut self, xi: NodeId, yi: NodeId) -> NodeId {
-        // We take advantage of cheap negation here and implement OR in terms
-        // of it's De Morgan complement.
+        // Use inexpensive negation to implement OR with its De Morgan complement.
         self.and(xi.not(), yi.not()).not()
     }
 
@@ -388,27 +369,25 @@ impl InternerGuard<'_> {
 
         let (x, y) = (self.shared.node(xi), self.shared.node(yi));
 
-        // Determine whether the conjunction _could_ contain a conflict.
+        // Check whether the conjunction _could_ contain a conflict.
         //
-        // As an optimization, we only have to perform this check at the top-level, since these
-        // variables are given higher priority in the tree. In other words, if they're present, they
-        // _must_ be at the top; and if they're not at the top, we know they aren't present in any
-        // children.
+        // Check only the top level. These variables have higher priority, so they _must_ appear at
+        // the top when present. If they are absent there, they cannot appear in any child.
         let conflicts = x.var.is_conflicting_variable() && y.var.is_conflicting_variable();
 
-        // Perform Shannon Expansion of the higher order variable.
+        // Apply Shannon expansion to the higher-order variable.
         let (func, children) = match x.var.cmp(&y.var) {
-            // X is higher order than Y, apply Y to every child of X.
+            // X has higher order than Y. Apply Y to every child of X.
             Ordering::Less => {
                 let children = x.children.map(xi, |node| self.and(node, yi));
                 (x.var.clone(), children)
             }
-            // Y is higher order than X, apply X to every child of Y.
+            // Y has higher order than X. Apply X to every child of Y.
             Ordering::Greater => {
                 let children = y.children.map(yi, |node| self.and(node, xi));
                 (y.var.clone(), children)
             }
-            // X and Y represent the same variable, merge their children.
+            // X and Y represent the same variable. Merge their children.
             Ordering::Equal => {
                 let children = x.children.apply(xi, &y.children, yi, |x, y| self.and(x, y));
                 (x.var.clone(), children)
@@ -432,15 +411,14 @@ impl InternerGuard<'_> {
 
         // Memoize the result of this operation.
         //
-        // ADDs often contain duplicated subgraphs in distinct branches due to the restricted
-        // variable ordering. Memoizing allows ADD operations to remain polynomial time.
+        // Fixed variable ordering can duplicate subgraphs across branches. Memoization keeps ADD
+        // operations within polynomial time.
         self.state.cache.insert((xi, yi), node);
 
         node
     }
 
-    /// Returns `true` if there is no environment in which both marker trees can apply,
-    /// i.e. their conjunction is always `false`.
+    /// Returns `true` if both marker trees cannot apply to the same environment.
     pub(crate) fn is_disjoint_nontrivial(&mut self, xi: NodeId, yi: NodeId) -> bool {
         debug_assert!(
             xi.is_disjoint_trivial(yi).is_none(),
@@ -449,35 +427,32 @@ impl InternerGuard<'_> {
 
         let (x, y) = (self.shared.node(xi), self.shared.node(yi));
 
-        // Determine whether the conjunction _could_ contain a conflict.
+        // Check whether the conjunction _could_ contain a conflict.
         //
-        // As an optimization, we only have to perform this check at the top-level, since these
-        // variables are given higher priority in the tree. In other words, if they're present, they
-        // _must_ be at the top; and if they're not at the top, we know they aren't present in any
-        // children.
+        // Check only the top level. These variables have higher priority, so they _must_ appear at
+        // the top when present. If they are absent there, they cannot appear in any child.
         if x.var.is_conflicting_variable() && y.var.is_conflicting_variable() {
             return self.and(xi, yi).is_false();
         }
 
-        // Perform Shannon Expansion of the higher order variable.
+        // Apply Shannon expansion to the higher-order variable.
         match x.var.cmp(&y.var) {
-            // X is higher order than Y, Y must be disjoint with every child of X.
+            // X has higher order than Y. Y must be disjoint with every child of X.
             Ordering::Less => x
                 .children
                 .nodes()
                 .all(|x| self.disjointness(x.negate(xi), yi)),
-            // Y is higher order than X, X must be disjoint with every child of Y.
+            // Y has higher order than X. X must be disjoint with every child of Y.
             Ordering::Greater => y
                 .children
                 .nodes()
                 .all(|y| self.disjointness(y.negate(yi), xi)),
-            // X and Y represent the same variable, their merged edges must be unsatisfiable.
+            // X and Y represent the same variable. Their merged edges must be unsatisfiable.
             Ordering::Equal => x.children.is_disjoint(xi, &y.children, yi, self),
         }
     }
 
-    /// Returns `true` if there is no environment in which both marker trees can apply,
-    /// i.e., their conjunction is always `false`.
+    /// Returns `true` if both marker trees cannot apply to the same environment.
     fn disjointness(&mut self, xi: NodeId, yi: NodeId) -> bool {
         // NOTE(charlie): This is equivalent to `is_disjoint`, with the exception that it doesn't
         // perform the mutually-incompatible marker check. If it did, we'd create an infinite loop,
@@ -503,28 +478,27 @@ impl InternerGuard<'_> {
 
         let (x, y) = (self.shared.node(xi), self.shared.node(yi));
 
-        // Perform Shannon Expansion of the higher order variable.
+        // Apply Shannon expansion to the higher-order variable.
         match x.var.cmp(&y.var) {
-            // X is higher order than Y, Y must be disjoint with every child of X.
+            // X has higher order than Y. Y must be disjoint with every child of X.
             Ordering::Less => x
                 .children
                 .nodes()
                 .all(|x| self.disjointness(x.negate(xi), yi)),
-            // Y is higher order than X, X must be disjoint with every child of Y.
+            // Y has higher order than X. X must be disjoint with every child of Y.
             Ordering::Greater => y
                 .children
                 .nodes()
                 .all(|y| self.disjointness(y.negate(yi), xi)),
-            // X and Y represent the same variable, their merged edges must be unsatisfiable.
+            // X and Y represent the same variable. Their merged edges must be unsatisfiable.
             Ordering::Equal => x.children.is_disjoint(xi, &y.children, yi, self),
         }
     }
 
     // Restrict the output of selected boolean variables in the tree.
     //
-    // If the provided function `f` returns a `Some` boolean value, the tree will be simplified
-    // with the assumption that each variable is restricted to that value. If the function
-    // returns `None`, the variable will not be affected.
+    // If `f` returns `Some`, simplify the tree as if the variable has that boolean value. If `f`
+    // returns `None`, leave the variable unchanged.
     pub(crate) fn restrict_by(
         &mut self,
         i: NodeId,
@@ -549,11 +523,10 @@ impl InternerGuard<'_> {
         self.create_node(node.var.clone(), children)
     }
 
-    /// Restrict a marker by assuming that another marker is true.
+    /// Restricts a marker under the assumption that another marker is true.
     ///
-    /// The returned marker is equivalent to `value` wherever `assumption` is true. Its value
-    /// outside of `assumption` is unspecified, which lets us eliminate decisions that are only
-    /// needed to restate the assumption.
+    /// The returned marker matches `value` wherever `assumption` is true. Its value outside the
+    /// assumption is unspecified. This removes decisions that only restate the assumption.
     pub(crate) fn restrict(&mut self, value: NodeId, assumption: NodeId) -> NodeId {
         let mut cache = FxHashMap::default();
         self.restrict_cached(value, assumption, &mut cache)
@@ -642,17 +615,15 @@ impl InternerGuard<'_> {
         result
     }
 
-    /// Returns a new tree where the only nodes remaining are non-`extra`
-    /// nodes.
+    /// Returns a new tree that contains only non-`extra` nodes.
     ///
-    /// If there are only `extra` nodes, then this returns a tree that is
-    /// always true.
+    /// Returns an always-true tree if every node is an `extra` node.
     ///
-    /// This works by assuming all `extra` nodes are always true.
+    /// Assumes every `extra` node is true.
     ///
-    /// For example, given a marker like
+    /// For example, the marker
     /// `((os_name == ... and extra == foo) or (sys_platform == ... and extra != foo))`,
-    /// this would return a marker
+    /// becomes
     /// `os_name == ... or sys_platform == ...`.
     pub(crate) fn without_extras(&mut self, i: NodeId) -> NodeId {
         let mut cache = FxHashMap::default();
@@ -696,12 +667,11 @@ impl InternerGuard<'_> {
         result
     }
 
-    /// Returns a new tree where the only nodes remaining are `extra` nodes.
+    /// Returns a new tree that contains only `extra` nodes.
     ///
-    /// If there are no extra nodes, then this returns a tree that is always
-    /// true.
+    /// Returns an always-true tree if no `extra` nodes exist.
     ///
-    /// This works by assuming all non-`extra` nodes are always true.
+    /// Assumes every non-`extra` node is true.
     pub(crate) fn only_extras(&mut self, mut i: NodeId) -> NodeId {
         if matches!(i, NodeId::TRUE | NodeId::FALSE) {
             return i;
@@ -725,12 +695,12 @@ impl InternerGuard<'_> {
         }
     }
 
-    /// Simplify this tree by *assuming* that the Python version range provided
-    /// is true and that the complement of it is false.
+    /// Simplifies this tree under the *assumption* that the given Python version range is true and
+    /// its complement is false.
     ///
     /// For example, with `requires-python = '>=3.8'` and a marker tree of
     /// `python_full_version >= '3.8' and python_full_version <= '3.10'`, this
-    /// would result in a marker of `python_full_version <= '3.10'`.
+    /// becomes `python_full_version <= '3.10'`.
     pub(crate) fn simplify_python_versions(
         &mut self,
         i: NodeId,
@@ -744,8 +714,7 @@ impl InternerGuard<'_> {
         }
 
         let node = self.shared.node(i);
-        // Look for a `python_full_version` expression, otherwise
-        // we recursively simplify.
+        // Find a `python_full_version` expression or simplify recursively.
         let Node {
             var: Variable::Version(CanonicalMarkerValueVersion::PythonFullVersion),
             children: Edges::Version { edges },
@@ -759,8 +728,7 @@ impl InternerGuard<'_> {
         };
         let py_range = Ranges::from_range_bounds((py_lower.cloned(), py_upper.cloned()));
         if py_range.is_empty() {
-            // Oops, the bounds imply there is nothing that can match,
-            // so we always evaluate to false.
+            // The bounds cannot match any version, so the marker is always false.
             return NodeId::FALSE;
         }
         let mut new = SmallVec::new();
@@ -772,14 +740,10 @@ impl InternerGuard<'_> {
             new.push((overlap.clone(), node));
         }
 
-        // Now that we know the only ranges left are those that
-        // intersect with our lower/upper Python version bounds, we
-        // can "extend" out the lower/upper bounds here all the way to
-        // negative and positive infinity, respectively.
+        // Every remaining range intersects the Python version bounds. Extend the lower and upper
+        // bounds to negative and positive infinity, respectively.
         //
-        // This has the effect of producing a marker that is only
-        // applicable in a context where the Python lower/upper bounds
-        // are known to be satisfied.
+        // The resulting marker applies only when the Python version bounds are already satisfied.
         let &(ref first_range, first_node_id) = new.first().unwrap();
         let first_upper = first_range.bounding_range().unwrap().1;
         let clipped = Ranges::from_range_bounds((Bound::Unbounded, first_upper.cloned()));
@@ -794,12 +758,10 @@ impl InternerGuard<'_> {
             .negate(i)
     }
 
-    /// Complexify this tree by requiring the given Python version
-    /// range to be true in order for this marker tree to evaluate to
-    /// true in all circumstances.
+    /// Adds the given Python version range as a requirement for this marker tree.
     ///
     /// For example, with `requires-python = '>=3.8'` and a marker tree of
-    /// `python_full_version <= '3.10'`, this would result in a marker of
+    /// `python_full_version <= '3.10'`, the marker becomes
     /// `python_full_version >= '3.8' and python_full_version <= '3.10'`.
     pub(crate) fn complexify_python_versions(
         &mut self,
@@ -815,8 +777,7 @@ impl InternerGuard<'_> {
 
         let py_range = Ranges::from_range_bounds((py_lower.cloned(), py_upper.cloned()));
         if py_range.is_empty() {
-            // Oops, the bounds imply there is nothing that can match,
-            // so we always evaluate to false.
+            // The bounds cannot match any version, so the marker is always false.
             return NodeId::FALSE;
         }
         if matches!(i, NodeId::TRUE) {
@@ -839,41 +800,30 @@ impl InternerGuard<'_> {
             });
             return self.create_node(node.var.clone(), children);
         };
-        // The approach we take here is to filter out any range that
-        // has no intersection with our Python lower/upper bounds.
-        // These ranges will now always be false, so we can dismiss
-        // them entirely.
+        // Remove ranges that do not intersect the Python version bounds. These ranges are always
+        // false.
         //
-        // Then, depending on whether we have finite lower/upper bound,
-        // we "fix up" the edges by clipping the existing ranges and
-        // adding an additional range that covers the Python versions
-        // outside of our bounds by always mapping them to false.
+        // For finite bounds, clip the existing edges. Add an always-false range for Python
+        // versions outside those bounds.
         let mut new: SmallVec<_> = edges
             .iter()
             .filter(|(range, _)| !py_range.intersection(range).is_empty())
             .cloned()
             .collect();
-        // Below, we assume `new` has at least one element. It's
-        // subtle, but since 1) edges is a disjoint covering of the
-        // universe and 2) our `py_range` is non-empty at this point,
-        // it must intersect with at least one range.
+        // `new` must contain at least one element. The edges cover all values, and `py_range` is
+        // non-empty, so at least one edge intersects the range.
         assert!(
             !new.is_empty(),
             "expected at least one non-empty intersection"
         );
-        // This is the NodeId we map to anything that should
-        // always be false. We have to "negate" it in case the
-        // parent is negated.
+        // Map always-false values to this `NodeId`. Negate it when the parent is negated.
         let exclude_node_id = NodeId::FALSE.negate(i);
         if !matches!(py_lower, Bound::Unbounded) {
             let &(ref first_range, first_node_id) = new.first().unwrap();
             let first_upper = first_range.bounding_range().unwrap().1;
-            // When the first range is always false, then we can just
-            // "expand" it out to negative infinity to reflect that
-            // anything less than our lower bound should evaluate to
-            // false. If we don't do this, then we could have two
-            // adjacent ranges map to the same node, which would not be
-            // a canonical representation.
+            // Extend an always-false first range to negative infinity. Values below the lower
+            // bound must be false. This also prevents adjacent ranges from mapping to the same
+            // node, which would break the canonical representation.
             if exclude_node_id == first_node_id {
                 let clipped = Ranges::from_range_bounds((Bound::Unbounded, first_upper.cloned()));
                 *new.first_mut().unwrap() = (clipped, first_node_id);
@@ -889,9 +839,7 @@ impl InternerGuard<'_> {
         if !matches!(py_upper, Bound::Unbounded) {
             let &(ref last_range, last_node_id) = new.last().unwrap();
             let last_lower = last_range.bounding_range().unwrap().0;
-            // See lower bound case above for why we do this. The
-            // same reasoning applies here: to maintain a canonical
-            // representation.
+            // As with the lower bound, keep the representation canonical.
             if exclude_node_id == last_node_id {
                 let clipped = Ranges::from_range_bounds((last_lower.cloned(), Bound::Unbounded));
                 *new.last_mut().unwrap() = (clipped, last_node_id);
@@ -910,32 +858,27 @@ impl InternerGuard<'_> {
 
     /// The disjunction of known incompatible conditions.
     ///
-    /// For example, while the marker specification and grammar do not _forbid_ it, we know that
-    /// both `sys_platform == 'win32'` and `platform_system == 'Darwin'` will never true at the
-    /// same time.
+    /// For example, `sys_platform == 'win32'` and `platform_system == 'Darwin'` cannot both be
+    /// true, even though the marker specification and grammar do not _forbid_ this combination.
     ///
-    /// This method thus encodes assumptions about the environment that are not guaranteed by the
-    /// PEP 508 specification alone.
+    /// This method adds environment assumptions that the PEP 508 specification does not guarantee.
     fn exclusions(&mut self) -> NodeId {
-        /// Perform a disjunction operation between two nodes.
+        /// Applies a disjunction operation to two nodes.
         ///
-        /// This is equivalent to [`InternerGuard::or`], with the exception that it does not
-        /// incorporate knowledge from outside the marker algebra.
+        /// This matches [`InternerGuard::or`] but excludes information outside the marker algebra.
         fn disjunction(
             guard: &mut InternerGuard<'_>,
             cache: &mut FxHashMap<(NodeId, NodeId), NodeId>,
             xi: NodeId,
             yi: NodeId,
         ) -> NodeId {
-            // We take advantage of cheap negation here and implement OR in terms
-            // of it's De Morgan complement.
+            // Use inexpensive negation to implement OR with its De Morgan complement.
             conjunction(guard, cache, xi.not(), yi.not()).not()
         }
 
-        /// Perform a conjunction operation between two nodes.
+        /// Applies a conjunction operation to two nodes.
         ///
-        /// This is equivalent to [`InternerGuard::and`], with the exception that it does not
-        /// incorporate knowledge from outside the marker algebra.
+        /// This matches [`InternerGuard::and`] but excludes information outside the marker algebra.
         fn conjunction(
             guard: &mut InternerGuard<'_>,
             cache: &mut FxHashMap<(NodeId, NodeId), NodeId>,
@@ -966,23 +909,23 @@ impl InternerGuard<'_> {
 
             let (x, y) = (guard.shared.node(xi), guard.shared.node(yi));
 
-            // Perform Shannon Expansion of the higher order variable.
+            // Apply Shannon expansion to the higher-order variable.
             let (func, children) = match x.var.cmp(&y.var) {
-                // X is higher order than Y, apply Y to every child of X.
+                // X has higher order than Y. Apply Y to every child of X.
                 Ordering::Less => {
                     let children = x
                         .children
                         .map(xi, |node| conjunction(guard, cache, node, yi));
                     (x.var.clone(), children)
                 }
-                // Y is higher order than X, apply X to every child of Y.
+                // Y has higher order than X. Apply X to every child of Y.
                 Ordering::Greater => {
                     let children = y
                         .children
                         .map(yi, |node| conjunction(guard, cache, node, xi));
                     (y.var.clone(), children)
                 }
-                // X and Y represent the same variable, merge their children.
+                // X and Y represent the same variable. Merge their children.
                 Ordering::Equal => {
                     let children = x
                         .children
@@ -1008,7 +951,7 @@ impl InternerGuard<'_> {
         // by regular marker operations.
         let mut cache = FxHashMap::default();
 
-        // Create all nodes upfront.
+        // Create all nodes in advance.
         let os_name_nt = self.expression(MarkerExpression::String {
             key: MarkerValueString::OsName,
             operator: MarkerOperator::Equal,
@@ -1127,7 +1070,7 @@ impl InternerGuard<'_> {
                 sys_platform_cygwin,
                 sys_platform_wasi,
             ] {
-                // Some of the above pairs are actually compatible.
+                // Some of these pairs are compatible.
                 if sys_platform == sys_platform_ios
                     && (platform_system == platform_system_ios
                         || platform_system == platform_system_ipados)
@@ -1150,54 +1093,45 @@ impl InternerGuard<'_> {
 
 /// A unique variable for a decision node.
 ///
-/// This `enum` also defines the variable ordering for all ADDs.
-/// Variable ordering is an interesting property of ADDs. A bad ordering
-/// can lead to exponential explosion of the size of an ADD. However,
-/// dynamically computing an optimal ordering is NP-complete.
+/// This `enum` defines the variable order for all ADDs. A poor order can increase ADD size
+/// exponentially. Computing an optimal order dynamically is NP-complete.
 ///
-/// We may wish to investigate the effect of this ordering on common marker
-/// trees. However, marker trees are typically small, so this may not be high
-/// impact.
+/// The effect of this order on common marker trees may need investigation. Most marker trees are
+/// small, so the effect may be limited.
 #[derive(PartialOrd, Ord, PartialEq, Eq, Hash, Clone, Debug)]
 pub(crate) enum Variable {
     /// A string marker, such as `os_name`.
     String(CanonicalMarkerValueString),
     /// A version marker, such as `python_version`.
     ///
-    /// This is the highest order variable as it typically contains the most complex
-    /// ranges, allowing us to merge ranges at the top-level.
+    /// This highest-order variable usually contains the most complex ranges. Its position lets
+    /// the tree merge ranges at the top level.
     Version(CanonicalMarkerValueVersion),
-    /// A variable representing a `<key> in <value>` expression for a particular
-    /// string marker and value.
+    /// A `<key> in <value>` expression for a specific string marker and value.
     In {
         key: CanonicalMarkerValueString,
         value: ArcStr,
     },
-    /// A variable representing a `<value> in <key>` expression for a particular
-    /// string marker and value.
+    /// A `<value> in <key>` expression for a specific string marker and value.
     Contains {
         key: CanonicalMarkerValueString,
         value: ArcStr,
     },
-    /// A variable representing the existence or absence of a given extra.
+    /// Whether a specific extra exists.
     ///
-    /// We keep extras at the leaves of the tree, so when simplifying extras we can
-    /// trivially remove the leaves without having to reconstruct the entire tree.
+    /// Keep extras at the leaves so simplification can remove them without rebuilding the tree.
     Extra(CanonicalMarkerValueExtra),
-    /// A variable representing whether a `<value> in <key>` or `<value> not in <key>`
-    /// expression, where the key is a list.
+    /// A `<value> in <key>` or `<value> not in <key>` expression where the key is a list.
     ///
-    /// We keep extras and groups at the leaves of the tree, so when simplifying extras we can
-    /// trivially remove the leaves without having to reconstruct the entire tree.
+    /// Keep extras and groups at the leaves so simplification can remove them without rebuilding
+    /// the tree.
     List(CanonicalMarkerListPair),
 }
 
 impl Variable {
-    /// Returns `true` if the variable is known to be involved in _at least_ one conflicting
-    /// marker pair.
+    /// Returns `true` if the variable occurs in _at least_ one known conflicting marker pair.
     ///
-    /// For example, `sys_platform == 'win32'` and `platform_system == 'Darwin'` are known to
-    /// never be true at the same time.
+    /// For example, `sys_platform == 'win32'` and `platform_system == 'Darwin'` cannot both be true.
     fn is_conflicting_variable(&self) -> bool {
         let Self::String(marker) = self else {
             return false;
@@ -1211,13 +1145,12 @@ impl Variable {
 pub(crate) struct Node {
     /// The variable this node represents.
     pub(crate) var: Variable,
-    /// The children of this node, with edges representing the possible outputs
-    /// of this variable.
+    /// The child edges for the possible outputs of this variable.
     pub(crate) children: Edges,
 }
 
 impl Node {
-    /// Return the complement of this node, flipping all children IDs.
+    /// Returns the complement of this node and flips every child ID.
     fn not(self) -> Self {
         Self {
             var: self.var,
@@ -1226,9 +1159,9 @@ impl Node {
     }
 }
 
-/// An ID representing a reference to a decision node in the [`Interner`].
+/// An ID that references a decision node in the [`Interner`].
 ///
-/// The lowest bit of the ID is used represent complemented edges.
+/// The lowest bit represents complemented edges.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(crate) struct NodeId(usize);
 
@@ -1239,7 +1172,7 @@ impl NodeId {
     // The terminal node representing `false`, or an unsatisfiable node.
     pub(crate) const FALSE: Self = Self(1);
 
-    /// Create a new, optionally complemented, [`NodeId`] with the given index.
+    /// Creates a [`NodeId`] for the given index and optional complement.
     fn new(index: usize, complement: bool) -> Self {
         // Ensure the index does not interfere with the lowest complement bit.
         let index = (index + 1) << 1;
@@ -1248,7 +1181,7 @@ impl NodeId {
 
     /// Returns the index of this ID, ignoring the complemented edge.
     fn index(self) -> usize {
-        // Ignore the lowest bit and bring indices back to starting at `0`.
+        // Ignore the lowest bit and return a zero-based index.
         (self.0 >> 1) - 1
     }
 
@@ -1264,10 +1197,9 @@ impl NodeId {
         Self(self.0 ^ 1)
     }
 
-    /// Returns the complement of this node, if it's parent is complemented.
+    /// Returns the complement of this node if its parent is complemented.
     ///
-    /// This method is useful to restore the complemented state of children nodes
-    /// when traversing the tree.
+    /// Restores the complemented state of child nodes when traversing the tree.
     pub(crate) fn negate(self, parent: Self) -> Self {
         if parent.is_complement() {
             self.not()
@@ -1318,8 +1250,7 @@ impl NodeId {
     }
 }
 
-/// A [`SmallVec`] with enough elements to hold two constant edges, as well as the
-/// ranges in-between.
+/// A [`SmallVec`] that holds two constant edges and the ranges between them.
 type SmallVec<T> = smallvec::SmallVec<[T; 5]>;
 
 /// The edges of a decision node.
@@ -1367,8 +1298,7 @@ impl Edges {
 
     /// Returns the [`Edges`] for a string expression.
     ///
-    /// This function will panic for the `In` and `Contains` marker operators, which
-    /// should be represented as separate boolean variables.
+    /// Panics for `In` and `Contains`, which require separate boolean variables.
     fn from_string(
         key: CanonicalMarkerValueString,
         operator: MarkerOperator,
@@ -1426,9 +1356,9 @@ impl Edges {
         }
     }
 
-    /// Returns an [`Edges`] where values in the given range are `true`.
+    /// Returns [`Edges`] that mark values in the given range as `true`.
     ///
-    /// Only for use when the `key` is a `PythonVersion`. Normalizes to `PythonFullVersion`.
+    /// Accepts only a `PythonVersion` key and normalizes it to `PythonFullVersion`.
     fn from_python_versions(
         versions: Vec<Version>,
         operator: ContainerOperator,
@@ -1452,7 +1382,7 @@ impl Edges {
         })
     }
 
-    /// Returns an [`Edges`] where values in the given range are `true`.
+    /// Returns [`Edges`] that mark values in the given range as `true`.
     fn from_versions(versions: Vec<Version>, operator: ContainerOperator) -> Self {
         let mut range: Ranges<Version> = versions
             .into_iter()
@@ -1468,7 +1398,7 @@ impl Edges {
         }
     }
 
-    /// Returns an [`Edges`] where values in the given range are `true`.
+    /// Returns [`Edges`] that mark values in the given range as `true`.
     fn from_range<T>(range: &Ranges<T>) -> SmallVec<(Ranges<T>, NodeId)>
     where
         T: Ord + Clone,
@@ -1489,12 +1419,12 @@ impl Edges {
 
         // Sort the ranges.
         //
-        // The ranges are disjoint so we don't care about equality.
+        // The ranges are disjoint, so equality is not possible.
         edges.sort_by(|(range1, _), (range2, _)| compare_disjoint_range_start(range1, range2));
         edges
     }
 
-    /// Merge two [`Edges`], applying the given operation (e.g., `AND` or `OR`) to all intersecting edges.
+    /// Merges two [`Edges`] and applies an operation, such as `AND` or `OR`, to intersecting edges.
     ///
     /// For example, given two nodes corresponding to the same boolean variable:
     /// ```text
@@ -1502,13 +1432,13 @@ impl Edges {
     /// right (extra == 'foo'): { true: C, false: D }
     /// ```
     ///
-    /// We merge them into a single node by applying the given operation to the matching edges.
+    /// Apply the operation to matching edges to merge them into one node.
     /// ```text
     /// (extra == 'foo'): { true: (A and C), false: (B and D) }
     /// ```
-    /// For non-boolean variables, this is more complex. See `apply_ranges` for details.
+    /// Non-boolean variables require additional handling. See `apply_ranges` for details.
     ///
-    /// Note that the LHS and RHS must be of the same [`Edges`] variant.
+    /// Both inputs must use the same [`Edges`] variant.
     fn apply(
         &self,
         parent: NodeId,
@@ -1517,14 +1447,14 @@ impl Edges {
         mut apply: impl FnMut(NodeId, NodeId) -> NodeId,
     ) -> Self {
         match (self, right_edges) {
-            // For version or string variables, we have to split and merge the overlapping ranges.
+            // Split and merge overlapping ranges for version or string variables.
             (Self::Version { edges }, Self::Version { edges: right_edges }) => Self::Version {
                 edges: Self::apply_ranges(edges, parent, right_edges, right_parent, apply),
             },
             (Self::String { edges }, Self::String { edges: right_edges }) => Self::String {
                 edges: Self::apply_ranges(edges, parent, right_edges, right_parent, apply),
             },
-            // For boolean variables, we simply merge the low and high edges.
+            // Merge the low and high edges for boolean variables.
             (
                 Self::Boolean { high, low },
                 Self::Boolean {
@@ -1539,7 +1469,7 @@ impl Edges {
         }
     }
 
-    /// Merge two range maps, applying the given operation to all disjoint, intersecting ranges.
+    /// Merges two range maps and applies the operation to every disjoint, intersecting range.
     ///
     /// For example, two nodes might have the following edges:
     /// ```text
@@ -1547,8 +1477,8 @@ impl Edges {
     /// right (python_version): { [0, 3.6): D,   [3.6, 3.6]: E,   (3.6, inf): F }
     /// ```
     ///
-    /// Unlike with boolean variables, we can't simply apply the operation the static `true`
-    /// and `false` edges. Instead, we have to split and merge overlapping ranges:
+    /// Unlike boolean variables, these variables have no fixed `true` and `false` edges. Split and
+    /// merge the overlapping ranges instead:
     /// ```text
     /// python_version: {
     ///     [0, 3.4):   (A and D),
@@ -1559,9 +1489,9 @@ impl Edges {
     /// }
     /// ```
     ///
-    /// The left and right edges may also have a restricted range from calls to `restrict_versions`.
-    /// In that case, we drop any ranges that do not exist in the domain of both edges. Note that
-    /// this should not occur in practice because `requires-python` bounds are global.
+    /// Calls to `restrict_versions` can restrict the left and right edges. Drop ranges outside the
+    /// domain of either edge. This should not occur in practice because `requires-python` bounds
+    /// are global.
     fn apply_ranges<T>(
         left_edges: &SmallVec<(Ranges<T>, NodeId)>,
         left_parent: NodeId,
@@ -1574,13 +1504,11 @@ impl Edges {
     {
         let mut combined = SmallVec::new();
         for (left_range, left_child) in left_edges {
-            // Split the two maps into a set of disjoint and overlapping ranges, merging the
-            // intersections.
+            // Split both maps into disjoint and overlapping ranges. Merge their intersections.
             //
-            // Note that restrict ranges (see `restrict_versions`) makes finding intersections
-            // a bit more complicated despite the ranges being sorted. We cannot simply zip both
-            // sets, as they may contain arbitrary gaps. Instead, we use a quadratic search for
-            // simplicity as the set of ranges for a given variable is typically very small.
+            // Restricted ranges from `restrict_versions` can contain arbitrary gaps, even when
+            // sorted. Do not zip the sets together. Use a quadratic search because each variable
+            // usually has few ranges.
             for (right_range, right_child) in right_edges {
                 let intersection = right_range.intersection(left_range);
                 if intersection.is_empty() {
@@ -1616,14 +1544,14 @@ impl Edges {
         interner: &mut InternerGuard<'_>,
     ) -> bool {
         match (self, right_edges) {
-            // For version or string variables, we have to split and check the overlapping ranges.
+            // Split and check overlapping ranges for version or string variables.
             (Self::Version { edges }, Self::Version { edges: right_edges }) => {
                 Self::is_disjoint_ranges(edges, parent, right_edges, right_parent, interner)
             }
             (Self::String { edges }, Self::String { edges: right_edges }) => {
                 Self::is_disjoint_ranges(edges, parent, right_edges, right_parent, interner)
             }
-            // For boolean variables, we simply check the low and high edges.
+            // Check the low and high edges for boolean variables.
             (
                 Self::Boolean { high, low },
                 Self::Boolean {
@@ -1649,8 +1577,7 @@ impl Edges {
     where
         T: Clone + Ord,
     {
-        // This is similar to the routine in `apply_ranges` except we only care about disjointness,
-        // not the resulting edges.
+        // This matches `apply_ranges` but checks only disjointness, not the resulting edges.
         for (left_range, left_child) in left_edges {
             for (right_range, right_child) in right_edges {
                 if right_range.is_disjoint(left_range) {
@@ -1734,8 +1661,8 @@ impl Edges {
 ///
 /// Returns `Err` with a constant node if the equivalent comparison is always `true` or `false`.
 fn python_version_to_full_version(specifier: VersionSpecifier) -> Result<VersionSpecifier, NodeId> {
-    // Trailing zeroes matter only for (not-)equals-star and tilde-equals. This means that below
-    // the next two blocks, we can use the trimmed release as the release.
+    // Trailing zeroes matter only for (not-)equals-star and tilde-equals. After those two cases,
+    // use the trimmed release.
     if specifier.operator().is_star() {
         // Input          python_version  python_full_version
         // ==3.*          3.*             3.*
@@ -1794,11 +1721,9 @@ fn python_version_to_full_version(specifier: VersionSpecifier) -> Result<Version
         _ => None,
     };
 
-    // Note that the values taken on by `python_version` are truncated to their major and minor
-    // version segments. For example, a python version of `3.7.0`, `3.7.1`, and so on, would all
-    // result in a `python_version` marker of `3.7`. For this reason, we must consider the range
-    // of values that would satisfy a `python_version` specifier when truncated in order to transform
-    // the specifier into its `python_full_version` equivalent.
+    // `python_version` contains only major and minor version segments. For example, `3.7.0` and
+    // `3.7.1` both produce the marker value `3.7`. Convert the specifier to `python_full_version`
+    // by finding every full version whose truncated value satisfies the original specifier.
     if let Some((major, minor)) = major_minor {
         let version = Version::new([major, minor]);
 
@@ -1834,13 +1759,13 @@ fn python_version_to_full_version(specifier: VersionSpecifier) -> Result<Version
         };
 
         Ok(match specifier.operator() {
-            // `python_version` cannot have more than two release segments, and we know
-            // that the following release segments aren't purely zeroes so equality is impossible.
+            // `python_version` has at most two release segments. Later nonzero segments make
+            // equality impossible.
             Operator::Equal | Operator::ExactEqual => {
                 return Err(NodeId::FALSE);
             }
 
-            // Similarly, inequalities are always `true`.
+            // Inequalities are always `true` for the same reason.
             Operator::NotEqual => return Err(NodeId::TRUE),
 
             // `python_version {<,<=} 3.7.8` is equivalent to `python_full_version < 3.8`.
@@ -1874,14 +1799,14 @@ where
         (_, Bound::Unbounded) => Ordering::Greater,
         (Bound::Included(v1), Bound::Excluded(v2)) if v1 == v2 => Ordering::Less,
         (Bound::Excluded(v1), Bound::Included(v2)) if v1 == v2 => Ordering::Greater,
-        // Note that the ranges are disjoint, so their lower bounds cannot be equal.
+        // Disjoint ranges cannot have equal lower bounds.
         (Bound::Included(v1) | Bound::Excluded(v1), Bound::Included(v2) | Bound::Excluded(v2)) => {
             v1.cmp(v2)
         }
     }
 }
 
-/// Returns `true` if two disjoint ranges can be conjoined seamlessly without introducing a gap.
+/// Returns `true` if two disjoint ranges can join without a gap.
 fn can_conjoin<T>(range1: &Ranges<T>, range2: &Ranges<T>) -> bool
 where
     T: Ord + Clone,

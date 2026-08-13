@@ -2,81 +2,78 @@
 
 ## Finding ways to help
 
-We label issues that we think are a good opportunity for subsequent contributions as
-[`help wanted`](https://github.com/astral-sh/uv/issues?q=is%3Aopen+is%3Aissue+label%3A%22help+wanted%22).
-These require varying levels of experience with Rust and uv. Often, we want to accomplish these
-tasks but do not have the resources to do so ourselves.
+The
+[`help wanted`](https://github.com/astral-sh/uv/issues?q=is%3Aopen+is%3Aissue+label%3A%22help+wanted%22)
+label identifies issues that welcome community contributions. These issues require different levels
+of experience with Rust and uv. The uv team wants to complete these tasks but does not have enough
+resources.
 
-You don't need our permission to start on an issue we have labeled as appropriate for community
-contribution as described above. However, it's a good idea to indicate that you are going to work on
-an issue to avoid concurrent attempts to solve the same problem.
+You do not need permission to work on an issue with this label. Consider stating that you plan to
+work on the issue so that other contributors do not duplicate your work.
 
-Please check in with us before starting work on an issue that has not been labeled as appropriate
-for community contribution. We're happy to receive contributions for other issues, but it's
-important to make sure we have consensus on the solution to the problem first.
+Contact the uv team before you work on an issue without a community contribution label. The team
+welcomes other contributions but must first agree on a solution.
 
-Outside of issues with the labels above, issues labeled as
+Among issues without this label, those labeled
 [`bug`](https://github.com/astral-sh/uv/issues?q=is%3Aopen+is%3Aissue+label%3A%22bug%22) are the
-best candidates for contribution. In contrast, issues labeled with `needs-decision` or
-`needs-design` are _not_ good candidates for contribution. Please do not open pull requests for
-issues with these labels.
+best candidates for contributions. Issues labeled `needs-decision` or `needs-design` are _not_ good
+candidates. Do not open pull requests for issues with these labels.
 
-Please do not open pull requests for new features without prior discussion. While we appreciate
-exploration of new features, we will almost always close these pull requests immediately. Adding a
-new feature to uv creates a long-term maintenance burden and requires strong consensus from the uv
-team before it is appropriate to begin work on an implementation.
+Discuss new features before you open a pull request. New features increase long-term maintenance, so
+the uv team must agree on a feature before implementation begins. The team closes most feature pull
+requests that have not been discussed.
 
 ## Use of AI
 
-We **require all use of AI in contributions to follow our
+**All use of AI in contributions must follow the
 [AI Policy](https://github.com/astral-sh/.github/blob/main/AI_POLICY.md)**.
 
-If your contribution does not follow the policy, it will be closed.
+The uv team closes contributions that do not follow this policy.
 
 ## Setup
 
-[Rust](https://rustup.rs/) (and a C compiler) are required to build uv.
+Install [Rust](https://rustup.rs/) and a C compiler to build uv.
 
-On Ubuntu and other Debian-based distributions, you can install a C compiler with:
+On Ubuntu and other Debian-based distributions, install a C compiler with:
 
 ```shell
 sudo apt install build-essential
 ```
 
-On Fedora-based distributions, you can install a C compiler with:
+On Fedora-based distributions, install a C compiler with:
 
 ```shell
 sudo dnf install gcc
 ```
 
-On Windows, [NASM](https://www.nasm.us/) is required for building the TLS backend (`aws-lc-sys`). If
-it is not present, a prebuilt blob provided by `aws-lc-sys` will be used instead. WinGet can be used
-to install NASM:
+On Windows, the TLS backend (`aws-lc-sys`) uses [NASM](https://www.nasm.us/) to build from source.
+If NASM is not available, `aws-lc-sys` uses a prebuilt file instead. Install NASM with WinGet:
 
 ```shell
 winget install NASM.NASM
 ```
 
-After installation, add `C:\Program Files\NASM` to your `PATH`. While the prebuilt blob will not be
-used when NASM is found, you can guarantee this behavior by setting `AWS_LC_SYS_PREBUILT_NASM=0`.
+After you install NASM, add `C:\Program Files\NASM` to your `PATH`. When NASM is available,
+`aws-lc-sys` does not use the prebuilt file. Set `AWS_LC_SYS_PREBUILT_NASM=0` to require this
+behavior.
 
 ## Testing
 
-For running tests, we recommend [nextest](https://nexte.st/).
+Run tests with [nextest](https://nexte.st/).
 
-To run a specific test by name:
+Run a specific test by name:
 
 ```shell
 cargo nextest run -E 'test(test_name)'
 ```
 
-To run all tests and accept snapshot changes:
+Run all tests and accept snapshot changes:
 
 ```shell
 cargo insta test --accept --test-runner nextest
 ```
 
-To update snapshots for a specific test:
+Update the snapshots for a specific test:
 
 ```shell
 cargo insta test --accept --test-runner nextest -- <test_name>
@@ -84,22 +81,21 @@ cargo insta test --accept --test-runner nextest -- <test_name>
 
 ### Python
 
-Testing uv requires multiple specific Python versions; they can be installed with:
+uv tests require several specific Python versions. Install them with:
 
 ```shell
 cargo run python install
 ```
 
-The storage directory can be configured with `UV_PYTHON_INSTALL_DIR`. (It must be an absolute path.)
+Set `UV_PYTHON_INSTALL_DIR` to an absolute path to configure the storage directory.
 
 ### Snapshot testing
 
-uv uses [insta](https://insta.rs/) for snapshot testing. It's recommended (but not necessary) to use
-`cargo-insta` for a better snapshot review experience. See the
-[installation guide](https://insta.rs/docs/cli/) for more information.
+uv uses [insta](https://insta.rs/) for snapshot testing. Use the optional `cargo-insta` tool to make
+snapshot review easier. See the [installation guide](https://insta.rs/docs/cli/) for more
+information.
 
-In tests, you can use `uv_snapshot!` macro to simplify creating snapshots for uv commands. For
-example:
+Use the `uv_snapshot!` macro in tests to create snapshots for uv commands. For example:
 
 ```rust
 #[test]
@@ -109,15 +105,15 @@ fn test_add() {
 }
 ```
 
-To run and review a specific snapshot test:
+Run and review a specific snapshot test:
 
 ```shell
 cargo test --package <package> --test <test> -- <test_name> -- --exact
 cargo insta review
 ```
 
-A script is available to update the snapshots based on results in CI. This is useful for updating
-snapshots without re-running the test suite and for updating platform-specific snapshots.
+Run the following script to update snapshots from CI results without running the test suite again.
+The script also updates platform-specific snapshots.
 
 ```shell
 ./scripts/apply-ci-snapshots.sh
@@ -125,14 +121,13 @@ snapshots without re-running the test suite and for updating platform-specific s
 
 ### Git and Git LFS
 
-A subset of uv tests require both [Git](https://git-scm.com) and [Git LFS](https://git-lfs.com/) to
-execute properly.
+Some uv tests require both [Git](https://git-scm.com) and [Git LFS](https://git-lfs.com/).
 
-These tests can be disabled by turning off either `git` or `git-lfs` uv features.
+To disable these tests, turn off either the `git` or `git-lfs` uv feature.
 
 ### Local testing
 
-You can invoke your development version of uv with `cargo run -- <args>`. For example:
+Run your development version of uv with `cargo run -- <args>`. For example:
 
 ```shell
 cargo run -- venv
@@ -156,9 +151,8 @@ docker run --rm -v .:/src/ -w /src/ node:alpine npx prettier@3.9.0 --write .
 
 ## Linting
 
-Linting requires [shellcheck](https://github.com/koalaman/shellcheck) to be installed separately.
-Validating `pyproject.toml` against the checked-in uv schema also requires
-[jq](https://jqlang.org/).
+Install [shellcheck](https://github.com/koalaman/shellcheck) separately before you run the linters.
+Install [jq](https://jqlang.org/) to validate `pyproject.toml` against the checked-in uv schema.
 
 ```shell
 # Rust
@@ -188,8 +182,8 @@ uv run --only-group=check cargo-shear
 
 ### Compiling for Windows from Unix
 
-To run clippy for a Windows target from Linux or macOS, you can use
-[cargo-xwin](https://github.com/rust-cross/cargo-xwin):
+Use [cargo-xwin](https://github.com/rust-cross/cargo-xwin) to run Clippy for a Windows target from
+Linux or macOS:
 
 ```shell
 # Install cargo-xwin
@@ -205,7 +199,7 @@ cargo xwin clippy --workspace --all-targets --all-features --locked -- -D warnin
 ## Crate structure
 
 Rust does not allow circular dependencies between crates. To visualize the crate hierarchy, install
-[cargo-depgraph](https://github.com/jplatte/cargo-depgraph) and graphviz, then run:
+[cargo-depgraph](https://github.com/jplatte/cargo-depgraph) and graphviz. Then run:
 
 ```shell
 cargo depgraph --dedup-transitive-deps --workspace-only | dot -Tpng > graph.png
@@ -213,11 +207,11 @@ cargo depgraph --dedup-transitive-deps --workspace-only | dot -Tpng > graph.png
 
 ## Running inside a Docker container
 
-Source distributions can run arbitrary code on build and can make unwanted modifications to your
-system
-(["Someone's Been Messing With My Subnormals!" on Blogspot](https://moyix.blogspot.com/2022/09/someones-been-messing-with-my-subnormals.html),
-["nvidia-pyindex" on PyPI](https://pypi.org/project/nvidia-pyindex/)), which can even occur when
-just resolving requirements. To prevent this, there's a Docker container you can run commands in:
+Source distributions can run arbitrary code when you build them or resolve requirements. This code
+can change your system. For examples, see
+["Someone's Been Messing With My Subnormals!" on Blogspot](https://moyix.blogspot.com/2022/09/someones-been-messing-with-my-subnormals.html)
+and ["nvidia-pyindex" on PyPI](https://pypi.org/project/nvidia-pyindex/). Run commands in a Docker
+container to isolate these operations:
 
 ```console
 $ docker build -t uv-builder -f crates/uv-dev/builder.dockerfile --load .
@@ -226,20 +220,20 @@ cargo build --target x86_64-unknown-linux-musl --profile profiling
 docker run --rm -it -v $(pwd):/app uv-builder /app/target/x86_64-unknown-linux-musl/profiling/uv-dev resolve-many --cache-dir /app/cache-docker /app/scripts/popular_packages/pypi_10k_most_dependents.txt
 ```
 
-We recommend using this container if you don't trust the dependency tree of the package(s) you are
-trying to resolve or install.
+Use this container when you do not trust the dependencies of the packages that you resolve or
+install.
 
 ## Profiling and Benchmarking
 
-Please refer to Ruff's
+See Ruff's
 [Profiling Guide](https://github.com/astral-sh/ruff/blob/main/CONTRIBUTING.md#profiling-projects),
-it applies to uv, too.
+which also applies to uv.
 
-We provide diverse sets of requirements for testing and benchmarking the resolver in
-`test/requirements` and for the installer in `test/requirements/compiled`.
+Use `test/requirements` to test and benchmark the resolver. Use `test/requirements/compiled` to test
+and benchmark the installer.
 
-You can use `scripts/benchmark` to benchmark predefined workloads between uv versions and with other
-tools, e.g., from the `scripts/benchmark` directory:
+Use `scripts/benchmark` to compare workloads across uv versions and other tools. For example, run
+the following command from the `scripts/benchmark` directory:
 
 ```shell
 uv run resolver \
@@ -252,9 +246,9 @@ uv run resolver \
 
 ### Analyzing concurrency
 
-You can use [tracing-durations-export](https://github.com/konstin/tracing-durations-export) to
-visualize parallel requests and find any spots where uv is CPU-bound. Example usage, with `uv` and
-`uv-dev` respectively:
+Use [tracing-durations-export](https://github.com/konstin/tracing-durations-export) to visualize
+parallel requests and find where uv is CPU-bound. These examples run `uv` and `uv-dev`,
+respectively:
 
 ```shell
 RUST_LOG=uv=info TRACING_DURATIONS_FILE=target/traces/jupyter.ndjson cargo run --features tracing-durations-export --profile profiling -- pip compile test/requirements/jupyter.in
@@ -266,7 +260,7 @@ RUST_LOG=uv=info TRACING_DURATIONS_FILE=target/traces/jupyter.ndjson cargo run -
 
 ### Trace-level logging
 
-You can enable `trace` level logging using the `RUST_LOG` environment variable, i.e.
+Set the `RUST_LOG` environment variable to enable `trace`-level logging:
 
 ```shell
 RUST_LOG=trace uv
@@ -274,56 +268,54 @@ RUST_LOG=trace uv
 
 ## Documentation
 
-To preview any changes to the documentation locally:
+To preview documentation changes locally:
 
 1. Install the [Rust toolchain](https://www.rust-lang.org/tools/install).
 
-2. Install [Node](https://nodejs.org/en/download) - needed to run Prettier to format the docs
+2. Install [Node](https://nodejs.org/en/download) to run Prettier and format the documentation.
 
-3. Run `cargo dev generate-all`, to update any auto-generated documentation.
+3. Run `cargo dev generate-all` to update generated documentation.
 
-4. Run the development server with:
+4. Run the development server:
 
    ```shell
    uv run --only-group docs mkdocs serve -f mkdocs.yml
    ```
 
-The documentation should then be available locally at
-[http://127.0.0.1:8000/uv/](http://127.0.0.1:8000/uv/).
+Open [http://127.0.0.1:8000/uv/](http://127.0.0.1:8000/uv/) to view the documentation locally.
 
-Documentation is deployed automatically on release by publishing to the
-[Astral documentation](https://github.com/astral-sh/docs) repository, which itself deploys via
-Cloudflare Pages.
+Each release publishes the documentation to the
+[Astral documentation](https://github.com/astral-sh/docs) repository. That repository deploys the
+documentation with Cloudflare Pages.
 
-After making changes to the documentation, [format the markdown files](#formatting) using Prettier.
+After you edit the documentation, [format the Markdown files](#formatting) with Prettier.
 
 ## Development code signing on macOS
 
-Code signing can only be performed by Astral team members.
+Only Astral team members can sign code.
 
-Code signing on macOS can improve developer experience when running tests, e.g., when running tests
-that access the macOS keychain, a signed binary can be approved once but an unsigned binary will
-need to be approved on each re-compile.
+Code signing on macOS can make tests easier to run. For tests that access the macOS keychain, you
+can approve a signed binary once. You must approve an unsigned binary after each recompile.
 
 ### Acquiring a development certificate
 
 1. Generate a
-   [request for the certificate](https://developer.apple.com/help/account/certificates/create-a-certificate-signing-request)
+   [request for the certificate](https://developer.apple.com/help/account/certificates/create-a-certificate-signing-request).
 2. Create a certificate in the
-   [Apple Developer portal](https://developer.apple.com/account/resources/certificates/list)
-3. Download and install the certificate to your login keychain
+   [Apple Developer portal](https://developer.apple.com/account/resources/certificates/list).
+3. Download the certificate and install it in your login keychain:
 
    ```shell
    security import ~/Downloads/mac_development.cer -k ~/Library/Keychains/login.keychain-db
    ```
 
-4. Identify your code signing identity
+4. Find your code-signing identity:
 
    ```shell
    security find-identity -v -p codesigning
    ```
 
-5. If the above fails to find your identity, install the intermediate certificates
+5. If the command does not find your identity, install the intermediate certificates:
 
    ```shell
    curl -sLO "https://www.apple.com/certificateauthority/AppleWWDRCAG3.cer"
@@ -331,19 +323,19 @@ need to be approved on each re-compile.
    rm AppleWWDRCAG3.cer
    ```
 
-6. Set `UV_TEST_CODESIGN_IDENTITY`
+6. Set `UV_TEST_CODESIGN_IDENTITY`:
 
    ```shell
    export UV_TEST_CODESIGN_IDENTITY="Mac Developer: Your Name (TEAM_ID)"
    ```
 
-Note `UV_TEST_CODESIGN_IDENTITY` is only supported via `nextest`.
+Only `nextest` supports `UV_TEST_CODESIGN_IDENTITY`.
 
 ## Releases
 
-Releases can only be performed by Astral team members.
+Only Astral team members can create releases.
 
-Changelog entries and version bumps are automated. First, run:
+The release script updates changelog entries and version numbers automatically. Run:
 
 ```shell
 ./scripts/release.sh
@@ -352,13 +344,13 @@ Changelog entries and version bumps are automated. First, run:
 If release preparation detects a new workspace crate, add it to
 [`astral-sh/crates-policies`](https://github.com/astral-sh/crates-policies).
 
-Then, editorialize the `CHANGELOG.md` file to ensure entries are consistently styled.
+Edit `CHANGELOG.md` so that its entries use a consistent style.
 
-Then, open a pull request, e.g., `Bump version to ...`.
+Open a pull request with a title such as `Bump version to ...`.
 
-Binary builds will automatically be tested for the release.
+CI automatically tests the binary builds for the release.
 
-After merging the pull request, run the
+After you merge the pull request, run the
 [release workflow](https://github.com/astral-sh/uv/actions/workflows/release.yml) with the version
-tag. **Do not include a leading `v`**. The release will automatically be created on GitHub after
-everything else publishes.
+tag. **Do not include a leading `v`**. GitHub creates the release after all other publishing steps
+finish.
