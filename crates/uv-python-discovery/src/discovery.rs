@@ -54,7 +54,7 @@ pub(crate) struct DiscoveryPreferences {
 /// Returned by [`find_python_installation`].
 type FindPythonResult = Result<PythonInstallation, PythonNotFound>;
 
-/// The result of failed Python installation discovery.
+/// The result of a failed Python installation search.
 #[derive(Clone, Debug, Error)]
 pub struct PythonNotFound {
     pub(super) request: PythonRequest,
@@ -84,7 +84,7 @@ pub enum Error {
     #[error(transparent)]
     Io(#[from] io::Error),
 
-    /// An error was encountering when retrieving interpreter information.
+    /// Could not read interpreter information.
     #[error("Failed to inspect Python interpreter from {} at `{}` ", _2, _1.user_display())]
     Query(
         #[source] Box<uv_python_interpreter::InterpreterError>,
@@ -92,12 +92,11 @@ pub enum Error {
         PythonSource,
     ),
 
-    /// An error was encountered while trying to find a managed Python installation matching the
-    /// current platform.
+    /// Could not find a managed Python installation for the current platform.
     #[error("Failed to discover managed Python installations")]
     ManagedPython(#[from] uv_python_managed::Error),
 
-    /// An error was encountered when inspecting a virtual environment.
+    /// Could not inspect a virtual environment.
     #[error(transparent)]
     VirtualEnv(#[from] uv_python_interpreter::VirtualEnvError),
 
@@ -108,11 +107,11 @@ pub enum Error {
     #[error(transparent)]
     InvalidEnvironmentVariable(#[from] uv_static::InvalidEnvironmentVariable),
 
-    /// An invalid version request was given
+    /// The version request is invalid.
     #[error("Invalid version request: {0}")]
     InvalidVersionRequest(String),
 
-    /// The @latest version request was given
+    /// The version request uses `@latest`.
     #[error("Requesting the 'latest' Python version is not yet supported")]
     LatestVersionRequest,
 
@@ -142,14 +141,14 @@ impl uv_errors::Hinted for Error {
     }
 }
 
-/// Lazily iterate over Python executables in mutable virtual environments.
+/// Iterate lazily over Python executables in writable virtual environments.
 ///
-/// The following sources are supported:
+/// Supported sources include:
 ///
-/// - Active virtual environment (via `VIRTUAL_ENV`)
-/// - Discovered virtual environment (e.g. `.venv` in a parent directory)
+/// - An active virtual environment set by `VIRTUAL_ENV`.
+/// - A discovered virtual environment, such as `.venv` in a parent directory.
 ///
-/// Notably, "system" environments are excluded. See [`python_executables_from_installed`].
+/// System environments are excluded. See [`python_executables_from_installed`].
 fn python_executables_from_virtual_environments<'a>()
 -> impl Iterator<Item = Result<(PythonSource, PathBuf), Error>> + 'a {
     let from_active_environment = iter::once_with(|| {
@@ -160,7 +159,7 @@ fn python_executables_from_virtual_environments<'a>()
     })
     .flatten();
 
-    // N.B. we prefer the conda environment over discovered virtual environments
+    // Prefer the conda environment over discovered virtual environments.
     let from_conda_environment = iter::once_with(move || {
         conda_environment_from_env(CondaEnvironmentKind::Child)
             .into_iter()
@@ -185,21 +184,21 @@ fn python_executables_from_virtual_environments<'a>()
         .chain(from_discovered_environment)
 }
 
-/// Lazily iterate over Python executables installed on the system.
+/// Iterate lazily over Python executables installed on the system.
 ///
-/// The following sources are supported:
+/// Supported sources include:
 ///
-/// - Managed Python installations (e.g. `uv python install`)
-/// - The search path (i.e. `PATH`)
-/// - The registry (Windows only)
+/// - Managed Python installations, such as those from `uv python install`.
+/// - The `PATH` search path.
+/// - The Windows registry.
 ///
-/// The ordering and presence of each source is determined by the [`PythonPreference`].
+/// [`PythonPreference`] controls which sources are used and their order.
 ///
-/// If a [`VersionRequest`] is provided, we will skip executables that we know do not satisfy the request
-/// and (as discussed in [`python_executables_from_search_path`]) additional version-specific executables may
-/// be included. However, the caller MUST query the returned executables to ensure they satisfy the request;
-/// this function does not guarantee that the executables provide any particular version. See
-/// [`find_python_installation`] instead.
+/// When a [`VersionRequest`] is present, skip executables that cannot satisfy it. The search can
+/// include extra version-specific executables. See [`python_executables_from_search_path`].
+///
+/// The caller MUST query each returned executable to verify its version. This function does not
+/// guarantee that an executable provides a specific version. See [`find_python_installation`].
 ///
 /// This function does not guarantee that the executables are valid Python interpreters.
 /// See [`python_interpreters_from_executables`].
@@ -221,8 +220,7 @@ fn python_executables_from_installed<'a>(
 
                 let build_versions = python_build_versions_from_env()?;
 
-                // Check that the Python version and platform satisfy the request to avoid
-                // unnecessary interpreter queries later
+                // Check the Python version and platform before querying the interpreter.
                 Ok(installations
                     .into_iter()
                     .filter(move |installation| {
@@ -254,8 +252,7 @@ fn python_executables_from_installed<'a>(
                     })
                     .inspect(|installation| debug!("Found managed installation `{installation}`"))
                     .map(move |installation| {
-                        // If it's not a patch version request, then attempt to read the stable
-                        // minor version link.
+                        // Read the stable minor-version link unless the request specifies a patch.
                         let executable = version
                                 .patch()
                                 .is_none()
@@ -305,7 +302,7 @@ fn python_executables_from_installed<'a>(
         Ok(Some(true)) => Box::new(iter::empty()),
         Ok(Some(false) | None) => Box::new(
             iter::once_with(move || {
-                // Skip interpreter probing if we already know the version doesn't match.
+                // Skip interpreter queries when the version does not match.
                 let version_filter = move |entry: &WindowsPython| {
                     if let Some(found) = &entry.version {
                         // Some distributions emit the patch version (example: `SysVersion: 3.9`)
@@ -369,15 +366,14 @@ fn python_executables_from_installed<'a>(
     }
 }
 
-/// Lazily iterate over all discoverable Python executables.
+/// Iterate lazily over available Python executables.
 ///
-/// Note that Python executables may be excluded by the given [`EnvironmentPreference`],
-/// [`PythonPreference`], and [`PlatformRequest`]. However, these filters are only applied for
-/// performance. We cannot guarantee that the all requests or preferences are satisfied until we
-/// query the interpreter.
+/// [`EnvironmentPreference`], [`PythonPreference`], and [`PlatformRequest`] can exclude some
+/// executables. These filters only improve performance. Query the interpreter to confirm that it
+/// satisfies all requests and preferences.
 ///
 /// See [`python_executables_from_installed`] and [`python_executables_from_virtual_environments`]
-/// for more information on discovery.
+/// for details about discovery.
 fn python_executables<'a>(
     version: &'a VersionRequest,
     implementation: Option<&'a ImplementationName>,
@@ -385,7 +381,7 @@ fn python_executables<'a>(
     environments: EnvironmentPreference,
     preference: PythonPreference,
 ) -> Box<dyn Iterator<Item = Result<PythonExecutableGroup, Error>> + 'a> {
-    // Always read from `UV_INTERNAL__PARENT_INTERPRETER` — it could be a system interpreter
+    // Always read `UV_INTERNAL__PARENT_INTERPRETER`. It can refer to a system interpreter.
     let from_parent_interpreter = iter::once_with(|| {
         env::var_os(EnvVars::UV_INTERNAL__PARENT_INTERPRETER)
             .into_iter()
@@ -398,7 +394,7 @@ fn python_executables<'a>(
     })
     .flatten();
 
-    // Check if the base conda environment is active
+    // Check whether the base conda environment is active.
     let from_base_conda_environment = iter::once_with(move || {
         conda_environment_from_env(CondaEnvironmentKind::Base)
             .into_iter()
@@ -417,9 +413,9 @@ fn python_executables<'a>(
     let from_installed =
         python_executables_from_installed(version, implementation, platform, preference);
 
-    // Limit the search to the relevant environment preference; this avoids unnecessary work like
-    // traversal of the file system. Subsequent filtering should be done by the caller with
-    // `source_satisfies_environment_preference` and `EnvironmentPreference::allows_installation`.
+    // Limit the search to the selected environment preference to avoid extra file system access.
+    // The caller must also filter with `source_satisfies_environment_preference` and
+    // `EnvironmentPreference::allows_installation`.
     match environments {
         EnvironmentPreference::OnlyVirtual => {
             Box::new(from_parent_interpreter.chain(from_virtual_environments))
@@ -438,38 +434,38 @@ fn python_executables<'a>(
     }
 }
 
-/// Lazily iterate over Python executables in the `PATH`.
+/// Iterate lazily over Python executables in `PATH`.
 ///
-/// The [`VersionRequest`] and [`ImplementationName`] are used to determine the possible
-/// Python interpreter names, e.g. if looking for Python 3.9 we will look for `python3.9`
-/// or if looking for `PyPy` we will look for `pypy` in addition to the default names.
+/// [`VersionRequest`] and [`ImplementationName`] select possible executable names. For example,
+/// Python 3.9 adds `python3.9`. `PyPy` adds `pypy`. Both searches include the default names.
 ///
-/// Executables are returned in the search path order, then by specificity of the name, e.g.
-/// `python3.9` is preferred over `python3` and `pypy3.9` is preferred over `python3.9`.
+/// Return executables in search-path order. Within each directory, prefer more specific names.
+/// For example, prefer `python3.9` over `python3` and `pypy3.9` over `python3.9`.
 ///
 /// For a `PATH` directory containing `python`, `python3`, `python3.14`, `python3.15`, and
-/// `python3.15t`, an exact `3.15` request produces the following groups:
+/// `python3.15t`, an exact `3.15` request returns these groups:
 ///
 /// ```text
 /// [python3.15], [python3], [python]
 /// ```
 ///
-/// A `>=3.14,<3.16` request instead produces:
+/// A `>=3.14,<3.16` request returns these groups:
 ///
 /// ```text
 /// [python3], [python], [python3.14, python3.15, python3.15t]
 /// ```
 ///
-/// Grouping minor-version fallback candidates from the same directory allows their queried
-/// installation keys to determine their relative order without overriding search-path precedence.
+/// Group minor-version fallback candidates from the same directory. This grouping lets their
+/// queried installation keys determine their relative order. It does not override search-path
+/// precedence.
 ///
-/// If a `version` is not provided, we will only look for default executable names e.g.
-/// `python3` and `python` — `python3.9` and similar will not be included.
+/// Without a `version`, search only for default names such as `python3` and `python`. Exclude
+/// version-specific names such as `python3.9`.
 fn python_executables_from_search_path<'a>(
     version: &'a VersionRequest,
     implementation: Option<&'a ImplementationName>,
 ) -> impl Iterator<Item = Vec<PathBuf>> + 'a {
-    // `UV_PYTHON_SEARCH_PATH` can be used to override `PATH` for Python executable discovery
+    // `UV_PYTHON_SEARCH_PATH` overrides `PATH` for Python executable discovery.
     let search_path = env::var_os(EnvVars::UV_PYTHON_SEARCH_PATH)
         .unwrap_or(env::var_os(EnvVars::PATH).unwrap_or_default());
 
@@ -484,31 +480,29 @@ fn python_executables_from_search_path<'a>(
         possible_names.join(", ")
     );
 
-    // Split and iterate over the paths instead of using `which_all` so we can
-    // check multiple names per directory while respecting the search path order and python names
-    // precedence.
+    // Search each directory separately instead of using `which_all`. This preserves search-path
+    // order and executable-name priority while checking multiple names per directory.
     let search_dirs: Vec<_> = env::split_paths(&search_path).collect();
     let mut seen_dirs = FxHashSet::with_capacity_and_hasher(search_dirs.len(), FxBuildHasher);
     search_dirs
         .into_iter()
         .filter(|dir| dir.is_dir())
         .flat_map(move |dir| {
-            // Clone the directory for second closure
+            // Clone the directory for the second closure.
             let dir_clone = dir.clone();
             trace!(
                 "Checking `PATH` directory for interpreters: {}",
                 dir.display()
             );
             same_file::Handle::from_path(&dir)
-                // Skip directories we've already seen, to avoid inspecting interpreters multiple
-                // times when directories are repeated or symlinked in the `PATH`
+                // Skip repeated or linked directories to avoid querying the same interpreter twice.
                 .map(|handle| seen_dirs.insert(handle))
                 .inspect(|fresh_dir| {
                     if !fresh_dir {
                         trace!("Skipping already seen directory: {}", dir.display());
                     }
                 })
-                // If we cannot determine if the directory is unique, we'll assume it is
+                // Treat the directory as unique if its identity cannot be determined.
                 .unwrap_or(true)
                 .then(|| {
                     let minor_version_directory = dir_clone.clone();
@@ -517,14 +511,13 @@ fn python_executables_from_search_path<'a>(
                         .clone()
                         .into_iter()
                         .flat_map(move |name| {
-                            // Since we're just working with a single directory at a time, we collect to simplify ownership
+                            // Collect results from one directory to simplify ownership.
                             which::which_in_global(&*name, Some(&dir))
                                 .into_iter()
                                 .flatten()
                                 .filter(|path| !is_windows_store_shim(path))
                                 .map(|path| vec![path])
-                                // We have to collect since `which` requires that the regex outlives its
-                                // parameters, and the dir is local while we return the iterator.
+                                // Collect because the returned iterator must outlive the local directory.
                                 .collect::<Vec<_>>()
                         })
                         .chain(
@@ -561,8 +554,8 @@ fn python_executables_from_search_path<'a>(
 
 /// Find all acceptable `python3.x` minor versions.
 ///
-/// For example, let's say `python` and `python3` are Python 3.10. When a user requests `>= 3.11`,
-/// we still need to find a `python3.12` in PATH.
+/// For example, `python` and `python3` can both refer to Python 3.10. A request for `>=3.11` must
+/// still find `python3.12` in `PATH`.
 fn find_all_minor(
     implementation: Option<&ImplementationName>,
     version_request: &VersionRequest,
@@ -603,14 +596,14 @@ fn find_all_minor(
                         return false;
                     };
 
-                    // Filter out interpreter we already know have a too low minor version.
+                    // Skip interpreters with a minor version that is too low.
                     let minor = captures["minor"].parse().ok();
                     if let Some(minor) = minor {
-                        // Optimization: Skip generally unsupported Python versions without querying.
+                        // Skip unsupported Python versions without querying them.
                         if minor < 6 {
                             return false;
                         }
-                        // Optimization 2: Skip excluded Python (minor) versions without querying.
+                        // Skip excluded Python minor versions without querying them.
                         if !version_request.matches_major_minor(3, minor) {
                             return false;
                         }
@@ -639,13 +632,13 @@ enum QueryStrategy {
 
 /// Iterate over all discoverable Python interpreters.
 ///
-/// Note interpreters may be excluded by the given [`EnvironmentPreference`], [`PythonPreference`],
-/// [`VersionRequest`], or [`PlatformRequest`].
+/// [`EnvironmentPreference`], [`PythonPreference`], [`VersionRequest`], and [`PlatformRequest`]
+/// can exclude interpreters.
 ///
-/// The [`PlatformRequest`] is currently only applied to managed Python installations before querying
-/// the interpreter. The caller is responsible for ensuring it is applied otherwise.
+/// Before querying an interpreter, [`PlatformRequest`] applies only to managed installations. The
+/// caller must check the platform for other installations.
 ///
-/// See [`python_executables`] for more information on discovery.
+/// See [`python_executables`] for details about discovery.
 fn python_installations<'a>(
     version: &'a VersionRequest,
     implementation: Option<&'a ImplementationName>,
@@ -657,9 +650,8 @@ fn python_installations<'a>(
 ) -> Box<dyn Iterator<Item = Result<PythonInstallation, Error>> + 'a> {
     Box::new(
         python_installations_from_executables(
-            // Perform filtering on the discovered executables based on their source. This avoids
-            // unnecessary interpreter queries, which are generally expensive. We'll filter again
-            // with `PythonInstallation::satisfies_preferences` after querying.
+            // Filter executable sources before running expensive interpreter queries. After each
+            // query, filter again with `PythonInstallation::satisfies_preferences`.
             python_executables(version, implementation, platform, environments, preference)
                 .filter_map(move |result| match result {
                     Ok(group) => group
@@ -680,7 +672,7 @@ fn python_installations<'a>(
     )
 }
 
-/// Query a single Python executable, returning a [`PythonInstallation`] on success.
+/// Query one Python executable and return a [`PythonInstallation`] on success.
 fn python_installation_from_executable(
     source: PythonSource,
     path: PathBuf,
@@ -702,7 +694,7 @@ fn python_installation_from_executable(
         .inspect_err(|err| debug!("{err}"))
 }
 
-/// Convert Python executables into installations using the given query strategy.
+/// Convert Python executables into installations with the specified query strategy.
 fn python_installations_from_executables<'a>(
     executables: impl Iterator<Item = Result<PythonExecutableGroup, Error>> + 'a,
     cache: &'a Cache,
@@ -767,10 +759,11 @@ fn sort_installations_by_key<T, K: Ord>(
     }
 }
 
-/// Returns true if a [`PythonSource`] could satisfy the [`EnvironmentPreference`].
+/// Return `true` if a [`PythonSource`] could satisfy the [`EnvironmentPreference`].
 ///
-/// This is useful as a pre-filtering step. Use of [`PythonInstallation::satisfies_environment_preference`]
-/// is required to determine if an [`Interpreter`] satisfies the preference.
+/// Use this as an initial filter. Call
+/// [`PythonInstallation::satisfies_environment_preference`] to confirm that an [`Interpreter`]
+/// satisfies the preference.
 ///
 /// The interpreter path is only used for debug messages.
 fn source_satisfies_environment_preference(
@@ -816,14 +809,15 @@ fn source_satisfies_environment_preference(
     }
 }
 
-/// Check if an encountered error is critical and should stop discovery.
+/// Check whether an error is critical and must stop discovery.
 ///
-/// Returns false when an error could be due to a faulty Python installation and we should continue searching for a working one.
+/// Return `false` if the error can come from a broken Python installation. Continue searching for
+/// a working installation in that case.
 impl Error {
     pub(crate) fn is_critical(&self) -> bool {
         match self {
-            // When querying the Python interpreter fails, we will only raise errors that demonstrate that something is broken
-            // If the Python interpreter returned a bad response, we'll continue searching for one that works
+            // Stop only for errors that indicate a critical failure. If an interpreter returns an
+            // invalid response, continue searching for a working interpreter.
             Self::Query(err, _, source) => match &**err {
                 InterpreterError::Encode(_)
                 | InterpreterError::Io(_)
@@ -860,8 +854,7 @@ impl Error {
                 }
                 InterpreterError::NotFound(path)
                 | InterpreterError::BrokenLink(BrokenLink { path, .. }) => {
-                    // If the interpreter is from an active, valid virtual environment, we should
-                    // fail because it's broken
+                    // Fail if the missing interpreter belongs to an active virtual environment.
                     if matches!(source, PythonSource::ActiveEnvironment)
                         && uv_fs::is_virtualenv_executable(path)
                     {
@@ -893,7 +886,7 @@ fn python_installation_from_directory(
     })
 }
 
-/// Lazily iterate over all Python executable paths on the path with the given executable name.
+/// Iterate lazily over Python executables in `PATH` with the specified name.
 fn python_executables_with_name(
     name: &str,
 ) -> impl Iterator<Item = Result<(PythonSource, PathBuf), Error>> + '_ {
@@ -902,7 +895,7 @@ fn python_executables_with_name(
         .flat_map(|inner| inner.map(|path| Ok((PythonSource::SearchPath, path))))
 }
 
-/// Lazily iterate over all Python installations on the path with the given executable name.
+/// Iterate lazily over Python installations in `PATH` with the specified executable name.
 fn python_installations_with_name<'a>(
     name: &'a str,
     cache: &'a Cache,
@@ -916,7 +909,7 @@ fn python_installations_with_name<'a>(
     )
 }
 
-/// Iterate over all Python installations that satisfy the given request.
+/// Iterate over Python installations that satisfy the request.
 pub(crate) fn find_python_installations<'a>(
     request: &'a PythonRequest,
     environments: EnvironmentPreference,
@@ -934,8 +927,7 @@ pub(crate) fn find_python_installations<'a>(
     )
 }
 
-/// Iterate over all Python installations that satisfy the given request using the given query
-/// strategy.
+/// Iterate over matching Python installations with the specified query strategy.
 fn find_python_installations_with_strategy<'a>(
     request: &'a PythonRequest,
     environments: EnvironmentPreference,
@@ -1142,11 +1134,10 @@ fn find_python_installations_with_strategy<'a>(
     }
 }
 
-/// Find all Python installations that satisfy the given request, querying interpreters
-/// concurrently.
+/// Find all matching Python installations and query their interpreters concurrently.
 ///
-/// Eagerly collects matching installations. Interpreter query failures produce warnings and are
-/// skipped. Other non-critical discovery errors are dropped, while critical errors are propagated in
+/// Collect all matching installations immediately. Ignore interpreter query failures after
+/// reporting warnings. Ignore other non-critical discovery errors. Return critical errors in
 /// discovery order.
 pub fn find_all_python_installations(
     request: &PythonRequest,
@@ -1178,10 +1169,9 @@ pub fn find_all_python_installations(
     Ok(installations)
 }
 
-/// Find a Python installation that satisfies the given request.
+/// Find a Python installation that satisfies the request.
 ///
-/// If an error is encountered while locating or inspecting a candidate installation,
-/// the error will raised instead of attempting further candidates.
+/// If a critical error occurs while locating or inspecting an installation, return that error.
 pub(crate) fn find_python_installation(
     request: &PythonRequest,
     environments: EnvironmentPreference,
@@ -1195,9 +1185,9 @@ pub(crate) fn find_python_installation(
     let mut first_managed = None;
     let mut first_error = None;
     for result in installations {
-        // Iterate until the first critical error or happy result
+        // Stop at the first critical error or accepted installation.
         if !result.as_ref().err().is_none_or(Error::is_critical) {
-            // Track the first non-critical error
+            // Save the first non-critical error.
             if first_error.is_none()
                 && let Err(err) = result
             {
@@ -1206,24 +1196,23 @@ pub(crate) fn find_python_installation(
             continue;
         }
 
-        // If it's an error, we're done.
+        // Return immediately for a critical error.
         let Ok(Ok(ref installation)) = result else {
             return result;
         };
 
-        // Check if we need to skip the interpreter because it is "not allowed", e.g., if it is a
-        // pre-release version or an alternative implementation, using it requires opt-in.
+        // Skip interpreters that require explicit selection, such as pre-releases or alternative
+        // implementations.
 
-        // If the interpreter has a default executable name, e.g. `python`, and was found on the
-        // search path, we consider this opt-in to use it.
+        // A default executable name in the search path, such as `python`, counts as an explicit
+        // selection.
         let has_default_executable_name = installation.interpreter.has_default_executable_name()
             && matches!(
                 installation.source,
                 PythonSource::SearchPath | PythonSource::SearchPathFirst
             );
 
-        // If it's a pre-release and pre-releases aren't allowed, skip it — but store it for later
-        // since we'll use a pre-release if no other versions are available.
+        // Save a disallowed pre-release as a fallback when no other version is available.
         if installation.python_version().pre().is_some()
             && !request.allows_prereleases()
             && !installation.source.allows_prereleases()
@@ -1236,8 +1225,7 @@ pub(crate) fn find_python_installation(
             continue;
         }
 
-        // If it's a debug build and debug builds aren't allowed, skip it — but store it for later
-        // since we'll use a debug build if no other versions are available.
+        // Save a disallowed debug build as a fallback when no other version is available.
         if installation.key().variant().is_debug()
             && !request.allows_debug()
             && !installation.source.allows_debug()
@@ -1250,10 +1238,8 @@ pub(crate) fn find_python_installation(
             continue;
         }
 
-        // If it's an alternative implementation and alternative implementations aren't allowed,
-        // skip it. Note we avoid querying these interpreters at all if they're on the search path
-        // and are not requested, but other sources such as the managed installations can include
-        // them.
+        // Skip alternative implementations unless explicitly allowed. Unrequested alternatives in
+        // the search path are not queried, but managed installations can still contain them.
         if installation.is_alternative_implementation()
             && !request.allows_alternative_implementations()
             && !installation.source.allows_alternative_implementations()
@@ -1263,8 +1249,7 @@ pub(crate) fn find_python_installation(
             continue;
         }
 
-        // If it's a managed Python installation, and system interpreters are preferred, skip it
-        // for now.
+        // Save a managed installation as a fallback when system interpreters are preferred.
         if matches!(preference, PythonPreference::System) && installation.is_managed() {
             debug!(
                 "Skipping managed installation {}: system installation preferred",
@@ -1276,12 +1261,11 @@ pub(crate) fn find_python_installation(
             continue;
         }
 
-        // If we didn't skip it, this is the installation to use
+        // Use the first installation that was not skipped.
         return result;
     }
 
-    // If we only found managed installations, and the preference allows them, we should return
-    // the first one.
+    // Return the first managed installation if no system installation was found.
     if let Some(installation) = first_managed {
         debug!(
             "Allowing managed installation {}: no system installations",
@@ -1290,8 +1274,7 @@ pub(crate) fn find_python_installation(
         return Ok(Ok(installation));
     }
 
-    // If we only found debug installations, they're implicitly allowed and we should return the
-    // first one.
+    // Return the first debug installation if no non-debug installation was found.
     if let Some(installation) = first_debug {
         debug!(
             "Allowing debug installation {}: no non-debug installations",
@@ -1300,7 +1283,7 @@ pub(crate) fn find_python_installation(
         return Ok(Ok(installation));
     }
 
-    // If we only found pre-releases, they're implicitly allowed and we should return the first one.
+    // Return the first pre-release if no stable installation was found.
     if let Some(installation) = first_prerelease {
         debug!(
             "Allowing pre-release installation {}: no stable installations",
@@ -1309,8 +1292,7 @@ pub(crate) fn find_python_installation(
         return Ok(Ok(installation));
     }
 
-    // If we found a Python, but it was unusable for some reason, report that instead of saying we
-    // couldn't find any Python interpreters.
+    // Report an unusable Python installation instead of claiming that none was found.
     if let Some(err) = first_error {
         return Err(err);
     }
@@ -1324,19 +1306,17 @@ pub(crate) fn find_python_installation(
     }))
 }
 
-/// Find the best-matching Python installation.
+/// Find the Python installation that best matches the request.
 ///
-/// If no Python version is provided, we will use the first available installation.
+/// If no Python version is specified, use the first available installation.
 ///
-/// If a Python version is provided, we will first try to find an exact match. If
-/// that cannot be found and a patch version was requested, we will look for a match
-/// without comparing the patch version number. If that cannot be found, we fall back to
-/// the first available version.
+/// If a Python version is specified, first look for an exact match. If a requested patch version
+/// is unavailable, match the major and minor version instead. If that also fails, use the first
+/// available version.
 ///
-/// At all points, if the specified version cannot be found, we will attempt to
-/// download it if downloads are enabled.
+/// At each step, download the requested version if it is unavailable and downloads are enabled.
 ///
-/// See [`find_python_installation`] for more details on installation discovery.
+/// See [`find_python_installation`] for details about installation discovery.
 #[instrument(skip_all, fields(request))]
 pub(crate) async fn find_best_python_installation(
     request: &PythonRequest,
@@ -1389,13 +1369,13 @@ pub(crate) async fn find_best_python_installation(
                 warn_on_unsupported_python(installation.interpreter());
                 return Ok(installation);
             }
-            // Continue if we can't find a matching Python and ignore non-critical discovery errors
+            // Continue when no Python matches or when discovery returns a non-critical error.
             Ok(Err(error)) => error.into(),
             Err(error) if !error.is_critical() => error.into(),
             Err(error) => return Err(error.into()),
         };
 
-        // Attempt to download the version if downloads are enabled
+        // Download the version when downloads are enabled.
         if downloads_enabled
             && !previous_fetch_failed
             && let Some(download_request) = PythonDownloadRequest::from_request(request)
@@ -1412,8 +1392,8 @@ pub(crate) async fn find_best_python_installation(
                     .await?;
                     let retry_policy = client_builder.retry_policy();
 
-                    // Python downloads are performing their own retries to catch stream errors, disable
-                    // the default retries to avoid the middleware performing uncontrolled retries.
+                    // Python downloads retry stream errors. Disable middleware retries to avoid
+                    // extra, uncontrolled attempts.
                     let client = client_builder.clone().retries(0).build()?;
                     download_state.insert((client, retry_policy, download_list))
                 };
@@ -1442,17 +1422,12 @@ pub(crate) async fn find_best_python_installation(
             if let Ok(Some(installation)) = result {
                 return Ok(installation);
             }
-            // Emit a warning instead of failing since we may find a suitable
-            // interpreter on the system after relaxing the request further.
-            // Additionally, uv did not previously attempt downloads in this
-            // code path and we want to minimize the fatal cases for
-            // backwards compatibility.
-            // Errors encountered here are either network errors or quirky
-            // configuration problems.
+            // Warn instead of failing because a later, less specific request can find a system
+            // interpreter. Older versions did not download in this path, so avoid new fatal errors.
+            // These failures usually come from the network or configuration.
             if let Err(error) = result {
-                // If the request was for the default or any version, propagate
-                // the error as nothing else we are about to do will help the
-                // situation.
+                // Return the error for a default or unrestricted request. No later fallback can
+                // recover from it.
                 if matches!(request, PythonRequest::Default | PythonRequest::Any) {
                     return Err(error);
                 }
@@ -1468,15 +1443,12 @@ pub(crate) async fn find_best_python_installation(
             }
         }
 
-        // If this was a request for the Default or Any version, this means that
-        // either that's what we were called with, or we're on the last
-        // iteration.
-        //
-        // The most recent find error therefore becomes a fatal one.
+        // A default or unrestricted request is either the original request or the final fallback.
+        // Return its discovery error.
         if matches!(request, PythonRequest::Default | PythonRequest::Any) {
             return Err(match error {
                 crate::Error::MissingPython(err, _) => PythonNotFound {
-                    // Use a more general error in this case since we looked for multiple versions
+                    // Use a general request because the search covered multiple versions.
                     request: original_request
                         .with_default_arch(arch.map(PythonArchitecture::into_inner))
                         .into_owned(),
@@ -1492,9 +1464,9 @@ pub(crate) async fn find_best_python_installation(
     unreachable!("The loop should have terminated when it reached PythonRequest::Default");
 }
 
-/// Display a warning if the Python version of the [`Interpreter`] is unsupported by uv.
+/// Warn if uv does not support the Python version of the [`Interpreter`].
 fn warn_on_unsupported_python(interpreter: &Interpreter) {
-    // Warn on usage with an unsupported Python version
+    // Warn when the Python version is unsupported.
     if interpreter.python_tuple() < (3, 8) {
         warn_user_once!(
             "uv is only compatible with Python >=3.8, found Python {}",
@@ -1503,15 +1475,13 @@ fn warn_on_unsupported_python(interpreter: &Interpreter) {
     }
 }
 
-/// On Windows we might encounter the Windows Store proxy shim (enabled in:
-/// Settings/Apps/Advanced app settings/App execution aliases). When Python is _not_ installed
-/// via the Windows Store, but the proxy shim is enabled, then executing `python.exe` or
-/// `python3.exe` will redirect to the Windows Store installer.
+/// Detect the Windows Store proxy shim.
 ///
-/// We need to detect that these `python.exe` and `python3.exe` files are _not_ Python
-/// executables.
+/// Windows can enable this shim in Settings > Apps > Advanced app settings > App execution aliases.
+/// If Python is not installed from the Windows Store, `python.exe` and `python3.exe` can open the
+/// Windows Store installer. Do not treat those files as Python executables.
 ///
-/// This method is taken from Rye:
+/// This method comes from Rye:
 ///
 /// > This is a pretty dumb way.  We know how to parse this reparse point, but Microsoft
 /// > does not want us to do this as the format is unstable.  So this is a best effort way.
@@ -1538,11 +1508,11 @@ fn is_windows_store_shim(path: &Path) -> bool {
         return false;
     }
 
-    // The path must point to something like:
+    // The path must have this form:
     //   `C:\Users\crmar\AppData\Local\Microsoft\WindowsApps\python3.exe`
     let mut components = path.components().rev();
 
-    // Ex) `python.exe`, `python3.exe`, `python3.12.exe`, etc.
+    // Match `python.exe`, `python3.exe`, or a version-specific name such as `python3.12.exe`.
     if !components
         .next()
         .and_then(|component| component.as_os_str().to_str())
@@ -1556,7 +1526,7 @@ fn is_windows_store_shim(path: &Path) -> bool {
         return false;
     }
 
-    // Ex) `WindowsApps`
+    // Match the `WindowsApps` directory.
     if components
         .next()
         .is_none_or(|component| component.as_os_str() != "WindowsApps")
@@ -1564,7 +1534,7 @@ fn is_windows_store_shim(path: &Path) -> bool {
         return false;
     }
 
-    // Ex) `Microsoft`
+    // Match the `Microsoft` directory.
     if components
         .next()
         .is_none_or(|component| component.as_os_str() != "Microsoft")
@@ -1572,7 +1542,7 @@ fn is_windows_store_shim(path: &Path) -> bool {
         return false;
     }
 
-    // The file is only relevant if it's a reparse point.
+    // Only inspect files that are reparse points.
     let Ok(md) = fs_err::symlink_metadata(path) else {
         return false;
     };
@@ -1629,7 +1599,7 @@ fn is_windows_store_shim(path: &Path) -> bool {
         let _ = CloseHandle(reparse_handle);
     }
 
-    // If the operation failed, assume it's not a reparse point.
+    // Treat a failed operation as a file that is not a reparse point.
     if !success {
         return false;
     }
@@ -1638,7 +1608,7 @@ fn is_windows_store_shim(path: &Path) -> bool {
     reparse_point.contains("\\AppInstallerPythonRedirector.exe")
 }
 
-/// On Unix, we do not need to deal with Windows store shims.
+/// Return `false` on Unix because Windows Store shims are not relevant.
 ///
 /// See the Windows implementation for details.
 #[cfg(not(windows))]
@@ -1647,8 +1617,7 @@ fn is_windows_store_shim(_path: &Path) -> bool {
 }
 
 impl DiscoveryPreferences {
-    /// Return a string describing the sources that are considered when searching for Python with
-    /// the given preferences.
+    /// Describe the Python sources allowed by these preferences.
     fn sources(&self, request: &PythonRequest) -> String {
         let python_sources = self
             .python_preference
@@ -1711,7 +1680,7 @@ impl fmt::Display for PythonNotFound {
     }
 }
 
-/// Join a series of items with `or` separators, making use of commas when necessary.
+/// Join items with `or`. Add commas when needed.
 fn disjunction(items: &[&str]) -> String {
     match items.len() {
         0 => String::new(),

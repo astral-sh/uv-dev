@@ -1,7 +1,7 @@
 # Benchmarks
 
-uv's performance is continually benchmarked against previous releases, and regularly compared to
-other tools in the space, like pip and Poetry.
+Regular benchmarks compare uv's performance with earlier releases and other tools, such as pip and
+Poetry.
 
-The latest benchmarks and details on the benchmarking process can be found in the
+The latest benchmarks and details about the benchmark process are available in the
 [GitHub repository](https://github.com/astral-sh/uv/blob/main/BENCHMARKS.md).

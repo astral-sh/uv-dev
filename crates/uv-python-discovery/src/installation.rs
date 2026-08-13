@@ -392,9 +392,9 @@ impl PythonInstallation {
         LenientImplementationName::from(self.interpreter.implementation_name())
     }
 
-    /// Returns `true` if this is a managed (uv-installed) Python installation.
+    /// Return `true` if this is a uv-managed Python installation.
     ///
-    /// Uses the source as a fast path, then falls back to checking the interpreter's base prefix.
+    /// Check the source first, then check the interpreter's base prefix.
     pub(crate) fn is_managed(&self) -> bool {
         if self.source.is_managed() {
             return true;
@@ -403,8 +403,7 @@ impl PythonInstallation {
         if let Ok(test_managed) =
             std::env::var(uv_static::EnvVars::UV_INTERNAL__TEST_PYTHON_MANAGED)
         {
-            // During testing, we collect interpreters into an artificial search path and need to
-            // be able to mock whether an interpreter is managed or not.
+            // Tests use an artificial search path and must control which interpreters are managed.
             return test_managed.split_ascii_whitespace().any(|item| {
                 let version = <PythonVersion as std::str::FromStr>::from_str(item).expect(
                     "`UV_INTERNAL__TEST_PYTHON_MANAGED` items should be valid Python versions",
@@ -589,7 +588,7 @@ impl PythonInstallation {
                     false
                 }
             }
-            // If not "only" a kind, any interpreter is okay
+            // A non-exclusive preference allows any interpreter.
             PythonPreference::Managed | PythonPreference::System => true,
             PythonPreference::OnlySystem => {
                 if !self.is_managed() {
@@ -620,7 +619,7 @@ impl PythonInstallation {
     ) -> bool {
         match (
             preference,
-            // Conda environments are not conformant virtual environments but we treat them as such.
+            // Treat conda environments as virtual environments even though they do not follow PEP 405.
             self.interpreter.is_virtualenv() || (matches!(self.source, PythonSource::CondaPrefix)),
         ) {
             (EnvironmentPreference::Any, _) => true,
