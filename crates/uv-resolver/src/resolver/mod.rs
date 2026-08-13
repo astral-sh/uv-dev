@@ -104,8 +104,7 @@ pub struct Resolver<Provider: ResolverProvider, InstalledPackages: InstalledPack
     provider: Provider,
 }
 
-/// State that is shared between the prefetcher and the PubGrub solver during
-/// resolution, across all forks.
+/// Resolution state that the prefetcher and PubGrub solver share across all forks.
 struct ResolverState<InstalledPackages: InstalledPackagesProvider> {
     project: Option<PackageName>,
     requirements: Vec<Requirement>,
@@ -136,7 +135,7 @@ struct ResolverState<InstalledPackages: InstalledPackagesProvider> {
     unavailable_packages: Box<HashMap<PackageName, UnavailablePackage>>,
     /// Incompatibilities for packages that are unavailable at specific versions.
     incomplete_packages: Box<HashMap<PackageName, HashMap<Version, MetadataUnavailable>>>,
-    /// The options that were used to configure this resolver.
+    /// The options used to configure this resolver.
     options: Options,
     /// The reporter to use for this resolver.
     reporter: Option<Arc<dyn Reporter>>,
@@ -145,24 +144,18 @@ struct ResolverState<InstalledPackages: InstalledPackagesProvider> {
 impl<'a, Context: BuildContext, InstalledPackages: InstalledPackagesProvider>
     Resolver<DefaultResolverProvider<'a, Context>, InstalledPackages>
 {
-    /// Initialize a new resolver using the default backend doing real requests.
-    ///
-    /// Reads the flat index entries.
+    /// Create a resolver with the default backend and read the flat index entries.
     ///
     /// # Marker environment
     ///
     /// The marker environment is optional.
     ///
-    /// When a marker environment is not provided, the resolver is said to be
-    /// in "universal" mode. When in universal mode, the resolution produced
-    /// may contain multiple versions of the same package. And thus, in order
-    /// to use the resulting resolution, there must be a "universal"-aware
-    /// reader of the resolution that knows to exclude distributions that can't
-    /// be used in the current environment.
+    /// Without a marker environment, the resolver operates in "universal" mode.
+    /// A universal resolution can contain multiple versions of the same package.
+    /// Its reader must exclude distributions that do not support the current environment.
     ///
-    /// When a marker environment is provided, the resolver is in
-    /// "non-universal" mode, which corresponds to standard `pip` behavior that
-    /// works only for a specific marker environment.
+    /// With a marker environment, the resolver operates in "non-universal" mode.
+    /// This matches the standard `pip` behavior for one marker environment.
     pub fn new(
         manifest: Manifest,
         options: Options,
@@ -213,7 +206,7 @@ impl<'a, Context: BuildContext, InstalledPackages: InstalledPackagesProvider>
 impl<Provider: ResolverProvider, InstalledPackages: InstalledPackagesProvider>
     Resolver<Provider, InstalledPackages>
 {
-    /// Initialize a new resolver using a user provided backend.
+    /// Create a resolver with a user-provided backend.
     pub fn new_custom_io(
         manifest: Manifest,
         options: Options,
@@ -348,11 +341,10 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
         let mut preferences = self.preferences.clone();
         let mut forked_states = self.env.initial_forked_states(state)?;
 
-        // Apply the same Python-bound scheduling used for dependency-created forks. Since states
-        // are popped from the end of the stack, sort lower Python bounds last for `fewest` and
-        // higher Python bounds last for `requires-python`. There's no `cmp_upper_bounds` tiebreak
-        // here: it counts upper-bounded specifiers among a fork's dependencies, which an initial
-        // state doesn't have yet.
+        // Schedule initial forks by Python bounds, as with dependency-created forks.
+        // States are popped from the end of the stack. For `fewest`, place lower bounds last.
+        // For `requires-python`, place higher bounds last. Do not use `cmp_upper_bounds`:
+        // it counts upper-bounded dependency specifiers, and initial states have no dependencies.
         match (self.options.fork_strategy, self.options.resolution_mode) {
             (ForkStrategy::Fewest, _) | (_, ResolutionMode::Lowest) => {
                 forked_states.sort_by(|a, b| cmp_requires_python(&a.env, &b.env).reverse());
@@ -372,9 +364,8 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             loop {
                 let highest_priority_pkg =
                     if let Some(initial) = state.initial_id.take() {
-                        // If we just forked based on `requires-python`, we can skip unit
-                        // propagation, since we already propagated the package that initiated
-                        // the fork.
+                        // Skip unit propagation after a `requires-python` fork. The package that
+                        // created the fork was already propagated.
                         initial
                     } else {
                         // Run unit propagation.
@@ -394,14 +385,13 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                             }
                             Ok(conflicts) => {
                                 for (affected, incompatibility) in conflicts {
-                                    // Conflict tracking: If there was a conflict, track affected and
-                                    // culprit for all root cause incompatibilities
+                                    // Record the affected package and cause of each incompatibility.
                                     state.record_conflict(affected, None, incompatibility);
                                 }
                             }
                         }
 
-                        // Pre-visit all candidate packages, to allow metadata to be fetched in parallel.
+                        // Visit all candidate packages early so metadata can be fetched in parallel.
                         if self.dependency_mode.is_transitive() {
                             Self::pre_visit(
                                 state.pubgrub.partial_solution.prioritized_packages().map(
@@ -428,14 +418,13 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                                 .join(", ")
                         );
                         // Choose a package.
-                        // We aren't allowed to use the term intersection as it would extend the
-                        // mutable borrow of `state`.
+                        // Do not use the term intersection: it extends the mutable borrow of `state`.
                         let Some((highest_priority_pkg, _)) =
                             state.pubgrub.partial_solution.pick_highest_priority_pkg(
                                 |id, _range| state.priorities.get(&state.pubgrub.package_store[id]),
                             )
                         else {
-                            // All packages have been assigned, the fork has been successfully resolved
+                            // All packages are assigned, so the fork is resolved.
                             if tracing::enabled!(Level::DEBUG) {
                                 state.prefetcher.log_tried_versions();
                             }
@@ -447,14 +436,12 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
 
                             let resolution = state.into_resolution();
 
-                            // Walk over the selected versions, and mark them as preferences. We have to
-                            // add forks back as to not override the preferences from the lockfile for
-                            // the next fork
+                            // Mark selected versions as preferences. Include fork markers to
+                            // preserve lockfile preferences for the next fork.
                             //
-                            // If we're using a resolution mode that varies based on whether a dependency is
-                            // direct or transitive, skip preferences, as we risk adding a preference from
-                            // one fork (in which it's a transitive dependency) to another fork (in which
-                            // it's direct).
+                            // Skip preferences when the resolution mode distinguishes direct and
+                            // transitive dependencies. The same dependency can be transitive in one
+                            // fork and direct in another.
                             if matches!(
                                 self.options.resolution_mode,
                                 ResolutionMode::Lowest | ResolutionMode::Highest
@@ -889,11 +876,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             if forks.len() == 1 { "" } else { "s" }
         );
         assert!(forks.len() >= 2);
-        // This is a somewhat tortured technique to ensure
-        // that our resolver state is only cloned as much
-        // as it needs to be. We basically move the state
-        // into `forked_states`, and then only clone it if
-        // there is at least one more fork to visit.
+        // Move the resolver state into each fork. Clone it only when another fork remains.
         let package = current_state.next;
         let mut cur_state = Some(current_state);
         let forks_len = forks.len();
@@ -953,11 +936,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
         current_state: ForkState,
         forks: Vec<VersionFork>,
     ) -> impl Iterator<Item = ForkState> + '_ {
-        // This is a somewhat tortured technique to ensure
-        // that our resolver state is only cloned as much
-        // as it needs to be. We basically move the state
-        // into `forked_states`, and then only clone it if
-        // there is at least one more fork to visit.
+        // Move the resolver state into each fork. Clone it only when another fork remains.
         let mut cur_state = Some(current_state);
         let forks_len = forks.len();
         forks.into_iter().enumerate().map(move |(i, fork)| {
@@ -972,7 +951,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
         })
     }
 
-    /// Visit a set of [`PubGrubDependency`] entities prior to selection.
+    /// Visit each [`PubGrubDependency`] before selection.
     fn visit_dependencies(
         &self,
         dependencies: &[PubGrubDependency],
@@ -993,8 +972,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
         Ok(())
     }
 
-    /// Visit a [`PubGrubPackage`] prior to selection. This should be called on a [`PubGrubPackage`]
-    /// before it is selected, to allow metadata to be fetched in parallel.
+    /// Visit a [`PubGrubPackage`] before selection so metadata can be fetched in parallel.
     fn visit_package(
         &self,
         package: &PubGrubPackage,
@@ -1002,7 +980,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
         index: Option<&IndexMetadata>,
         request_sink: &Sender<Request>,
     ) -> Result<(), ResolveError> {
-        // Ignore unresolved URL packages, i.e., packages that use a direct URL in some forks.
+        // Ignore unresolved packages that use a direct URL in some forks.
         if url.is_none() && package.name().is_none_or(|name| self.urls.any_url(name)) {
             return Ok(());
         }
@@ -1051,8 +1029,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
         Ok(())
     }
 
-    /// Visit the set of [`PubGrubPackage`] candidates prior to selection. This allows us to fetch
-    /// metadata for all packages in parallel.
+    /// Visit [`PubGrubPackage`] candidates before selection to fetch their metadata in parallel.
     fn pre_visit<'data>(
         packages: impl Iterator<
             Item = (
@@ -1067,8 +1044,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
         python_requirement: &PythonRequirement,
         request_sink: &Sender<Request>,
     ) -> Result<(), ResolveError> {
-        // Iterate over the potential packages, and fetch file metadata for any of them. These
-        // represent our current best guesses for the versions that we _might_ select.
+        // Fetch metadata for candidate versions that the resolver might select.
         for (id, package, range) in packages {
             let PubGrubPackageInner::Package {
                 name,
@@ -1079,8 +1055,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             else {
                 continue;
             };
-            // Avoid pre-visiting packages that have any URLs in any fork. At this point we can't
-            // tell whether they are registry distributions or which url they use.
+            // Skip packages with URLs in any fork. Their distribution type and URL are not yet known.
             if urls.any_url(name) {
                 continue;
             }
@@ -1088,8 +1063,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             if indexes.contains_key(name) {
                 continue;
             }
-            // Unit propagation often leaves a package's range unchanged. Although prefetching the
-            // same package and range is idempotent, selecting its candidate is not free.
+            // Skip repeated package ranges. Prefetching is idempotent, but candidate selection has a cost.
             if pre_visited.get(&id) == Some(range) {
                 continue;
             }
@@ -1172,8 +1146,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
         }
     }
 
-    /// Select a version for a URL requirement. Since there is only one version per URL, we return
-    /// that version if it is in range and `None` otherwise.
+    /// Select the single version for a URL requirement if it is in range. Otherwise, return `None`.
     fn choose_version_url(
         &self,
         id: Id<PubGrubPackage>,
@@ -2957,24 +2930,23 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
     }
 }
 
-/// All known versions for each package, from the version maps and the installed packages,
-/// used to keep the version sets in the partial solution minimal.
+/// Known versions from package indexes and installed packages.
+/// These versions keep the version sets in the partial solution minimal.
 #[derive(Clone, Default)]
 struct KnownVersions(FxHashMap<PackageName, Arc<[Version]>>);
 
 impl KnownVersions {
-    /// Returns the sorted, deduplicated candidate universe used to widen version sets.
+    /// Return the sorted, deduplicated candidate versions used to widen version sets.
     ///
     /// Results are cached on the first call per package.
     ///
-    /// Every selectable version must be present: omitting one could extend an incompatibility
-    /// across it, while including an unselectable version only prevents a possible simplification.
-    /// The result is therefore conservative, including yanked and otherwise unavailable versions
-    /// from every index plus installed versions missing from the indexes. Versions past the
-    /// exclude-newer cutoff are omitted because resolution treats them as nonexistent.
+    /// Include every selectable version. A missing version could extend an incompatibility across it.
+    /// An unselectable version only prevents a possible simplification.
+    /// Include yanked and unavailable versions from every index, plus unlisted installed versions.
+    /// Exclude versions after the exclude-newer cutoff because resolution treats them as nonexistent.
     ///
-    /// Non-blocking: Returns `None` if the version map hasn't been fetched yet, or if the
-    /// package is not a registry package.
+    /// This does not block. Return `None` if the version map is unavailable or the package
+    /// does not come from a registry.
     fn get_or_update<'a, InstalledPackages: InstalledPackagesProvider>(
         &'a mut self,
         index: &InMemoryIndex,
@@ -3017,53 +2989,41 @@ impl KnownVersions {
     }
 }
 
-/// State that is used during unit propagation in the resolver, one instance per fork.
+/// Resolver state for unit propagation in a single fork.
 #[derive(Clone)]
 pub(crate) struct ForkState {
     /// The internal state used by the resolver.
     ///
-    /// Note that not all parts of this state are strictly internal. For
-    /// example, the edges in the dependency graph generated as part of the
-    /// output of resolution are derived from the "incompatibilities" tracked
-    /// in this state. We also ultimately retrieve the final set of version
-    /// assignments (to packages) from this state's "partial solution."
+    /// Its tracked "incompatibilities" produce the resolved dependency graph.
+    /// Its "partial solution" contains the final package version assignments.
     pubgrub: State<UvDependencyProvider>,
-    /// The initial package to select. If set, the first iteration over this state will avoid
-    /// asking PubGrub for the highest-priority package, and will instead use the provided package.
+    /// The package to select first instead of asking PubGrub for its highest-priority package.
     initial_id: Option<Id<PubGrubPackage>>,
-    /// The initial version to select. If set, the first iteration over this state will avoid
-    /// asking PubGrub for the highest-priority version, and will instead use the provided version.
+    /// The version to select first instead of asking PubGrub for its highest-priority version.
     initial_version: Option<Version>,
     /// The next package on which to run unit propagation.
     next: Id<PubGrubPackage>,
-    /// The set of pinned versions we accrue throughout resolution.
+    /// The package versions pinned during resolution.
     ///
-    /// The key of this map is a package name, and each package name maps to
-    /// a set of versions for that package. Each version in turn is mapped
-    /// to the concrete distribution selected for installation, along with the
-    /// concrete distribution whose metadata was used during resolution.
-    /// After resolution is finished, this map is consulted to recover both the
-    /// locked artifact and the metadata backing the resolved dependency edges.
+    /// Each package name maps to its selected versions. Each version maps to the distribution
+    /// selected for installation and the distribution that supplied its resolution metadata.
+    /// After resolution, use this map to recover locked artifacts and dependency metadata.
     pins: FilePins,
-    /// Ensure we don't have duplicate URLs in any branch.
+    /// Prevent duplicate URLs in this branch.
     ///
-    /// Unlike [`Urls`], we add only the URLs we have seen in this branch, and there can be only
-    /// one URL per package. By prioritizing direct URL dependencies over registry dependencies,
-    /// this map is populated for all direct URL packages before we look at any registry packages.
+    /// Unlike [`Urls`], this map contains one URL per package seen in this branch.
+    /// Direct URL dependencies are processed before registry dependencies.
+    /// Therefore, the map contains every direct URL package before registry packages are processed.
     fork_urls: ForkUrls,
-    /// Ensure we don't have duplicate indexes in any branch.
+    /// Prevent duplicate indexes in this branch.
     ///
-    /// Unlike [`Indexes`], we add only the indexes we have seen in this branch, and there can be
-    /// only one index per package.
+    /// Unlike [`Indexes`], this map contains one index per package seen in this branch.
     fork_indexes: ForkIndexes,
-    /// When dependencies for a package are retrieved, this map of priorities
-    /// is updated based on how each dependency was specified. Certain types
-    /// of dependencies have more "priority" than others (like direct URL
-    /// dependencies). These priorities help determine which package to
-    /// consider next during resolution.
+    /// Package priorities derived from dependency specifications.
+    /// Direct URL dependencies have a higher priority than other dependency types.
+    /// These priorities determine which package the resolver considers next.
     priorities: PubGrubPriorities,
-    /// This keeps track of the set of versions for each package that we've
-    /// already visited during resolution. This avoids doing redundant work.
+    /// Package versions already visited during resolution, used to prevent repeated work.
     added_dependencies: FxHashMap<Id<PubGrubPackage>, FxHashSet<Version>>,
     /// The last range scheduled for prefetch for each undecided package.
     pre_visited: FxHashMap<Id<PubGrubPackage>, Range<Version>>,
@@ -3075,22 +3035,15 @@ pub(crate) struct ForkState {
     known_versions: KnownVersions,
     /// The marker expression that created this state.
     ///
-    /// The root state always corresponds to a marker expression that is always
-    /// `true` for every `MarkerEnvironment`.
+    /// The root state has a marker expression that is `true` for every `MarkerEnvironment`.
     ///
-    /// In non-universal mode, forking never occurs and so this marker
-    /// expression is always `true`.
+    /// In non-universal mode, no forks occur and this marker expression is always `true`.
     ///
-    /// Whenever dependencies are fetched, all requirement specifications
-    /// are checked for disjointness with the marker expression of the fork
-    /// in which those dependencies were fetched. If a requirement has a
-    /// completely disjoint marker expression (i.e., it can never be true given
-    /// that the marker expression that provoked the fork is true), then that
-    /// dependency is completely ignored.
+    /// When dependencies are fetched, compare each requirement marker with the fork marker.
+    /// Ignore requirements whose marker is disjoint from the fork marker.
     env: ResolverEnvironment,
-    /// The Python requirement for this fork. Defaults to the Python requirement for
-    /// the resolution, but may be narrowed if a `python_version` marker is present
-    /// in a given fork.
+    /// The Python requirement for this fork. A `python_version` marker can narrow the
+    /// Python requirement inherited from the resolution.
     ///
     /// For example, in:
     /// ```text
@@ -3098,13 +3051,12 @@ pub(crate) struct ForkState {
     /// numpy <1.26 ; python_version < "3.9"
     /// ```
     ///
-    /// The top fork has a narrower Python compatibility range, and thus can find a
-    /// solution that omits Python 3.8 support.
+    /// The first fork has a narrower Python compatibility range and can omit Python 3.8 support.
     python_requirement: PythonRequirement,
     conflict_tracker: ConflictTracker,
     /// Prefetch package versions for packages with many rejected versions.
     ///
-    /// Tracked on the fork state to avoid counting each identical version between forks as new try.
+    /// Keep this in the fork state so identical versions across forks are not counted twice.
     prefetcher: BatchPrefetcher,
 }
 
@@ -3767,14 +3719,14 @@ impl ForkState {
     }
 }
 
-/// Widens a single version to the largest interval that contains no other known version
+/// Widen a single version to the largest interval that contains no other known version
 /// ([`Ranges::widen_versions`]).
 ///
-/// The interval adds only versions the registry does not list, which can never be selected, so an
-/// incompatibility recorded for it holds for the same selectable versions.
+/// The interval adds only unlisted registry versions, which cannot be selected.
+/// Therefore, an incompatibility for the interval covers the same selectable versions.
 ///
-/// Returns the singleton range when the known versions are unavailable, as for a URL or workspace
-/// package, and for an empty list, which would otherwise widen to the full range.
+/// Return the singleton range when known versions are unavailable or the version list is empty.
+/// Known versions are unavailable for URL and workspace packages.
 fn widen_to_gap(version: &Version, known_versions: Option<&[Version]>) -> Range<Version> {
     let versions = Range::singleton(version.clone());
     match known_versions {
@@ -3785,31 +3737,27 @@ fn widen_to_gap(version: &Version, known_versions: Option<&[Version]>) -> Range<
     }
 }
 
-/// Fetch the metadata for an item
+/// A request to fetch metadata.
 #[derive(Debug)]
 #[expect(clippy::large_enum_variant)]
 pub(crate) enum Request {
-    /// A request to fetch the metadata for a package.
+    /// Fetch package metadata.
     Package(PackageName, Option<IndexMetadata>),
-    /// A request to fetch the metadata for a built or source distribution.
+    /// Fetch metadata for a built or source distribution.
     Dist(Dist),
-    /// A request to fetch the metadata from an already-installed distribution.
+    /// Fetch metadata from an installed distribution.
     Installed(InstalledDist),
-    /// A request to pre-fetch the metadata for a package and the best-guess distribution.
+    /// Prefetch metadata for a package and its most likely distribution.
     Prefetch(PackageName, Range<Version>, PythonRequirement),
 }
 
 impl<'a> From<ResolvedDistRef<'a>> for Request {
     fn from(dist: ResolvedDistRef<'a>) -> Self {
-        // N.B. This is almost identical to `ResolvedDistRef::to_owned`, but
-        // creates a `Request` instead of a `ResolvedDist`. There's probably
-        // some room for DRYing this up a bit. The obvious way would be to
-        // add a method to create a `Dist`, but a `Dist` cannot be represented
-        // as an installed dist.
+        // This resembles `ResolvedDistRef::to_owned` but creates a `Request`.
+        // A shared method cannot return `Dist` because `Dist` cannot represent installed packages.
         match dist {
             ResolvedDistRef::InstallableRegistrySourceDist { sdist, prioritized } => {
-                // This is okay because we're only here if the prioritized dist
-                // has an sdist, so this always succeeds.
+                // This branch guarantees that the prioritized distribution has a source distribution.
                 let source = prioritized.source_dist().expect("a source distribution");
                 assert_eq!(
                     (&sdist.name, &sdist.version),
@@ -3826,8 +3774,7 @@ impl<'a> From<ResolvedDistRef<'a>> for Request {
                     prioritized.best_wheel().map(|(wheel, _)| &wheel.filename),
                     "expected chosen wheel to match best wheel"
                 );
-                // This is okay because we're only here if the prioritized dist
-                // has at least one wheel, so this always succeeds.
+                // This branch guarantees that the prioritized distribution has at least one wheel.
                 let built = prioritized.built_dist().expect("at least one wheel");
                 Self::Dist(Dist::Built(BuiltDist::Registry(built)))
             }
@@ -3872,36 +3819,30 @@ enum Response {
     },
 }
 
-/// Information about the dependencies for a particular package.
+/// Dependency information for a package.
 ///
-/// This effectively distills the dependency metadata of a package down into
-/// its pubgrub specific constituent parts: each dependency package has a range
-/// of possible versions.
+/// Each dependency includes the package and the version range used by PubGrub.
 enum Dependencies {
     /// Package dependencies are not available.
     Unavailable(UnavailableVersion),
-    /// Container for all available package versions.
+    /// Dependencies for all available package versions.
     ///
-    /// Note that in universal mode, it is possible and allowed for multiple
-    /// `PubGrubPackage` values in this list to have the same package name.
-    /// These conflicts are resolved via [`ForkedDependencies::from_dependencies_universal`].
+    /// In universal mode, multiple `PubGrubPackage` values can have the same package name.
+    /// [`ForkedDependencies::from_dependencies_universal`] resolves these conflicts.
     Available(Vec<PubGrubDependency>),
     /// Package metadata has a `Requires-Python` specifier that is incompatible with the target.
     RequiresPython(VersionSpecifiers),
-    /// Dependencies that should never result in a fork.
+    /// Dependencies that must not create a fork.
     ///
-    /// For example, the dependencies of a `Marker` package will have the
-    /// same name and version, but differ according to marker expressions.
-    /// But we never want this to result in a fork.
+    /// For example, `Marker` dependencies can share a name and version but have different markers.
+    /// These differences must not create a fork.
     Unforkable(Vec<PubGrubDependency>),
 }
 
-/// Information about the (possibly forked) dependencies for a particular
-/// package.
+/// Dependency information for a package, including any forks.
 ///
-/// This is like `Dependencies` but with an extra variant that only occurs when
-/// a `Dependencies` list has multiple dependency specifications with the same
-/// name and non-overlapping marker expressions (i.e., a fork occurs).
+/// Unlike [`Dependencies`], this includes a variant for dependencies that require separate forks.
+/// These dependencies have the same package name and disjoint marker expressions.
 #[derive(Debug)]
 enum ForkedDependencies {
     /// Package dependencies are not available.
@@ -3910,14 +3851,13 @@ enum ForkedDependencies {
     ///
     /// This is the same as `Dependencies::Available`.
     Unforked(Vec<PubGrubDependency>),
-    /// Forked containers for all available package versions.
+    /// Separate forks for all available package versions.
     ///
-    /// Note that there is always at least two forks. If there would
-    /// be fewer than 2 forks, then there is no fork at all and the
-    /// `Unforked` variant is used instead.
+    /// This variant always contains at least two forks.
+    /// Use [`ForkedDependencies::Unforked`] when fewer than two forks are needed.
     Forked {
         forks: Vec<Fork>,
-        /// The package(s) with different requirements for disjoint markers.
+        /// Packages with different requirements for disjoint markers.
         diverging_packages: BTreeSet<PackageName>,
     },
     /// Package metadata has a `Requires-Python` specifier that is incompatible with the target.
@@ -3925,12 +3865,9 @@ enum ForkedDependencies {
 }
 
 impl ForkedDependencies {
-    /// Turn a flat list of dependencies into a potential set of forked
-    /// groups of dependencies.
+    /// Convert a flat dependency list into forked dependency groups when needed.
     ///
-    /// A fork *only* occurs when there are multiple dependencies with the same
-    /// name *and* those dependency specifications have corresponding marker
-    /// expressions that are completely disjoint with one another.
+    /// A fork occurs only when dependencies share a name and have completely disjoint markers.
     fn from_dependencies_universal(
         dependencies: Dependencies,
         env: &ResolverEnvironment,
@@ -3968,8 +3905,7 @@ impl ForkedDependencies {
         }
     }
 
-    /// Noop companion to [`ForkedDependencies::from_dependencies_universal`] for non-universal
-    /// resolutions with a fixed marker environment.
+    /// Return unforked dependencies for a non-universal resolution with a fixed marker environment.
     fn from_dependencies_platform_specific(dependencies: Dependencies) -> Self {
         match dependencies {
             Dependencies::Available(deps) | Dependencies::Unforkable(deps) => Self::Unforked(deps),
@@ -3978,13 +3914,11 @@ impl ForkedDependencies {
         }
     }
 
-    /// Build a list of forks determined from the dependencies of a single package.
+    /// Build forks from the dependencies of a single package.
     ///
-    /// Any time a marker expression is seen that is not true for all possible
-    /// marker environments, it is possible for it to introduce a new fork.
+    /// A marker expression can create a fork when it is not true in every marker environment.
     ///
-    /// Returns the forks discovered among the dependencies and the package(s) that
-    /// provoked at least one additional fork.
+    /// Return the resulting forks and the packages that created additional forks.
     fn fork(
         name_to_deps: BTreeMap<PackageName, Vec<PubGrubDependency>>,
         env: &ResolverEnvironment,
@@ -3997,24 +3931,15 @@ impl ForkedDependencies {
         let mut diverging_packages = BTreeSet::new();
         for (name, mut deps) in name_to_deps {
             assert!(!deps.is_empty(), "every name has at least one dependency");
-            // We never fork if there's only one dependency
-            // specification for a given package name. This particular
-            // strategy results in a "conservative" approach to forking
-            // that gives up correctness in some cases in exchange for
-            // more limited forking. More limited forking results in
-            // simpler-and-easier-to-understand lock files and faster
-            // resolving. The correctness we give up manifests when
-            // two transitive non-sibling dependencies conflict. In
-            // that case, we don't detect the fork ahead of time (at
-            // present).
+            // Avoid forking for a package with one dependency specification.
+            // This conservative strategy produces simpler lockfiles and faster resolution.
+            // However, it does not detect conflicts between transitive non-sibling dependencies.
             if let [dep] = deps.as_slice() {
-                // There's one exception: if the requirement increases the minimum-supported Python
-                // version, we also fork in order to respect that minimum in the subsequent
-                // resolution.
+                // Fork if the requirement raises the minimum supported Python version.
+                // The subsequent resolution must respect the higher minimum.
                 //
                 // For example, given `requires-python = ">=3.7"` and `uv ; python_version >= "3.8"`,
-                // where uv itself only supports Python 3.8 and later, we need to fork to ensure
-                // that the resolution can find a solution.
+                // uv supports only Python 3.8 and later, so a fork is needed to find a solution.
                 if marker::requires_python(dep.package.marker())
                     .is_none_or(|bound| !python_requirement.raises(&bound))
                 {
@@ -4028,13 +3953,11 @@ impl ForkedDependencies {
                     continue;
                 }
             } else {
-                // If all dependencies have the same markers, we should also avoid forking.
+                // Avoid forking when all dependencies have the same marker.
                 if let Some(dep) = deps.first() {
                     let marker = dep.package.marker();
                     if deps.iter().all(|dep| marker == dep.package.marker()) {
-                        // Unless that "same marker" is a Python requirement that is stricter than
-                        // the current Python requirement. In that case, we need to fork to respect
-                        // the stricter requirement.
+                        // Fork if the shared marker requires a stricter Python version.
                         if marker::requires_python(marker)
                             .is_none_or(|bound| !python_requirement.raises(&bound))
                         {
@@ -4054,20 +3977,18 @@ impl ForkedDependencies {
                 let mut forker = match ForkingPossibility::new(env, &dep) {
                     ForkingPossibility::Possible(forker) => forker,
                     ForkingPossibility::DependencyAlwaysExcluded => {
-                        // If the markers can never be satisfied by the parent
-                        // fork, then we can drop this dependency unceremoniously.
+                        // Drop dependencies whose markers cannot match the parent fork.
                         continue;
                     }
                     ForkingPossibility::NoForkingPossible => {
-                        // Or, if the markers are always true, then we just
-                        // add the dependency to every fork unconditionally.
+                        // Add dependencies with always-true markers to every fork.
                         for fork in &mut forks {
                             fork.add_dependency(dep.clone());
                         }
                         continue;
                     }
                 };
-                // Otherwise, we *should* need to add a new fork...
+                // Otherwise, create a new fork when the marker requires one.
                 diverging_packages.insert(name.clone());
 
                 let mut new = vec![];
@@ -4081,15 +4002,12 @@ impl ForkedDependencies {
                     for fork_env in envs {
                         let mut new_fork = fork.clone();
                         new_fork.set_env(fork_env);
-                        // We only add the dependency to this fork if it
-                        // satisfies the fork's markers. Some forks are
-                        // specifically created to exclude this dependency,
-                        // so this isn't always true!
+                        // Add the dependency only when its marker matches the fork.
+                        // Some forks intentionally exclude this dependency.
                         if forker.included(&new_fork.env) {
                             new_fork.add_dependency(dep.clone());
                         }
-                        // Filter out any forks we created that are disjoint with our
-                        // Python requirement.
+                        // Drop forks that are disjoint from the Python requirement.
                         if new_fork.env.included_by_marker(python_marker) {
                             new.push(new_fork);
                         }
@@ -4098,30 +4016,19 @@ impl ForkedDependencies {
                 forks = new;
             }
         }
-        // When there is a conflicting group configuration, we need
-        // to potentially add more forks. Each fork added contains an
-        // exclusion list of conflicting groups where dependencies with
-        // the corresponding package and extra name are forcefully
-        // excluded from that group.
+        // Conflicting group configurations can require more forks.
+        // Each fork excludes dependencies that match its conflicting package and extra names.
         //
-        // We specifically iterate on conflicting groups and
-        // potentially re-generate all forks for each one. We do it
-        // this way in case there are multiple sets of conflicting
-        // groups that impact the forks here.
+        // Rebuild the forks for each conflict set so all sets are applied.
         //
-        // For example, if we have conflicting groups {x1, x2} and {x3,
-        // x4}, we need to make sure the forks generated from one set
-        // also account for the other set.
+        // For example, forks for `{x1, x2}` must also account for `{x3, x4}`.
         for set in conflicts.iter() {
             let mut new = vec![];
             for fork in std::mem::take(&mut forks) {
-                // Check if this conflict set is relevant to this fork. We need two conditions:
+                // A conflict set is relevant to this fork under two conditions:
                 //
-                // 1. At least one item has dependencies in this fork (otherwise there's nothing to
-                //    fork on).
-                // 2. At least two items are not already excluded in this fork's environment
-                //    (otherwise the conflict constraint is already satisfied and no fork is
-                //    needed).
+                // 1. At least one item has dependencies in this fork.
+                // 2. At least two items are not excluded by the fork environment.
                 let mut has_conflicting_dependency = false;
                 for item in set.iter() {
                     if fork.contains_conflicting_item(item.as_ref()) {
@@ -4135,20 +4042,16 @@ impl ForkedDependencies {
                     continue;
                 }
 
-                // If fewer than two items in this conflict set are still possible (not already
-                // excluded) in this fork, the conflict constraint is already satisfied by prior
-                // forking. We can skip the full N+1 fork split if the single remaining non-excluded
-                // item doesn't appear in any other conflict set (since it would never need its own
-                // "excluded" variant).
+                // Earlier forks satisfy this conflict if fewer than two items remain possible.
+                // Skip the full N+1 split when the remaining item appears in no other conflict set.
+                // In that case, the item does not need a separate excluded variant.
                 let non_excluded: Vec<_> = set
                     .iter()
                     .filter(|item| fork.env.included_by_group(item.as_ref()))
                     .collect();
                 if non_excluded.len() < 2 {
-                    // Check if any non-excluded item still has a live conflict in another set —
-                    // i.e., another set where this item AND at least one other non-excluded item
-                    // both appear. If so, we still need to fork to create the "excluded" variant
-                    // for that item.
+                    // Check whether a remaining item conflicts with another possible item in a
+                    // different set. If it does, create an excluded variant for that item.
                     let dominated = non_excluded.iter().all(|item| {
                         !conflicts.iter().any(|other_set| {
                             !std::ptr::eq(set, other_set)
@@ -4165,10 +4068,8 @@ impl ForkedDependencies {
                         })
                     });
                     if dominated {
-                        // When dependencies are added to forks, we check `included_by_marker` but
-                        // not on whether the dependency's conflict item is included by the fork's
-                        // environment so there may be extraneous dependencies and we need to filter
-                        // the fork to clean up dependencies gated on already-excluded extras.
+                        // Adding dependencies checks `included_by_marker`, not conflict inclusion.
+                        // Remove dependencies guarded by extras that this fork already excludes.
                         let rules: Vec<_> = set
                             .iter()
                             .filter(|item| !fork.env.included_by_group(item.as_ref()))
@@ -4182,18 +4083,15 @@ impl ForkedDependencies {
                     }
                 }
 
-                // Create a fork that excludes ALL conflicts.
+                // Create a fork that excludes every conflicting group.
                 if let Some(fork_none) = fork.clone().filter(set.iter().cloned().map(Err)) {
                     new.push(fork_none);
                 }
 
-                // Now create a fork for each conflicting group, where
-                // that fork excludes every *other* conflicting group.
+                // Create one fork per conflicting group. Each fork excludes every other group.
                 //
-                // So if we have conflicting extras foo, bar and baz,
-                // then this creates three forks: one that excludes
-                // {foo, bar}, one that excludes {foo, baz} and one
-                // that excludes {bar, baz}.
+                // For conflicting extras `foo`, `bar`, and `baz`, create three forks.
+                // They exclude `{foo, bar}`, `{foo, baz}`, and `{bar, baz}`, respectively.
                 for (i, _) in set.iter().enumerate() {
                     let fork_allows_group = fork.clone().filter(
                         set.iter()
@@ -4214,47 +4112,34 @@ impl ForkedDependencies {
 
 /// A single fork in a list of dependencies.
 ///
-/// A fork corresponds to the full list of dependencies for a package,
-/// but with any conflicting dependency specifications omitted. For
-/// example, if we have `a<2 ; sys_platform == 'foo'` and `a>=2 ;
-/// sys_platform == 'bar'`, then because the dependency specifications
-/// have the same name and because the marker expressions are disjoint,
-/// a fork occurs. One fork will contain `a<2` but not `a>=2`, while
-/// the other fork will contain `a>=2` but not `a<2`.
+/// A fork contains package dependencies without conflicting specifications.
+/// For example, `a<2 ; sys_platform == 'foo'` and `a>=2 ; sys_platform == 'bar'` create two forks.
+/// Their package names match, but their marker expressions are disjoint.
+/// One fork contains only `a<2`; the other contains only `a>=2`.
 #[derive(Clone, Debug)]
 struct Fork {
-    /// The list of dependencies for this fork, guaranteed to be conflict
-    /// free. (i.e., There are no two packages with the same name with
-    /// non-overlapping marker expressions.)
+    /// Conflict-free dependencies for this fork.
+    /// No two packages with the same name have non-overlapping marker expressions.
     ///
-    /// Note that callers shouldn't mutate this sequence directly. Instead,
-    /// they should use `add_forked_package` or `add_nonfork_package`. Namely,
-    /// it should be impossible for a package with a marker expression that is
-    /// disjoint from the marker expression on this fork to be added.
+    /// Do not modify this list directly. Use `add_forked_package` or `add_nonfork_package`.
+    /// A package marker must not be disjoint from the fork marker.
     dependencies: Vec<PubGrubDependency>,
     /// The conflicting groups in this fork.
     ///
-    /// This exists to make some access patterns more efficient. Namely,
-    /// it makes it easy to check whether there's a dependency with a
-    /// particular conflicting group in this fork.
+    /// This set efficiently identifies dependencies in a particular conflicting group.
     conflicts: crate::FxHashbrownSet<ConflictItem>,
     /// The resolver environment for this fork.
     ///
-    /// Principally, this corresponds to the markers in this for. So in the
-    /// example above, the `a<2` fork would have `sys_platform == 'foo'`, while
-    /// the `a>=2` fork would have `sys_platform == 'bar'`.
+    /// This environment includes the fork markers. In the example above, the `a<2` fork uses
+    /// `sys_platform == 'foo'`, and the `a>=2` fork uses `sys_platform == 'bar'`.
     ///
-    /// If this fork was generated from another fork, then this *includes*
-    /// the criteria from its parent. i.e., Its marker expression represents
-    /// the intersection of the marker expression from its parent and any
-    /// additional marker expression generated by addition forking based on
-    /// conflicting dependency specifications.
+    /// A child fork also includes its parent criteria.
+    /// Its marker intersects the parent marker with markers from additional dependency forks.
     env: ResolverEnvironment,
 }
 
 impl Fork {
-    /// Create a new fork with no dependencies with the given resolver
-    /// environment.
+    /// Create a fork with the given resolver environment and no dependencies.
     fn new(env: ResolverEnvironment) -> Self {
         Self {
             dependencies: vec![],
@@ -4271,10 +4156,9 @@ impl Fork {
         self.dependencies.push(dep);
     }
 
-    /// Sets the resolver environment to the one given.
+    /// Set the resolver environment.
     ///
-    /// Any dependency in this fork that does not satisfy the given environment
-    /// is removed.
+    /// Remove dependencies that do not satisfy the new environment.
     fn set_env(&mut self, env: ResolverEnvironment) {
         self.env = env;
         self.dependencies.retain(|dep| {
@@ -4289,18 +4173,16 @@ impl Fork {
         });
     }
 
-    /// Returns true if any of the dependencies in this fork contain a
-    /// dependency with the given package and extra values.
+    /// Return `true` if a dependency has the given package and extra values.
     fn contains_conflicting_item(&self, item: ConflictItemRef<'_>) -> bool {
         self.conflicts.contains(&item)
     }
 
-    /// Include or Exclude the given groups from this fork.
+    /// Include or exclude the given groups from this fork.
     ///
-    /// This removes all dependencies matching the given conflicting groups.
+    /// Remove dependencies that match excluded conflicting groups.
     ///
-    /// If the exclusion rules would result in a fork with an unsatisfiable
-    /// resolver environment, then this returns `None`.
+    /// Return `None` if the exclusion rules make the resolver environment unsatisfiable.
     fn filter(
         mut self,
         rules: impl IntoIterator<Item = Result<ConflictItem, ConflictItem>>,
@@ -4314,8 +4196,8 @@ impl Fork {
                 return true;
             }
             match conflicting_item.kind() {
-                // We should not filter entire projects unless they're a top-level dependency
-                // Otherwise, we'll fail to solve for children of the project, like extras
+                // Filter an entire project only when it is a top-level dependency.
+                // Otherwise, its children, such as extras, cannot be resolved.
                 ConflictKindRef::Project => {
                     if dep.parent.is_some() {
                         return true;

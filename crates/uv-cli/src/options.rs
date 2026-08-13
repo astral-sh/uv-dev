@@ -145,8 +145,8 @@ pub fn resolve_flag(cli_flag: bool, name: &'static str, env_flag: EnvFlag) -> Fl
 
 /// Resolve a pair of mutually exclusive boolean flags from the CLI and environment variables.
 ///
-/// If either flag is set on the command line, both environment variables are ignored so the CLI
-/// retains precedence over the full pair.
+/// If either flag is set on the command line, both environment variables are ignored. The CLI
+/// takes precedence over the full pair.
 pub fn resolve_flag_pair(
     cli_flag: bool,
     cli_no_flag: bool,
@@ -182,8 +182,8 @@ pub fn resolve_flag_pair(
 
 /// Check if two flags conflict and return an error if they do.
 ///
-/// This function checks if both flags are enabled (truthy) and reports an error if so, including
-/// the source of each flag (CLI or environment variable) in the error message.
+/// If both flags are enabled, returns an error that includes each flag's source: the CLI or an
+/// environment variable.
 pub fn check_conflicts(flag_a: Flag, flag_b: Flag) -> anyhow::Result<()> {
     if let (
         Flag::Enabled {

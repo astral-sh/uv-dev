@@ -1,7 +1,6 @@
-"""
-Python shims for the PEP 517 and PEP 660 build backend.
+"""Provide PEP 517 and PEP 660 build backend hooks.
 
-Major imports in this module are required to be lazy:
+Import large modules only when a hook needs them. Imports can increase startup time:
 ```
 $ hyperfine \
      "/usr/bin/python3 -c \"print('hi')\"" \
@@ -11,9 +10,9 @@ With import: Time (mean ± σ):      15.2 ms ±   2.0 ms    [User: 12.3 ms, Syst
 Base 1.38 ± 0.28 times faster than with import
 ```
 
-The same thing goes for the typing module, so we use Python 3.10 type annotations that
-don't require importing typing but then quote them so earlier Python version ignore
-them while IDEs and type checker can see through the quotes.
+Use quoted Python 3.10 type annotations to avoid importing `typing` at runtime.
+Older Python versions ignore the quoted annotations. Editors and type checkers can
+still read them.
 """
 
 TYPE_CHECKING = False
@@ -21,13 +20,14 @@ if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
     from typing import Any
 
-# Use the `uv build-backend` command rather than `uv-build`. This option is provided
-# for downstream distributions who provide `uv` and wish to avoid building a partially
-# overlapping `uv-build` executable.
+# Run `uv build-backend` instead of `uv-build` when this option is enabled.
+# Downstream distributors that already provide `uv` can avoid building a separate
+# executable with overlapping functionality.
 USE_UV_EXECUTABLE = False
 
 
 def warn_config_settings(config_settings: "Mapping[Any, Any] | None" = None) -> None:
+    """Warn when a caller supplies unsupported build settings."""
     import sys
 
     if config_settings:
@@ -37,7 +37,7 @@ def warn_config_settings(config_settings: "Mapping[Any, Any] | None" = None) -> 
 def call(
     args: "Sequence[str]", config_settings: "Mapping[Any, Any] | None" = None
 ) -> str:
-    """Invoke a uv subprocess and return the filename from stdout."""
+    """Run the build backend and return its output filename."""
     import shutil
     import subprocess
     import sys
@@ -45,21 +45,21 @@ def call(
     warn_config_settings(config_settings)
 
     uv_bin_name = "uv" if USE_UV_EXECUTABLE else "uv-build"
-    # Unlike `find_uv_bin`, this mechanism must work according to PEP 517
+    # Search `PATH` so the executable follows the PEP 517 build environment.
     uv_bin = shutil.which(uv_bin_name)
     if uv_bin is None:
         raise RuntimeError(f"{uv_bin_name} was not properly installed")
     build_backend_args = ["build-backend"] if USE_UV_EXECUTABLE else []
-    # Forward stderr, capture stdout for the filename
+    # Send standard error to the caller and capture the output filename.
     result = subprocess.run(
         [uv_bin, *build_backend_args, *args], stdout=subprocess.PIPE, check=False
     )
     if result.returncode != 0:
         sys.exit(result.returncode)
-    # If there was extra stdout, forward it (there should not be extra stdout)
+    # Forward any output that appears before the filename.
     stdout = result.stdout.decode("utf-8").strip().splitlines(keepends=True)
     sys.stdout.writelines(stdout[:-1])
-    # Fail explicitly instead of an irrelevant stacktrace
+    # Show a clear error when the subprocess does not return a filename.
     if not stdout:
         print(
             f"{uv_bin_name} subprocess did not return a filename on stdout",
@@ -72,7 +72,7 @@ def call(
 def build_sdist(
     sdist_directory: str, config_settings: "Mapping[Any, Any] | None" = None
 ) -> str:
-    """PEP 517 hook `build_sdist`."""
+    """Build a source distribution with the PEP 517 `build_sdist` hook."""
     args = ["build-sdist", sdist_directory]
     return call(args, config_settings)
 
@@ -82,7 +82,7 @@ def build_wheel(
     config_settings: "Mapping[Any, Any] | None" = None,
     metadata_directory: "str | None" = None,
 ) -> str:
-    """PEP 517 hook `build_wheel`."""
+    """Build a wheel with the PEP 517 `build_wheel` hook."""
     args = ["build-wheel", wheel_directory]
     if metadata_directory:
         args.extend([metadata_directory])
@@ -92,7 +92,7 @@ def build_wheel(
 def get_requires_for_build_sdist(
     config_settings: "Mapping[Any, Any] | None" = None,
 ) -> "Sequence[str]":
-    """PEP 517 hook `get_requires_for_build_sdist`."""
+    """Return the extra build requirements for a source distribution."""
     warn_config_settings(config_settings)
     return []
 
@@ -100,7 +100,7 @@ def get_requires_for_build_sdist(
 def get_requires_for_build_wheel(
     config_settings: "Mapping[Any, Any] | None" = None,
 ) -> "Sequence[str]":
-    """PEP 517 hook `get_requires_for_build_wheel`."""
+    """Return the extra build requirements for a wheel."""
     warn_config_settings(config_settings)
     return []
 
@@ -108,7 +108,7 @@ def get_requires_for_build_wheel(
 def prepare_metadata_for_build_wheel(
     metadata_directory: str, config_settings: "Mapping[Any, Any] | None" = None
 ) -> str:
-    """PEP 517 hook `prepare_metadata_for_build_wheel`."""
+    """Prepare wheel metadata with the PEP 517 metadata hook."""
     args = ["prepare-metadata-for-build-wheel", metadata_directory]
     return call(args, config_settings)
 
@@ -118,7 +118,7 @@ def build_editable(
     config_settings: "Mapping[Any, Any] | None" = None,
     metadata_directory: "str | None" = None,
 ) -> str:
-    """PEP 660 hook `build_editable`."""
+    """Build an editable wheel with the PEP 660 `build_editable` hook."""
     args = ["build-editable", wheel_directory]
     if metadata_directory:
         args.extend([metadata_directory])
@@ -128,7 +128,7 @@ def build_editable(
 def get_requires_for_build_editable(
     config_settings: "Mapping[Any, Any] | None" = None,
 ) -> "Sequence[str]":
-    """PEP 660 hook `get_requires_for_build_editable`."""
+    """Return the extra build requirements for an editable wheel."""
     warn_config_settings(config_settings)
     return []
 
@@ -136,6 +136,6 @@ def get_requires_for_build_editable(
 def prepare_metadata_for_build_editable(
     metadata_directory: str, config_settings: "Mapping[Any, Any] | None" = None
 ) -> str:
-    """PEP 660 hook `prepare_metadata_for_build_editable`."""
+    """Prepare editable wheel metadata with the PEP 660 metadata hook."""
     args = ["prepare-metadata-for-build-editable", metadata_directory]
     return call(args, config_settings)

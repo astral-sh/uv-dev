@@ -281,8 +281,7 @@ static ANDROID_X86_MARKERS: LazyLock<UniversalMarker> = LazyLock::new(|| {
 
 /// A distribution with its associated hash.
 ///
-/// This pairs a [`Dist`] with the [`HashDigests`] for the specific wheel or
-/// sdist that would be installed.
+/// Pair a [`Dist`] with the [`HashDigests`] for the wheel or source distribution to install.
 pub(crate) struct HashedDist {
     dist: Dist,
     hashes: HashDigests,
@@ -632,28 +631,16 @@ impl<'a> LockedDependencyBuilder<'a> {
         let dependency =
             Dependency::new(self.requires_python, package_id, extras, simplified_marker);
 
-        // It's important that we do a comparison on
-        // *simplified* markers here. In particular, when
-        // we write markers out to the lock file, we use
-        // "simplified" markers, or markers that are simplified
-        // *given* that `requires-python` is satisfied. So if
-        // we don't do equality based on what the simplified
-        // marker is, we might wind up not merging dependencies
-        // that ought to be merged and thus writing out extra
-        // entries.
+        // Compare simplified markers because the lockfile stores markers simplified under
+        // `requires-python`. Comparing unsimplified markers can prevent equivalent dependencies
+        // from merging and create duplicate lockfile entries.
         //
-        // For example, if `requires-python = '>=3.8'` and we
-        // have `foo==1` and
-        // `foo==1 ; python_version >= '3.8'` dependencies,
-        // then they don't have equivalent complexified
-        // markers, but their simplified markers are identical.
+        // For `requires-python = '>=3.8'`, the dependencies `foo==1` and
+        // `foo==1 ; python_version >= '3.8'` have different complexified markers.
+        // Their simplified markers are identical.
         //
-        // NOTE: It does seem like perhaps this should
-        // be implemented semantically/algebraically on
-        // `MarkerTree` itself, but it wasn't totally clear
-        // how to do that. I think `pep508` would need to
-        // grow a concept of "requires python" and provide an
-        // operation specifically for that.
+        // NOTE: `MarkerTree` could implement this comparison if `pep508` gains an operation
+        // that accounts for `requires-python`.
         let existing = dependencies.iter_mut().find(|existing| {
             existing.package_id == dependency.package_id
                 && existing.simplified_marker == dependency.simplified_marker
@@ -947,8 +934,7 @@ impl<'lock> ExpectedPackageDependencies<'lock> {
 
 /// Direct dependency selections from a [`Lock`] for a named package.
 ///
-/// The dependency can come from the lock manifest, a dependency group, the production packages,
-/// or a combination thereof.
+/// Dependencies can come from the lock manifest, dependency groups, production packages, or all three.
 #[derive(Debug)]
 pub struct DependencySelection<'lock> {
     root: Option<SelectedDependency<'lock>>,
@@ -3319,13 +3305,10 @@ impl Lock {
     }
 }
 
-/// The set of lockfile packages that should be audited, materialized from a
-/// single traversal of the dependency graph.
+/// Lockfile packages to audit, collected in one traversal of the dependency graph.
 ///
-/// Created via [`Lock::auditable`]. Exposes multiple views so that different
-/// audit sources (e.g. per-version vulnerability databases and per-project
-/// status markers) can share one walk rather than each re-traversing the
-/// lockfile.
+/// [`Lock::auditable`] creates this set. Its views let multiple audit sources share one traversal.
+/// Audit sources include per-version vulnerability databases and per-project status markers.
 #[derive(Debug)]
 pub struct Auditable<'lock> {
     /// Packages deduplicated by `(name, version)` and sorted by the same key.
@@ -3788,9 +3771,8 @@ impl TryFrom<LockWire> for Lock {
     }
 }
 
-/// Like [`Lock`], but limited to the version field. Used for error reporting: by limiting parsing
-/// to the version field, we can verify compatibility for lockfiles that may otherwise be
-/// unparsable.
+/// The version field of a [`Lock`], used for error reporting.
+/// Parsing only this field checks compatibility even when the rest of a lockfile cannot be parsed.
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 struct LockVersion {
@@ -4725,8 +4707,7 @@ impl PackageWire {
     }
 }
 
-/// Inside the lockfile, we match a dependency entry to a package entry through a key made up
-/// of the name, the version and the source url.
+/// Match a lockfile dependency to a package by name, version, and source URL.
 #[derive(Clone, Debug, Eq, Hash, PartialEq, PartialOrd, Ord, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) struct PackageId {
@@ -4798,8 +4779,7 @@ impl PackageIdForDependency {
             if let Some(package_id) = unambiguous_package_id {
                 package_id.version.clone()
             } else {
-                // If the package is a source tree, assume that the missing `self.version` field is
-                // indicative of a dynamic version.
+                // A missing `self.version` field indicates a dynamic version for a source tree.
                 if source.is_source_tree() {
                     None
                 } else {
@@ -4828,13 +4808,10 @@ impl From<PackageId> for PackageIdForDependency {
     }
 }
 
-/// A unique identifier to differentiate between different sources for the same version of a
-/// package.
+/// A unique source identifier for a package version.
 ///
-/// NOTE: Care should be taken when adding variants to this enum. Namely, new
-/// variants should be added without changing the relative ordering of other
-/// variants. Otherwise, this could cause the lockfile to have a different
-/// canonical ordering of sources.
+/// NOTE: Add variants without changing the relative order of existing variants.
+/// Otherwise, the canonical order of lockfile sources can change.
 #[derive(Clone, Debug, Eq, Hash, PartialEq, PartialOrd, Ord, serde::Deserialize)]
 #[serde(try_from = "SourceWire")]
 enum Source {
@@ -5343,12 +5320,12 @@ impl TryFrom<SourceWire> for Source {
     }
 }
 
-/// The source for a registry, which could be a URL or a relative path.
+/// A registry source, represented by a URL or relative path.
 #[derive(Clone, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
 enum RegistrySource {
-    /// Ex) `https://pypi.org/simple`
+    /// For example, `https://pypi.org/simple`.
     Url(UrlString),
-    /// Ex) `../path/to/local/index`
+    /// For example, `../path/to/local/index`.
     Path(Box<Path>),
 }
 
@@ -5363,9 +5340,9 @@ impl Display for RegistrySource {
 
 #[derive(Clone, Debug)]
 enum RegistrySourceWire {
-    /// Ex) `https://pypi.org/simple`
+    /// For example, `https://pypi.org/simple`.
     Url(UrlString),
-    /// Ex) `../path/to/local/index`
+    /// For example, `../path/to/local/index`.
     Path(PortablePathBuf),
 }
 
@@ -5424,10 +5401,8 @@ struct DirectSource {
     subdirectory: Option<Box<Path>>,
 }
 
-/// NOTE: Care should be taken when adding variants to this enum. Namely, new
-/// variants should be added without changing the relative ordering of other
-/// variants. Otherwise, this could cause the lockfile to have a different
-/// canonical ordering of package entries.
+/// NOTE: Add variants without changing the relative order of existing variants.
+/// Otherwise, the canonical order of lockfile package entries can change.
 #[derive(Clone, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
 struct GitSource {
     precise: GitOid,
@@ -5437,7 +5412,7 @@ struct GitSource {
     lfs: GitLfs,
 }
 
-/// An error that occurs when a source string could not be parsed.
+/// An error that occurs when a source string cannot be parsed.
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum GitSourceError {
     InvalidSha,
@@ -5446,8 +5421,7 @@ enum GitSourceError {
 }
 
 impl GitSource {
-    /// Extracts a Git source reference from the query pairs and the hash
-    /// fragment in the given URL.
+    /// Extract a Git source reference from the URL query parameters and hash fragment.
     fn from_url(url: &Url) -> Result<Self, GitSourceError> {
         let mut kind = GitSourceKind::DefaultBranch;
         let mut subdirectory = None;
@@ -5510,16 +5484,14 @@ struct SourceDistMetadata {
     hash: Option<Hash>,
     /// The size of the source distribution in bytes.
     ///
-    /// This is only present for source distributions that come from registries.
+    /// This is present only for source distributions from registries.
     size: Option<u64>,
     /// The upload time of the source distribution.
     upload_time: Option<Timestamp>,
 }
 
-/// A URL or file path where the source dist that was
-/// locked against was found. The location does not need to exist in the
-/// future, so this should be treated as only a hint to where to look
-/// and/or recording where the source dist file originally came from.
+/// The URL or file path where a locked source distribution was found.
+/// The location might not exist later. Treat it as a search hint or a record of the original source.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum SourceDist {
     Url {
@@ -6628,15 +6600,14 @@ fn normalize_url(mut url: DisplaySafeUrl) -> UrlString {
     UrlString::from(url)
 }
 
-/// Normalize a [`Requirement`], which could come from a lockfile, a `pyproject.toml`, etc.
+/// Normalize a [`Requirement`] from a lockfile, `pyproject.toml`, or another source.
 ///
-/// Performs the following steps:
+/// Perform these steps:
 ///
-/// 1. Removes any sensitive credentials.
-/// 2. Ensures that the lock and install paths are appropriately framed with respect to the
-///    current [`Workspace`].
-/// 3. Removes the `origin` field, which is only used in `requirements.txt`.
-/// 4. Simplifies the markers using the provided [`RequiresPython`] instance.
+/// 1. Remove sensitive credentials.
+/// 2. Resolve lock and install paths relative to the current [`Workspace`].
+/// 3. Remove the `origin` field, which is used only in `requirements.txt`.
+/// 4. Simplify markers with the provided [`RequiresPython`] instance.
 fn normalize_requirement(
     mut requirement: Requirement,
     root: &Path,
@@ -7243,81 +7214,65 @@ impl std::fmt::Display for WheelTagHint {
     }
 }
 
-/// An error that occurs when generating a `Lock` data structure.
+/// An error that occurs while generating a [`Lock`].
 ///
-/// These errors are sometimes the result of possible programming bugs.
-/// For example, if there are two or more duplicative distributions given
-/// to `Lock::new`, then an error is returned. It's likely that the fault
-/// is with the caller somewhere in such cases.
+/// Some errors indicate programming bugs. For example, [`Lock::new`] rejects duplicate
+/// distributions, which usually indicates an error in the caller.
 #[derive(Debug, thiserror::Error)]
 enum LockErrorKind {
-    /// An error that occurs when the overrides for validating a
-    /// metadata-free lockfile cannot be scoped to their packages.
+    /// Overrides for a metadata-free lockfile cannot be scoped to their packages.
     #[error(transparent)]
     InvalidScopedOverride(#[from] ScopedOverrideSourceError),
-    /// An error that occurs when multiple packages with the same
-    /// ID were found.
+    /// Multiple packages have the same ID.
     #[error("Found duplicate package `{id}`", id = id.cyan())]
     DuplicatePackage {
         /// The ID of the conflicting package.
         id: PackageId,
     },
-    /// An error that occurs when there are multiple dependencies for the
-    /// same package that have identical identifiers.
+    /// A package has multiple dependencies with the same identifier.
     #[error("For package `{id}`, found duplicate dependency `{dependency}`", id = id.cyan(), dependency = dependency.cyan())]
     DuplicateDependency {
-        /// The ID of the package for which a duplicate dependency was
-        /// found.
+        /// The ID of the package with the duplicate dependency.
         id: PackageId,
         /// The ID of the conflicting dependency.
         dependency: Dependency,
     },
-    /// An error that occurs when there are multiple dependencies for the
-    /// same package that have identical identifiers, as part of the
-    /// that package's optional dependencies.
+    /// A package has multiple optional dependencies with the same identifier.
     #[error("For package `{id}`, found duplicate dependency `{dependency}`", id = format!("{id}[{extra}]").cyan(), dependency = dependency.cyan())]
     DuplicateOptionalDependency {
-        /// The ID of the package for which a duplicate dependency was
-        /// found.
+        /// The ID of the package with the duplicate dependency.
         id: PackageId,
         /// The name of the extra.
         extra: ExtraName,
         /// The ID of the conflicting dependency.
         dependency: Dependency,
     },
-    /// An error that occurs when there are multiple dependencies for the
-    /// same package that have identical identifiers, as part of the
-    /// that package's development dependencies.
+    /// A package has multiple development dependencies with the same identifier.
     #[error("For package `{id}`, found duplicate dependency `{dependency}`", id = format!("{id}:{group}").cyan(), dependency = dependency.cyan())]
     DuplicateDevDependency {
-        /// The ID of the package for which a duplicate dependency was
-        /// found.
+        /// The ID of the package with the duplicate dependency.
         id: PackageId,
         /// The name of the dev dependency group.
         group: GroupName,
         /// The ID of the conflicting dependency.
         dependency: Dependency,
     },
-    /// An error that occurs when the URL to a file for a wheel or
-    /// source dist could not be converted to a structured `url::Url`.
+    /// A wheel or source distribution URL cannot be converted to a structured `url::Url`.
     #[error(transparent)]
     InvalidUrl(
-        /// The underlying error that occurred. This includes the
-        /// errant URL in its error message.
+        /// The underlying error, including the invalid URL.
         #[from]
         ToUrlError,
     ),
-    /// An error that occurs when the extension can't be determined
-    /// for a given wheel or source distribution.
+    /// The file extension of a wheel or source distribution cannot be determined.
     #[error("Failed to parse file extension for `{id}`; expected one of: {err}", id = id.cyan())]
     MissingExtension {
-        /// The filename that was expected to have an extension.
+        /// The filename that must have an extension.
         id: PackageId,
-        /// The list of valid extensions that were expected.
+        /// The valid file extensions.
         err: ExtensionError,
     },
-    /// An error that occurs when a locked source distribution has a
-    /// non-PEP 625-compliant filename (e.g., `.tar.bz2`).
+    /// A locked source distribution has a filename that does not comply with PEP 625.
     #[error(
         "Source distribution for `{id}` has a non-PEP 625-compliant filename; only `.tar.gz` and `.zip` archives are accepted",
         id = id.cyan()
@@ -7329,43 +7284,35 @@ enum LockErrorKind {
     /// Failed to parse a Git source URL.
     #[error("Failed to parse Git URL")]
     InvalidGitSourceUrl(
-        /// The underlying error that occurred. This includes the
-        /// errant URL in the message.
+        /// The underlying error, including the invalid URL.
         #[source]
         SourceParseError,
     ),
     #[error("Failed to parse timestamp")]
     InvalidTimestamp(
-        /// The underlying error that occurred. This includes the
-        /// errant timestamp in the message.
+        /// The underlying error, including the invalid timestamp.
         #[source]
         jiff::Error,
     ),
-    /// An error that occurs when there's an unrecognized dependency.
-    ///
-    /// That is, a dependency for a package that isn't in the lockfile.
+    /// A dependency refers to a package that is not in the lockfile.
     #[error("For package `{id}`, found dependency `{dependency}` with no locked package", id = id.cyan(), dependency = dependency.cyan())]
     UnrecognizedDependency {
         /// The ID of the package that has an unrecognized dependency.
         id: PackageId,
-        /// The ID of the dependency that doesn't have a corresponding package
-        /// entry.
+        /// The ID of the dependency without a corresponding package entry.
         dependency: Dependency,
     },
-    /// An error that occurs when a hash is expected (or not) for a particular
-    /// artifact, but one was not found (or was).
+    /// An artifact hash is missing when required or present when not expected.
     #[error("Since the package `{id}` comes from a {source} dependency, a hash was {expected} but one was not found for {artifact_type}", id = id.cyan(), source = id.source.name(), expected = if *expected { "expected" } else { "not expected" })]
     Hash {
         /// The ID of the package that has a missing hash.
         id: PackageId,
-        /// The specific type of artifact, e.g., "source package"
-        /// or "wheel".
+        /// The artifact type, such as "source package" or "wheel".
         artifact_type: &'static str,
         /// Whether a hash was expected.
         expected: bool,
     },
-    /// An error that occurs when an index requires a hash algorithm that an artifact does not
-    /// advertise.
+    /// An artifact does not advertise the hash algorithm required by its index.
     #[error(
         "The index `{index}` requires `{algorithm}` hashes, but `{filename}` does not provide one"
     )]
@@ -7374,8 +7321,7 @@ enum LockErrorKind {
         filename: String,
         algorithm: HashAlgorithm,
     },
-    /// An error that occurs when a package is included with an extra name,
-    /// but no corresponding base package (i.e., without the extra) exists.
+    /// A package extra is present without its corresponding base package.
     #[error("Found package `{id}` with extra `{extra}` but no base package", id = id.cyan(), extra = extra.cyan())]
     MissingExtraBase {
         /// The ID of the package that has a missing base.
@@ -7383,9 +7329,7 @@ enum LockErrorKind {
         /// The extra name that was found.
         extra: ExtraName,
     },
-    /// An error that occurs when a package is included with a development
-    /// dependency group, but no corresponding base package (i.e., without
-    /// the group) exists.
+    /// A development dependency group is present without its corresponding base package.
     #[error("Found package `{id}` with development dependency group `{group}` but no base package", id = id.cyan())]
     MissingDevBase {
         /// The ID of the package that has a missing base.
@@ -7393,8 +7337,7 @@ enum LockErrorKind {
         /// The development dependency group that was found.
         group: GroupName,
     },
-    /// An error that occurs from an invalid lockfile where a wheel comes from a non-wheel source
-    /// such as a directory.
+    /// A wheel comes from an invalid source, such as a directory.
     #[error("Wheels cannot come from {source_type} sources")]
     InvalidWheelSource {
         /// The ID of the distribution that has a missing base.
@@ -7402,8 +7345,7 @@ enum LockErrorKind {
         /// The kind of the invalid source.
         source_type: &'static str,
     },
-    /// An error that occurs when a distribution indicates that it is sourced from a remote
-    /// registry, but is missing a URL.
+    /// A distribution from a remote registry is missing its URL.
     #[error("Found registry distribution `{name}` ({version}) without a valid URL", name = name.cyan(), version = format!("v{version}").cyan())]
     MissingUrl {
         /// The name of the distribution that is missing a URL.
@@ -7411,8 +7353,7 @@ enum LockErrorKind {
         /// The version of the distribution that is missing a URL.
         version: Version,
     },
-    /// An error that occurs when a distribution indicates that it is sourced from a local registry,
-    /// but is missing a path.
+    /// A distribution from a local registry is missing its path.
     #[error("Found registry distribution `{name}` ({version}) without a valid path", name = name.cyan(), version = format!("v{version}").cyan())]
     MissingPath {
         /// The name of the distribution that is missing a path.
@@ -7420,145 +7361,136 @@ enum LockErrorKind {
         /// The version of the distribution that is missing a path.
         version: Version,
     },
-    /// An error that occurs when a distribution indicates that it is sourced from a registry, but
-    /// is missing a filename.
+    /// A distribution from a registry is missing its filename.
     #[error("Found registry distribution `{id}` without a valid filename", id = id.cyan())]
     MissingFilename {
         /// The ID of the distribution that is missing a filename.
         id: PackageId,
     },
-    /// An error that occurs when a distribution is included with neither wheels nor a source
-    /// distribution.
+    /// A distribution has neither a wheel nor a source distribution.
     #[error("Distribution `{id}` can't be installed because it doesn't have a source distribution or wheel for the current platform", id = id.cyan())]
     NeitherSourceDistNorWheel {
         /// The ID of the distribution.
         id: PackageId,
     },
-    /// An error that occurs when a distribution is marked as both `--no-binary` and `--no-build`.
+    /// A distribution is marked with both `--no-binary` and `--no-build`.
     #[error("Distribution `{id}` can't be installed because it is marked as both `--no-binary` and `--no-build`", id = id.cyan())]
     NoBinaryNoBuild {
         /// The ID of the distribution.
         id: PackageId,
     },
-    /// An error that occurs when a distribution is marked as `--no-binary`, but no source
-    /// distribution is available.
+    /// A distribution marked with `--no-binary` has no source distribution.
     #[error("Distribution `{id}` can't be installed because it is marked as `--no-binary` but has no source distribution", id = id.cyan())]
     NoBinary {
         /// The ID of the distribution.
         id: PackageId,
     },
-    /// An error that occurs when a distribution is marked as `--no-build`, but no binary
-    /// distribution is available.
+    /// A distribution marked with `--no-build` has no binary distribution.
     #[error("Distribution `{id}` can't be installed because it is marked as `--no-build` but has no binary distribution", id = id.cyan())]
     NoBuild {
         /// The ID of the distribution.
         id: PackageId,
     },
-    /// An error that occurs when a wheel-only distribution is incompatible with the current
-    /// platform.
+    /// A wheel-only distribution is incompatible with the current platform.
     #[error("Distribution `{id}` can't be installed because the binary distribution is incompatible with the current platform", id = id.cyan())]
     IncompatibleWheelOnly {
         /// The ID of the distribution.
         id: PackageId,
     },
-    /// An error that occurs when a wheel-only source is marked as `--no-binary`.
+    /// A wheel-only source is marked with `--no-binary`.
     #[error("Distribution `{id}` can't be installed because it is marked as `--no-binary` but is itself a binary distribution", id = id.cyan())]
     NoBinaryWheelOnly {
         /// The ID of the distribution.
         id: PackageId,
     },
-    /// An error that occurs when converting between URLs and paths.
+    /// A URL cannot be converted to a path, or a path cannot be converted to a URL.
     #[error("Found dependency `{id}` with no locked distribution", id = id.cyan())]
     VerbatimUrl {
         /// The ID of the distribution that has a missing base.
         id: PackageId,
-        /// The inner error we forward.
+        /// The underlying conversion error.
         #[source]
         err: VerbatimUrlError,
     },
-    /// An error that occurs when parsing an existing requirement.
+    /// A distribution path cannot be made relative to the workspace.
     #[error("Could not compute relative path between workspace and distribution")]
     DistributionRelativePath(
-        /// The inner error we forward.
+        /// The underlying path error.
         #[source]
         io::Error,
     ),
-    /// An error that occurs when converting an index URL to a relative path
+    /// An index URL cannot be converted to a path relative to the workspace.
     #[error("Could not compute relative path between workspace and index")]
     IndexRelativePath(
-        /// The inner error we forward.
+        /// The underlying path error.
         #[source]
         io::Error,
     ),
-    /// An error that occurs when converting a lockfile path from relative to absolute.
+    /// A relative lockfile path cannot be converted to an absolute path.
     #[error("Could not compute absolute path from workspace root and lockfile path")]
     AbsolutePath(
-        /// The inner error we forward.
+        /// The underlying path error.
         #[source]
         io::Error,
     ),
-    /// An error that occurs when an ambiguous `package.dependency` is
-    /// missing a `version` field.
+    /// An ambiguous `package.dependency` is missing its `version` field.
     #[error("Dependency `{name}` has missing `version` field but has more than one matching package", name = name.cyan())]
     MissingDependencyVersion {
         /// The name of the dependency that is missing a `version` field.
         name: PackageName,
     },
-    /// An error that occurs when a registry-source package is missing a
-    /// `version` field.
+    /// A registry-source package is missing its `version` field.
     #[error("Package `{name}` from a registry source has a missing `version` field", name = name.cyan())]
     MissingPackageVersion {
         /// The name of the package that is missing a `version` field.
         name: PackageName,
     },
-    /// An error that occurs when an ambiguous `package.dependency` is
-    /// missing a `source` field.
+    /// An ambiguous `package.dependency` is missing its `source` field.
     #[error("Dependency `{name}` has missing `source` field but has more than one matching package", name = name.cyan())]
     MissingDependencySource {
         /// The name of the dependency that is missing a `source` field.
         name: PackageName,
     },
-    /// An error that occurs when parsing an existing requirement.
+    /// A requirement path cannot be made relative to the workspace.
     #[error("Could not compute relative path between workspace and requirement")]
     RequirementRelativePath(
-        /// The inner error we forward.
+        /// The underlying path error.
         #[source]
         io::Error,
     ),
-    /// An error that occurs when parsing an existing requirement.
+    /// A requirement URL cannot be converted to a path, or a path cannot be converted to a URL.
     #[error("Could not convert between URL and path")]
     RequirementVerbatimUrl(
-        /// The inner error we forward.
+        /// The underlying conversion error.
         #[source]
         VerbatimUrlError,
     ),
-    /// An error that occurs when parsing a registry's index URL.
+    /// A registry index URL cannot be converted to a path.
     #[error("Could not convert between URL and path")]
     RegistryVerbatimUrl(
-        /// The inner error we forward.
+        /// The underlying conversion error.
         #[source]
         VerbatimUrlError,
     ),
-    /// An error that occurs when converting a path to a URL.
+    /// A path cannot be converted to a URL.
     #[error("Failed to convert path to URL: {path}", path = path.display().cyan())]
     PathToUrl { path: Box<Path> },
-    /// An error that occurs when converting a URL to a path
+    /// A URL cannot be converted to a path.
     #[error("Failed to convert URL to path: {url}", url = url.cyan())]
     UrlToPath { url: DisplaySafeUrl },
-    /// An error that occurs when multiple packages with the same
-    /// name were found when identifying the root packages.
+    /// Multiple root packages have the same name.
     #[error("Found multiple packages matching `{name}`", name = name.cyan())]
     MultipleRootPackages {
         /// The ID of the package.
         name: PackageName,
     },
-    /// An error that occurs when a root package can't be found.
+    /// A root package cannot be found.
     #[error("Could not find root package `{name}`", name = name.cyan())]
     MissingRootPackage {
         /// The ID of the package.
         name: PackageName,
     },
-    /// An error that occurs when a concrete root package does not belong to the lock.
+    /// A concrete root package is not in the lockfile.
     #[error("Could not find root package `{id}` in lock", id = id.cyan())]
     RootPackageMissingFromLock {
         /// The ID of the package.
@@ -7576,17 +7508,17 @@ enum LockErrorKind {
         /// The ID of the dependency whose inclusion is ambiguous.
         dependency: PackageId,
     },
-    /// An error that occurs when resolving metadata for a package.
+    /// Package metadata cannot be resolved.
     #[error("Failed to generate package metadata for `{id}`", id = id.cyan())]
     Resolution {
         /// The ID of the distribution that failed to resolve.
         id: PackageId,
-        /// The inner error we forward.
+        /// The underlying resolution error.
         #[source]
         err: uv_distribution::Error,
     },
-    /// A package has inconsistent versions in a single entry
-    // Using name instead of id since the version in the id is part of the conflict.
+    /// A package entry contains inconsistent versions.
+    // Use the package name because the version in its ID contributes to the conflict.
     #[error("The entry for package `{name}` ({version}) has wheel `{wheel_filename}` with inconsistent version ({wheel_version}), which indicates a malformed wheel. If this is intentional, set `{env_var}`.", name = name.cyan(), wheel_filename = wheel.filename, wheel_version = wheel.filename.version, env_var = "UV_SKIP_WHEEL_FILENAME_CHECK=1".green())]
     InconsistentVersions {
         /// The name of the package with the inconsistent entry.
@@ -7620,7 +7552,7 @@ enum LockErrorKind {
         #[source]
         err: uv_pypi_types::MetadataError,
     },
-    /// An error that occurs when a workspace member has a non-local source.
+    /// A workspace member has a non-local source.
     #[error("Workspace member `{id}` has non-local source", id = id.cyan())]
     NonLocalWorkspaceMember {
         /// The ID of the workspace member with an invalid source.
@@ -7628,33 +7560,33 @@ enum LockErrorKind {
     },
 }
 
-/// An error that occurs when a source string could not be parsed.
+/// An error that occurs when a source string cannot be parsed.
 #[derive(Debug, thiserror::Error)]
 enum SourceParseError {
-    /// An error that occurs when the URL in the source is invalid.
+    /// The source contains an invalid URL.
     #[error("Invalid URL in source `{given}`")]
     InvalidUrl {
-        /// The source string given.
+        /// The source string.
         given: String,
         /// The URL parse error.
         #[source]
         err: DisplaySafeUrlError,
     },
-    /// An error that occurs when a Git URL is missing a precise commit SHA.
+    /// A Git URL is missing a precise commit SHA.
     #[error("Missing SHA in source `{given}`")]
     MissingSha {
-        /// The source string given.
+        /// The source string.
         given: String,
     },
-    /// An error that occurs when a Git URL has an invalid SHA.
+    /// A Git URL contains an invalid SHA.
     #[error("Invalid SHA in source `{given}`")]
     InvalidSha {
-        /// The source string given.
+        /// The source string.
         given: String,
     },
 }
 
-/// An error that occurs when a hash digest could not be parsed.
+/// An error that occurs when a hash digest cannot be parsed.
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct HashParseError(&'static str);
 
@@ -7681,9 +7613,9 @@ fn fork_markers_union(
     environment
 }
 
-/// Simplify an edge marker using the PEP 508 conditions that must already hold to reach its parent
-/// node. Parent conflict predicates remain on the edge for compatibility with older lockfile
-/// readers that evaluate dependency markers independently during conflict discovery.
+/// Simplify an edge marker with the PEP 508 conditions needed to reach its parent node.
+/// Keep parent conflict predicates on the edge for compatibility with older lockfile readers.
+/// Those readers evaluate dependency markers independently during conflict discovery.
 fn simplify_dependency_marker(
     requires_python: &RequiresPython,
     environment: SimplifiedMarkerTree,
@@ -7703,10 +7635,9 @@ fn simplify_dependency_marker(
     marker
 }
 
-/// Returns the simplified string-ified version of each marker given.
+/// Return the simplified string form of each marker.
 ///
-/// Note that the marker strings returned will include conflict markers if they
-/// are present.
+/// Include conflict markers when they are present.
 fn simplified_universal_markers(
     markers: &[UniversalMarker],
     requires_python: &RequiresPython,
@@ -7719,10 +7650,9 @@ fn simplified_universal_markers(
 
 /// Canonicalize universal markers to match the form persisted in `uv.lock`.
 ///
-/// When the PEP 508 portions of the markers are disjoint, the lockfile stores
-/// only those simplified PEP 508 markers. Otherwise, it stores the simplified
-/// combined markers (including conflict markers). Markers that serialize to
-/// `true` are omitted.
+/// When the PEP 508 parts are disjoint, store only their simplified PEP 508 markers.
+/// Otherwise, store the simplified combined markers, including conflict markers.
+/// Omit markers that serialize to `true`.
 fn canonicalize_universal_markers(
     markers: &[UniversalMarker],
     requires_python: &RequiresPython,
@@ -7771,13 +7701,12 @@ fn canonical_marker_trees(
         .collect()
 }
 
-/// Filter out wheels that can't be selected for installation due to environment markers.
+/// Filter out wheels that environment markers prevent from being installed.
 ///
-/// For example, a package included under `sys_platform == 'win32'` does not need Linux
-/// wheels.
+/// For example, a package under `sys_platform == 'win32'` does not need Linux wheels.
 ///
-/// Returns `true` if the wheel is definitely unreachable, and `false` if it may be reachable,
-/// including if the wheel tag isn't recognized.
+/// Return `true` if the wheel is definitely unreachable.
+/// Return `false` if the wheel might be reachable or its tag is not recognized.
 fn is_wheel_unreachable_for_marker(
     filename: &WheelFilename,
     requires_python: &RequiresPython,
@@ -7789,19 +7718,17 @@ fn is_wheel_unreachable_for_marker(
     {
         return true;
     }
-    // Remove wheels that don't match `requires-python` and can't be selected for installation.
+    // Remove wheels that do not match `requires-python` and cannot be installed.
     if !requires_python.matches_wheel_tag(filename) {
         return true;
     }
 
     // Filter by platform tags.
 
-    // Naively, we'd check whether `platform_system == 'Linux'` is disjoint, or
-    // `os_name == 'posix'` is disjoint, or `sys_platform == 'linux'` is disjoint (each on its
-    // own sufficient to exclude linux wheels), but due to
+    // Each platform marker can independently exclude a wheel. For Linux, these include
+    // `platform_system == 'Linux'`, `os_name == 'posix'`, and `sys_platform == 'linux'`.
     // `(A ∩ (B ∩ C) = ∅) => ((A ∩ B = ∅) or (A ∩ C = ∅))`
-    // a single disjointness check with the intersection is sufficient, so we have one
-    // constant per platform.
+    // Therefore, one intersection check and one marker constant are sufficient per platform.
     let platform_tags = filename.platform_tags();
 
     if platform_tags.iter().all(PlatformTag::is_any) {

@@ -24,32 +24,32 @@ use crate::marker::lowering::{
 use crate::marker::parse;
 use crate::{CanonicalMarkerValueExtra, MarkerEnvironment, Pep508Error, Reporter, TracingReporter};
 
-/// Ways in which marker evaluation can fail
+/// Warnings that can occur during marker evaluation.
 #[derive(Copy, Clone, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
 pub enum MarkerWarningKind {
-    /// Using an old name from PEP 345 instead of the modern equivalent
+    /// Uses a deprecated PEP 345 name instead of its current equivalent.
     /// <https://peps.python.org/pep-0345/#environment-markers>
     DeprecatedMarkerName,
-    /// Doing an operation other than `==` and `!=` on a quoted string with `extra`, such as
-    /// `extra > "perf"` or `extra == os_name`
+    /// Compares `extra` with an unsupported operator or an unquoted value, such as
+    /// `extra > "perf"` or `extra == os_name`.
     ExtraInvalidComparison,
-    /// Doing an operation other than `in` and `not in` on a quoted string with `extra`, such as
-    /// `extras > "perf"` or `extras == os_name`
+    /// Compares `extras` with an unsupported operator or an unquoted value, such as
+    /// `extras > "perf"` or `extras == os_name`.
     ExtrasInvalidComparison,
-    /// Doing an operation other than `in` and `not in` on a quoted string with `dependency_groups`,
-    /// such as `dependency_groups > "perf"` or `dependency_groups == os_name`
+    /// Compares `dependency_groups` with an unsupported operator or an unquoted value, such as
+    /// `dependency_groups > "perf"` or `dependency_groups == os_name`.
     DependencyGroupsInvalidComparison,
-    /// Comparing a string valued marker and a string lexicographically, such as `"3.9" > "3.10"`
+    /// Compares a string-valued marker lexicographically, such as `"3.9" > "3.10"`.
     LexicographicComparison,
-    /// Comparing two markers, such as `os_name != sys_implementation`
+    /// Compares two markers, such as `os_name != sys_implementation`.
     MarkerMarkerComparison,
-    /// Failed to parse a PEP 440 version or version specifier, e.g. `>=1<2`
+    /// Cannot parse a PEP 440 version or version specifier, such as `>=1<2`.
     Pep440Error,
-    /// Comparing two strings, such as `"3.9" > "3.10"`
+    /// Compares two strings, such as `"3.9" > "3.10"`.
     StringStringComparison,
 }
 
-/// Those environment markers with a PEP 440 version as value such as `python_version`
+/// Environment markers with PEP 440 version values, such as `python_version`.
 #[derive(Copy, Clone, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
 pub enum MarkerValueVersion {
     /// `implementation_version`
@@ -70,7 +70,7 @@ impl Display for MarkerValueVersion {
     }
 }
 
-/// Those environment markers with an arbitrary string as value such as `sys_platform`
+/// Environment markers with string values, such as `sys_platform`.
 #[derive(Copy, Clone, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
 pub enum MarkerValueString {
     /// `implementation_name`
@@ -104,7 +104,7 @@ pub enum MarkerValueString {
 }
 
 impl Display for MarkerValueString {
-    /// Normalizes deprecated names to the proper ones
+    /// Replaces deprecated names with their current names.
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Self::ImplementationName => f.write_str("implementation_name"),
@@ -125,14 +125,14 @@ impl Display for MarkerValueString {
     }
 }
 
-/// Those markers with exclusively `in` and `not in` operators.
+/// Markers that support only the `in` and `not in` operators.
 ///
-/// Contains PEP 751 lockfile markers.
+/// Includes PEP 751 lockfile markers.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
 pub enum MarkerValueList {
-    /// `extras`. This one is special because it's a list, and user-provided
+    /// The user-provided `extras` list.
     Extras,
-    /// `dependency_groups`. This one is special because it's a list, and user-provided
+    /// The user-provided `dependency_groups` list.
     DependencyGroups,
 }
 
@@ -145,27 +145,27 @@ impl Display for MarkerValueList {
     }
 }
 
-/// One of the predefined environment values
+/// A predefined environment marker value.
 ///
 /// <https://packaging.python.org/en/latest/specifications/dependency-specifiers/#environment-markers>
 #[derive(Clone, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
 pub(crate) enum MarkerValue {
-    /// Those environment markers with a PEP 440 version as value such as `python_version`
+    /// An environment marker with a PEP 440 version value, such as `python_version`.
     MarkerEnvVersion(MarkerValueVersion),
-    /// Those environment markers with an arbitrary string as value such as `sys_platform`
+    /// An environment marker with a string value, such as `sys_platform`.
     MarkerEnvString(MarkerValueString),
-    /// Those markers with exclusively `in` and `not in` operators
+    /// A marker that supports only the `in` and `not in` operators.
     MarkerEnvList(MarkerValueList),
-    /// `extra`. This one is special because it's a list, and user-provided
+    /// A user-provided `extra` value.
     Extra,
-    /// Not a constant, but a user given quoted string with a value inside such as '3.8' or "windows"
+    /// A user-provided quoted string, such as `'3.8'` or `"windows"`.
     QuotedString(ArcStr),
 }
 
 impl FromStr for MarkerValue {
     type Err = String;
 
-    /// This is specifically for the reserved values
+    /// Parses a reserved marker value.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let value = match s {
             "implementation_name" => Self::MarkerEnvString(MarkerValueString::ImplementationName),
@@ -218,7 +218,7 @@ impl Display for MarkerValue {
     }
 }
 
-/// How to compare key and value, such as by `==`, `>` or `not in`
+/// An operator that compares a marker key and value, such as `==`, `>`, or `not in`.
 #[derive(Copy, Clone, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
 pub enum MarkerOperator {
     /// `==`
@@ -241,18 +241,16 @@ pub enum MarkerOperator {
     NotIn,
     /// The inverse of the `in` operator.
     ///
-    /// This is not a valid operator when parsing but is used for normalizing
-    /// marker trees.
+    /// Valid only when normalizing marker trees, not when parsing markers.
     Contains,
     /// The inverse of the `not in` operator.
     ///
-    /// This is not a valid operator when parsing but is used for normalizing
-    /// marker trees.
+    /// Valid only when normalizing marker trees, not when parsing markers.
     NotContains,
 }
 
 impl MarkerOperator {
-    /// Compare two versions, returning `None` for `in` and `not in`.
+    /// Compares two versions and returns `None` for `in` and `not in`.
     pub(crate) fn to_pep440_operator(self) -> Option<uv_pep440::Operator> {
         match self {
             Self::Equal => Some(uv_pep440::Operator::Equal),
@@ -285,8 +283,7 @@ impl MarkerOperator {
 
     /// Negates this marker operator.
     ///
-    /// If a negation doesn't exist, which is only the case for ~=, then this
-    /// returns `None`.
+    /// Returns `None` for `~=`, which has no single negated operator.
     pub(crate) fn negate(self) -> Option<Self> {
         Some(match self {
             Self::Equal => Self::NotEqual,
@@ -320,7 +317,7 @@ impl MarkerOperator {
         b1.into_iter().chain(b2)
     }
 
-    /// Returns a value specifier representing the given lower bound.
+    /// Returns a value specifier for the given lower bound.
     fn from_lower_bound(bound: Bound<&ArcStr>) -> Option<(Self, ArcStr)> {
         match bound {
             Bound::Included(value) => Some((Self::GreaterEqual, value.clone())),
@@ -329,7 +326,7 @@ impl MarkerOperator {
         }
     }
 
-    /// Returns a value specifier representing the given upper bound.
+    /// Returns a value specifier for the given upper bound.
     fn from_upper_bound(bound: Bound<&ArcStr>) -> Option<(Self, ArcStr)> {
         match bound {
             Bound::Included(value) => Some((Self::LessEqual, value.clone())),
@@ -342,7 +339,7 @@ impl MarkerOperator {
 impl FromStr for MarkerOperator {
     type Err = String;
 
-    /// PEP 508 allows arbitrary whitespace between "not" and "in", and so do we
+    /// Allows arbitrary whitespace between `not` and `in`, as PEP 508 requires.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let value = match s {
             "==" => Self::Equal,
@@ -355,11 +352,11 @@ impl FromStr for MarkerOperator {
             "in" => Self::In,
             not_space_in
                 if not_space_in
-                    // start with not
+                    // Start with `not`.
                     .strip_prefix("not")
-                    // ends with in
+                    // End with `in`.
                     .and_then(|space_in| space_in.strip_suffix("in"))
-                    // and has only whitespace in between
+                    // Accept only whitespace between them.
                     .is_some_and(|space| !space.is_empty() && space.trim().is_empty()) =>
             {
                 Self::NotIn
@@ -386,12 +383,12 @@ impl Display for MarkerOperator {
     }
 }
 
-/// Helper type with a [Version] and its original text
+/// A [`Version`] and its original text.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct StringVersion {
-    /// Original unchanged string
+    /// The original, unchanged string.
     pub string: String,
-    /// Parsed version
+    /// The parsed version.
     pub version: Version,
 }
 
@@ -479,7 +476,7 @@ impl MarkerValueExtra {
         }
     }
 
-    /// Convert the [`MarkerValueExtra`] to an [`ExtraName`], if possible.
+    /// Converts the [`MarkerValueExtra`] to an [`ExtraName`], if possible.
     fn into_extra(self) -> Option<ExtraName> {
         match self {
             Self::Extra(extra) => Some(extra),
@@ -497,34 +494,33 @@ impl Display for MarkerValueExtra {
     }
 }
 
-/// Represents one clause such as `python_version > "3.8"`.
+/// A marker clause, such as `python_version > "3.8"`.
 #[derive(Clone, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
 #[allow(missing_docs)]
 pub enum MarkerExpression {
-    /// A version expression, e.g. `<version key> <version op> <quoted PEP 440 version>`.
+    /// A version expression, such as `<version key> <version op> <quoted PEP 440 version>`.
     ///
-    /// Inverted version expressions, such as `<version> <version op> <version key>`, are also
-    /// normalized to this form.
+    /// Also normalizes inverted expressions, such as `<version> <version op> <version key>`, to
+    /// this form.
     Version {
         key: MarkerValueVersion,
         specifier: VersionSpecifier,
     },
-    /// A version in list expression, e.g. `<version key> in <quoted list of PEP 440 versions>`.
+    /// A version-list expression, such as `<version key> in <quoted list of PEP 440 versions>`.
     ///
-    /// A special case of [`MarkerExpression::String`] with the [`MarkerOperator::In`] operator for
-    /// [`MarkerValueVersion`] values.
+    /// A [`MarkerExpression::String`] with [`MarkerOperator::In`] and [`MarkerValueVersion`] values.
     ///
-    /// See [`parse::parse_version_in_expr`] for details on the supported syntax.
+    /// See [`parse::parse_version_in_expr`] for the supported syntax.
     ///
-    /// Negated expressions, using "not in" are represented using `negated = true`.
+    /// The `not in` operator represents negated expressions.
     VersionIn {
         key: MarkerValueVersion,
         versions: Vec<Version>,
         operator: ContainerOperator,
     },
-    /// An string marker comparison, e.g. `sys_platform == '...'`.
+    /// A string marker comparison, such as `sys_platform == '...'`.
     ///
-    /// Inverted string expressions, e.g `'...' == sys_platform`, are also normalized to this form.
+    /// Also normalizes inverted expressions, such as `'...' == sys_platform`, to this form.
     String {
         key: MarkerValueString,
         operator: MarkerOperator,
@@ -545,19 +541,19 @@ pub enum MarkerExpression {
 /// The kind of a [`MarkerExpression`].
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
 pub(crate) enum MarkerExpressionKind {
-    /// A version expression, e.g. `<version key> <version op> <quoted PEP 440 version>`.
+    /// A version expression, such as `<version key> <version op> <quoted PEP 440 version>`.
     Version(MarkerValueVersion),
-    /// A version `in` expression, e.g. `<version key> in <quoted list of PEP 440 versions>`.
+    /// A version `in` expression, such as `<version key> in <quoted list of PEP 440 versions>`.
     VersionIn(MarkerValueVersion),
-    /// A string marker comparison, e.g. `sys_platform == '...'`.
+    /// A string marker comparison, such as `sys_platform == '...'`.
     String(MarkerValueString),
-    /// A list `in` or `not in` expression, e.g. `'...' in dependency_groups`.
+    /// A list `in` or `not in` expression, such as `'...' in dependency_groups`.
     List(MarkerValueList),
-    /// An extra expression, e.g. `extra == '...'`.
+    /// An extra expression, such as `extra == '...'`.
     Extra,
 }
 
-/// The operator for an extra expression, either '==' or '!='.
+/// An extra expression operator: `==` or `!=`.
 #[derive(Clone, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
 pub enum ExtraOperator {
     /// `==`
@@ -567,7 +563,7 @@ pub enum ExtraOperator {
 }
 
 impl ExtraOperator {
-    /// Creates a [`ExtraOperator`] from an equivalent [`MarkerOperator`].
+    /// Creates an [`ExtraOperator`] from an equivalent [`MarkerOperator`].
     ///
     /// Returns `None` if the operator is not supported for extras.
     pub(crate) fn from_marker_operator(operator: MarkerOperator) -> Option<Self> {
@@ -596,7 +592,7 @@ impl Display for ExtraOperator {
     }
 }
 
-/// The operator for a container expression, either 'in' or 'not in'.
+/// A container expression operator: `in` or `not in`.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
 pub enum ContainerOperator {
     /// `in`
@@ -628,7 +624,7 @@ impl Display for ContainerOperator {
 }
 
 impl MarkerExpression {
-    /// Parse a [`MarkerExpression`] from a string with the given reporter.
+    /// Parses a [`MarkerExpression`] from a string with the given reporter.
     #[cfg(test)]
     fn parse_reporter(s: &str, reporter: &mut impl Reporter) -> Result<Option<Self>, Pep508Error> {
         let mut chars = Cursor::new(s);
@@ -649,16 +645,15 @@ impl MarkerExpression {
         Ok(expression)
     }
 
-    /// Parse a [`MarkerExpression`] from a string.
+    /// Parses a [`MarkerExpression`] from a string.
     ///
-    /// Returns `None` if the expression consists entirely of meaningless expressions
-    /// that are ignored, such as `os_name ~= 'foo'`.
+    /// Returns `None` if every expression is ignored, such as `os_name ~= 'foo'`.
     #[cfg(test)]
     pub(crate) fn from_str(s: &str) -> Result<Option<Self>, Pep508Error> {
         Self::parse_reporter(s, &mut TracingReporter)
     }
 
-    /// Return the kind of this marker expression.
+    /// Returns the kind of this marker expression.
     pub(crate) fn kind(&self) -> MarkerExpressionKind {
         match self {
             Self::Version { key, .. } => MarkerExpressionKind::Version(*key),
@@ -755,11 +750,10 @@ impl<'a> ExtrasEnvironment<'a> {
     }
 }
 
-/// Represents one or more nested marker expressions with and/or/parentheses.
+/// One or more nested marker expressions with `and`, `or`, and parentheses.
 ///
-/// Marker trees are canonical, meaning any two functionally equivalent markers
-/// will compare equally. Markers also support efficient polynomial-time operations,
-/// such as conjunction and disjunction.
+/// Marker trees are canonical, so equivalent markers compare equally. Conjunction, disjunction,
+/// and other marker operations take polynomial time.
 #[derive(Clone, Copy, Eq, Hash, PartialEq)]
 pub struct MarkerTree(NodeId);
 
@@ -812,34 +806,30 @@ impl MarkerTree {
         Self(INTERNER.lock().expression(expr))
     }
 
-    /// Whether the marker always evaluates to `true`.
+    /// Returns `true` if the marker is known to always evaluate to `true`.
     ///
-    /// If this method returns `true`, it is definitively known that the marker will
-    /// evaluate to `true` in any environment. However, this method may return false
-    /// negatives, i.e. it may not be able to detect that a marker is always true for
-    /// complex expressions.
+    /// A `true` result guarantees that the marker evaluates to `true` in every environment. A
+    /// `false` result does not guarantee the opposite because complex expressions can produce
+    /// false negatives.
     pub fn is_true(self) -> bool {
         self.0.is_true()
     }
 
-    /// Whether the marker always evaluates to `false`, i.e. the expression is not
-    /// satisfiable in any environment.
+    /// Returns `true` if the marker is known to always evaluate to `false`.
     ///
-    /// If this method returns `true`, it is definitively known that the marker will
-    /// evaluate to `false` in any environment. However, this method may return false
-    /// negatives, i.e. it may not be able to detect that a marker is unsatisfiable
-    /// for complex expressions.
+    /// A `true` result guarantees that no environment satisfies the marker. A `false` result does
+    /// not guarantee the opposite because complex expressions can produce false negatives.
     pub fn is_false(self) -> bool {
         self.0.is_false()
     }
 
-    /// Returns a new marker tree that is the negation of this one.
+    /// Returns the negation of this marker tree.
     #[must_use]
     pub fn negate(self) -> Self {
         Self(self.0.not())
     }
 
-    /// Returns a new marker tree that combines this one with the given one via a conjunction.
+    /// Returns the conjunction of this marker tree and the given tree.
     #[must_use]
     pub fn and(self, tree: Self) -> Self {
         if let Some(node) = self.0.and_trivial(tree.0) {
@@ -848,7 +838,7 @@ impl MarkerTree {
         Self(INTERNER.lock().and_nontrivial(self.0, tree.0))
     }
 
-    /// Returns a new marker tree that combines this one with the given one via a disjunction.
+    /// Returns the disjunction of this marker tree and the given tree.
     #[must_use]
     pub fn or(self, tree: Self) -> Self {
         if let Some(node) = self.0.or_trivial(tree.0) {
@@ -857,24 +847,20 @@ impl MarkerTree {
         Self(INTERNER.lock().or_nontrivial(self.0, tree.0))
     }
 
-    /// Returns a marker equivalent to the implication of this one and the given consequent.
+    /// Returns the logical implication from this marker to the given consequent.
     ///
-    /// If the marker set is always `true`, then it can be said that `self`
-    /// implies `consequent`.
+    /// If the result is always `true`, `self` implies `consequent`.
     #[must_use]
     pub fn implies(self, consequent: Self) -> Self {
-        // This could probably be optimized, but is clearly
-        // correct, since logical implication is `-P or Q`.
+        // Logical implication is `-P or Q`.
         self.negate().or(consequent)
     }
 
-    /// Returns `true` if there is no environment in which both marker trees can apply,
-    /// i.e. their conjunction is always `false`.
+    /// Returns `true` if both marker trees cannot apply to the same environment.
     ///
-    /// If this method returns `true`, it is definitively known that the two markers can
-    /// never both evaluate to `true` in a given environment. However, this method may return
-    /// false negatives, i.e. it may not be able to detect that two markers are disjoint for
-    /// complex expressions.
+    /// A `true` result guarantees that both markers cannot evaluate to `true` in the same
+    /// environment. A `false` result does not guarantee the opposite because complex expressions
+    /// can produce false negatives.
     pub fn is_disjoint(self, other: Self) -> bool {
         if let Some(disjoint) = self.0.is_disjoint_trivial(other.0) {
             return disjoint;
@@ -884,8 +870,8 @@ impl MarkerTree {
 
     /// Returns the contents of this marker tree, if it contains at least one expression.
     ///
-    /// If the marker is `true`, this method will return `None`.
-    /// If the marker is `false`, the marker is represented as the normalized expression, `python_version < '0'`.
+    /// Returns `None` for a `true` marker. Represents a `false` marker as the normalized expression
+    /// `python_version < '0'`.
     ///
     /// The returned type implements [`Display`] and [`serde::Serialize`].
     pub fn contents(self) -> Option<MarkerTreeContents> {
@@ -896,11 +882,10 @@ impl MarkerTree {
         Some(MarkerTreeContents(self))
     }
 
-    /// Returns a simplified string representation of this marker, if it contains at least one
-    /// expression.
+    /// Returns a simplified string for this marker if it contains at least one expression.
     ///
-    /// If the marker is `true`, this method will return `None`.
-    /// If the marker is `false`, the marker is represented as the normalized expression, `python_version < '0'`.
+    /// Returns `None` for a `true` marker. Represents a `false` marker as the normalized expression
+    /// `python_version < '0'`.
     pub fn try_to_string(self) -> Option<String> {
         self.contents().map(|contents| contents.to_string())
     }
@@ -987,7 +972,7 @@ impl MarkerTree {
         simplify::to_dnf(self)
     }
 
-    /// Does this marker apply in the given environment?
+    /// Returns `true` if this marker applies to the given environment.
     pub fn evaluate(self, env: &MarkerEnvironment, extras: &[ExtraName]) -> bool {
         self.evaluate_reporter_impl(
             env,
@@ -996,9 +981,9 @@ impl MarkerTree {
         )
     }
 
-    /// Evaluate a marker in the context of a PEP 751 lockfile, which exposes several additional
-    /// markers (`extras` and `dependency_groups`) that are not available in any other context,
-    /// per the spec.
+    /// Evaluates a marker in a PEP 751 lockfile context.
+    ///
+    /// This context also provides the `extras` and `dependency_groups` markers.
     pub fn evaluate_pep751(
         self,
         env: &MarkerEnvironment,
@@ -1012,13 +997,10 @@ impl MarkerTree {
         )
     }
 
-    /// Evaluates this marker tree against an optional environment and a
-    /// possibly empty sequence of extras.
+    /// Evaluates this marker tree with an optional environment and a sequence of extras.
     ///
-    /// When an environment is not provided, all marker expressions based on
-    /// the environment evaluate to `true`. That is, this provides environment
-    /// independent marker evaluation. In practice, this means only the extras
-    /// are evaluated when an environment is not provided.
+    /// Without an environment, every environment-based marker expression evaluates to `true`.
+    /// Only the extras are evaluated in that case.
     pub fn evaluate_optional_environment(
         self,
         env: Option<&MarkerEnvironment>,
@@ -1102,7 +1084,7 @@ impl MarkerTree {
                     CanonicalMarkerListPair::DependencyGroup(dependency_group) => {
                         extras.dependency_groups().contains(dependency_group)
                     }
-                    // Invalid marker expression
+                    // Reject an invalid marker expression.
                     CanonicalMarkerListPair::Arbitrary { .. } => return false,
                 };
 
@@ -1115,9 +1097,9 @@ impl MarkerTree {
         false
     }
 
-    /// Checks if the requirement should be activated with the given set of active extras without evaluating
-    /// the remaining environment markers, i.e. if there is potentially an environment that could activate this
-    /// requirement.
+    /// Checks whether the active extras can enable this requirement in any environment.
+    ///
+    /// Does not evaluate the remaining environment markers.
     fn evaluate_extras(self, extras: &[ExtraName]) -> bool {
         match self.kind() {
             MarkerTreeKind::True => true,
@@ -1143,7 +1125,7 @@ impl MarkerTree {
         }
     }
 
-    /// Returns true if this marker simplifies to true if the given set of extras is activated.
+    /// Returns `true` if the given active extras simplify this marker to `true`.
     pub fn evaluate_only_extras(self, extras: &[ExtraName]) -> bool {
         match self.kind() {
             MarkerTreeKind::True => true,
@@ -1169,7 +1151,7 @@ impl MarkerTree {
         }
     }
 
-    /// Find a top level `extra == "..."` expression.
+    /// Finds a top-level `extra == "..."` expression.
     ///
     /// ASSUMPTION: There is one `extra = "..."`, and it's either the only marker or part of the
     /// main conjunction.
@@ -1186,8 +1168,7 @@ impl MarkerTree {
                 )
             })?;
 
-            // Because the marker tree is in DNF form, we must verify that the extra expression is part
-            // of all solutions to this marker.
+            // DNF form requires the extra expression to appear in every solution.
             if let Some(ref extra_expression) = extra_expression {
                 if *extra_expression != *found {
                     return None;
@@ -1202,12 +1183,12 @@ impl MarkerTree {
         extra_expression
     }
 
-    /// Find a top level `extra == "..."` name.
+    /// Finds a top-level `extra == "..."` name.
     ///
     /// ASSUMPTION: There is one `extra = "..."`, and it's either the only marker or part of the
     /// main conjunction.
     pub fn top_level_extra_name(self) -> Option<Cow<'static, ExtraName>> {
-        // Fast path: The marker is only a `extra == "..."`.
+        // Fast path: The marker contains only `extra == "..."`.
         if let MarkerTreeKind::Extra(marker) = self.kind()
             && marker.edge(true).is_true()
         {
@@ -1223,30 +1204,22 @@ impl MarkerTree {
         }
     }
 
-    /// Simplify this marker by *assuming* that the Python version range
-    /// provided is true and that the complement of it is false.
+    /// Simplifies this marker under the *assumption* that the given Python version range is true.
     ///
     /// For example, with `requires-python = '>=3.8'` and a marker tree of
     /// `python_full_version >= '3.8' and python_full_version <= '3.10'`, this
-    /// would result in a marker of `python_full_version <= '3.10'`.
+    /// becomes `python_full_version <= '3.10'`.
     ///
-    /// This is useful when one wants to write "simpler" markers in a
-    /// particular context with a bound on the supported Python versions.
-    /// In general, the simplified markers returned shouldn't be used for
-    /// evaluation. Instead, they should be turned back into their more
-    /// "complex" form first.
+    /// Use this to write simpler markers when supported Python versions have known bounds. Do not
+    /// evaluate the simplified marker directly. Restore its Python version bounds first.
     ///
-    /// Note that simplifying a marker and then complexifying it, even
-    /// with the same Python version bounds, is a lossy operation. For
-    /// example, simplifying `python_version < '3.7'` with `requires-python
-    /// = ">=3.8"` will result in a marker that always returns false (e.g.,
-    /// `python_version < '0'`). Therefore, complexifying an always-false
-    /// marker will result in a marker that is still always false, despite
-    /// the fact that the original marker was true for `<3.7`. Therefore,
-    /// simplifying should only be done as a one-way transformation when it is
-    /// known that `requires-python` reflects an eternal lower bound on the
-    /// results of that simplification. (If `requires-python` changes, then one
-    /// should reconstitute all relevant markers from the source data.)
+    /// Simplification loses information even if the same bounds are restored later. For example,
+    /// simplifying `python_version < '3.7'` with `requires-python = ">=3.8"` produces an
+    /// always-false marker, such as `python_version < '0'`. Restoring the bounds cannot recover
+    /// the original marker, which was true for versions below `3.7`.
+    ///
+    /// Simplify only when the `requires-python` bounds remain valid for the result. If those bounds
+    /// change, recreate the affected markers from their source data.
     #[must_use]
     pub fn simplify_python_versions(self, lower: Bound<&Version>, upper: Bound<&Version>) -> Self {
         Self(
@@ -1256,12 +1229,10 @@ impl MarkerTree {
         )
     }
 
-    /// Complexify marker tree by requiring the given Python version range
-    /// to be true in order for this marker tree to evaluate to true in all
-    /// circumstances.
+    /// Adds the given Python version range as a requirement for this marker tree.
     ///
     /// For example, with `requires-python = '>=3.8'` and a marker tree of
-    /// `python_full_version <= '3.10'`, this would result in a marker of
+    /// `python_full_version <= '3.10'`, the marker becomes
     /// `python_full_version >= '3.8' and python_full_version <= '3.10'`.
     #[must_use]
     pub fn complexify_python_versions(
@@ -1276,11 +1247,10 @@ impl MarkerTree {
         )
     }
 
-    /// Restrict this marker by assuming that `assumption` is true.
+    /// Restricts this marker under the assumption that `assumption` is true.
     ///
-    /// The returned marker is equivalent to this marker wherever `assumption` is true, but may
-    /// have a different value outside of that context. Before evaluating the simplified marker,
-    /// callers should conjoin `assumption` to restore its standalone meaning.
+    /// The returned marker matches this marker wherever `assumption` is true. It can differ
+    /// outside that context. Conjoin `assumption` before evaluating the marker independently.
     ///
     /// For example, restricting
     /// `sys_platform == 'linux' and python_version < '3.11'` under the assumption
@@ -1290,47 +1260,37 @@ impl MarkerTree {
         Self(INTERNER.lock().restrict(self.0, assumption.0))
     }
 
-    /// Remove the extras from a marker, returning `None` if the marker tree evaluates to `true`.
+    /// Removes satisfied `extra` expressions from this marker.
     ///
-    /// Any `extra` markers that are always `true` given the provided extras will be removed.
-    /// Any `extra` markers that are always `false` given the provided extras will be left
+    /// Removes `extra` expressions that the given extras satisfy. Leaves unsatisfied expressions
     /// unchanged.
     ///
-    /// For example, if `dev` is a provided extra, given `sys_platform == 'linux' and extra == 'dev'`,
-    /// the marker will be simplified to `sys_platform == 'linux'`.
+    /// For example, when `dev` is provided, `sys_platform == 'linux' and extra == 'dev'` becomes
+    /// `sys_platform == 'linux'`.
     #[must_use]
     pub fn simplify_extras(self, extras: &[ExtraName]) -> Self {
         self.simplify_extras_with(|name| extras.contains(name))
     }
 
-    /// Remove the extras from a marker, returning `None` if the marker tree evaluates to `true`.
+    /// Removes `extra` expressions that the given predicate satisfies.
     ///
-    /// Any `extra` markers that are always `true` given the provided predicate will be removed.
-    /// Any `extra` markers that are always `false` given the provided predicate will be left
-    /// unchanged.
+    /// Leaves unsatisfied `extra` expressions unchanged.
     ///
-    /// For example, if `is_extra('dev')` is true, given
-    /// `sys_platform == 'linux' and extra == 'dev'`, the marker will be simplified to
-    /// `sys_platform == 'linux'`.
+    /// For example, when `is_extra('dev')` is true, `sys_platform == 'linux' and extra == 'dev'`
+    /// becomes `sys_platform == 'linux'`.
     #[must_use]
     pub fn simplify_extras_with(self, is_extra: impl Fn(&ExtraName) -> bool) -> Self {
-        // Because `simplify_extras_with_impl` is recursive, and we need to use
-        // our predicate in recursive calls, we need the predicate itself to
-        // have some indirection (or else we'd have to clone it). To avoid a
-        // recursive type at codegen time, we just introduce the indirection
-        // here, but keep the calling API ergonomic.
+        // Pass the predicate by reference so recursive calls can reuse it without cloning it or
+        // creating a recursive type during code generation.
         self.simplify_extras_with_impl(&is_extra)
     }
 
-    /// Remove negated extras from a marker, returning `None` if the marker
-    /// tree evaluates to `true`.
+    /// Removes satisfied negated `extra` expressions from this marker.
     ///
-    /// Any negated `extra` markers that are always `true` given the provided
-    /// extras will be removed. Any `extra` markers that are always `false`
-    /// given the provided extras will be left unchanged.
+    /// Removes negated `extra` expressions that the given extras satisfy. Leaves unsatisfied
+    /// expressions unchanged.
     ///
-    /// For example, if `dev` is a provided extra, given `sys_platform
-    /// == 'linux' and extra != 'dev'`, the marker will be simplified to
+    /// For example, when `dev` is provided, `sys_platform == 'linux' and extra != 'dev'` becomes
     /// `sys_platform == 'linux'`.
     #[cfg(test)]
     #[must_use]
@@ -1338,39 +1298,30 @@ impl MarkerTree {
         self.simplify_not_extras_with(|name| extras.contains(name))
     }
 
-    /// Remove negated extras from a marker, returning `None` if the marker tree evaluates to
-    /// `true`.
+    /// Removes negated `extra` expressions that the given predicate satisfies.
     ///
-    /// Any negated `extra` markers that are always `true` given the provided
-    /// predicate will be removed. Any `extra` markers that are always `false`
-    /// given the provided predicate will be left unchanged.
+    /// Leaves unsatisfied `extra` expressions unchanged.
     ///
-    /// For example, if `is_extra('dev')` is true, given
-    /// `sys_platform == 'linux' and extra != 'dev'`, the marker will be simplified to
-    /// `sys_platform == 'linux'`.
+    /// For example, when `is_extra('dev')` is true, `sys_platform == 'linux' and extra != 'dev'`
+    /// becomes `sys_platform == 'linux'`.
     #[must_use]
     pub fn simplify_not_extras_with(self, is_extra: impl Fn(&ExtraName) -> bool) -> Self {
-        // Because `simplify_extras_with_impl` is recursive, and we need to use
-        // our predicate in recursive calls, we need the predicate itself to
-        // have some indirection (or else we'd have to clone it). To avoid a
-        // recursive type at codegen time, we just introduce the indirection
-        // here, but keep the calling API ergonomic.
+        // Pass the predicate by reference so recursive calls can reuse it without cloning it or
+        // creating a recursive type during code generation.
         self.simplify_not_extras_with_impl(&is_extra)
     }
 
-    /// Returns a new `MarkerTree` where all `extra` expressions are removed.
+    /// Returns a [`MarkerTree`] without `extra` expressions.
     ///
-    /// If the marker only consisted of `extra` expressions, then a marker that
-    /// is always true is returned.
+    /// Returns an always-true marker if the original contains only `extra` expressions.
     #[must_use]
     pub fn without_extras(self) -> Self {
         Self(INTERNER.lock().without_extras(self.0))
     }
 
-    /// Returns a new `MarkerTree` where only `extra` expressions are removed.
+    /// Returns a [`MarkerTree`] that contains only `extra` expressions.
     ///
-    /// If the marker did not contain any `extra` expressions, then a marker
-    /// that is always true is returned.
+    /// Returns an always-true marker if the original contains no `extra` expressions.
     #[must_use]
     pub fn only_extras(self) -> Self {
         Self(INTERNER.lock().only_extras(self.0))
@@ -1378,8 +1329,7 @@ impl MarkerTree {
 
     /// Calls the provided function on every `extra` in this tree.
     ///
-    /// The operator provided to the function is guaranteed to be
-    /// `MarkerOperator::Equal` or `MarkerOperator::NotEqual`.
+    /// The function receives only `MarkerOperator::Equal` or `MarkerOperator::NotEqual`.
     pub fn visit_extras(self, mut f: impl FnMut(MarkerOperator, &ExtraName)) {
         fn imp(tree: MarkerTree, f: &mut impl FnMut(MarkerOperator, &ExtraName)) {
             match tree.kind() {
@@ -1463,11 +1413,10 @@ impl Ord for MarkerTree {
     }
 }
 
-/// The underlying kind of an arbitrary node in a [`MarkerTree`].
+/// The kind of a node in a [`MarkerTree`].
 ///
-/// A marker tree is represented as an algebraic decision tree with two terminal nodes
-/// `True` or `False`. The edges of a given node correspond to a particular assignment of
-/// a value to that variable.
+/// A marker tree is an algebraic decision tree with terminal `True` and `False` nodes. Each edge
+/// assigns a value to its node's variable.
 #[derive(PartialEq, Eq, Clone, Debug, PartialOrd, Ord)]
 pub enum MarkerTreeKind<'a> {
     /// An empty marker that always evaluates to `true`.
@@ -1482,9 +1431,9 @@ pub enum MarkerTreeKind<'a> {
     In(InMarkerTree<'a>),
     /// A string expression with the `contains` operator.
     Contains(ContainsMarkerTree<'a>),
-    /// A `in` or `not in` expression.
+    /// An `in` or `not in` expression.
     List(ListMarkerTree<'a>),
-    /// An extra expression (e.g., `extra == 'dev'`).
+    /// An extra expression, such as `extra == 'dev'`.
     Extra(ExtraMarkerTree<'a>),
 }
 
@@ -1497,12 +1446,12 @@ pub struct VersionMarkerTree<'a> {
 }
 
 impl VersionMarkerTree<'_> {
-    /// The key for this node.
+    /// Returns the key for this node.
     pub fn key(&self) -> CanonicalMarkerValueVersion {
         self.key
     }
 
-    /// The edges of this node, corresponding to possible output ranges of the given variable.
+    /// Returns the edges for the possible output ranges of this variable.
     pub fn edges(&self) -> impl ExactSizeIterator<Item = (&Ranges<Version>, MarkerTree)> + '_ {
         self.map
             .iter()
@@ -1533,12 +1482,12 @@ pub struct StringMarkerTree<'a> {
 }
 
 impl StringMarkerTree<'_> {
-    /// The key for this node.
+    /// Returns the key for this node.
     pub fn key(&self) -> CanonicalMarkerValueString {
         self.key
     }
 
-    /// The edges of this node, corresponding to possible output ranges of the given variable.
+    /// Returns the edges for the possible output ranges of this variable.
     pub fn children(&self) -> impl ExactSizeIterator<Item = (&Ranges<ArcStr>, MarkerTree)> {
         self.map
             .iter()
@@ -1570,22 +1519,22 @@ pub struct InMarkerTree<'a> {
 }
 
 impl InMarkerTree<'_> {
-    /// The key (LHS) for this expression.
+    /// Returns the key on the left side of this expression.
     pub fn key(&self) -> CanonicalMarkerValueString {
         self.key
     }
 
-    /// The value (RHS) for this expression.
+    /// Returns the value on the right side of this expression.
     pub(crate) fn value(&self) -> &ArcStr {
         self.value
     }
 
-    /// The edges of this node, corresponding to the boolean evaluation of the expression.
+    /// Returns the edges for the boolean result of this expression.
     pub fn children(&self) -> impl Iterator<Item = (bool, MarkerTree)> {
         [(true, MarkerTree(self.high)), (false, MarkerTree(self.low))].into_iter()
     }
 
-    /// Returns the subtree associated with the given edge value.
+    /// Returns the subtree for the given edge value.
     fn edge(&self, value: bool) -> MarkerTree {
         if value {
             MarkerTree(self.high)
@@ -1610,7 +1559,7 @@ impl Ord for InMarkerTree<'_> {
     }
 }
 
-/// A string marker node with inverse of the `in` operator, such as `'nux' in os_name`.
+/// A string marker node with the inverse `in` operator, such as `'nux' in os_name`.
 #[derive(PartialEq, Eq, Clone, Debug)]
 pub struct ContainsMarkerTree<'a> {
     key: CanonicalMarkerValueString,
@@ -1620,22 +1569,22 @@ pub struct ContainsMarkerTree<'a> {
 }
 
 impl ContainsMarkerTree<'_> {
-    /// The key (LHS) for this expression.
+    /// Returns the key on the right side of this expression.
     pub fn key(&self) -> CanonicalMarkerValueString {
         self.key
     }
 
-    /// The value (RHS) for this expression.
+    /// Returns the value on the left side of this expression.
     pub(crate) fn value(&self) -> &str {
         self.value
     }
 
-    /// The edges of this node, corresponding to the boolean evaluation of the expression.
+    /// Returns the edges for the boolean result of this expression.
     pub fn children(&self) -> impl Iterator<Item = (bool, MarkerTree)> {
         [(true, MarkerTree(self.high)), (false, MarkerTree(self.low))].into_iter()
     }
 
-    /// Returns the subtree associated with the given edge value.
+    /// Returns the subtree for the given edge value.
     fn edge(&self, value: bool) -> MarkerTree {
         if value {
             MarkerTree(self.high)
@@ -1662,34 +1611,34 @@ impl Ord for ContainsMarkerTree<'_> {
 
 #[derive(PartialEq, Eq, Clone, Debug)]
 pub struct ListMarkerTree<'a> {
-    // No separate canonical type, the type is already canonical.
+    // This type is already canonical and needs no separate canonical type.
     pair: &'a CanonicalMarkerListPair,
     high: NodeId,
     low: NodeId,
 }
 
 impl ListMarkerTree<'_> {
-    /// The key-value pair for this expression
+    /// Returns the key-value pair for this expression.
     pub fn pair(&self) -> &CanonicalMarkerListPair {
         self.pair
     }
 
-    /// The key (RHS) for this expression.
+    /// Returns the key on the right side of this expression.
     pub fn key(&self) -> MarkerValueList {
         self.pair.key()
     }
 
-    /// The value (LHS) for this expression.
+    /// Returns the value on the left side of this expression.
     pub fn value(&self) -> String {
         self.pair.value()
     }
 
-    /// The edges of this node, corresponding to the boolean evaluation of the expression.
+    /// Returns the edges for the boolean result of this expression.
     pub fn children(&self) -> impl Iterator<Item = (bool, MarkerTree)> {
         [(true, MarkerTree(self.high)), (false, MarkerTree(self.low))].into_iter()
     }
 
-    /// Returns the subtree associated with the given edge value.
+    /// Returns the subtree for the given edge value.
     pub fn edge(&self, value: bool) -> MarkerTree {
         if value {
             MarkerTree(self.high)
@@ -1713,7 +1662,7 @@ impl Ord for ListMarkerTree<'_> {
     }
 }
 
-/// A node representing the existence or absence of a given extra, such as `extra == 'bar'`.
+/// A node that records whether an extra exists, such as `extra == 'bar'`.
 #[derive(PartialEq, Eq, Clone, Debug)]
 pub struct ExtraMarkerTree<'a> {
     name: &'a CanonicalMarkerValueExtra,
@@ -1727,12 +1676,12 @@ impl ExtraMarkerTree<'_> {
         self.name
     }
 
-    /// The edges of this node, corresponding to the boolean evaluation of the expression.
+    /// Returns the edges for the boolean result of this expression.
     pub fn children(&self) -> impl Iterator<Item = (bool, MarkerTree)> {
         [(true, MarkerTree(self.high)), (false, MarkerTree(self.low))].into_iter()
     }
 
-    /// Returns the subtree associated with the given edge value.
+    /// Returns the subtree for the given edge value.
     fn edge(&self, value: bool) -> MarkerTree {
         if value {
             MarkerTree(self.high)

@@ -1,7 +1,7 @@
 # Troubleshooting
 
-The troubleshooting section provides information about investigating failures in uv:
+The troubleshooting section describes how to investigate uv failures:
 
-- [Build failures](./build-failures.md): Understanding common causes of package build failures.
+- [Build failures](./build-failures.md): Common causes of package build failures.
 - [Reproducible examples](./reproducible-examples.md): How to write a minimal reproducible example
   for a uv issue.

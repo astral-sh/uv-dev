@@ -1,10 +1,10 @@
-//! Reads the following fields from `pyproject.toml`:
+//! Read these fields from `pyproject.toml`:
 //!
 //! * `project.{dependencies,optional-dependencies}`
 //! * `tool.uv.sources`
 //! * `tool.uv.workspace`
 //!
-//! Then lowers them into a dependency specification.
+//! Convert the fields into a dependency specification.
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
@@ -69,7 +69,7 @@ where
     .map(Some)
 }
 
-/// A `pyproject.toml` as specified in PEP 517.
+/// A `pyproject.toml` file that follows PEP 517.
 #[derive(Deserialize, Debug, Clone)]
 #[cfg_attr(test, derive(Serialize))]
 #[serde(rename_all = "kebab-case")]
@@ -80,11 +80,11 @@ pub struct PyProjectToml {
     pub tool: Option<Tool>,
     /// Non-project dependency groups, as defined in PEP 735.
     pub dependency_groups: Option<DependencyGroups>,
-    /// The raw unserialized document.
+    /// The original document.
     #[serde(skip)]
     pub raw: String,
 
-    /// Used to determine whether a `build-system` section is present.
+    /// Record whether the document contains a `build-system` section.
     #[serde(default, skip_serializing)]
     build_system: Option<serde::de::IgnoredAny>,
 }
@@ -112,19 +112,18 @@ impl PyProjectToml {
         Ok(Self { raw, ..pyproject })
     }
 
-    /// Returns `true` if the project should be considered a Python package, as opposed to a
-    /// non-package ("virtual") project.
+    /// Return `true` if the project is a Python package instead of a virtual project.
     pub fn is_package(&self, require_build_system: bool) -> bool {
-        // If `tool.uv.package` is set, defer to that explicit setting.
+        // Use the explicit `tool.uv.package` setting if it is present.
         if let Some(is_package) = self.tool_uv_package() {
             return is_package;
         }
 
-        // Otherwise, a project is assumed to be a package if `build-system` is present.
+        // Otherwise, treat the project as a package if `build-system` is present.
         self.build_system.is_some() || !require_build_system
     }
 
-    /// Returns the value of `tool.uv.package` if set.
+    /// Return `tool.uv.package` if it is set.
     fn tool_uv_package(&self) -> Option<bool> {
         self.tool
             .as_ref()
@@ -132,7 +131,7 @@ impl PyProjectToml {
             .and_then(|uv| uv.package)
     }
 
-    /// Returns whether the project manifest contains any script table.
+    /// Return whether the project manifest contains a script table.
     pub fn has_scripts(&self) -> bool {
         if let Some(ref project) = self.project {
             project.gui_scripts.is_some() || project.scripts.is_some()
@@ -141,7 +140,7 @@ impl PyProjectToml {
         }
     }
 
-    /// Returns the set of conflicts for the project.
+    /// Return the project conflicts.
     pub(crate) fn conflicts(&self) -> Result<Conflicts, ConflictError> {
         let empty = Conflicts::empty();
         let Some(project) = self.project.as_ref() else {
@@ -160,7 +159,7 @@ impl PyProjectToml {
     }
 }
 
-// Ignore raw document in comparison.
+// Ignore the original document when comparing projects.
 impl PartialEq for PyProjectToml {
     fn eq(&self, other: &Self) -> bool {
         self.project.eq(&other.project) && self.tool.eq(&other.tool)
@@ -182,21 +181,21 @@ impl AsRef<[u8]> for PyProjectToml {
 #[cfg_attr(test, derive(Serialize))]
 #[serde(rename_all = "kebab-case", try_from = "ProjectWire")]
 pub struct Project {
-    /// The name of the project
+    /// The project name.
     pub name: PackageName,
-    /// The version of the project
+    /// The project version.
     version: Option<Version>,
-    /// The Python versions this project is compatible with.
+    /// The Python versions that are compatible with this project.
     pub(crate) requires_python: Option<VersionSpecifiers>,
-    /// The dependencies of the project.
+    /// The project dependencies.
     pub dependencies: Option<Vec<String>>,
-    /// The optional dependencies of the project.
+    /// The optional project dependencies.
     pub optional_dependencies: Option<BTreeMap<ExtraName, Vec<String>>>,
 
-    /// Used to determine whether a `gui-scripts` section is present.
+    /// Record whether the document contains a `gui-scripts` section.
     #[serde(default, skip_serializing)]
     gui_scripts: Option<serde::de::IgnoredAny>,
-    /// Used to determine whether a `scripts` section is present.
+    /// Record whether the document contains a `scripts` section.
     #[serde(default, skip_serializing)]
     scripts: Option<serde::de::IgnoredAny>,
 }
@@ -219,10 +218,11 @@ impl TryFrom<ProjectWire> for Project {
     type Error = PyprojectTomlError;
 
     fn try_from(value: ProjectWire) -> Result<Self, Self::Error> {
-        // If `[project.name]` is not present, show a dedicated error message.
+        // Report a specific error if `[project.name]` is not present.
         let name = value.name.ok_or(PyprojectTomlError::MissingName)?;
 
-        // If `[project.version]` is not present (or listed in `[project.dynamic]`), show a dedicated error message.
+        // Report a specific error if `[project.version]` is absent from both the project and
+        // `[project.dynamic]`.
         if value.version.is_none()
             && !value
                 .dynamic
@@ -251,11 +251,9 @@ pub struct Tool {
     pub uv: Option<ToolUv>,
 }
 
-/// Validates the `tool.uv.index` field.
+/// Validate the `tool.uv.index` field.
 ///
-/// This custom deserializer function checks for:
-/// - Duplicate index names
-/// - Multiple indexes marked as default
+/// Reject duplicate index names and multiple default indexes.
 fn deserialize_index_vec<'de, D>(deserializer: D) -> Result<Option<Vec<Index>>, D::Error>
 where
     D: Deserializer<'de>,
@@ -288,7 +286,7 @@ where
 /// An override dependency before source lowering.
 pub type OverrideDependency = Override<uv_pep508::Requirement<VerbatimParsedUrl>>;
 
-// NOTE(charlie): When adding fields to this struct, mark them as ignored on `Options` in
+// NOTE(charlie): When adding fields to this struct, also ignore them on `Options` in
 // `crates/uv-settings/src/settings.rs`.
 #[derive(Deserialize, OptionsMetadata, Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(test, derive(Serialize))]
@@ -297,11 +295,10 @@ pub type OverrideDependency = Override<uv_pep508::Requirement<VerbatimParsedUrl>
 pub struct ToolUv {
     /// The sources to use when resolving dependencies.
     ///
-    /// `tool.uv.sources` enriches the dependency metadata with additional sources, incorporated
-    /// during development. A dependency source can be a Git repository, a URL, a local path, or an
-    /// alternative registry.
+    /// `tool.uv.sources` adds development sources to the dependency metadata. A source can be a
+    /// Git repository, a URL, a local path, or another registry.
     ///
-    /// See [Dependencies](../concepts/projects/dependencies.md) for more.
+    /// For more information, see [Dependencies](../concepts/projects/dependencies.md).
     #[option(
         default = "{}",
         value_type = "dict",
@@ -316,17 +313,16 @@ pub struct ToolUv {
 
     /// The indexes to use when resolving dependencies.
     ///
-    /// Accepts either a repository compliant with [PEP 503](https://peps.python.org/pep-0503/)
-    /// (the simple repository API), or a local directory laid out in the same format.
+    /// Use a repository that follows [PEP 503](https://peps.python.org/pep-0503/) (the simple
+    /// repository API), or a local directory that uses the same format.
     ///
-    /// Indexes are considered in the order in which they're defined, such that the first-defined
-    /// index has the highest priority. Further, the indexes provided by this setting are given
-    /// higher priority than any indexes specified via [`index_url`](#index-url) or
-    /// [`extra_index_url`](#extra-index-url). uv will only consider the first index that contains
-    /// a given package, unless an alternative [index strategy](#index-strategy) is specified.
+    /// uv searches indexes in their defined order. The first index has the highest priority.
+    /// These indexes have higher priority than indexes from [`index_url`](#index-url) or
+    /// [`extra_index_url`](#extra-index-url). Unless you select another
+    /// [index strategy](#index-strategy), uv uses only the first index that contains a package.
     ///
-    /// If an index is marked as `explicit = true`, it will be used exclusively for the
-    /// dependencies that select it explicitly via `[tool.uv.sources]`, as in:
+    /// If an index has `explicit = true`, uv uses it only for dependencies that select it in
+    /// `[tool.uv.sources]`:
     ///
     /// ```toml
     /// [[tool.uv.index]]
@@ -338,9 +334,8 @@ pub struct ToolUv {
     /// torch = { index = "pytorch" }
     /// ```
     ///
-    /// If an index is marked as `default = true`, it will be moved to the end of the prioritized list, such that it is
-    /// given the lowest priority when resolving packages. Additionally, marking an index as default will disable the
-    /// PyPI default index.
+    /// If an index has `default = true`, uv moves it to the end of the list. The index then has the
+    /// lowest priority. A default index also disables the default PyPI index.
     #[option(
         default = "[]",
         value_type = "dict",
@@ -357,8 +352,7 @@ pub struct ToolUv {
     #[option_group]
     pub(crate) workspace: Option<ToolUvWorkspace>,
 
-    /// Whether the project is managed by uv. If `false`, uv will ignore the project when
-    /// `uv run` is invoked.
+    /// Whether uv manages the project. If `false`, `uv run` ignores the project.
     #[option(
         default = r#"true"#,
         value_type = "bool",
@@ -368,16 +362,14 @@ pub struct ToolUv {
     )]
     pub(crate) managed: Option<bool>,
 
-    /// Whether the project should be considered a Python package, or a non-package ("virtual")
-    /// project.
+    /// Whether the project is a Python package or a non-package ("virtual") project.
     ///
-    /// Packages are built and installed into the virtual environment in editable mode and thus
-    /// require a build backend, while virtual projects are _not_ built or installed; instead, only
-    /// their dependencies are included in the virtual environment.
+    /// uv builds packages and installs them into the virtual environment in editable mode.
+    /// Packages therefore require a build backend. uv does _not_ build or install virtual
+    /// projects. It installs only their dependencies into the virtual environment.
     ///
-    /// Creating a package requires that a `build-system` is present in the `pyproject.toml`, and
-    /// that the project adheres to a structure that adheres to the build backend's expectations
-    /// (e.g., a `src` layout).
+    /// A package requires a `build-system` in `pyproject.toml`. Its structure must also meet the
+    /// build backend's requirements, such as a `src` layout.
     #[option(
         default = r#"true"#,
         value_type = "bool",
@@ -389,7 +381,7 @@ pub struct ToolUv {
 
     /// The list of `dependency-groups` to install by default.
     ///
-    /// Can also be the literal `"all"` to default enable all groups.
+    /// Set this to `"all"` to enable every group by default.
     #[option(
         default = r#"["dev"]"#,
         value_type = r#"str | list[str]"#,
@@ -401,12 +393,10 @@ pub struct ToolUv {
 
     /// Additional settings for `dependency-groups`.
     ///
-    /// Currently this can only be used to add `requires-python` constraints
-    /// to dependency groups (typically to inform uv that your dev tooling
-    /// has a higher python requirement than your actual project).
+    /// Use this setting to add `requires-python` constraints to dependency groups. For example,
+    /// development tools can require a newer Python version than the project.
     ///
-    /// This cannot be used to define dependency groups, use the top-level
-    /// `[dependency-groups]` table for that.
+    /// To define dependency groups, use the top-level `[dependency-groups]` table.
     #[option(
         default = "[]",
         value_type = "dict",
@@ -419,13 +409,12 @@ pub struct ToolUv {
 
     /// The project's development dependencies.
     ///
-    /// Development dependencies will be installed by default in `uv run` and `uv sync`, but will
-    /// not appear in the project's published metadata.
+    /// `uv run` and `uv sync` install development dependencies by default. They do not appear in
+    /// the project's published metadata.
     ///
-    /// Use of this field is not recommend anymore. Instead, use the `dependency-groups.dev` field
-    /// which is a standardized way to declare development dependencies. The contents of
-    /// `tool.uv.dev-dependencies` and `dependency-groups.dev` are combined to determine the final
-    /// requirements of the `dev` dependency group.
+    /// Use the standard `dependency-groups.dev` field instead of this field. uv combines
+    /// `tool.uv.dev-dependencies` and `dependency-groups.dev` to determine the requirements of the
+    /// `dev` dependency group.
     #[cfg_attr(
         feature = "schemars",
         schemars(
@@ -444,32 +433,28 @@ pub struct ToolUv {
 
     /// Overrides to apply when resolving the project's dependencies.
     ///
-    /// Overrides are used to force selection of a specific version of a package, regardless of the
-    /// version requested by any other package, and regardless of whether choosing that version
-    /// would typically constitute an invalid resolution.
+    /// Overrides select a specific package version. They ignore the versions that other packages
+    /// request, even if the selected version would normally make the resolution invalid.
     ///
-    /// While constraints are _additive_, in that they're combined with the requirements of the
-    /// constituent packages, overrides are _absolute_, in that they completely replace the
-    /// requirements of any constituent packages.
+    /// Constraints are _additive_: uv combines them with package requirements. Overrides are
+    /// _absolute_: they replace package requirements.
     ///
-    /// Including a package as an override will _not_ trigger installation of the package on its
-    /// own; instead, the package must be requested elsewhere in the project's first-party or
-    /// transitive dependencies.
+    /// An override does _not_ install a package by itself. A direct or transitive dependency must
+    /// also request the package.
     ///
-    /// Overrides can be limited to the dependencies declared by a specific package version by
-    /// using a table with `package` and `dependencies`. The `package` table identifies the package
-    /// whose dependencies will be overridden by `name` and, optionally, `version`. If `version` is
-    /// omitted, the overrides apply to all versions of that package. Requirements in `dependencies`
-    /// replace dependencies with the same name and add dependencies that are not declared by the
-    /// package. Dependencies not listed in `dependencies` are left unchanged.
+    /// To override the dependencies of a specific package, use a table with `package` and
+    /// `dependencies`. The `package` table identifies the package by `name` and, optionally,
+    /// `version`. If you omit `version`, the overrides apply to every version of that package.
+    /// Requirements in `dependencies` replace dependencies with the same name and add undeclared
+    /// dependencies. Other dependencies do not change.
     ///
-    /// Scoped overrides currently support registry version specifiers only. Direct URL and path
-    /// sources, including Git sources, and explicit indexes are not supported.
+    /// Scoped overrides support registry version specifiers only. They do not support direct URL
+    /// or path sources, Git sources, or explicit indexes.
     ///
     /// !!! note
-    ///     In `uv lock`, `uv sync`, and `uv run`, uv will only read `override-dependencies` from
-    ///     the `pyproject.toml` at the workspace root, and will ignore any declarations in other
-    ///     workspace members or `uv.toml` files.
+    ///     `uv lock`, `uv sync`, and `uv run` read `override-dependencies` only from the workspace
+    ///     root's `pyproject.toml`. They ignore declarations in other workspace members and
+    ///     `uv.toml` files.
     #[option(
         default = "[]",
         value_type = "list[str | dict]",
@@ -486,24 +471,21 @@ pub struct ToolUv {
 
     /// Dependencies to exclude when resolving the project's dependencies.
     ///
-    /// Excludes are used to prevent a package from being selected during resolution,
-    /// regardless of whether it's requested by any other package. When a package is excluded,
-    /// it will be omitted from the dependency list entirely.
+    /// Exclusions prevent uv from selecting a package during resolution, even if another package
+    /// requests it. uv removes the excluded package from the dependency list.
     ///
-    /// Including a package as an exclusion will prevent it from being installed, even if
-    /// it's requested by transitive dependencies. This can be useful for removing optional
-    /// dependencies or working around packages with broken dependencies.
+    /// An excluded package is not installed, even if a transitive dependency requests it. Use
+    /// exclusions to remove optional dependencies or work around broken package dependencies.
     ///
-    /// Exclusions can be limited to the dependencies declared by a specific package version by
-    /// using a table with `package` and `dependencies`. The `package` table identifies the package
-    /// whose dependencies will be excluded by `name` and, optionally, `version`. If `version` is
-    /// omitted, the exclusions apply to all versions of that package. A version-specific entry
-    /// takes precedence over an all-versions entry.
+    /// To exclude the dependencies of a specific package, use a table with `package` and
+    /// `dependencies`. The `package` table identifies the package by `name` and, optionally,
+    /// `version`. If you omit `version`, the exclusions apply to every version of that package.
+    /// A version-specific entry takes priority over an entry for all versions.
     ///
     /// !!! note
-    ///     In `uv lock`, `uv sync`, and `uv run`, uv will only read `exclude-dependencies` from
-    ///     the `pyproject.toml` at the workspace root, and will ignore any declarations in other
-    ///     workspace members or `uv.toml` files.
+    ///     `uv lock`, `uv sync`, and `uv run` read `exclude-dependencies` only from the workspace
+    ///     root's `pyproject.toml`. They ignore declarations in other workspace members and
+    ///     `uv.toml` files.
     #[option(
         default = "[]",
         value_type = "list[str | dict]",
@@ -519,17 +501,15 @@ pub struct ToolUv {
 
     /// Constraints to apply when resolving the project's dependencies.
     ///
-    /// Constraints are used to restrict the versions of dependencies that are selected during
-    /// resolution.
+    /// Constraints restrict the dependency versions that uv selects during resolution.
     ///
-    /// Including a package as a constraint will _not_ trigger installation of the package on its
-    /// own; instead, the package must be requested elsewhere in the project's first-party or
-    /// transitive dependencies.
+    /// A constraint does _not_ install a package by itself. A direct or transitive dependency
+    /// must also request the package.
     ///
     /// !!! note
-    ///     In `uv lock`, `uv sync`, and `uv run`, uv will only read `constraint-dependencies` from
-    ///     the `pyproject.toml` at the workspace root, and will ignore any declarations in other
-    ///     workspace members or `uv.toml` files.
+    ///     `uv lock`, `uv sync`, and `uv run` read `constraint-dependencies` only from the workspace
+    ///     root's `pyproject.toml`. They ignore declarations in other workspace members and
+    ///     `uv.toml` files.
     #[cfg_attr(
         feature = "schemars",
         schemars(
@@ -550,17 +530,16 @@ pub struct ToolUv {
 
     /// Constraints to apply when solving build dependencies.
     ///
-    /// Build constraints are used to restrict the versions of build dependencies that are selected
-    /// when building a package during resolution or installation.
+    /// Build constraints restrict the build dependency versions that uv selects when it builds a
+    /// package during resolution or installation.
     ///
-    /// Including a package as a constraint will _not_ trigger installation of the package during
-    /// a build; instead, the package must be requested elsewhere in the project's build dependency
-    /// graph.
+    /// A build constraint does _not_ install a package by itself. The project's build dependency
+    /// graph must also request the package.
     ///
     /// !!! note
-    ///     In `uv lock`, `uv sync`, and `uv run`, uv will only read `build-constraint-dependencies` from
-    ///     the `pyproject.toml` at the workspace root, and will ignore any declarations in other
-    ///     workspace members or `uv.toml` files.
+    ///     `uv lock`, `uv sync`, and `uv run` read `build-constraint-dependencies` only from the
+    ///     workspace root's `pyproject.toml`. They ignore declarations in other workspace members
+    ///     and `uv.toml` files.
     #[cfg_attr(
         feature = "schemars",
         schemars(
@@ -580,14 +559,12 @@ pub struct ToolUv {
     pub(crate) build_constraint_dependencies:
         Option<Vec<uv_pep508::Requirement<VerbatimParsedUrl>>>,
 
-    /// A list of supported environments against which to resolve dependencies.
+    /// The supported environments for dependency resolution.
     ///
-    /// By default, uv will resolve for all possible environments during a `uv lock` operation.
-    /// However, you can restrict the set of supported environments to improve performance and avoid
-    /// unsatisfiable branches in the solution space.
+    /// By default, `uv lock` resolves dependencies for every possible environment. Restrict the
+    /// supported environments to improve performance and avoid unsatisfiable branches.
     ///
-    /// These environments will also be respected when `uv pip compile` is invoked with the
-    /// `--universal` flag.
+    /// `uv pip compile --universal` also uses these environments.
     #[cfg_attr(
         feature = "schemars",
         schemars(
@@ -605,25 +582,22 @@ pub struct ToolUv {
     )]
     pub(crate) environments: Option<SupportedEnvironments>,
 
-    /// A list of required platforms, for packages that lack source distributions.
+    /// Required platforms for packages that do not have source distributions.
     ///
-    /// When a package does not have a source distribution, it's availability will be limited to
-    /// the platforms supported by its built distributions (wheels). For example, if a package only
-    /// publishes wheels for Linux, then it won't be installable on macOS or Windows.
+    /// Without a source distribution, a package is available only on the platforms that its wheels
+    /// support. For example, a package that publishes only Linux wheels cannot be installed on
+    /// macOS or Windows.
     ///
     /// By default, uv requires each package to include at least one wheel that is compatible with
-    /// the designated Python version. The `required-environments` setting can be used to ensure that
-    /// the resulting resolution contains wheels for specific platforms, or fails if no such wheels
-    /// are available.
+    /// the selected Python version. Use `required-environments` to require wheels for specific
+    /// platforms. Resolution fails if those wheels are not available.
     ///
-    /// While the `environments` setting _limits_ the set of environments that uv will consider when
-    /// resolving dependencies, `required-environments` _expands_ the set of platforms that uv _must_
-    /// support when resolving dependencies.
+    /// The `environments` setting _limits_ the environments that uv considers during resolution.
+    /// The `required-environments` setting _expands_ the platforms that uv _must_ support.
     ///
-    /// For example, `environments = ["sys_platform == 'darwin'"]` would limit uv to solving for
-    /// macOS (and ignoring Linux and Windows). On the other hand, `required-environments = ["sys_platform == 'darwin'"]`
-    /// would _require_ that any package without a source distribution include a wheel for macOS in
-    /// order to be installable.
+    /// For example, `environments = ["sys_platform == 'darwin'"]` limits resolution to macOS and
+    /// ignores Linux and Windows. In contrast, `required-environments = ["sys_platform == 'darwin'"]`
+    /// _requires_ each package without a source distribution to include a macOS wheel.
     #[cfg_attr(
         feature = "schemars",
         schemars(
@@ -648,20 +622,15 @@ pub struct ToolUv {
     )]
     pub(crate) required_environments: Option<SupportedEnvironments>,
 
-    /// Declare collections of extras or dependency groups that are conflicting
-    /// (i.e., mutually exclusive).
+    /// Declare extras or dependency groups that conflict with each other.
     ///
-    /// It's useful to declare conflicts when two or more extras have mutually
-    /// incompatible dependencies. For example, extra `foo` might depend
-    /// on `numpy==2.0.0` while extra `bar` depends on `numpy==2.1.0`. While these
-    /// dependencies conflict, it may be the case that users are not expected to
-    /// activate both `foo` and `bar` at the same time, making it possible to
-    /// generate a universal resolution for the project despite the incompatibility.
+    /// Declare a conflict when extras have incompatible dependencies but are not intended to be
+    /// active together. For example, extra `foo` can require `numpy==2.0.0`, while extra `bar`
+    /// requires `numpy==2.1.0`. uv can still create a universal resolution if the extras are
+    /// mutually exclusive.
     ///
-    /// By making such conflicts explicit, uv can generate a universal resolution
-    /// for a project, taking into account that certain combinations of extras and
-    /// groups are mutually exclusive. In exchange, installation will fail if a
-    /// user attempts to activate both conflicting extras.
+    /// When you declare the conflict, uv accounts for the mutually exclusive extras and groups.
+    /// Installation fails if a user activates conflicting extras together.
     #[cfg_attr(
         feature = "schemars",
         schemars(description = "A list of sets of conflicting groups or extras.")
@@ -692,12 +661,12 @@ pub struct ToolUv {
     )]
     pub(crate) conflicts: Option<SchemaConflicts>,
 
-    // Only exists on this type for schema and docs generation, the build backend settings are
-    // never merged in a workspace and read separately by the backend code.
+    // Keep this field only for schema and documentation generation. The backend reads its settings
+    // separately, and workspace configuration never merges them.
     /// Configuration for the uv build backend.
     ///
-    /// Note that those settings only apply when using the `uv_build` backend, other build backends
-    /// (such as hatchling) have their own configuration.
+    /// These settings apply only to the `uv_build` backend. Other backends, such as hatchling,
+    /// have their own configuration.
     #[option_group]
     build_backend: Option<BuildBackendSettingsSchema>,
 }
@@ -728,12 +697,12 @@ struct ToolUvSourcesOnlyWire {
 struct ToolUvSourcesWire(BTreeMap<PackageName, SourcesWire>);
 
 impl ToolUvSources {
-    /// Returns the underlying `BTreeMap` of package names to sources.
+    /// Return the `BTreeMap` that maps package names to sources.
     pub fn inner(&self) -> &BTreeMap<PackageName, Sources> {
         &self.0
     }
 
-    /// Convert the [`ToolUvSources`] into its inner `BTreeMap`.
+    /// Convert [`ToolUvSources`] into its `BTreeMap`.
     #[must_use]
     pub(crate) fn into_inner(self) -> BTreeMap<PackageName, Sources> {
         self.0
@@ -784,7 +753,7 @@ impl<'de> serde::de::Deserialize<'de> for ToolUvSources {
 pub(crate) struct ToolUvDependencyGroups(BTreeMap<GroupName, DependencyGroupSettings>);
 
 impl ToolUvDependencyGroups {
-    /// Returns the underlying `BTreeMap` of group names to settings.
+    /// Return the `BTreeMap` that maps group names to settings.
     pub(crate) fn inner(&self) -> &BTreeMap<GroupName, DependencyGroupSettings> {
         &self.0
     }
@@ -808,7 +777,7 @@ impl<'de> serde::de::Deserialize<'de> for ToolUvDependencyGroups {
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 pub(crate) struct DependencyGroupSettings {
-    /// Version of python to require when installing this group
+    /// The Python version required to install this group.
     #[cfg_attr(feature = "schemars", schemars(with = "Option<String>"))]
     pub(crate) requires_python: Option<VersionSpecifiers>,
 }
@@ -925,9 +894,9 @@ impl<'de> serde::de::Deserialize<'de> for ExtraBuildDependencies {
 pub(crate) struct ToolUvWorkspace {
     /// Packages to include as workspace members.
     ///
-    /// Supports both globs and explicit paths.
+    /// Use globs or explicit paths.
     ///
-    /// For more information on the glob syntax, refer to the [`glob` documentation](https://docs.rs/glob/latest/glob/struct.Pattern.html).
+    /// For the glob syntax, see the [`glob` documentation](https://docs.rs/glob/latest/glob/struct.Pattern.html).
     #[option(
         default = "[]",
         value_type = "list[str]",
@@ -937,11 +906,11 @@ pub(crate) struct ToolUvWorkspace {
     )]
     pub(crate) members: Option<Vec<SerdePattern>>,
     /// Packages to exclude as workspace members. If a package matches both `members` and
-    /// `exclude`, it will be excluded.
+    /// `exclude`, uv excludes it.
     ///
-    /// Supports both globs and explicit paths.
+    /// Use globs or explicit paths.
     ///
-    /// For more information on the glob syntax, refer to the [`glob` documentation](https://docs.rs/glob/latest/glob/struct.Pattern.html).
+    /// For the glob syntax, see the [`glob` documentation](https://docs.rs/glob/latest/glob/struct.Pattern.html).
     #[option(
         default = "[]",
         value_type = "list[str]",
@@ -952,7 +921,7 @@ pub(crate) struct ToolUvWorkspace {
     pub(crate) exclude: Option<Vec<SerdePattern>>,
 }
 
-/// (De)serialize globs as strings.
+/// Serialize and deserialize globs as strings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SerdePattern(Pattern);
 
@@ -1014,9 +983,9 @@ pub struct Sources(#[cfg_attr(feature = "schemars", schemars(with = "SourcesWire
 impl Sources {
     /// Return an [`Iterator`] over the sources.
     ///
-    /// If the iterator contains multiple entries, they will always use disjoint markers.
+    /// Multiple entries always use disjoint markers.
     ///
-    /// The iterator will contain at most one registry source.
+    /// The iterator contains at most one registry source.
     pub fn iter(&self) -> impl Iterator<Item = &Source> {
         self.0.iter()
     }
@@ -1120,7 +1089,7 @@ impl TryFrom<SourcesWire> for Sources {
                     }
                 }
 
-                // Ensure that there is at least one source.
+                // Require at least one source.
                 if sources.is_empty() {
                     return Err(SourceError::EmptySources);
                 }
@@ -1136,7 +1105,7 @@ impl TryFrom<SourcesWire> for Sources {
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case", untagged, deny_unknown_fields)]
 pub enum Source {
-    /// A remote Git repository, available over HTTPS or SSH.
+    /// A remote Git repository that uses HTTPS or SSH.
     ///
     /// Example:
     /// ```toml
@@ -1145,11 +1114,11 @@ pub enum Source {
     Git {
         /// The repository URL (without the `git+` prefix).
         git: DisplaySafeUrl,
-        /// The path to the directory with the `pyproject.toml`, if it's not in the repository root.
+        /// The directory that contains `pyproject.toml`, if it is not in the repository root.
         subdirectory: Option<PortablePathBuf>,
-        /// The path to the archive within the repository.
+        /// The path to an archive in the repository.
         path: Option<PortablePathBuf>,
-        // Only one of the three may be used; we'll validate this later and emit a custom error.
+        // Only one field may be set. Validate this later and report a custom error.
         rev: Option<String>,
         tag: Option<String>,
         branch: Option<String>,
@@ -1164,7 +1133,7 @@ pub enum Source {
         extra: Option<ExtraName>,
         group: Option<GroupName>,
     },
-    /// A remote `http://` or `https://` URL, either a wheel (`.whl`) or a source distribution
+    /// A remote `http://` or `https://` URL for a wheel (`.whl`) or source distribution
     /// (`.zip`, `.tar.gz`).
     ///
     /// Example:
@@ -1173,8 +1142,8 @@ pub enum Source {
     /// ```
     Url {
         url: DisplaySafeUrl,
-        /// For source distributions, the path to the directory with the `pyproject.toml`, if it's
-        /// not in the archive root.
+        /// For a source distribution, the directory that contains `pyproject.toml`, if it is not
+        /// in the archive root.
         subdirectory: Option<PortablePathBuf>,
         #[serde(
             skip_serializing_if = "uv_pep508::marker::ser::is_empty",
@@ -1185,19 +1154,18 @@ pub enum Source {
         extra: Option<ExtraName>,
         group: Option<GroupName>,
     },
-    /// The path to a dependency, either a wheel (a `.whl` file), source distribution (a `.zip` or
-    /// `.tar.gz` file), or source tree (i.e., a directory containing a `pyproject.toml` or
-    /// `setup.py` file in the root).
+    /// The path to a wheel (`.whl`), a source distribution (`.zip` or `.tar.gz`), or a source
+    /// tree. A source tree contains a `pyproject.toml` or `setup.py` file in its root.
     Path {
         path: PortablePathBuf,
         /// `false` by default.
         editable: Option<bool>,
         /// Whether to treat the dependency as a buildable Python package (`true`) or as a virtual
-        /// package (`false`). If `false`, the package will not be built or installed, but its
-        /// dependencies will be included in the virtual environment.
+        /// package (`false`). If `false`, uv does not build or install the package. It installs the
+        /// package's dependencies into the virtual environment.
         ///
-        /// When omitted, the package status is inferred based on the presence of a `[build-system]`
-        /// in the project's `pyproject.toml`.
+        /// If omitted, uv infers the package status from `[build-system]` in the project's
+        /// `pyproject.toml`.
         package: Option<bool>,
         #[serde(
             skip_serializing_if = "uv_pep508::marker::ser::is_empty",
@@ -1208,7 +1176,8 @@ pub enum Source {
         extra: Option<ExtraName>,
         group: Option<GroupName>,
     },
-    /// A dependency pinned to a specific index, e.g., `torch` after setting `torch` to `https://download.pytorch.org/whl/cu118`.
+    /// A dependency pinned to a specific index, such as `torch` pinned to
+    /// `https://download.pytorch.org/whl/cu118`.
     Registry {
         index: IndexName,
         #[serde(
@@ -1222,13 +1191,11 @@ pub enum Source {
     },
     /// A dependency on another package in the workspace.
     Workspace {
-        /// `true` selects the current workspace. A string selects another workspace discovered
-        /// from the given path.
+        /// `true` selects the current workspace. A string selects a workspace at the given path.
         ///
-        /// When set to `false`, the package will be fetched from the remote index, rather than
-        /// included as a workspace package.
+        /// If `false`, uv gets the package from the remote index instead of the workspace.
         workspace: WorkspaceReference,
-        /// Whether the package should be installed as editable. Defaults to `true`.
+        /// Whether to install the package as editable. Defaults to `true`.
         editable: Option<bool>,
         #[serde(
             skip_serializing_if = "uv_pep508::marker::ser::is_empty",
@@ -1241,7 +1208,7 @@ pub enum Source {
     },
 }
 
-/// A reference to either the current workspace or a workspace discovered from a path.
+/// A reference to the current workspace or a workspace at a given path.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema), schemars(untagged))]
 #[serde(untagged)]
@@ -1250,8 +1217,7 @@ pub enum WorkspaceReference {
     Path(PortablePathBuf),
 }
 
-/// A custom deserialization implementation for [`Source`]. This is roughly equivalent to
-/// `#[serde(untagged)]`, but provides more detailed error messages.
+/// Deserialize [`Source`] like `#[serde(untagged)]`, but report more detailed errors.
 impl<'de> Deserialize<'de> for Source {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -1282,7 +1248,7 @@ impl<'de> Deserialize<'de> for Source {
             group: Option<GroupName>,
         }
 
-        // Attempt to deserialize as `CatchAll`.
+        // Try to deserialize as `CatchAll`.
         let CatchAll {
             git,
             subdirectory,
@@ -1301,14 +1267,14 @@ impl<'de> Deserialize<'de> for Source {
             group,
         } = CatchAll::deserialize(deserializer)?;
 
-        // If both `extra` and `group` are set, return an error.
+        // Return an error if both `extra` and `group` are set.
         if extra.is_some() && group.is_some() {
             return Err(serde::de::Error::custom(
                 "cannot specify both `extra` and `group`",
             ));
         }
 
-        // If the `git` field is set, we're dealing with a Git source.
+        // A `git` field identifies a Git source.
         if let Some(git) = git {
             if index.is_some() {
                 return Err(serde::de::Error::custom(
@@ -1341,7 +1307,7 @@ impl<'de> Deserialize<'de> for Source {
                 ));
             }
 
-            // At most one of `rev`, `tag`, or `branch` may be set.
+            // At most one of `rev`, `tag`, and `branch` may be set.
             match (rev.as_ref(), tag.as_ref(), branch.as_ref()) {
                 (None, None, None) => {}
                 (Some(_), None, None) => {}
@@ -1354,7 +1320,7 @@ impl<'de> Deserialize<'de> for Source {
                 }
             }
 
-            // If the user prefixed the URL with `git+`, strip it.
+            // Remove the `git+` prefix from the URL if it is present.
             let git = if let Some(git) = git.as_str().strip_prefix("git+") {
                 DisplaySafeUrl::parse(git).map_err(serde::de::Error::custom)?
             } else {
@@ -1375,7 +1341,7 @@ impl<'de> Deserialize<'de> for Source {
             });
         }
 
-        // If the `url` field is set, we're dealing with a URL source.
+        // A `url` field identifies a URL source.
         if let Some(url) = url {
             if index.is_some() {
                 return Err(serde::de::Error::custom(
@@ -1432,7 +1398,7 @@ impl<'de> Deserialize<'de> for Source {
             });
         }
 
-        // If the `path` field is set, we're dealing with a path source.
+        // A `path` field identifies a path source.
         if let Some(path) = path {
             if index.is_some() {
                 return Err(serde::de::Error::custom(
@@ -1470,7 +1436,7 @@ impl<'de> Deserialize<'de> for Source {
                 ));
             }
 
-            // A project must be packaged in order to be installed as editable.
+            // A project must be packaged to support an editable installation.
             if editable == Some(true) && package == Some(false) {
                 return Err(serde::de::Error::custom(
                     "cannot specify both `editable = true` and `package = false`",
@@ -1487,7 +1453,7 @@ impl<'de> Deserialize<'de> for Source {
             });
         }
 
-        // If the `index` field is set, we're dealing with a registry source.
+        // An `index` field identifies a registry source.
         if let Some(index) = index {
             if workspace.is_some() {
                 return Err(serde::de::Error::custom(
@@ -1543,7 +1509,7 @@ impl<'de> Deserialize<'de> for Source {
             });
         }
 
-        // If the `workspace` field is set, we're dealing with a workspace source.
+        // A `workspace` field identifies a workspace source.
         if let Some(workspace) = workspace {
             if index.is_some() {
                 return Err(serde::de::Error::custom(
@@ -1595,7 +1561,7 @@ impl<'de> Deserialize<'de> for Source {
             });
         }
 
-        // If none of the fields are set, we're dealing with an error.
+        // Return an error if no source field is set.
         Err(serde::de::Error::custom(
             "expected one of `git`, `url`, `path`, `index`, or `workspace`",
         ))
@@ -1671,7 +1637,8 @@ impl Source {
         root: &Path,
         existing_sources: Option<&BTreeMap<PackageName, Sources>>,
     ) -> Result<Option<Self>, SourceError> {
-        // If the user specified a Git reference for a non-Git source, try existing Git sources before erroring.
+        // If a non-Git source has a Git reference, check existing Git sources before returning an
+        // error.
         if !matches!(
             source,
             RequirementSource::GitDirectory { .. } | RequirementSource::GitPath { .. }
@@ -1723,7 +1690,7 @@ impl Source {
             }
         }
 
-        // If we resolved a non-path source, and user specified an `--editable` flag, error.
+        // Reject `--editable` for a non-path source.
         if !workspace {
             if !matches!(source, RequirementSource::Directory { .. }) {
                 if editable == Some(true) {
@@ -1732,7 +1699,7 @@ impl Source {
             }
         }
 
-        // If the source is a workspace package, error if the user tried to specify a source.
+        // Reject explicit sources for a workspace package.
         if workspace {
             return match source {
                 RequirementSource::Registry { .. } | RequirementSource::Directory { .. } => {
@@ -1945,7 +1912,7 @@ pub enum DependencyType {
 }
 
 impl DependencyType {
-    /// Return the TOML table name(s) for this dependency type.
+    /// Return the TOML table name or names for this dependency type.
     pub fn toml_table_name(&self) -> Cow<'_, str> {
         match self {
             Self::Production => Cow::Borrowed("`project.dependencies`"),

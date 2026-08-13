@@ -1,6 +1,6 @@
 # Integration guides
 
-Learn how to integrate uv with other software:
+Use these guides to integrate uv with other software:
 
 - [Using in Docker images](./docker.md)
 - [Using with Jupyter notebooks](./jupyter.md)
@@ -20,5 +20,5 @@ Learn how to integrate uv with other software:
 - [Using with AWS Lambda](./aws-lambda.md)
 - [Using with Coiled](./coiled.md)
 
-Or, explore the [concept documentation](../../concepts/index.md) for comprehensive breakdown of each
-feature.
+For a detailed explanation of each feature, see the
+[concept documentation](../../concepts/index.md).

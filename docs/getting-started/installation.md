@@ -2,27 +2,27 @@
 
 ## Installation methods
 
-Install uv with our standalone installers or your package manager of choice.
+Install uv with a standalone installer or your preferred package manager.
 
 ### Standalone installer
 
-uv provides a standalone installer to download and install uv:
+Use the standalone installer to download and install uv:
 
 === "macOS and Linux"
 
-    Use `curl` to download the script and execute it with `sh`:
+    Use `curl` to download the installation script. Run the script with `sh`:
 
     ```console
     $ curl -LsSf https://astral.sh/uv/install.sh | sh
     ```
 
-    If your system doesn't have `curl`, you can use `wget`:
+    If `curl` is not available, use `wget`:
 
     ```console
     $ wget -qO- https://astral.sh/uv/install.sh | sh
     ```
 
-    Request a specific version by including it in the URL:
+    To install a specific version, include that version in the URL:
 
     ```console
     $ curl -LsSf https://astral.sh/uv/0.12.10/install.sh | sh
@@ -30,15 +30,15 @@ uv provides a standalone installer to download and install uv:
 
 === "Windows"
 
-    Use `irm` to download the script and execute it with `iex`:
+    Use `irm` to download the installation script. Run the script with `iex`:
 
     ```pwsh-session
     PS> powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
     ```
 
-    Changing the [execution policy](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_execution_policies?view=powershell-7.4#powershell-execution-policies) allows running a script from the internet.
+    Changing the [execution policy](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_execution_policies?view=powershell-7.4#powershell-execution-policies) permits the installation script to run.
 
-    Request a specific version by including it in the URL:
+    To install a specific version, include that version in the URL:
 
     ```pwsh-session
     PS> powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/0.12.10/install.ps1 | iex"
@@ -46,7 +46,7 @@ uv provides a standalone installer to download and install uv:
 
 !!! tip
 
-    The installation script may be inspected before use:
+    Inspect the installation script before you run it:
 
     === "macOS and Linux"
 
@@ -60,22 +60,21 @@ uv provides a standalone installer to download and install uv:
         PS> powershell -c "irm https://astral.sh/uv/install.ps1 | more"
         ```
 
-    Alternatively, the installer or binaries can be downloaded directly from [GitHub](#github-releases).
+    You can also download the installer or binaries directly from [GitHub](#github-releases).
 
-See the reference documentation on the [installer](../reference/installer.md) for details on
-customizing your uv installation.
+Read the [installer reference](../reference/installer.md) to customize your uv installation.
 
 ### PyPI
 
-For convenience, uv is published to [PyPI](https://pypi.org/project/uv/).
+uv is available on [PyPI](https://pypi.org/project/uv/).
 
-If installing from PyPI, we recommend installing uv into an isolated environment, e.g., with `pipx`:
+Use `pipx` to install uv from PyPI in an isolated environment:
 
 ```console
 $ pipx install uv
 ```
 
-However, `pip` can also be used:
+You can also install uv with `pip`:
 
 ```console
 $ pip install uv
@@ -83,14 +82,15 @@ $ pip install uv
 
 !!! note
 
-    uv ships with prebuilt distributions (wheels) for many platforms; if a wheel is not available for a given
-    platform, uv will be built from source, which requires a Rust toolchain. See the
+    uv provides prebuilt distributions, also called wheels, for many platforms. If your platform has
+    no wheel, the package manager builds uv from source. Building uv from source requires a Rust
+    toolchain. Read the
     [contributing setup guide](https://github.com/astral-sh/uv/blob/main/CONTRIBUTING.md#setup)
-    for details on building uv from source.
+    for details.
 
 ### Homebrew
 
-uv is available in the core Homebrew packages.
+Install uv from the core Homebrew packages:
 
 ```console
 $ brew install uv
@@ -98,7 +98,7 @@ $ brew install uv
 
 ### MacPorts
 
-uv is available via [MacPorts](https://ports.macports.org/port/uv/).
+Install uv with [MacPorts](https://ports.macports.org/port/uv/):
 
 ```console
 $ sudo port install uv
@@ -106,7 +106,7 @@ $ sudo port install uv
 
 ### WinGet
 
-uv is available via [WinGet](https://winstall.app/apps/astral-sh.uv).
+Install uv with [WinGet](https://winstall.app/apps/astral-sh.uv):
 
 ```console
 $ winget install --id=astral-sh.uv  -e
@@ -114,7 +114,7 @@ $ winget install --id=astral-sh.uv  -e
 
 ### Scoop
 
-uv is available via [Scoop](https://scoop.sh/#/apps?q=uv).
+Install uv with [Scoop](https://scoop.sh/#/apps?q=uv):
 
 ```console
 $ scoop install main/uv
@@ -125,19 +125,19 @@ $ scoop install main/uv
 uv provides a Docker image at
 [`ghcr.io/astral-sh/uv`](https://github.com/astral-sh/uv/pkgs/container/uv).
 
-See our guide on [using uv in Docker](../guides/integration/docker.md) for more details.
+Read the guide on [using uv in Docker](../guides/integration/docker.md) for details.
 
 ### GitHub Releases
 
-uv release artifacts can be downloaded directly from
+Download uv release artifacts directly from
 [GitHub Releases](https://github.com/astral-sh/uv/releases).
 
-Each release page includes binaries for all supported platforms as well as instructions for using
-the standalone installer via `github.com` instead of `astral.sh`.
+Each release includes binaries for every supported platform. The release page also explains how to
+run the standalone installer from `github.com` instead of `astral.sh`.
 
 ### Cargo
 
-uv is available via [crates.io](https://crates.io).
+Install uv from [crates.io](https://crates.io):
 
 ```console
 $ cargo install --locked uv
@@ -145,11 +145,11 @@ $ cargo install --locked uv
 
 !!! note
 
-    This method builds uv from source, which requires a compatible Rust toolchain.
+    This command builds uv from source and requires a compatible Rust toolchain.
 
 ## Upgrading uv
 
-When uv is installed via the standalone installer, it can update itself on-demand:
+If you used the standalone installer, update uv with this command:
 
 ```console
 $ uv self update
@@ -157,11 +157,11 @@ $ uv self update
 
 !!! tip
 
-    Updating uv will re-run the installer and can modify your shell profiles. To disable this
-    behavior, set `UV_NO_MODIFY_PATH=1`.
+    An update runs the installer again and can modify your shell profiles. Set `UV_NO_MODIFY_PATH=1`
+    to prevent these changes.
 
-When another installation method is used, self-updates are disabled. Use the package manager's
-upgrade method instead. For example, with `pip`:
+If you used another installation method, uv disables self-updates. Use your package manager to
+upgrade uv instead. For example, use `pip`:
 
 ```console
 $ pip install --upgrade uv
@@ -171,9 +171,9 @@ $ pip install --upgrade uv
 
 !!! tip
 
-    You can run `echo $SHELL` to help you determine your shell.
+    Run `echo $SHELL` to identify your shell.
 
-To enable shell autocompletion for uv commands, run one of the following:
+To enable shell autocompletion for uv commands, run the command for your shell:
 
 === "Bash"
 
@@ -208,7 +208,7 @@ To enable shell autocompletion for uv commands, run one of the following:
     Add-Content -Path $PROFILE -Value '(& uv generate-shell-completion powershell) | Out-String | Invoke-Expression'
     ```
 
-To enable shell autocompletion for uvx, run one of the following:
+To enable shell autocompletion for `uvx`, run the command for your shell:
 
 === "Bash"
 
@@ -243,13 +243,13 @@ To enable shell autocompletion for uvx, run one of the following:
     Add-Content -Path $PROFILE -Value '(& uvx --generate-shell-completion powershell) | Out-String | Invoke-Expression'
     ```
 
-Then restart the shell or source the shell config file.
+Then, restart the shell or source its configuration file.
 
 ## Uninstallation
 
-If you need to remove uv from your system, follow these steps:
+To remove uv from your system:
 
-1.  Clean up stored data (optional):
+1.  Optionally, remove stored data:
 
     ```console
     $ uv cache clean
@@ -259,8 +259,8 @@ If you need to remove uv from your system, follow these steps:
 
     !!! tip
 
-        Before removing the binaries, you may want to remove any data that uv has stored. See the
-        [storage reference](../reference/storage.md) for details on where uv stores data.
+        You can remove stored uv data before you remove the binaries. The
+        [storage reference](../reference/storage.md) lists where uv stores data.
 
 2.  Remove the uv, uvx, and uvw binaries:
 
@@ -280,11 +280,11 @@ If you need to remove uv from your system, follow these steps:
 
     !!! note
 
-        Prior to 0.5.0, uv was installed into `~/.cargo/bin`. The binaries can be removed from there to
-        uninstall. Upgrading from an older version will not automatically remove the binaries from
-        `~/.cargo/bin`.
+        Versions earlier than 0.5.0 installed uv in `~/.cargo/bin`. Remove the binaries from that
+        directory to uninstall those versions. Upgrading does not automatically remove old binaries
+        from `~/.cargo/bin`.
 
 ## Next steps
 
-See the [first steps](./first-steps.md) or jump straight to the [guides](../guides/index.md) to
-start using uv.
+Follow the [first steps](./first-steps.md) or read the [guides](../guides/index.md) to start using
+uv.

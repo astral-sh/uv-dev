@@ -1,32 +1,30 @@
 # Locking and syncing
 
-Locking is the process of [resolving](../resolution.md) your project's dependencies into a
-[lockfile](./layout.md#the-lockfile). Syncing is the process of installing a subset of packages from
-the lockfile into the [project environment](./layout.md#the-project-environment).
+Locking [resolves](../resolution.md) a project's dependencies into a
+[lockfile](./layout.md#the-lockfile). Syncing installs a subset of locked packages into the
+[project environment](./layout.md#the-project-environment).
 
 ## Automatic lock and sync
 
-Locking and syncing are _automatic_ in uv. For example, when `uv run` is used, the project is locked
-and synced before invoking the requested command. This ensures the project environment is always
-up-to-date. Similarly, commands which read the lockfile, such as `uv tree`, will automatically
-update it before running.
+Locking and syncing are _automatic_ in uv. Before `uv run` executes a command, uv locks and syncs
+the project. This keeps the project environment current. Commands that read the lockfile, such as
+`uv tree`, also update it automatically before they run.
 
-To disable automatic locking, use the `--locked` option:
+`--locked` disables automatic locking:
 
 ```console
 $ uv run --locked ...
 ```
 
-If the lockfile is not up-to-date, uv will raise an error instead of updating the lockfile.
+If the lockfile is not current, uv raises an error instead of updating it.
 
-To use the lockfile without checking if it is up-to-date, use the `--frozen` option:
+`--frozen` uses the lockfile without checking whether it is current:
 
 ```console
 $ uv run --frozen ...
 ```
 
-Similarly, to run a command without checking if the environment is up-to-date, use the `--no-sync`
-option:
+`--no-sync` runs a command without checking whether the environment is current:
 
 ```console
 $ uv run --no-sync ...
@@ -34,31 +32,29 @@ $ uv run --no-sync ...
 
 ## Checking the lockfile
 
-When considering if the lockfile is up-to-date, uv will check if it matches the project metadata.
-For example, if you add a dependency to your `pyproject.toml`, the lockfile will be considered
-outdated. Similarly, if you change the version constraints for a dependency such that the locked
-version is excluded, the lockfile will be considered outdated. However, if you change the version
-constraints such that the existing locked version is still included, the lockfile will still be
-considered up-to-date.
+uv checks whether the lockfile matches the project metadata. If `pyproject.toml` gains a dependency,
+uv considers the lockfile outdated. If changed version constraints exclude a locked version, uv also
+considers the lockfile outdated. If the constraints still permit the locked version, the lockfile
+remains current.
 
-You can check if the lockfile is up-to-date by passing the `--check` flag to `uv lock`:
+`uv lock --check` checks whether the lockfile is current:
 
 ```console
 $ uv lock --check
 ```
 
-This is equivalent to the `--locked` flag for other commands.
+`--check` has the same effect as `--locked` on other commands.
 
 !!! important
 
-    uv will not consider lockfiles outdated when new versions of packages are released — the lockfile
-    needs to be explicitly updated if you want to upgrade dependencies. See the documentation on
-    [upgrading locked package versions](#upgrading-locked-package-versions) for details.
+    New package releases do not make an existing lockfile outdated. Upgrading dependencies requires
+    an explicit lockfile update. The [upgrading locked package versions](#upgrading-locked-package-versions)
+    section describes this process.
 
 ## Creating the lockfile
 
-While the lockfile is created [automatically](#automatic-lock-and-sync), the lockfile may also be
-explicitly created or updated using `uv lock`:
+Although uv creates the lockfile [automatically](#automatic-lock-and-sync), `uv lock` also creates
+or updates it explicitly:
 
 ```console
 $ uv lock
@@ -66,43 +62,40 @@ $ uv lock
 
 ## Syncing the environment
 
-While the environment is synced [automatically](#automatic-lock-and-sync), it may also be explicitly
-synced using `uv sync`:
+Although uv syncs the environment [automatically](#automatic-lock-and-sync), `uv sync` also syncs it
+explicitly:
 
 ```console
 $ uv sync
 ```
 
-Syncing the environment manually is especially useful for ensuring your editor has the correct
-versions of dependencies.
+Manual syncing helps editors use the correct dependency versions.
 
 ### Editable installation
 
-When the environment is synced, uv will install the project (and other workspace members) as
-_editable_ packages, such that re-syncing is not necessary for changes to be reflected in the
-environment.
+During a sync, uv installs the project and other workspace members as _editable_ packages. Changes
+then appear in the environment without another sync.
 
-To opt-out of this behavior, use the `--no-editable` option.
+`--no-editable` disables this behavior.
 
 !!! note
 
-    If the project does not define a build system, it will not be installed.
-    See the [build systems](./config.md#build-systems) documentation for details.
+    If the project does not define a build system, uv does not install it. The
+    [build systems](./config.md#build-systems) documentation describes this behavior.
 
 ### Handling of extraneous packages
 
-`uv sync` performs "exact" syncing by default, which means it will remove any packages that are not
-present in the lockfile.
+`uv sync` performs an "exact" sync by default. It removes packages that do not appear in the
+lockfile.
 
-To retain extraneous packages, use the `--inexact` flag:
+`--inexact` retains extra packages:
 
 ```console
 $ uv sync --inexact
 ```
 
-In contrast, `uv run` uses "inexact" syncing by default, ensuring that all required packages are
-installed but not removing extraneous packages. To enable exact syncing with `uv run`, use the
-`--exact` flag:
+`uv run` performs an "inexact" sync by default. It installs all required packages without removing
+extra packages. `--exact` enables exact syncing for `uv run`:
 
 ```console
 $ uv run --exact ...
@@ -110,92 +103,86 @@ $ uv run --exact ...
 
 ### Syncing optional dependencies
 
-uv reads optional dependencies from the `[project.optional-dependencies]` table. These are
-frequently referred to as "extras".
+uv reads optional dependencies from the `[project.optional-dependencies]` table. These dependencies
+are also called "extras".
 
-uv does not sync extras by default. Use the `--extra` option to include an extra.
+By default, uv does not sync extras. `--extra` includes a named extra:
 
 ```console
 $ uv sync --extra foo
 ```
 
-To quickly enable all extras, use the `--all-extras` option.
+`--all-extras` enables every extra.
 
-See the [optional dependencies](./dependencies.md#optional-dependencies) documentation for details
-on how to manage optional dependencies.
+The [optional dependencies](./dependencies.md#optional-dependencies) documentation describes how uv
+manages these dependencies.
 
 ### Syncing development dependencies
 
-uv reads development dependencies from the `[dependency-groups]` table (as defined in
-[PEP 735](https://peps.python.org/pep-0735/)).
+uv reads development dependencies from the `[dependency-groups]` table defined in
+[PEP 735](https://peps.python.org/pep-0735/).
 
-The `dev` group is special-cased and synced by default. See the
-[default groups](./dependencies.md#default-groups) documentation for details on changing the
-defaults.
+By default, uv syncs the `dev` group. The [default groups](./dependencies.md#default-groups)
+documentation describes how this default can change.
 
-The `--no-dev` flag can be used to exclude the `dev` group.
+`--no-dev` excludes the `dev` group.
 
-The `--only-dev` flag can be used to install the `dev` group _without_ the project and its
-dependencies.
+`--only-dev` installs the `dev` group _without_ the project and its dependencies.
 
-Additional groups can be included or excluded with the `--all-groups`, `--no-default-groups`,
-`--group <name>`, `--only-group <name>`, and `--no-group <name>` options. The semantics of
-`--only-group` are the same as `--only-dev`, the project will not be included. However,
-`--only-group` will also exclude default groups.
+`--all-groups`, `--no-default-groups`, `--group <name>`, `--only-group <name>`, and
+`--no-group <name>` include or exclude additional groups. Like `--only-dev`, `--only-group` excludes
+the project. Unlike `--only-dev`, `--only-group` also excludes default groups.
 
-Group exclusions always take precedence over inclusions, so given the command:
+Group exclusions take precedence over inclusions. For example:
 
 ```
 $ uv sync --no-group foo --group foo
 ```
 
-The `foo` group would not be installed.
+uv does not install the `foo` group.
 
-See the [development dependencies](./dependencies.md#development-dependencies) documentation for
-details on how to manage development dependencies.
+The [development dependencies](./dependencies.md#development-dependencies) documentation describes
+how uv manages these dependencies.
 
 ## Upgrading locked package versions
 
-With an existing `uv.lock` file, uv will prefer the previously locked versions of packages when
-running `uv sync` and `uv lock`. Package versions will only change if the project's dependency
-constraints exclude the previous, locked version.
+With an existing `uv.lock` file, `uv sync` and `uv lock` prefer previously locked package versions.
+A version changes only if the project's dependency constraints exclude the locked version.
 
-To upgrade all packages:
+The following command upgrades all packages:
 
 ```console
 $ uv lock --upgrade
 ```
 
-To upgrade a single package to the latest version, while retaining the locked versions of all other
-packages:
+The following command upgrades one package to its latest version. Other packages keep their locked
+versions:
 
 ```console
 $ uv lock --upgrade-package <package>
 ```
 
-To upgrade a single package to a specific version:
+The following command upgrades one package to a specific version:
 
 ```console
 $ uv lock --upgrade-package <package>==<version>
 ```
 
-In all cases, upgrades are limited to the project's dependency constraints. For example, if the
-project defines an upper bound for a package then an upgrade will not go beyond that version.
+Every upgrade must satisfy the project's dependency constraints. For example, an upgrade cannot
+exceed an upper version bound.
 
 !!! note
 
-    uv applies similar logic to Git dependencies. For example, if a Git dependency references
-    the `main` branch, uv will prefer the locked commit SHA in an existing `uv.lock` file over
-    the latest commit on the `main` branch, unless the `--upgrade` or `--upgrade-package` flags
-    are used.
+    uv applies the same preference to Git dependencies. If a Git dependency references `main`, uv
+    prefers the commit SHA in an existing `uv.lock` file. `--upgrade` and `--upgrade-package` update
+    the locked commit.
 
-These flags can also be provided to `uv sync` or `uv run` to update the lockfile _and_ the
-environment.
+`uv sync` and `uv run` also accept these flags. They update both the lockfile _and_ the environment.
 
 ## Exporting the lockfile
 
-If you need to integrate uv with other tools or workflows, you can export `uv.lock` to different
-formats including `requirements.txt`, `pylock.toml` (PEP 751), and CycloneDX SBOM.
+`uv export` converts `uv.lock` into formats used by other tools or workflows. Supported formats
+include `requirements.txt`, `pylock.toml` (PEP 751), and CycloneDX SBOM.
 
 ```console
 $ uv export --format requirements.txt
@@ -203,38 +190,38 @@ $ uv export --format pylock.toml
 $ uv export --format cyclonedx1.5
 ```
 
-See the [export guide](./export.md) for comprehensive documentation on all export formats and their
-use cases.
+The [export guide](./export.md) describes all export formats and their use cases.
 
 ## Partial installations
 
-Sometimes it's helpful to perform installations in multiple steps, e.g., for optimal layer caching
-while building a Docker image. `uv sync` has several flags for this purpose.
+Some workflows install dependencies in stages. For example, Docker builds can use staged
+installation to improve layer caching. `uv sync` supports these flags:
 
-- `--no-install-project`: Do not install the current project
-- `--no-install-workspace`: Do not install any workspace members, including the root project
-- `--no-install-package <NO_INSTALL_PACKAGE>`: Do not install the given package(s)
+- `--no-install-project`: Excludes the current project.
+- `--no-install-workspace`: Excludes all workspace members, including the root project.
+- `--no-install-package <NO_INSTALL_PACKAGE>`: Excludes the specified package or packages.
 
-When these options are used, all the dependencies of the target are still installed. For example,
-`--no-install-project` will omit the _project_ but not any of its dependencies.
+Each option still installs the target's dependencies. For example, `--no-install-project` skips the
+_project_ without skipping its dependencies.
 
-If used improperly, these flags can result in a broken environment since a package can be missing
-its dependencies.
+If a required package is omitted, these flags can leave an environment without one of its
+dependencies.
 
 ## Malware checks
 
 !!! important
 
-    On-sync malware checking is in [preview](../preview.md), and is subject to change until stabilized.
+    On-sync malware checking is in [preview](../preview.md). Its behavior can change before the
+    feature becomes stable.
 
-While syncing, uv can perform a lightweight scan of your lockfile for known malware by checking it
-against [OSV](https://osv.dev). OSV references MAL advisories from the OpenSSF's
+During a sync, uv can perform a lightweight lockfile scan for known malware against
+[OSV](https://osv.dev). OSV lists MAL advisories from the OpenSSF's
 [malicious packages database](https://github.com/ossf/malicious-packages).
 
-If a locked dependency matches a malware advisory, the sync will be terminated.
+If a locked dependency matches a malware advisory, uv stops the sync.
 
-To enable malware checks, set `audit.malware-check = true` in your uv settings or set
-`UV_MALWARE_CHECK=1` in your environment.
+Either `audit.malware-check = true` in uv settings or `UV_MALWARE_CHECK=1` in the environment
+enables malware checks.
 
-To use an alternative vulnerability service, set `audit.malware-check-url` in your uv settings or
-set `UV_MALWARE_CHECK_URL` in your environment.
+The `audit.malware-check-url` setting or the `UV_MALWARE_CHECK_URL` environment variable selects an
+alternative vulnerability service.

@@ -1,6 +1,6 @@
 # uv
 
-An extremely fast Python package and project manager, written in Rust.
+uv is an extremely fast Python package and project manager written in Rust.
 
 <p align="center">
   <img alt="Shows a bar chart with benchmark results." src="https://github.com/astral-sh/uv/assets/1309177/629e59c0-9c6e-4013-9ad4-adb2bcf5080d#only-light">
@@ -16,28 +16,25 @@ An extremely fast Python package and project manager, written in Rust.
 
 ## Highlights
 
-- A single tool to replace `pip`, `pip-tools`, `pipx`, `poetry`, `pyenv`, `twine`, `virtualenv`, and
-  more.
-- [10-100x faster](https://github.com/astral-sh/uv/blob/main/BENCHMARKS.md) than `pip`.
-- Provides [comprehensive project management](#projects), with a
+- Replaces `pip`, `pip-tools`, `pipx`, `poetry`, `pyenv`, `twine`, `virtualenv`, and other tools.
+- Runs [10-100x faster](https://github.com/astral-sh/uv/blob/main/BENCHMARKS.md) than `pip`.
+- Manages [projects](#projects) with a
   [universal lockfile](./concepts/projects/layout.md#the-lockfile).
-- [Runs scripts](#scripts), with support for
+- [Runs scripts](#scripts) with
   [inline dependency metadata](./guides/scripts.md#declaring-script-dependencies).
 - [Installs and manages](#python-versions) Python versions.
-- [Runs and installs](#tools) tools published as Python packages.
-- Includes a [pip-compatible interface](#the-pip-interface) for a performance boost with a familiar
-  CLI.
+- [Runs and installs](#tools) command-line tools published as Python packages.
+- Provides a faster [pip-compatible interface](#the-pip-interface) with familiar commands.
 - Supports Cargo-style [workspaces](./concepts/projects/workspaces.md) for scalable projects.
-- Disk-space efficient, with a [global cache](./concepts/cache.md) for dependency deduplication.
-- Installable without Rust or Python via `curl` or `pip`.
+- Saves disk space by reusing dependencies through a [global cache](./concepts/cache.md).
+- Installs with `curl` or `pip`. The standalone installer does not require Rust or Python.
 - Supports macOS, Linux, and Windows.
 
-uv is backed by [Astral](https://astral.sh), the creators of
-[Ruff](https://github.com/astral-sh/ruff).
+[Astral](https://astral.sh) supports uv and created [Ruff](https://github.com/astral-sh/ruff).
 
 ## Installation
 
-Install uv with our official standalone installer:
+Install uv with the official standalone installer:
 
 === "macOS and Linux"
 
@@ -51,17 +48,18 @@ Install uv with our official standalone installer:
     PS> powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
     ```
 
-Then, check out the [first steps](./getting-started/first-steps.md) or read on for a brief overview.
+Next, follow the [first steps](./getting-started/first-steps.md) or continue reading for an
+overview.
 
 !!! tip
 
-    uv may also be installed with pip, Homebrew, and more. See all of the methods on the
-    [installation page](./getting-started/installation.md).
+    You can also install uv with pip, Homebrew, and other package managers. See the
+    [installation page](./getting-started/installation.md) for all installation methods.
 
 ## Projects
 
-uv manages project dependencies and environments, with support for lockfiles, workspaces, and more,
-similar to `rye` or `poetry`:
+uv manages project dependencies and environments. It supports lockfiles, workspaces, and other
+features found in `rye` or `poetry`:
 
 ```console
 $ uv init example
@@ -89,16 +87,16 @@ Resolved 2 packages in 0.70ms
 Checked 1 package in 0.02ms
 ```
 
-See the [project guide](./guides/projects.md) to get started.
+Read the [project guide](./guides/projects.md) to get started.
 
-uv also supports building and publishing projects, even if they're not managed with uv. See the
+uv also builds and publishes projects that uv does not manage. Read the
 [packaging guide](./guides/package.md) to learn more.
 
 ## Scripts
 
 uv manages dependencies and environments for single-file scripts.
 
-Create a new script and add inline metadata declaring its dependencies:
+Create a script. Add inline metadata that declares its dependencies:
 
 ```console
 $ echo 'import requests; print(requests.get("https://astral.sh"))' > example.py
@@ -107,7 +105,7 @@ $ uv add --script example.py requests
 Updated `example.py`
 ```
 
-Then, run the script in an isolated virtual environment:
+Run the script in an isolated virtual environment:
 
 ```console
 $ uv run example.py
@@ -116,13 +114,13 @@ Installed 5 packages in 12ms
 <Response [200]>
 ```
 
-See the [scripts guide](./guides/scripts.md) to get started.
+Read the [scripts guide](./guides/scripts.md) to get started.
 
 ## Tools
 
-uv executes and installs command-line tools provided by Python packages, similar to `pipx`.
+uv runs and installs command-line tools from Python packages, similar to `pipx`.
 
-Run a tool in an ephemeral environment using `uvx` (an alias for `uv tool run`):
+Run a tool in a temporary environment with `uvx`, an alias for `uv tool run`:
 
 ```console
 $ uvx pycowsay 'hello world!'
@@ -154,13 +152,13 @@ $ ruff --version
 ruff 0.5.4
 ```
 
-See the [tools guide](./guides/tools.md) to get started.
+Read the [tools guide](./guides/tools.md) to get started.
 
 ## Python versions
 
-uv installs Python and allows quickly switching between versions.
+uv installs Python and lets you switch between versions.
 
-Install multiple Python versions:
+Install several Python versions:
 
 ```console
 $ uv python install 3.10 3.11 3.12
@@ -173,7 +171,7 @@ Installed 3 versions in 3.42s
  + cpython-3.12.4-macos-aarch64-none
 ```
 
-Download Python versions as needed:
+Download Python versions when a command requires them:
 
 ```console
 $ uv venv --python 3.12.0
@@ -195,18 +193,16 @@ $ uv python pin 3.11
 Pinned `.python-version` to `3.11`
 ```
 
-See the [installing Python guide](./guides/install-python.md) to get started.
+Read the [installing Python guide](./guides/install-python.md) to get started.
 
 ## The pip interface
 
-uv provides a drop-in replacement for common `pip`, `pip-tools`, and `virtualenv` commands.
+uv provides replacements for common `pip`, `pip-tools`, and `virtualenv` commands.
 
-uv extends their interfaces with advanced features, such as dependency version overrides,
-platform-independent resolutions, reproducible resolutions, alternative resolution strategies, and
-more.
+uv adds features such as dependency version overrides and platform-independent resolution. It also
+supports reproducible resolution and alternative resolution strategies.
 
-Migrate to uv without changing your existing workflows — and experience a 10-100x speedup — with the
-`uv pip` interface.
+Use `uv pip` to keep your existing workflows and run commands 10-100 times faster.
 
 Compile requirements into a platform-independent requirements file:
 
@@ -238,9 +234,9 @@ Installed 43 packages in 208ms
  ...
 ```
 
-See the [pip interface documentation](./pip/index.md) to get started.
+Read the [pip interface documentation](./pip/index.md) to get started.
 
 ## Learn more
 
-See the [first steps](./getting-started/first-steps.md) or jump straight to the
-[guides](./guides/index.md) to start using uv.
+Follow the [first steps](./getting-started/first-steps.md) or read the [guides](./guides/index.md)
+to start using uv.

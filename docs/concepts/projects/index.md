@@ -1,12 +1,12 @@
 # Projects
 
-Projects help manage Python code spanning multiple files.
+Projects manage Python code across multiple files.
 
 !!! tip
 
-    Looking for an introduction to creating a project with uv? See the [projects guide](../../guides/projects.md) first.
+    The [projects guide](../../guides/projects.md) introduces project creation with uv.
 
-Working on projects is a core part of the uv experience. Learn more about using projects:
+Project management is a core uv feature. These topics describe project behavior:
 
 - [Understanding project structure and files](./layout.md)
 - [Creating new projects](./init.md)
