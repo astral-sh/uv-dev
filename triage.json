@@ -1,0 +1,27 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 11215,
+        "title": "Adding a dependency without its own dependencies  like `--no-deps` in pip",
+        "url": "https://github.com/astral-sh/uv/issues/11215",
+        "state": "open",
+        "reason": "A comment independently shows the identical empty PEP 508 input and detached caret, but astral-sh/uv#11215 tracks dependency-metadata and `--no-deps` semantics rather than diagnostic formatting."
+      },
+      {
+        "kind": "pull_request",
+        "number": 19781,
+        "title": "Use UTF-8 lengths for requirement errors",
+        "url": "https://github.com/astral-sh/uv/pull/19781",
+        "state": "merged",
+        "reason": "astral-sh/uv#19781 is adjacent fix-oriented precedent for the same PEP 508 error renderer: it corrected multibyte span rendering, but did not address zero-length input."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests using the exact error, `orphaned caret`, `points nowhere`, TOML parse error/caret combinations, empty or blank dependency and requirement terms, PEP 508 diagnostic, span, underline, and formatting terms, and astral-sh/uv#21089. Comments, references, recent parser commits, and formatter fixes were inspected. The only prior exact output was incidental to astral-sh/uv#11215. Plausible candidates astral-sh/uv#13183 and astral-sh/uv#8281 with astral-sh/uv#8282 were ruled out because they concern a setuptools configuration error and a leading-whitespace parser panic, respectively."
+  },
+  "type": "bug",
+  "type_reason": "Repository source confirms that empty input receives a one-character span and the formatter always emits its underline, producing a caret beneath no text. Rejecting the empty requirement is correct, but this user-facing rendering is misleading. No existing issue or pull request canonically tracks the formatting problem, and no prior fix has regressed.",
+  "summary": "astral-sh/uv#11215 incidentally demonstrates the same artifact, while astral-sh/uv#19781 fixed a different PEP 508 span-rendering bug. Neither tracks or fixes the empty-input case.",
+  "draft_response": "Thanks for the clear reproduction. The empty string is invalid and uv is correct to reject it, but the standalone caret is not useful. The PEP 508 formatter currently forces a one-character underline even when the input is empty, which produces this detached caret inside the TOML diagnostic. This is a diagnostic-formatting bug. A fix should suppress the empty inner source and underline while retaining the TOML span and PEP 508 message, with regression coverage for inline script dependencies."
+}
