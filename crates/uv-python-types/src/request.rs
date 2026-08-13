@@ -18,28 +18,28 @@ use crate::{ImplementationName, PythonDownloadRequest, PythonInstallationKey, Py
 /// See [`PythonRequest::parse`].
 #[derive(Debug, Clone, Eq, Default)]
 pub enum PythonRequest {
-    /// An appropriate default Python installation
+    /// A suitable default Python installation.
     ///
-    /// This may skip some Python installations, such as pre-release versions or alternative
-    /// implementations.
+    /// This can exclude pre-release versions and alternative implementations.
     #[default]
     Default,
-    /// Any Python installation
+    /// Any Python installation.
     Any,
-    /// A Python version without an implementation name e.g. `3.10` or `>=3.12,<3.13`
+    /// A Python version without an implementation name, such as `3.10` or `>=3.12,<3.13`.
     Version(VersionRequest),
-    /// A path to a directory containing a Python installation, e.g. `.venv`
+    /// A directory that contains a Python installation, such as `.venv`.
     Directory(PathBuf),
-    /// A path to a Python executable e.g. `~/bin/python`
+    /// A Python executable path, such as `~/bin/python`.
     File(PathBuf),
-    /// The name of a Python executable (i.e. for lookup in the PATH) e.g. `foopython3`
+    /// A Python executable name to find in `PATH`, such as `foopython3`.
     ExecutableName(String),
-    /// A Python implementation without a version e.g. `pypy` or `pp`
+    /// A Python implementation without a version, such as `pypy` or `pp`.
     Implementation(ImplementationName),
-    /// A Python implementation name and version e.g. `pypy3.8` or `pypy@3.8` or `pp38`
+    /// A Python implementation and version, such as `pypy3.8`, `pypy@3.8`, or `pp38`.
     ImplementationVersion(ImplementationName, VersionRequest),
-    /// A request for a specific Python installation key e.g. `cpython-3.12-x86_64-linux-gnu`
-    /// Generally these refer to managed Python downloads.
+    /// A Python installation key, such as `cpython-3.12-x86_64-linux-gnu`.
+    ///
+    /// These keys usually identify managed Python downloads.
     Key(PythonDownloadRequest),
 }
 
@@ -80,19 +80,19 @@ impl serde::Serialize for PythonRequest {
 #[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub enum PythonPreference {
-    /// Only use managed Python installations; never use system Python installations.
+    /// Use only managed Python installations. Do not use system Python installations.
     OnlyManaged,
     #[default]
     /// Prefer managed Python installations over system Python installations.
     ///
-    /// System Python installations are still preferred over downloading managed Python versions.
-    /// Use `only-managed` to always fetch a managed Python version.
+    /// Use an existing system Python installation before downloading a managed version.
+    /// Use `only-managed` to always download a managed Python version.
     Managed,
     /// Prefer system Python installations over managed Python installations.
     ///
-    /// If a system Python installation cannot be found, a managed Python installation can be used.
+    /// Use a managed installation if no system installation is available.
     System,
-    /// Only use system Python installations; never use managed Python installations.
+    /// Use only system Python installations. Do not use managed Python installations.
     OnlySystem,
 }
 
@@ -101,13 +101,13 @@ pub enum PythonPreference {
 #[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub enum PythonDownloads {
-    /// Automatically download managed Python installations when needed.
+    /// Download managed Python installations automatically when needed.
     #[default]
     #[serde(alias = "auto")]
     Automatic,
-    /// Do not automatically download managed Python installations; require explicit installation.
+    /// Require explicit installation. Do not download managed Python installations automatically.
     Manual,
-    /// Do not ever allow Python downloads.
+    /// Do not allow Python downloads.
     Never,
 }
 
@@ -132,12 +132,12 @@ impl From<bool> for PythonDownloads {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum EnvironmentPreference {
-    /// Only use virtual environments, never allow a system environment.
+    /// Use only virtual environments. Do not allow a system environment.
     #[default]
     OnlyVirtual,
-    /// Prefer virtual environments and allow a system environment if explicitly requested.
+    /// Prefer virtual environments. Allow a system environment only when explicitly requested.
     ExplicitSystem,
-    /// Only use a system environment, ignore virtual environments.
+    /// Use only a system environment. Ignore virtual environments.
     OnlySystem,
     /// Allow any environment.
     Any,
@@ -157,7 +157,7 @@ pub enum PythonVariant {
 /// A Python discovery version request.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub enum VersionRequest {
-    /// Allow an appropriate default Python version.
+    /// Allow a suitable default Python version.
     #[default]
     Default,
     /// Allow any Python version.
@@ -170,30 +170,30 @@ pub enum VersionRequest {
     Range(VersionSpecifiers, PythonVariant),
 }
 
-/// A location for discovery of a Python installation or interpreter.
+/// A location where uv can find a Python installation or interpreter.
 #[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, PartialOrd, Ord)]
 pub enum PythonSource {
-    /// The path was provided directly
+    /// A path provided directly.
     ProvidedPath,
-    /// An environment was active e.g. via `VIRTUAL_ENV`
+    /// An active virtual environment, such as one set by `VIRTUAL_ENV`.
     ActiveEnvironment,
-    /// A conda environment was active e.g. via `CONDA_PREFIX`
+    /// An active conda environment, such as one set by `CONDA_PREFIX`.
     CondaPrefix,
-    /// A base conda environment was active e.g. via `CONDA_PREFIX`
+    /// An active base conda environment, such as one set by `CONDA_PREFIX`.
     BaseCondaPrefix,
-    /// An environment was discovered e.g. via `.venv`
+    /// A discovered virtual environment, such as `.venv`.
     DiscoveredEnvironment,
-    /// An executable was found in the search path i.e. `PATH`
+    /// An executable found in `PATH`.
     SearchPath,
-    /// The first executable found in the search path i.e. `PATH`
+    /// The first executable found in `PATH`.
     SearchPathFirst,
-    /// An executable was found in the Windows registry via PEP 514
+    /// An executable found in the Windows registry with PEP 514.
     Registry,
-    /// An executable was found in the known Microsoft Store locations
+    /// An executable found in a known Microsoft Store location.
     MicrosoftStore,
-    /// The Python installation was found in the uv managed Python directory
+    /// A Python installation found in the uv-managed Python directory.
     Managed,
-    /// The Python installation was found via the invoking interpreter i.e. via `python -m uv ...`
+    /// The Python interpreter that ran uv, such as with `python -m uv ...`.
     ParentInterpreter,
 }
 
@@ -207,9 +207,9 @@ pub enum PythonRequestError {
 }
 
 impl PythonVariant {
-    /// Return the executable suffix for the variant, e.g., `t` for `python3.13t`.
+    /// Return the executable suffix for the variant, such as `t` for `python3.13t`.
     ///
-    /// Returns an empty string for the default Python variant.
+    /// Return an empty string for the default Python variant.
     pub fn executable_suffix(self) -> &'static str {
         match self {
             Self::Default => "",
@@ -221,7 +221,7 @@ impl PythonVariant {
         }
     }
 
-    /// Return the suffix for display purposes, e.g., `+gil`.
+    /// Return the display suffix, such as `+gil`.
     pub fn display_suffix(self) -> &'static str {
         match self {
             Self::Default => "",
@@ -233,8 +233,9 @@ impl PythonVariant {
         }
     }
 
-    /// Return the lib suffix for the variant, e.g., `t` for `python3.13t` but an empty string for
-    /// `python3.13d` or `python3.13`.
+    /// Return the library suffix for the variant.
+    ///
+    /// Return `t` for `python3.13t`. Return an empty string for `python3.13d` or `python3.13`.
     pub fn lib_suffix(self) -> &'static str {
         match self {
             Self::Default | Self::Debug | Self::Gil | Self::GilDebug => "",
@@ -272,11 +273,11 @@ impl PythonRequest {
 
     /// Create a request from a string.
     ///
-    /// This cannot fail, which means weird inputs will be parsed as [`PythonRequest::File`] or
+    /// This method cannot fail. Parse unrecognized inputs as [`PythonRequest::File`] or
     /// [`PythonRequest::ExecutableName`].
     ///
-    /// This is intended for parsing the argument to the `--python` flag. See also
-    /// [`try_from_tool_name`][Self::try_from_tool_name] below.
+    /// Use this method to parse the `--python` argument. See also
+    /// [`try_from_tool_name`][Self::try_from_tool_name].
     pub fn parse(value: &str) -> Self {
         Self::parse_with_working_directory(value, Path::new(""))
     }
@@ -285,7 +286,7 @@ impl PythonRequest {
     pub fn parse_with_working_directory(value: &str, working_directory: &Path) -> Self {
         let lowercase_value = &value.to_ascii_lowercase();
 
-        // Literals, e.g. `any` or `default`
+        // Match literal values such as `any` and `default`.
         if lowercase_value == "any" {
             return Self::Any;
         }
@@ -293,13 +294,13 @@ impl PythonRequest {
             return Self::Default;
         }
 
-        // the prefix of e.g. `python312` and the empty prefix of bare versions, e.g. `312`
+        // Match the `python` prefix in `python312` and the empty prefix in `312`.
         let abstract_version_prefixes = ["python", ""];
         let all_implementation_names = ImplementationName::iter_all().flat_map(|implementation| {
             std::iter::once(implementation.long_name()).chain(implementation.short_name())
         });
-        // Abstract versions like `python@312`, `python312`, or `312`, plus implementations and
-        // implementation versions like `pypy`, `pypy@312` or `pypy312`.
+        // Match version requests such as `python@312`, `python312`, and `312`. Also match
+        // implementation requests such as `pypy`, `pypy@312`, and `pypy312`.
         if let Ok(Some(request)) = Self::parse_versions_and_implementations(
             abstract_version_prefixes,
             all_implementation_names,
@@ -309,16 +310,16 @@ impl PythonRequest {
         }
 
         let value_as_path = working_directory.join(value);
-        // e.g. /path/to/.venv
+        // Match an environment directory such as `/path/to/.venv`.
         if value_as_path.is_dir() {
             return Self::Directory(value_as_path);
         }
-        // e.g. /path/to/python
+        // Match an executable such as `/path/to/python`.
         if value_as_path.is_file() {
             return Self::File(value_as_path);
         }
 
-        // e.g. path/to/python on Windows, where path/to/python.exe is the true path
+        // On Windows, `path/to/python` can refer to `path/to/python.exe`.
         #[cfg(windows)]
         if value_as_path.extension().is_none() {
             let value_as_path = value_as_path.with_extension(EXE_SUFFIX);
@@ -327,37 +328,32 @@ impl PythonRequest {
             }
         }
 
-        // e.g. .\path\to\python3.exe or ./path/to/python3
-        // If it contains a path separator, we'll treat it as a full path even if it does not exist
+        // Treat a value with a path separator as a path even if it does not exist.
         if value.contains(std::path::MAIN_SEPARATOR) {
             return Self::File(value_as_path);
         }
-        // e.g. ./path/to/python3.exe
-        // On Windows, Unix path separators are often valid
+        // Also accept Unix path separators on Windows.
         if cfg!(windows) && value.contains('/') {
             return Self::File(value_as_path);
         }
         if let Ok(request) = PythonDownloadRequest::from_str(value) {
             return Self::Key(request);
         }
-        // Finally, we'll treat it as the name of an executable (i.e. in the search PATH)
-        // e.g. foo.exe
+        // Otherwise, treat the value as an executable name to find in `PATH`.
         Self::ExecutableName(value.to_string())
     }
 
-    /// Try to parse a tool name as a Python version, e.g. `uvx python311`.
+    /// Parse a tool name as a Python version, such as `uvx python311`.
     ///
-    /// The `PythonRequest::parse` constructor above is intended for the `--python` flag, where the
-    /// value is unambiguously a Python version. This alternate constructor is intended for `uvx`
-    /// or `uvx --from`, where the executable could be either a Python version or a package name.
-    /// There are several differences in behavior:
+    /// [`PythonRequest::parse`] handles `--python`, where the value identifies a Python request.
+    /// This method handles `uvx` and `uvx --from`, where a value can identify either a Python
+    /// version or a package.
     ///
-    /// - This only supports long names, including e.g. `pypy39` but **not** `pp39` or `39`.
-    /// - On Windows only, this allows `pythonw` as an alias for `python`.
-    /// - This allows `python` by itself (and on Windows, `pythonw`) as an alias for `default`.
+    /// - Accept long names such as `pypy39`. Do not accept `pp39` or `39`.
+    /// - On Windows, accept `pythonw` as an alias for `python`.
+    /// - Accept `python` as an alias for `default`. On Windows, also accept `pythonw`.
     ///
-    /// This can only return `Err` if `@` is used. Otherwise, if no match is found, it returns
-    /// `Ok(None)`.
+    /// Return `Err` only when the value uses `@`. Return `Ok(None)` when no value matches.
     pub fn try_from_tool_name(value: &str) -> Result<Option<Self>, PythonRequestError> {
         let lowercase_value = &value.to_ascii_lowercase();
         // Omitting the empty string from these lists excludes bare versions like "39".
@@ -366,7 +362,7 @@ impl PythonRequest {
         } else {
             &["python"][..]
         };
-        // e.g. just `python`
+        // Match an executable name without a version, such as `python`.
         if abstract_version_prefixes.contains(&lowercase_value.as_str()) {
             return Ok(Some(Self::Default));
         }
@@ -377,36 +373,34 @@ impl PythonRequest {
         )
     }
 
-    /// Take a value like `"python3.11"`, check whether it matches a set of abstract python
-    /// prefixes (e.g. `"python"`, `"pythonw"`, or even `""`) or a set of specific Python
-    /// implementations (e.g. `"cpython"` or `"pypy"`, possibly with abbreviations), and if so try
-    /// to parse its version.
+    /// Parse a Python version from a value such as `"python3.11"`.
     ///
-    /// This can only return `Err` if `@` is used, see
-    /// [`try_split_prefix_and_version`][Self::try_split_prefix_and_version] below. Otherwise, if
-    /// no match is found, it returns `Ok(None)`.
+    /// Match a generic prefix such as `"python"`, `"pythonw"`, or `""`. Also match specific
+    /// implementations such as `"cpython"`, `"pypy"`, and their supported abbreviations.
+    ///
+    /// Return `Err` only when the value uses `@`. Return `Ok(None)` when no value matches. See
+    /// [`try_split_prefix_and_version`][Self::try_split_prefix_and_version].
     fn parse_versions_and_implementations<'a>(
-        // typically "python", possibly also "pythonw" or "" (for bare versions)
+        // Generic prefixes include "python", "pythonw", and "" for bare versions.
         abstract_version_prefixes: impl IntoIterator<Item = &'a str>,
-        // expected to be either long names or all names
+        // Include either long implementation names or all implementation names.
         implementation_names: impl IntoIterator<Item = &'a str>,
-        // the string to parse
+        // The string to parse.
         lowercase_value: &str,
     ) -> Result<Option<Self>, PythonRequestError> {
         for prefix in abstract_version_prefixes {
             if let Some(version_request) =
                 Self::try_split_prefix_and_version(prefix, lowercase_value)?
             {
-                // e.g. `python39` or `python@39`
-                // Note that e.g. `python` gets handled elsewhere, if at all. (It's currently
-                // allowed in tool executables but not in --python flags.)
+                // Match requests such as `python39` and `python@39`. Handle `python` without a
+                // version separately. It is valid for tool executables, but not for `--python`.
                 return Ok(Some(Self::Version(version_request)));
             }
         }
         for implementation in implementation_names {
             if lowercase_value == implementation {
                 return Ok(Some(Self::Implementation(
-                    // e.g. `pypy`
+                    // For example, `pypy`.
                     // Safety: The name matched the possible names above
                     ImplementationName::from_str(implementation).unwrap(),
                 )));
@@ -414,7 +408,7 @@ impl PythonRequest {
             if let Some(version_request) =
                 Self::try_split_prefix_and_version(implementation, lowercase_value)?
             {
-                // e.g. `pypy39`
+                // For example, `pypy39`.
                 return Ok(Some(Self::ImplementationVersion(
                     // Safety: The name matched the possible names above
                     ImplementationName::from_str(implementation).unwrap(),
@@ -425,16 +419,16 @@ impl PythonRequest {
         Ok(None)
     }
 
-    /// Take a value like `"python3.11"`, check whether it matches a target prefix (e.g.
-    /// `"python"`, `"pypy"`, or even `""`), and if so try to parse its version.
+    /// Parse a version from a value that matches a target prefix.
     ///
-    /// Failing to match the prefix (e.g. `"notpython3.11"`) or failing to parse a version (e.g.
-    /// `"python3notaversion"`) is not an error, and those cases return `Ok(None)`. The `@`
-    /// separator is optional, and this function can only return `Err` if `@` is used. There are
-    /// two error cases:
+    /// For example, `"python3.11"` matches the `"python"` prefix. Other prefixes include
+    /// `"pypy"` and `""`.
     ///
-    /// - The value starts with `@` (e.g. `@3.11`).
-    /// - The prefix is a match, but the version is invalid (e.g. `python@3.not.a.version`).
+    /// Return `Ok(None)` if the prefix does not match or the version cannot be parsed. The `@`
+    /// separator is optional. Return `Err` only in these cases:
+    ///
+    /// - The value starts with `@`, such as `@3.11`.
+    /// - The prefix matches, but the version after `@` is invalid, such as `python@3.not.a.version`.
     fn try_split_prefix_and_version(
         prefix: &str,
         lowercase_value: &str,
@@ -447,26 +441,24 @@ impl PythonRequest {
         let Some(rest) = lowercase_value.strip_prefix(prefix) else {
             return Ok(None);
         };
-        // Just the prefix by itself (e.g. "python") is handled elsewhere.
+        // Handle a prefix without a version, such as "python", elsewhere.
         if rest.is_empty() {
             return Ok(None);
         }
-        // The @ separator is optional. If it's present, the right half must be a version, and
-        // parsing errors are raised to the caller.
+        // The `@` separator is optional. When present, return errors for an invalid version.
         if let Some(after_at) = rest.strip_prefix('@') {
             if after_at == "latest" {
-                // Handle `@latest` as a special case. It's still an error for now, but we plan to
-                // support it. TODO(zanieb): Add `PythonRequest::Latest`
+                // Return a special error for `@latest` until it is supported.
+                // TODO(zanieb): Add `PythonRequest::Latest`.
                 return Err(PythonRequestError::LatestVersionRequest);
             }
             return after_at.parse().map(Some);
         }
-        // The @ was not present, so if the version fails to parse just return Ok(None). For
-        // example, python3stuff.
+        // Without `@`, return `Ok(None)` for an invalid version such as `python3stuff`.
         Ok(rest.parse().ok())
     }
 
-    /// Check if this request includes a specific patch version.
+    /// Return `true` if this request includes a specific patch version.
     pub fn includes_patch(&self) -> bool {
         match self {
             Self::Default => false,
@@ -484,7 +476,7 @@ impl PythonRequest {
         }
     }
 
-    /// Check if this request includes a specific prerelease version.
+    /// Return `true` if this request includes a specific pre-release version.
     pub fn includes_prerelease(&self) -> bool {
         match self {
             Self::Default => false,
@@ -502,7 +494,7 @@ impl PythonRequest {
         }
     }
 
-    /// Require an exact architecture for requests that do not select one or name an executable.
+    /// Set an exact architecture for requests that do not select one or name an executable.
     pub fn with_default_arch(&self, arch: Option<Arch>) -> Cow<'_, Self> {
         let Some(arch) = arch else {
             return Cow::Borrowed(self);
@@ -516,7 +508,7 @@ impl PythonRequest {
         Cow::Owned(Self::Key(request.with_arch(arch)))
     }
 
-    /// Whether this request opts-in to a pre-release Python version.
+    /// Return `true` if this request allows a pre-release Python version.
     pub fn allows_prereleases(&self) -> bool {
         match self {
             Self::Default => false,
@@ -529,7 +521,7 @@ impl PythonRequest {
         }
     }
 
-    /// Whether this request opts-in to a debug Python version.
+    /// Return `true` if this request allows a debug Python version.
     pub fn allows_debug(&self) -> bool {
         match self {
             Self::Default => false,
@@ -542,7 +534,7 @@ impl PythonRequest {
         }
     }
 
-    /// Whether this request opts-in to an alternative Python implementation, e.g., PyPy.
+    /// Return `true` if this request allows an alternative Python implementation, such as PyPy.
     pub fn allows_alternative_implementations(&self) -> bool {
         match self {
             Self::Default => false,
@@ -561,9 +553,9 @@ impl PythonRequest {
         matches!(self, Self::File(_) | Self::Directory(_))
     }
 
-    /// Serialize the request to a canonical representation.
+    /// Convert the request to its canonical string.
     ///
-    /// [`Self::parse`] should always return the same request when given the output of this method.
+    /// [`Self::parse`] must return the same request when it receives this string.
     pub fn to_canonical_string(&self) -> Cow<'_, str> {
         match self {
             Self::Any => Cow::Borrowed("any"),
@@ -579,9 +571,9 @@ impl PythonRequest {
         }
     }
 
-    /// Convert an interpreter request into a concrete PEP 440 `Version` when possible.
+    /// Convert this interpreter request into a concrete PEP 440 `Version`, when possible.
     ///
-    /// Returns `None` if the request doesn't carry an exact version
+    /// Return `None` if the request does not specify an exact version.
     pub fn as_pep440_version(&self) -> Option<Version> {
         match self {
             Self::Version(v) | Self::ImplementationVersion(_, v) => v.as_pep440_version(),
@@ -597,11 +589,9 @@ impl PythonRequest {
         }
     }
 
-    /// Convert an interpreter request into [`VersionSpecifiers`] representing the range of
-    /// compatible versions.
+    /// Convert this interpreter request into [`VersionSpecifiers`] for compatible versions.
     ///
-    /// Returns `None` if the request doesn't carry version constraints (e.g., a path or
-    /// executable name).
+    /// Return `None` if the request has no version constraints, such as a path or executable name.
     fn as_version_specifiers(&self) -> Option<VersionSpecifiers> {
         match self {
             Self::Version(version) | Self::ImplementationVersion(_, version) => {
@@ -619,11 +609,10 @@ impl PythonRequest {
         }
     }
 
-    /// Returns `true` when this request is compatible with the given `requires-python` specifier.
+    /// Return `true` if this request is compatible with the `requires-python` specifier.
     ///
-    /// Requests without version constraints (e.g., paths, executable names) are always considered
-    /// compatible. For versioned requests, compatibility means the request's version range has a
-    /// non-empty intersection with the `requires-python` range.
+    /// Paths and executable names have no version constraints, so they are always compatible. A
+    /// versioned request is compatible when its range overlaps the `requires-python` range.
     pub fn intersects_specifiers(&self, requires_python: &VersionSpecifiers) -> bool {
         let Some(specifiers) = self.as_version_specifiers() else {
             return true;
@@ -642,7 +631,7 @@ impl PythonSource {
         matches!(self, Self::Managed)
     }
 
-    /// Whether a pre-release Python installation from this source can be used without opt-in.
+    /// Return `true` if this source allows pre-release Python without explicit selection.
     pub fn allows_prereleases(self) -> bool {
         match self {
             Self::Managed | Self::Registry | Self::MicrosoftStore => false,
@@ -657,7 +646,7 @@ impl PythonSource {
         }
     }
 
-    /// Whether a debug Python installation from this source can be used without opt-in.
+    /// Return `true` if this source allows debug Python without explicit selection.
     pub fn allows_debug(self) -> bool {
         match self {
             Self::Managed | Self::Registry | Self::MicrosoftStore => false,
@@ -672,14 +661,13 @@ impl PythonSource {
         }
     }
 
-    /// Whether an alternative Python implementation from this source can be used without opt-in.
+    /// Return `true` if this source allows alternative implementations without explicit selection.
     pub fn allows_alternative_implementations(self) -> bool {
         match self {
             Self::Managed
             | Self::Registry
             | Self::SearchPath
-            // TODO(zanieb): We may want to allow this at some point, but when adding this variant
-            // we want compatibility with existing behavior
+            // TODO(zanieb): Consider allowing this while preserving existing behavior.
             | Self::SearchPathFirst
             | Self::MicrosoftStore => false,
             Self::CondaPrefix
@@ -691,17 +679,14 @@ impl PythonSource {
         }
     }
 
-    /// Whether this source **could** be a virtual environment.
+    /// Return `true` if this source could be a virtual environment.
     ///
-    /// This excludes the [`PythonSource::SearchPath`] although it could be in a virtual
-    /// environment; pragmatically, that's not common and saves us from querying a bunch of system
-    /// interpreters for no reason. It seems dubious to consider an interpreter in the `PATH` as a
-    /// target virtual environment if it's not discovered through our virtual environment-specific
-    /// patterns. Instead, we special case the first Python executable found on the `PATH` with
-    /// [`PythonSource::SearchPathFirst`], allowing us to check if that's a virtual environment.
-    /// This enables targeting the virtual environment with uv by putting its `bin/` on the `PATH`
-    /// without setting `VIRTUAL_ENV` — but if there's another interpreter before it we will ignore
-    /// it.
+    /// Exclude [`PythonSource::SearchPath`] to avoid querying every system interpreter. A later
+    /// `PATH` entry can belong to a virtual environment, but uv does not select it automatically.
+    ///
+    /// Check the first `PATH` executable through [`PythonSource::SearchPathFirst`]. This lets a
+    /// virtual environment work when its `bin/` directory is first in `PATH`, even without
+    /// `VIRTUAL_ENV`. If another interpreter appears first, ignore the environment.
     pub fn is_maybe_virtualenv(self) -> bool {
         match self {
             Self::ProvidedPath
@@ -715,8 +700,9 @@ impl PythonSource {
         }
     }
 
-    /// Whether this source is "explicit", e.g., it was directly provided by the user or is
-    /// an active virtual environment.
+    /// Return `true` if the user explicitly selected this source.
+    ///
+    /// Explicit sources include provided paths and active virtual environments.
     pub fn is_explicit(self) -> bool {
         match self {
             Self::ProvidedPath
@@ -733,7 +719,7 @@ impl PythonSource {
         }
     }
 
-    /// Whether this source **could** be a system interpreter.
+    /// Return `true` if this source could be a system interpreter.
     pub fn is_maybe_system(self) -> bool {
         match self {
             Self::CondaPrefix
@@ -752,7 +738,7 @@ impl PythonSource {
 
 impl PythonPreference {
     pub fn allows_source(self, source: PythonSource) -> bool {
-        // If not dealing with a system interpreter source, we don't care about the preference
+        // Ignore the preference for sources that are not system interpreter sources.
         if !matches!(
             source,
             PythonSource::Managed | PythonSource::SearchPath | PythonSource::Registry
@@ -779,17 +765,14 @@ impl PythonPreference {
         }
     }
 
-    /// Returns a new preference when the `--system` flag is used.
+    /// Return the preference selected by the `--system` flag.
     ///
-    /// This will convert [`PythonPreference::Managed`] to [`PythonPreference::System`] when system
-    /// is set.
+    /// Convert [`PythonPreference::Managed`] to [`PythonPreference::System`] when `system` is set.
     #[must_use]
     pub fn with_system_flag(self, system: bool) -> Self {
         match self {
-            // TODO(zanieb): It's not clear if we want to allow `--system` to override
-            // `--managed-python`. We should probably make this `from_system_flag` and refactor
-            // handling of the `PythonPreference` to use an `Option` so we can tell if the user
-            // provided it?
+            // TODO(zanieb): Decide whether `--system` can override `--managed-python`. An
+            // `Option<PythonPreference>` could distinguish explicit values from defaults.
             Self::OnlyManaged => self,
             Self::Managed => {
                 if system {
@@ -813,11 +796,11 @@ impl PythonDownloads {
 impl EnvironmentPreference {
     pub fn from_system_flag(system: bool, mutable: bool) -> Self {
         match (system, mutable) {
-            // When the system flag is provided, ignore virtual environments.
+            // Ignore virtual environments when `--system` is set.
             (true, _) => Self::OnlySystem,
-            // For mutable operations, only allow discovery of the system with explicit selection.
+            // Allow system environments for mutable operations only when explicitly selected.
             (false, true) => Self::ExplicitSystem,
-            // For immutable operations, we allow discovery of the system environment
+            // Allow system environments for immutable operations.
             (false, false) => Self::Any,
         }
     }
@@ -841,12 +824,11 @@ struct ExecutableNameComparator<'a> {
 }
 
 impl Ord for ExecutableNameComparator<'_> {
-    /// Note the comparison returns a reverse priority ordering.
+    /// Compare executable names in reverse priority order.
     ///
-    /// Higher priority items are "Greater" than lower priority items.
+    /// Higher-priority names compare as `Greater`.
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        // Prefer the default name over a specific implementation, unless an implementation was
-        // requested
+        // Prefer the default name unless the request specifies an implementation.
         let name_ordering = if self.implementation.is_some() {
             std::cmp::Ordering::Greater
         } else {
@@ -858,7 +840,7 @@ impl Ord for ExecutableNameComparator<'_> {
         if self.name.implementation.is_some() && other.name.implementation.is_none() {
             return name_ordering;
         }
-        // Otherwise, use the names in supported order
+        // Otherwise, use the supported implementation order.
         let ordering = self.name.implementation.cmp(&other.name.implementation);
         if ordering != std::cmp::Ordering::Equal {
             return ordering;
@@ -993,8 +975,8 @@ impl fmt::Display for ExecutableName {
 impl VersionRequest {
     /// Create a [`VersionRequest`] from [`VersionSpecifiers`].
     ///
-    /// If the specifiers consist of a single `==` constraint, the version is parsed as a
-    /// concrete version request (e.g., `MajorMinorPatch`) rather than a range.
+    /// Parse one `==` constraint as a concrete version request, such as `MajorMinorPatch`. Parse
+    /// other constraints as a range.
     pub fn from_specifiers(specifiers: VersionSpecifiers, variant: PythonVariant) -> Self {
         if let [specifier] = specifiers.iter().as_slice()
             && specifier.operator() == &uv_pep440::Operator::Equal
@@ -1005,7 +987,7 @@ impl VersionRequest {
         Self::Range(specifiers, variant)
     }
 
-    /// Drop any patch or prerelease information from the version request.
+    /// Remove patch and pre-release information from the version request.
     #[must_use]
     pub fn only_minor(self) -> Self {
         match self {
@@ -1028,7 +1010,7 @@ impl VersionRequest {
         }
     }
 
-    /// Return possible executable names for the given version request.
+    /// Return possible executable names for this version request.
     pub fn executable_names(
         &self,
         implementation: Option<&ImplementationName>,
@@ -1036,29 +1018,29 @@ impl VersionRequest {
         let prerelease = match self {
             Self::MajorMinorPrerelease(_, _, prerelease, _)
             | Self::MajorMinorPatchPrerelease(_, _, _, prerelease, _) => {
-                // Include the prerelease version, e.g., `python3.8a`
+                // Include the pre-release version, such as `python3.8a`.
                 Some(prerelease)
             }
             _ => None,
         };
 
-        // Push a default one
+        // Add the default executable name.
         let mut names = Vec::new();
         names.push(ExecutableName::default());
 
-        // Collect each variant depending on the number of versions
+        // Add names for each available version component.
         if let Some(major) = self.major() {
-            // e.g. `python3`
+            // For example, `python3`.
             names.push(ExecutableName::default().with_major(major));
             if let Some(minor) = self.minor() {
-                // e.g., `python3.12`
+                // For example, `python3.12`.
                 names.push(
                     ExecutableName::default()
                         .with_major(major)
                         .with_minor(minor),
                 );
                 if let Some(patch) = self.patch() {
-                    // e.g, `python3.12.1`
+                    // For example, `python3.12.1`.
                     names.push(
                         ExecutableName::default()
                             .with_major(major)
@@ -1068,31 +1050,31 @@ impl VersionRequest {
                 }
             }
         } else {
-            // Include `3` by default, e.g., `python3`
+            // Include Python 3 by default, such as `python3`.
             names.push(ExecutableName::default().with_major(3));
         }
 
         if let Some(prerelease) = prerelease {
-            // Include the prerelease version, e.g., `python3.8a`
+            // Include the pre-release version, such as `python3.8a`.
             for i in 0..names.len() {
                 let name = names[i];
                 if name.minor.is_none() {
-                    // We don't want to include the pre-release marker here
-                    // e.g. `pythonrc1` and `python3rc1` don't make sense
+                    // Do not add a pre-release marker without a minor version.
+                    // Names such as `pythonrc1` and `python3rc1` are invalid.
                     continue;
                 }
                 names.push(name.with_prerelease(*prerelease));
             }
         }
 
-        // Add all the implementation-specific names
+        // Add all implementation-specific names.
         if let Some(implementation) = implementation {
             for i in 0..names.len() {
                 let name = names[i].with_implementation(*implementation);
                 names.push(name);
             }
         } else {
-            // When looking for all implementations, include all possible names
+            // Include every name when the request allows all implementations.
             if matches!(self, Self::Any) {
                 for i in 0..names.len() {
                     for implementation in ImplementationName::iter_all() {
@@ -1103,7 +1085,7 @@ impl VersionRequest {
             }
         }
 
-        // Include free-threaded variants
+        // Include free-threaded variants.
         if let Some(variant) = self.variant()
             && variant != PythonVariant::Default
         {
@@ -1167,9 +1149,9 @@ impl VersionRequest {
         }
     }
 
-    /// Check if the request is for a version supported by uv.
+    /// Check whether uv supports the requested version.
     ///
-    /// If not, an `Err` is returned with an explanatory message.
+    /// Return `Err` with an explanation if the version is unsupported.
     pub fn check_supported(&self) -> Result<(), String> {
         match self {
             Self::Any | Self::Default => (),
@@ -1208,7 +1190,7 @@ impl VersionRequest {
                     ));
                 }
             }
-            // TODO(zanieb): We could do some checking here to see if the range can be satisfied
+            // TODO(zanieb): Check whether this version range can be satisfied.
             Self::Range(_, _) => (),
         }
 
@@ -1224,11 +1206,10 @@ impl VersionRequest {
         Ok(())
     }
 
-    /// Change this request into a request appropriate for the given [`PythonSource`].
+    /// Adjust this request for the specified [`PythonSource`].
     ///
-    /// For example, if [`VersionRequest::Default`] is requested, it will be changed to
-    /// [`VersionRequest::Any`] for sources that should allow non-default interpreters like
-    /// free-threaded variants.
+    /// Convert [`VersionRequest::Default`] to [`VersionRequest::Any`] for sources that allow
+    /// non-default interpreters, such as free-threaded variants.
     #[must_use]
     pub fn into_request_for_source(self, source: PythonSource) -> Self {
         match self {
@@ -1249,7 +1230,7 @@ impl VersionRequest {
         }
     }
 
-    /// Check if a version is compatible with the request.
+    /// Check whether a version is compatible with this request.
     ///
     /// This only rules out incompatible versions before querying an interpreter; full matching
     /// must also check the interpreter's variant.
@@ -1292,7 +1273,7 @@ impl VersionRequest {
         }
     }
 
-    /// Check if major and minor version segments are compatible with the request.
+    /// Check whether major and minor version components match this request.
     ///
     /// This only rules out incompatible versions before querying an interpreter; full matching
     /// must also check the interpreter's variant.
@@ -1334,8 +1315,7 @@ impl VersionRequest {
         }
     }
 
-    /// Check if major, minor, patch, and prerelease version segments are compatible with the
-    /// request.
+    /// Check whether major, minor, patch, and pre-release components match this request.
     ///
     /// This only rules out incompatible versions before querying an interpreter; full matching
     /// must also check the interpreter's variant.
@@ -1354,8 +1334,7 @@ impl VersionRequest {
             }
             Self::MajorMinorPatch(self_major, self_minor, self_patch, _) => {
                 (*self_major, *self_minor, *self_patch) == (major, minor, patch)
-                    // When a patch version is included, we treat it as a request for a stable
-                    // release
+                    // A patch version requests a stable release.
                     && prerelease.is_none()
             }
             Self::Range(specifiers, _) => specifiers.contains(
@@ -1363,7 +1342,7 @@ impl VersionRequest {
                     .with_pre(prerelease),
             ),
             Self::MajorMinorPrerelease(self_major, self_minor, self_prerelease, _) => {
-                // Pre-releases without a patch in the request match the zero patch version
+                // A pre-release without a patch matches patch version zero.
                 (*self_major, *self_minor, 0, Some(*self_prerelease))
                     == (major, minor, patch, prerelease)
             }
@@ -1384,7 +1363,7 @@ impl VersionRequest {
         }
     }
 
-    /// Check if a [`PythonInstallationKey`] is compatible with the request.
+    /// Check whether a [`PythonInstallationKey`] matches this request.
     ///
     /// This only rules out incompatible versions before querying an interpreter; full matching
     /// must also check the interpreter's variant.
@@ -1392,7 +1371,7 @@ impl VersionRequest {
         self.matches_major_minor_patch_prerelease(key.major, key.minor, key.patch, key.prerelease())
     }
 
-    /// Whether a patch version segment is present in the request.
+    /// Return `true` if the request includes a patch version.
     pub fn has_patch(&self) -> bool {
         match self {
             Self::Any | Self::Default => false,
@@ -1405,9 +1384,9 @@ impl VersionRequest {
         }
     }
 
-    /// Return a new [`VersionRequest`] without the patch version if possible.
+    /// Return a [`VersionRequest`] without its patch version, when possible.
     ///
-    /// If the patch version is not present, the request is returned unchanged.
+    /// Return the original request if it has no patch version.
     #[must_use]
     pub fn without_patch(self) -> Self {
         match self {
@@ -1428,7 +1407,7 @@ impl VersionRequest {
         }
     }
 
-    /// Whether this request should allow selection of pre-release versions.
+    /// Return `true` if this request allows pre-release versions.
     pub(crate) fn allows_prereleases(&self) -> bool {
         match self {
             Self::Default => false,
@@ -1442,7 +1421,7 @@ impl VersionRequest {
         }
     }
 
-    /// Whether this request is for a debug Python variant.
+    /// Return `true` if this request is for a debug Python variant.
     pub(crate) fn is_debug(&self) -> bool {
         match self {
             Self::Any | Self::Default => false,
@@ -1455,7 +1434,7 @@ impl VersionRequest {
         }
     }
 
-    /// Whether this request is for a free-threaded Python variant.
+    /// Return `true` if this request is for a free-threaded Python variant.
     fn is_freethreaded(&self) -> bool {
         match self {
             Self::Any | Self::Default => false,
@@ -1482,9 +1461,9 @@ impl VersionRequest {
         }
     }
 
-    /// Convert this request into a concrete PEP 440 `Version` when possible.
+    /// Convert this request into a concrete PEP 440 `Version`, when possible.
     ///
-    /// Returns `None` for non-concrete requests
+    /// Return `None` for requests without a concrete version.
     fn as_pep440_version(&self) -> Option<Version> {
         match self {
             Self::Default | Self::Any | Self::Range(_, _) => None,
@@ -1497,7 +1476,7 @@ impl VersionRequest {
                 u64::from(*minor),
                 u64::from(*patch),
             ])),
-            // Pre-releases without a patch use the zero patch version
+            // A pre-release without a patch uses patch version zero.
             Self::MajorMinorPrerelease(major, minor, prerelease, _) => Some(
                 Version::new([u64::from(*major), u64::from(*minor), 0]).with_pre(Some(*prerelease)),
             ),
@@ -1508,11 +1487,10 @@ impl VersionRequest {
         }
     }
 
-    /// Convert this request into [`VersionSpecifiers`] representing the range of compatible
-    /// versions.
+    /// Convert this request into [`VersionSpecifiers`] for compatible versions.
     ///
-    /// Returns `None` for requests without version constraints (e.g., [`VersionRequest::Default`]
-    /// and [`VersionRequest::Any`]).
+    /// Return `None` for requests without version constraints, such as [`VersionRequest::Default`]
+    /// and [`VersionRequest::Any`].
     fn as_version_specifiers(&self) -> Option<VersionSpecifiers> {
         match self {
             Self::Default | Self::Any => None,
@@ -1551,10 +1529,9 @@ impl FromStr for VersionRequest {
     type Err = PythonRequestError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        /// Extract the variant from the end of a version request string, returning the prefix and
-        /// the variant type.
+        /// Extract the variant from a version request. Return the prefix and variant type.
         fn parse_variant(s: &str) -> Result<(&str, PythonVariant), PythonRequestError> {
-            // This cannot be a valid version, just error immediately
+            // Return an error because letters alone are not a valid version.
             if s.chars().all(char::is_alphabetic) {
                 return Err(PythonRequestError::InvalidVersionRequest(s.to_string()));
             }
@@ -1563,10 +1540,10 @@ impl FromStr for VersionRequest {
                 return Ok((s, PythonVariant::Default));
             };
 
-            // Advance past the first digit
+            // Advance past the first digit.
             start += 1;
 
-            // Ensure we're not out of bounds
+            // Check that the index is within bounds.
             if start + 1 > s.len() {
                 return Ok((s, PythonVariant::Default));
             }
@@ -1574,12 +1551,12 @@ impl FromStr for VersionRequest {
             let variant = &s[start..];
             let prefix = &s[..start];
 
-            // Strip a leading `+` if present
+            // Remove a leading `+`, if present.
             let variant = variant.strip_prefix('+').unwrap_or(variant);
 
-            // TODO(zanieb): Special-case error for use of `dt` instead of `td`
+            // TODO(zanieb): Return a specific error when `dt` is used instead of `td`.
 
-            // If there's not a valid variant, fallback to failure in [`Version::from_str`]
+            // Let [`Version::from_str`] reject an invalid variant.
             let Ok(variant) = PythonVariant::from_str(variant) else {
                 return Ok((s, PythonVariant::Default));
             };
@@ -1592,21 +1569,20 @@ impl FromStr for VersionRequest {
             return parse_version_specifiers_request(s, variant);
         };
 
-        // Split the release component if it uses the wheel tag format (e.g., `38`)
+        // Split a wheel-tag release such as `38` into separate version components.
         let version = split_wheel_tag_release_version(version);
 
-        // We dont allow post or dev version here
+        // Reject post-release and development versions.
         if version.post().is_some() || version.dev().is_some() {
             return Err(PythonRequestError::InvalidVersionRequest(s.to_string()));
         }
 
-        // We don't allow local version suffixes unless they're variants, in which case they'd
-        // already be stripped.
+        // Reject local version suffixes. Supported variant suffixes were already removed.
         if !version.local().is_empty() {
             return Err(PythonRequestError::InvalidVersionRequest(s.to_string()));
         }
 
-        // Cast the release components into u8s since that's what we use in `VersionRequest`
+        // Convert release components to the `u8` values used by `VersionRequest`.
         let Ok(release) = try_into_u8_slice(&version.release()) else {
             return Err(PythonRequestError::InvalidVersionRequest(s.to_string()));
         };
@@ -1614,15 +1590,15 @@ impl FromStr for VersionRequest {
         let prerelease = version.pre();
 
         match release.as_slice() {
-            // e.g. `3
+            // For example, `3`.
             [major] => {
-                // Prereleases are not allowed here, e.g., `3rc1` doesn't make sense
+                // Reject pre-releases without a minor version, such as `3rc1`.
                 if prerelease.is_some() {
                     return Err(PythonRequestError::InvalidVersionRequest(s.to_string()));
                 }
                 Ok(Self::Major(*major, variant))
             }
-            // e.g. `3.12` or `312` or `3.13rc1`
+            // For example, `3.12`, `312`, or `3.13rc1`.
             [major, minor] => {
                 if let Some(prerelease) = prerelease {
                     return Ok(Self::MajorMinorPrerelease(
@@ -1631,7 +1607,7 @@ impl FromStr for VersionRequest {
                 }
                 Ok(Self::MajorMinor(*major, *minor, variant))
             }
-            // e.g. `3.12.1`, `3.13.0rc1`, or `3.14.5rc1`
+            // For example, `3.12.1`, `3.13.0rc1`, or `3.14.5rc1`.
             [major, minor, patch] => {
                 if let Some(prerelease) = prerelease {
                     if *patch == 0 {
@@ -1764,8 +1740,7 @@ impl fmt::Display for PythonSource {
 }
 
 impl PythonPreference {
-    /// Return the sources that are considered when searching for a Python interpreter with this
-    /// preference.
+    /// Return the interpreter sources allowed by this preference.
     pub fn sources(self) -> &'static [PythonSource] {
         match self {
             Self::OnlyManaged => &[PythonSource::Managed],
@@ -1823,12 +1798,11 @@ fn try_into_u8_slice(release: &[u64]) -> Result<Vec<u8>, std::num::TryFromIntErr
         .collect()
 }
 
-/// Convert a wheel tag formatted version (e.g., `38`) to multiple components (e.g., `3.8`).
+/// Convert a wheel-tag version such as `38` into separate components such as `3.8`.
 ///
-/// The major version is always assumed to be a single digit 0-9. The minor version is all
-/// the following content.
+/// The first digit is the major version. The remaining digits are the minor version.
 ///
-/// If not a wheel tag formatted version, the input is returned unchanged.
+/// Return the original input if it is not a wheel-tag version.
 fn split_wheel_tag_release_version(version: Version) -> Version {
     let release = version.release();
     if release.len() != 1 {

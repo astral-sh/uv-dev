@@ -1,6 +1,6 @@
 # Concepts overview
 
-Read the concept documents to learn more about uv's features:
+These concept documents describe uv features:
 
 - [Projects](./projects/index.md)
 - [Tools](./tools.md)
@@ -13,4 +13,4 @@ Read the concept documents to learn more about uv's features:
 - [Caching](./cache.md)
 - [The pip interface](../pip/index.md)
 
-Looking for a quick introduction to features? See the [guides](../guides/index.md) instead.
+For a quick introduction to these features, see the [guides](../guides/index.md).
