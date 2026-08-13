@@ -1,7 +1,7 @@
 # TLS certificates
 
-uv uses TLS to securely communicate with package indexes and other HTTPS servers. TLS certificates
-are used to verify the identity of these servers, ensuring that connections are not intercepted.
+uv uses TLS for secure connections to package indexes and other HTTPS servers. TLS certificates
+verify the identity of these servers and help prevent intercepted connections.
 
 ## TLS backend
 
@@ -17,27 +17,24 @@ uv supports the following X.509 certificate signature algorithms:
 
 ## System certificates
 
-By default, uv uses bundled Mozilla root certificates for TLS verification. In some cases, you may
-want to use the platform's native certificate store instead — for example, if you're relying on a
-corporate trust root (e.g., for a mandatory proxy) that's included in your system's certificate
-store.
+By default, uv verifies TLS connections with bundled Mozilla root certificates. A system certificate
+store can provide a required corporate trust root. For example, a mandatory proxy can require one.
 
 To use system certificates, pass the [`--system-certs`](../../reference/cli.md#uv) flag, set the
 [`UV_SYSTEM_CERTS`](../../reference/environment.md#uv_system_certs) environment variable to `true`,
 or set [`system-certs = true`](../../reference/settings.md#system-certs) in `uv.toml`.
 
-When using system certificates, certificate verification is performed by
-[`rustls-platform-verifier`](https://github.com/rustls/rustls-platform-verifier), which delegates to
+When uv uses system certificates,
+[`rustls-platform-verifier`](https://github.com/rustls/rustls-platform-verifier) verifies them with
 the operating system's certificate verifier.
 
 ## Custom certificates
 
-To use custom CA certificates, set the
-[`SSL_CERT_FILE`](../../reference/environment.md#ssl_cert_file) environment variable to the path of
-a PEM-encoded certificate bundle (e.g., `certs.pem`, `ca-bundle.crt`), or set
-[`SSL_CERT_DIR`](../../reference/environment.md#ssl_cert_dir) to one or more directories containing
-PEM-encoded certificate files. Multiple entries are supported, separated using a platform-specific
-delimiter (`:` on Unix, `;` on Windows).
+To use custom CA certificates, set [`SSL_CERT_FILE`](../../reference/environment.md#ssl_cert_file)
+to the path of a PEM-encoded certificate bundle, such as `certs.pem` or `ca-bundle.crt`.
+Alternatively, set [`SSL_CERT_DIR`](../../reference/environment.md#ssl_cert_dir) to one or more
+directories that contain PEM-encoded certificate files. Separate multiple directories with `:` on
+Unix or `;` on Windows.
 
 !!! note
 
@@ -45,42 +42,40 @@ delimiter (`:` on Unix, `;` on Windows).
     to a PEM-encoded certificate bundle. The bundle replaces uv's default certificate source for
     that invocation.
 
-Certificates are usually stored with `.pem`, `.crt`, or `.cer` extensions, but uv will attempt to
-read a certificate from any regular file in the provided `SSL_CERT_DIR`.
+Certificates usually have `.pem`, `.crt`, or `.cer` extensions. However, uv attempts to read a
+certificate from every regular file in `SSL_CERT_DIR`.
 
-Files that cannot be parsed as PEM certificates are ignored. uv resolves symlinks and ignores
-dangling symlinks.
+uv ignores files that it cannot parse as PEM certificates. It resolves symlinks and ignores dangling
+symlinks.
 
-DER-encoded files are not supported.
+uv does not support DER-encoded files.
 
-When set to non-empty values, these environment variables **override** the default certificate
-source entirely — only the provided certificates will be trusted. If a configured file or directory
-does not exist or contains no valid certificates, no default certificates will be trusted.
+Non-empty values for these environment variables **replace** the default certificate source. uv
+trusts only the specified certificates. If a specified file or directory does not exist or contains
+no valid certificates, uv does not trust any default certificates.
 
 `SSL_CERT_FILE` can point to a single certificate or a bundle containing multiple certificates.
-`SSL_CERT_DIR` can include multiple directory entries; uv will load all valid certificates from each
+`SSL_CERT_DIR` can include multiple directories. uv loads all valid certificates from each
 directory.
 
-If client certificate authentication (mTLS) is desired, set the
-[`SSL_CLIENT_CERT`](../../reference/environment.md#ssl_client_cert) environment variable to the path
-of a PEM formatted file containing the certificate followed by the private key.
+To use client certificate authentication (mTLS), set
+[`SSL_CLIENT_CERT`](../../reference/environment.md#ssl_client_cert) to a PEM-formatted file. The
+file must contain the certificate followed by the private key.
 
 ## Insecure hosts
 
-If you're using a setup in which you want to trust a self-signed certificate or otherwise disable
-certificate verification, you can instruct uv to allow insecure connections to dedicated hosts via
-the [`allow-insecure-host`](../../reference/settings.md#allow-insecure-host) configuration option.
-For example, adding the following to `pyproject.toml` will allow insecure connections to
-`example.com`:
+To trust a self-signed certificate or disable certificate verification for specific hosts, use
+[`allow-insecure-host`](../../reference/settings.md#allow-insecure-host). For example, add the
+following to `pyproject.toml` to allow insecure connections to `example.com`:
 
 ```toml
 [tool.uv]
 allow-insecure-host = ["example.com"]
 ```
 
-`allow-insecure-host` expects to receive a hostname (e.g., `localhost`) or hostname-port pair (e.g.,
-`localhost:8080`), and is only applicable to HTTPS connections, as HTTP connections are inherently
+`allow-insecure-host` accepts a hostname, such as `localhost`, or a hostname and port, such as
+`localhost:8080`. It applies only to HTTPS connections because HTTP connections are already
 insecure.
 
-Use `allow-insecure-host` with caution and only in trusted environments, as it can expose you to
-security risks due to the lack of certificate verification.
+Use `allow-insecure-host` only in trusted environments. Connections without certificate verification
+can expose credentials and other sensitive data.
