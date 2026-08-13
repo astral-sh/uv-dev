@@ -76,6 +76,17 @@ using that as the operational workaround. This matches the maintainer's strong r
 construct environments with symlinks rather than copies and the successful symlinked control above.
 It avoids the copied-interpreter `sys._base_executable` behavior without requiring a uv change.
 
+## Prospective upstream prevention
+
+python/cpython#129382 proposes changing the defaults of `venv.EnvBuilder` and `venv.create` to match
+`python -m venv`: use symlinks by default on POSIX and copies on Windows. That would make the
+reporter's explicit `symlinks=True` workaround the default for future POSIX API callers and prevent
+the original default-copy trigger in many cases. It would not repair existing copied environments
+or make uv robust to incorrect `sys._base_executable` metadata.
+
+The implementation in python/cpython#129493 is still open, has changes requested, and has been
+marked stale. There is therefore no released CPython change or dependable delivery timeline yet.
+
 ## Draft response
 
 Thanks for the reproducer. We reproduced this with uv 0.12.2 using an active copied Python 3.13
@@ -116,6 +127,12 @@ mixed-version executable layout; the reporter's exact CentOS paths were not requ
   investigation identified stale interpreter-cache data and `--refresh` resolves that report;
   astral-sh/uv#21077 instead has a deterministic copied-versus-symlinked trigger and a `--with`
   import failure.
+- python/cpython#129382 (open issue), “venv.EnvBuilder and venv.create should have the same symlinks
+  defaults as python -m venv” — proposes making symlinks the POSIX API default, which would prevent
+  the default-copy trigger for newly created environments.
+- python/cpython#129493 (open pull request), “Change venv's API symlinks default to match the CLI” —
+  implements that prospective default change, but currently has changes requested and is
+  stale rather than merged.
 
 ## Search evidence
 
