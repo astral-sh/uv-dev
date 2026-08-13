@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 6578,
+        "title": "Add `--no-install-*` to `add`/`remove`/`run` and add env vars",
+        "url": "https://github.com/astral-sh/uv/issues/6578",
+        "state": "open",
+        "reason": "Closest conceptual request: extend project-install omission beyond uv sync for auto-syncing commands, with the same expensive compiled-project motivation. Its explicit scope is add/remove/run, not uv check, so it is adjacent rather than an exact duplicate."
+      },
+      {
+        "kind": "issue",
+        "number": 20233,
+        "title": "Support for --package and --all-packages in `uv check`",
+        "url": "https://github.com/astral-sh/uv/issues/20233",
+        "state": "closed",
+        "reason": "The same uv check and ty-pre-commit path, requesting another sync-derived selection control. Maintainer comments establish that ty-pre-commit forwards arguments to uv check, but this concerns workspace package selection rather than omitting project installation."
+      },
+      {
+        "kind": "pull_request",
+        "number": 20628,
+        "title": "Add `--package` and `--all-packages` to `uv check`",
+        "url": "https://github.com/astral-sh/uv/pull/20628",
+        "state": "merged",
+        "reason": "Implemented astral-sh/uv#20233 by extending uv check CLI/settings and synchronization target selection. It is direct implementation precedent for exposing sync-derived controls, but does not add no-install-project."
+      },
+      {
+        "kind": "issue",
+        "number": 4028,
+        "title": "Allow users to install a project's dependencies, without the project itself",
+        "url": "https://github.com/astral-sh/uv/issues/4028",
+        "state": "closed",
+        "reason": "Canonical historical discussion that introduced no-install-project semantics for uv sync: install dependencies while omitting the local project, especially to avoid costly builds. It covers the requested behavior but not uv check."
+      }
+    ],
+    "search_scope": "Exact searches for uv check with no-install-project found only astral-sh/uv#21083. Literal and conceptual searches also covered install/build/sync/no-sync, ty-pre-commit, dependency-only environments, heavy compiled projects, and no-install controls across commands. Historical and fix-oriented inspection covered astral-sh/uv#4028, astral-sh/uv#20233, and merged astral-sh/uv#20628. astral-sh/uv#6578 was the strongest duplicate candidate but was ruled adjacent because it explicitly tracks add/remove/run and predates uv check. astral-sh/uv#19790 and astral-sh/uv#19791 share ty-pre-commit but concern a broken environment and custom ty configuration, respectively; astral-sh/uv#19601 concerns composing existing uv sync flags."
+  },
+  "type": "enhancement",
+  "type_reason": "Repository source confirms uv check discovers and locks the project, then synchronizes it with default install options; CheckArgs exposes dependency and group selection plus no-sync, but not no-install-project. The requested dependency-only synchronization mode is new CLI functionality for the experimental uv check command, not incorrect documented behavior. No open issue or pull request already tracks this command-specific request.",
+  "summary": "No exact existing tracker or implementation was found. astral-sh/uv#6578 is the closest broader request but names different commands; astral-sh/uv#4028 defines the desired sync behavior, while astral-sh/uv#20233 and merged astral-sh/uv#20628 provide uv check/ty-pre-commit option-parity precedent.",
+  "draft_response": "Thanks — this is a distinct gap in the current `uv check` interface. `uv check` synchronizes the selected project with the default install options, but it does not currently expose `--no-install-project`; `--no-sync` skips synchronization entirely, so it is not equivalent when the hook should update dependencies. As a workaround, `ty-pre-commit` forwards its arguments to `uv check`, so you can run `uv sync --no-install-project` first and pass `--no-sync` to the hook. That preserves the dependency-only environment, but the hook will not update it. We can keep astral-sh/uv#21083 scoped to adding project-install selection to `uv check`; astral-sh/uv#6578 is related but covers other commands."
+}
