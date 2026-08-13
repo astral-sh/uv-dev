@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "Using uv 0.12.3 (x86_64-unknown-linux-gnu) on Linux with all files and caches under /tmp, `uv run --script /tmp/.../script.py` on inline metadata containing `dependencies = [\"httpx\", \"\"]` exited 2. It displayed the correct TOML span, then `Empty field is not allowed for PEP508`, a blank line, and the reported orphaned `^`. Python was not invoked. The parser-level snapshot `error_empty` in `crates/uv-pep508/src/lib.rs` covers this blank-input caret, but no inline-script integration test was found."
+}

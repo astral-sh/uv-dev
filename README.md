@@ -17,6 +17,58 @@ formatting problem. The closest prior formatter work is astral-sh/uv#19781, whic
 PEP 508 span-rendering failure for multibyte input. No existing issue or pull request was found that
 tracks or fixes the empty-input case.
 
+## Reproduction
+
+Outcome: **reproducible**.
+
+The report specifies uv 0.12.3 on macOS, but does not provide a macOS version, architecture, or
+Python version. The same behavior was reproduced with the installed `uv 0.12.3
+(x86_64-unknown-linux-gnu)` on Linux 6.17.0-1020-azure x86_64. Python was not selected or invoked:
+uv rejected the inline metadata before script execution. All reproduction files, uv cache data,
+Python-install data, and XDG state were isolated under a newly created `/tmp` directory.
+
+Minimal `script.py`:
+
+```python
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["httpx", ""]
+# ///
+
+import httpx
+```
+
+Command, with `<temp>` referring to the isolated temporary directory:
+
+```console
+UV_CACHE_DIR=<temp>/cache \
+UV_PYTHON_INSTALL_DIR=<temp>/python \
+XDG_CACHE_HOME=<temp>/xdg-cache \
+XDG_CONFIG_HOME=<temp>/xdg-config \
+uv run --script <temp>/script.py
+```
+
+The command exited with status 2 and produced no stdout. Its stderr included the correct outer TOML
+span followed by the reported detached caret on a blank PEP 508 input line:
+
+```text
+error: TOML parse error at line 2, column 26
+  |
+2 | dependencies = ["httpx", ""]
+  |                          ^^
+Empty field is not allowed for PEP508
+
+^
+```
+
+Existing coverage is limited to the parser-level unit snapshot
+`crates/uv-pep508/src/lib.rs::tests::error_empty`, which parses an empty requirement and explicitly
+expects the message, blank input line, and caret. Searches of the integration suites under
+`crates/uv/tests/` and `crates/uv-client/tests/it/` found no test for an empty dependency in PEP 723
+inline-script metadata. In particular, `crates/uv/tests/project/run.rs::run_pep723_script` covers
+valid inline dependencies and malformed PEP 723 tags, but not this nested empty-requirement
+diagnostic.
+
 ## Draft response
 
 Thanks for the clear reproduction. The empty string is invalid and uv is correct to reject it, but
@@ -28,8 +80,9 @@ script dependencies.
 
 ## Classification
 
-This is a bug because repository source confirms that uv intentionally emits a source marker where
-there is no source text:
+This is a reproducible diagnostic-formatting bug: uv 0.12.3 rejects the invalid dependency as
+expected, but emits a source marker where there is no source text. Repository source explains the
+observed rendering:
 
 - `parse_name` constructs the empty-input error with an empty `input`, `start: 0`, and `len: 1`.
 - `Pep508Error` formatting treats `start == input.len()` as a one-character underline and always
