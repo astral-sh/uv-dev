@@ -7660,12 +7660,16 @@ pub struct MetadataArgs {
     #[arg(long, requires = "script", value_hint = ValueHint::FilePath)]
     pub stdin_filename: Option<PathBuf>,
 
-    /// Resolve a stdin script without discovering on-disk configuration, lockfiles, or its saved
-    /// script environment [env: UV_ISOLATED=]
+    /// Resolve metadata without modifying the lockfile or using the project or script environment
+    /// [env: UV_ISOLATED=]
     ///
-    /// When used with `--stdin-filename`, the filename still identifies the script, but only the
-    /// contents provided on stdin are used to resolve its dependencies.
-    #[arg(long, value_parser = clap::builder::BoolishValueParser::new())]
+    /// Existing lockfiles and configuration remain available during resolution, but no lockfile is
+    /// written and existing environments are excluded from the output.
+    #[arg(
+        long,
+        conflicts_with = "sync",
+        value_parser = clap::builder::BoolishValueParser::new()
+    )]
     pub isolated: bool,
 
     /// Check if the lockfile is up-to-date [env: UV_LOCKED=]

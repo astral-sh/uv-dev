@@ -146,6 +146,8 @@ async fn run_with_workspace_cache(
     global_initialization: GlobalInitialization,
     workspace_cache: WorkspaceCache,
 ) -> Result<ExitStatus> {
+    let config_discovery = ConfigDiscovery::from_args(cli.top_level.no_config);
+
     // Configure color before resolving settings so argument errors retain their styling.
     anstream::ColorChoice::write_global(resolve_color(&cli.top_level.global_args).into());
 
@@ -184,19 +186,6 @@ async fn run_with_workspace_cache(
 
     // Load environment variables not handled by Clap.
     let environment = EnvironmentOptions::new()?;
-
-    let isolated_stdin_script = matches!(
-        &*cli.command,
-        Commands::Workspace(WorkspaceNamespace {
-            command: WorkspaceCommand::Metadata(args),
-        }) if args.script.as_deref() == Some(Path::new("-"))
-            && args.stdin_filename.is_some()
-            && (args.isolated
-                || cli.top_level.global_args.isolated
-                || environment.isolated.value == Some(true))
-    );
-    let config_discovery =
-        ConfigDiscovery::from_args(cli.top_level.no_config || isolated_stdin_script);
 
     // Resolve preview flags before config discovery for decisions that affect the discovery root.
     let early_preview = settings::resolve_preview(&cli.top_level.global_args, None, &environment)?;
@@ -300,10 +289,10 @@ async fn run_with_workspace_cache(
                 false
             }
 
-            // Named stdin scripts support `--isolated` without on-disk discovery or lockfiles.
+            // Workspace metadata supports `--isolated` as its own argument.
             Commands::Workspace(WorkspaceNamespace {
                 command: WorkspaceCommand::Metadata(_),
-            }) if isolated_stdin_script => false,
+            }) => false,
 
             // `--isolated` moved to `--no-workspace`.
             Commands::Project(command) if matches!(**command, ProjectCommand::Init(_)) => {

@@ -57,7 +57,6 @@ pub(crate) async fn metadata(
 ) -> Result<ExitStatus> {
     let stdin = matches!(script.as_ref(), Some(Pep723Item::Stdin(_)));
     let saved_stdin = if stdin
-        && !isolated
         && let Some(filename) = stdin_filename.as_ref()
         && let Some(contents) = stdin_contents.as_ref()
     {
@@ -115,7 +114,6 @@ pub(crate) async fn metadata(
         }
     };
     let script_item = if stdin_filename.is_some()
-        && !isolated
         && let LockTarget::Script(script) = target
     {
         Some(Pep723ItemRef::Script(script))
@@ -180,7 +178,8 @@ pub(crate) async fn metadata(
 
         if let LockCheck::Enabled(lock_check) = lock_check {
             LockMode::Locked(&interpreter, lock_check)
-        } else if (stdin && !saved_stdin)
+        } else if isolated
+            || (stdin && !saved_stdin)
             || dry_run.enabled()
             || (matches!(target, LockTarget::Script(_)) && !target.lock_path().is_file())
         {
@@ -226,7 +225,9 @@ pub(crate) async fn metadata(
                 },
             };
             let mut export = metadata_for_target(install_target)?;
-            let environment = if sync {
+            let environment = if isolated {
+                None
+            } else if sync {
                 Some(match target {
                     LockTarget::Workspace(workspace) => ProjectEnvironment::get_or_init(
                         workspace,
