@@ -5,7 +5,7 @@ use indoc::{formatdoc, indoc};
 use uv_fs::Simplified;
 use uv_static::EnvVars;
 
-use uv_test::{site_packages_path, uv_snapshot};
+use uv_test::{TestContext, site_packages_path, uv_snapshot};
 
 /// Filter the user scheme, which differs between Windows and Unix.
 fn user_scheme_bin_filter() -> (String, String) {
@@ -17,6 +17,17 @@ fn user_scheme_bin_filter() -> (String, String) {
     } else {
         (r"\[HOME\]/\.local".to_string(), "[USER_SCHEME]".to_string())
     }
+}
+
+fn test_context(python_version: &str) -> TestContext {
+    uv_test::test_context!(python_version)
+        .with_filtered_python_names()
+        .with_filtered_virtualenv_bin()
+        .with_filtered_exe_suffix()
+        .with_filter(user_scheme_bin_filter())
+        // Target installs always use "bin" on all platforms. On Windows,
+        // `with_filtered_virtualenv_bin` only filters "Scripts", not "bin".
+        .with_filter((r"[\\/]bin".to_string(), "/[BIN]".to_string()))
 }
 
 // Override sys.base_prefix with a path that's guaranteed not to contain
@@ -32,14 +43,7 @@ print(uv.find_uv_bin())
 
 #[test]
 fn find_uv_bin_venv() {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_python_names()
-        .with_filtered_virtualenv_bin()
-        .with_filtered_exe_suffix()
-        .with_filter(user_scheme_bin_filter())
-        // Target installs always use "bin" on all platforms. On Windows,
-        // `with_filtered_virtualenv_bin` only filters "Scripts", not "bin"
-        .with_filter((r"[\\/]bin".to_string(), "/[BIN]".to_string()));
+    let context = test_context("3.12");
 
     // Install in a virtual environment
     uv_snapshot!(context.filters(), context.pip_install()
@@ -66,14 +70,7 @@ fn find_uv_bin_venv() {
 
 #[test]
 fn find_uv_bin_target() {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_python_names()
-        .with_filtered_virtualenv_bin()
-        .with_filtered_exe_suffix()
-        .with_filter(user_scheme_bin_filter())
-        // Target installs always use "bin" on all platforms. On Windows,
-        // `with_filtered_virtualenv_bin` only filters "Scripts", not "bin"
-        .with_filter((r"[\\/]bin".to_string(), "/[BIN]".to_string()));
+    let context = test_context("3.12");
 
     // Install in a target directory
     uv_snapshot!(context.filters(), context.pip_install()
@@ -104,14 +101,7 @@ fn find_uv_bin_target() {
 
 #[test]
 fn find_uv_bin_prefix() {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_python_names()
-        .with_filtered_virtualenv_bin()
-        .with_filtered_exe_suffix()
-        .with_filter(user_scheme_bin_filter())
-        // Target installs always use "bin" on all platforms. On Windows,
-        // `with_filtered_virtualenv_bin` only filters "Scripts", not "bin"
-        .with_filter((r"[\\/]bin".to_string(), "/[BIN]".to_string()));
+    let context = test_context("3.12");
 
     // Install in a prefix directory
     let prefix = context.temp_dir.child("prefix");
@@ -147,14 +137,7 @@ fn find_uv_bin_prefix() {
 
 #[test]
 fn find_uv_bin_base_prefix() {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_python_names()
-        .with_filtered_virtualenv_bin()
-        .with_filtered_exe_suffix()
-        .with_filter(user_scheme_bin_filter())
-        // Target installs always use "bin" on all platforms. On Windows,
-        // `with_filtered_virtualenv_bin` only filters "Scripts", not "bin"
-        .with_filter((r"[\\/]bin".to_string(), "/[BIN]".to_string()));
+    let context = test_context("3.12");
 
     // Test base prefix fallback by mutating sys.base_prefix
     // First, create a "base" environment with fake-uv installed
@@ -192,14 +175,7 @@ fn find_uv_bin_base_prefix() {
 
 #[test]
 fn find_uv_bin_in_ephemeral_environment() -> anyhow::Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_python_names()
-        .with_filtered_virtualenv_bin()
-        .with_filtered_exe_suffix()
-        .with_filter(user_scheme_bin_filter())
-        // Target installs always use "bin" on all platforms. On Windows,
-        // `with_filtered_virtualenv_bin` only filters "Scripts", not "bin"
-        .with_filter((r"[\\/]bin".to_string(), "/[BIN]".to_string()));
+    let context = test_context("3.12");
 
     // Create a minimal pyproject.toml
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -238,14 +214,7 @@ fn find_uv_bin_in_ephemeral_environment() -> anyhow::Result<()> {
 
 #[test]
 fn find_uv_bin_in_parent_of_ephemeral_environment() -> anyhow::Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_python_names()
-        .with_filtered_virtualenv_bin()
-        .with_filtered_exe_suffix()
-        .with_filter(user_scheme_bin_filter())
-        // Target installs always use "bin" on all platforms. On Windows,
-        // `with_filtered_virtualenv_bin` only filters "Scripts", not "bin"
-        .with_filter((r"[\\/]bin".to_string(), "/[BIN]".to_string()));
+    let context = test_context("3.12");
 
     // Add the fake-uv package as a dependency
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -294,14 +263,7 @@ fn find_uv_bin_in_parent_of_ephemeral_environment() -> anyhow::Result<()> {
 
 #[test]
 fn find_uv_bin_user_bin() {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_python_names()
-        .with_filtered_virtualenv_bin()
-        .with_filtered_exe_suffix()
-        .with_filter(user_scheme_bin_filter())
-        // Target installs always use "bin" on all platforms. On Windows,
-        // `with_filtered_virtualenv_bin` only filters "Scripts", not "bin"
-        .with_filter((r"[\\/]bin".to_string(), "/[BIN]".to_string()));
+    let context = test_context("3.12");
 
     // Add uv to `~/.local/bin`
     let bin = if cfg!(unix) {
@@ -361,14 +323,7 @@ fn find_uv_bin_user_bin() {
 
 #[test]
 fn find_uv_bin_error_message() {
-    let mut context = uv_test::test_context!("3.12")
-        .with_filtered_python_names()
-        .with_filtered_virtualenv_bin()
-        .with_filtered_exe_suffix()
-        .with_filter(user_scheme_bin_filter())
-        // Target installs always use "bin" on all platforms. On Windows,
-        // `with_filtered_virtualenv_bin` only filters "Scripts", not "bin"
-        .with_filter((r"[\\/]bin".to_string(), "/[BIN]".to_string()));
+    let mut context = test_context("3.12");
 
     // Add filters for Python bin directories using with_filtered_path
     // This inserts at the beginning, so these filters are applied first
@@ -434,14 +389,7 @@ fn find_uv_bin_error_message() {
 #[cfg(feature = "test-python-eol")]
 #[test]
 fn find_uv_bin_py38() {
-    let context = uv_test::test_context!("3.8")
-        .with_filtered_python_names()
-        .with_filtered_virtualenv_bin()
-        .with_filtered_exe_suffix()
-        .with_filter(user_scheme_bin_filter())
-        // Target installs always use "bin" on all platforms. On Windows,
-        // `with_filtered_virtualenv_bin` only filters "Scripts", not "bin"
-        .with_filter((r"[\\/]bin".to_string(), "/[BIN]".to_string()));
+    let context = test_context("3.8");
 
     // Install in a virtual environment
     uv_snapshot!(context.filters(), context.pip_install()
@@ -468,14 +416,7 @@ fn find_uv_bin_py38() {
 
 #[test]
 fn find_uv_bin_py39() {
-    let context = uv_test::test_context!("3.9")
-        .with_filtered_python_names()
-        .with_filtered_virtualenv_bin()
-        .with_filtered_exe_suffix()
-        .with_filter(user_scheme_bin_filter())
-        // Target installs always use "bin" on all platforms. On Windows,
-        // `with_filtered_virtualenv_bin` only filters "Scripts", not "bin"
-        .with_filter((r"[\\/]bin".to_string(), "/[BIN]".to_string()));
+    let context = test_context("3.9");
 
     // Install in a virtual environment
     uv_snapshot!(context.filters(), context.pip_install()
@@ -502,14 +443,7 @@ fn find_uv_bin_py39() {
 
 #[test]
 fn find_uv_bin_py310() {
-    let context = uv_test::test_context!("3.10")
-        .with_filtered_python_names()
-        .with_filtered_virtualenv_bin()
-        .with_filtered_exe_suffix()
-        .with_filter(user_scheme_bin_filter())
-        // Target installs always use "bin" on all platforms. On Windows,
-        // `with_filtered_virtualenv_bin` only filters "Scripts", not "bin"
-        .with_filter((r"[\\/]bin".to_string(), "/[BIN]".to_string()));
+    let context = test_context("3.10");
 
     // Install in a virtual environment
     uv_snapshot!(context.filters(), context.pip_install()
@@ -536,14 +470,7 @@ fn find_uv_bin_py310() {
 
 #[test]
 fn find_uv_bin_py311() {
-    let context = uv_test::test_context!("3.11")
-        .with_filtered_python_names()
-        .with_filtered_virtualenv_bin()
-        .with_filtered_exe_suffix()
-        .with_filter(user_scheme_bin_filter())
-        // Target installs always use "bin" on all platforms. On Windows,
-        // `with_filtered_virtualenv_bin` only filters "Scripts", not "bin"
-        .with_filter((r"[\\/]bin".to_string(), "/[BIN]".to_string()));
+    let context = test_context("3.11");
 
     // Install in a virtual environment
     uv_snapshot!(context.filters(), context.pip_install()
@@ -570,14 +497,7 @@ fn find_uv_bin_py311() {
 
 #[test]
 fn find_uv_bin_py312() {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_python_names()
-        .with_filtered_virtualenv_bin()
-        .with_filtered_exe_suffix()
-        .with_filter(user_scheme_bin_filter())
-        // Target installs always use "bin" on all platforms. On Windows,
-        // `with_filtered_virtualenv_bin` only filters "Scripts", not "bin"
-        .with_filter((r"[\\/]bin".to_string(), "/[BIN]".to_string()));
+    let context = test_context("3.12");
 
     // Install in a virtual environment
     uv_snapshot!(context.filters(), context.pip_install()
@@ -604,14 +524,7 @@ fn find_uv_bin_py312() {
 
 #[test]
 fn find_uv_bin_py313() {
-    let context = uv_test::test_context!("3.13")
-        .with_filtered_python_names()
-        .with_filtered_virtualenv_bin()
-        .with_filtered_exe_suffix()
-        .with_filter(user_scheme_bin_filter())
-        // Target installs always use "bin" on all platforms. On Windows,
-        // `with_filtered_virtualenv_bin` only filters "Scripts", not "bin"
-        .with_filter((r"[\\/]bin".to_string(), "/[BIN]".to_string()));
+    let context = test_context("3.13");
 
     // Install in a virtual environment
     uv_snapshot!(context.filters(), context.pip_install()
@@ -638,14 +551,7 @@ fn find_uv_bin_py313() {
 
 #[test]
 fn find_uv_bin_py314() {
-    let context = uv_test::test_context!("3.14")
-        .with_filtered_python_names()
-        .with_filtered_virtualenv_bin()
-        .with_filtered_exe_suffix()
-        .with_filter(user_scheme_bin_filter())
-        // Target installs always use "bin" on all platforms. On Windows,
-        // `with_filtered_virtualenv_bin` only filters "Scripts", not "bin"
-        .with_filter((r"[\\/]bin".to_string(), "/[BIN]".to_string()));
+    let context = test_context("3.14");
 
     // Install in a virtual environment
     uv_snapshot!(context.filters(), context.pip_install()
