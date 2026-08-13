@@ -1,43 +1,42 @@
 # Migrating from pip to a uv project
 
-This guide will discuss converting from a `pip` and `pip-tools` workflow centered on `requirements`
-files to uv's project workflow using a `pyproject.toml` and `uv.lock` file.
+This guide explains how to move from a `pip` and `pip-tools` workflow based on `requirements` files
+to a uv project workflow. The uv workflow uses `pyproject.toml` and `uv.lock` files.
 
 !!! note
 
-    If you're looking to migrate from `pip` and `pip-tools` to uv's drop-in interface or from an
-    existing workflow where you're already using a `pyproject.toml`, those guides are not yet
-    written. See [#5200](https://github.com/astral-sh/uv/issues/5200) to track progress.
+    Guides for moving from `pip` and `pip-tools` to the uv drop-in interface or migrating an existing
+    `pyproject.toml` workflow are not available. Track progress in
+    [#5200](https://github.com/astral-sh/uv/issues/5200).
 
-We'll start with an overview of developing with `pip`, then discuss migrating to uv.
+This guide first explains `pip` workflows and then describes how to migrate to uv.
 
 !!! tip
 
-    If you're familiar with the ecosystem, you can jump ahead to the
+    If you understand the Python packaging ecosystem, go directly to the
     [requirements file import](#importing-requirements-files) instructions.
 
 ## Understanding pip workflows
 
 ### Project dependencies
 
-When you want to use a package in your project, you need to install it first. `pip` supports
-imperative installation of packages, e.g.:
+Install a package before you use it in your project. Use `pip` to install a package directly:
 
 ```console
 $ pip install fastapi
 ```
 
-This installs the package into the environment that `pip` is installed in. This may be a virtual
-environment, or, the global environment of your system's Python installation.
+This command installs the package into the same environment as `pip`. That environment can be a
+virtual environment or the global environment of your system Python installation.
 
-Then, you can run a Python script that requires the package:
+Then run a Python script that imports the package:
 
 ```python title="example.py"
 import fastapi
 ```
 
-It's best practice to create a virtual environment for each project, to avoid mixing packages
-between them. For example:
+Create a separate virtual environment for each project to keep project packages separate. For
+example:
 
 ```console
 $ python -m venv
@@ -45,12 +44,12 @@ $ source .venv/bin/activate
 $ pip ...
 ```
 
-We will revisit this topic in the [project environments section](#project-environments) below.
+See the [project environments section](#project-environments) for more information.
 
 ### Requirements files
 
-When sharing projects with others, it's useful to declare all the packages you require upfront.
-`pip` supports installing requirements from a file, e.g.:
+When you share a project, list its required packages in a file. `pip` can install those
+requirements:
 
 ```requirements title="requirements.txt"
 fastapi
@@ -60,25 +59,22 @@ fastapi
 $ pip install -r requirements.txt
 ```
 
-Notice above that `fastapi` is not "locked" to a specific version — each person working on the
-project may have a different version of `fastapi` installed. `pip-tools` was created to improve this
-experience.
+In this example, `fastapi` is not locked to a specific version. Different contributors can install
+different versions. `pip-tools` helps keep versions consistent.
 
-When using `pip-tools`, requirements files specify both the dependencies for your project and lock
-dependencies to a specific version — the file extension is used to differentiate between the two.
-For example, if you require `fastapi` and `pydantic`, you'd specify these in a `requirements.in`
-file:
+`pip-tools` uses separate requirements files to list project dependencies and lock their versions.
+The file extensions identify each purpose. For example, list `fastapi` and `pydantic` in a
+`requirements.in` file:
 
 ```requirements title="requirements.in"
 fastapi
 pydantic>2
 ```
 
-Notice there's a version constraint on `pydantic` — this means only `pydantic` versions later than
-`2.0.0` can be used. In contrast, `fastapi` does not have a version constraint — any version can be
-used.
+`pydantic>2` allows only `pydantic` versions later than `2.0.0`. `fastapi` has no version
+constraint, so any version is allowed.
 
-These dependencies can be compiled into a `requirements.txt` file:
+Run the following command to compile these dependencies into `requirements.txt`:
 
 ```console
 $ pip-compile requirements.in -o requirements.txt
@@ -110,12 +106,11 @@ typing-extensions==4.12.2
     #   pydantic-core
 ```
 
-Here, all the versions constraints are _exact_. Only a single version of each package can be used.
-The above example was generated with `uv pip compile`, but could also be generated with
-`pip-compile` from `pip-tools`.
+Each version constraint is _exact_, so each package has one permitted version. The example was
+generated with `uv pip compile`. You can also generate it with `pip-compile` from `pip-tools`.
 
-Though less common, the `requirements.txt` can also be generated using `pip freeze`, by first
-installing the input dependencies into the environment then exporting the installed versions:
+Alternatively, use `pip freeze` to generate `requirements.txt`. First install the input
+dependencies, and then export the installed versions:
 
 ```console
 $ pip install -r requirements.in
@@ -134,10 +129,10 @@ starlette==0.46.1
 typing-extensions==4.12.2
 ```
 
-After compiling dependencies into a locked set of versions, these files are committed to version
-control and distributed with the project.
+After you lock the dependency versions, commit the requirements files to version control and
+distribute them with the project.
 
-Then, when someone wants to use the project, they install from the requirements file:
+Other users can then install the locked dependencies:
 
 ```console
 $ pip install -r requirements.txt
@@ -147,9 +142,8 @@ $ pip install -r requirements.txt
 
 ### Development dependencies
 
-The requirements file format can only describe a single set of dependencies at once. This means if
-you have additional _groups_ of dependencies, such as development dependencies, they need separate
-files. For example, we'll create a `-dev` dependency file:
+A requirements file can describe only one dependency group. Store additional _groups_, such as
+development dependencies, in separate files. For example, create a `-dev` dependency file:
 
 ```requirements title="requirements-dev.in"
 -r requirements.in
@@ -158,20 +152,18 @@ files. For example, we'll create a `-dev` dependency file:
 pytest
 ```
 
-Notice the base requirements are included with `-r requirements.in`. This ensures your development
-environment considers _all_ of the dependencies together. The `-c requirements.txt` _constrains_ the
-package version to ensure that the `requirements-dev.txt` uses the same versions as
-`requirements.txt`.
+`-r requirements.in` includes the base requirements, so the development environment considers _all_
+dependencies together. `-c requirements.txt` _constrains_ package versions, so
+`requirements-dev.txt` uses the same versions as `requirements.txt`.
 
 !!! note
 
-    It's common to use `-r requirements.txt` directly instead of using both
-    `-r requirements.in`, and `-c requirements.txt`. There's no difference in the resulting package
-    versions, but using both files produces annotations which allow you to determine which
-    dependencies are _direct_ (annotated with `-r requirements.in`) and which are _indirect_ (only
-    annotated with `-c requirements.txt`).
+    You can use `-r requirements.txt` instead of both `-r requirements.in` and `-c requirements.txt`.
+    Both approaches produce the same package versions. Using both files adds annotations that
+    identify _direct_ dependencies with `-r requirements.in` and _indirect_ dependencies with
+    `-c requirements.txt`.
 
-The compiled development dependencies look like:
+The compiled development dependencies are:
 
 ```requirements title="requirements-dev.txt"
 annotated-types==0.7.0
@@ -223,8 +215,8 @@ typing-extensions==4.12.2
     #   pydantic-core
 ```
 
-As with the base dependency files, these are committed to version control and distributed with the
-project. When someone wants to work on the project, they'll install from the requirements file:
+Commit these files to version control and distribute them with the project. Contributors can install
+the development requirements with:
 
 ```console
 $ pip install -r requirements-dev.txt
@@ -232,11 +224,10 @@ $ pip install -r requirements-dev.txt
 
 ### Platform-specific dependencies
 
-When compiling dependencies with `pip` or `pip-tools`, the result is only usable on the same
-platform as it is generated on. This poses a problem for projects which need to be usable on
-multiple platforms, such as Windows and macOS.
+`pip` and `pip-tools` compile dependencies for the current platform. The resulting file does not
+necessarily work on other platforms, such as Windows or macOS.
 
-For example, take a simple dependency:
+For example, consider this dependency:
 
 ```requirements title="requirements.in"
 tqdm
@@ -249,7 +240,7 @@ tqdm==4.67.1
     # via -r requirements.in
 ```
 
-While on Windows, this compiles to:
+On Windows, the same dependency compiles to:
 
 ```requirements title="requirements-win.txt"
 colorama==0.4.6
@@ -260,13 +251,13 @@ tqdm==4.67.1
 
 `colorama` is a Windows-only dependency of `tqdm`.
 
-When using `pip` and `pip-tools`, a project needs to declare a requirements lock file for each
-supported platform.
+If you use `pip` and `pip-tools`, create a locked requirements file for each supported platform.
 
 !!! note
 
-    uv's resolver can compile dependencies for multiple platforms at once (see ["universal resolution"](../../concepts/resolution.md#universal-resolution)),
-    allowing you to use a single `requirements.txt` for all platforms:
+    The uv resolver can compile dependencies for multiple platforms at once. See
+    ["universal resolution"](../../concepts/resolution.md#universal-resolution). This lets you use
+    one `requirements.txt` file for every platform:
 
     ```console
     $ uv pip compile --universal requirements.in
@@ -279,21 +270,19 @@ supported platform.
         # via -r requirements.in
     ```
 
-    This resolution mode is also used when using a `pyproject.toml` and `uv.lock`.
+    uv also uses universal resolution with `pyproject.toml` and `uv.lock`.
 
 ## Migrating to a uv project
 
 ### The `pyproject.toml`
 
-The `pyproject.toml` is a standardized file for Python project metadata. It replaces
-`requirements.in` files, allowing you to represent arbitrary groups of project dependencies. It also
-provides a centralized location for metadata about your project, such as the build system or tool
-settings.
+`pyproject.toml` is the standard file for Python project metadata. It replaces `requirements.in`
+files and supports multiple groups of project dependencies. It also stores project metadata, such as
+the build system and tool settings.
 
 <!-- TODO: Link to the official docs on this or write more -->
 
-For example, the `requirements.in` and `requirements-dev.in` files above can be translated to a
-`pyproject.toml` as follows:
+The `requirements.in` and `requirements-dev.in` examples correspond to this `pyproject.toml`:
 
 ```toml title="pyproject.toml"
 [project]
@@ -308,73 +297,66 @@ dependencies = [
 dev = ["pytest"]
 ```
 
-We'll discuss the commands necessary to automate these imports below.
+Later sections show how to import these files automatically.
 
 ### The uv lockfile
 
-uv uses a lockfile (`uv.lock`) file to lock package versions. The format of this file is specific to
-uv, allowing uv to support advanced features. It replaces `requirements.txt` files.
+uv uses `uv.lock` to lock package versions. The file uses a uv-specific format that supports
+advanced features and replaces `requirements.txt` files.
 
-The lockfile will be automatically created and populated when adding dependencies, but you can
-explicitly create it with `uv lock`.
+uv creates and updates the lockfile automatically when you add dependencies. To create it
+explicitly, run `uv lock`.
 
-Unlike `requirements.txt` files, the `uv.lock` file can represent arbitrary groups of dependencies,
-so multiple files are not needed to lock development dependencies.
+`uv.lock` can contain multiple dependency groups. You do not need separate lockfiles for development
+dependencies.
 
-The uv lockfile is always [universal](../../concepts/resolution.md#universal-resolution), so
-multiple files are not needed to
-[lock dependencies for each platform](#platform-specific-dependencies). This ensures that all
-developers are using consistent, locked versions of dependencies regardless of their machine.
+The uv lockfile is always [universal](../../concepts/resolution.md#universal-resolution). You do not
+need separate files to [lock dependencies for each platform](#platform-specific-dependencies). This
+keeps dependency versions consistent across supported platforms.
 
-The uv lockfile also supports concepts like
+The uv lockfile also supports
 [pinning packages to specific indexes](../../concepts/indexes.md#pinning-a-package-to-an-index),
-which is not representable in `requirements.txt` files.
+which `requirements.txt` files cannot represent.
 
 !!! tip
 
-    If you only need to lock for a subset of platforms, use the
+    To lock dependencies for only some platforms, use the
     [`tool.uv.environments`](../../concepts/resolution.md#limited-resolution-environments) setting
-    to limit the resolution and lockfile.
+    to limit resolution and the lockfile.
 
-To learn more, see the [lockfile](../../concepts/projects/layout.md#the-lockfile) documentation.
+See the [lockfile](../../concepts/projects/layout.md#the-lockfile) documentation for more
+information.
 
 ### Importing requirements files
 
-First, create a `pyproject.toml` if you have not already:
+First, create a `pyproject.toml` if the project does not already have one:
 
 ```console
 $ uv init
 ```
 
-Then, the easiest way to import requirements is with `uv add`:
+Then use `uv add` to import the requirements:
 
 ```console
 $ uv add -r requirements.in
 ```
 
-However, there is some nuance to this transition. Notice we used the `requirements.in` file, which
-does not pin to exact versions of packages so uv will solve for new versions of these packages. You
-may want to continue using your previously locked versions from your `requirements.txt` so, when
-switching over to uv, none of your dependency versions change.
-
-The solution is to add your locked versions as _constraints_. uv supports using these on `add` to
-preserve locked versions:
+`requirements.in` does not pin exact package versions, so uv can select new versions. To keep the
+versions already locked in `requirements.txt`, add that file as a _constraint_:
 
 ```console
 $ uv add -r requirements.in -c requirements.txt
 ```
 
-Your existing versions will be retained when producing a `uv.lock` file.
+uv preserves the existing versions when it creates `uv.lock`.
 
 #### Importing platform-specific constraints
 
-If your platform-specific dependencies have been compiled into separate files, you can still
-transition to a universal lockfile. However, you cannot just use `-c` to specify constraints from
-your existing platform-specific `requirements.txt` files because they do not include markers
-describing the environment and will consequently conflict.
+You can migrate separate platform-specific dependency files to a universal lockfile. Do not pass the
+existing files directly with `-c`. They do not contain environment markers, so their constraints can
+conflict.
 
-To add the necessary markers, use `uv pip compile` to convert your existing files. For example,
-given the following:
+Use `uv pip compile` to add the required markers. For example, start with this file:
 
 ```requirements title="requirements-win.txt"
 colorama==0.4.6
@@ -383,13 +365,13 @@ tqdm==4.67.1
     # via -r requirements.in
 ```
 
-The markers can be added with:
+Add the markers with:
 
 ```console
 $ uv pip compile requirements.in -o requirements-win.txt --python-platform windows --no-strip-markers
 ```
 
-Notice the resulting output includes a Windows marker on `colorama`:
+The updated file includes a Windows marker for `colorama`:
 
 ```requirements title="requirements-win.txt"
 colorama==0.4.6 ; sys_platform == 'win32'
@@ -398,13 +380,13 @@ tqdm==4.67.1
     # via -r requirements.in
 ```
 
-When using `-o`, uv will constrain the versions to match the existing output file, if it can.
+When you use `-o`, uv keeps the versions from the existing output file when possible.
 
-Markers can be added for other platforms by changing the `--python-platform` and `-o` values for
-each requirements file you need to import, e.g., to `linux` and `macos`.
+To add markers for other platforms, change `--python-platform` and `-o` for each requirements file.
+For example, use `linux` or `macos`.
 
-Once each `requirements.txt` file has been transformed, the dependencies can be imported to the
-`pyproject.toml` and `uv.lock` with `uv add`:
+After you add markers to each `requirements.txt` file, import the dependencies into `pyproject.toml`
+and `uv.lock` with `uv add`:
 
 ```console
 $ uv add -r requirements.in -c requirements-win.txt -c requirements-linux.txt
@@ -412,26 +394,25 @@ $ uv add -r requirements.in -c requirements-win.txt -c requirements-linux.txt
 
 #### Importing development dependency files
 
-As discussed in the [development dependencies](#development-dependencies) section, it's common to
-have groups of dependencies for development purposes.
+The [development dependencies](#development-dependencies) section describes separate groups of
+development dependencies.
 
-To import development dependencies, use the `--dev` flag during `uv add`:
+Use `uv add --dev` to import development dependencies:
 
 ```console
 $ uv add --dev -r requirements-dev.in -c requirements-dev.txt
 ```
 
-If the `requirements-dev.in` includes the parent `requirements.in` via `-r`, it will need to be
-stripped to avoid adding the base requirements to the `dev` dependency group. The following example
-uses `sed` to strip lines that start with `-r`, then pipes the result to `uv add`:
+If `requirements-dev.in` includes `requirements.in` through `-r`, remove that line first. Otherwise,
+uv adds the base requirements to the `dev` dependency group. This example uses `sed` to remove lines
+that start with `-r`, then pipes the result to `uv add`:
 
 ```console
 $ sed '/^-r /d' requirements-dev.in | uv add --dev -r - -c requirements-dev.txt
 ```
 
-In addition to the `dev` dependency group, uv supports arbitrary group names. For example, if you
-also have a dedicated set of dependencies for building your documentation, those can be imported to
-a `docs` group:
+uv also supports other dependency group names. For example, import documentation dependencies into a
+`docs` group:
 
 ```console
 $ uv add -r requirements-docs.in -c requirements-docs.txt --group docs
@@ -439,7 +420,7 @@ $ uv add -r requirements-docs.in -c requirements-docs.txt --group docs
 
 #### Importing dependency sources
 
-When importing requirements on local paths or Git repositories, for example:
+A requirements file can include local paths and Git repositories:
 
 ```requirements title="requirements.in"
 ./path-dep
@@ -447,8 +428,9 @@ When importing requirements on local paths or Git repositories, for example:
 git-dep @ git+https://github.com/astral-sh/git-dep
 ```
 
-uv will map them to [dependency sources](../../concepts/projects/dependencies.md#dependency-sources)
-in the `[tool.uv.sources]` table of the `pyproject.toml`:
+uv maps these requirements to
+[dependency sources](../../concepts/projects/dependencies.md#dependency-sources) in the
+`[tool.uv.sources]` table in `pyproject.toml`:
 
 ```toml title="pyproject.toml"
 [project]
@@ -466,34 +448,31 @@ git-dep = { git = "https://github.com/astral-sh/git-dep" }
 
 ### Project environments
 
-Unlike `pip`, uv is not centered around the concept of an "active" virtual environment. Instead, uv
-uses a dedicated virtual environment for each project in a `.venv` directory. This environment is
-automatically managed, so when you run a command, like `uv add`, the environment is synced with the
-project dependencies.
+`pip` typically uses an active virtual environment. uv instead creates a dedicated virtual
+environment in the `.venv` directory for each project. uv manages that environment automatically.
+Commands such as `uv add` synchronize the environment with the project dependencies.
 
-The preferred way to execute commands in the environment is with `uv run`, e.g.:
+Use `uv run` to execute a command in the project environment:
 
 ```console
 $ uv run pytest
 ```
 
-Prior to every `uv run` invocation, uv will verify that the lockfile is up-to-date with the
-`pyproject.toml`, and that the environment is up-to-date with the lockfile, keeping your project
-in-sync without the need for manual intervention. `uv run` guarantees that your command is run in a
-consistent, locked environment.
+Before each `uv run` command, uv verifies that the lockfile matches `pyproject.toml` and the
+environment matches the lockfile. This keeps the project synchronized without manual steps. `uv run`
+executes the command in a consistent, locked environment.
 
-The project environment can also be explicitly created with `uv sync`, e.g., for use with editors.
+To create the project environment explicitly, run `uv sync`. This can help configure an editor.
 
 !!! note
 
-    When in projects, uv will prefer a `.venv` in the project directory and ignore the active
-    environment as declared by the `VIRTUAL_ENV` variable by default. You can opt-in to using the
-    active environment with the `--active` flag.
+    By default, uv uses `.venv` in the project directory and ignores an active environment
+    identified by `VIRTUAL_ENV`. To use the active environment, add the `--active` flag.
 
-To learn more, see the
-[project environment](../../concepts/projects/layout.md#the-project-environment) documentation.
+See the [project environment](../../concepts/projects/layout.md#the-project-environment)
+documentation for more information.
 
 ## Next steps
 
-Now that you've migrated to uv, take a look at the
-[project concept](../../concepts/projects/index.md) page for more details about uv projects.
+After you migrate, see the [project concept](../../concepts/projects/index.md) page for more
+information about uv projects.

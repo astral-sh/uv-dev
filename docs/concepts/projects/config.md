@@ -2,10 +2,10 @@
 
 ## Python version requirement
 
-Projects may declare the Python versions supported by the project in the `project.requires-python`
-field of the `pyproject.toml`.
+The `project.requires-python` field in `pyproject.toml` declares the Python versions that a project
+supports.
 
-It is recommended to set a `requires-python` value:
+A `requires-python` value is recommended:
 
 ```toml title="pyproject.toml" hl_lines="4"
 [project]
@@ -14,13 +14,13 @@ version = "0.1.0"
 requires-python = ">=3.12"
 ```
 
-The Python version requirement determines the Python syntax that is allowed in the project and
-affects selection of dependency versions (they must support the same Python version range).
+The Python version requirement determines which Python syntax the project can use. It also affects
+dependency selection because dependencies must support the same Python version range.
 
 ## Entry points
 
-[Entry points](https://packaging.python.org/en/latest/specifications/entry-points/#entry-points) are
-the official term for an installed package to advertise interfaces. These include:
+[Entry points](https://packaging.python.org/en/latest/specifications/entry-points/#entry-points)
+declare the interfaces that an installed package provides. These include:
 
 - [Command line interfaces](#command-line-interfaces)
 - [Graphical user interfaces](#graphical-user-interfaces)
@@ -28,12 +28,11 @@ the official term for an installed package to advertise interfaces. These includ
 
 !!! important
 
-    Using the entry point tables requires a [build system](#build-systems) to be defined.
+    Entry point tables require a [build system](#build-systems).
 
 ### Command-line interfaces
 
-Projects may define command line interfaces (CLIs) for the project in the `[project.scripts]` table
-of the `pyproject.toml`.
+The `[project.scripts]` table in `pyproject.toml` defines command-line interfaces (CLIs).
 
 For example, to declare a command called `hello` that invokes the `hello` function in the `example`
 module:
@@ -43,7 +42,7 @@ module:
 hello = "example:hello"
 ```
 
-Then, the command can be run from a console:
+The command then runs from a console:
 
 ```console
 $ uv run hello
@@ -51,14 +50,13 @@ $ uv run hello
 
 ### Graphical user interfaces
 
-Projects may define graphical user interfaces (GUIs) for the project in the `[project.gui-scripts]`
-table of the `pyproject.toml`.
+The `[project.gui-scripts]` table in `pyproject.toml` defines graphical user interfaces (GUIs).
 
 !!! important
 
-    These are only different from [command-line interfaces](#command-line-interfaces) on Windows, where
-    they are wrapped by a GUI executable so they can be started without a console. On other platforms,
-    they behave the same.
+    These differ from [command-line interfaces](#command-line-interfaces) only on Windows. Windows
+    wraps them in a GUI executable that starts without a console. On other platforms, both types
+    behave the same way.
 
 For example, to declare a command called `hello` that invokes the `app` function in the `example`
 module:
@@ -70,7 +68,7 @@ hello = "example:app"
 
 ### Plugin entry points
 
-Projects may define entry points for plugin discovery in the
+Projects can define plugin discovery entry points in the
 [`[project.entry-points]`](https://packaging.python.org/en/latest/guides/creating-and-discovering-plugins/#using-package-metadata)
 table of the `pyproject.toml`.
 
@@ -81,7 +79,7 @@ For example, to register the `example-plugin-a` package as a plugin for `example
 a = "example_plugin_a"
 ```
 
-Then, in `example`, plugins would be loaded with:
+The `example` package can load the plugins with:
 
 ```python title="example/__init__.py"
 from importlib.metadata import entry_points
@@ -92,35 +90,32 @@ for plugin in entry_points(group="example.plugins"):
 
 !!! note
 
-    The `group` key can be an arbitrary value, it does not need to include the package name or
-    "plugins". However, it is recommended to namespace the key by the package name to avoid
-    collisions with other packages.
+    The `group` key accepts any value. It does not need to contain the package name or "plugins".
+    Including the package name is recommended because it avoids conflicts with other packages.
 
 ## Build systems
 
-A build system determines how the project should be packaged and installed. Projects may declare and
-configure a build system in the `[build-system]` table of the `pyproject.toml`.
+A build system determines how to package and install a project. The `[build-system]` table in
+`pyproject.toml` declares and configures the build system.
 
-uv uses the presence of a build system to determine if a project contains a package that should be
-installed in the project virtual environment. If a build system is not defined, uv will not attempt
-to build or install the project itself, just its dependencies. If a build system is defined, uv will
-build and install the project into the project environment.
+uv uses the build system to determine whether a project contains a package to install in its virtual
+environment. If the project has no build system, uv installs its dependencies but does not build or
+install the project. If the project has a build system, uv builds and installs the project.
 
 By default, `uv init` creates a packaged project using the [uv build backend](../build-backend.md).
-The `--build-backend` option can be provided to select an alternative build backend, and
-`--no-package` can be provided to create a flat, unpackaged project instead.
+The `--build-backend` option selects another build backend. The `--no-package` option creates a
+flat, unpackaged project instead.
 
 !!! note
 
-    While uv will not build and install the current project without a build system definition,
-    the presence of a `[build-system]` table is not required in other packages. For legacy reasons,
-    if a build system is not defined, then `setuptools.build_meta:__legacy__` is used to build the
-    package. Packages you depend on may not explicitly declare their build system but are still
-    installable. Similarly, if you [add a dependency on a local project](./dependencies.md#path)
-    or install it with `uv pip`, uv will attempt to build and install it regardless of the presence
-    of a `[build-system]` table.
+    uv does not build or install the current project without a build system. Other packages do not
+    require a `[build-system]` table. For compatibility, uv builds packages without a declared build
+    system with `setuptools.build_meta:__legacy__`. Dependencies can therefore be installed without
+    an explicit build system. uv also attempts to build and install
+    [local project dependencies](./dependencies.md#path) and packages installed with `uv pip`, even
+    when they do not declare a build system.
 
-Build systems are used to power the following features:
+Build systems support these features:
 
 - Including or excluding files from distributions
 - Editable installation behavior
@@ -128,118 +123,105 @@ Build systems are used to power the following features:
 - Compilation of native code
 - Vendoring shared libraries
 
-To configure these features, refer to the documentation of your chosen build system.
+The documentation for each build system describes how to configure these features.
 
 ## Project packaging
 
-As discussed in [build systems](#build-systems), a Python project must be built to be installed.
-This process is generally referred to as "packaging".
+As described in [build systems](#build-systems), a Python project must be built before installation.
+This process is called "packaging".
 
-You probably need a package if you want to:
+A project usually needs a package to:
 
 - Add commands to the project
 - Distribute the project to others
 - Use a `src` and `test` layout
 - Write a library
 
-You probably _do not_ need a package if you are:
+A project usually _does not_ need a package for:
 
 - Writing scripts
 - Building a simple application
 - Using a flat layout
 
-While uv usually uses the declaration of a [build system](#build-systems) to determine if a project
-should be packaged, uv also allows overriding this behavior with the
-[`tool.uv.package`](../../reference/settings.md#package) setting.
+uv usually determines whether to package a project from its [build system](#build-systems). The
+[`tool.uv.package`](../../reference/settings.md#package) setting overrides this behavior.
 
-Setting `tool.uv.package = true` will force a project to be built and installed into the project
-environment. If no build system is defined, uv will use the setuptools legacy backend.
+Setting `tool.uv.package = true` forces uv to build and install the project. If the project has no
+build system, uv uses the setuptools legacy backend.
 
-Setting `tool.uv.package = false` will force a project package _not_ to be built and installed into
-the project environment. uv will ignore a declared build system when interacting with the project;
-however, uv will still respect explicit attempts to build the project such as invoking `uv build`.
+Setting `tool.uv.package = false` prevents uv from building and installing the project package. uv
+ignores any declared build system during project operations. Explicit build commands such as
+`uv build` still build the project.
 
 ## Project environment path
 
-The `UV_PROJECT_ENVIRONMENT` environment variable can be used to configure the project virtual
-environment path (`.venv` by default).
+The `UV_PROJECT_ENVIRONMENT` environment variable configures the path to the project virtual
+environment. The default path is `.venv`.
 
-If a relative path is provided, it will be resolved relative to the workspace root. If an absolute
-path is provided, it will be used as-is, i.e., a child directory will not be created for the
-environment. If an environment is not present at the provided path, uv will create it.
+uv resolves relative paths from the workspace root. It uses absolute paths directly and does not
+create a child directory for the environment. If the specified environment does not exist, uv
+creates it.
 
-This option can be used to write to the system Python environment, though it is not recommended.
-`uv sync` will remove extraneous packages from the environment by default and, as such, may leave
-the system in a broken state.
+This option can target the system Python environment, but this is not recommended. By default,
+`uv sync` removes packages that the project does not require. This can break the system environment.
 
-To target the system environment, set `UV_PROJECT_ENVIRONMENT` to the prefix of the Python
-installation. For example, on Debian-based systems, this is usually `/usr/local`:
+The system environment is selected by setting `UV_PROJECT_ENVIRONMENT` to the Python installation
+prefix. On Debian-based systems, that prefix is usually `/usr/local`:
 
 ```console
 $ python -c "import sysconfig; print(sysconfig.get_config_var('prefix'))"
 /usr/local
 ```
 
-To target this environment, you'd export `UV_PROJECT_ENVIRONMENT=/usr/local`.
+The setting `UV_PROJECT_ENVIRONMENT=/usr/local` selects this environment.
 
 !!! important
 
-    If an absolute path is provided and the setting is used across multiple projects, the
-    environment will be overwritten by invocations in each project. This setting is only recommended
-    for use for a single project in CI or Docker images.
+    If multiple projects use the same absolute path, each project overwrites the environment. An
+    absolute path is recommended only for one project in CI or a Docker image.
 
 !!! note
 
-    By default, uv does not read the `VIRTUAL_ENV` environment variable during project operations.
-    A warning will be displayed if `VIRTUAL_ENV` is set to a different path than the project's
-    environment. The `--active` flag can be used to opt-in to respecting `VIRTUAL_ENV`. The
-    `--no-active` flag can be used to silence the warning.
+    By default, uv does not read `VIRTUAL_ENV` during project operations. If `VIRTUAL_ENV` points to
+    a different environment, uv displays a warning. The `--active` option makes uv use
+    `VIRTUAL_ENV`. The `--no-active` option hides the warning.
 
 ## Build isolation
 
-By default, uv builds all packages in isolated virtual environments alongside their declared build
-dependencies, as per [PEP 517](https://peps.python.org/pep-0517/).
+By default, uv builds packages in isolated virtual environments with their declared build
+dependencies. This follows [PEP 517](https://peps.python.org/pep-0517/).
 
-Some packages are incompatible with this approach to build isolation, be it intentionally or
-unintentionally.
+Some packages do not support this form of build isolation. For example,
+[`flash-attn`](https://pypi.org/project/flash-attn/) and
+[`deepspeed`](https://pypi.org/project/deepspeed/) must build against the PyTorch version in the
+project environment. An isolated build can select a different PyTorch version and cause runtime
+errors.
 
-For example, packages like [`flash-attn`](https://pypi.org/project/flash-attn/) and
-[`deepspeed`](https://pypi.org/project/deepspeed/) need to build against the same version of PyTorch
-that is installed in the project environment; by building them in an isolated environment, they may
-inadvertently build against a different version of PyTorch, leading to runtime errors.
+Other packages do not declare all their build dependencies. For example,
+[`cchardet`](https://pypi.org/project/cchardet/) requires `cython` before installation but does not
+declare `cython` as a build dependency.
 
-In other cases, packages may accidentally omit necessary dependencies in their declared build
-dependency list. For example, [`cchardet`](https://pypi.org/project/cchardet/) requires `cython` to
-be installed in the project environment prior to installing `cchardet`, but does not declare it as a
-build dependency.
+uv supports two ways to change build isolation:
 
-To address these issues, uv supports two separate approaches to modifying the build isolation
-behavior:
+1. **Augmenting the list of build dependencies**: The
+   [`extra-build-dependencies`](../../reference/settings.md#extra-build-dependencies) setting adds
+   undeclared build dependencies to an isolated environment. A build dependency such as `torch` can
+   also be matched to the version in the project environment.
 
-1. **Augmenting the list of build dependencies**: This allows you to install a package in an
-   isolated environment, but with additional build dependencies that are not declared by the package
-   itself via the [`extra-build-dependencies`](../../reference/settings.md#extra-build-dependencies)
-   setting. For packages like `flash-attn`, you can even enforce that those build dependencies (like
-   `torch`) match the version of the package that is or will be installed in the project
-   environment.
+1. **Disabling build isolation for specific packages**: uv can build selected packages in the
+   project environment instead of an isolated environment.
 
-1. **Disabling build isolation for specific packages**: This allows you to install a package without
-   building it in an isolated environment.
-
-When possible, we recommend augmenting the build dependencies rather than disabling build isolation
-entirely, as the latter approach requires that the build dependencies are installed in the project
-environment _prior_ to installing the package itself, which can lead to more complex installation
-steps, the inclusion of extraneous packages in the project environment, and difficulty in
-reproducing the project environment in other contexts.
+Additional build dependencies are preferred when possible. Without build isolation, build
+dependencies must already be installed in the project environment. This can make installation more
+complex, leave extra packages in the environment, and make the environment harder to reproduce.
 
 ### Augmenting build dependencies
 
-To augment the list of build dependencies for a specific package, add it to the
-[`extra-build-dependencies`](../../reference/settings.md#extra-build-dependencies) list in your
-`pyproject.toml`.
+The [`extra-build-dependencies`](../../reference/settings.md#extra-build-dependencies) table in
+`pyproject.toml` specifies additional build dependencies for each package.
 
-For example, to build `cchardet` with `cython` as an additional build dependency, include the
-following in your `pyproject.toml`:
+For example, the following configuration builds `cchardet` with `cython` as an additional build
+dependency:
 
 ```toml title="pyproject.toml"
 [project]
@@ -254,10 +236,8 @@ dependencies = ["cchardet"]
 cchardet = ["cython"]
 ```
 
-To ensure that a build dependency matches the version of the package that is or will be installed in
-the project environment, set `match-runtime = true` in the `extra-build-dependencies` table. For
-example, to build `deepspeed` with `torch` as an additional build dependency, include the following
-in your `pyproject.toml`:
+The `match-runtime = true` setting selects the same build dependency version as the project
+environment. For example, the following configuration builds `deepspeed` with `torch`:
 
 ```toml title="pyproject.toml"
 [project]
@@ -272,16 +252,14 @@ dependencies = ["deepspeed", "torch"]
 deepspeed = [{ requirement = "torch", match-runtime = true }]
 ```
 
-This will ensure that `deepspeed` is built with the same version of `torch` that is installed in the
-project environment.
+This builds `deepspeed` with the same `torch` version that the project environment uses.
 
 !!! tip
 
     Pre-built `deepspeed` wheels are also available from the
     [Astral GPU indexes](../../guides/integration/pytorch.md#installing-gpu-enabled-pytorch-extensions).
 
-Similarly, to build `flash-attn` with `torch` as an additional build dependency, include the
-following in your `pyproject.toml`:
+The same approach can build `flash-attn` with `torch` as an additional build dependency:
 
 ```toml title="pyproject.toml"
 [project]
@@ -301,21 +279,19 @@ flash-attn = { FLASH_ATTENTION_SKIP_CUDA_BUILD = "TRUE" }
 
 !!! note
 
-    The `FLASH_ATTENTION_SKIP_CUDA_BUILD` environment variable enables `flash-attn` to be
-    resolved from a pre-built wheel, rather than attempting to build it from source, which
-    requires access to the CUDA development toolkit.
+    The `FLASH_ATTENTION_SKIP_CUDA_BUILD` variable lets uv resolve `flash-attn` from a pre-built
+    wheel. A source build requires the CUDA development toolkit.
 
-    If the CUDA toolkit is available during resolution, we recommend omitting the
-    `FLASH_ATTENTION_SKIP_CUDA_BUILD` variable, as setting `FLASH_ATTENTION_SKIP_CUDA_BUILD`
-    to `TRUE` can lead to an incompatible install if no compatible pre-built wheel is available
-    for the target PyTorch version, GPU version, and platform.
+    If the CUDA toolkit is available during resolution, omitting
+    `FLASH_ATTENTION_SKIP_CUDA_BUILD` is recommended. Setting it to `TRUE` can produce an
+    incompatible installation if no wheel supports the target PyTorch version, GPU, and platform.
 
 !!! tip
 
     Pre-built `flash-attn` wheels are also available from the
     [Astral GPU indexes](../../guides/integration/pytorch.md#installing-gpu-enabled-pytorch-extensions).
 
-Similarly, [`deep_gemm`](https://github.com/deepseek-ai/DeepGEMM) follows the same pattern:
+[`deep_gemm`](https://github.com/deepseek-ai/DeepGEMM) follows the same pattern:
 
 ```toml title="pyproject.toml"
 [project]
@@ -338,30 +314,24 @@ deep_gemm = [{ requirement = "torch", match-runtime = true }]
     Pre-built `deep_gemm` wheels are also available from the
     [Astral GPU indexes](../../guides/integration/pytorch.md#installing-gpu-enabled-pytorch-extensions).
 
-The use of `extra-build-dependencies` and `extra-build-variables` are tracked in the uv cache, such
-that changes to these settings will trigger a reinstall and rebuild of the affected packages. For
-example, in the case of `flash-attn`, upgrading the version of `torch` used in your project would
-subsequently trigger a rebuild of `flash-attn` with the new version of `torch`.
+The uv cache tracks `extra-build-dependencies` and `extra-build-variables`. Changing either setting
+rebuilds and reinstalls the affected packages. For example, upgrading `torch` rebuilds `flash-attn`
+with the new `torch` version.
 
 #### Dynamic metadata
 
-The use of `match-runtime = true` is only available for packages like `flash-attn` that declare
-static metadata. If static metadata is unavailable, uv is required to build the package during the
-dependency resolution phase; as such, uv cannot determine the version of the build dependency that
-would ultimately be installed in the project environment.
+The `match-runtime = true` setting requires static package metadata. Without static metadata, uv
+must build the package during dependency resolution. At that point, uv does not yet know which
+version of the build dependency the project environment will use.
 
-In other words, if `flash-attn` did not declare static metadata, uv would not be able to determine
-the version of `torch` that would be installed in the project environment, since it would need to
-build `flash-attn` prior to resolving the `torch` version.
+For example, without static `flash-attn` metadata, uv would need to build `flash-attn` before it
+could resolve the `torch` version.
 
-As a concrete example, [`axolotl`](https://pypi.org/project/axolotl/) is a popular package that
-requires augmented build dependencies, but does not declare static metadata, as the package's
-dependencies vary based on the version of `torch` that is installed in the project environment. In
-this case, users should instead specify the exact version of `torch` that they intend to use in
-their project, and then augment the build dependencies with that version.
+[`axolotl`](https://pypi.org/project/axolotl/) needs additional build dependencies but does not
+declare static metadata. Its dependencies depend on the installed `torch` version. The project must
+therefore specify an exact `torch` version and add that version as a build dependency.
 
-For example, to build `axolotl` against `torch==2.6.0`, include the following in your
-`pyproject.toml`:
+For example, this configuration builds `axolotl` with `torch==2.6.0`:
 
 ```toml title="pyproject.toml"
 [project]
@@ -378,13 +348,11 @@ deepspeed = ["torch==2.6.0"]
 flash-attn = ["torch==2.6.0"]
 ```
 
-Similarly, older versions of `flash-attn` did not declare static metadata, and thus would not have
-supported `match-runtime = true` out of the box. Unlike `axolotl`, though, `flash-attn` did not vary
-its dependencies based on dynamic properties of the build environment. As such, users could instead
-provide the `flash-attn` metadata upfront via the
-[`dependency-metadata`](../../reference/settings.md#dependency-metadata) setting, thereby forgoing
-the need to build the package during the dependency resolution phase. For example, to provide the
-`flash-attn` metadata upfront:
+Older versions of `flash-attn` also lacked static metadata and did not directly support
+`match-runtime = true`. Unlike `axolotl`, their dependencies did not change with the build
+environment. The [`dependency-metadata`](../../reference/settings.md#dependency-metadata) setting
+can provide their metadata in advance. This avoids building the package during dependency
+resolution. For example:
 
 ```toml title="pyproject.toml"
 [[tool.uv.dependency-metadata]]
@@ -395,26 +363,24 @@ requires-dist = ["torch", "einops"]
 
 !!! tip
 
-    To determine the package metadata for a package like `flash-attn`, navigate to the appropriate Git repository,
-    or look it up on [PyPI](https://pypi.org/project/flash-attn) and download the package's source distribution.
-    The package requirements can typically be found in the `setup.py` or `setup.cfg` file.
+    Package metadata is available from the package's Git repository or its source distribution on
+    [PyPI](https://pypi.org/project/flash-attn). Package requirements are usually in `setup.py` or
+    `setup.cfg`.
 
-    (If the package includes a built distribution, you can unzip it to find the `METADATA` file; however, the presence
-    of a built distribution would negate the need to provide the metadata upfront, since it would already be available
-    to uv.)
+    A built distribution contains a `METADATA` file. If a built distribution is available, uv can
+    already read its metadata, so providing the metadata separately is unnecessary.
 
-    The `version` field in `tool.uv.dependency-metadata` is optional for registry-based
-    dependencies (when omitted, uv will assume the metadata applies to all versions of the package),
-    but _required_ for direct URL dependencies (like Git dependencies).
+    The `version` field in `tool.uv.dependency-metadata` is optional for registry dependencies. If
+    omitted, the metadata applies to all package versions. The field is _required_ for direct URL
+    dependencies, including Git dependencies.
 
 ### Disabling build isolation
 
-Installing packages without build isolation requires that the package's build dependencies are
-installed in the project environment _prior_ to building the package itself.
+Without build isolation, a package's build dependencies must be installed in the project environment
+_before_ the package is built.
 
-For example, historically, to install `cchardet` without build isolation, you would first need to
-install the `cython` and `setuptools` packages in the project environment, followed by a separate
-invocation to install `cchardet` without build isolation:
+For example, installing `cchardet` without build isolation previously required separate commands.
+First, `cython` and `setuptools` were installed. Then, `cchardet` was installed without isolation:
 
 ```console
 $ uv venv
@@ -422,16 +388,14 @@ $ uv pip install cython setuptools
 $ uv pip install cchardet --no-build-isolation
 ```
 
-uv simplifies this process by allowing you to specify packages that should not be built in isolation
-via the `no-build-isolation-package` setting in your `pyproject.toml` and the
-`--no-build-isolation-package` flag in the command line. Further, when a package is marked for
-disabling build isolation, uv will perform a two-phase install, first installing any packages that
-support build isolation, followed by those that do not. As a result, if a project's build
-dependencies are included as project dependencies, uv will automatically install them before
-installing the package that requires build isolation to be disabled.
+The `no-build-isolation-package` setting in `pyproject.toml` disables isolation for selected
+packages. The `--no-build-isolation-package` command-line option has the same effect.
 
-For example, to install `cchardet` without build isolation, include the following in your
-`pyproject.toml`:
+uv first installs packages that support isolated builds. It then installs packages that do not. When
+build dependencies are also project dependencies, uv installs them before the package that requires
+them.
+
+For example, this configuration installs `cchardet` without build isolation:
 
 ```toml title="pyproject.toml"
 [project]
@@ -446,8 +410,8 @@ dependencies = ["cchardet", "cython", "setuptools"]
 no-build-isolation-package = ["cchardet"]
 ```
 
-When running `uv sync`, uv will first install `cython` and `setuptools` in the project environment,
-followed by `cchardet` (without build isolation):
+`uv sync` first installs `cython` and `setuptools`. It then installs `cchardet` without build
+isolation:
 
 ```console
 $ uv sync --extra build
@@ -456,8 +420,7 @@ $ uv sync --extra build
  + setuptools==80.9.0
 ```
 
-Similarly, to install `flash-attn` without build isolation, include the following in your
-`pyproject.toml`:
+The same approach can install `flash-attn` without build isolation:
 
 ```toml title="pyproject.toml"
 [project]
@@ -472,21 +435,15 @@ dependencies = ["flash-attn", "torch"]
 no-build-isolation-package = ["flash-attn"]
 ```
 
-When running `uv sync`, uv will first install `torch` in the project environment, followed by
-`flash-attn` (without build isolation). As `torch` is both a project dependency and a build
-dependency, the version of `torch` is guaranteed to be consistent between the build and runtime
-environments.
+`uv sync` first installs `torch`. It then installs `flash-attn` without build isolation. Because
+`torch` is both a project dependency and a build dependency, both environments use the same version.
 
-A downside of the above approach is that it requires the build dependencies to be installed in the
-project environment, which is appropriate for `flash-attn` (which requires `torch` both at
-build-time and runtime), but not for `cchardet` (which only requires `cython` at build-time).
+This approach keeps build dependencies in the project environment. That works for `flash-attn`,
+which needs `torch` during both builds and runtime. It is less suitable for `cchardet`, which needs
+`cython` only during builds.
 
-To avoid including build dependencies in the project environment, uv supports a two-step
-installation process that allows you to separate the build dependencies from the packages that
-require them.
-
-For example, the build dependencies for `cchardet` can be isolated to an optional `build` group, as
-in:
+A two-step installation can keep build dependencies separate from the packages that require them.
+For example, the `cchardet` build dependencies can be placed in an optional `build` group:
 
 ```toml title="pyproject.toml"
 [project]
@@ -504,8 +461,8 @@ build = ["setuptools", "cython"]
 no-build-isolation-package = ["cchardet"]
 ```
 
-Given the above, a user would first sync with the `build` optional group, and then without it to
-remove the build dependencies:
+The first sync includes the optional `build` group. The second sync excludes it and removes the
+build dependencies:
 
 ```console
 $ uv sync --extra build
@@ -517,12 +474,11 @@ $ uv sync
  - setuptools==80.9.0
 ```
 
-Some packages, like `cchardet`, only require build dependencies for the _installation_ phase of
-`uv sync`. Others require their build dependencies to be present even just to resolve the project's
-dependencies during the _resolution_ phase.
+Some packages, such as `cchardet`, need build dependencies only during the _installation_ phase of
+`uv sync`. Other packages also need them during dependency _resolution_.
 
-In such cases, the build dependencies can be installed prior to running any `uv lock` or `uv sync`
-commands, using the lower lower-level `uv pip` API. For example, given:
+For those packages, the lower-level `uv pip` interface can install build dependencies before
+`uv lock` or `uv sync` runs. For example:
 
 ```toml title="pyproject.toml"
 [project]
@@ -537,7 +493,7 @@ dependencies = ["flash-attn"]
 no-build-isolation-package = ["flash-attn"]
 ```
 
-You could run the following sequence of commands to sync `flash-attn`:
+The following commands sync `flash-attn`:
 
 ```console
 $ uv venv
@@ -545,10 +501,9 @@ $ uv pip install torch setuptools
 $ uv sync
 ```
 
-Alternatively, users can instead provide the `flash-attn` metadata upfront via the
-[`dependency-metadata`](../../reference/settings.md#dependency-metadata) setting, thereby forgoing
-the need to build the package during the dependency resolution phase. For example, to provide the
-`flash-attn` metadata upfront:
+Alternatively, the [`dependency-metadata`](../../reference/settings.md#dependency-metadata) setting
+can provide `flash-attn` metadata in advance. This avoids building the package during dependency
+resolution. For example:
 
 ```toml title="pyproject.toml"
 [[tool.uv.dependency-metadata]]
@@ -559,20 +514,18 @@ requires-dist = ["torch", "einops"]
 
 ## Editable mode
 
-By default, the project will be installed in editable mode, such that changes to the source code are
-immediately reflected in the environment. `uv sync` and `uv run` both accept a `--no-editable` flag,
-which instructs uv to install the project in non-editable mode. `--no-editable` is intended for
-deployment use-cases, such as building a Docker container, in which the project should be included
-in the deployed environment without a dependency on the originating source code.
+By default, uv installs the project in editable mode. Changes to the source code are immediately
+available in the environment. Both `uv sync` and `uv run` accept `--no-editable` to install the
+project in non-editable mode. This option supports deployments such as Docker containers, where the
+installed project must not depend on its original source directory.
 
 ## Conflicting dependencies
 
 uv resolves all project dependencies together, including optional dependencies ("extras") and
-dependency groups. If dependencies declared in one section are not compatible with those in another
-section, uv will fail to resolve the requirements of the project with an error.
+dependency groups. If dependencies from different sections are incompatible, resolution fails.
 
-uv supports explicit declaration of conflicting dependency groups. For example, to declare that the
-`optional-dependency` groups `extra1` and `extra2` are incompatible:
+uv supports explicit declarations of conflicting dependency groups. For example, the following
+configuration declares that the `optional-dependency` groups `extra1` and `extra2` are incompatible:
 
 ```toml title="pyproject.toml"
 [tool.uv]
@@ -584,7 +537,8 @@ conflicts = [
 ]
 ```
 
-Or, to declare the development dependency groups `group1` and `group2` incompatible:
+The following configuration declares that the development dependency groups `group1` and `group2`
+are incompatible:
 
 ```toml title="pyproject.toml"
 [tool.uv]
@@ -596,13 +550,13 @@ conflicts = [
 ]
 ```
 
-See the [resolution documentation](../resolution.md#conflicting-dependencies) for more.
+The [resolution documentation](../resolution.md#conflicting-dependencies) provides more details.
 
 ## Limited resolution environments
 
-If your project supports a more limited set of platforms or Python versions, you can constrain the
-set of solved platforms via the `environments` setting, which accepts a list of PEP 508 environment
-markers. For example, to constrain the lockfile to macOS and Linux, and exclude Windows:
+The `environments` setting limits resolution to specific platforms or Python versions. It accepts a
+list of PEP 508 environment markers. For example, the following configuration limits the lockfile to
+macOS and Linux and excludes Windows:
 
 ```toml title="pyproject.toml"
 [tool.uv]
@@ -612,13 +566,13 @@ environments = [
 ]
 ```
 
-See the [resolution documentation](../resolution.md#limited-resolution-environments) for more.
+The [resolution documentation](../resolution.md#limited-resolution-environments) provides more
+details.
 
 ## Required environments
 
-If your project _must_ support a specific platform or Python version, you can mark that platform as
-required via the `required-environments` setting. For example, to require that the project supports
-Intel macOS:
+The `required-environments` setting marks specific platforms or Python versions as required. For
+example, the following configuration requires support for Intel macOS:
 
 ```toml title="pyproject.toml"
 [tool.uv]
@@ -627,8 +581,7 @@ required-environments = [
 ]
 ```
 
-The `required-environments` setting is only relevant for packages that do not publish a source
-distribution (like PyTorch), as such packages can _only_ be installed on environments covered by the
-set of pre-built binary distributions (wheels) published by that package.
+The `required-environments` setting affects packages without source distributions, such as PyTorch.
+These packages can _only_ be installed in environments that match a published pre-built wheel.
 
-See the [resolution documentation](../resolution.md#required-environments) for more.
+The [resolution documentation](../resolution.md#required-environments) provides more details.

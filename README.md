@@ -20,30 +20,28 @@ An extremely fast Python package and project manager, written in Rust.
 
 ## Highlights
 
-- A single tool to replace `pip`, `pip-tools`, `pipx`, `poetry`, `pyenv`, `twine`, `virtualenv`, and
-  more.
+- Replaces `pip`, `pip-tools`, `pipx`, `poetry`, `pyenv`, `twine`, `virtualenv`, and other tools.
 - [10-100x faster](https://github.com/astral-sh/uv/blob/main/BENCHMARKS.md) than `pip`.
-- Provides [comprehensive project management](#projects), with a
+- [Manages projects](#projects) with a
   [universal lockfile](https://docs.astral.sh/uv/concepts/projects/layout#the-lockfile).
-- [Runs scripts](#scripts), with support for
+- [Runs scripts](#scripts) and supports
   [inline dependency metadata](https://docs.astral.sh/uv/guides/scripts#declaring-script-dependencies).
 - [Installs and manages](#python-versions) Python versions.
-- [Runs and installs](#tools) tools published as Python packages.
-- Includes a [pip-compatible interface](#the-pip-interface) for a performance boost with a familiar
-  CLI.
+- [Runs and installs](#tools) tools from Python packages.
+- Includes a [pip-compatible interface](#the-pip-interface) to run familiar commands faster.
 - Supports Cargo-style [workspaces](https://docs.astral.sh/uv/concepts/projects/workspaces) for
   scalable projects.
-- Disk-space efficient, with a [global cache](https://docs.astral.sh/uv/concepts/cache) for
-  dependency deduplication.
-- Installable without Rust or Python via `curl` or `pip`.
+- Saves disk space with a [global cache](https://docs.astral.sh/uv/concepts/cache) that avoids
+  duplicate dependency data.
+- Installs with `curl` or `pip`. The standalone installer does not require Rust or Python.
 - Supports macOS, Linux, and Windows.
 
-uv is backed by [Astral](https://astral.sh), the creators of
-[Ruff](https://github.com/astral-sh/ruff) and [ty](https://github.com/astral-sh/ty).
+uv is backed by [Astral](https://astral.sh), which created [Ruff](https://github.com/astral-sh/ruff)
+and [ty](https://github.com/astral-sh/ty).
 
 ## Installation
 
-Install uv with our standalone installers:
+Install uv with the standalone installer:
 
 ```bash
 # On macOS and Linux.
@@ -55,7 +53,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
 ```
 
-Or, from [PyPI](https://pypi.org/project/uv/):
+You can also install uv from [PyPI](https://pypi.org/project/uv/):
 
 ```bash
 # With pip.
@@ -67,27 +65,27 @@ pip install uv
 pipx install uv
 ```
 
-If installed via the standalone installer, uv can update itself to the latest version:
+If you used the standalone installer, update uv to the latest version with:
 
 ```bash
 uv self update
 ```
 
 See the [installation documentation](https://docs.astral.sh/uv/getting-started/installation/) for
-details and alternative installation methods.
+more details and other installation methods.
 
 ## Documentation
 
-uv's documentation is available at [docs.astral.sh/uv](https://docs.astral.sh/uv).
+Read the uv documentation at [docs.astral.sh/uv](https://docs.astral.sh/uv).
 
-Additionally, the command line reference documentation can be viewed with `uv help`.
+Run `uv help` to view the command-line reference documentation.
 
 ## Features
 
 ### Projects
 
-uv manages project dependencies and environments, with support for lockfiles, workspaces, and more,
-similar to `rye` or `poetry`:
+Like `rye` and `poetry`, uv manages project dependencies and environments. It supports lockfiles,
+workspaces, and other features:
 
 ```console
 $ uv init example
@@ -117,14 +115,14 @@ Checked 1 package in 0.02ms
 
 See the [project documentation](https://docs.astral.sh/uv/guides/projects/) to get started.
 
-uv also supports building and publishing projects, even if they're not managed with uv. See the
-[publish guide](https://docs.astral.sh/uv/guides/publish/) to learn more.
+uv also builds and publishes projects, including projects that it does not manage. See the
+[publish guide](https://docs.astral.sh/uv/guides/publish/) for more information.
 
 ### Scripts
 
 uv manages dependencies and environments for single-file scripts.
 
-Create a new script and add inline metadata declaring its dependencies:
+Create a script and declare its dependencies with inline metadata:
 
 ```console
 $ echo 'import requests; print(requests.get("https://astral.sh"))' > example.py
@@ -133,7 +131,7 @@ $ uv add --script example.py requests
 Updated `example.py`
 ```
 
-Then, run the script in an isolated virtual environment:
+Run the script in an isolated virtual environment:
 
 ```console
 $ uv run example.py
@@ -146,9 +144,9 @@ See the [scripts documentation](https://docs.astral.sh/uv/guides/scripts/) to ge
 
 ### Tools
 
-uv executes and installs command-line tools provided by Python packages, similar to `pipx`.
+Like `pipx`, uv runs and installs command-line tools from Python packages.
 
-Run a tool in an ephemeral environment using `uvx` (an alias for `uv tool run`):
+Run a tool in a temporary environment with `uvx`, an alias for `uv tool run`:
 
 ```console
 $ uvx pycowsay 'hello world!'
@@ -184,7 +182,7 @@ See the [tools documentation](https://docs.astral.sh/uv/guides/tools/) to get st
 
 ### Python versions
 
-uv installs Python and allows quickly switching between versions.
+uv installs Python versions and switches between them.
 
 Install multiple Python versions:
 
@@ -224,14 +222,12 @@ started.
 
 ### The pip interface
 
-uv provides a drop-in replacement for common `pip`, `pip-tools`, and `virtualenv` commands.
+uv replaces common `pip`, `pip-tools`, and `virtualenv` commands.
 
-uv extends their interfaces with advanced features, such as dependency version overrides,
-platform-independent resolutions, reproducible resolutions, alternative resolution strategies, and
-more.
+It adds features such as dependency version overrides, platform-independent resolutions,
+reproducible resolutions, and alternative resolution strategies.
 
-Migrate to uv without changing your existing workflows — and experience a 10-100x speedup — with the
-`uv pip` interface.
+Use the `uv pip` interface to keep your existing workflows and run them 10-100 times faster.
 
 Compile requirements into a platform-independent requirements file:
 
@@ -267,8 +263,7 @@ See the [pip interface documentation](https://docs.astral.sh/uv/pip/index/) to g
 
 ## Contributing
 
-We are passionate about supporting contributors of all levels of experience and would love to see
-you get involved in the project. See the
+Contributors of all experience levels can get involved. See the
 [contributing guide](https://github.com/astral-sh/uv?tab=contributing-ov-file#contributing) to get
 started.
 
@@ -276,11 +271,11 @@ started.
 
 #### How do you pronounce uv?
 
-It's pronounced as "you - vee" ([`/juː viː/`](https://en.wikipedia.org/wiki/Help:IPA/English#Key))
+Pronounce uv as "you - vee" ([`/juː viː/`](https://en.wikipedia.org/wiki/Help:IPA/English#Key)).
 
 #### How should I stylize uv?
 
-Just "uv", please. See the [style guide](./STYLE.md#styling-uv) for details.
+Use "uv". See the [style guide](./STYLE.md#styling-uv) for details.
 
 #### What platforms does uv support?
 
@@ -288,20 +283,19 @@ See uv's [platform support](https://docs.astral.sh/uv/reference/platforms/) docu
 
 #### Is uv ready for production?
 
-Yes, uv is stable and widely used in production. See uv's
-[versioning policy](https://docs.astral.sh/uv/reference/versioning/) document for details.
+Yes. uv is stable and widely used in production. See its
+[versioning policy](https://docs.astral.sh/uv/reference/versioning/) for details.
 
 ## Acknowledgements
 
-uv's dependency resolver uses [PubGrub](https://github.com/pubgrub-rs/pubgrub) under the hood. We're
-grateful to the PubGrub maintainers, especially [Jacob Finkelman](https://github.com/Eh2406), for
-their support.
+The uv dependency resolver uses [PubGrub](https://github.com/pubgrub-rs/pubgrub). Thank you to the
+PubGrub maintainers, especially [Jacob Finkelman](https://github.com/Eh2406), for their support.
 
-uv's Git implementation is based on [Cargo](https://github.com/rust-lang/cargo).
+uv bases its Git implementation on [Cargo](https://github.com/rust-lang/cargo).
 
-Some of uv's optimizations are inspired by the great work we've seen in [pnpm](https://pnpm.io/),
-[Orogene](https://github.com/orogene/orogene), and [Bun](https://github.com/oven-sh/bun). We've also
-learned a lot from Nathaniel J. Smith's [Posy](https://github.com/njsmith/posy) and adapted its
+Work in [pnpm](https://pnpm.io/), [Orogene](https://github.com/orogene/orogene), and
+[Bun](https://github.com/oven-sh/bun) inspired some uv optimizations. uv also uses ideas from
+Nathaniel J. Smith's [Posy](https://github.com/njsmith/posy) and adapts its
 [trampoline](https://github.com/njsmith/posy/tree/main/src/trampolines/windows-trampolines/posy-trampoline)
 for Windows support.
 

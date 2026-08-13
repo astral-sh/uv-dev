@@ -1,13 +1,12 @@
 # Troubleshooting build failures
 
-uv needs to build packages when there is not a compatible wheel (a pre-built distribution of the
-package) available. Building packages can fail for many reasons, some of which may be unrelated to
-uv itself.
+uv builds a package when no compatible wheel, or pre-built package distribution, is available.
+Package builds can fail for many reasons. Some failures do not relate to uv.
 
 ## Recognizing a build failure
 
-An example build failure can be produced by trying to install and old version of numpy on a new,
-unsupported version of Python:
+The following example tries to install an old numpy version with a newer, unsupported Python
+version:
 
 ```console
 $ uv pip install -p 3.13 'numpy<1.20'
@@ -28,19 +27,18 @@ Resolved 1 package in 62ms
       on `distutils`.
 ```
 
-Notice that the error message is prefaced by "The build backend returned an error".
+The error message includes "The build backend returned an error".
 
-The build failure includes the `[stderr]` (and `[stdout]`, if present) from the build backend that
-was used for the build. The error logs are not from uv itself.
+The failure includes `[stderr]` and, when present, `[stdout]` from the build backend. These error
+logs come from the backend, not from uv.
 
-The message following the `╰─▶` is a hint provided by uv, to help resolve common build failures. A
-hint will not be available for all build failures.
+The message after `╰─▶` describes the backend failure. uv may also provide a `hint:` to explain
+common build failures, but not every failure includes a hint.
 
 ## Confirming that a build failure is specific to uv
 
-Build failures are usually related to your system and the build backend. It is rare that a build
-failure is specific to uv. You can confirm that the build failure is not related to uv by attempting
-to reproduce it with pip:
+Build failures usually relate to the system or build backend. Few are specific to uv. Running the
+same installation with pip can show whether the failure also occurs with another installer:
 
 ```console
 $ uv venv -p 3.13 --seed
@@ -78,43 +76,41 @@ ModuleNotFoundError: No module named 'distutils'
 
 !!! important
 
-    The `--use-pep517` flag should be included with the `pip install` invocation to ensure the same
-    build isolation behavior. uv always uses [build isolation by default](../../pip/compatibility.md#pep-517-build-isolation).
+    The `--use-pep517` option gives `pip install` the same build isolation behavior as uv. uv uses
+    [build isolation by default](../../pip/compatibility.md#pep-517-build-isolation).
 
-    We also recommend including the `--force-reinstall` and `--no-cache` options when reproducing
-    failures.
+    The `--force-reinstall` and `--no-cache` options help reproduce failures consistently.
 
-Since this build failure occurs in pip too, it is not likely to be a bug with uv.
+Because this build also fails with pip, the issue is unlikely to be a uv bug.
 
-If a build failure is reproducible with another installer, you should investigate upstream (in this
-example, `numpy` or `setuptools`), find a way to avoid building the package in the first place, or
-make the necessary adjustments to your system for the build to succeed.
+When another installer reproduces the failure, the cause may be in an upstream project, such as
+`numpy` or `setuptools`. Other solutions include avoiding the package build or installing its system
+requirements.
 
 ## Why does uv build a package?
 
-When generating the cross-platform lockfile, uv needs to determine the dependencies of all packages,
-even those only installed on other platforms. uv tries to avoid package builds during resolution. It
-uses any wheel if exist for that version, then tries to find static metadata in the source
-distribution (mainly pyproject.toml with static `project.version`, `project.dependencies` and
-`project.optional-dependencies` or METADATA v2.2+). Only if all of that fails, it builds the
-package.
+When creating a cross-platform lockfile, uv must determine the dependencies of every package. This
+includes packages installed only on other platforms. During resolution, uv first checks for an
+available wheel. If none exists, it looks for static metadata in the source distribution, such as
+`pyproject.toml` fields or `METADATA` version 2.2 or later. It only builds the package when neither
+source provides the required metadata.
 
-When installing, uv needs to have a wheel for the current platform for each package. If no matching
-wheel exists in the index, uv tries to build the source distribution.
+During installation, uv needs a wheel for the current platform. If the index does not contain a
+matching wheel, uv tries to build the source distribution.
 
-You can check which wheels exist for a PyPI project under “Download Files”, e.g.
-https://pypi.org/project/numpy/2.1.1.md#files. Wheels with `...-py3-none-any.whl` filenames work
-everywhere, others have the operating system and platform in the filename. In the linked `numpy`
-example, you can see that there are pre-built distributions for Python 3.10 to 3.13 on macOS, Linux
-and Windows.
+The PyPI "Download Files" page lists the wheels for a project, for example,
+https://pypi.org/project/numpy/2.1.1.md#files. A filename ending in `...-py3-none-any.whl` works
+across platforms. Other wheel filenames include their supported operating system and platform. The
+linked `numpy` example provides pre-built distributions for Python 3.10 to 3.13 on macOS, Linux, and
+Windows.
 
 ## Common build failures
 
-The following examples demonstrate common build failures and how to resolve them.
+The following examples describe common build failures and their solutions.
 
 ### Command is not found
 
-If the build error mentions a missing command, for example, `gcc`:
+A build failure may report a missing command, such as `gcc`:
 
 <!-- docker run --platform linux/x86_64 -it ghcr.io/astral-sh/uv:python3.10-trixie-slim /bin/bash -c "uv pip install --system pysha3==1.0.2" -->
 
@@ -139,7 +135,7 @@ If the build error mentions a missing command, for example, `gcc`:
     error: command 'gcc' failed: No such file or directory
 ```
 
-Then, you'll need to install it with your system package manager, e.g., to resolve the error above:
+The system package manager can install the missing command. For the error above:
 
 ```console
 $ apt install gcc
@@ -147,11 +143,10 @@ $ apt install gcc
 
 !!! tip
 
-    When using the uv-managed Python versions, it's common to need `clang` installed instead of
-    `gcc`.
+    uv-managed Python versions often require `clang` instead of `gcc`.
 
-    Many Linux distributions provide a package that includes all the common build dependencies.
-    You can address most build requirements by installing it, e.g., for Debian or Ubuntu:
+    Many Linux distributions provide a package with common build dependencies. On Debian or Ubuntu,
+    `build-essential` provides most of these requirements:
 
     ```console
     $ apt install build-essential
@@ -159,10 +154,10 @@ $ apt install gcc
 
 ### Header or library is missing
 
-If the build error mentions a missing header or library, e.g., a `.h` file, then you'll need to
-install it with your system package manager.
+A build failure may report a missing header or library, such as a `.h` file. The system package
+manager can install the missing dependency.
 
-For example, installing `pygraphviz` requires Graphviz to be installed:
+For example, `pygraphviz` requires Graphviz:
 
 <!-- docker run --platform linux/x86_64 -it ghcr.io/astral-sh/uv:python3.12-trixie /bin/bash -c "uv pip install --system 'pygraphviz'" -->
 
@@ -194,23 +189,24 @@ For example, installing `pygraphviz` requires Graphviz to be installed:
   hint: This error likely indicates that you need to install a library that provides "graphviz/cgraph.h" for `pygraphviz@1.14`
 ```
 
-To resolve this error on Debian, you'd install the `libgraphviz-dev` package:
+On Debian, the `libgraphviz-dev` package resolves this error:
 
 ```console
 $ apt install libgraphviz-dev
 ```
 
-Note that installing the `graphviz` package is not sufficient, the development headers need to be
-installed.
+The `graphviz` package alone is not sufficient. The development headers are also required.
 
 !!! tip
 
-    To resolve an error where `Python.h` is missing, install the [`python3-dev` package](https://packages.debian.org/trixie/python3-dev).
+    The [`python3-dev` package](https://packages.debian.org/trixie/python3-dev) provides a missing
+    `Python.h` header.
 
 ### Module is missing or cannot be imported
 
-If the build error mentions a failing import, consider
-[disabling build isolation](../../concepts/projects/config.md#build-isolation).
+When a build fails because an import is missing,
+[disabling build isolation](../../concepts/projects/config.md#build-isolation) may resolve the
+issue.
 
 For example, some packages assume that `pip` is available without declaring it as a build
 dependency:
@@ -244,24 +240,22 @@ dependency:
     ModuleNotFoundError: No module named 'pip'
 ```
 
-To resolve this error, pre-install the build dependencies then disable build isolation for the
-package:
+Installing the build dependencies first and disabling build isolation for the package resolves this
+error:
 
 ```console
 $ uv pip install pip setuptools
 $ uv pip install chumpy --no-build-isolation-package chumpy
 ```
 
-Note you will need to install the missing package, e.g., `pip`, _and_ all the other build
-dependencies of the package, e.g, `setuptools`.
+The environment must contain the missing package, such as `pip`, _and_ all other build dependencies,
+such as `setuptools`.
 
 ### Old version of the package is built
 
-If a package fails to build during resolution and the version that failed to build is older than the
-version you want to use, try adding a [constraint](../settings.md#constraint-dependencies) with a
-lower bound (e.g., `numpy>=1.17`). Sometimes, due to algorithmic limitations, the uv resolver tries
-to find a fitting version using unreasonably old packages, which can be prevented by using lower
-bounds.
+The resolver may try to build an old package version because of algorithmic limitations. A
+[constraint](../settings.md#constraint-dependencies) with a lower bound, such as `numpy>=1.17`, can
+prevent uv from selecting these versions.
 
 For example, when resolving the following dependencies on Python 3.10, uv attempts to build an old
 version of `apache-beam`.
@@ -282,23 +276,21 @@ apache-beam<=2.49.0
     ...
 ```
 
-Adding a lower bound constraint, e.g., `apache-beam<=2.49.0,>2.30.0`, resolves this build failure as
-uv will avoid using an old version of `apache-beam`.
+A lower-bound constraint, such as `apache-beam<=2.49.0,>2.30.0`, prevents uv from selecting an old
+`apache-beam` version and resolves this build failure.
 
-Constraints can also be defined for indirect dependencies using `constraints.txt` files or the
-[`constraint-dependencies`](../settings.md#constraint-dependencies) setting.
+The `constraints.txt` file and [`constraint-dependencies`](../settings.md#constraint-dependencies)
+setting also support constraints on indirect dependencies.
 
 ### Old Version of a build dependency is used
 
-If a package fails to build because `uv` selects an incompatible or outdated version of a build-time
-dependency, you can enforce constraints specifically for build dependencies. The
-[`build-constraint-dependencies`](../settings.md#build-constraint-dependencies) setting (or an
-analogous `build-constraints.txt` file) can be used to ensure that `uv` selects an appropriate
-version of a given build requirements.
+A build may fail when uv selects an incompatible or old build dependency. The
+[`build-constraint-dependencies`](../settings.md#build-constraint-dependencies) setting or a
+`build-constraints.txt` file limits the versions that uv can select for build dependencies.
 
-For example, the issue described in
-[#5551](https://github.com/astral-sh/uv/issues/5551#issuecomment-2256055975) could be addressed by
-specifying a build constraint that excludes `setuptools` version `72.0.0`:
+For example, the issue in
+[#5551](https://github.com/astral-sh/uv/issues/5551#issuecomment-2256055975) can be addressed by a
+build constraint that excludes `setuptools` version `72.0.0`:
 
 ```toml title="pyproject.toml"
 [tool.uv]
@@ -306,22 +298,19 @@ specifying a build constraint that excludes `setuptools` version `72.0.0`:
 build-constraint-dependencies = ["setuptools!=72.0.0"]
 ```
 
-The build constraint will thus ensure that any package requiring `setuptools` during the build
-process will avoid using the problematic version, preventing build failures caused by incompatible
-build dependencies.
+This constraint prevents package builds from using the incompatible `setuptools` version.
 
 ### Package is only needed for an unused platform
 
-If locking fails due to building a package from a platform you do not need to support, consider
-[limiting resolution](../../concepts/projects/config.md#limited-resolution-environments) to your
-supported platforms.
+Locking may fail while building a package for an unsupported platform.
+[Limiting resolution](../../concepts/projects/config.md#limited-resolution-environments) to the
+supported platforms can prevent this failure.
 
 ### Package does not support all Python versions
 
-If you support a large range of Python versions, consider using markers to use older versions for
-older Python versions and newer versions for newer Python version. For example, `numpy` only
-supports four Python minor version at a time, so to support a wider range of Python versions, e.g.,
-Python 3.8 to 3.13, the `numpy` requirement needs to be split:
+Environment markers can select different package versions for different Python versions. For
+example, each `numpy` version supports only four Python minor versions. Supporting Python 3.8 to
+3.13 requires separate `numpy` requirements:
 
 ```
 numpy>=1.23; python_version >= "3.10"
@@ -330,7 +319,6 @@ numpy<1.23; python_version < "3.10"
 
 ### Package is only usable on a specific platform
 
-If locking fails due to building a package that is only usable on another platform, you can
-[provide dependency metadata manually](../settings.md#dependency-metadata) to skip the build. uv can
-not verify this information, so it is important to specify correct metadata when using this
-override.
+Locking may fail when a package can only run on a different platform.
+[Providing dependency metadata manually](../settings.md#dependency-metadata) avoids building the
+package. uv cannot verify this metadata, so it must be correct.
