@@ -9,29 +9,29 @@ class UvNotFound(FileNotFoundError): ...
 
 
 def find_uv_bin() -> str:
-    """Return the uv binary path."""
+    """Return the path to the `uv` executable."""
 
     uv_exe = "uv" + sysconfig.get_config_var("EXE")
 
     targets = [
-        # The scripts directory for the current Python
+        # Check the scripts directory for the current Python interpreter.
         sysconfig.get_path("scripts"),
-        # The scripts directory for the base prefix
+        # Check the scripts directory for the base Python prefix.
         sysconfig.get_path("scripts", vars={"base": sys.base_prefix}),
-        # Above the package root, e.g., from `pip install --prefix` or `uv run --with`
+        # Check above the package root after `pip install --prefix` or `uv run --with`.
         (
-            # On Windows, with module path `<prefix>/Lib/site-packages/uv`
+            # On Windows, the package path is `<prefix>/Lib/site-packages/uv`.
             _join(_matching_parents(_module_path(), "Lib/site-packages/uv"), "Scripts")
             if sys.platform == "win32"
-            # On Unix,  with module path `<prefix>/lib/python3.13/site-packages/uv`
+            # On Unix, the package path is `<prefix>/lib/python3.13/site-packages/uv`.
             else _join(
                 _matching_parents(_module_path(), "lib/python*/site-packages/uv"), "bin"
             )
         ),
-        # Adjacent to the package root, e.g., from `pip install --target`
-        # with module path `<target>/uv`
+        # Check next to the package root after `pip install --target`.
+        # The package path is `<target>/uv`.
         _join(_matching_parents(_module_path(), "uv"), "bin"),
-        # The user scheme scripts directory, e.g., `~/.local/bin`
+        # Check the user scripts directory, such as `~/.local/bin`.
         sysconfig.get_path("scripts", scheme=_user_scheme()),
     ]
 
@@ -58,12 +58,11 @@ def _module_path() -> str | None:
 
 
 def _matching_parents(path: str | None, match: str) -> str | None:
-    """
-    Return the parent directory of `path` after trimming a `match` from the end.
-    The match is expected to contain `/` as a path separator, while the `path`
-    is expected to use the platform's path separator (e.g., `os.sep`). The path
-    components are compared case-insensitively and a `*` wildcard can be used
-    in the `match`.
+    """Return the parent directory after removing `match` from the end of `path`.
+
+    Use `/` as the path separator in `match`. Use the platform path separator in
+    `path`. Compare path components with the platform's case rules. The `*`
+    wildcard can match a path component.
     """
     from fnmatch import fnmatch
 

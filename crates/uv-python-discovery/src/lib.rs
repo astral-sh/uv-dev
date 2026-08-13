@@ -77,7 +77,7 @@ pub enum Error {
     #[error(transparent)]
     ClientBuild(#[from] uv_client::ClientBuildError),
 
-    // TODO(zanieb) We might want to ensure this is always wrapped in another type
+    // TODO(zanieb): Consider requiring another type to wrap this error.
     #[error(transparent)]
     KeyError(#[from] uv_python_types::PythonInstallationKeyError),
 
@@ -94,16 +94,16 @@ pub enum Error {
     RetryParsing(#[from] uv_client::RetryParsingError),
 }
 
-/// The reason a managed Python download could not be used.
+/// The reason uv could not use a managed Python download.
 #[derive(Debug)]
 pub enum MissingPythonHint {
-    /// uv's embedded download metadata may be stale.
+    /// The embedded Python download metadata may be outdated.
     RequiresUpdate,
-    /// Downloads are set to `manual`.
+    /// Python downloads are set to `manual`.
     DownloadsManual(PythonRequest),
-    /// Downloads are set to `never`.
+    /// Python downloads are set to `never`.
     DownloadsNever(PythonRequest),
-    /// Python preference is set to `only-system`.
+    /// The Python preference is set to `only-system`.
     PreferenceOnlySystem(PythonRequest),
     /// uv is in offline mode.
     Offline(PythonRequest),
@@ -203,8 +203,8 @@ impl From<PythonEnvironmentError> for Error {
     }
 }
 
-// The mock interpreters are not valid on Windows so we don't have unit test coverage there
-// TODO(zanieb): We should write a mock interpreter script that works on Windows
+// The mock interpreters do not work on Windows, so these unit tests do not run there.
+// TODO(zanieb): Write a mock interpreter script that works on Windows.
 #[cfg(all(test, unix))]
 mod tests {
     fn parse_request(value: &str) -> PythonRequest {
@@ -319,15 +319,15 @@ mod tests {
                 .map(|name| (name, None))
                 .collect();
             run_vars.extend([
-                // Keep discovery hermetic by disabling registry-based sources unless a test opts in.
+                // Disable registry sources unless a test explicitly enables them.
                 (EnvVars::UV_PYTHON_NO_REGISTRY, Some(OsStr::new("1"))),
                 (EnvVars::PATH, path.as_deref()),
-                // Use the temporary python directory
+                // Use the temporary Python installation directory.
                 (
                     EnvVars::UV_PYTHON_INSTALL_DIR,
                     Some(self.installations.root().as_os_str()),
                 ),
-                // Set a working directory
+                // Set the working directory.
                 (EnvVars::PWD, Some(self.workdir.path().as_os_str())),
             ]);
             run_vars.extend(vars.iter().copied());
@@ -347,8 +347,7 @@ mod tests {
             self.run_with_vars(vars, closure)
         }
 
-        /// Create a fake Python interpreter executable which returns fixed metadata mocking our interpreter
-        /// query script output.
+        /// Create a mock Python interpreter that returns fixed query-script metadata.
         fn create_mock_interpreter(
             path: &Path,
             version: &PythonVersion,
@@ -536,8 +535,7 @@ mod tests {
             Ok(())
         }
 
-        /// Create a mock Python 2 interpreter executable which returns a fixed error message mocking
-        /// invocation of Python 2 with the `-I` flag as done by our query script.
+        /// Create a mock Python 2 interpreter that rejects the query-script `-I` flag.
         fn create_mock_python2_interpreter(path: &Path) -> Result<()> {
             let output = indoc! { r"
                 Unknown option: -I
@@ -570,9 +568,7 @@ mod tests {
             Ok(paths)
         }
 
-        /// Create fake Python interpreters the given Python versions.
-        ///
-        /// Adds them to the test context search path.
+        /// Create a mock Python interpreter with the specified version in the working directory.
         fn add_python_to_workdir(&self, name: &str, version: &str) -> Result<()> {
             Self::create_mock_interpreter(
                 self.workdir.child(name).as_ref(),
@@ -593,9 +589,9 @@ mod tests {
             Ok(())
         }
 
-        /// Create fake Python interpreters the given Python versions.
+        /// Create mock Python interpreters for the specified versions.
         ///
-        /// Adds them to the test context search path.
+        /// Add them to the test context search path.
         fn add_python_versions(&mut self, versions: &[&'static str]) -> Result<()> {
             let interpreters: Vec<_> = versions
                 .iter()
@@ -604,14 +600,14 @@ mod tests {
             self.add_python_interpreters(interpreters.as_slice())
         }
 
-        /// Create fake Python interpreters the given Python implementations and versions.
+        /// Create mock Python interpreters for the specified implementations and versions.
         ///
-        /// Adds them to the test context search path.
+        /// Add them to the test context search path.
         fn add_python_interpreters(
             &mut self,
             kinds: &[(bool, ImplementationName, &'static str, &'static str)],
         ) -> Result<()> {
-            // Generate a "unique" folder name for each interpreter
+            // Generate a unique directory name for each interpreter.
             let names: Vec<OsString> = kinds
                 .iter()
                 .map(|(system, implementation, name, version)| {
@@ -635,7 +631,7 @@ mod tests {
             Ok(())
         }
 
-        /// Create a mock virtual environment at the given directory
+        /// Create a mock virtual environment in the specified directory.
         fn mock_venv(path: impl AsRef<Path>, version: &'static str) -> Result<()> {
             let executable = virtualenv_python_executable(path.as_ref());
             fs_err::create_dir_all(
@@ -655,9 +651,10 @@ mod tests {
             Ok(())
         }
 
-        /// Create a mock conda prefix at the given directory.
+        /// Create a mock conda prefix in the specified directory.
         ///
-        /// These are like virtual environments but they look like system interpreters because `prefix` and `base_prefix` are equal.
+        /// These act like virtual environments. They resemble system interpreters because
+        /// `prefix` and `base_prefix` are equal.
         fn mock_conda_prefix(path: impl AsRef<Path>, version: &'static str) -> Result<()> {
             let executable = virtualenv_python_executable(&path);
             fs_err::create_dir_all(
@@ -862,8 +859,7 @@ mod tests {
     fn find_or_download_skips_download_metadata_when_python_is_found() -> Result<()> {
         let mut context = TestContext::new()?;
         context.add_python_versions(&["3.12.1"])?;
-        // Pass a missing metadata file to assert that an already-installed Python can
-        // be returned without reading the download list.
+        // Pass a missing metadata file. An installed Python must not require the download list.
         let missing_downloads = context.tempdir.child("missing-downloads.json");
 
         let interpreter = context.run(|| {
@@ -913,7 +909,7 @@ mod tests {
             "good",
         ])?;
 
-        // An executable file with a bad response
+        // An executable file that returns an invalid response.
         #[cfg(unix)]
         fs_err::write(
             children[0].join(format!("python{}", env::consts::EXE_SUFFIX)),
@@ -927,12 +923,12 @@ mod tests {
             std::os::unix::fs::PermissionsExt::from_mode(0o770),
         )?;
 
-        // A non-executable file
+        // A file that is not executable.
         ChildPath::new(children[1].join(format!("python{}", env::consts::EXE_SUFFIX))).touch()?;
 
-        // An empty directory at `children[2]`
+        // An empty directory at `children[2]`.
 
-        // An good interpreter!
+        // A valid interpreter.
         let python_path = children[3].join(format!("python{}", env::consts::EXE_SUFFIX));
         TestContext::create_mock_interpreter(
             &python_path,
@@ -1318,7 +1314,7 @@ mod tests {
             "Should find the first interpreter regardless of system"
         );
 
-        // Reverse the order of the virtual environment and system
+        // Reverse the virtual environment and system interpreter order.
         context.reset_search_path();
         context.add_python_interpreters(&[
             (true, ImplementationName::CPython, "python", "3.10.1"),
@@ -1719,7 +1715,7 @@ mod tests {
             .run_with_vars(
                 &[(EnvVars::CONDA_PREFIX, Some(condaenv.as_os_str()))],
                 || {
-                    // Note this python is not treated as a system interpreter
+                    // Do not treat this Python interpreter as a system interpreter.
                     find_python_installation(
                         &PythonRequest::Default,
                         EnvironmentPreference::OnlyVirtual,
@@ -1739,7 +1735,7 @@ mod tests {
         let baseenv = context.tempdir.child("conda");
         TestContext::mock_conda_prefix(&baseenv, "3.12.1")?;
 
-        // But not if it's a base environment
+        // Do not select the base environment as a virtual environment.
         let result = context.run_with_vars_and_preview(
             &[
                 (EnvVars::CONDA_PREFIX, Some(baseenv.as_os_str())),
@@ -1764,7 +1760,7 @@ mod tests {
             "We should not allow the non-virtual environment; got {result:?}"
         );
 
-        // Unless, system interpreters are included...
+        // Select the base environment when system interpreters are allowed.
         let python = context
             .run_with_vars_and_preview(
                 &[
@@ -1791,7 +1787,7 @@ mod tests {
             "We should find the base conda environment"
         );
 
-        // If the environment name doesn't match the default, we should not treat it as system
+        // Do not treat an environment as a system environment when its name is not the default.
         let python = context
             .run_with_vars_and_preview(
                 &[
@@ -1820,8 +1816,8 @@ mod tests {
             "We should find the conda environment when name matches"
         );
 
-        // A special Conda environment name only identifies the base environment when its path
-        // does not match the environment name.
+        // A special conda environment name identifies the base environment only when its path does
+        // not match the environment name.
         let result = context.run_with_vars_and_preview(
             &[
                 (EnvVars::CONDA_PREFIX, Some(condaenv.as_os_str())),
@@ -1845,8 +1841,7 @@ mod tests {
             "We should not allow the base environment when looking for virtual environments"
         );
 
-        // When the directory name matches a special Conda environment name, it should be treated
-        // as a child environment.
+        // Treat a directory as a child environment when its name matches a special conda name.
         for (name, version) in [("base", "3.12.6"), ("root", "3.12.7")] {
             let environment = context.tempdir.child(name);
             TestContext::mock_conda_prefix(&environment, version)?;
@@ -1876,7 +1871,7 @@ mod tests {
             );
         }
 
-        // When environment name matches directory name, it should be treated as a child environment
+        // Treat an environment as a child when its name matches its directory name.
         let myenv_dir = context.tempdir.child("myenv");
         TestContext::mock_conda_prefix(&myenv_dir, "3.12.5")?;
         let python = context
@@ -1904,11 +1899,11 @@ mod tests {
             "We should find the child conda environment"
         );
 
-        // Test _CONDA_ROOT detection of base environment
+        // Check whether `_CONDA_ROOT` identifies the base environment.
         let conda_root_env = context.tempdir.child("conda-root");
         TestContext::mock_conda_prefix(&conda_root_env, "3.12.2")?;
 
-        // When _CONDA_ROOT matches CONDA_PREFIX, it should be treated as a base environment
+        // Treat the environment as the base when `_CONDA_ROOT` matches `CONDA_PREFIX`.
         let result = context.run_with_vars(
             &[
                 (EnvVars::CONDA_PREFIX, Some(conda_root_env.as_os_str())),
@@ -1935,7 +1930,7 @@ mod tests {
             "Base environment detected via _CONDA_ROOT should be excluded from virtual environments; got {result:?}"
         );
 
-        // When _CONDA_ROOT doesn't match CONDA_PREFIX, it should be treated as a regular conda environment
+        // Treat the environment as a child when `_CONDA_ROOT` does not match `CONDA_PREFIX`.
         let other_conda_env = context.tempdir.child("other-conda");
         TestContext::mock_conda_prefix(&other_conda_env, "3.12.3")?;
 
@@ -1968,7 +1963,7 @@ mod tests {
             "Non-base conda environment should be available for virtual environment preference"
         );
 
-        // When CONDA_PREFIX equals CONDA_DEFAULT_ENV, it should be treated as a virtual environment
+        // Treat the environment as virtual when `CONDA_PREFIX` equals `CONDA_DEFAULT_ENV`.
         let unnamed_env = context.tempdir.child("my-conda-env");
         TestContext::mock_conda_prefix(&unnamed_env, "3.12.4")?;
         let unnamed_env_path = unnamed_env.to_string_lossy().to_string();
@@ -2030,7 +2025,7 @@ mod tests {
             "We should prefer the non-conda python"
         );
 
-        // Put a virtual environment in the working directory
+        // Create a virtual environment in the working directory.
         let venv = context.workdir.child(".venv");
         TestContext::mock_venv(venv, "3.12.2")?;
         let python = context.run_with_vars(
@@ -2058,7 +2053,7 @@ mod tests {
     fn find_python_from_discovered_python() -> Result<()> {
         let mut context = TestContext::new()?;
 
-        // Create a virtual environment in a parent of the workdir
+        // Create a virtual environment in a parent of the working directory.
         let venv = context.tempdir.child(".venv");
         TestContext::mock_venv(venv, "3.12.0")?;
 
@@ -2078,7 +2073,7 @@ mod tests {
             "We should find the python"
         );
 
-        // Add some system versions to ensure we don't use those
+        // Add system versions and confirm that they are not selected.
         context.add_python_versions(&["3.12.1", "3.12.2"])?;
         let python = context.run(|| {
             find_python_installation(
@@ -2105,7 +2100,7 @@ mod tests {
         let venv = context.tempdir.child(".venv");
         TestContext::mock_venv(&venv, "3.12.0")?;
 
-        // Delete the pyvenv cfg to break the virtualenv
+        // Remove `pyvenv.cfg` to break the virtual environment.
         fs_err::remove_file(venv.join("pyvenv.cfg"))?;
 
         let python =
@@ -2121,7 +2116,7 @@ mod tests {
         assert_eq!(
             python.interpreter().python_full_version().to_string(),
             "3.12.0",
-            // TODO(zanieb): We should skip this python, why don't we?
+            // TODO(zanieb): Determine why this Python interpreter is not skipped.
             "We should prefer the active environment"
         );
 
@@ -2137,7 +2132,7 @@ mod tests {
             &parent,
             &PythonVersion::from_str("3.12.0").unwrap(),
             ImplementationName::CPython,
-            // Note we mark this as a system interpreter instead of a virtual environment
+            // Mark this as a system interpreter, not a virtual environment.
             true,
             false,
         )?;
@@ -2163,7 +2158,7 @@ mod tests {
             "We should find the parent interpreter"
         );
 
-        // Parent interpreters are preferred over virtual environments and system interpreters
+        // Prefer parent interpreters over virtual environments and system interpreters.
         let venv = context.tempdir.child(".venv");
         TestContext::mock_venv(&venv, "3.12.2")?;
         context.add_python_versions(&["3.12.3"])?;
@@ -2278,7 +2273,7 @@ mod tests {
             &parent,
             &PythonVersion::from_str("3.13.0rc2").unwrap(),
             ImplementationName::CPython,
-            // Note we mark this as a system interpreter instead of a virtual environment
+            // Mark this as a system interpreter, not a virtual environment.
             true,
             false,
         )?;
@@ -2314,7 +2309,7 @@ mod tests {
         TestContext::mock_venv(&venv, "3.9.0")?;
         context.add_python_versions(&["3.10.0", "3.11.1", "3.12.2"])?;
 
-        // Without a specific request
+        // Search without a specific request.
         let python =
             context.run_with_vars(&[(EnvVars::VIRTUAL_ENV, Some(venv.as_os_str()))], || {
                 find_python_installation(
@@ -2331,7 +2326,7 @@ mod tests {
             "We should skip the active environment"
         );
 
-        // With a requested minor version
+        // Search with a requested minor version.
         let python =
             context.run_with_vars(&[(EnvVars::VIRTUAL_ENV, Some(venv.as_os_str()))], || {
                 find_python_installation(
@@ -2348,7 +2343,7 @@ mod tests {
             "We should skip the active environment"
         );
 
-        // With a patch version that cannot be python
+        // Search with a patch version that cannot match Python.
         let result =
             context.run_with_vars(&[(EnvVars::VIRTUAL_ENV, Some(venv.as_os_str()))], || {
                 find_python_installation(
@@ -2387,7 +2382,7 @@ mod tests {
             "We should not find an python; got {result:?}"
         );
 
-        // With an invalid virtual environment variable
+        // Search with an invalid virtual environment variable.
         let result = context.run_with_vars(
             &[(EnvVars::VIRTUAL_ENV, Some(context.tempdir.as_os_str()))],
             || {
@@ -2680,7 +2675,7 @@ mod tests {
             "We should find the absolute venv path"
         );
 
-        // We should allow it to be a directory that _looks_ like a virtual environment.
+        // Allow a directory that looks like a virtual environment.
         let python_path = context.tempdir.child("bar").join("bin").join("python");
         TestContext::create_mock_interpreter(
             &python_path,
@@ -2806,7 +2801,7 @@ mod tests {
             "We should find the `bar` executable"
         );
 
-        // With [`EnvironmentPreference::OnlyVirtual`], we should not allow the interpreter
+        // Reject the system interpreter when it is not explicitly selected.
         let result = context.run(|| {
             find_python_installation(
                 &parse_request("bar"),
@@ -2822,7 +2817,7 @@ mod tests {
             "We should not allow a system interpreter; got {result:?}"
         );
 
-        // Unless it's a virtual environment interpreter
+        // Accept the interpreter when it belongs to a virtual environment.
         let mut context = TestContext::new()?;
         let python = context.tempdir.child("foo").join("bar");
         TestContext::create_mock_interpreter(
@@ -2875,7 +2870,7 @@ mod tests {
             "We should not find the pypy interpreter if not named `python` or requested; got {result:?}"
         );
 
-        // But we should find it
+        // The interpreter must still be found.
         context.reset_search_path();
         context.add_python_interpreters(&[(true, ImplementationName::PyPy, "python", "3.10.1")])?;
         let python = context.run(|| {
@@ -3111,7 +3106,7 @@ mod tests {
             "We should not the graalpy interpreter if not named `python` or requested; got {result:?}"
         );
 
-        // But we should find it
+        // The interpreter must still be found.
         context.reset_search_path();
         context.add_python_interpreters(&[(
             true,
@@ -3308,8 +3303,7 @@ mod tests {
             "We should prefer the generic name over the implementation name, but not the versioned name"
         );
 
-        // We prefer `python` executables over `graalpy` executables in the same directory
-        // if they are both GraalPy
+        // Prefer `python` over `graalpy` in the same directory when both run GraalPy.
         let mut context = TestContext::new()?;
         TestContext::create_mock_interpreter(
             &context.tempdir.join("python"),
@@ -3344,7 +3338,7 @@ mod tests {
             "3.10.1",
         );
 
-        // And `python` executables earlier in the search path will take precedence
+        // Prefer `python` executables that appear earlier in the search path.
         context.reset_search_path();
         context.add_python_interpreters(&[
             (true, ImplementationName::GraalPy, "python", "3.10.2"),
@@ -3367,7 +3361,7 @@ mod tests {
             "3.10.2",
         );
 
-        // And `graalpy` executables earlier in the search path will take precedence
+        // Prefer `graalpy` executables that appear earlier in the search path.
         context.reset_search_path();
         context.add_python_interpreters(&[
             (true, ImplementationName::GraalPy, "graalpy", "3.10.3"),
@@ -3501,7 +3495,7 @@ mod tests {
 
         context.add_pyodide_version("3.13.2")?;
 
-        // We should not find the Pyodide interpreter by default
+        // Do not find the Pyodide interpreter by default.
         let result = context.run(|| {
             find_python_installation(
                 &PythonRequest::Default,
@@ -3516,7 +3510,7 @@ mod tests {
             "We should not find an python; got {result:?}"
         );
 
-        // With `Any`, it should be discoverable
+        // Find the Pyodide interpreter with `Any`.
         let python = context.run(|| {
             find_python_installation(
                 &PythonRequest::Any,
@@ -3546,7 +3540,7 @@ mod tests {
                 .matches_request(&PythonRequest::parse("pyodide@3.12"), &context.cache)
         );
 
-        // We should prefer the native Python to the Pyodide Python
+        // Prefer native Python over Pyodide Python.
         context.add_python_versions(&["3.15.7"])?;
 
         let python = context.run(|| {

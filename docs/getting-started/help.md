@@ -2,63 +2,60 @@
 
 ## Help menus
 
-The `--help` flag can be used to view the help menu for a command, e.g., for `uv`:
+View the help menu for `uv` with the `--help` flag:
 
 ```console
 $ uv --help
 ```
 
-To view the help menu for a specific command, e.g., for `uv init`:
+View help for a specific command, such as `uv init`:
 
 ```console
 $ uv init --help
 ```
 
-When using the `--help` flag, uv displays a condensed help menu. To view a longer help menu for a
-command, use `uv help`:
+The `--help` flag displays a short help menu. Use `uv help` to view the longer help menu:
 
 ```console
 $ uv help
 ```
 
-To view the long help menu for a specific command, e.g., for `uv init`:
+View the longer help menu for a specific command, such as `uv init`:
 
 ```console
 $ uv help init
 ```
 
-When using the long help menu, uv will attempt to use `less` or `more` to "page" the output so it is
-not all displayed at once. To exit the pager, press `q`.
+uv uses `less` or `more`, when available, to display long help output one screen at a time. Press
+`q` to close the pager.
 
 ## Displaying verbose output
 
-The `-v` flag can be used to display verbose output for a command, e.g., for `uv sync`:
+Use the `-v` flag to display verbose output for a command, such as `uv sync`:
 
 ```console
 $ uv sync -v
 ```
 
-The `-v` flag can be repeated to increase verbosity, e.g.:
+Repeat the `-v` flag to show more detailed output:
 
 ```console
 $ uv sync -vv
 ```
 
-Often, the verbose output will include additional information about why uv is behaving in a certain
-way.
+Verbose output often explains why uv behaves a particular way.
 
 ## Viewing the version
 
-When seeking help, it's important to determine the version of uv that you're using — sometimes the
-problem is already solved in a newer version.
+Check your uv version before you ask for help. A newer version might already fix the problem.
 
-To check the installed version:
+Check the installed version:
 
 ```console
 $ uv self version
 ```
 
-The following are also valid:
+You can also use these commands:
 
 ```console
 $ uv --version      # Same output as `uv self version`
@@ -67,20 +64,18 @@ $ uv -V             # Will not include the build commit and date
 
 !!! note
 
-    Before uv 0.7.0, `uv version` was used instead of `uv self version`.
+    uv versions earlier than 0.7.0 use `uv version` instead of `uv self version`.
 
 ## Troubleshooting issues
 
-The reference documentation contains a
-[troubleshooting guide](../reference/troubleshooting/index.md) for common issues.
+Read the [troubleshooting guide](../reference/troubleshooting/index.md) for common issues.
 
 ## Open an issue on GitHub
 
-The [issue tracker](https://github.com/astral-sh/uv/issues) on GitHub is a good place to report bugs
-and request features. Make sure to search for similar issues first, as it is common for someone else
-to encounter the same problem.
+Use the GitHub [issue tracker](https://github.com/astral-sh/uv/issues) to report bugs and request
+features. Search for similar issues before you open a new issue.
 
 ## Chat on Discord
 
-Astral has a [Discord server](https://discord.com/invite/astral-sh), which is a great place to ask
-questions, learn more about uv, and engage with other community members.
+Ask questions, learn about uv, and meet other community members on the
+[Astral Discord server](https://discord.com/invite/astral-sh).

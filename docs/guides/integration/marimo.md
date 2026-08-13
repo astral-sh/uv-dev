@@ -1,24 +1,20 @@
 ---
 title: Using uv with marimo
 description:
-  A complete guide to using uv with marimo notebooks for interactive computing, script execution,
-  and data apps.
+  Use uv with marimo notebooks for interactive computing, Python scripts, and data applications.
 ---
 
 # Using uv with marimo
 
-[marimo](https://github.com/marimo-team/marimo) is an open-source Python notebook that blends
-interactive computing with the reproducibility and reusability of traditional software, letting you
-version with Git, run as scripts, and share as apps. Because marimo notebooks are stored as pure
-Python scripts, they are able to integrate tightly with uv.
+[marimo](https://github.com/marimo-team/marimo) is an open-source, interactive Python notebook.
+marimo stores notebooks as Python scripts. You can track these scripts with Git, run them directly,
+and share them as applications. Because marimo notebooks are Python scripts, they work well with uv.
 
-You can readily use marimo as a standalone tool, as self-contained scripts, in projects, and in
-non-project environments.
+Use marimo as a standalone tool, with self-contained scripts, in projects, or in other environments.
 
 ## Using marimo as a standalone tool
 
-For ad-hoc access to marimo notebooks, start a marimo server at any time in an isolated environment
-with:
+To use a marimo notebook without a project, start a marimo server in an isolated environment:
 
 ```console
 $ uvx marimo edit
@@ -32,25 +28,25 @@ $ uvx marimo edit my_notebook.py
 
 ## Using marimo with inline script metadata
 
-Because marimo notebooks are stored as Python scripts, they can encapsulate their own dependencies
-using inline script metadata, via uv's [support for scripts](../../guides/scripts.md). For example,
-to add `numpy` as a dependency to your notebook, use this command:
+marimo notebooks can declare their own dependencies with inline script metadata. See the
+[script guide](../../guides/scripts.md) for more information. To add `numpy` as a notebook
+dependency, run:
 
 ```console
 $ uv add --script my_notebook.py numpy
 ```
 
-To interactively edit a notebook containing inline script metadata, use:
+To edit a notebook that contains inline script metadata, run:
 
 ```console
 $ uvx marimo edit --sandbox my_notebook.py
 ```
 
-marimo will automatically use uv to start your notebook in an isolated virtual environment with your
-script's dependencies. Packages installed from the marimo UI will automatically be added to the
-notebook's script metadata.
+marimo uses uv to start the notebook in an isolated virtual environment with its declared
+dependencies. If you install packages from the marimo interface, marimo adds them to the script
+metadata.
 
-You can optionally run these notebooks as Python scripts, without opening an interactive session:
+To run a notebook as a Python script without an interactive session, run:
 
 ```console
 $ uv run my_notebook.py
@@ -58,32 +54,30 @@ $ uv run my_notebook.py
 
 ## Using marimo within a project
 
-If you're working within a [project](../../concepts/projects/index.md), you can start a marimo
-notebook with access to the project's virtual environment via the following command (assuming marimo
-is a project dependency):
+If marimo is a dependency of your [project](../../concepts/projects/index.md), start a notebook with
+access to the project environment:
 
 ```console
 $ uv run marimo edit my_notebook.py
 ```
 
-To make additional packages available to your notebook, either add them to your project with
-`uv add`, or use marimo's built-in package installation UI, which will invoke `uv add` on your
-behalf.
+To make more packages available, add them to the project with `uv add`. You can also use the marimo
+package installation interface, which runs `uv add` for you.
 
-If marimo is not a project dependency, you can still run a notebook with the following command:
+If marimo is not a project dependency, run the notebook with:
 
 ```console
 $ uv run --with marimo marimo edit my_notebook.py
 ```
 
-This will let you import your project's modules while editing your notebook. However, packages
-installed via marimo's UI when running in this way will not be added to your project, and may
-disappear on subsequent marimo invocations.
+You can import project modules while you edit the notebook. However, packages that you install
+through the marimo interface are not added to the project. These packages might not be available the
+next time you run marimo.
 
 ## Using marimo in a non-project environment
 
-To run marimo in a virtual environment that isn't associated with a
-[project](../../concepts/projects/index.md), add marimo to the environment directly:
+To run marimo in a virtual environment without a [project](../../concepts/projects/index.md),
+install marimo directly in the environment:
 
 ```console
 $ uv venv
@@ -92,17 +86,16 @@ $ uv pip install marimo
 $ uv run marimo edit
 ```
 
-From here, `import numpy` will work within the notebook, and marimo's UI installer will add packages
-to the environment with `uv pip install` on your behalf.
+The notebook can now use `import numpy`. When you install a package from the marimo interface,
+marimo adds it to the environment with `uv pip install`.
 
 ## Running marimo notebooks as scripts
 
-Regardless of how your dependencies are managed (with inline script metadata, within a project, or
-with a non-project environment), you can run marimo notebooks as scripts with:
+You can run a marimo notebook as a script with:
 
 ```console
 $ uv run my_notebook.py
 ```
 
-This executes your notebook as a Python script, without opening an interactive session in your
-browser.
+This command runs the notebook as a Python script without an interactive browser session. It works
+with inline script metadata, project dependencies, or a non-project environment.
