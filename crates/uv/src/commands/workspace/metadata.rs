@@ -45,6 +45,7 @@ pub(crate) async fn metadata(
     script: Option<Pep723Item>,
     stdin_filename: Option<PathBuf>,
     stdin_contents: Option<Vec<u8>>,
+    isolated: bool,
     python_preference: PythonPreference,
     python_downloads: PythonDownloads,
     concurrency: Concurrency,
@@ -56,6 +57,7 @@ pub(crate) async fn metadata(
 ) -> Result<ExitStatus> {
     let stdin = matches!(script.as_ref(), Some(Pep723Item::Stdin(_)));
     let saved_stdin = if stdin
+        && !isolated
         && let Some(filename) = stdin_filename.as_ref()
         && let Some(contents) = stdin_contents.as_ref()
     {
@@ -113,6 +115,7 @@ pub(crate) async fn metadata(
         }
     };
     let script_item = if stdin_filename.is_some()
+        && !isolated
         && let LockTarget::Script(script) = target
     {
         Some(Pep723ItemRef::Script(script))

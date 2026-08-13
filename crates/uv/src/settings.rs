@@ -2143,6 +2143,7 @@ pub(crate) struct MetadataSettings {
     #[expect(dead_code)]
     script: Option<PathBuf>,
     pub(crate) stdin_filename: Option<PathBuf>,
+    pub(crate) isolated: bool,
     pub(crate) lock_check: LockCheck,
     pub(crate) frozen: Option<FrozenSource>,
     pub(crate) dry_run: DryRun,
@@ -2165,6 +2166,7 @@ impl MetadataSettings {
         let MetadataArgs {
             script,
             stdin_filename,
+            isolated,
             locked,
             frozen,
             dry_run,
@@ -2193,6 +2195,7 @@ impl MetadataSettings {
         Ok(Self {
             script,
             stdin_filename: stdin_filename.map(std::path::absolute).transpose()?,
+            isolated: isolated || environment.isolated.value == Some(true),
             lock_check: resolve_lock_check(locked),
             frozen: resolve_frozen(frozen),
             dry_run: DryRun::from_args(dry_run),

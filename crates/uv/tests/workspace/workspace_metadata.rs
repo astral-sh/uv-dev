@@ -882,6 +882,272 @@ fn workspace_metadata_script_stdin_filename_discovers_configuration() -> Result<
 }
 
 #[test]
+fn workspace_metadata_script_stdin_filename_isolated_ignores_on_disk_state() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let directory = context.temp_dir.child("scripts");
+    directory.create_dir_all()?;
+    directory
+        .child("uv.toml")
+        .write_str("required-version = \">=9999\"\n")?;
+    directory.child(".python-version").write_str("99\n")?;
+
+    let script = directory.child("example.py");
+    script.write_str(
+        r#"# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
+"#,
+    )?;
+
+    let lockfile = directory.child("example.py.lock");
+    lockfile.write_str("invalid lockfile")?;
+
+    uv_snapshot!(
+        context.filters(),
+        context
+            .workspace_metadata()
+            .arg("--script")
+            .arg("-")
+            .arg("--stdin-filename")
+            .arg(script.path())
+            .arg("--isolated")
+            .stdin(File::open(script.path())?.into_file()),
+        @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "workspace_root": "[TEMP_DIR]/scripts",
+      "script": {
+        "path": "[TEMP_DIR]/scripts/example.py",
+        "id": "script+[TEMP_DIR]/scripts/example.py"
+      },
+      "requires_python": ">=3.12",
+      "conflicts": {
+        "sets": []
+      },
+      "resolution": {
+        "script+[TEMP_DIR]/scripts/example.py": {
+          "kind": "script",
+          "path": "[TEMP_DIR]/scripts/example.py",
+          "dependencies": []
+        }
+      }
+    }
+
+    ----- stderr -----
+    warning: The `uv workspace metadata` command is experimental and may change without warning. Pass `--preview-features workspace-metadata` to disable this warning.
+    Resolved in [TIME]
+    "#
+    );
+
+    assert_eq!(fs_err::read_to_string(lockfile.path())?, "invalid lockfile");
+
+    Ok(())
+}
+
+#[test]
+fn workspace_metadata_script_stdin_filename_isolated_uses_stdin_environment() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_python_names()
+        .with_filtered_virtualenv_bin();
+    let script = context.temp_dir.child("example.py");
+    script.write_str(
+        r#"# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
+"#,
+    )?;
+
+    context.run().arg(script.path()).assert().success();
+    context
+        .run()
+        .arg("-")
+        .stdin(File::open(script.path())?.into_file())
+        .assert()
+        .success();
+
+    let assert = context
+        .workspace_metadata()
+        .arg("--script")
+        .arg("-")
+        .arg("--stdin-filename")
+        .arg(script.path())
+        .arg("--isolated")
+        .stdin(File::open(script.path())?.into_file())
+        .assert()
+        .success();
+    let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
+
+    let mut filters = context.filters();
+    filters.push((r"/environments-v2/[a-f0-9]{16}", "/environments-v2/[HASH]"));
+
+    insta::with_settings!({ filters => filters }, {
+        insta::assert_json_snapshot!(serde_json::json!({
+            "environment": metadata["environment"],
+            "script": metadata["script"],
+        }), @r#"
+        {
+          "environment": {
+            "python": {
+              "implementation": "cpython",
+              "path": "[CACHE_DIR]/environments-v2/[HASH]/[BIN]/[PYTHON]",
+              "version": "3.12.[X]"
+            },
+            "root": "[CACHE_DIR]/environments-v2/[HASH]"
+          },
+          "script": {
+            "id": "script+[TEMP_DIR]/example.py",
+            "path": "[TEMP_DIR]/example.py"
+          }
+        }
+        "#);
+    });
+
+    Ok(())
+}
+
+#[test]
+fn workspace_metadata_script_stdin_filename_isolated_resolves_unsaved_dependencies() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_python_names()
+        .with_filtered_virtualenv_bin();
+    let saved_script = context.temp_dir.child("example.py");
+    saved_script.write_str(
+        r#"# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
+"#,
+    )?;
+
+    let lockfile = context.temp_dir.child("example.py.lock");
+    lockfile.write_str("invalid lockfile")?;
+
+    let wheel = context
+        .temp_dir
+        .child("metadata_stdin_isolated-0.1.0-py3-none-any.whl");
+    write_wheel(
+        wheel.path(),
+        "metadata-stdin-isolated",
+        "metadata_stdin_isolated-0.1.0",
+        &[("metadata_stdin_isolated/__init__.py", "")],
+    )?;
+    let wheel_url = Url::from_file_path(wheel.path())
+        .map_err(|()| anyhow::anyhow!("failed to convert wheel path to file URL"))?;
+
+    let stdin_script = context.temp_dir.child("stdin.py");
+    stdin_script.write_str(&format!(
+        r#"# /// script
+# requires-python = ">=3.12"
+# dependencies = ["metadata-stdin-isolated @ {wheel_url}"]
+# ///
+"#
+    ))?;
+
+    let assert = context
+        .workspace_metadata()
+        .arg("--script")
+        .arg("-")
+        .arg("--stdin-filename")
+        .arg(saved_script.path())
+        .arg("--isolated")
+        .arg("--sync")
+        .stdin(File::open(stdin_script.path())?.into_file())
+        .assert()
+        .success();
+    let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
+
+    let mut filters = context.filters();
+    filters.push((r"/environments-v2/[a-f0-9]{16}", "/environments-v2/[HASH]"));
+
+    insta::with_settings!({ filters => filters }, {
+        insta::assert_json_snapshot!(serde_json::json!({
+            "environment": metadata["environment"],
+            "module_owners": metadata["module_owners"],
+            "script": metadata["script"],
+        }), @r#"
+        {
+          "environment": {
+            "python": {
+              "implementation": "cpython",
+              "path": "[CACHE_DIR]/environments-v2/[HASH]/[BIN]/[PYTHON]",
+              "version": "3.12.[X]"
+            },
+            "root": "[CACHE_DIR]/environments-v2/[HASH]"
+          },
+          "module_owners": {
+            "metadata_stdin_isolated": [
+              {
+                "package_id": "metadata-stdin-isolated==0.1.0@path+[TEMP_DIR]/metadata_stdin_isolated-0.1.0-py3-none-any.whl"
+              }
+            ]
+          },
+          "script": {
+            "id": "script+[TEMP_DIR]/example.py",
+            "path": "[TEMP_DIR]/example.py"
+          }
+        }
+        "#);
+    });
+
+    assert_eq!(fs_err::read_to_string(lockfile.path())?, "invalid lockfile");
+
+    Ok(())
+}
+
+#[test]
+fn workspace_metadata_script_stdin_filename_isolated_environment_variable() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let directory = context.temp_dir.child("scripts");
+    directory.create_dir_all()?;
+    directory
+        .child("uv.toml")
+        .write_str("required-version = \">=9999\"\n")?;
+
+    let script = directory.child("example.py");
+    script.write_str(
+        r#"# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
+"#,
+    )?;
+
+    let lockfile = directory.child("example.py.lock");
+    lockfile.write_str("invalid lockfile")?;
+
+    let assert = context
+        .workspace_metadata()
+        .arg("--script")
+        .arg("-")
+        .arg("--stdin-filename")
+        .arg(script.path())
+        .env(EnvVars::UV_ISOLATED, "1")
+        .stdin(File::open(script.path())?.into_file())
+        .assert()
+        .success();
+    let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
+
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_json_snapshot!(metadata["script"], @r#"
+        {
+          "id": "script+[TEMP_DIR]/scripts/example.py",
+          "path": "[TEMP_DIR]/scripts/example.py"
+        }
+        "#);
+    });
+
+    assert_eq!(fs_err::read_to_string(lockfile.path())?, "invalid lockfile");
+
+    Ok(())
+}
+
+#[test]
 fn workspace_metadata_script_stdin_filename_requires_stdin() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let script = context.temp_dir.child("script.py");
