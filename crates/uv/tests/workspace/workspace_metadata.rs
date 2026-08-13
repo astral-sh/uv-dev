@@ -476,6 +476,189 @@ print("Hello, world!")
 }
 
 #[test]
+fn workspace_metadata_script_stdin_filename() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let directory = context.temp_dir.child("scripts");
+    directory.create_dir_all()?;
+
+    let saved_script = directory.child("example.py");
+    saved_script.write_str(
+        r#"# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
+"#,
+    )?;
+
+    let stdin_script = context.temp_dir.child("stdin.py");
+    stdin_script.write_str(
+        r#"# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
+"#,
+    )?;
+
+    let lockfile = directory.child("example.py.lock");
+    lockfile.write_str("invalid lockfile")?;
+
+    uv_snapshot!(
+        context.filters(),
+        context
+            .workspace_metadata()
+            .arg("--script")
+            .arg("-")
+            .arg("--stdin-filename")
+            .arg("scripts/example.py")
+            .stdin(File::open(stdin_script.path())?.into_file()),
+        @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "workspace_root": "[TEMP_DIR]/scripts",
+      "script": {
+        "path": "[TEMP_DIR]/scripts/example.py",
+        "id": "script+[TEMP_DIR]/scripts/example.py"
+      },
+      "requires_python": ">=3.12",
+      "conflicts": {
+        "sets": []
+      },
+      "resolution": {
+        "script+[TEMP_DIR]/scripts/example.py": {
+          "kind": "script",
+          "path": "[TEMP_DIR]/scripts/example.py",
+          "dependencies": []
+        }
+      }
+    }
+
+    ----- stderr -----
+    warning: The `uv workspace metadata` command is experimental and may change without warning. Pass `--preview-features workspace-metadata` to disable this warning.
+    Resolved in [TIME]
+    "#
+    );
+
+    assert_eq!(fs_err::read_to_string(lockfile.path())?, "invalid lockfile");
+
+    Ok(())
+}
+
+#[test]
+fn workspace_metadata_script_stdin_filename_includes_existing_environment() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_python_names()
+        .with_filtered_virtualenv_bin();
+    let script = context.temp_dir.child("example.py");
+    script.write_str(
+        r#"# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
+"#,
+    )?;
+
+    context.run().arg(script.path()).assert().success();
+
+    let assert = context
+        .workspace_metadata()
+        .arg("--script")
+        .arg("-")
+        .arg("--stdin-filename")
+        .arg(script.path())
+        .stdin(File::open(script.path())?.into_file())
+        .assert()
+        .success();
+    let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
+
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_json_snapshot!(metadata["environment"], @r#"
+        {
+          "python": {
+            "implementation": "cpython",
+            "path": "[CACHE_DIR]/environments-v2/example-[HASH]/[BIN]/[PYTHON]",
+            "version": "3.12.[X]"
+          },
+          "root": "[CACHE_DIR]/environments-v2/example-[HASH]"
+        }
+        "#);
+    });
+
+    Ok(())
+}
+
+#[test]
+fn workspace_metadata_script_stdin_filename_discovers_configuration() -> Result<()> {
+    let context =
+        uv_test::test_context!("3.12").with_filter((uv_version::version(), "[UV_VERSION]"));
+    let directory = context.temp_dir.child("scripts");
+    directory.create_dir_all()?;
+    directory
+        .child("uv.toml")
+        .write_str("required-version = \">=9999\"\n")?;
+
+    let script = context.temp_dir.child("stdin.py");
+    script.write_str(
+        r#"# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
+"#,
+    )?;
+
+    uv_snapshot!(
+        context.filters(),
+        context
+            .workspace_metadata()
+            .arg("--script")
+            .arg("-")
+            .arg("--stdin-filename")
+            .arg(directory.child("example.py").path())
+            .stdin(File::open(script.path())?.into_file()),
+        @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Required uv version `>=9999` does not match the running version `[UV_VERSION]`
+    "#
+    );
+
+    Ok(())
+}
+
+#[test]
+fn workspace_metadata_script_stdin_filename_requires_stdin() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let script = context.temp_dir.child("script.py");
+    script.write_str(
+        r#"# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
+"#,
+    )?;
+
+    uv_snapshot!(
+        context.filters(),
+        context
+            .workspace_metadata()
+            .arg("--script")
+            .arg(script.path())
+            .arg("--stdin-filename")
+            .arg(script.path()),
+        @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: `--stdin-filename` can only be used with `--script -`
+    "#
+    );
+
+    Ok(())
+}
+
+#[test]
 fn workspace_metadata_script_stdin_missing_metadata() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let script = context.temp_dir.child("script.py");
