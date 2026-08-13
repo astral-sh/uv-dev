@@ -8,7 +8,7 @@ Classification: bug
 
 The reported failure is reproducible. An activated Python 3.13 virtual environment created with the
 standard-library API `venv.create(".venv")` works by itself, but `uv run --with ipython ipython`
-selects a differently versioned `python3` from the base installation, then the generated entry point
+selects a differently versioned interpreter from the base installation, then the generated entry point
 fails with `ModuleNotFoundError: No module named 'IPython'`. A symlinked environment created by
 `python3.13 -m venv .venv` does not switch interpreters and succeeds.
 
@@ -18,10 +18,11 @@ reports cover copied interpreters, the `--with` ephemeral-overlay design, and st
 metadata separately.
 
 The reproduction confirms the relevant interpreter-selection path. uv first discovers the copied
-environment as Python 3.13, then resolves its `sys._base_executable` to the adjacent unversioned
-`python3`, queries that executable as Python 3.12, and uses it for the cached requirements and
-temporary overlay environments. This is the same version-layout distinction reported on CentOS,
-where the adjacent unversioned interpreter is Python 3.9.
+environment as Python 3.13, then follows the unversioned base executable reported by that
+environment, queries a differently versioned interpreter, and uses it for the cached requirements
+and temporary overlay environments. On the reporter's CentOS system, the copied environment reports
+`sys._base_executable = /usr/bin/python` even though `pyvenv.cfg` records
+`executable = /usr/bin/python3.13`; `/usr/bin/python` is Python 3.9.
 
 ## Reproduction
 
@@ -67,6 +68,13 @@ base executable is a different Python version. The closest coverage is
 `crates/uv/tests/project/run.rs::run_with_pyvenv_cfg_file`, which verifies `uv run --with` metadata
 and parent search paths using a normal uv-created environment; it does not exercise copied
 executables or mismatched base-interpreter aliases.
+
+## Workaround
+
+The reporter has changed the affected project to call `venv.create(".venv", symlinks=True)` and is
+using that as the operational workaround. This matches the maintainer's strong recommendation to
+construct environments with symlinks rather than copies and the successful symlinked control above.
+It avoids the copied-interpreter `sys._base_executable` behavior without requiring a uv change.
 
 ## Draft response
 
