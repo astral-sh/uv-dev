@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 10827,
+        "title": "Resolve `find-links` paths relative to the configuration file",
+        "url": "https://github.com/astral-sh/uv/pull/10827",
+        "state": "merged",
+        "reason": "Closest precedent: it fixed the same `Failed to read --find-links directory` behavior for relative paths in `pyproject.toml` and `uv.toml` by rebasing them to the containing configuration file. Its scope did not include PEP 723 metadata."
+      },
+      {
+        "kind": "issue",
+        "number": 15055,
+        "title": "Relative indexes are stored as absolute in the lockfile",
+        "url": "https://github.com/astral-sh/uv/issues/15055",
+        "state": "open",
+        "reason": "It also concerns a relative `format = \"flat\"` index, but the defect is absolute serialization in `uv.lock`, not runtime resolution against the wrong directory."
+      },
+      {
+        "kind": "pull_request",
+        "number": 9208,
+        "title": "Respect `[[tool.uv.index]]` in PEP 723 scripts",
+        "url": "https://github.com/astral-sh/uv/pull/9208",
+        "state": "merged",
+        "reason": "It introduced script-index support, but its regression test uses an HTTPS index and does not exercise relative local paths."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests for PEP 723 and inline metadata, `uv run` by path, `[[tool.uv.index]]`, flat indexes, `--find-links`, the exact read-directory error, relative/local indexes, and working-directory versus script/configuration-directory resolution. Also inspected historical script-index, config-relative find-links, workspace-discovery, and lockfile-path fixes. astral-sh/uv#11302, astral-sh/uv#12193, astral-sh/uv#17423, and astral-sh/uv#18687 were plausible but concern workspace, shebang, or configuration discovery rather than PEP 723 index rebasing."
+  },
+  "type": "bug",
+  "type_reason": "The reproduction establishes incorrect, working-directory-dependent interpretation of file-embedded metadata. Source confirms that file-backed PEP 723 requirements receive the script directory, while script indexes are returned without the `relative_to(script_dir)` rebasing used for file-backed configuration. No existing issue or pull request tracks this exact runtime case.",
+  "summary": "No duplicate was found. astral-sh/uv#10827 is the closest precedent, while astral-sh/uv#15055 concerns lockfile serialization and astral-sh/uv#9208 lacks relative-path coverage.",
+  "draft_response": "Thanks for the clear reproduction. This is a bug: a relative index declared in a file-backed PEP 723 block should be resolved from the script’s directory, just as relative index and find-links paths in `pyproject.toml` and `uv.toml` are resolved from their containing configuration file. The current script-index path does not apply that rebasing. I could not find an existing issue or pull request tracking this specific case. A focused regression test should invoke the script by path from another working directory and verify that its relative flat index is still loaded from beside the script."
+}
