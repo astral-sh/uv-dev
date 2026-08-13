@@ -380,6 +380,7 @@ async fn run_with_workspace_cache(
     } else {
         (None, None)
     };
+    let mut stdin_contents = None;
     let script = if let Some(run_script) = run_script {
         Some(run_script)
     } else if let Commands::Project(command) = &*cli.command {
@@ -456,7 +457,10 @@ async fn run_with_workspace_cache(
             stdin().read_to_end(&mut contents)?;
 
             match Pep723Metadata::parse(&contents)? {
-                Some(metadata) => Some(Pep723Item::Stdin(metadata)),
+                Some(metadata) => {
+                    stdin_contents = Some(contents);
+                    Some(Pep723Item::Stdin(metadata))
+                }
                 None => {
                     bail!("The script provided on stdin does not contain a PEP 723 metadata tag")
                 }
@@ -2144,6 +2148,7 @@ async fn run_with_workspace_cache(
                     client_builder.subcommand(vec!["workspace".to_owned(), "metadata".to_owned()]),
                     script,
                     args.stdin_filename,
+                    stdin_contents,
                     globals.python_preference,
                     globals.python_downloads,
                     globals.concurrency,
