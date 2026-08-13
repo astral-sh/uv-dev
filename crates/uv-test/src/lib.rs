@@ -1929,8 +1929,11 @@ impl TestContext {
             ));
         }
 
-        // Include a non-canonicalized version
-        patterns.push(Self::path_pattern(path));
+        let pattern = Self::path_pattern(path);
+        // Include a non-canonicalized version only when its pattern differs.
+        if !patterns.contains(&pattern) {
+            patterns.push(pattern);
+        }
 
         patterns
     }
@@ -2826,5 +2829,46 @@ mod file_read_tests {
         let context = TestContext::new_with_versions_and_bin(&[], PathBuf::from("uv"));
 
         context.read_bytes("missing.bin");
+    }
+}
+
+#[cfg(test)]
+mod path_pattern_tests {
+    #[cfg(unix)]
+    use fs_err::os::unix::fs::symlink;
+
+    use super::TestContext;
+
+    #[test]
+    fn path_patterns_deduplicates_canonical_paths() -> anyhow::Result<()> {
+        let temporary_directory = tempfile::tempdir()?;
+        let directory = temporary_directory.path().canonicalize()?;
+
+        assert_eq!(
+            TestContext::path_patterns(&directory),
+            vec![TestContext::path_pattern(&directory)]
+        );
+
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn path_patterns_preserves_symlink_paths() -> anyhow::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let target = directory.path().join("target");
+        let link = directory.path().join("link");
+        fs_err::create_dir_all(&target)?;
+        symlink(&target, &link)?;
+
+        assert_eq!(
+            TestContext::path_patterns(&link),
+            vec![
+                TestContext::path_pattern(target.canonicalize()?),
+                TestContext::path_pattern(&link),
+            ]
+        );
+
+        Ok(())
     }
 }
