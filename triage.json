@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 10784,
+        "title": "Hint use of `uv run` if `uvx` is given a script path",
+        "url": "https://github.com/astral-sh/uv/issues/10784",
+        "state": "closed",
+        "reason": "This tracks the intended handling of actual `.py` script paths. The new report differs because its input is a supported Git requirement, not a script path."
+      },
+      {
+        "kind": "pull_request",
+        "number": 11623,
+        "title": "Return error when running uvx with a .py script",
+        "url": "https://github.com/astral-sh/uv/pull/11623",
+        "state": "merged",
+        "reason": "This implemented the extension-only early checks for direct targets and `--from`, confirming the false-positive mechanism. It did not address Git URLs ending in `.py`."
+      },
+      {
+        "kind": "issue",
+        "number": 8199,
+        "title": "feature: uvx for github repos",
+        "url": "https://github.com/astral-sh/uv/issues/8199",
+        "state": "closed",
+        "reason": "This establishes that Git repository requirements are supported through `--from` and direct invocation. It does not cover the `.py` suffix collision."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests using the exact error, sample repository, `.py` endings, direct and `--from` Git requirements, script-path handling, and PEP 508/tool-request terminology. astral-sh/uv#6296 and astral-sh/uv#11337 concern older general requirement parsing. astral-sh/uv#12713, astral-sh/uv#15882, and astral-sh/uv#16303 fail later during Git handling and were ruled out."
+  },
+  "type": "bug",
+  "type_reason": "Current source intercepts both the direct target and `--from` value with an extension-only script-path check before parsing the tool requirement. A Git URL ending in `.py` therefore reaches `PackageName::from_str` and is incorrectly rejected. No existing issue or pull request tracks this false positive.",
+  "summary": "No existing report tracks the same `.py` Git-URL false positive. The closest history is the local-script safeguard in astral-sh/uv#10784 and astral-sh/uv#11623; astral-sh/uv#8199 confirms Git repository tool requests are supported.",
+  "draft_response": "Thanks for the report. Git requirements are supported in both forms shown, but the current `.py` script-path check runs before the tool requirement is parsed. A Git URL whose repository name ends in `.py` is therefore incorrectly treated as a script path and validated as a package name. This is distinct from astral-sh/uv#10784, which handles actual `.py` script paths. The next step is to narrow that check and add coverage for both the direct and `--from` forms."
+}
