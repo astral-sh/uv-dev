@@ -22,7 +22,9 @@ A maintainer confirmed that astral-sh/uv#21135 is closely related to astral-sh/u
 favor a packaging standard for advertising the run target rather than another tool-specific setting,
 and uv does not read other tools' settings blocks as a matter of principle. The earlier suggestion
 that uv could support `[pipx.run]` assumed that metadata would first become an official standard; it
-was explicitly clarified that uv should not consume the existing pipx-specific block as-is.
+was explicitly clarified that uv should not consume the existing pipx-specific block as-is. The
+maintainer who raised that possibility also clarified that `pipx.run` would not be a good spelling
+for the future standard itself.
 
 The remaining work is standardization and design consensus, especially:
 
@@ -90,5 +92,6 @@ pypa/pipx#2004 report was inspected as a lead; it confirms the current pipx uv-b
 but the repository-side capability is already represented by astral-sh/uv#3878.
 
 Maintainer discussion on astral-sh/uv#21135 establishes that `[pipx.run]` is prior art rather than a
-configuration block uv intends to read. The only contemplated path for that shape is for it to become
-an official standard first; no such standard or implementation commitment is established here.
+configuration block uv intends to read. A future standard could address the same capability, but the
+literal `pipx.run` spelling is not favored; no standard or implementation commitment is established
+here.
