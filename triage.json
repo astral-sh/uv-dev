@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 12647,
+        "title": "why there is no information to delete `uv-receipt.json` when uninstalling `uv`",
+        "url": "https://github.com/astral-sh/uv/issues/12647",
+        "state": "open",
+        "reason": "Exact canonical match: it requests documenting deletion of the same receipt on the same uninstallation page. A maintainer said deletion could be recommended."
+      },
+      {
+        "kind": "issue",
+        "number": 12686,
+        "title": "`uv self update` fails in MSYS2 environment",
+        "url": "https://github.com/astral-sh/uv/issues/12686",
+        "state": "open",
+        "reason": "Contains the same Windows receipt-mismatch diagnostic, but its trigger is an MSYS2 path representation problem rather than a stale receipt after migration to WinGet."
+      },
+      {
+        "kind": "pull_request",
+        "number": 21129,
+        "title": "Document removing uv-receipt.json after uninstall on Windows",
+        "url": "https://github.com/astral-sh/uv/pull/21129",
+        "state": "closed",
+        "reason": "Directly proposed this documentation change, but closed without merging and does not supersede the older canonical issue."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests using exact receipt and diagnostic fragments, uninstall documentation terms, standalone-installer metadata, WinGet/package-manager migration, self-update, and self-uninstall terminology. Inspected the broader astral-sh/uv#9871 and astral-sh/uv#11613 self-uninstall work and historical astral-sh/uv#1696 and astral-sh/uv#9938 documentation work, but ruled them out as less specific."
+  },
+  "type": "duplicate",
+  "type_reason": "Open issue astral-sh/uv#12647 already tracks the same missing `uv-receipt.json` cleanup guidance on the same uninstallation page. The WinGet scenario adds useful evidence but can be centralized there.",
+  "summary": "astral-sh/uv#12647 is an exact open duplicate. astral-sh/uv#12686 demonstrates the same diagnostic under a different Windows trigger, while astral-sh/uv#21129 closed without merging.",
+  "draft_response": "Thanks for documenting the concrete WinGet migration case. The missing `uv-receipt.json` cleanup guidance is already tracked in astral-sh/uv#12647, where maintainers noted that recommending deletion is possible. The current uninstallation page omits the receipt, and self-update checks a loaded receipt against the running executable, consistent with the diagnostic you saw. Let’s centralize the documentation decision in astral-sh/uv#12647; closing this as a duplicate."
+}
