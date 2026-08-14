@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 21008,
+        "title": "Preserve inline comments when updating dependencies",
+        "url": "https://github.com/astral-sh/uv/pull/21008",
+        "state": "merged",
+        "reason": "Exact fix: it covers updating the final optional dependency without a trailing comma, preserves the inline comment, adds the reporter’s scenario as an integration regression test, and was released in uv 0.12.4."
+      },
+      {
+        "kind": "issue",
+        "number": 8982,
+        "title": "Inconsistency with comments on uv add",
+        "url": "https://github.com/astral-sh/uv/issues/8982",
+        "state": "closed",
+        "reason": "Closest historical symptom: `uv add` moved a non-terminal dependency’s inline comment onto a newly inserted dependency. It differs because the commented item already had a comma and was not last; maintainers confirmed astral-sh/uv#12360 fixed that case."
+      },
+      {
+        "kind": "pull_request",
+        "number": 12360,
+        "title": "Retain end-of-line comment position when adding dependency",
+        "url": "https://github.com/astral-sh/uv/pull/12360",
+        "state": "merged",
+        "reason": "Historical fix for the adjacent mid-array insertion case tracked by astral-sh/uv#12333 and later confirmed to fix astral-sh/uv#8982; it did not cover updating the final no-comma item reported here."
+      }
+    ],
+    "search_scope": "Searched exact phrases and identifiers (`inline comment`, `trailing comma`, `narwhals`, `pandas-stubs`, uv 0.12.2, and the issue title), then conceptual variants covering moved or shifted comments, preservation of TOML decoration, final array items, `toml_edit` suffixes, optional-dependency updates, and `uv add` formatting. Fix-oriented searches covered open and closed issues, open, closed, and merged pull requests, linked timelines, comments, source tests, and release notes. astral-sh/uv#8343 and astral-sh/uv#8384 concern broader comment repositioning while inserting dependencies; astral-sh/uv#16719 and astral-sh/uv#16734 concern whitespace normalization rather than comment ownership; astral-sh/uv#9856, astral-sh/uv#13966, astral-sh/uv#6364, and astral-sh/uv#13447 use `uv remove` or PEP 723 script metadata and were ruled out as materially different."
+  },
+  "type": "bug",
+  "type_reason": "`uv add` incorrectly reassociated an existing inline comment with another dependency. astral-sh/uv#21008 confirms the formatter mechanism and adds the exact integration regression test. This is not a duplicate: that pull request was opened in response to this report, while earlier fixes addressed different array positions and operations.",
+  "summary": "astral-sh/uv#21008 is the exact merged fix, released in uv 0.12.4. The closest historical thread is astral-sh/uv#8982 with astral-sh/uv#12360, but that case involved inserting after a commented non-terminal item with a comma, not updating a final no-comma item.",
+  "draft_response": "Thanks for the focused reproduction. This was a bug in how `uv add` handled the inline comment on the final array item when that item had no trailing comma: the formatter could attach the comment to the preceding dependency while adding the comma. The fix and an integration regression test were merged in astral-sh/uv#21008 and released in uv 0.12.4. Please upgrade to uv 0.12.4 or later; your trailing-comma workaround remains valid on older versions."
+}
