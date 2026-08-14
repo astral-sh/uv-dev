@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "With uv 0.12.4 on Linux x86_64, both `uvx git+file:///<tmp>/fixturetool.py` and `uvx --from git+file:///<tmp>/fixturetool.py fixturetool` exited 2 with the reported invalid package-name error. An identical local Git repository named `fixturetool` succeeded in both forms and ran its entry point."
+}

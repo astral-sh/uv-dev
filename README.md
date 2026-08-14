@@ -6,8 +6,8 @@ Classification: bug
 
 ## Summary
 
-The reporter is using uv 0.12.4 and finds that both supported forms of running a tool from a Git
-requirement fail when the repository basename ends in `.py`:
+The behavior in astral-sh/uv#21141 is reproducible with uv 0.12.4. Both supported forms of running a
+tool from a Git requirement reject a repository URL whose basename ends in `.py`:
 
 ```console
 uvx git+https://github.com/uPesy/easyeda2kicad.py
@@ -15,15 +15,73 @@ uvx --from git+https://github.com/uPesy/easyeda2kicad.py easyeda2kicad
 ```
 
 Both commands reject the entire URL as an invalid package or extra name before any Git operation.
-The repository's integration tests demonstrate that direct and `--from` Git requirements normally
-work. Current source also confirms the reported false positive: `run.rs` checks whether the direct
-target or `--from` value has a `.py`/`.pyw` path extension before calling `ToolRequest::parse`. For
-this URL, that branch then passes the complete URL to `PackageName::from_str`, which emits the
-reported validation error.
+A local, trusted Git fixture reproduced the same result in both forms, while an otherwise identical
+repository with a basename that does not end in `.py` ran successfully.
+
+Current source is consistent with the observation: `run.rs` checks whether the direct target or
+`--from` value has a `.py`/`.pyw` path extension before calling `ToolRequest::parse`, then passes the
+complete URL to `PackageName::from_str` in this case.
 
 No existing issue or pull request was found that already tracks this `.py` Git-URL collision. The
 closest history is the intentional handling of actual Python script paths added for
 astral-sh/uv#10784 by astral-sh/uv#11623.
+
+## Reproduction
+
+Outcome: **reproducible**.
+
+The reproduction used the installed `uvx 0.12.4 (x86_64-unknown-linux-gnu)` on Linux x86_64 with
+Python 3.12.3 available. The reporter used the same uv version on OpenSUSE Tumbleweed x86_64 with
+Python 3.12.13. The failure occurs before Python selection or Git access.
+
+A temporary local Git repository named `fixturetool.py` contained this minimal package metadata and
+a `fixturetool` module whose `main` function prints `fixture tool ran`:
+
+```toml
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fixturetool"
+version = "0.1.0"
+requires-python = ">=3.8"
+
+[project.scripts]
+fixturetool = "fixturetool:main"
+
+[tool.setuptools]
+py-modules = ["fixturetool"]
+```
+
+With all caches and tool directories isolated under the temporary directory, both reconstructed
+forms failed:
+
+```console
+$ uvx git+file:///<tmp>/fixturetool.py
+error: Not a valid package or extra name: "git+file:///<tmp>/fixturetool.py". Names must start and end with a letter or digit and may only contain -, _, ., and alphanumeric characters.
+$ echo $?
+2
+
+$ uvx --from git+file:///<tmp>/fixturetool.py fixturetool
+error: Not a valid package or extra name: "git+file:///<tmp>/fixturetool.py". Names must start and end with a letter or digit and may only contain -, _, ., and alphanumeric characters.
+$ echo $?
+2
+```
+
+Copying the identical Git repository to a directory named `fixturetool` provided a control. Both
+`uvx git+file:///<tmp>/fixturetool` and
+`uvx --from git+file:///<tmp>/fixturetool fixturetool` built the package, printed
+`fixture tool ran`, and exited 0.
+
+Existing integration coverage is adjacent but does not cover the collision:
+
+- `crates/uv/tests/tool/tool_run.rs::tool_run_git` verifies successful direct and `--from` Git
+  requirements whose repository basename does not end in `.py`.
+- `crates/uv/tests/tool/tool_run.rs::tool_run_with_existing_py_script`,
+  `tool_run_with_nonexistent_py_script`, and `tool_run_with_from_script` verify the intended errors
+  for actual or apparent Python script paths.
+- No existing test in that file combines a Git requirement with a `.py` repository basename.
 
 ## Draft response
 
@@ -38,11 +96,10 @@ both the direct and `--from` forms.
 
 ## Classification
 
-This is a bug. Git requirements are an established `uvx` capability, and current integration tests
-cover successful direct and `--from` invocations. The extension-only pre-parse guard incorrectly
-classifies a valid Git requirement as a Python script path. The same source branch accounts for both
-reported commands and the exact package-name validation error. No open issue or pull request already
-tracks this behavior, so astral-sh/uv#21141 is not a duplicate.
+This is a reproducible bug. Git requirements are an established `uvx` capability, and current
+integration tests cover successful direct and `--from` invocations. The extension-only pre-parse
+guard incorrectly intercepts a valid Git requirement. No open issue or pull request already tracks
+this behavior, so astral-sh/uv#21141 is not a duplicate.
 
 ## Related
 
@@ -72,4 +129,5 @@ authentication, or fetching, whereas this report fails during local pre-parse va
 Current integration tests in `crates/uv/tests/tool/tool_run.rs` cover successful Git requirements in
 both reported invocation forms and separately cover the intended errors for local `.py` and `.pyw`
 script names. They do not cover a Git requirement whose final path component has one of those
-extensions.
+extensions. The local reproduction above supplies direct behavioral evidence in addition to that
+source and test inspection.
