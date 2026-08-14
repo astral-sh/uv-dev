@@ -1,0 +1,51 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 13577,
+        "title": "System global .python-version `uv python pin --system`",
+        "url": "https://github.com/astral-sh/uv/issues/13577",
+        "state": "open",
+        "reason": "Closest open request for another global-pin storage location, but it proposes a lower-precedence system-wide pin rather than a user-selected file path."
+      },
+      {
+        "kind": "issue",
+        "number": 4972,
+        "title": "`uv python pin` should support \"global\" pins",
+        "url": "https://github.com/astral-sh/uv/issues/4972",
+        "state": "closed",
+        "reason": "Original design issue for global pins; it explicitly selected the user-level uv configuration directory as the storage location."
+      },
+      {
+        "kind": "pull_request",
+        "number": 12115,
+        "title": "Add support for global `uv python pin`",
+        "url": "https://github.com/astral-sh/uv/pull/12115",
+        "state": "merged",
+        "reason": "Introduced `uv python pin --global` and implemented the global `.python-version` under the user-level uv configuration directory without a path override."
+      },
+      {
+        "kind": "issue",
+        "number": 12921,
+        "title": "Respect --global Python pins during uv tool operations",
+        "url": "https://github.com/astral-sh/uv/issues/12921",
+        "state": "closed",
+        "reason": "Canonical design discussion for the distinction motivating this request: how a global fallback pin should affect new tool installs, reinstalls, and upgrades."
+      },
+      {
+        "kind": "pull_request",
+        "number": 14112,
+        "title": "Respect global Python version pins in `uv tool run` and `uv tool install`",
+        "url": "https://github.com/astral-sh/uv/pull/14112",
+        "state": "merged",
+        "reason": "Implemented the intentional behavior whereby a global pin selects Python for a new install but does not change an existing tool on an ordinary upgrade, while an explicit Python request can change it."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests using literal terms for UV_PYTHON_GLOBAL_PIN_FILE, uv python pin --global, global pin file, .python-version, %APPDATA%, UV_CONFIG_FILE, and UV_CONFIG_DIR. Conceptual searches covered custom, user, and system configuration directories, alternate global-pin locations, default Python selection, UV_PYTHON and --python precedence, interpreter migration, uv tool upgrade --all, and freethreaded upgrades. Fix-oriented searches followed the original global-pin and tool-operation design chains. astral-sh/uv#11534 was ruled out because it concerns tools broken after their Python installation is deleted. astral-sh/uv#13402 concerns pyenv shim failures from local version files, not global-pin placement."
+  },
+  "type": "enhancement",
+  "type_reason": "The issue requests a new environment variable or equivalent configuration surface for relocating the global Python pin file. Current documentation and source intentionally place that file in the uv user configuration directory, while UV_PYTHON intentionally acts like an explicit --python request during tool upgrades. The differing behavior motivates the new capability but does not establish incorrect behavior. No existing issue or pull request tracks the same user-selected global-pin path closely enough to centralize discussion.",
+  "summary": "No duplicate was found. The closest history is the original global-pin feature in astral-sh/uv#4972 and astral-sh/uv#12115 and its intentional tool-selection semantics in astral-sh/uv#12921 and astral-sh/uv#14112. Open astral-sh/uv#13577 is adjacent but requests a system-wide pin rather than an arbitrary user path.",
+  "draft_response": "Thanks, the tool-upgrade example clarifies why `UV_PYTHON` is not equivalent here. Today, `uv python pin --global` reads and writes `.python-version` in uv's user configuration directory, and there is no override for that file's location. `UV_PYTHON` is wired as an explicit Python request for `uv tool upgrade`, like `--python`, so it can move existing tool environments to that interpreter. The global pin was intentionally designed as a fallback for new installs without changing an existing tool on an ordinary upgrade in astral-sh/uv#12921 and astral-sh/uv#14112.\n\nA configurable global-pin path would therefore be a new capability. The main design question is whether the override should name this specific file or relocate the user-level uv configuration directory more generally, including its precedence relative to `--global` and `--no-config`. We can keep this issue open as the enhancement request for that decision."
+}
