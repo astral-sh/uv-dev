@@ -5,6 +5,7 @@ use rustc_hash::{FxBuildHasher, FxHashSet};
 use same_file::is_same_file;
 use std::borrow::Cow;
 use std::env::consts::EXE_SUFFIX;
+use std::ffi::OsString;
 use std::fmt::{self, Debug, Formatter};
 use std::{env, io, iter};
 use std::{path::Path, path::PathBuf, str::FromStr};
@@ -22,7 +23,7 @@ use uv_pep440::{
 };
 use uv_static::EnvVars;
 use uv_warnings::{warn_user_once, write_warning_chain};
-use which::{which, which_all};
+use which::which;
 
 use crate::downloads::{ManagedPythonDownloadList, PlatformRequest, PythonDownloadRequest};
 use crate::implementation::ImplementationName;
@@ -594,9 +595,7 @@ fn python_executables_from_search_path<'a>(
     version: &'a VersionRequest,
     implementation: Option<&'a ImplementationName>,
 ) -> impl Iterator<Item = PathBuf> + 'a {
-    // `UV_PYTHON_SEARCH_PATH` can be used to override `PATH` for Python executable discovery
-    let search_path = env::var_os(EnvVars::UV_PYTHON_SEARCH_PATH)
-        .unwrap_or(env::var_os(EnvVars::PATH).unwrap_or_default());
+    let search_path = python_search_path();
 
     let possible_names: Vec<_> = version
         .executable_names(implementation)
@@ -669,6 +668,12 @@ fn python_executables_from_search_path<'a>(
                 .into_iter()
                 .flatten()
         })
+}
+
+/// Return the configured Python executable search path, falling back to `PATH`.
+fn python_search_path() -> OsString {
+    env::var_os(EnvVars::UV_PYTHON_SEARCH_PATH)
+        .unwrap_or_else(|| env::var_os(EnvVars::PATH).unwrap_or_default())
 }
 
 /// Find all acceptable `python3.x` minor versions.
@@ -1018,7 +1023,7 @@ fn python_installation_from_directory(
 fn python_executables_with_name(
     name: &str,
 ) -> impl Iterator<Item = Result<(PythonSource, PathBuf), Error>> + '_ {
-    which_all(name)
+    which::which_in_global(name, Some(python_search_path()))
         .into_iter()
         .flat_map(|inner| inner.map(|path| Ok((PythonSource::SearchPath, path))))
 }
