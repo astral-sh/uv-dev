@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 15096,
+        "title": "Add a hint for virtual environments included in wheels",
+        "url": "https://github.com/astral-sh/uv/issues/15096",
+        "state": "closed",
+        "reason": "Historical canonical request for the exact missing source-distribution diagnostic."
+      },
+      {
+        "kind": "pull_request",
+        "number": 15202,
+        "title": "Add hint for venv in source distribution error",
+        "url": "https://github.com/astral-sh/uv/pull/15202",
+        "state": "merged",
+        "reason": "Implemented the diagnostic that has regressed in the reported environment."
+      },
+      {
+        "kind": "pull_request",
+        "number": 19979,
+        "title": "Replace astral-tokio-tar with tar-codec",
+        "url": "https://github.com/astral-sh/uv/pull/19979",
+        "state": "merged",
+        "reason": "Added the tar-codec error path and restrictive `bin/python*` target heuristic exercised by this failure shortly before 0.12.4."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests for the test identifier, exact tar and hint errors, Gentoo, and 0.12.4. Conceptual searches covered sdist virtual environments, external symlinks, structured extraction errors, build hints, and tar-codec. Historical fix chains, source changes, comments, and release timing were inspected. astral-sh/uv#14834 and astral-sh/uv#15086 concern expected rejection of invalid sdists rather than the missing hint; astral-sh/uv#15243 concerns symlinked package-directory support and is distinct."
+  },
+  "type": "bug",
+  "type_reason": "The 0.12.4 source and snapshot establish that tar-codec should preserve the virtual-environment hint. Its handler assumes the symlink target's parent is `bin`, while Gentoo's test interpreter is under `python/3.12/python3`, causing the hint and snapshot to fail. This regresses the diagnostic implemented by astral-sh/uv#15202 for astral-sh/uv#15096. No open issue or pull request already tracks this regression.",
+  "summary": "This is a platform-sensitive regression in the tar-codec version of the venv-in-sdist diagnostic. astral-sh/uv#15096 and astral-sh/uv#15202 establish the intended hint; astral-sh/uv#19979 introduced the path-sensitive handler that misses Gentoo's interpreter layout.",
+  "draft_response": "Thanks for the report. The source distribution is still expected to be rejected because it contains a virtual environment, but the tar-codec path should also emit the explanatory hint. In 0.12.4, that detection expects the symlink target to look like `bin/python*`; your test interpreter target is instead under `python/3.12/python3`, so the second snapshot loses the hint and fails. This is a regression of the diagnostic added in astral-sh/uv#15202 for astral-sh/uv#15096. We should make the tar-codec detection independent of the test interpreter's installation layout and add coverage for this path shape."
+}
