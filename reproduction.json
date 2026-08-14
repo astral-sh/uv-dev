@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "On Ubuntu 24.04 x86_64 with CPython 3.12.3 and installed uv 0.12.4, a Hatchling project force-including `.venv` reproduced astral-sh/uv#21128. After creating the venv from an interpreter at `/tmp/.../python/3.12/python3`, `uv build --no-config` rejected the sdist and printed the virtual-environment hint, while `uv build --no-config --preview-features tar-codec` rejected it with status 2 but omitted the hint. A `/tmp/.../bin/python3` control printed the hint with tar-codec. uv 0.12.3 used the legacy extractor and printed the hint; tar-codec was not yet recognized. Existing coverage is `crates/uv/tests/build/build.rs`, test `venv_included_in_sdist`, but its usual `bin/python*` interpreter layout misses this platform-sensitive case. The issue-context README was updated with the commands and findings."
+}

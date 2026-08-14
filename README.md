@@ -6,33 +6,73 @@ Classification: bug
 
 ## Summary
 
-On Gentoo Linux amd64, the `build::venv_included_in_sdist` integration test from uv 0.12.4 fails its second snapshot. Both extraction backends correctly reject the deliberately invalid source distribution because it contains a virtual environment with an absolute Python symlink. The legacy extraction path also prints the intended hint explaining that virtual environments must be excluded from source distributions, but the preview `tar-codec` path omits that hint.
+The failure reported on Gentoo Linux amd64 is reproducible with uv 0.12.4. When a source distribution contains `.venv/bin/python` as an absolute symlink to an interpreter laid out as `.../python/3.12/python3`, both extraction backends correctly reject the invalid archive, but the preview `tar-codec` backend omits the intended virtual-environment hint. The legacy backend includes the hint.
 
-The 0.12.4 source and snapshot explicitly require the hint on both paths. The `tar-codec` handler recognizes a virtual-environment Python target only when its parent directory is named `bin` and its filename starts with `python`. The test environment used in the report resolves the target as `.../python/3.12/python3`, so it does not satisfy that path-shape check. This explains the observed missing hint without changing the validity of the underlying extraction error.
-
-## Draft response
-
-Thanks for the report. The source distribution is still expected to be rejected because it contains a virtual environment, but the tar-codec path should also emit the explanatory hint. In 0.12.4, that hint detection expects the symlink target to look like `bin/python*`; your test interpreter target is instead under `python/3.12/python3`, so the second snapshot loses the hint and fails. This is a regression of the diagnostic added in astral-sh/uv#15202 for astral-sh/uv#15096. We should make the tar-codec detection independent of the test interpreter's installation layout and add coverage for this path shape.
+A control using an interpreter target laid out as `.../bin/python3` makes the 0.12.4 `tar-codec` backend print the hint. This confirms that the diagnostic depends on the interpreter installation path, matching the Gentoo test failure.
 
 ## Classification
 
-This is a bug. The committed 0.12.4 integration test establishes that the tar-codec error path is intended to retain the source-distribution virtual-environment hint. Repository source confirms that the path-shape heuristic does not recognize Gentoo's test interpreter layout, producing incorrect diagnostic output and a snapshot failure.
+This is a reproducible platform-sensitive diagnostic bug. The archive rejection is expected; the bug is that the preview extraction path loses the explanatory hint and therefore fails the committed snapshot in `crates/uv/tests/build/build.rs`, test `venv_included_in_sdist`.
 
-The behavior restores a platform-sensitive gap in a previously fixed diagnostic: astral-sh/uv#15096 requested the hint, and astral-sh/uv#15202 implemented it. Because no open issue or pull request already tracks this regression, astral-sh/uv#21128 should not be classified as a duplicate.
+The implementation in `crates/uv/src/commands/build_frontend.rs` classifies a tar-codec unsafe symlink as a virtual-environment interpreter only when the symlink target itself has a parent ending in `bin` and a filename beginning with `python`. The reported and reproduced target ends in `python/3.12/python3`, so it is not recognized even though the archive member is `.venv/bin/python`.
+
+## Reproduction
+
+Outcome: **reproducible**.
+
+Environment used:
+
+- Ubuntu 24.04, Linux x86_64
+- installed `uv 0.12.4 (x86_64-unknown-linux-gnu)`
+- CPython 3.12.3
+- all project files, tool installations, Python copies, and uv caches under `/tmp`
+
+The minimal project used Hatchling and deliberately included `.venv` in its sdist:
+
+```toml
+[project]
+name = "project"
+version = "0.1.0"
+requires-python = ">=3.12.0"
+
+[tool.hatch.build.targets.sdist.force-include]
+".venv" = ".venv"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+```
+
+After adding `src/project/__init__.py`, the relevant setup and commands were:
+
+```console
+$ mkdir -p "$CASE/python/3.12"
+$ cp /usr/bin/python3.12 "$CASE/python/3.12/python3"
+$ uv venv --no-config --python "$CASE/python/3.12/python3" --clear .venv
+$ readlink .venv/bin/python
+/tmp/.../python/3.12/python3
+$ uv build --no-config
+...
+Caused by: symlink path `/tmp/.../python/3.12/python3` is absolute, but external symlinks are not allowed
+
+hint: The source distribution includes a virtual environment. Virtual environments must be excluded from source distributions.
+$ uv build --no-config --preview-features tar-codec
+...
+Caused by: at byte 41472: unsafe symbolic-link target "/tmp/.../python/3.12/python3": is absolute
+```
+
+The second command exited with status 2 and omitted the hint, reproducing the reported snapshot difference. With the same fixture but an interpreter copied to `/tmp/.../bin/python3`, the preview command still exited with status 2 and did print the hint.
+
+For comparison, uv 0.12.3 rejected the same fixture through the legacy extractor and printed the hint. It warned that `tar-codec` was an unknown preview feature, so the affected preview path was not available in that release.
+
+Existing integration coverage is `crates/uv/tests/build/build.rs`, test `venv_included_in_sdist`. It constructs a Hatchling project that force-includes `.venv`, verifies rejection by both extractors, and snapshots the hint for both. Its interpreter fixture normally resolves to a `bin/python*` target, so it does not cover the reproduced `python/3.12/python3` layout and fails rather than passes on Gentoo.
 
 ## Related
 
-- astral-sh/uv#15096 — Closed issue that requested the exact explanatory hint for virtual environments included in source distributions. Its title says “wheels,” but its body and resolution concern the source-distribution extraction error exercised here.
-- astral-sh/uv#15202 — Merged pull request that fixed astral-sh/uv#15096 by adding the venv-in-sdist hint and its integration coverage. The new report is a regression of that user-facing diagnostic.
-- astral-sh/uv#19979 — Merged pull request that added the preview tar-codec extraction path shortly before the 0.12.4 release. It added structured unsafe-link handling and the `bin/python*` target heuristic that does not match the Gentoo test layout.
+- astral-sh/uv#15096 requested the explanatory hint for virtual environments included in source distributions.
+- astral-sh/uv#15202 added the hint and the original integration coverage.
+- astral-sh/uv#19979 introduced the preview tar-codec extraction path, added its structured unsafe-link hint detection, and added the second snapshot shortly before uv 0.12.4.
 
-## Supporting evidence
+## Maintainer handoff
 
-- The report's first extraction run includes the expected hint, while the second run reports `unsafe symbolic-link target ... is absolute` without it; only the second snapshot fails.
-- The uv 0.12.4 tag was published on 2026-08-13 and contains both the tar-codec handler and a snapshot requiring the hint. astral-sh/uv#19979 merged on 2026-08-11, immediately before that release.
-- In the reported environment, the symlink target ends in `python/3.12/python3`. The tar-codec hint logic requires the target's parent to end in `bin`, so it returns no hint for this otherwise equivalent test layout.
-- astral-sh/uv#14834 and astral-sh/uv#15086 concern the expected rejection of invalid source distributions containing virtual environments, not this missing-hint test regression. astral-sh/uv#15243 concerns uv_build support for symlinked package directories and is also distinct.
-
-## Search coverage
-
-Searches covered open and closed issues and open, closed, and merged pull requests. Literal queries included `venv_included_in_sdist`, `unsafe symbolic-link target`, `external symlinks are not allowed`, the complete virtual-environment hint, `Invalid tar file`, Gentoo, and 0.12.4. Conceptual and fix-oriented queries covered source-distribution virtual environments, external symlinks, extraction policy, build hints, structured tar errors, tar-codec, the historical hint issue, and changes merged before the 0.12.4 release. The strongest candidates, their comments, referenced commits, fixing pull requests, source changes, and release timing were inspected.
+The observed issue is limited to hint detection; both extractors continue to reject the invalid sdist. Any fix should preserve the structured tar-codec checks while recognizing the archive member `.venv/bin/python` independently of the host interpreter's absolute installation layout. Coverage should include a symlink target shaped like `.../python/3.12/python3` as well as the existing `.../bin/python*` shape.
