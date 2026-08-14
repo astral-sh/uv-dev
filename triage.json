@@ -1,0 +1,27 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 6012,
+        "title": "Software Bill of Materials (SBOM) output",
+        "url": "https://github.com/astral-sh/uv/issues/6012",
+        "state": "closed",
+        "reason": "The original feature thread explicitly discussed registry-distribution hashes, identified distribution external references as the likely representation, and deliberately deferred them from the initial exporter."
+      },
+      {
+        "kind": "pull_request",
+        "number": 16523,
+        "title": "Add SBOM export support",
+        "url": "https://github.com/astral-sh/uv/pull/16523",
+        "state": "merged",
+        "reason": "This implemented CycloneDX 1.5 export and closed astral-sh/uv#6012. The resulting implementation leaves hashes and external references absent and does not receive the export hash setting."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests using literal terms including cyclonedx1.5, CycloneDX hash/hashes, component hashes, externalReferences, --hashes, and --no-hashes, plus conceptual terms covering SBOM verification, artifact/distribution checksums, and lockfile hash export. No dedicated prior tracker or active pull request was found. astral-sh/uv#6944, astral-sh/uv#9225, astral-sh/uv#10987, and astral-sh/uv#7064 were inspected but ruled out because they concern requirements.txt behavior or hashes absent from uv.lock for --find-links."
+  },
+  "type": "enhancement",
+  "type_reason": "This is a known scope limitation rather than a regression. astral-sh/uv#6012 agreed that distribution hashes were reasonable but explicitly deferred them from astral-sh/uv#16523. Adding them and making the hash-control option meaningful for CycloneDX introduces functionality the exporter has never provided.",
+  "summary": "astral-sh/uv#21122 is the deferred hash follow-up from astral-sh/uv#6012 after astral-sh/uv#16523 shipped the initial CycloneDX exporter without distribution hashes; no issue or pull request already tracks it.",
+  "draft_response": "Thanks for the detailed reproduction. Distribution hashes were discussed in astral-sh/uv#6012 and intentionally deferred from the initial CycloneDX implementation in astral-sh/uv#16523, so this is a valid scoped enhancement rather than a regression. The current exporter does not consume the hash setting and emits neither component hashes nor distribution external references. The next step is to settle the artifact representation—astral-sh/uv#6012 identified distribution external references as the likely fit—and add coverage for hashes being included by default and suppressed by --no-hashes."
+}
