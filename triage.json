@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 3878,
+        "title": "Support custom tool entrypoints",
+        "url": "https://github.com/astral-sh/uv/issues/3878",
+        "state": "open",
+        "reason": "Canonical request for pipx-style custom entry points for packages intended to run via `python -m`."
+      },
+      {
+        "kind": "issue",
+        "number": 7552,
+        "title": "Module support for uvx",
+        "url": "https://github.com/astral-sh/uv/issues/7552",
+        "state": "open",
+        "reason": "Adjacent caller-side module shorthand; the caller selects the module instead of the project advertising it."
+      },
+      {
+        "kind": "issue",
+        "number": 12976,
+        "title": "Allow `uvx <name>` without `--from` when the normalized executable name matches",
+        "url": "https://github.com/astral-sh/uv/issues/12976",
+        "state": "open",
+        "reason": "Covers automatic selection of an existing differently named executable, not a declared module target or zero-executable package."
+      },
+      {
+        "kind": "pull_request",
+        "number": 17779,
+        "title": "Auto-run single executable in uvx/uv tool run when package name differs",
+        "url": "https://github.com/astral-sh/uv/pull/17779",
+        "state": "open",
+        "reason": "Proposes running a package's sole mismatched executable, but does not support `[pipx.run]`, module declarations, or packages without executables."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests using literal terms including `[pipx.run]`, `python -m`, `__main__.py`, `module:callable`, and the no-executables diagnostic; conceptual searches covered custom/default entry points, advertised run targets, executable-name mismatches, `--from`, and uvx module support. Inspected current source and tests plus astral-sh/uv#11603, astral-sh/uv#7322, astral-sh/uv#7754, and astral-sh/uv#17779. The merged astral-sh/uv#7754 was ruled out because it implements `uv run -m`, not uvx module selection. The external pypa/pipx#2004 report was treated as supporting context, not the canonical repository discussion."
+  },
+  "type": "duplicate",
+  "type_reason": "Open issue astral-sh/uv#3878 already tracks the same underlying project-side capability: selecting a pipx-style custom runner for a package intended to execute through `python -m` rather than the expected console executable. The new issue broadens the proposed metadata designs and motivation, but discussion can be centralized there.",
+  "summary": "astral-sh/uv#3878 is the canonical project-side custom-entrypoint request. astral-sh/uv#7552, astral-sh/uv#12976, and astral-sh/uv#17779 cover distinct caller-side or executable-selection variants.",
+  "draft_response": "Thanks for the detailed proposal. The project-side capability is already tracked in astral-sh/uv#3878, which covers packages intended to run via `python -m` and asks `uv tool run` to support the custom entry-point mechanism used by pipx. The caller-side `-m` shorthand is tracked separately in astral-sh/uv#7552.\n\nLet's centralize the project-advertised default runner and metadata design in astral-sh/uv#3878, so I'm marking this as a duplicate. The current explicit form remains `uvx --from <package> python -m <module> ...`."
+}
