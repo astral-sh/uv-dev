@@ -36,6 +36,12 @@ impl fmt::Display for PythonVersion {
 pub enum Error {
     #[error("Building source distributions is disabled")]
     NoBuild,
+    #[error("Building source distributions is disabled")]
+    NoBuildUnknownPackage {
+        package: PackageName,
+        repository: DisplaySafeUrl,
+        requirement: String,
+    },
     #[error("Building source distributions for `{0}` is disabled")]
     NoBuildPackage(PackageName),
 
@@ -233,6 +239,13 @@ impl From<reqwest_middleware::Error> for Error {
 impl uv_errors::Hint for Error {
     fn hints(&self) -> uv_errors::Hints<'_> {
         match self {
+            Self::NoBuildUnknownPackage {
+                package,
+                repository,
+                requirement,
+            } => uv_errors::Hints::from(format!(
+                "`{package}` is included in your `no-binary-package` settings and could match the repository `{repository}`, but the repository does not define a name in `pyproject.toml`; use `{requirement}` so uv can apply the exception"
+            )),
             Self::Build(err) => err.hints(),
             Self::Client(err) => uv_errors::Hint::hints(err),
             Self::MetadataLowering(err) => err.hints(),
