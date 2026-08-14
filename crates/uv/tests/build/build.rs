@@ -2782,8 +2782,8 @@ fn venv_included_in_sdist() -> Result<()> {
     hint: The source distribution includes a virtual environment. Virtual environments must be excluded from source distributions.
     ");
 
-    // This missing hint is undesirable: tar-codec does not recognize the test interpreter's
-    // `python/3.12/python3` layout as a virtual environment link (astral-sh/uv#21128).
+    // The preview tar-codec backend reports a structured unsafe-link error and preserves the same
+    // user-facing hint, regardless of the test interpreter's installation layout.
     uv_snapshot!(context.filters(), context
         .build()
         .arg("--preview-features")
@@ -2794,6 +2794,8 @@ fn venv_included_in_sdist() -> Result<()> {
     error: Failed to build `[TEMP_DIR]/`
       Caused by: Invalid tar file
       Caused by: at byte [OFFSET]: unsafe symbolic-link target "[PYTHON-3.12]": is absolute
+
+    hint: The source distribution includes a virtual environment. Virtual environments must be excluded from source distributions.
     "#);
 
     uv_snapshot!(context.filters(), context.build().arg("-q"), @"
