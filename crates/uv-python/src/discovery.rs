@@ -699,7 +699,7 @@ fn find_all_minor(
                 ))
                 .unwrap()
             };
-            let all_minors = fs_err::read_dir(dir)
+            let mut all_minors = fs_err::read_dir(dir)
                 .into_iter()
                 .flatten()
                 .flatten()
@@ -731,6 +731,17 @@ fn find_all_minor(
                 })
                 .filter(|path| is_executable(path))
                 .collect::<Vec<_>>();
+
+            // Prefer the requested variant while preserving the filesystem order otherwise.
+            all_minors.sort_by_key(|path| {
+                let is_freethreaded = path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .and_then(|name| name.strip_suffix(EXE_SUFFIX))
+                    .is_some_and(|name| name.ends_with('t'));
+                is_freethreaded != version_request.is_freethreaded()
+            });
+
             Either::Left(all_minors.into_iter())
         }
         VersionRequest::MajorMinor(_, _, _)
