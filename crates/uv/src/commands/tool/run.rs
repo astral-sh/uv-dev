@@ -25,7 +25,7 @@ use uv_distribution_types::{
 use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
 use uv_normalize::PackageName;
 use uv_pep440::{VersionSpecifier, VersionSpecifiers};
-use uv_pep508::MarkerTree;
+use uv_pep508::{MarkerTree, Scheme, split_scheme};
 use uv_preview::Preview;
 use uv_python::{
     ConfigDiscovery, EnvironmentPreference, PythonDownloads, PythonEnvironment, PythonInstallation,
@@ -129,6 +129,18 @@ pub(crate) async fn run(
             .is_some_and(|ext| ext.eq_ignore_ascii_case("py") || ext.eq_ignore_ascii_case("pyw"))
     }
 
+    /// Whether the given target is a Git requirement, either named or unnamed.
+    fn is_git_requirement(target: &str) -> bool {
+        split_scheme(target)
+            .or_else(|| {
+                target
+                    .split_once('@')
+                    .and_then(|(_, url)| split_scheme(url.trim()))
+            })
+            .and_then(|(scheme, _)| Scheme::parse(scheme))
+            .is_some_and(|scheme| matches!(scheme, Scheme::Git(_)))
+    }
+
     if settings.resolver.torch_backend.is_some() {
         warn_user_once!(
             "The `--torch-backend` option is experimental and may change without warning."
@@ -160,7 +172,7 @@ pub(crate) async fn run(
     };
 
     if let Some(ref from) = from {
-        if has_python_script_ext(Path::new(from)) {
+        if has_python_script_ext(Path::new(from)) && !is_git_requirement(from) {
             let package_name = PackageName::from_str(from)?;
             return Err(ToolRunScriptError::FromScript {
                 package_name,
@@ -173,7 +185,7 @@ pub(crate) async fn run(
         let target_path = Path::new(target);
 
         // If the user tries to invoke `uvx script.py`, hint them towards `uv run`.
-        if has_python_script_ext(target_path) {
+        if has_python_script_ext(target_path) && !is_git_requirement(target) {
             return if target_path.try_exists()? {
                 Err(ToolRunScriptError::TargetScriptExists {
                     path: target_path.to_path_buf(),
