@@ -1,0 +1,10 @@
+{
+  "outcome": "fixed",
+  "summary": "The tar-codec diagnostic only recognized virtual-environment interpreters under a bin directory, omitting the sdist hint for versioned Python layouts. The classifier now also recognizes python/<version>/python* targets, and the regression snapshot requires the hint for that layout.",
+  "validation": [
+    "Focused venv_included_in_sdist integration test passed",
+    "Rust formatting check passed",
+    "Git diff whitespace check passed"
+  ],
+  "pull_request": "https://github.com/astral-sh/uv-dev/pull/747"
+}

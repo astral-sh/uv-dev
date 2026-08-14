@@ -14,7 +14,7 @@ A control using an interpreter target laid out as `.../bin/python3` makes the 0.
 
 This is a reproducible platform-sensitive diagnostic bug. The archive rejection is expected; the bug is that the preview extraction path loses the explanatory hint and therefore fails the committed snapshot in `crates/uv/tests/build/build.rs`, test `venv_included_in_sdist`.
 
-The implementation in `crates/uv/src/commands/build_frontend.rs` classifies a tar-codec unsafe symlink as a virtual-environment interpreter only when the symlink target itself has a parent ending in `bin` and a filename beginning with `python`. The reported and reproduced target ends in `python/3.12/python3`, so it is not recognized even though the archive member is `.venv/bin/python`.
+Before the fix, the implementation in `crates/uv/src/commands/build_frontend.rs` classified a tar-codec unsafe symlink as a virtual-environment interpreter only when the symlink target itself had a parent ending in `bin` and a filename beginning with `python`. The reported and reproduced target ends in `python/3.12/python3`, so it was not recognized even though the archive member is `.venv/bin/python`.
 
 ## Reproduction
 
@@ -65,7 +65,7 @@ The second command exited with status 2 and omitted the hint, reproducing the re
 
 For comparison, uv 0.12.3 rejected the same fixture through the legacy extractor and printed the hint. It warned that `tar-codec` was an unknown preview feature, so the affected preview path was not available in that release.
 
-Existing integration coverage is `crates/uv/tests/build/build.rs`, test `venv_included_in_sdist`. It constructs a Hatchling project that force-includes `.venv`, verifies rejection by both extractors, and snapshots the hint for both. Its interpreter fixture normally resolves to a `bin/python*` target, so it does not cover the reproduced `python/3.12/python3` layout and fails rather than passes on Gentoo.
+Integration coverage is `crates/uv/tests/build/build.rs`, test `venv_included_in_sdist`. It constructs a Hatchling project that force-includes `.venv`, verifies rejection by both extractors, and snapshots the hint for both. The parent regression change replaces `.venv/bin/python` with an absolute symlink to the test interpreter's `python/3.12/python3` path, so the updated snapshot now covers the reported layout explicitly.
 
 ## Related
 
@@ -73,6 +73,20 @@ Existing integration coverage is `crates/uv/tests/build/build.rs`, test `venv_in
 - astral-sh/uv#15202 added the hint and the original integration coverage.
 - astral-sh/uv#19979 introduced the preview tar-codec extraction path, added its structured unsafe-link hint detection, and added the second snapshot shortly before uv 0.12.4.
 
+## Fix
+
+Fixed in the checkout. The parent regression test was first verified to pass while snapshotting the undesirable missing hint. Its snapshot was then changed to require the hint and failed specifically because the tar-codec diagnostic omitted it for the forced `python/3.12/python3` target.
+
+The production tar-codec hint classifier now recognizes Python executables under both the existing `bin/python*` layout and the reported versioned `python/<version>/python*` layout. This retains the structured unsafe-link checks and limits the change to the interpreter path shape demonstrated by the issue. The same integration test now requires the virtual-environment hint from both extraction backends while using the versioned target layout.
+
+Successful focused validation:
+
+- `cargo test --package uv --test build build::venv_included_in_sdist -- --exact` — 1 passed, 188 filtered out, using the debug test profile.
+- `cargo +stable fmt --all` — completed successfully. The pinned 1.97.1 toolchain lacks its rustfmt component, so the equivalent installed stable 1.97.1 toolchain supplied rustfmt.
+- `git diff --check` — passed.
+
 ## Maintainer handoff
 
-The observed issue is limited to hint detection; both extractors continue to reject the invalid sdist. Any fix should preserve the structured tar-codec checks while recognizing the archive member `.venv/bin/python` independently of the host interpreter's absolute installation layout. Coverage should include a symlink target shaped like `.../python/3.12/python3` as well as the existing `.../bin/python*` shape.
+The observed issue is limited to hint detection; both extractors continue to reject the invalid sdist. The focused fix and updated regression test preserve that rejection while restoring the missing explanatory hint for the reported interpreter layout.
+
+Pull request: https://github.com/astral-sh/uv-dev/pull/747
