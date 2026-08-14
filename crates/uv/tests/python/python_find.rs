@@ -1140,8 +1140,8 @@ fn python_find_version_range_variant_order() {
     [TEMP_DIR]/managed/cpython-3.15-[PLATFORM]/[INSTALL-BIN]/python3.15
     ");
 
-    // When the installed executables are discovered on the search path, the result depends on the
-    // order returned by the filesystem.
+    // The installed executables should prefer the default variant when discovered on the search
+    // path, regardless of the order returned by the filesystem.
     uv_snapshot!(context.filters(), context.python_find()
         .arg("==3.15.*")
         .arg("--python-preference")
@@ -1149,7 +1149,7 @@ fn python_find_version_range_variant_order() {
         .env(EnvVars::UV_PYTHON_SEARCH_PATH, context.bin_dir.path()), @"
     exit_code: 0 (success)
     ----- stdout -----
-    [BIN]/python3.15t
+    [BIN]/python3.15
     ");
 }
 
