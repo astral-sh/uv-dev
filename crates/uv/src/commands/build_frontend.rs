@@ -133,10 +133,14 @@ impl Hint for Error {
             }
             Self::Extract(uv_extract::Error::TarCodec(err)) => {
                 let is_virtual_environment_python = |path: &Path| {
-                    path.parent().is_some_and(|parent| parent.ends_with("bin"))
-                        && path
-                            .file_name()
-                            .is_some_and(|name| name.to_string_lossy().starts_with("python"))
+                    path.file_name()
+                        .is_some_and(|name| name.to_string_lossy().starts_with("python"))
+                        && path.parent().is_some_and(|parent| {
+                            parent.ends_with("bin")
+                                || parent
+                                    .parent()
+                                    .is_some_and(|parent| parent.ends_with("python"))
+                        })
                 };
                 let involves_virtual_environment_python = match err {
                     tar_codec::ExtractError::UnsafePath {
