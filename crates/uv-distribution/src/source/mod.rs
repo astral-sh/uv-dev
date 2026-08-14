@@ -28,7 +28,7 @@ use uv_client::{
     BaseClientBuilder, CacheControl, CachedClientError, Connectivity, DataWithCachePolicy,
     RegistryClient,
 };
-use uv_configuration::{BuildKind, BuildOutput, NoSources};
+use uv_configuration::{BuildKind, BuildOptions, BuildOutput, NoBinary, NoSources};
 use uv_distribution_filename::{SourceDistExtension, WheelFilename};
 use uv_distribution_types::{
     BuildInfo, BuildVariables, BuildableSource, ConfigSettings, DirectorySourceUrl,
@@ -3010,6 +3010,11 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         {
             if source.is_editable() {
                 debug!("Allowing build for editable source distribution: {source}");
+            } else if source_name.is_none() {
+                return Err(no_build_unknown_package(
+                    source,
+                    self.build_context.build_options(),
+                ));
             } else {
                 return Err(Error::NoBuild);
             }
@@ -3176,7 +3181,10 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             return if let Some(name) = source_name {
                 Err(Error::NoBuildPackage(name))
             } else {
-                Err(Error::NoBuild)
+                Err(no_build_unknown_package(
+                    source,
+                    self.build_context.build_options(),
+                ))
             };
         }
 
@@ -3744,6 +3752,47 @@ async fn static_source_name(
         Ok(pyproject_toml) => Ok(pyproject_toml.project.map(|project| project.name)),
         Err(Error::MissingPyprojectToml) => Ok(None),
         Err(err) => Err(err),
+    }
+}
+
+/// Suggest a configured build exception that matches the Git subdirectory or repository name.
+fn no_build_unknown_package(source: &BuildableSource<'_>, options: &BuildOptions) -> Error {
+    let BuildableSource::Url(SourceUrl::GitDirectory(source)) = source else {
+        return Error::NoBuild;
+    };
+
+    let NoBinary::Packages(packages) = options.no_binary() else {
+        return Error::NoBuild;
+    };
+
+    let subdirectory = source
+        .subdirectory
+        .and_then(|subdirectory| subdirectory.file_name())
+        .and_then(|name| name.to_str())
+        .and_then(|name| PackageName::from_str(name).ok());
+    let repository = source
+        .git
+        .url()
+        .path_segments()
+        .and_then(Iterator::last)
+        .map(|name| name.strip_suffix(".git").unwrap_or(name))
+        .and_then(|name| PackageName::from_str(name).ok());
+
+    let Some(package) = packages.iter().find(|package| {
+        subdirectory
+            .as_ref()
+            .is_some_and(|candidate| candidate == *package)
+            || repository
+                .as_ref()
+                .is_some_and(|candidate| candidate == *package)
+    }) else {
+        return Error::NoBuild;
+    };
+
+    Error::NoBuildUnknownPackage {
+        package: package.clone(),
+        repository: source.git.url().clone(),
+        requirement: format!("{package} @ {}", source.url),
     }
 }
 

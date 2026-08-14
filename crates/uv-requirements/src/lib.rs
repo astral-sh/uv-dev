@@ -44,6 +44,15 @@ pub enum Error {
     Io(#[from] std::io::Error),
 }
 
+impl uv_errors::Hint for Error {
+    fn hints(&self) -> uv_errors::Hints<'_> {
+        match self {
+            Self::Dist(_, _, err) | Self::Distribution(err) => uv_errors::Hint::hints(err.as_ref()),
+            _ => uv_errors::Hints::none(),
+        }
+    }
+}
+
 impl Error {
     /// Create an [`Error`] from a distribution error.
     fn from_dist(dist: Dist, err: uv_distribution::Error) -> Self {

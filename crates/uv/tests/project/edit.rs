@@ -706,6 +706,8 @@ fn add_git_unnamed_no_build_hint() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Building source distributions is disabled
+
+    hint: `example` is included in your `no-binary-package` settings and could match the repository `file://[TEMP_DIR]/example`, but the repository does not define a name in `pyproject.toml`; use `example @ git+file://[TEMP_DIR]/example` so uv can apply the exception
     ");
 
     Ok(())
