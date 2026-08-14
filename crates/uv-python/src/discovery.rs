@@ -1839,6 +1839,11 @@ impl PythonRequest {
         if lowercase_value == "default" {
             return Self::Default;
         }
+        // The standard executable name should not become a path when the working directory
+        // contains a `python` directory; use `./python` to explicitly request that directory.
+        if lowercase_value == "python" {
+            return Self::ExecutableName(value.to_string());
+        }
 
         // the prefix of e.g. `python312` and the empty prefix of bare versions, e.g. `312`
         let abstract_version_prefixes = ["python", ""];
