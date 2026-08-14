@@ -993,9 +993,7 @@ impl InterpreterInfo {
             .arg("-I") // Isolated mode.
             .arg("-B") // Don't write bytecode.
             .arg("-c")
-            .arg(script)
-            // Ignore a cross-compilation override when determining the host interpreter tags.
-            .env_remove("_PYTHON_HOST_PLATFORM");
+            .arg(script);
 
         // Disable Apple's SYSTEM_VERSION_COMPAT shim so that `platform.mac_ver()` reports
         // the real macOS version instead of "10.16" for interpreters built against older SDKs
@@ -1135,6 +1133,7 @@ impl InterpreterInfo {
 
     /// Return the cache entry for an interpreter's absolute and canonical executable paths.
     fn cache_entry(absolute: &Path, canonical: &Path, cache: &Cache) -> CacheEntry {
+        let host_platform = env::var("_PYTHON_HOST_PLATFORM").ok();
         let python_executable = env::var_os(EnvVars::PYTHONEXECUTABLE).map(PathBuf::from);
         let pyvenv_launcher = env::var_os(EnvVars::PYVENV_LAUNCHER).map(PathBuf::from);
 
@@ -1159,11 +1158,18 @@ impl InterpreterInfo {
             // have a `.venv/bin/python` pointing to both Python 3.12 and Python 3.13 that were
             // modified at the same time.
             //
-            // Launcher overrides can also change the reported executable and virtual environment
-            // without changing either executable path.
+            // A host platform override changes the reported compatibility tags, while launcher
+            // overrides can change the reported executable and virtual environment. None of these
+            // overrides change either executable path.
             format!(
                 "{}.msgpack",
-                cache_digest(&(absolute, canonical, &python_executable, &pyvenv_launcher))
+                cache_digest(&(
+                    absolute,
+                    canonical,
+                    &host_platform,
+                    &python_executable,
+                    &pyvenv_launcher,
+                ))
             ),
         )
     }

@@ -13741,11 +13741,18 @@ fn reject_cached_foreign_python_host_platform() {
     let wheel = context
         .workspace_root
         .join("test/links/wheel_tag_test-0.1.0-py3-none-win_amd64.whl");
-    uv_snapshot!(context.filters(), context.pip_install().arg(&wheel), @"
-    success: false
-    exit_code: 2
-    ----- stdout -----
 
+    // An explicitly requested cross-compilation platform must remain effective.
+    context
+        .pip_install()
+        .arg(&wheel)
+        .arg("--dry-run")
+        .env("_PYTHON_HOST_PLATFORM", "win-amd64")
+        .assert()
+        .success();
+
+    uv_snapshot!(context.filters(), context.pip_install().arg(&wheel), @"
+    exit_code: 2 (failure)
     ----- stderr -----
     Resolved 1 package in [TIME]
     error: Failed to determine installation plan
