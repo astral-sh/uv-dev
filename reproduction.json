@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "Using uv 0.12.4 on Linux x86_64 with UV_CACHE_DIR, UV_PYTHON_INSTALL_DIR, and UV_PYTHON_BIN_DIR isolated under /tmp, `uv --no-config python install --default` installed 3.14.7. Then `uv --no-config python install --default 3.14.6` reported 3.14.6 installed with `python`, `python3`, and `python3.14`, but all three still ran Python 3.14.7 and resolved through the shared 3.14 link to the 3.14.7 installation. No existing integration test covers this same-minor older-patch `--default` sequence."
+}

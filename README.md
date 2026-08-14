@@ -6,10 +6,11 @@ Classification: bug
 
 ## Summary
 
-After `uv python install --default` installed CPython 3.14.7, the reporter ran
-`uv python install --default 3.14.6`. uv installed 3.14.6 successfully, but the
-`python` and `python3` executables in `~/.local/bin` continued to resolve to
-3.14.7. The report is for uv 0.12.3 on macOS 15 x86_64.
+The reported behavior is reproducible. After `uv python install --default`
+installed CPython 3.14.7, running `uv python install --default 3.14.6`
+installed 3.14.6 successfully, but the `python` executable continued to run
+3.14.7. The report is for uv 0.12.3 on macOS 15 x86_64; the reproduction used
+the installed uv 0.12.4 executable on Linux x86_64.
 
 This is a correctness problem in the interaction between `--default` and
 transparent patch upgrades. The command help describes `--default` as using the
@@ -17,14 +18,13 @@ requested Python as the default and installing the unversioned executables.
 The pull request that introduced the flag, astral-sh/uv#8650, further records
 the intended behavior: `--default` should override executables managed by uv.
 
-The current implementation does attempt to replace a different managed target
-when `--default` is present, but it creates the bin executables through a
-`PythonMinorVersionLink`. After link creation, `uv python install` selects the
-highest installed patch for each minor-version key and makes that intermediary
-link target the highest patch. With both 3.14.6 and 3.14.7 installed, the
-unversioned executables therefore continue to resolve through the 3.14 link to
-3.14.7. This minor-version indirection was introduced for transparent upgrades
-by astral-sh/uv#13954.
+The reproduced links confirm the implementation mechanism. The executable in
+the bin directory points through a `PythonMinorVersionLink`. After link
+creation, `uv python install` selects the highest installed patch for each
+minor-version key and makes that intermediary link target the highest patch.
+With both 3.14.6 and 3.14.7 installed, the unversioned executable therefore
+continues to resolve through the 3.14 link to 3.14.7. This minor-version
+indirection was introduced for transparent upgrades by astral-sh/uv#13954.
 
 No existing issue or pull request was found that tracks this stable
 older-patch case. astral-sh/uv#15237 has the closest user-visible symptom, but
@@ -32,16 +32,54 @@ it concerns a prerelease minor-version request for which the unversioned links
 were not created at all. That prerelease mechanism was fixed by
 astral-sh/uv#16706 and is not the same problem.
 
+## Reproduction
+
+Outcome: reproducible with uv 0.12.4 (`x86_64-unknown-linux-gnu`) on Linux
+x86_64. The report's exact command sequence was run with the managed Python
+install directory, executable directory, and cache isolated under `/tmp` and
+configuration discovery disabled:
+
+```console
+$ export UV_CACHE_DIR=/tmp/uv-issue-21125/cache
+$ export UV_PYTHON_INSTALL_DIR=/tmp/uv-issue-21125/python
+$ export UV_PYTHON_BIN_DIR=/tmp/uv-issue-21125/bin
+$ uv --no-config python install --default
+Installed Python 3.14.7 ...
+ + cpython-3.14.7-linux-x86_64-gnu (python, python3, python3.14)
+$ /tmp/uv-issue-21125/bin/python --version
+Python 3.14.7
+$ uv --no-config python install --default 3.14.6
+Installed Python 3.14.6 ...
+ + cpython-3.14.6-linux-x86_64-gnu (python, python3, python3.14)
+$ /tmp/uv-issue-21125/bin/python --version
+Python 3.14.7
+$ readlink -f /tmp/uv-issue-21125/bin/python
+/tmp/uv-issue-21125/python/cpython-3.14.7-linux-x86_64-gnu/bin/python3.14
+```
+
+The second install succeeded and reported the requested 3.14.6 executables,
+but `python` still ran 3.14.7. Inspection also showed `python`, `python3`, and
+`python3.14` linked through the shared `cpython-3.14-linux-x86_64-gnu`
+directory, which resolved to the higher installed patch.
+
+No existing integration test covers this exact newer-then-older patch sequence
+with `--default`. In `crates/uv/tests/python/python_install.rs`,
+`python_install_default` verifies creation and replacement of the default links
+for the latest patch and for a different minor version, but never requests an
+older patch of the same minor. `install_transparent_patch_upgrade_uv_venv`
+separately verifies that the shared minor-version link continues to select the
+highest patch for a virtual environment; it does not exercise the selection
+promised by `--default`.
+
 ## Draft response
 
-Thanks for the clear reproduction. This is a bug: `--default` should make the
-requested managed Python the target of `python` and `python3`, even when that
-means selecting an older installed patch. The current implementation routes
-those executables through the minor-version link, which is then set to the
-highest installed patch, so requesting 3.14.6 leaves them resolving to 3.14.7.
-We can track the stable older-patch case here; a regression test should cover
-installing 3.14.7 first and then running
-`uv python install --default 3.14.6`.
+Thanks for the clear reproduction. I can reproduce this with uv 0.12.4 on
+Linux: after installing 3.14.7 as the default, uv reports that 3.14.6 and its
+default executables were installed, but `python --version` still prints
+3.14.7. This is a bug: `--default` should make the requested managed Python the
+target of `python` and `python3`, even when that means selecting an older
+installed patch. A regression test should cover installing 3.14.7 first and
+then running `uv python install --default 3.14.6`.
 
 ## Classification
 
