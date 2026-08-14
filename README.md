@@ -15,6 +15,52 @@ The behavior was confirmed and fixed by astral-sh/uv#21008. The change preserves
 inline comment while normalizing the array to include a trailing comma and adds an integration
 regression test using the report's optional-dependency scenario. The fix was released in uv 0.12.4.
 
+## Reproduction
+
+Outcome: **reproducible** with the reported uv 0.12.2, and no longer present in uv 0.12.4.
+
+The report's complete `pyproject.toml` was copied into two isolated temporary directories on Linux
+x86_64 (kernel 6.17.0-1022-azure) with CPython 3.12.3. All caches, tool installations, virtual
+environments, and generated lockfiles were kept beneath `$RUNNER_TEMP`. The affected version was
+obtained through the installed uv executable and verified as `uv 0.12.2
+(x86_64-unknown-linux-gnu)`; the uv executable on `PATH` was `uv 0.12.4
+(x86_64-unknown-linux-gnu)`.
+
+For uv 0.12.2, the exact reported project command was run through that isolated version:
+
+```console
+$ uv tool run --from uv==0.12.2 uv add --optional=typing 'narwhals>=1.42'
+```
+
+It exited successfully and changed the optional dependency array to:
+
+```toml
+[project.optional-dependencies]
+typing = [
+    "pandas-stubs>=2.0.2", # narwhals are toothed whales native to the Arctic
+    "narwhals>=1.42",
+]
+```
+
+This exactly reproduces the reported behavior: the comment originally attached to the final
+`narwhals` item, which had no trailing comma, moved to the preceding `pandas-stubs` item.
+
+Running the same command and original fixture with uv 0.12.4 also exited successfully, but produced:
+
+```toml
+[project.optional-dependencies]
+typing = [
+    "pandas-stubs>=2.0.2",
+    "narwhals>=1.42", # narwhals are toothed whales native to the Arctic
+]
+```
+
+Current integration coverage is in `crates/uv/tests/project/edit.rs`, test
+`add_preserves_end_of_line_comment_on_updated_optional_dependency`. Its setup uses the same
+two-entry `typing` array with the final `narwhals` dependency lacking a trailing comma, runs
+`uv add narwhals>=1.42 --optional=typing --frozen`, and snapshots the comment remaining on
+`narwhals` while a trailing comma is added.
+
 ## Draft response
 
 Thanks for the focused reproduction. This was a bug in how `uv add` handled the inline comment on
@@ -25,11 +71,10 @@ your trailing-comma workaround remains valid on older versions.
 
 ## Classification
 
-This is a bug because `uv add` incorrectly changed which dependency an existing inline comment
-described. The merged implementation in astral-sh/uv#21008 confirms that, without a trailing comma,
-`toml_edit` stores the comment in the final value's suffix and uv's array formatter previously
-treated that suffix as a prefix, allowing the comment to move to the preceding dependency. The pull
-request adds the exact integration regression test and is labeled `bug`.
+This is a bug because the uv 0.12.2 reproduction shows that `uv add` changed which dependency an
+existing inline comment described. astral-sh/uv#21008 addresses the final-item, no-trailing-comma
+case and adds the exact integration regression test; uv 0.12.4 preserves the comment in the same
+fixture.
 
 This is not a duplicate. astral-sh/uv#21008 was opened in direct response to this report, and the
 earlier comment-position fixes addressed different triggers: inserting a new dependency after a

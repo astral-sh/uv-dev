@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "On Linux x86_64 with CPython 3.12.3, the reported pyproject.toml and `uv add --optional=typing 'narwhals>=1.42'` under uv 0.12.2 moved the narwhals inline comment onto pandas-stubs exactly as reported. The same fixture under uv 0.12.4 preserved the comment on narwhals and added a trailing comma. Existing coverage: `crates/uv/tests/project/edit.rs`, test `add_preserves_end_of_line_comment_on_updated_optional_dependency`, exercises this exact final-item optional-dependency case."
+}
