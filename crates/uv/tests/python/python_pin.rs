@@ -152,6 +152,41 @@ fn python_pin() {
 }
 
 #[test]
+fn python_pin_range_variant() {
+    let context = uv_test::test_context_with_versions!(&["3.12"]).with_filtered_python_sources();
+
+    uv_snapshot!(context.filters(), context.python_pin().arg(">=3.13,<3.14+freethreaded"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Pinned `.python-version` to `>=3.13, <3.14+freethreaded`
+
+    ----- stderr -----
+    warning: No interpreter found for Python >=3.13, <3.14+freethreaded in [PYTHON SOURCES]
+    ");
+
+    let python_version = context.read(PYTHON_VERSION_FILENAME);
+    assert_snapshot!(python_version, @">=3.13, <3.14+freethreaded");
+
+    uv_snapshot!(context.filters(), context.python_pin(), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    >=3.13, <3.14+freethreaded
+    ");
+
+    uv_snapshot!(context.filters(), context.python_pin().arg(">=3.13,<3.14+debug"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Updated `.python-version` from `>=3.13, <3.14+freethreaded` -> `>=3.13, <3.14+debug`
+
+    ----- stderr -----
+    warning: No interpreter found for Python >=3.13, <3.14+debug in [PYTHON SOURCES]
+    ");
+
+    let python_version = context.read(PYTHON_VERSION_FILENAME);
+    assert_snapshot!(python_version, @">=3.13, <3.14+debug");
+}
+
+#[test]
 fn python_pin_uses_python_downloads_json_url() {
     let context = uv_test::test_context_with_versions!(&[]).with_filtered_python_sources();
     let metadata = context.temp_dir.child("empty-download-metadata.json");
