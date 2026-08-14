@@ -15,6 +15,8 @@ use indoc::{formatdoc, indoc};
 use insta::assert_snapshot;
 use serde_json::json;
 use std::path::Path;
+#[cfg(feature = "test-git")]
+use std::process::Command;
 use url::Url;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
@@ -640,6 +642,70 @@ fn add_git_unnamed_partial_static_metadata_no_build() -> Result<()> {
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
      + dynamic-requires-python-tool==0.1.0 (from git+https://github.com/astral-sh/uv-dynamic-requires-python-test@75a612dc87fc215e999a25a0efc376cbf9831afa#subdirectory=dynamic)
+    ");
+
+    Ok(())
+}
+
+#[test]
+#[cfg(feature = "test-git")]
+fn add_git_unnamed_no_build_hint() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+
+        [tool.uv]
+        no-binary-package = ["example"]
+        no-build = true
+    "#})?;
+
+    let repository = context.temp_dir.child("example");
+    repository.child("setup.py").write_str(indoc! {r#"
+        from setuptools import setup
+
+        setup(name="example", version="0.1.0")
+    "#})?;
+    Command::new("git")
+        .arg("init")
+        .arg(repository.path())
+        .assert()
+        .success();
+    Command::new("git")
+        .arg("-C")
+        .arg(repository.path())
+        .arg("add")
+        .arg(".")
+        .assert()
+        .success();
+    Command::new("git")
+        .arg("-C")
+        .arg(repository.path())
+        .arg("-c")
+        .arg("user.name=ferris")
+        .arg("-c")
+        .arg("user.email=ferris@example.com")
+        .arg("commit")
+        .arg("-m")
+        .arg("Initial commit")
+        .assert()
+        .success();
+
+    let repository_url = Url::from_directory_path(repository.path())
+        .map_err(|()| anyhow::anyhow!("failed to convert repository path to file URL"))?;
+
+    // The error should explain how to name the requirement so the exception can apply; see
+    // astral-sh/uv-dev#733.
+    uv_snapshot!(context.filters(), context.add()
+        .arg(format!("git+{}", repository_url.as_str().trim_end_matches('/'))), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Building source distributions is disabled
     ");
 
     Ok(())
