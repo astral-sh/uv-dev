@@ -1074,22 +1074,43 @@ fn tool_run_git_repository_ending_in_py() -> Result<()> {
     let repository_url = Url::from_directory_path(repository.path())
         .map_err(|()| anyhow!("failed to convert repository path to file URL"))?;
     let requirement = format!("git+{}", repository_url.as_str().trim_end_matches('/'));
+    let mut filters = context.filters();
+    filters.push((r"@[0-9a-f]{40}", "@[COMMIT]"));
 
-    // This valid Git requirement is mistaken for a Python script because its URL ends in `.py`,
-    // preventing both supported tool invocation forms from running it. See astral-sh/uv#21141.
-    uv_snapshot!(context.filters(), context.tool_run().arg(&requirement), @r#"
-    exit_code: 2 (failure)
+    // A valid Git requirement should not be mistaken for a Python script when its URL ends in
+    // `.py`. See astral-sh/uv#21141.
+    uv_snapshot!(filters, context.tool_run().arg(&requirement), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    fixturetool
+
     ----- stderr -----
-    error: Not a valid package or extra name: "git+file://[TEMP_DIR]/fixturetool.py". Names must start and end with a letter or digit and may only contain -, _, ., and alphanumeric characters.
+    Resolved [N] packages in [TIME]
+    Prepared [N] packages in [TIME]
+    Installed [N] packages in [TIME]
+     + fixturetool==0.1.0 (from git+file://[TEMP_DIR]/fixturetool.py@[COMMIT])
     "#);
 
-    uv_snapshot!(context.filters(), context.tool_run()
+    uv_snapshot!(filters, context.tool_run()
         .arg("--from")
         .arg(&requirement)
         .arg("fixturetool"), @r#"
-    exit_code: 2 (failure)
+    exit_code: 0 (success)
+    ----- stdout -----
+    fixturetool
+
     ----- stderr -----
-    error: Not a valid package or extra name: "git+file://[TEMP_DIR]/fixturetool.py". Names must start and end with a letter or digit and may only contain -, _, ., and alphanumeric characters.
+    Resolved [N] packages in [TIME]
+    "#);
+
+    let named_requirement = format!("fixturetool @ {requirement}");
+    uv_snapshot!(filters, context.tool_run().arg(&named_requirement), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    fixturetool
+
+    ----- stderr -----
+    Resolved [N] packages in [TIME]
     "#);
 
     Ok(())
