@@ -10,6 +10,8 @@ The reporter shows that uv 0.12.4 on macOS 14 arm64 records SHA-256 hashes for r
 
 This is the concrete follow-up anticipated during the original SBOM design discussion. In astral-sh/uv#6012, participants discussed the same lockfile distribution hashes, a maintainer agreed that adding them was reasonable, and the implementation author recorded that they would be left out of the initial pull request and could be added later. astral-sh/uv#16523 then shipped the initial CycloneDX exporter and closed that broad feature issue. No open issue or pull request currently tracks the deferred hash support.
 
+In the current discussion, maintainer @zanieb confirmed that the omission was deferred from the original implementation for simplicity and stated that supporting hashes is acceptable. This establishes maintainer support for the enhancement, while leaving the representation and implementation details to be settled.
+
 ## Draft response
 
 Thanks for the detailed reproduction. Distribution hashes were discussed in astral-sh/uv#6012 and intentionally deferred from the initial CycloneDX implementation in astral-sh/uv#16523, so this is a valid scoped enhancement rather than a regression. The current exporter does not consume the hash setting and emits neither component hashes nor distribution external references. The next step is to settle the artifact representation—astral-sh/uv#6012 identified distribution external references as the likely fit—and add coverage for hashes being included by default and suppressed by `--no-hashes`.
@@ -17,6 +19,8 @@ Thanks for the detailed reproduction. Distribution hashes were discussed in astr
 ## Classification
 
 This should be classified as an enhancement. CycloneDX hash support has never been implemented: the discussion in astral-sh/uv#6012 explicitly deferred it from the initial exporter rather than establishing that the first release would include it. The request would add that missing capability and make the existing hash-control option meaningful for CycloneDX output. It is not a regression and is not a duplicate because the broad feature issue is closed and no separate issue or active pull request already tracks the deferred work.
+
+The maintainer response on astral-sh/uv#21122 corroborates this classification: the omission was a simplification in the original implementation, not a newly introduced failure, and adding support is acceptable.
 
 The current source matches that history:
 
