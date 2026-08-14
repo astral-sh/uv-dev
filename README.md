@@ -18,9 +18,9 @@ Both commands reject the entire URL as an invalid package or extra name before a
 A local, trusted Git fixture reproduced the same result in both forms, while an otherwise identical
 repository with a basename that does not end in `.py` ran successfully.
 
-Current source is consistent with the observation: `run.rs` checks whether the direct target or
-`--from` value has a `.py`/`.pyw` path extension before calling `ToolRequest::parse`, then passes the
-complete URL to `PackageName::from_str` in this case.
+The pre-fix source is consistent with the observation: `run.rs` checked whether the direct target
+or `--from` value had a `.py`/`.pyw` path extension before calling `ToolRequest::parse`, then passed
+the complete URL to `PackageName::from_str` in this case.
 
 No existing issue or pull request was found that already tracks this `.py` Git-URL collision. The
 closest history is the intentional handling of actual Python script paths added for
@@ -74,32 +74,57 @@ Copying the identical Git repository to a directory named `fixturetool` provided
 `uvx --from git+file:///<tmp>/fixturetool fixturetool` built the package, printed
 `fixture tool ran`, and exited 0.
 
-Existing integration coverage is adjacent but does not cover the collision:
+Integration coverage relevant to the collision is:
 
 - `crates/uv/tests/tool/tool_run.rs::tool_run_git` verifies successful direct and `--from` Git
   requirements whose repository basename does not end in `.py`.
 - `crates/uv/tests/tool/tool_run.rs::tool_run_with_existing_py_script`,
   `tool_run_with_nonexistent_py_script`, and `tool_run_with_from_script` verify the intended errors
   for actual or apparent Python script paths.
-- No existing test in that file combines a Git requirement with a `.py` repository basename.
+- `crates/uv/tests/tool/tool_run.rs::tool_run_git_repository_ending_in_py`, added by the parent
+  regression pull request after triage, combines those cases and is updated by the fix below.
+
+## Fix
+
+Outcome: **fixed**.
+
+The script-path guard in `crates/uv/src/commands/tool/run.rs` now recognizes named and unnamed Git
+requirements before applying the `.py`/`.pyw` path check. Git URLs whose repository basename ends
+in `.py` therefore continue through normal tool requirement parsing, while actual existing,
+missing, and `--from` Python script paths retain their existing diagnostics.
+
+The parent regression in `crates/uv/tests/tool/tool_run.rs` was changed from snapshotting the
+invalid-name error to running the temporary Git package successfully in both reported invocation
+forms. Inspection also demonstrated the same false positive for the supported named PEP 508 form,
+so the same regression now verifies `fixturetool @ git+file://.../fixturetool.py` as a distinct
+configuration of the confirmed cause.
+
+Focused validation succeeded:
+
+- `cargo test --package uv --test tool tool_run_git_repository_ending_in_py`
+- `cargo test --package uv --test tool tool_run_with_existing_py_script`
+- `cargo test --package uv --test tool tool_run_with_nonexistent_py_script`
+- `cargo test --package uv --test tool tool_run_with_from_script`
+- `cargo +stable clippy --package uv --test tool -- -D warnings`
+- `cargo +stable fmt --all`
 
 ## Draft response
 
-Thanks for the report. Git requirements are supported in both forms shown, but the current `.py`
-script-path check runs before the tool requirement is parsed. As a result, a Git URL whose
-repository name ends in `.py` is incorrectly treated as a script path and then validated as a
+Thanks for the report. Git requirements are supported in both forms shown, but the `.py`
+script-path check ran before the tool requirement was parsed. As a result, a Git URL whose
+repository name ended in `.py` was incorrectly treated as a script path and then validated as a
 package name.
 
 This is distinct from astral-sh/uv#10784, which intentionally handles actual `.py` script paths.
-The next step is to narrow that check to avoid intercepting Git requirements and add coverage for
-both the direct and `--from` forms.
+The check now excludes Git requirements, with coverage for the direct, `--from`, and named PEP 508
+forms while preserving the diagnostics for actual script paths.
 
 ## Classification
 
-This is a reproducible bug. Git requirements are an established `uvx` capability, and current
-integration tests cover successful direct and `--from` invocations. The extension-only pre-parse
-guard incorrectly intercepts a valid Git requirement. No open issue or pull request already tracks
-this behavior, so astral-sh/uv#21141 is not a duplicate.
+This is a reproducible bug. Git requirements are an established `uvx` capability, and integration
+tests cover successful direct and `--from` invocations. The pre-fix extension-only guard incorrectly
+intercepted a valid Git requirement. No open issue or pull request already tracks this behavior, so
+astral-sh/uv#21141 is not a duplicate.
 
 ## Related
 
@@ -126,8 +151,10 @@ extension-based script guard. Git-related reports astral-sh/uv#12713, astral-sh/
 astral-sh/uv#16303 were also ruled out because their failures occur later during Git parsing,
 authentication, or fetching, whereas this report fails during local pre-parse validation.
 
-Current integration tests in `crates/uv/tests/tool/tool_run.rs` cover successful Git requirements in
-both reported invocation forms and separately cover the intended errors for local `.py` and `.pyw`
-script names. They do not cover a Git requirement whose final path component has one of those
-extensions. The local reproduction above supplies direct behavioral evidence in addition to that
-source and test inspection.
+Integration tests in `crates/uv/tests/tool/tool_run.rs` cover successful Git requirements in both
+reported invocation forms and separately cover the intended errors for local `.py` and `.pyw`
+script names. The updated parent regression now also covers a Git requirement whose final path
+component has a `.py` extension. The local reproduction above supplies direct behavioral evidence
+in addition to that source and test inspection.
+
+Pull request: https://github.com/astral-sh/uv-dev/pull/751

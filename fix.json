@@ -1,0 +1,13 @@
+{
+  "outcome": "fixed",
+  "summary": "The tool-run script-path check mistook Git requirements ending in `.py` for Python scripts. It now excludes named and unnamed Git requirements, and the regression test verifies successful direct, `--from`, and named requirement execution while preserving script-path diagnostics.",
+  "validation": [
+    "cargo test --package uv --test tool tool_run_git_repository_ending_in_py",
+    "cargo test --package uv --test tool tool_run_with_existing_py_script",
+    "cargo test --package uv --test tool tool_run_with_nonexistent_py_script",
+    "cargo test --package uv --test tool tool_run_with_from_script",
+    "cargo +stable clippy --package uv --test tool -- -D warnings",
+    "cargo +stable fmt --all --check"
+  ],
+  "pull_request": "https://github.com/astral-sh/uv-dev/pull/751"
+}
