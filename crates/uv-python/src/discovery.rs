@@ -687,14 +687,14 @@ fn find_all_minor(
         | VersionRequest::Range(_, _) => {
             let regex = if let Some(implementation) = implementation {
                 Regex::new(&format!(
-                    r"^({}|python3)\.(?<minor>\d\d?)t?{}$",
+                    r"^({}|python3)\.(?<minor>\d\d?)t?d?{}$",
                     regex::escape(&implementation.to_string()),
                     regex::escape(EXE_SUFFIX)
                 ))
                 .unwrap()
             } else {
                 Regex::new(&format!(
-                    r"^python3\.(?<minor>\d\d?)t?{}$",
+                    r"^python3\.(?<minor>\d\d?)t?d?{}$",
                     regex::escape(EXE_SUFFIX)
                 ))
                 .unwrap()
