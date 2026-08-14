@@ -168,6 +168,7 @@ pub trait BuildContext {
     /// For PEP 517 builds, this calls `get_requires_for_build_wheel`.
     ///
     /// `version_id` is for error reporting only.
+    /// `name` is the package name, if known.
     /// `dist` is for safety checks and may be null for editable builds.
     fn setup_build<'a>(
         &'a self,
@@ -176,6 +177,7 @@ pub trait BuildContext {
         install_path: &'a Path,
         stop_discovery_at: Option<&'a Path>,
         version_id: Option<&'a str>,
+        name: Option<&'a PackageName>,
         dist: Option<&'a SourceDist>,
         sources: &'a NoSources,
         build_kind: BuildKind,

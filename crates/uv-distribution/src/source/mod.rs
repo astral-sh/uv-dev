@@ -3002,10 +3002,11 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         debug!("Building: {source}");
 
         // Guard against build of source distributions when disabled.
+        let source_name = static_source_name(source, source_root, subdirectory).await?;
         if self
             .build_context
             .build_options()
-            .no_build_requirement(source.name())
+            .no_build_requirement(source_name.as_ref())
         {
             if source.is_editable() {
                 debug!("Allowing build for editable source distribution: {source}");
@@ -3104,6 +3105,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                         &install_path,
                         stop_discovery_at,
                         Some(&source.to_string()),
+                        source_name.as_ref(),
                         source.as_dist(),
                         &no_sources,
                         if source.is_editable() {
@@ -3162,17 +3164,17 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
     ) -> Result<Option<ResolutionMetadata>, Error> {
         debug!("Preparing metadata for: {source}");
 
-        let source_name = source.name();
+        let source_name = static_source_name(source, source_root, subdirectory).await?;
         if self
             .build_context
             .build_options()
-            .no_build_requirement(source_name)
+            .no_build_requirement(source_name.as_ref())
             // Editable requirements without a known name need metadata to apply
             // package-specific build settings; named editables must respect `--no-build`.
             && !(source_name.is_none() && source.is_editable())
         {
             return if let Some(name) = source_name {
-                Err(Error::NoBuildPackage(name.clone()))
+                Err(Error::NoBuildPackage(name))
             } else {
                 Err(Error::NoBuild)
             };
@@ -3238,6 +3240,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 &install_path,
                 stop_discovery_at,
                 Some(&source.to_string()),
+                source_name.as_ref(),
                 source.as_dist(),
                 &no_sources,
                 build_kind,
@@ -3722,6 +3725,26 @@ async fn read_pyproject_toml(
     let pyproject_toml = PyProjectToml::from_toml(&content, pyproject_toml.simplified_display())?;
 
     Ok(pyproject_toml)
+}
+
+/// Infer the name from any statically available project metadata.
+///
+/// An unnamed source may still have dynamic metadata that requires a build, but the static name is
+/// sufficient to apply package-specific build options.
+async fn static_source_name(
+    source: &BuildableSource<'_>,
+    source_root: &Path,
+    subdirectory: Option<&Path>,
+) -> Result<Option<PackageName>, Error> {
+    if let Some(name) = source.name() {
+        return Ok(Some(name.clone()));
+    }
+
+    match read_pyproject_toml(source_root, subdirectory).await {
+        Ok(pyproject_toml) => Ok(pyproject_toml.project.map(|project| project.name)),
+        Err(Error::MissingPyprojectToml) => Ok(None),
+        Err(err) => Err(err),
+    }
 }
 
 /// Wheel metadata stored in the source distribution cache.

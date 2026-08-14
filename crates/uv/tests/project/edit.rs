@@ -634,9 +634,12 @@ fn add_git_unnamed_partial_static_metadata_no_build() -> Result<()> {
     // astral-sh/uv-dev#732.
     uv_snapshot!(context.filters(), context.add()
         .arg("git+https://github.com/astral-sh/uv-dynamic-requires-python-test@75a612dc87fc215e999a25a0efc376cbf9831afa#subdirectory=dynamic"), @"
-    exit_code: 2 (failure)
+    exit_code: 0 (success)
     ----- stderr -----
-    error: Building source distributions is disabled
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + dynamic-requires-python-tool==0.1.0 (from git+https://github.com/astral-sh/uv-dynamic-requires-python-test@75a612dc87fc215e999a25a0efc376cbf9831afa#subdirectory=dynamic)
     ");
 
     Ok(())

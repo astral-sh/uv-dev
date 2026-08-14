@@ -29,6 +29,7 @@ use uv_distribution_types::{
 };
 use uv_git::GitResolver;
 use uv_installer::{InstallationStrategy, Installer, Plan, Planner, Preparer, SitePackages};
+use uv_normalize::PackageName;
 use uv_preview::Preview;
 use uv_pypi_types::Conflicts;
 use uv_python::{Interpreter, PythonEnvironment};
@@ -495,13 +496,14 @@ impl BuildContext for BuildDispatch<'_> {
         install_path: &'data Path,
         stop_discovery_at: Option<&'data Path>,
         version_id: Option<&'data str>,
+        name: Option<&'data PackageName>,
         dist: Option<&'data SourceDist>,
         sources: &'data NoSources,
         build_kind: BuildKind,
         build_output: BuildOutput,
         mut build_stack: BuildStack,
     ) -> Result<SourceBuild, uv_build_frontend::Error> {
-        let dist_name = dist.map(uv_distribution_types::Name::name);
+        let dist_name = name.or_else(|| dist.map(uv_distribution_types::Name::name));
         let dist_version = dist
             .map(uv_distribution_types::DistributionMetadata::version_or_url)
             .and_then(|version| match version {
@@ -517,8 +519,8 @@ impl BuildContext for BuildDispatch<'_> {
             // We always allow editable builds
             && !matches!(build_kind, BuildKind::Editable)
         {
-            let err = if let Some(dist) = dist {
-                uv_build_frontend::Error::NoSourceDistBuild(dist.name().clone())
+            let err = if let Some(name) = dist_name {
+                uv_build_frontend::Error::NoSourceDistBuild(name.clone())
             } else {
                 uv_build_frontend::Error::NoSourceDistBuilds
             };
