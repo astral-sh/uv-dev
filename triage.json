@@ -1,0 +1,51 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 11070,
+        "title": "Inheriting [tool.uv] section from root-level pyproject.toml when desired",
+        "url": "https://github.com/astral-sh/uv/issues/11070",
+        "state": "open",
+        "reason": "Tracks the same monorepo request for child projects to inherit repository-root [tool.uv] policy without copying it. Maintainer comments confirm user/system merging does not solve team sharing."
+      },
+      {
+        "kind": "issue",
+        "number": 5596,
+        "title": "Feature Request: extend config option",
+        "url": "https://github.com/astral-sh/uv/issues/5596",
+        "state": "open",
+        "reason": "Tracks the broader file-reference solution through an extend directive for shared uv configuration."
+      },
+      {
+        "kind": "pull_request",
+        "number": 16854,
+        "title": "Allow disabling exclude-newer per package",
+        "url": "https://github.com/astral-sh/uv/pull/16854",
+        "state": "merged",
+        "reason": "Introduced the name=false sentinel used here. Its discussion requested environment-variable support, but the pull request did not add it."
+      },
+      {
+        "kind": "issue",
+        "number": 20788,
+        "title": "Support glob patterns in exclude-newer-package",
+        "url": "https://github.com/astral-sh/uv/issues/20788",
+        "state": "open",
+        "reason": "Adjacent only: globs could shorten prefix-based exemption tables but would not centralize configuration across workspace roots."
+      },
+      {
+        "kind": "issue",
+        "number": 19864,
+        "title": "Structured bypasses for exclude-newer",
+        "url": "https://github.com/astral-sh/uv/issues/19864",
+        "state": "open",
+        "reason": "Adjacent only: it changes cooldown bypass semantics for constraints rather than how exemption policy is shared."
+      }
+    ],
+    "search_scope": "Searched exact identifiers and settings (exclude-newer-package, UV_EXCLUDE_NEWER_PACKAGE, and UV_EXCLUDE_NEWER), environment and CLI forms, and conceptual terms covering shared configuration, monorepos, workspace roots, repository-level configuration, parent uv.toml files, inheritance, include, and extend. Open and closed issues and open, closed, and merged pull requests were considered, with comments and referenced threads inspected. astral-sh/uv#5929 and merged astral-sh/uv#5931 were ruled out because that fix searches above workspace roots when necessary but does not merge arbitrary parent configuration with each workspace's own [tool.uv]. Closed astral-sh/uv#10353 was also ruled out because it only established parent discovery when no conflicting child configuration won."
+  },
+  "type": "duplicate",
+  "type_reason": "astral-sh/uv#11070 already tracks the same repository-local configuration-sharing problem for independent monorepo projects, including opt-in inheritance from a root [tool.uv]. astral-sh/uv#5596 separately tracks the proposed extend/file-reference mechanism. The package-specific environment representation is useful additional design detail but does not require a separate tracker.",
+  "summary": "astral-sh/uv#11070 is the closest canonical request, while astral-sh/uv#5596 covers the broader external-file design. The exclude-newer-specific threads are related but do not solve cross-workspace sharing.",
+  "draft_response": "Thanks for the concrete monorepo case. The underlying request to share repository-local uv configuration across independent projects is already tracked in astral-sh/uv#11070, including an opt-in root-config inheritance design; a broader extend/file-reference mechanism is discussed in astral-sh/uv#5596. Environment-variable support for per-package exemptions was also raised during astral-sh/uv#16854, but was not implemented there.\n\nLet's centralize the configuration-sharing discussion in astral-sh/uv#11070. The scale here and the uvx/CI environment-variable use case are useful constraints for that design. astral-sh/uv#20788 would only shorten prefix-based lists, while astral-sh/uv#19864 concerns bypass semantics rather than sharing."
+}
