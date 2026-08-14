@@ -2,7 +2,7 @@
 
 Issue: astral-sh/uv#21135
 
-Classification: duplicate
+Classification: duplicate (existing triage; not yet confirmed by a maintainer)
 
 ## Summary
 
@@ -11,30 +11,36 @@ distribution is intended to run through `python -m <module>` or a `module:callab
 matching console script. Suggested designs include honoring `[pipx.run]`, adding uv-specific
 metadata, or falling back to a package's `__main__.py`.
 
-The underlying project-side custom-entrypoint request is already tracked by astral-sh/uv#3878.
-That issue uses `build` as the example: pipx can run the package through its special entry point,
-while `uv tool run` does not know how to select the package's module runner. A maintainer explicitly
-identified the package's pipx-specific entry point as the relevant mechanism. The new report
-generalizes the same request and adds current pipx uv-backend motivation, but it does not require a
-separate canonical discussion.
+The underlying project-side custom-entrypoint request is also tracked by astral-sh/uv#3878. That
+issue uses `build` as the example: pipx can run the package through its special entry point, while
+`uv tool run` does not know how to select the package's module runner. A maintainer explicitly
+identified the package's pipx-specific entry point as the relevant mechanism.
 
-## Draft response
+## Maintainer status
 
-Thanks for the detailed proposal. The project-side capability is already tracked in
-astral-sh/uv#3878: that issue covers packages intended to run via `python -m` and asks `uv tool run`
-to support the custom entry-point mechanism used by pipx. The caller-side `-m` shorthand is tracked
-separately in astral-sh/uv#7552.
+A maintainer confirmed that astral-sh/uv#21135 is closely related to astral-sh/uv#3878. They see no
+known hard engineering reason uv could not support either `[pipx.run]` or a uv-specific equivalent.
+The remaining work is design consensus, especially:
 
-Let's centralize the project-advertised default runner and metadata design in astral-sh/uv#3878, so
-I'm marking this as a duplicate. The current explicit form remains `uvx --from <package> python -m
-<module> ...`.
+- whether to adopt `[pipx.run]` or define uv-specific metadata;
+- how multiple advertised entry points are selected; and
+- what takes precedence if pipx and uv metadata both exist and disagree.
+
+The maintainer did not call the issue a duplicate or direct that it be closed. The current explicit
+workaround remains `uvx --from <package> python -m <module> ...`.
 
 ## Classification
 
-This is a duplicate of the open astral-sh/uv#3878, which tracks the same underlying capability:
-selecting a custom package runner when the package does not expose the executable that `uvx` would
-otherwise invoke. The new issue contributes a broader formulation, possible metadata shapes, and a
-recent interoperability example, but those details can be centralized on the existing request.
+The existing triage classified this as a duplicate of open issue astral-sh/uv#3878 because it tracks
+the same underlying capability: selecting a custom package runner when the package does not expose
+the executable that `uvx` would otherwise invoke. The new issue contributes a broader formulation,
+possible metadata shapes, and a recent interoperability example.
+
+The maintainer follow-up confirms the close relationship but does not confirm duplicate closure;
+instead, it frames the issue as an implementable enhancement awaiting a metadata and precedence
+decision. Maintainers should therefore decide whether to centralize the design in
+astral-sh/uv#3878 or retain astral-sh/uv#21135 as the more specific project-metadata proposal before
+applying a final label or closing either issue.
 
 Absent that existing issue, this would be an enhancement rather than a bug. Current uv behavior is
 implemented around installed executable entry points, and choosing a module or callable from new
