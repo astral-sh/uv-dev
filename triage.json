@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 8650,
+        "title": "Add `uv python install --default`",
+        "url": "https://github.com/astral-sh/uv/pull/8650",
+        "state": "merged",
+        "reason": "Introduced `--default`; maintainer discussion establishes that it should override uv-managed `python` and `python3` executables."
+      },
+      {
+        "kind": "pull_request",
+        "number": 13954,
+        "title": "Support transparent Python patch version upgrades",
+        "url": "https://github.com/astral-sh/uv/pull/13954",
+        "state": "merged",
+        "reason": "Introduced the minor-version link that selects the highest installed patch, directly explaining why links requested for 3.14.6 still resolve to 3.14.7."
+      },
+      {
+        "kind": "issue",
+        "number": 15237,
+        "title": "`uv python install --default 3.14` doesn't make 3.14 my global python",
+        "url": "https://github.com/astral-sh/uv/issues/15237",
+        "state": "open",
+        "reason": "Closest symptom-level report, but adjacent rather than duplicate: it concerns prerelease handling that omitted unversioned links, while astral-sh/uv#21125 concerns stable links resolving through a newer patch."
+      }
+    ],
+    "search_scope": "Searched issues and pull requests using literal terms for `uv python install --default`, 3.14.6, 3.14.7, `.local/bin`, and symlinks; conceptual terms for global/default Python, managed executable replacement, patch downgrades, latest-patch preference, and minor-version links; and historical fixes for executable repointing and transparent upgrades. Inspected astral-sh/uv#8650, astral-sh/uv#8733, astral-sh/uv#13954, astral-sh/uv#14247, astral-sh/uv#14261, astral-sh/uv#15237, and astral-sh/uv#16696. The prerelease reports were ruled out as duplicates because they involve a distinct, subsequently fixed link-creation mechanism."
+  },
+  "type": "bug",
+  "type_reason": "`--default` is intended to select the requested Python for unversioned executables and override existing uv-managed links. Current source instead routes those executables through a minor-version link and then targets that link at the highest installed patch. Consequently, an explicit older patch installs successfully but cannot become the effective default. No open issue or pull request tracks this stable older-patch case.",
+  "summary": "No exact existing report was found. astral-sh/uv#8650 establishes the intended `--default` semantics, while astral-sh/uv#13954 introduced the highest-patch indirection that explains the failure. astral-sh/uv#15237 is similar but has a distinct prerelease trigger.",
+  "draft_response": "Thanks for the clear reproduction. This is a bug: `--default` should make the requested managed Python the target of `python` and `python3`, even when selecting an older installed patch. The current implementation routes those executables through the minor-version link, which is then set to the highest installed patch, so requesting 3.14.6 leaves them resolving to 3.14.7. We can track the stable older-patch case here; a regression test should cover installing 3.14.7 first and then running `uv python install --default 3.14.6`."
+}
