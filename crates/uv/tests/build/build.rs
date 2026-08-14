@@ -2732,7 +2732,8 @@ fn force_pep517() -> Result<()> {
 #[cfg(unix)]
 #[test]
 fn venv_included_in_sdist() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_filter((r"at byte \d+", "at byte [OFFSET]"));
+    let context = uv_test::test_context_with_versions!(&["3.12"])
+        .with_filter((r"at byte \d+", "at byte [OFFSET]"));
 
     context
         .init()
@@ -2762,7 +2763,11 @@ fn venv_included_in_sdist() -> Result<()> {
         .child("pyproject.toml")
         .write_str(pyproject_toml)?;
 
-    context.venv().arg("--clear").assert().success();
+    context.venv().assert().success();
+
+    let venv_python = context.venv.child("bin").child("python");
+    fs_err::remove_file(&venv_python)?;
+    venv_python.symlink_to_file(context.root.child("python").child("3.12").child("python3"))?;
 
     // The default astral-tokio-tar backend recognizes the external virtual-environment link.
     uv_snapshot!(context.filters(), context.build(), @"
@@ -2777,8 +2782,8 @@ fn venv_included_in_sdist() -> Result<()> {
     hint: The source distribution includes a virtual environment. Virtual environments must be excluded from source distributions.
     ");
 
-    // The preview tar-codec backend reports a structured unsafe-link error and preserves the same
-    // user-facing hint.
+    // This missing hint is undesirable: tar-codec does not recognize the test interpreter's
+    // `python/3.12/python3` layout as a virtual environment link (astral-sh/uv#21128).
     uv_snapshot!(context.filters(), context
         .build()
         .arg("--preview-features")
@@ -2789,8 +2794,6 @@ fn venv_included_in_sdist() -> Result<()> {
     error: Failed to build `[TEMP_DIR]/`
       Caused by: Invalid tar file
       Caused by: at byte [OFFSET]: unsafe symbolic-link target "[PYTHON-3.12]": is absolute
-
-    hint: The source distribution includes a virtual environment. Virtual environments must be excluded from source distributions.
     "#);
 
     uv_snapshot!(context.filters(), context.build().arg("-q"), @"
