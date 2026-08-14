@@ -1302,6 +1302,50 @@ fn python_find_search_path() {
     ");
 }
 
+/// The standard `python` executable name should not be shadowed by a local `python` directory.
+#[test]
+#[cfg(unix)]
+fn python_find_executable_name_with_python_directory() {
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
+
+    context
+        .venv()
+        .arg("--python")
+        .arg("3.12")
+        .arg("python")
+        .arg("--quiet")
+        .assert()
+        .success();
+
+    let executable_directory = context.temp_dir.child("executables");
+    executable_directory.create_dir_all().unwrap();
+    fs_err::os::unix::fs::symlink(
+        &context.python_versions[0].1,
+        executable_directory.join("python"),
+    )
+    .unwrap();
+
+    // A bare executable name should search `PATH` even when a same-named directory exists.
+    uv_snapshot!(context.filters(), context.python_find()
+        .arg("python")
+        .env(EnvVars::PATH, executable_directory.path())
+        .env(EnvVars::UV_PYTHON_SEARCH_PATH, executable_directory.path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/executables/python
+    ");
+
+    // A relative path can still explicitly select the local Python environment.
+    uv_snapshot!(context.filters(), context.python_find()
+        .arg("./python")
+        .env(EnvVars::PATH, executable_directory.path())
+        .env(EnvVars::UV_PYTHON_SEARCH_PATH, executable_directory.path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/python/bin/python3
+    ");
+}
+
 /// When `requires-python` constrains to a minor version, we should find the correct interpreter
 /// even when only a version-specific executable (e.g., `python3.12`) is available.
 ///
