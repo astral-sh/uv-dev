@@ -34,6 +34,11 @@ absolute project paths.
 
 Outcome: `needs_more_information`.
 
+Maintainer zanieb stated that a minimal reproduction is needed before a fix can proceed and asked
+whether `PYTHONEXECUTABLE` is set. The report's claim that the failure persists under `env -i`
+appears to rule out an inherited value, but the reporter has not answered that configuration
+question explicitly.
+
 The report used uv 0.12.2 on macOS 26.6 x86_64 with Homebrew Python 3.14 and a project-local
 `.python-version`. Triage used isolated files, configuration, and caches on Linux x86_64 with
 system CPython 3.12.3. The scenario was checked with both uv 0.12.2 and the installed uv 0.12.3;
@@ -59,6 +64,15 @@ uv 0.12.3 behaved the same way. Five additional package projects were then indep
 synced, run, and deleted while sharing the uv 0.12.2 cache; a subsequent run still used B and did
 not recreate any deleted path.
 
+A second contributor independently tested a debug build from `main` on macOS with an isolated
+`UV_CACHE_DIR`. Two projects whose venv interpreters canonicalized to the same managed Python
+produced distinct interpreter-cache entries and continued to select their own venvs. Deleting A did
+not make B recreate or select A, and recreating A at the same path with Python 3.12 instead of 3.13
+still left both projects resolving correctly. Together with the earlier Linux test and the
+reporter's own unsuccessful fresh-worktree attempt, this rules out a shared canonical base
+interpreter, deletion of a sibling project, and simple path reuse with a different interpreter as
+sufficient triggers.
+
 This does not disprove the report because the triggering history or corrupt-cache state is missing.
 A meaningful targeted reproduction now needs a redacted failing trace that identifies the cache
 hit, the cache-entry filename and decoded timestamp/`sys_executable`/`sys_prefix`/`sys_path` fields,
@@ -68,6 +82,11 @@ operations overlapped during worktree churn, would help reconstruct the state. A
 affected cache entries, with private data removed, would permit checking whether B's key contains
 A's payload; deliberately overwriting a fresh B entry with A's payload would not reproduce the
 unknown trigger.
+
+The second contributor proposed comparing the serialized `CachedByTimestamp.timestamp` values with
+the canonical executables' timestamps to test whether an old entry was accepted because its stored
+timestamp matched a reused ctime. This is a plausible freshness-check hypothesis, not an established
+mechanism; the affected decoded entries are still required to evaluate it.
 
 No existing integration test was found that exercises two unrelated project environments across a
 shared interpreter cache after one project is deleted. The adjacent
