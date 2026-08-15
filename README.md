@@ -29,6 +29,15 @@ With both 3.14.6 and 3.14.7 installed, the unversioned executable therefore
 continues to resolve through the 3.14 link to 3.14.7. This minor-version
 indirection was introduced for transparent upgrades by astral-sh/uv#13954.
 
+A second macOS reproduction with 3.13.2 followed by
+`uv python install --default 3.13.0` adds an important implementation detail.
+Verbose output reports that uv enters the `--default` replacement branch for
+all three executables, identifies the existing 3.13.2 installation, and says
+each executable was updated to 3.13.0. The physical rewrite succeeds, but both
+the old and new bin entries use the identical
+`cpython-3.13-.../bin/python3.13` intermediary path. Since that intermediary
+still targets 3.13.2, the rewrite has no observable effect.
+
 The reporter clarified that selecting an older patch was only for testing a
 Zed issue when the Python version changed, not a production requirement, and
 that using a different minor version would have served the same purpose. This
@@ -71,6 +80,13 @@ but `python` still ran 3.14.7. Inspection also showed `python`, `python3`, and
 `python3.14` linked through the shared `cpython-3.14-linux-x86_64-gnu`
 directory, which resolved to the higher installed patch.
 
+The independent macOS 3.13.2-to-3.13.0 reproduction observed the same result
+and used verbose logging to confirm that this is not a skipped replacement or
+conflict-detection path. uv removes and recreates `python`, `python3`, and
+`python3.13`, but recreates them with the same minor-version-link target they
+already had. It then attributes those successfully recreated paths to 3.13.0
+in the changelog even though resolving them still reaches 3.13.2.
+
 No existing integration test covers this exact newer-then-older patch sequence
 with `--default`. In `crates/uv/tests/python/python_install.rs`,
 `python_install_default` verifies creation and replacement of the default links
@@ -105,13 +121,21 @@ minor-version scoped. Repository evidence explains the behavior:
 - `highest_installations_by_minor_version_key` then selects 3.14.7 over 3.14.6
   and `ensure_minor_version_link` points the shared 3.14 intermediary at that
   highest installation.
+- After recreating a bin link, `create_bin_links` records the path under the
+  requested installation in `changelog.installed_executables`; it does not
+  account for the intermediary resolving to a different, higher patch. This
+  produces the incorrect `(python, python3, python3.14)` attribution.
 
 This explains the absence of a conflict warning: uv recognizes the existing
 executables as managed and follows its normal link path, but the shared
 minor-version intermediary remains on the highest patch. The maintainer's
 comment establishes that retaining 3.14.7 is likely intended; the incorrect
-part is silently implying that 3.14.6 became the default. No open issue or pull
-request already tracks this exact feedback problem, so it is not a duplicate.
+part is silently implying that 3.14.6 became the default. The policy question
+of whether the minor-version link may move backwards is separable from the
+reporting bug: even if retaining the highest patch remains policy, uv should
+not claim that executables resolving elsewhere were installed for the older
+patch. No open issue or pull request already tracks this exact feedback
+problem, so it is not a duplicate.
 
 ## Related
 
