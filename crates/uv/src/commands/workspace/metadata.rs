@@ -1,5 +1,5 @@
 use std::io::{BufWriter, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use uv_cache::{Cache, Refresh};
@@ -43,6 +43,7 @@ pub(crate) async fn metadata(
     settings: ResolverSettings,
     client_builder: BaseClientBuilder<'_>,
     script: Option<Pep723Item>,
+    stdin_filename: Option<PathBuf>,
     python_preference: PythonPreference,
     python_downloads: PythonDownloads,
     concurrency: Concurrency,
@@ -73,7 +74,9 @@ pub(crate) async fn metadata(
         Some(Pep723Item::Script(script)) => LockTarget::Script(script),
         Some(Pep723Item::Stdin(metadata)) => {
             stdin_script = Pep723Script {
-                path: project_dir.join("-"),
+                path: stdin_filename
+                    .clone()
+                    .unwrap_or_else(|| project_dir.join("-")),
                 metadata: metadata.clone(),
                 prelude: String::new(),
                 postlude: String::new(),
@@ -94,7 +97,13 @@ pub(crate) async fn metadata(
             LockTarget::Workspace(virtual_project.workspace())
         }
     };
-    let script_item = script.as_ref().map(Pep723ItemRef::from);
+    let script_item = if stdin_filename.is_some()
+        && let LockTarget::Script(script) = target
+    {
+        Some(Pep723ItemRef::Script(script))
+    } else {
+        script.as_ref().map(Pep723ItemRef::from)
+    };
 
     // Don't enable any groups' requires-python for interpreter discovery.
     let groups = DependencyGroupsWithDefaults::none();

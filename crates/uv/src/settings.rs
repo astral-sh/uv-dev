@@ -2156,6 +2156,7 @@ impl UpgradeSettings {
 pub(crate) struct MetadataSettings {
     #[expect(dead_code)]
     script: Option<PathBuf>,
+    pub(crate) stdin_filename: Option<PathBuf>,
     pub(crate) lock_check: LockCheck,
     pub(crate) frozen: Option<FrozenSource>,
     pub(crate) dry_run: DryRun,
@@ -2177,6 +2178,7 @@ impl MetadataSettings {
     ) -> anyhow::Result<Self> {
         let MetadataArgs {
             script,
+            stdin_filename,
             locked,
             frozen,
             dry_run,
@@ -2204,6 +2206,7 @@ impl MetadataSettings {
 
         Ok(Self {
             script,
+            stdin_filename: stdin_filename.map(std::path::absolute).transpose()?,
             lock_check: resolve_lock_check(locked),
             frozen: resolve_frozen(frozen),
             dry_run: DryRun::from_args(dry_run),
