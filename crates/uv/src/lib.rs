@@ -289,6 +289,11 @@ async fn run_with_workspace_cache(
                 false
             }
 
+            // Workspace metadata supports `--isolated` as its own argument.
+            Commands::Workspace(WorkspaceNamespace {
+                command: WorkspaceCommand::Metadata(_),
+            }) => false,
+
             // `--isolated` moved to `--no-workspace`.
             Commands::Project(command) if matches!(**command, ProjectCommand::Init(_)) => {
                 warn_user!(
@@ -2157,6 +2162,7 @@ async fn run_with_workspace_cache(
                     script,
                     args.stdin_filename,
                     stdin_contents,
+                    args.isolated,
                     globals.python_preference,
                     globals.python_downloads,
                     globals.concurrency,

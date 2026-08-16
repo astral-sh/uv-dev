@@ -7787,6 +7787,18 @@ pub struct MetadataArgs {
     #[arg(long, requires = "script", value_hint = ValueHint::FilePath)]
     pub stdin_filename: Option<PathBuf>,
 
+    /// Resolve metadata without modifying the lockfile or using the project or script environment
+    /// [env: UV_ISOLATED=]
+    ///
+    /// Existing lockfiles and configuration remain available during resolution, but no lockfile is
+    /// written and existing environments are excluded from the output.
+    #[arg(
+        long,
+        conflicts_with = "sync",
+        value_parser = clap::builder::BoolishValueParser::new()
+    )]
+    pub isolated: bool,
+
     /// Check if the lockfile is up-to-date [env: UV_LOCKED=]
     ///
     /// Asserts that the `uv.lock` would remain unchanged after a resolution. If the lockfile is
