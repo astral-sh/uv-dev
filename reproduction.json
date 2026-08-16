@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "Using the checksummed official uv 0.12.5 riscv64gc-unknown-linux-musl artifact under QEMU 8.2.2, `uv -vv tool run nox --version` (equivalent to `uvx -vv nox --version`) reached an unauthenticated files.pythonhosted.org request and terminated with SIGSEGV, exit status 139. An Alpine 3.24.0 riscv64 fixture confirmed musl 1.2.6 and Python 3.14.7. The installed x86_64 GNU uv 0.12.5 completed the same request successfully. The root cause remains unconfirmed. Updated the issue-context README with commands, controls, and test-coverage findings."
+}

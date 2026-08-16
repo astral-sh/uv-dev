@@ -6,24 +6,81 @@ Classification: bug
 
 ## Summary
 
-The reporter shows that `uvx -vv nox --version` terminates with a segmentation fault while
-downloading a wheel on Alpine 3.24 riscv64. The failure occurs with uv 0.12.4 on both QEMU and real
-hardware and with uv 0.12.5 under QEMU. A controlled comparison on the same riscv64 environment
-shows that the statically linked `riscv64gc-unknown-linux-musl` artifact crashes while the glibc
-`manylinux_2_31_riscv64` artifact completes. The installer-provided musl binary fails in the same
-way.
+The reported crash is reproducible with the official, statically linked uv 0.12.5
+`riscv64gc-unknown-linux-musl` release artifact. Under QEMU 8.2.2, `uv tool run nox --version`
+(the canonical form of `uvx nox --version`) terminates with SIGSEGV and exit status 139 while
+making an unauthenticated HTTPS request to PyPI. The same artifact also reaches the reported point
+of failure in an Alpine 3.24.0 riscv64 root filesystem with musl 1.2.6 and Python 3.14.7.
+
+The reporter additionally reproduced uv 0.12.4 on QEMU and real hardware, reproduced uv 0.12.5
+under QEMU, and showed that the riscv64 glibc artifact completes in an otherwise controlled
+comparison. The independent reproduction below confirms the musl/static failure but did not repeat
+the riscv64 glibc comparison. An x86_64 GNU uv 0.12.5 control completed the same tool invocation.
 
 No earlier issue or pull request tracks this runtime failure. The nearest history is the request to
 publish riscv64 musllinux binaries in astral-sh/uv#16063 and its implementation in
 astral-sh/uv#18228. The new issue should remain the canonical discussion for the crash.
 
+## Reproduction
+
+Outcome: **reproducible**.
+
+The reproduction used only temporary directories and the checksummed official uv 0.12.5 release
+archive. The runner itself was x86_64 Ubuntu, so the riscv64 binary was executed with Ubuntu's
+QEMU user emulator 8.2.2. A minimal signal-confirming invocation was:
+
+```console
+$ export UV_CACHE_DIR="$RUNNER_TEMP/uv-21151/cache"
+$ export UV_TOOL_DIR="$RUNNER_TEMP/uv-21151/tools"
+$ export UV_PYTHON_INSTALL_DIR="$RUNNER_TEMP/uv-21151/python"
+$ qemu-riscv64 uv-riscv64gc-unknown-linux-musl/uv -vv tool run nox --version
+...
+TRACE Attempting unauthenticated request for https://files.pythonhosted.org/.../nox-2026.8.10-py3-none-any.whl.metadata
+Segmentation fault (core dumped)
+$ echo $?
+139
+```
+
+`file` identifies this release binary as a statically linked, stripped 64-bit RISC-V ELF. A second,
+smaller fixture that avoids executing the tool's Python entry point also exited 139 on the initial
+PyPI request:
+
+```console
+$ qemu-riscv64 uv-riscv64gc-unknown-linux-musl/uv -vv pip install \
+    --target "$RUNNER_TEMP/uv-21151/target" \
+    --python-version 3.14 \
+    --python-platform riscv64-unknown-linux \
+    --only-binary :all: nox
+...
+TRACE Attempting unauthenticated request for https://pypi.org/simple/nox/
+Segmentation fault (core dumped)
+$ echo $?
+139
+```
+
+The release artifact was also run through PRoot in an Alpine 3.24.0 riscv64 minirootfs. That fixture
+reported `riscv64`, Alpine 3.24.0, musl 1.2.6, Python 3.14.7, and
+`uv 0.12.5 (riscv64gc-unknown-linux-musl)`. It progressed to an unauthenticated
+`files.pythonhosted.org` request and then stopped at the same point. PRoot did not preserve the
+guest signal status, so the direct QEMU invocations above provide the exit-139 confirmation.
+
+As a control, the installed `uv 0.12.5 (x86_64-unknown-linux-gnu)` completed
+`uv tool run nox --version` against isolated caches and printed `2026.8.10` with exit status 0.
+
+The integration tests in `crates/uv/tests/tool/tool_run.rs` exercise tool resolution and execution,
+and `crates/uv-client/tests/it/ssl_certs.rs` exercises HTTPS behavior, but neither provides a
+riscv64 static-musl release-binary test. The release workflow's Alpine riscv64 smoke test in
+`.github/workflows/build-release-binaries.yml` runs only `uv --help` and `uvx --help`, so it does
+not cover the failing HTTPS download path.
+
 ## Report and supporting evidence
 
-- Actual behavior: uv reaches an unauthenticated request to `files.pythonhosted.org` and exits with
-  `Segmentation fault (core dumped)`.
+- Independently observed behavior: uv reaches an unauthenticated request to PyPI and exits with
+  `Segmentation fault (core dumped)` and status 139.
 - Trigger: the riscv64 musl/static release artifact. The report reproduces with the PyPI wheel and
   the standalone installer on Alpine 3.24.
-- Control: the riscv64 glibc wheel succeeds in the same manylinux/QEMU environment.
+- Controls: the reporter's riscv64 glibc wheel succeeds in the same manylinux/QEMU environment;
+  independently, the installed x86_64 GNU build succeeds with the same tool request.
 - Versions: uv 0.12.4 and 0.12.5 are affected, so there is no indication that a later released fix
   has already resolved it.
 - Release configuration: astral-sh/uv#18228 added the exact
@@ -41,11 +98,15 @@ Alpine, so it is a possible packaging mitigation rather than an established root
 
 ## Draft response
 
-Thanks for the detailed reproductions. The affected riscv64 musl release artifact was added in
-astral-sh/uv#18228, and its current Alpine smoke test only exercises help output, so it does not
-cover the network path that crashes here. Since you reproduced this on real hardware as well as
-QEMU and the riscv64 glibc artifact works, we'll treat this as a bug in the musl/static release
-artifact rather than a QEMU-only failure.
+Thanks for the detailed reproductions. We independently reproduced the SIGSEGV with the official
+uv 0.12.5 `riscv64gc-unknown-linux-musl` artifact under QEMU: the process exits 139 during an
+unauthenticated PyPI HTTPS request. We also reached the same point in an Alpine 3.24.0 riscv64
+rootfs with musl 1.2.6 and Python 3.14.7. The installed x86_64 GNU uv 0.12.5 build completes the
+same tool request. Together with your real-hardware result and working riscv64 glibc control, this
+confirms a bug specific to the riscv64 musl/static release artifact rather than a QEMU-only issue.
+
+The affected artifact was added in astral-sh/uv#18228, and its current Alpine smoke test only
+exercises help output, so it does not cover the HTTPS path that crashes here.
 
 The next useful diagnostic is a native backtrace from the core dump, ideally with debug symbols;
 please attach one if available. Using the glibc wheel is the current workaround. Removing the
@@ -58,10 +119,11 @@ the fault.
 This is a bug because official uv release artifacts reproducibly terminate with SIGSEGV during
 ordinary package retrieval. The working glibc build establishes that the command and package are
 not inherently failing, while the real-hardware reproduction distinguishes this report from a
-QEMU-only limitation. The source confirms how the musl artifact is built and tested but does not
-yet confirm why it crashes. There is no open issue or pull request already tracking the same
-failure, so this is not a duplicate. It is also not primarily an enhancement: changing the wheel
-tag is a proposed mitigation for incorrect runtime behavior.
+QEMU-only limitation. The independent exit-139 reproduction confirms the symptom but not the root
+cause. The source confirms how the musl artifact is built and tested but does not yet confirm why
+it crashes. There is no open issue or pull request already tracking the same failure, so this is
+not a duplicate. It is also not primarily an enhancement: changing the wheel tag is a proposed
+mitigation for incorrect runtime behavior.
 
 ## Related
 
