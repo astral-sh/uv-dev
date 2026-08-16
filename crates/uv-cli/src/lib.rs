@@ -7774,6 +7774,8 @@ pub struct MetadataArgs {
     ///
     /// If provided, uv will resolve the dependencies based on the script's inline metadata table,
     /// in adherence with PEP 723.
+    ///
+    /// If `-` is provided, the script will be read from stdin without using a lockfile.
     #[arg(long, value_hint = ValueHint::FilePath)]
     pub script: Option<PathBuf>,
 

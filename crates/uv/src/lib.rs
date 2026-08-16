@@ -3,7 +3,7 @@
 use std::borrow::Cow;
 use std::ffi::OsString;
 use std::fmt::Write;
-use std::io::stdout;
+use std::io::{Read, stdin, stdout};
 #[cfg(feature = "self-update")]
 use std::ops::Bound;
 use std::path::Path;
@@ -44,7 +44,7 @@ use uv_pypi_types::{ParsedDirectoryUrl, ParsedUrl};
 use uv_python::{ConfigDiscovery, PythonRequest};
 use uv_requirements::{GroupsSpecification, RequirementsSource};
 use uv_requirements_txt::RequirementsTxtRequirement;
-use uv_scripts::{Pep723Error, Pep723Item, Pep723Script};
+use uv_scripts::{Pep723Error, Pep723Item, Pep723Metadata, Pep723Script};
 use uv_settings::{Combine, EnvironmentOptions, FilesystemOptions, Options};
 use uv_static::EnvVars;
 use uv_warnings::{warn_user, warn_user_once};
@@ -438,23 +438,35 @@ async fn run_with_workspace_cache(
     }) = &*cli.command
         && let Some(script) = args.script.as_ref()
     {
-        match Pep723Script::read(script).await {
-            Ok(Some(script)) => Some(Pep723Item::Script(script)),
-            Ok(None) => {
-                bail!(
-                    "`{}` does not contain a PEP 723 metadata tag; run `{}` to initialize the script",
-                    script.user_display().cyan(),
-                    format!("uv init --script {}", script.user_display()).green()
-                )
+        if script == Path::new("-") {
+            let mut contents = Vec::new();
+            stdin().read_to_end(&mut contents)?;
+
+            match Pep723Metadata::parse(&contents)? {
+                Some(metadata) => Some(Pep723Item::Stdin(metadata)),
+                None => {
+                    bail!("The script provided on stdin does not contain a PEP 723 metadata tag")
+                }
             }
-            Err(Pep723Error::Io(err)) if err.kind() == std::io::ErrorKind::NotFound => {
-                bail!(
-                    "Failed to read `{}` (not found); run `{}` to create a PEP 723 script",
-                    script.user_display().cyan(),
-                    format!("uv init --script {}", script.user_display()).green()
-                )
+        } else {
+            match Pep723Script::read(script).await {
+                Ok(Some(script)) => Some(Pep723Item::Script(script)),
+                Ok(None) => {
+                    bail!(
+                        "`{}` does not contain a PEP 723 metadata tag; run `{}` to initialize the script",
+                        script.user_display().cyan(),
+                        format!("uv init --script {}", script.user_display()).green()
+                    )
+                }
+                Err(Pep723Error::Io(err)) if err.kind() == std::io::ErrorKind::NotFound => {
+                    bail!(
+                        "Failed to read `{}` (not found); run `{}` to create a PEP 723 script",
+                        script.user_display().cyan(),
+                        format!("uv init --script {}", script.user_display()).green()
+                    )
+                }
+                Err(err) => return Err(err.into()),
             }
-            Err(err) => return Err(err.into()),
         }
     } else if let Commands::Python(uv_cli::PythonNamespace {
         command:
@@ -2111,11 +2123,6 @@ async fn run_with_workspace_cache(
                         .clone()
                         .combine(Refresh::from(args.settings.upgrade.clone())),
                 );
-
-                let script = script.and_then(|script| match script {
-                    Pep723Item::Script(script) => Some(script),
-                    Pep723Item::Remote(..) | Pep723Item::Stdin(..) => None,
-                });
 
                 Box::pin(commands::metadata(
                     &project_dir,
