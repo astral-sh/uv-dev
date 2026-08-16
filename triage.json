@@ -1,0 +1,27 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 16063,
+        "title": "RISC-V64 musllinux binaries",
+        "url": "https://github.com/astral-sh/uv/issues/16063",
+        "state": "closed",
+        "reason": "Canonical request for the affected riscv64 musllinux artifact. It predates and does not track the crash."
+      },
+      {
+        "kind": "pull_request",
+        "number": 18228,
+        "title": "Add riscv64 musl target to build-release-binaries workflow",
+        "url": "https://github.com/astral-sh/uv/pull/18228",
+        "state": "merged",
+        "reason": "Introduced the exact static musl target and combined musllinux/manylinux tagging implicated here. Its Alpine smoke test only exercises help output, not networking."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests using literal terms for segmentation faults, riscv64, musl, Alpine, uvx, static linkage, exact target and wheel tags, plus conceptual searches for release artifacts, downloads, TLS, compatibility, and historical fixes. Followed the RISC-V support chain through astral-sh/uv#10883, astral-sh/uv#16063, and astral-sh/uv#18228. No prior tracker or fix for this crash was found. astral-sh/uv#16024 was ruled out because it affects amd64 glibc and rustc only under QEMU; astral-sh/uv#11231 concerns an emulated Python package installation, not uv’s network path."
+  },
+  "type": "bug",
+  "type_reason": "Published uv 0.12.4 and 0.12.5 artifacts reproducibly terminate with SIGSEGV during package retrieval. The musl/static riscv64 build fails on real hardware and QEMU while the glibc build succeeds. No existing issue or pull request tracks the same failure.",
+  "summary": "astral-sh/uv#16063 and astral-sh/uv#18228 document the origin of the affected artifact, but neither tracks its runtime failure; astral-sh/uv#21151 should remain the canonical bug discussion.",
+  "draft_response": "Thanks for the detailed reproductions. The affected riscv64 musl artifact was added in astral-sh/uv#18228, and its Alpine smoke test only covers help output, not the network path that crashes here. Reproduction on real hardware, together with the working riscv64 glibc artifact, establishes this as a musl/static release-artifact bug rather than a QEMU-only failure. If available, please attach a native core-dump backtrace, ideally with debug symbols, to help identify the failing component. The glibc wheel is the current workaround. Removing the manylinux compatibility tag may prevent selection on glibc systems, but it would not fix the Alpine crash, so that should be considered a packaging mitigation rather than the root fix."
+}
