@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 3708,
+        "title": "Combine `PythonVersion` and `VersionRequest`",
+        "url": "https://github.com/astral-sh/uv/issues/3708",
+        "state": "open",
+        "reason": "This is the canonical match: it tracks the same split between the two version representations that causes the reported parser inconsistency."
+      },
+      {
+        "kind": "pull_request",
+        "number": 3266,
+        "title": "Rewrite Python interpreter discovery",
+        "url": "https://github.com/astral-sh/uv/pull/3266",
+        "state": "merged",
+        "reason": "This introduced the interpreter-request architecture and explicitly deferred combining `PythonVersion` and `VersionRequest`; it establishes the canonical follow-up's origin but did not fix this behavior."
+      },
+      {
+        "kind": "issue",
+        "number": 12950,
+        "title": "Support 3.14-dev and 3.14t-dev in `python-version`",
+        "url": "https://github.com/astral-sh/uv/issues/12950",
+        "state": "open",
+        "reason": "This is adjacent suffix-syntax work, but it concerns development-release interpreter requests passed through `UV_PYTHON`, not `uv pip compile --python-version` parsing."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests using the exact `3.14t` selector, error fragments, `pip compile --python-version`, `PythonVersion`, `PythonRequest`, and conceptual free-threaded, variant, selector, resolver, and discovery terms. Historical variant fixes were inspected. astral-sh/uv#16434 was ruled out because it concerns Python 3.13 interpreter discovery against `requires-python`; astral-sh/uv#16253 and its fixes concern variant display and GIL-enabled interpreter selection, not this parser path. No recent pull request references astral-sh/uv#21149 or addresses this behavior."
+  },
+  "type": "duplicate",
+  "type_reason": "astral-sh/uv#3708 already tracks combining `PythonVersion` and `VersionRequest`, the exact representation split identified by this report. The new issue adds a concrete free-threaded `pip compile` reproduction but not a separate underlying task or a regression of a previous fix.",
+  "summary": "astral-sh/uv#3708 is the canonical match. astral-sh/uv#3266 documents the split's origin, while astral-sh/uv#12950 is related suffix work on a different command path.",
+  "draft_response": "Thanks — this is the user-facing consequence of the separate `PythonVersion` and `VersionRequest` representations already tracked in astral-sh/uv#3708. `--python` accepts interpreter-request variants such as `3.14t`, while `--python-version` currently goes through `PythonVersion`, so it rejects the `t` suffix before resolution.\n\nLet’s centralize the representation work in astral-sh/uv#3708; I’m marking this as a duplicate. For now, `uv pip compile --python=3.14t pyproject.toml` is the available way to select the free-threaded interpreter, as shown in your reproduction."
+}
