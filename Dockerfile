@@ -1,11 +1,14 @@
 FROM --platform=$BUILDPLATFORM ubuntu:24.04@sha256:d1e2e92c075e5ca139d51a140fff46f84315c0fdce203eab2807c7e495eff4f9 AS build
 
 ARG UBUNTU_SNAPSHOT=20260301T000000Z
+
 # Release assets are mutable, so new versions require reviewed SHA-256 digests.
 ARG RUSTUP_VERSION=1.28.1
 ARG RUSTUP_CHECKSUM_AARCH64=c64b33db2c6b9385817ec0e49a84bcfe018ed6e328fe755c3c809580cc70ce7a
 ARG RUSTUP_CHECKSUM_X86_64=a3339fb004c3d0bb9862ba0bce001861fe5cbde9c10d16591eb3f39ee6cd3e7f
-# Keep this checksum in sync with rust-toolchain.toml.
+
+# Match the version in `rust-toolchain.toml` and review the manifest hash on each bump.
+ARG RUST_VERSION=1.97.1
 ARG RUST_TOOLCHAIN_MANIFEST_CHECKSUM=03569b1886ceb5c05276b50c8431ab111de944cd6140fe1fa7d821dd8e0f29cf
 
 ENV HOME="/root"
@@ -30,7 +33,7 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --only-group docker --locked
 ENV PATH="$HOME/.venv/bin:$PATH"
 
-# Install rust
+# Select the cross-compilation target.
 ARG TARGETPLATFORM
 RUN case "$TARGETPLATFORM" in \
   "linux/arm64") echo "aarch64-unknown-linux-musl" > rust_target.txt ;; \
@@ -38,6 +41,7 @@ RUN case "$TARGETPLATFORM" in \
   *) exit 1 ;; \
   esac
 
+# Verify Rustup before running it, without installing a toolchain yet.
 RUN arch="$(uname -m)" && \
   case "${arch}" in \
   aarch64) checksum="${RUSTUP_CHECKSUM_AARCH64}" ;; \
@@ -49,39 +53,40 @@ RUN arch="$(uname -m)" && \
   -o rustup-init \
   && printf '%s  %s\n' "$checksum" rustup-init | sha256sum -c - \
   && chmod +x rustup-init \
-  && ./rustup-init -y --target $(cat rust_target.txt) --profile minimal --default-toolchain none \
+  && ./rustup-init -y --profile minimal --default-toolchain none \
   && rm rustup-init
 ENV PATH="$HOME/.cargo/bin:$PATH"
+
 # Rustup normally fetches both the manifest and its checksum from the same server.
-# Use a local mirror so every component is checked against our pinned manifest.
+# A local mirror makes it verify every component against our pinned manifest.
+# Keep later requests local too, so an unpinned toolchain cannot be installed.
 COPY rust-toolchain.toml rust-toolchain.toml
-# Keep later Rustup requests local, even after the downloaded archives are removed.
 ENV RUSTUP_DIST_SERVER="file://$HOME/rust-dist"
-# Fetch the minimal Linux toolchain and musl target. Rustup verifies the archives
-# against the local manifest before installing them; disable its self-update too.
-RUN rust_version="$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)" && \
-  rust_host="$(uname -m)-unknown-linux-gnu" && \
+# Mirror the minimal Linux profile and the additional musl target. Installing the
+# active toolchain also checks that `rust-toolchain.toml` selects the pinned version.
+RUN rust_host="$(uname -m)-unknown-linux-gnu" && \
   rust_target="$(cat rust_target.txt)" && \
-  manifest="channel-rust-${rust_version}.toml" && \
+  manifest="channel-rust-${RUST_VERSION}.toml" && \
   mkdir -p rust-dist/dist && \
-  curl --proto '=https' --tlsv1.2 -LsSf \
-  "https://static.rust-lang.org/dist/${manifest}" -o "rust-dist/dist/${manifest}" && \
-  printf '%s  %s\n' "${RUST_TOOLCHAIN_MANIFEST_CHECKSUM}" "${manifest}" > "rust-dist/dist/${manifest}.sha256" && \
-  (cd rust-dist/dist && sha256sum -c "${manifest}.sha256") && \
-  release_date="$(sed -n 's/^date = "\(.*\)"$/\1/p' "rust-dist/dist/${manifest}")" && \
-  mkdir "rust-dist/dist/${release_date}" && \
-  for archive in \
-  "rustc-${rust_version}-${rust_host}.tar.xz" \
-  "cargo-${rust_version}-${rust_host}.tar.xz" \
-  "rust-std-${rust_version}-${rust_host}.tar.xz" \
-  "rust-std-${rust_version}-${rust_target}.tar.xz"; do \
-  curl --proto '=https' --tlsv1.2 -LsSf \
-  "https://static.rust-lang.org/dist/${release_date}/${archive}" \
-  -o "rust-dist/dist/${release_date}/${archive}" || exit 1; \
-  done \
-  && rustup toolchain install --profile minimal --no-self-update \
-  && rustup target add "${rust_target}" \
-  && rm -r rust-dist
+  (cd rust-dist/dist && \
+    curl --proto '=https' --tlsv1.2 -LsSf \
+      "https://static.rust-lang.org/dist/${manifest}" -o "${manifest}" && \
+    printf '%s  %s\n' "${RUST_TOOLCHAIN_MANIFEST_CHECKSUM}" "${manifest}" > "${manifest}.sha256" && \
+    sha256sum -c "${manifest}.sha256" && \
+    release_date="$(sed -n 's/^date = "\(.*\)"$/\1/p' "${manifest}")" && \
+    mkdir "${release_date}" && \
+    for archive in \
+      "rustc-${RUST_VERSION}-${rust_host}.tar.xz" \
+      "cargo-${RUST_VERSION}-${rust_host}.tar.xz" \
+      "rust-std-${RUST_VERSION}-${rust_host}.tar.xz" \
+      "rust-std-${RUST_VERSION}-${rust_target}.tar.xz"; do \
+      curl --proto '=https' --tlsv1.2 -LsSf \
+        "https://static.rust-lang.org/dist/${release_date}/${archive}" \
+        -o "${release_date}/${archive}" || exit 1; \
+    done) && \
+  rustup toolchain install --profile minimal --no-self-update && \
+  rustup target add "${rust_target}" && \
+  rm -r rust-dist
 
 # Build
 COPY crates crates
