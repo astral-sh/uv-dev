@@ -51,9 +51,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { label: github-linux, runner: ubuntu-24.04 }
+          - { label: github-linux, runner: ubuntu-latest }
           - { label: namespace-macos, runner: namespace-profile-macos-15 }
           - { label: depot-linux, runner: depot-ubuntu-24.04-4 }
+          - { label: depot-latest, runner: depot-ubuntu-latest-4 }
           - { label: windows-x64, runner: github-windows-2025-x86_64-8 }
           - { label: windows-arm64, runner: github-windows-11-aarch64-8 }
     runs-on: ${{ matrix.runner }}
@@ -63,7 +64,7 @@ jobs:
       id-token: write
     steps:
       - name: Install exact release action before other hooks
-        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@a0ca53c7508f5625011f581f30c5934f881a33be
+        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@c3892c0a9adbb81c11bbda1eb62e020455665b6a
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: cache-proxy-seed-${{ github.run_id }}-${{ github.run_attempt }}
@@ -128,7 +129,7 @@ jobs:
     runs-on: ubuntu-slim
     timeout-minutes: 5
     steps:
-      - uses: astral-sh/uv-dev/.github/actions/disable-github-caches@a0ca53c7508f5625011f581f30c5934f881a33be
+      - uses: astral-sh/uv-dev/.github/actions/disable-github-caches@c3892c0a9adbb81c11bbda1eb62e020455665b6a
         with:
           enabled: false
       - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
@@ -157,7 +158,7 @@ jobs:
           import json
           from pathlib import Path
           files = list(Path("evidence").glob("*/cache-proxy-evidence.json"))
-          assert len(files) == 5, len(files)
+          assert len(files) == 6, len(files)
           for path in files:
               result = json.loads(path.read_text())
               assert result["rawReadDenied"] and result["rawWrite"]["denied"]
@@ -166,5 +167,5 @@ jobs:
               assert not result["directIsolation"] or all(item["blocked"] for item in result["direct"])
               assert result["oidcWorks"] and result["artifactMatches"]
               assert result["audit"]["artifact_forwarded"] > 0
-          print("All five release runner platforms passed.")
+          print("All six release runner configurations passed.")
           PY
