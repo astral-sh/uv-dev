@@ -18,7 +18,7 @@ defaults:
 
 jobs:
   seed:
-    runs-on: github-windows-2025-x86_64-8
+    runs-on: github-windows-11-aarch64-8
     timeout-minutes: 10
     outputs:
       seed-key: ${{ steps.raw.outputs.seed-key }}
@@ -57,7 +57,7 @@ jobs:
 
   protected:
     needs: seed
-    runs-on: github-windows-2025-x86_64-8
+    runs-on: github-windows-11-aarch64-8
     timeout-minutes: 10
     permissions:
       contents: read
