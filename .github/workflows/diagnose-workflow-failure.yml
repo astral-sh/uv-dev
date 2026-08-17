@@ -1,84 +1,81 @@
-# Isolated probe. This path is excluded from uv-dev's failure-report automation.
-name: Disposable cache proxy probe
-
+# Isolated probe, excluded from uv-dev's failure-report automation.
+name: Release cache proxy matrix
 on:
   push:
     branches: [zb/cache-proxy-probe-20260817-45a4]
-
 permissions:
   contents: read
-
-# Ensure that an opt-out in a newer cache client cannot explain the result.
 env:
   ACTIONS_CACHE_MODE: write
-
 defaults:
   run:
     shell: bash
-
 jobs:
   seed:
-    runs-on: github-windows-11-aarch64-8
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
       seed-key: ${{ steps.raw.outputs.seed-key }}
+      version: ${{ steps.raw.outputs.version }}
     steps:
-      - name: Create harmless raw cache
-        id: raw
+      - id: raw
         uses: astral-sh/uv-dev/.github/actions/cache-proxy-probe@2c5a954f8f2d440c9d80ec93744fdd8f38b96f39
         with:
           operation: seed
-      - name: Save with the older cache client
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0, toolkit 6.1.0
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: cache-proxy-marker
           key: cache-proxy-probe-${{ github.run_id }}-${{ github.run_attempt }}-old-client
-      - name: Remove local marker
-        run: python -c 'import shutil; shutil.rmtree("cache-proxy-marker")'
-      - name: Prove the older client can restore it
-        id: control
+          enableCrossOsArchive: true
+      - run: python3 -c 'import shutil; shutil.rmtree("cache-proxy-marker")'
+      - id: control
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: cache-proxy-marker
           key: cache-proxy-probe-${{ github.run_id }}-${{ github.run_attempt }}-old-client
+          enableCrossOsArchive: true
           fail-on-cache-miss: true
-      - name: Verify control cache hit
-        env:
+      - env:
           CACHE_HIT: ${{ steps.control.outputs.cache-hit }}
-        run: |
-          test "$CACHE_HIT" = true
-          python -c 'from pathlib import Path; assert Path("cache-proxy-marker/marker.txt").read_bytes() == b"Harmless cache-mode probe. No executable content.\n"'
-      - name: Upload same-run artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        run: test "$CACHE_HIT" = true
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: cache-proxy-seed-${{ github.run_id }}-${{ github.run_attempt }}
           path: cache-proxy-marker/marker.txt
           retention-days: 1
 
   protected:
+    name: protected-${{ matrix.label }}
     needs: seed
-    runs-on: github-windows-11-aarch64-8
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { label: github-linux, runner: ubuntu-24.04 }
+          - { label: namespace-macos, runner: namespace-profile-macos-15 }
+          - { label: depot-linux, runner: depot-ubuntu-24.04-4 }
+          - { label: windows-x64, runner: github-windows-2025-x86_64-8 }
+          - { label: windows-arm64, runner: github-windows-11-aarch64-8 }
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 10
     permissions:
       contents: read
       id-token: write
     steps:
-      - name: Install cache-denial proxy before other action hooks
-        uses: astral-sh/uv-dev/.github/actions/cache-proxy@2c5a954f8f2d440c9d80ec93744fdd8f38b96f39
-        with:
-          seed-key: ${{ needs.seed.outputs.seed-key }}
-      - name: Download same-run artifact through proxy
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - name: Install exact release action before other hooks
+        uses: $/.github/actions/disable-github-caches
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: cache-proxy-seed-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/seed-artifact
-      - name: Attempt restore with the older cache client
+      - name: Attempt old-client restore
         id: denied
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: cache-proxy-marker
           key: cache-proxy-probe-${{ github.run_id }}-${{ github.run_attempt }}-old-client
-      - name: Verify the old client did not restore
+          enableCrossOsArchive: true
+      - name: Verify no cache was restored
         env:
           CACHE_HIT: ${{ steps.denied.outputs.cache-hit }}
         run: |
@@ -86,12 +83,12 @@ jobs:
           test ! -e cache-proxy-marker/marker.txt
           mkdir cache-proxy-write
           cp "$RUNNER_TEMP/seed-artifact/marker.txt" cache-proxy-write/marker.txt
-      - name: Attempt save with the older cache client
+      - name: Attempt old-client save
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: cache-proxy-write
           key: cache-proxy-probe-${{ github.run_id }}-${{ github.run_attempt }}-old-blocked
-      - name: Check pre-hook coverage, raw APIs, direct IPs, and OIDC
+      - name: Check raw APIs, direct IPs, artifacts, and OIDC
         uses: astral-sh/uv-dev/.github/actions/cache-proxy-probe@2c5a954f8f2d440c9d80ec93744fdd8f38b96f39
         with:
           operation: probe
@@ -99,33 +96,53 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: cache-proxy-result-${{ github.run_id }}-${{ github.run_attempt }}
+          name: cache-proxy-result-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.label }}
           path: ${{ runner.temp }}/cache-proxy-evidence.json
           if-no-files-found: error
           retention-days: 1
 
+  disabled:
+    needs: seed
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    steps:
+      - uses: $/.github/actions/disable-github-caches
+        with:
+          enabled: false
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
+        env:
+          SEED_KEY: ${{ needs.seed.outputs.seed-key }}
+          SEED_VERSION: ${{ needs.seed.outputs.version }}
+        with:
+          script: |
+            if (process.env.UV_CACHE_PROXY_ACTIVE === '1') throw new Error('Disabled action installed a proxy');
+            const url = new URL('/twirp/github.actions.results.api.v1.CacheService/GetCacheEntryDownloadURL', process.env.ACTIONS_RESULTS_URL);
+            const response = await fetch(url, {method: 'POST', headers: {Authorization: `Bearer ${process.env.ACTIONS_RUNTIME_TOKEN}`, 'Content-Type': 'application/json'}, body: JSON.stringify({key: process.env.SEED_KEY, version: process.env.SEED_VERSION, restore_keys: []})});
+            if (!response.ok || !(await response.json()).ok) throw new Error('Ordinary CI cache access changed');
+            console.log('Disabled release action preserves CI cache access.');
+
   verify:
-    needs: protected
+    needs: [protected, disabled]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - name: Download the artifact uploaded through the proxy
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          name: cache-proxy-result-${{ github.run_id }}-${{ github.run_attempt }}
+          pattern: cache-proxy-result-${{ github.run_id }}-${{ github.run_attempt }}-*
           path: evidence
-      - name: Verify acceptance evidence
-        run: |
+      - run: |
           python3 - <<'PY'
           import json
           from pathlib import Path
-          result = json.loads(Path("evidence/cache-proxy-evidence.json").read_text())
-          assert result["rawReadDenied"]
-          assert result["rawWrite"]["denied"]
-          assert result["legacyReadDenied"]
-          assert result["direct"]
-          assert not result["directIsolation"] or all(item["blocked"] for item in result["direct"])
-          assert result["oidcWorks"] and result["artifactMatches"]
-          assert result["audit"]["artifact_forwarded"] > 0
-          print("Cache denial and artifact roundtrip verified.")
+          files = list(Path("evidence").glob("*/cache-proxy-evidence.json"))
+          assert len(files) == 5, len(files)
+          for path in files:
+              result = json.loads(path.read_text())
+              assert result["rawReadDenied"] and result["rawWrite"]["denied"]
+              assert result["legacyReadDenied"]
+              assert result["direct"]
+              assert not result["directIsolation"] or all(item["blocked"] for item in result["direct"])
+              assert result["oidcWorks"] and result["artifactMatches"]
+              assert result["audit"]["artifact_forwarded"] > 0
+          print("All five release runner platforms passed.")
           PY
