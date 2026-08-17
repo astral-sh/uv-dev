@@ -42,7 +42,7 @@ def check_release_cache_proxy(root: Path) -> list[str]:
         or action.get("inputs", {}).get("enabled", {}).get("default") != "true"
     ):
         errors.append(f"{ACTION}: cache-denial entry points or default changed")
-    for name in ("pre.cjs", "main.cjs", "post.cjs"):
+    for name in ("pre.cjs", "main.cjs", "post.cjs", "common.cjs", "action.py"):
         if not (root / ACTION.parent / name).is_file():
             errors.append(f"{ACTION}: missing {name}")
 

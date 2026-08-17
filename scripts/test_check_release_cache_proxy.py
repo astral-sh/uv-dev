@@ -32,7 +32,7 @@ class ReleaseCacheProxyTest(unittest.TestCase):
             },
         }
         self.write(ACTION, self.action)
-        for name in ("pre.cjs", "main.cjs", "post.cjs"):
+        for name in ("pre.cjs", "main.cjs", "post.cjs", "common.cjs", "action.py"):
             (self.root / Path(ACTION).parent / name).write_text("")
 
     def write(self, path: str, document: dict) -> None:
@@ -115,8 +115,12 @@ class ReleaseCacheProxyTest(unittest.TestCase):
 
     def test_entry_point_files_must_exist(self) -> None:
         self.steps([{"uses": USES}])
-        (self.root / Path(ACTION).parent / "pre.cjs").unlink()
-        self.check(f"{ACTION}: missing pre.cjs")
+        for name in ("pre.cjs", "common.cjs", "action.py"):
+            with self.subTest(name=name):
+                path = self.root / Path(ACTION).parent / name
+                path.unlink()
+                self.check(f"{ACTION}: missing {name}")
+                path.write_text("")
 
 
 if __name__ == "__main__":
