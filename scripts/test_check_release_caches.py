@@ -14,6 +14,7 @@ RELEASE_WORKFLOW = ".github/workflows/release.yml"
 CACHEABLE_BUILD_WORKFLOW = ".github/workflows/build-release-binaries.yml"
 BUILD_CACHE_MODE = "${{ inputs.allow-cache && 'write' || 'none' }}"
 BUILD_UV_CACHE = "${{ inputs.allow-cache && 'auto' || 'false' }}"
+CACHE_PROXY_USES = "astral-sh/uv-dev/.github/actions/disable-github-caches@c3892c0a9adbb81c11bbda1eb62e020455665b6a"
 
 
 class ReleaseCachePolicyTest(unittest.TestCase):
@@ -350,6 +351,22 @@ class ReleaseCachePolicyTest(unittest.TestCase):
         action = ".github/actions/local/action.yml"
         self.write(action, {"runs": {"using": "node24", "main": "index.js"}})
         self.check(f"{action}: cannot inspect non-composite local action")
+
+    def test_reviewed_cache_proxy_is_allowed(self) -> None:
+        self.write_steps([{"uses": CACHE_PROXY_USES}])
+        action = ".github/actions/disable-github-caches/action.yml"
+        self.write(
+            action,
+            {
+                "runs": {
+                    "using": "node24",
+                    "pre": "pre.cjs",
+                    "main": "main.cjs",
+                    "post": "post.cjs",
+                }
+            },
+        )
+        self.check(count=2)
 
     def test_local_references_cannot_escape(self) -> None:
         self.write_workflow(

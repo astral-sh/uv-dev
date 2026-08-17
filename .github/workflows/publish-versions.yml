@@ -24,6 +24,9 @@ jobs:
     env:
       VERSION: ${{ fromJson(inputs.plan).announcement_tag }}
     steps:
+      - name: Disable GitHub Actions caches
+        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@c3892c0a9adbb81c11bbda1eb62e020455665b6a
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
