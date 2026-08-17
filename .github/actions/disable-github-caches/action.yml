@@ -1,0 +1,12 @@
+name: Disable GitHub Actions caches
+description: Reject cache API requests before other action hooks run
+inputs:
+  enabled:
+    description: Disable only for ordinary CI callers that explicitly allow caches.
+    required: false
+    default: "true"
+runs:
+  using: node24
+  pre: pre.cjs
+  main: main.cjs
+  post: post.cjs
