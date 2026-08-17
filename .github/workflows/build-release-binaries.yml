@@ -40,6 +40,7 @@ jobs:
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
+          cache: ""
           python-version: ${{ env.PYTHON_VERSION }}
 
       # uv
@@ -48,6 +49,7 @@ jobs:
       - name: "Build sdist"
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
+          sccache: false
           maturin-version: v1.14.1
           command: sdist
           args: --out dist
@@ -69,6 +71,7 @@ jobs:
       - name: "Build sdist uv-build"
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
+          sccache: false
           maturin-version: v1.14.1
           command: sdist
           args: --out crates/uv-build/dist -m crates/uv-build/Cargo.toml
@@ -95,6 +98,7 @@ jobs:
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
+          cache: ""
           python-version: ${{ env.PYTHON_VERSION }}
           architecture: x64
       - name: "Prep README.md"
@@ -107,6 +111,7 @@ jobs:
       - name: "Build wheels - x86_64"
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
+          sccache: false
           maturin-version: v1.14.1
           target: x86_64
           args: --release --locked --out dist --features self-update --compatibility pypi
@@ -143,6 +148,7 @@ jobs:
       - name: "Build wheels uv-build - x86_64"
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
+          sccache: false
           maturin-version: v1.14.1
           target: x86_64
           args: --profile minimal-size --locked --out crates/uv-build/dist -m crates/uv-build/Cargo.toml --compatibility pypi
@@ -167,6 +173,7 @@ jobs:
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
+          cache: ""
           python-version: ${{ env.PYTHON_VERSION }}
           architecture: arm64
       - name: "Prep README.md"
@@ -179,6 +186,7 @@ jobs:
       - name: "Build wheels - aarch64"
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
+          sccache: false
           maturin-version: v1.14.1
           target: aarch64
           manylinux: 2_17
@@ -222,6 +230,7 @@ jobs:
       - name: "Build wheels uv-build - aarch64"
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
+          sccache: false
           maturin-version: v1.14.1
           target: aarch64
           args: --profile minimal-size --locked --out crates/uv-build/dist -m crates/uv-build/Cargo.toml --compatibility pypi
@@ -263,6 +272,7 @@ jobs:
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
+          cache: ""
           python-version: ${{ env.PYTHON_VERSION }}
           architecture: ${{ matrix.platform.arch }}
       - name: "Prep README.md"
@@ -282,6 +292,7 @@ jobs:
       - name: "Build wheels"
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
+          sccache: false
           maturin-version: v1.14.1
           target: ${{ matrix.platform.target }}
           args: --release --locked --out dist --features self-update,windows-gui-bin --compatibility pypi
@@ -324,6 +335,7 @@ jobs:
       - name: "Build wheels uv-build"
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
+          sccache: false
           maturin-version: v1.14.1
           target: ${{ matrix.platform.target }}
           args: --profile minimal-size --locked --out crates/uv-build/dist -m crates/uv-build/Cargo.toml --compatibility pypi
@@ -356,6 +368,7 @@ jobs:
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
+          cache: ""
           python-version: ${{ env.PYTHON_VERSION }}
           architecture: x64
       - name: "Prep README.md"
@@ -365,6 +378,7 @@ jobs:
       - name: "Build wheels"
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
+          sccache: false
           maturin-version: v1.14.1
           target: ${{ matrix.target }}
           # Generally, we try to build in a target docker container. In this case however, a
@@ -436,6 +450,7 @@ jobs:
       - name: "Build wheels uv-build"
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
+          sccache: false
           maturin-version: v1.14.1
           target: ${{ matrix.target }}
           manylinux: 2_17
@@ -487,6 +502,7 @@ jobs:
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
+          cache: ""
           python-version: ${{ env.PYTHON_VERSION }}
       - name: "Prep README.md"
         run: python scripts/transform_readme.py --target pypi
@@ -495,6 +511,7 @@ jobs:
       - name: "Build wheels"
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
+          sccache: false
           maturin-version: v1.14.1
           target: ${{ matrix.platform.target }}
           manylinux: ${{ matrix.platform.manylinux }}
@@ -552,6 +569,7 @@ jobs:
       - name: "Build wheels uv-build"
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
+          sccache: false
           maturin-version: v1.14.1
           target: ${{ matrix.platform.target }}
           manylinux: ${{ matrix.platform.manylinux }}
@@ -602,6 +620,7 @@ jobs:
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
+          cache: ""
           python-version: ${{ env.PYTHON_VERSION }}
       - name: "Prep README.md"
         run: python scripts/transform_readme.py --target pypi
@@ -610,6 +629,7 @@ jobs:
       - name: "Build wheels"
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
+          sccache: false
           maturin-version: v1.14.1
           target: ${{ matrix.platform.target }}
           manylinux: 2_17
@@ -672,6 +692,7 @@ jobs:
       - name: "Build wheels uv-build"
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
+          sccache: false
           maturin-version: v1.14.1
           target: ${{ matrix.platform.target }}
           manylinux: 2_17
@@ -723,6 +744,7 @@ jobs:
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
+          cache: ""
           python-version: ${{ env.PYTHON_VERSION }}
       - name: "Prep README.md"
         run: python scripts/transform_readme.py --target pypi
@@ -731,6 +753,7 @@ jobs:
       - name: "Build wheels"
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
+          sccache: false
           maturin-version: v1.14.1
           target: ${{ matrix.platform.target }}
           manylinux: 2_17
@@ -792,6 +815,7 @@ jobs:
       - name: "Build wheels uv-build"
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
+          sccache: false
           maturin-version: v1.14.1
           target: ${{ matrix.platform.target }}
           manylinux: 2_17
@@ -832,6 +856,7 @@ jobs:
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
+          cache: ""
           python-version: ${{ env.PYTHON_VERSION }}
       - name: "Prep README.md"
         run: python scripts/transform_readme.py --target pypi
@@ -840,6 +865,7 @@ jobs:
       - name: "Build wheels"
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
+          sccache: false
           maturin-version: v1.14.1
           target: ${{ matrix.platform.target }}
           manylinux: 2_31
@@ -898,6 +924,7 @@ jobs:
       - name: "Build wheels uv-build"
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
+          sccache: false
           maturin-version: v1.14.1
           target: ${{ matrix.platform.target }}
           manylinux: 2_31
@@ -946,6 +973,7 @@ jobs:
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
+          cache: ""
           python-version: ${{ env.PYTHON_VERSION }}
           architecture: x64
       - name: "Prep README.md"
@@ -955,6 +983,7 @@ jobs:
       - name: "Build wheels"
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
+          sccache: false
           maturin-version: v1.14.1
           target: ${{ matrix.target }}
           manylinux: musllinux_1_1
@@ -1007,6 +1036,7 @@ jobs:
       - name: "Build wheels uv-build"
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
+          sccache: false
           maturin-version: v1.14.1
           target: ${{ matrix.target }}
           manylinux: musllinux_1_1
@@ -1058,6 +1088,7 @@ jobs:
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
+          cache: ""
           python-version: ${{ env.PYTHON_VERSION }}
       - name: "Prep README.md"
         run: python scripts/transform_readme.py --target pypi
@@ -1066,6 +1097,7 @@ jobs:
       - name: "Build wheels"
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
+          sccache: false
           maturin-version: v1.14.1
           target: ${{ matrix.platform.target }}
           manylinux: musllinux_1_1
@@ -1144,6 +1176,7 @@ jobs:
       - name: "Build wheels"
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
+          sccache: false
           maturin-version: v1.14.1
           target: ${{ matrix.platform.target }}
           manylinux: musllinux_1_1
@@ -1214,6 +1247,8 @@ jobs:
           persist-credentials: false
       - name: "Install uv"
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          enable-cache: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: wheels_*-*
