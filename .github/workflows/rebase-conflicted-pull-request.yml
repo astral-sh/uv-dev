@@ -2,6 +2,11 @@ name: Rebase conflicted pull request
 
 on:
   workflow_call:
+    secrets:
+      OPENAI_API_KEY:
+        required: false
+      STS_API_URL:
+        required: false
     inputs:
       number:
         required: true
@@ -9,7 +14,15 @@ on:
       base-ref:
         required: true
         type: string
+      base-sha:
+        required: false
+        type: string
+        default: ""
       base-previous-sha:
+        required: false
+        type: string
+        default: ""
+      parent-merge-sha:
         required: false
         type: string
         default: ""
@@ -22,6 +35,10 @@ on:
       head-repository:
         required: true
         type: string
+      publish:
+        required: false
+        type: boolean
+        default: true
 
 permissions: {}
 
@@ -63,7 +80,9 @@ jobs:
         id: prepare
         env:
           BASE_REF: ${{ inputs.base-ref }}
+          EXPECTED_BASE_SHA: ${{ inputs.base-sha }}
           BASE_PREVIOUS_SHA: ${{ inputs.base-previous-sha }}
+          PARENT_MERGE_SHA: ${{ inputs.parent-merge-sha }}
           HEAD_REF: ${{ inputs.head-ref }}
           HEAD_SHA: ${{ inputs.head-sha }}
           HEAD_REPOSITORY: ${{ inputs.head-repository }}
@@ -88,6 +107,13 @@ jobs:
           git config user.name "astral-automations-bot[bot]"
           git config user.email "305554984+astral-automations-bot[bot]@users.noreply.github.com"
           base_sha=$(git rev-parse --verify "refs/remotes/origin/$BASE_REF^{commit}")
+          if [ -n "$EXPECTED_BASE_SHA" ] && [ "$base_sha" != "$EXPECTED_BASE_SHA" ]; then
+            echo "The pull request base changed; refusing to prepare a stale rebase." >&2
+            exit 1
+          fi
+          if [ -n "$PARENT_MERGE_SHA" ]; then
+            git merge-base --is-ancestor "$PARENT_MERGE_SHA" "$base_sha"
+          fi
           echo "base_sha=$base_sha" >> "$GITHUB_OUTPUT"
 
       - name: Enable Linux user namespaces for bubblewrap
@@ -148,6 +174,7 @@ jobs:
   push:
     name: "Push rebased pull request #${{ inputs.number }}"
     needs: rebase
+    if: inputs.publish
     runs-on: ubuntu-slim
     environment: automations
     timeout-minutes: 10

@@ -33,6 +33,8 @@ jobs:
         with:
           version: "0.12.5"
       - run: uv run --only-group check ruff check .
+      - name: "Test pull request promotion"
+        run: python3 -m unittest discover -s scripts/tests -p 'test_pull_request_promotion.py'
 
   ty:
     timeout-minutes: 10
