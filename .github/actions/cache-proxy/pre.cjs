@@ -12,11 +12,11 @@ const {
 
 async function main() {
   if (
-    process.platform !== "linux" ||
+    !["linux", "darwin"].includes(process.platform) ||
     process.env.GITHUB_REPOSITORY !== "astral-sh/uv-dev"
   )
     throw new Error(
-      "This disposable prototype is restricted to uv-dev Linux jobs",
+      "This disposable prototype is restricted to uv-dev Linux/macOS jobs",
     );
   const key = process.env["INPUT_SEED-KEY"];
   if (key !== `${prefix()}-raw-seed`)
@@ -52,12 +52,17 @@ async function main() {
     "uv-cache-proxy-origins.json",
   );
   fs.writeFileSync(plan, JSON.stringify(origins));
+  const macos = process.platform === "darwin";
+  const directory = macos ? "/var/run/uv-cache-proxy" : "/run/uv-cache-proxy";
+  const installer = macos ? "install-macos.py" : "install.py";
   execFileSync(
     "sudo",
-    ["python3", path.join(__dirname, "install.py"), "install", plan],
+    ["python3", path.join(__dirname, installer), "install", plan],
     { stdio: "inherit" },
   );
-  const cert = "/usr/local/share/ca-certificates/uv-cache-proxy.crt";
+  const cert = macos
+    ? `${directory}/ca.crt`
+    : "/usr/local/share/ca-certificates/uv-cache-proxy.crt";
   const health = serviceUrl(process.env.ACTIONS_RESULTS_URL);
   health.pathname = "/__uv_cache_proxy_health";
   health.search = "";
@@ -80,7 +85,7 @@ async function main() {
   const environment = {
     NODE_EXTRA_CA_CERTS: cert,
     UV_CACHE_PROXY_ACTIVE: "1",
-    UV_CACHE_PROXY_CONFIG: "/run/uv-cache-proxy/origins.json",
+    UV_CACHE_PROXY_CONFIG: `${directory}/origins.json`,
     no_proxy: bypass,
     NO_PROXY: bypass,
   };

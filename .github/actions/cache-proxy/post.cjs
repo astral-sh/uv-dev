@@ -3,14 +3,20 @@ const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 const { emit } = require("./common.cjs");
 try {
-  if (fs.existsSync("/run/uv-cache-proxy/audit.json"))
+  const directory =
+    process.platform === "darwin"
+      ? "/var/run/uv-cache-proxy"
+      : "/run/uv-cache-proxy";
+  const installer =
+    process.platform === "darwin" ? "install-macos.py" : "install.py";
+  if (fs.existsSync(`${directory}/audit.json`))
     emit(
       "final-audit",
-      JSON.parse(fs.readFileSync("/run/uv-cache-proxy/audit.json", "utf8")),
+      JSON.parse(fs.readFileSync(`${directory}/audit.json`, "utf8")),
     );
   execFileSync(
     "sudo",
-    ["python3", path.join(__dirname, "install.py"), "cleanup"],
+    ["python3", path.join(__dirname, installer), "cleanup"],
     { stdio: "inherit" },
   );
   console.log("Disposable cache proxy removed.");

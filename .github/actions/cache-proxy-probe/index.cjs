@@ -108,7 +108,13 @@ async function main() {
     oidcWorks,
     artifactMatches,
     audit: JSON.parse(
-      fs.readFileSync("/run/uv-cache-proxy/audit.json", "utf8"),
+      fs.readFileSync(
+        path.join(
+          path.dirname(process.env.UV_CACHE_PROXY_CONFIG),
+          "audit.json",
+        ),
+        "utf8",
+      ),
     ),
   };
   emit("protected-job", result);

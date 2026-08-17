@@ -4,6 +4,7 @@ import argparse
 import http.client
 import http.server
 import json
+import os
 import socket
 import ssl
 import threading
@@ -194,6 +195,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("directory", type=Path)
+    parser.add_argument("--uid", type=int)
+    parser.add_argument("--gid", type=int)
     args = parser.parse_args()
     config = json.loads((args.directory / "origins.json").read_text())
     server = ProxyServer(
@@ -204,6 +207,10 @@ def main():
     tls.set_alpn_protocols(["http/1.1"])
     tls.load_cert_chain(args.directory / "server.crt", args.directory / "server.key")
     server.socket = tls.wrap_socket(server.socket, server_side=True)
+    if args.uid is not None and args.gid is not None:
+        os.setgroups([])
+        os.setgid(args.gid)
+        os.setuid(args.uid)
     server.serve_forever()
 
 
