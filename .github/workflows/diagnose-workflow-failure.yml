@@ -1,5 +1,5 @@
 # Isolated probe, excluded from uv-dev's failure-report automation.
-name: Release cache proxy matrix
+name: Python release cache proxy matrix
 on:
   push:
     branches: [zb/cache-proxy-probe-20260817-45a4]
@@ -64,7 +64,7 @@ jobs:
       id-token: write
     steps:
       - name: Install exact release action before other hooks
-        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@c3892c0a9adbb81c11bbda1eb62e020455665b6a
+        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@6098a53dae6d87c6ce7553c00d84012b7004aa70
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: cache-proxy-seed-${{ github.run_id }}-${{ github.run_attempt }}
@@ -129,7 +129,7 @@ jobs:
     runs-on: ubuntu-slim
     timeout-minutes: 5
     steps:
-      - uses: astral-sh/uv-dev/.github/actions/disable-github-caches@c3892c0a9adbb81c11bbda1eb62e020455665b6a
+      - uses: astral-sh/uv-dev/.github/actions/disable-github-caches@6098a53dae6d87c6ce7553c00d84012b7004aa70
         with:
           enabled: false
       - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
