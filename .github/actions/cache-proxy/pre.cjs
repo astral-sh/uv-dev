@@ -22,13 +22,26 @@ async function main() {
   if (key !== `${prefix()}-raw-seed`)
     throw new Error("Unexpected disposable seed key");
   const origins = {};
-  for (const name of [
-    "ACTIONS_CACHE_URL",
-    "ACTIONS_RESULTS_URL",
-    "ACTIONS_RUNTIME_URL",
-  ]) {
-    if (!process.env[name]) continue;
-    const hostname = serviceUrl(process.env[name]).hostname;
+  const endpoints = [
+    process.env.ACTIONS_CACHE_URL,
+    process.env.ACTIONS_RESULTS_URL,
+    process.env.ACTIONS_RUNTIME_URL,
+    "https://artifactcache.actions.githubusercontent.com",
+    "https://results-receiver.actions.githubusercontent.com",
+  ];
+  for (const endpoint of endpoints) {
+    if (!endpoint) continue;
+    const url = serviceUrl(endpoint);
+    const hostname = url.hostname;
+    if (url.protocol === "http:") {
+      origins[url.host] = {
+        scheme: "http",
+        port: Number(url.port),
+        listen_port: Number(url.port) + 19000,
+        addresses: [hostname],
+      };
+      continue;
+    }
     if (origins[hostname]) continue;
     const resolved = await Promise.allSettled([
       dns.resolve4(hostname),
@@ -40,12 +53,25 @@ async function main() {
     if (!addresses.length) throw new Error("Could not resolve service origin");
     origins[hostname] = { addresses };
   }
-  const hostname = serviceUrl(process.env.ACTIONS_RESULTS_URL).hostname;
-  const address = origins[hostname].addresses.find(
+  const resultUrl = serviceUrl(process.env.ACTIONS_RESULTS_URL);
+  const address = origins[resultUrl.host].addresses.find(
     (value) => !value.includes(":"),
   );
   const baseline = await readMetadata(key, { address });
-  if (baseline.status !== 200 || baseline.data.ok !== true)
+  const githubBaseline =
+    resultUrl.protocol === "http:"
+      ? await readMetadata(key, {
+          base: "https://results-receiver.actions.githubusercontent.com",
+          address: origins[
+            "results-receiver.actions.githubusercontent.com"
+          ].addresses.find((value) => !value.includes(":")),
+        })
+      : baseline;
+  if (
+    baseline.status !== 200 ||
+    githubBaseline.status !== 200 ||
+    githubBaseline.data.ok !== true
+  )
     throw new Error("Same-run cache baseline was not readable");
   const plan = path.join(
     process.env.RUNNER_TEMP,

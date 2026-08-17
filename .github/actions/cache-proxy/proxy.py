@@ -45,6 +45,15 @@ class PinnedConnection(http.client.HTTPSConnection):
         self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
 
 
+class PinnedHTTPConnection(http.client.HTTPConnection):
+    def __init__(self, hostname, address, port):
+        super().__init__(hostname, port, timeout=30)
+        self.address = address
+
+    def connect(self):
+        self.sock = socket.create_connection((self.address, self.port), self.timeout)
+
+
 class ProxyServer(http.server.ThreadingHTTPServer):
     daemon_threads = True
 
@@ -113,8 +122,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         return self.rfile.read(length)
 
     def handle_request(self):
-        host = self.headers.get("Host", "").split(":", 1)[0].lower()
-        origin = self.server.origins.get(host)
+        authority = self.headers.get("Host", "").lower()
+        host = urlsplit("//" + authority).hostname
+        origin = self.server.origins.get(authority) or self.server.origins.get(host)
         if not origin or not self.path.startswith("/") or self.path.startswith("//"):
             self.reply(421, {"error": "unconfigured origin"})
             return
@@ -140,12 +150,19 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 for name, value in self.headers.items()
                 if name.lower() not in HOP_HEADERS
             }
-            headers["Host"] = host
+            headers["Host"] = authority
             headers["Connection"] = "close"
             response = None
             for address in origin["addresses"]:
-                connection = PinnedConnection(
-                    host, address, origin.get("port", 443), self.server.upstream_context
+                connection = (
+                    PinnedHTTPConnection(host, address, origin["port"])
+                    if origin.get("scheme") == "http"
+                    else PinnedConnection(
+                        host,
+                        address,
+                        origin.get("port", 443),
+                        self.server.upstream_context,
+                    )
                 )
                 try:
                     connection.request(
@@ -207,10 +224,24 @@ def main():
     tls.set_alpn_protocols(["http/1.1"])
     tls.load_cert_chain(args.directory / "server.crt", args.directory / "server.key")
     server.socket = tls.wrap_socket(server.socket, server_side=True)
+    listeners = [server]
+    for port in sorted(
+        {
+            origin["listen_port"]
+            for origin in config.values()
+            if origin.get("scheme") == "http"
+        }
+    ):
+        listener = ProxyServer(("127.0.0.1", port), config)
+        # Share counters and their lock across the HTTP and HTTPS listeners.
+        listener.count = server.count
+        listeners.append(listener)
     if args.uid is not None and args.gid is not None:
         os.setgroups([])
         os.setgid(args.gid)
         os.setuid(args.uid)
+    for listener in listeners[1:]:
+        threading.Thread(target=listener.serve_forever, daemon=True).start()
     server.serve_forever()
 
 

@@ -13,6 +13,7 @@ DIRECTORY = Path("/run/uv-cache-proxy")
 CA = Path("/usr/local/share/ca-certificates/uv-cache-proxy.crt")
 USER = "uv-cache-proxy"
 CHAIN = "UV_CACHE_PROXY"
+NAT_CHAIN = "UV_CACHE_PROXY_NAT"
 MARKER = "# uv-cache-proxy-probe"
 
 
@@ -26,6 +27,17 @@ def validate(origins):
     if not 1 <= len(origins) <= 8:
         raise ValueError("unexpected origin count")
     for hostname, value in origins.items():
+        if value.get("scheme") == "http":
+            address = ipaddress.ip_address(value["addresses"][0])
+            if (
+                not address.is_private
+                or address.version != 4
+                or value["port"] not in (977, 978)
+                or value["listen_port"] != value["port"] + 19000
+                or hostname != f"{address}:{value['port']}"
+            ):
+                raise ValueError("unexpected private cache endpoint")
+            continue
         if not hostname.endswith(".actions.githubusercontent.com") or any(
             character not in "abcdefghijklmnopqrstuvwxyz0123456789.-"
             for character in hostname
@@ -42,6 +54,9 @@ def validate(origins):
 def install(plan):
     origins = json.loads(Path(plan).read_text())
     validate(origins)
+    secure_origins = {
+        name: value for name, value in origins.items() if value.get("scheme") != "http"
+    }
     if DIRECTORY.exists() or CA.exists():
         raise RuntimeError("prototype already installed")
     run("useradd", "--system", "--no-create-home", "--shell", "/usr/sbin/nologin", USER)
@@ -84,7 +99,7 @@ def install(plan):
     )
     (DIRECTORY / "extensions").write_text(
         "basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nsubjectAltName="
-        + ",".join(f"DNS:{hostname}" for hostname in origins)
+        + ",".join(f"DNS:{hostname}" for hostname in secure_origins)
         + "\n"
     )
     run(
@@ -128,9 +143,9 @@ def install(plan):
     )
     # Steering the exact service names also catches clients that ignore proxy env.
     with Path("/etc/hosts").open("a") as hosts:
-        hosts.write("\n127.0.0.1 " + " ".join(origins) + " " + MARKER + "\n")
+        hosts.write("\n127.0.0.1 " + " ".join(secure_origins) + " " + MARKER + "\n")
     addresses = {
-        address for origin in origins.values() for address in origin["addresses"]
+        address for origin in secure_origins.values() for address in origin["addresses"]
     }
     for program, version in (("iptables", 4), ("ip6tables", 6)):
         selected = sorted(
@@ -169,11 +184,52 @@ def install(plan):
                 "tcp-reset",
             )
         run(program, "-I", "OUTPUT", "1", "-j", CHAIN)
+    private_origins = [
+        origin for origin in origins.values() if origin.get("scheme") == "http"
+    ]
+    if private_origins:
+        run("iptables", "-t", "nat", "-N", NAT_CHAIN)
+        run(
+            "iptables",
+            "-t",
+            "nat",
+            "-A",
+            NAT_CHAIN,
+            "-m",
+            "owner",
+            "--uid-owner",
+            str(account.pw_uid),
+            "-j",
+            "RETURN",
+        )
+        for origin in private_origins:
+            run(
+                "iptables",
+                "-t",
+                "nat",
+                "-A",
+                NAT_CHAIN,
+                "-d",
+                origin["addresses"][0],
+                "-p",
+                "tcp",
+                "--dport",
+                str(origin["port"]),
+                "-j",
+                "REDIRECT",
+                "--to-ports",
+                str(origin["listen_port"]),
+            )
+        run("iptables", "-t", "nat", "-I", "OUTPUT", "1", "-j", NAT_CHAIN)
 
 
 def cleanup():
     if not DIRECTORY.exists():
         return
+    if run("iptables", "-t", "nat", "-S", NAT_CHAIN, check=False).returncode == 0:
+        run("iptables", "-t", "nat", "-D", "OUTPUT", "-j", NAT_CHAIN, check=False)
+        run("iptables", "-t", "nat", "-F", NAT_CHAIN)
+        run("iptables", "-t", "nat", "-X", NAT_CHAIN)
     for program in ("iptables", "ip6tables"):
         if run(program, "-S", CHAIN, check=False).returncode == 0:
             run(program, "-D", "OUTPUT", "-j", CHAIN, check=False)

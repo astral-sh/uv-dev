@@ -66,6 +66,7 @@ class ProxyTests(unittest.TestCase):
         tls.load_cert_chain(cls.cert, key)
         cls.upstream = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
         cls.upstream.socket = tls.wrap_socket(cls.upstream.socket, server_side=True)
+        cls.plain_upstream = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
         cls.trust = ssl.create_default_context(cafile=str(cls.cert))
         cls.server = proxy.ProxyServer(
             ("127.0.0.1", 0),
@@ -73,17 +74,22 @@ class ProxyTests(unittest.TestCase):
                 "example.invalid": {
                     "addresses": ["127.0.0.1"],
                     "port": cls.upstream.server_port,
-                }
+                },
+                "10.0.0.1:978": {
+                    "scheme": "http",
+                    "addresses": ["127.0.0.1"],
+                    "port": cls.plain_upstream.server_port,
+                },
             },
             context=cls.trust,
         )
         cls.server.socket = tls.wrap_socket(cls.server.socket, server_side=True)
-        for server in (cls.upstream, cls.server):
+        for server in (cls.upstream, cls.plain_upstream, cls.server):
             threading.Thread(target=server.serve_forever, daemon=True).start()
 
     @classmethod
     def tearDownClass(cls):
-        for server in (cls.server, cls.upstream):
+        for server in (cls.server, cls.upstream, cls.plain_upstream):
             server.shutdown()
             server.server_close()
         cls.scratch.cleanup()
@@ -144,6 +150,28 @@ class ProxyTests(unittest.TestCase):
     def test_unconfigured_host_rejected(self):
         self.assertEqual(
             self.request("POST", "/anything", host="untrusted.invalid")[0], 421
+        )
+
+    def test_private_http_cache_denied(self):
+        self.assertEqual(
+            self.request(
+                "POST",
+                "/twirp/github.actions.results.api.v1.CacheService/GetCacheEntryDownloadURL",
+                host="10.0.0.1:978",
+            )[0],
+            403,
+        )
+
+    def test_private_http_artifact_forwarded(self):
+        body = b'{"private":true}'
+        self.assertEqual(
+            self.request(
+                "POST",
+                "/twirp/github.actions.results.api.v1.ArtifactService/ListArtifacts",
+                body,
+                host="10.0.0.1:978",
+            ),
+            (200, None, body),
         )
 
 

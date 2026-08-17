@@ -1,5 +1,7 @@
 const fs = require("node:fs");
 const https = require("node:https");
+const http = require("node:http");
+const net = require("node:net");
 const crypto = require("node:crypto");
 
 const content = Buffer.from(
@@ -16,10 +18,16 @@ const output = (name, value) =>
 
 function serviceUrl(value) {
   const url = new URL(value);
+  const privateDepot =
+    url.protocol === "http:" &&
+    net.isIPv4(url.hostname) &&
+    url.hostname.startsWith("10.") &&
+    ["977", "978"].includes(url.port);
   if (
-    url.protocol !== "https:" ||
-    !url.hostname.endsWith(".actions.githubusercontent.com") ||
-    url.port ||
+    (!privateDepot &&
+      (url.protocol !== "https:" ||
+        !url.hostname.endsWith(".actions.githubusercontent.com") ||
+        url.port)) ||
     url.username ||
     url.password
   )
@@ -39,7 +47,8 @@ function request(
         if (lookupOptions.all) callback(null, [{ address, family }]);
         else callback(null, address, family);
       };
-    const req = https.request(url, options, (response) => {
+    const transport = url.protocol === "http:" ? http : https;
+    const req = transport.request(url, options, (response) => {
       const chunks = [];
       let length = 0;
       response.on("data", (chunk) => {
@@ -76,12 +85,13 @@ function request(
 }
 
 async function cacheCall(method, data, options = {}) {
-  const url = serviceUrl(process.env.ACTIONS_RESULTS_URL);
+  const { base = process.env.ACTIONS_RESULTS_URL, ...requestOptions } = options;
+  const url = serviceUrl(base);
   url.pathname = `/twirp/github.actions.results.api.v1.CacheService/${method}`;
   url.search = "";
   const body = Buffer.from(JSON.stringify(data));
   const response = await request(url, {
-    ...options,
+    ...requestOptions,
     method: "POST",
     headers: {
       Authorization: `Bearer ${process.env.ACTIONS_RUNTIME_TOKEN}`,
@@ -112,9 +122,10 @@ const isDenied = (response, operation) =>
 
 async function storage(value, options = {}) {
   const url = new URL(value);
+  const s3 = /(^|\.)s3([.-][a-z0-9-]+)?\.amazonaws\.com$/.test(url.hostname);
   if (
     url.protocol !== "https:" ||
-    !url.hostname.endsWith(".blob.core.windows.net")
+    (!url.hostname.endsWith(".blob.core.windows.net") && !s3)
   )
     throw new Error("Unexpected storage endpoint");
   try {

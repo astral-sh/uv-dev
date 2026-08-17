@@ -51,7 +51,7 @@ async function main() {
   const origins = JSON.parse(
     fs.readFileSync(process.env.UV_CACHE_PROXY_CONFIG, "utf8"),
   );
-  const hostname = serviceUrl(process.env.ACTIONS_RESULTS_URL).hostname;
+  const hostname = serviceUrl(process.env.ACTIONS_RESULTS_URL).host;
   const direct = [];
   for (const address of origins[hostname].addresses) {
     try {
@@ -59,7 +59,7 @@ async function main() {
       direct.push({
         family: address.includes(":") ? 6 : 4,
         http: response.status,
-        blocked: false,
+        blocked: isDenied(response, "read"),
       });
     } catch (error) {
       direct.push({
