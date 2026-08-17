@@ -15,6 +15,7 @@ USER = "uv-cache-proxy"
 CHAIN = "UV_CACHE_PROXY"
 NAT_CHAIN = "UV_CACHE_PROXY_NAT"
 FORWARD_CHAIN = "UV_CACHE_PROXY_FWD"
+INPUT_CHAIN = "UV_CACHE_PROXY_IN"
 MARKER = "# uv-release-cache-proxy"
 
 
@@ -213,6 +214,8 @@ def install(plan):
             )
         run(program, "-I", "FORWARD", "1", "-j", FORWARD_CHAIN)
     if private_origins:
+        run("iptables", "-N", INPUT_CHAIN)
+        run("iptables", "-A", INPUT_CHAIN, "-i", "lo", "-j", "RETURN")
         run("iptables", "-t", "nat", "-N", NAT_CHAIN)
         run(
             "iptables",
@@ -228,6 +231,21 @@ def install(plan):
             "RETURN",
         )
         for origin in private_origins:
+            run(
+                "iptables",
+                "-A",
+                INPUT_CHAIN,
+                "-d",
+                origin["addresses"][0],
+                "-p",
+                "tcp",
+                "--dport",
+                str(origin["port"]),
+                "-j",
+                "REJECT",
+                "--reject-with",
+                "tcp-reset",
+            )
             run(
                 "iptables",
                 "-A",
@@ -261,11 +279,16 @@ def install(plan):
                 str(origin["listen_port"]),
             )
         run("iptables", "-t", "nat", "-I", "OUTPUT", "1", "-j", NAT_CHAIN)
+        run("iptables", "-I", "INPUT", "1", "-j", INPUT_CHAIN)
 
 
 def cleanup():
     if not DIRECTORY.exists():
         return
+    if run("iptables", "-S", INPUT_CHAIN, check=False).returncode == 0:
+        run("iptables", "-D", "INPUT", "-j", INPUT_CHAIN, check=False)
+        run("iptables", "-F", INPUT_CHAIN)
+        run("iptables", "-X", INPUT_CHAIN)
     if run("iptables", "-t", "nat", "-S", NAT_CHAIN, check=False).returncode == 0:
         run("iptables", "-t", "nat", "-D", "OUTPUT", "-j", NAT_CHAIN, check=False)
         run("iptables", "-t", "nat", "-F", NAT_CHAIN)
