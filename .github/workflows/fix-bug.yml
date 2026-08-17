@@ -59,6 +59,7 @@ jobs:
       issues: read
     outputs:
       bundle-artifact-id: ${{ steps.upload-fix.outputs.artifact-id }}
+      commit-sha: ${{ steps.upload-fix.outputs.head-sha }}
       context-artifact-id: ${{ steps.upload-context.outputs.artifact-id }}
       context-sha: ${{ steps.issue-context.outputs.head-sha }}
       created: ${{ steps.commit-fix.outputs.created }}
@@ -403,8 +404,7 @@ jobs:
             created=true
           fi
 
-          git -c core.hooksPath=/dev/null bundle create \
-            "$RUNNER_TEMP/fixed-bug.bundle" "$PARENT_HEAD_SHA..HEAD"
+          echo "head_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           {
             echo "created=$created"
             echo "publish=true"
@@ -428,16 +428,18 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-      - name: "Upload verified bug fix"
+      - name: "Restore trusted workflow revision"
+        if: steps.commit-fix.outputs.publish == 'true'
+        run: git -c core.hooksPath=/dev/null checkout --detach "$GITHUB_SHA"
+
+      - name: "Persist verified bug fix"
         id: upload-fix
         if: steps.commit-fix.outputs.publish == 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: ./.github/actions/persist-commit
         with:
           name: fixed-bug-${{ inputs.issue-number }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/fixed-bug.bundle
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 1
+          base-sha: ${{ inputs.parent-head-sha }}
+          head-sha: ${{ steps.commit-fix.outputs.head_sha }}
 
   publish:
     needs: fix
@@ -456,13 +458,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          artifact-ids: ${{ needs.fix.outputs.bundle-artifact-id }}
-          path: ${{ runner.temp }}/fixed-bug
-
-      - name: "Verify regression and bug-fix commits"
-        id: verify
+      - name: "Verify regression and bug-fix branches"
         env:
           EXISTING_HEAD_SHA: ${{ needs.fix.outputs.existing-head }}
           GH_TOKEN: ${{ github.token }}
@@ -536,10 +532,24 @@ jobs:
             fi
           fi
 
-          bundle="$RUNNER_TEMP/fixed-bug/fixed-bug.bundle"
-          git -c core.hooksPath=/dev/null bundle verify "$bundle"
-          git -c core.hooksPath=/dev/null fetch --no-tags "$bundle" HEAD
-          fixed_head="$(git rev-parse 'FETCH_HEAD^{commit}')"
+      - name: "Load bug-fix commit"
+        id: load-fix
+        uses: ./.github/actions/load-commit
+        with:
+          artifact-id: ${{ needs.fix.outputs.bundle-artifact-id }}
+          base-sha: ${{ inputs.parent-head-sha }}
+          head-sha: ${{ needs.fix.outputs.commit-sha }}
+
+      - name: "Verify bug-fix commit"
+        id: verify
+        env:
+          EXISTING_HEAD_SHA: ${{ needs.fix.outputs.existing-head }}
+          FIXED_HEAD_SHA: ${{ steps.load-fix.outputs.head-sha }}
+          GIT_CONFIG_GLOBAL: /dev/null
+          GIT_CONFIG_NOSYSTEM: "1"
+          PARENT_HEAD_SHA: ${{ inputs.parent-head-sha }}
+        run: |
+          fixed_head="$FIXED_HEAD_SHA"
           if [ "$(git rev-parse "$fixed_head^")" != "$PARENT_HEAD_SHA" ] ||
             [ "$(git show --no-patch --format=%s "$fixed_head")" != "Fix reproduced bug" ] ||
             [ "$(git show --no-patch --format=%ae "$fixed_head")" != \

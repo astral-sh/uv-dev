@@ -74,6 +74,8 @@ jobs:
           sudo mv "shellcheck-${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/
       - name: "Run shellcheck"
         run: find . -name '*.sh' -type f | xargs shellcheck --shell bash --severity style
+      - name: "Test commit artifact actions"
+        run: python3 scripts/test_commit_artifact.py
 
   validate-pyproject:
     timeout-minutes: 10
