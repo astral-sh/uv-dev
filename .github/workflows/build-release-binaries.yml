@@ -40,6 +40,11 @@ jobs:
     name: sdist
     runs-on: depot-ubuntu-24.04-4
     steps:
+      - name: Disable GitHub Actions caches
+        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@c3892c0a9adbb81c11bbda1eb62e020455665b6a
+        with:
+          enabled: ${{ !inputs.allow-cache }}
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -98,6 +103,11 @@ jobs:
     name: x86_64-apple-darwin
     runs-on: namespace-profile-macos-15
     steps:
+      - name: Disable GitHub Actions caches
+        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@c3892c0a9adbb81c11bbda1eb62e020455665b6a
+        with:
+          enabled: ${{ !inputs.allow-cache }}
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -173,6 +183,11 @@ jobs:
     name: aarch64-apple-darwin
     runs-on: namespace-profile-macos-15
     steps:
+      - name: Disable GitHub Actions caches
+        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@c3892c0a9adbb81c11bbda1eb62e020455665b6a
+        with:
+          enabled: ${{ !inputs.allow-cache }}
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -272,6 +287,11 @@ jobs:
             arch: arm64
             runner: github-windows-11-aarch64-8
     steps:
+      - name: Disable GitHub Actions caches
+        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@c3892c0a9adbb81c11bbda1eb62e020455665b6a
+        with:
+          enabled: ${{ !inputs.allow-cache }}
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -368,6 +388,11 @@ jobs:
           - { target: "i686-unknown-linux-gnu", cc: "gcc -m32" }
           - { target: "x86_64-unknown-linux-gnu", cc: "gcc" }
     steps:
+      - name: Disable GitHub Actions caches
+        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@c3892c0a9adbb81c11bbda1eb62e020455665b6a
+        with:
+          enabled: ${{ !inputs.allow-cache }}
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -502,6 +527,11 @@ jobs:
             manylinux: auto
 
     steps:
+      - name: Disable GitHub Actions caches
+        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@c3892c0a9adbb81c11bbda1eb62e020455665b6a
+        with:
+          enabled: ${{ !inputs.allow-cache }}
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -620,6 +650,11 @@ jobs:
             arch: s390x
 
     steps:
+      - name: Disable GitHub Actions caches
+        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@c3892c0a9adbb81c11bbda1eb62e020455665b6a
+        with:
+          enabled: ${{ !inputs.allow-cache }}
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -744,6 +779,11 @@ jobs:
             maturin_docker_options: -e JEMALLOC_SYS_WITH_LG_PAGE=16
 
     steps:
+      - name: Disable GitHub Actions caches
+        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@c3892c0a9adbb81c11bbda1eb62e020455665b6a
+        with:
+          enabled: ${{ !inputs.allow-cache }}
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -856,6 +896,11 @@ jobs:
             arch: riscv64
 
     steps:
+      - name: Disable GitHub Actions caches
+        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@c3892c0a9adbb81c11bbda1eb62e020455665b6a
+        with:
+          enabled: ${{ !inputs.allow-cache }}
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -973,6 +1018,11 @@ jobs:
           - x86_64-unknown-linux-musl
           - i686-unknown-linux-musl
     steps:
+      - name: Disable GitHub Actions caches
+        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@c3892c0a9adbb81c11bbda1eb62e020455665b6a
+        with:
+          enabled: ${{ !inputs.allow-cache }}
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -1088,6 +1138,11 @@ jobs:
       fail-fast: false
 
     steps:
+      - name: Disable GitHub Actions caches
+        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@c3892c0a9adbb81c11bbda1eb62e020455665b6a
+        with:
+          enabled: ${{ !inputs.allow-cache }}
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -1235,7 +1290,7 @@ jobs:
 
   check-wheels:
     name: "check wheel contents"
-    runs-on: ubuntu-slim
+    runs-on: ${{ inputs.allow-cache && 'ubuntu-slim' || 'ubuntu-latest' }}
     needs:
       - macos-x86_64
       - macos-aarch64
@@ -1248,6 +1303,11 @@ jobs:
       - musllinux
       - musllinux-cross
     steps:
+      - name: Disable GitHub Actions caches
+        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@c3892c0a9adbb81c11bbda1eb62e020455665b6a
+        with:
+          enabled: ${{ !inputs.allow-cache }}
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false

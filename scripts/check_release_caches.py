@@ -21,6 +21,8 @@ import yaml
 ROOT = Path(__file__).resolve().parent.parent
 RELEASE_WORKFLOW = Path(".github/workflows/release.yml")
 CACHEABLE_BUILD_WORKFLOW = Path(".github/workflows/build-release-binaries.yml")
+CACHE_PROXY_ACTION = Path(".github/actions/disable-github-caches/action.yml")
+CACHE_PROXY_USES = "astral-sh/uv-dev/.github/actions/disable-github-caches@c3892c0a9adbb81c11bbda1eb62e020455665b6a"
 # Recognize only these reviewed expressions, not arbitrary GitHub expressions.
 BUILD_CACHE_MODE = "${{ inputs.allow-cache && 'write' || 'none' }}"
 BUILD_UV_CACHE = "${{ inputs.allow-cache && 'auto' || 'false' }}"
@@ -111,6 +113,11 @@ def check_release_caches(root: Path) -> tuple[list[str], int]:
         check_cache_mode(step, location)
         if not (uses := step.get("uses")):
             return
+        if uses == CACHE_PROXY_USES:
+            check_local(
+                "$/.github/actions/disable-github-caches", location, workflow=False
+            )
+            return
         if uses.startswith(("./", "$/")):
             check_local(uses, location, workflow=False)
             return
@@ -197,6 +204,10 @@ def check_release_caches(root: Path) -> tuple[list[str], int]:
                     )
         else:
             runs = document.get("runs", {})
+            # This reviewed JavaScript action enforces the policy. Its placement
+            # and entry points are checked by check_release_cache_proxy.py.
+            if path == root / CACHE_PROXY_ACTION and runs.get("using") == "node24":
+                continue
             if runs.get("using") != "composite":
                 errors.append(f"{location}: cannot inspect non-composite local action")
                 continue

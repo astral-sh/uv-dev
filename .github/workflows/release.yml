@@ -67,6 +67,9 @@ jobs:
       name: release-gate
       deployment: true
     steps:
+      - name: Disable GitHub Actions caches
+        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@c3892c0a9adbb81c11bbda1eb62e020455665b6a
+
       - run: echo "Release approved"
 
   # Run 'dist plan' (or host) to determine what tasks we need to do
@@ -80,6 +83,9 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
+      - name: Disable GitHub Actions caches
+        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@c3892c0a9adbb81c11bbda1eb62e020455665b6a
+
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           persist-credentials: false
@@ -147,6 +153,9 @@ jobs:
     if: ${{ needs.plan.outputs.publishing == 'true' || fromJson(needs.plan.outputs.val).ci.github.pr_run_mode == 'upload' || inputs.tag == 'dry-run' }}
     runs-on: "depot-ubuntu-latest-4"
     steps:
+      - name: Disable GitHub Actions caches
+        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@c3892c0a9adbb81c11bbda1eb62e020455665b6a
+
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           persist-credentials: false
@@ -190,6 +199,9 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       BUILD_MANIFEST_NAME: target/distrib/global-dist-manifest.json
     steps:
+      - name: Disable GitHub Actions caches
+        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@c3892c0a9adbb81c11bbda1eb62e020455665b6a
+
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           persist-credentials: false
@@ -243,6 +255,9 @@ jobs:
     outputs:
       val: ${{ steps.host.outputs.manifest }}
     steps:
+      - name: Disable GitHub Actions caches
+        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@c3892c0a9adbb81c11bbda1eb62e020455665b6a
+
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           persist-credentials: false
@@ -328,6 +343,9 @@ jobs:
       "contents": "read"
       "id-token": "write"
     steps:
+      - name: Disable GitHub Actions caches
+        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@c3892c0a9adbb81c11bbda1eb62e020455665b6a
+
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           persist-credentials: false

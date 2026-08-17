@@ -19,9 +19,13 @@ jobs:
           version: "0.12.5"
           enable-cache: false
       - name: Check release cache policy
-        run: uv run --no-project --with pyyaml==6.0.3 python scripts/check_release_caches.py
+        run: |
+          uv run --no-project --with pyyaml==6.0.3 python scripts/check_release_caches.py
+          uv run --no-project --with pyyaml==6.0.3 python scripts/check_release_cache_proxy.py
       - name: Test release cache policy
-        run: uv run --no-project --with pyyaml==6.0.3 python -m unittest discover -s scripts -p test_check_release_caches.py
+        run: |
+          uv run --no-project --with pyyaml==6.0.3 python -m unittest discover -s scripts -p 'test_check_release_cache*.py'
+          uv run --no-project python scripts/test_release_cache_proxy.py
 
   dist-plan:
     name: "dist plan"
