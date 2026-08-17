@@ -26,6 +26,15 @@ The shown value is valid TOML 1.0 syntax. Separately, PEP 621 defines the standa
 metadata key as `project.authors` (plural), not `project.author`; that semantic naming issue does
 not explain the `.orig` file.
 
+## Reported impact and workaround
+
+The reporter later clarified that the additional file affected their downstream build system. When
+Renovate changed its build requirement from `uv_build>=0.11,<0.12` to
+`uv_build>=0.12,<0.13`, that system treated `pyproject.toml.orig` as a newly added project file and
+produced multiple unnecessary releases. This impact is reporter-supplied and has not been
+independently reproduced here. The reporter also says a newer version of their build system now
+handles the file, providing a downstream workaround for future updates.
+
 ## Draft response
 
 The presence of `pyproject.toml.orig` does not mean this field was interpreted as TOML 1.1. In uv
@@ -35,8 +44,7 @@ introduced in astral-sh/uv#18741 and made the default in astral-sh/uv#20225.
 
 The shown value is valid TOML 1.0 syntax, although the standardized PEP 621 metadata key is
 `project.authors` (plural). Omitting `.orig` for already-compatible inputs would be a change to the
-stabilized behavior rather than a parser fix. If the extra file causes a concrete interoperability
-problem, please share the affected tool and error so we can assess that impact.
+stabilized behavior rather than a parser fix.
 
 ## Classification
 
