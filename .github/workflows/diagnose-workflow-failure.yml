@@ -1,45 +1,126 @@
-# Isolated runner inventory; excluded from failure-report automation.
-name: Cache proxy runner inventory
+# Isolated probe. This path is excluded from uv-dev's failure-report automation.
+name: Disposable cache proxy probe
+
 on:
   push:
     branches: [zb/cache-proxy-probe-20260817-45a4]
-permissions: {}
+
+permissions:
+  contents: read
+
+# Ensure that an opt-out in a newer cache client cannot explain the result.
+env:
+  ACTIONS_CACHE_MODE: write
+
 jobs:
-  inventory:
-    strategy:
-      fail-fast: false
-      matrix:
-        runner:
-          - namespace-profile-macos-15
-          - depot-ubuntu-24.04-4
-          - github-windows-2025-x86_64-8
-          - github-windows-11-aarch64-8
-          - ubuntu-slim
-    runs-on: ${{ matrix.runner }}
+  seed:
+    runs-on: namespace-profile-macos-15
+    timeout-minutes: 10
+    outputs:
+      seed-key: ${{ steps.raw.outputs.seed-key }}
+    steps:
+      - name: Create harmless raw cache
+        id: raw
+        uses: astral-sh/uv-dev/.github/actions/cache-proxy-probe@f6e1799283c33cdf86338b887191514e037cd584
+        with:
+          operation: seed
+      - name: Save with the older cache client
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0, toolkit 6.1.0
+        with:
+          path: cache-proxy-marker
+          key: cache-proxy-probe-${{ github.run_id }}-${{ github.run_attempt }}-old-client
+      - name: Remove local marker
+        run: python3 -c 'import shutil; shutil.rmtree("cache-proxy-marker")'
+      - name: Prove the older client can restore it
+        id: control
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: cache-proxy-marker
+          key: cache-proxy-probe-${{ github.run_id }}-${{ github.run_attempt }}-old-client
+          fail-on-cache-miss: true
+      - name: Verify control cache hit
+        env:
+          CACHE_HIT: ${{ steps.control.outputs.cache-hit }}
+        run: |
+          test "$CACHE_HIT" = true
+          python3 -c 'from pathlib import Path; assert Path("cache-proxy-marker/marker.txt").read_bytes() == b"Harmless cache-mode probe. No executable content.\n"'
+      - name: Upload same-run artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cache-proxy-seed-${{ github.run_id }}-${{ github.run_attempt }}
+          path: cache-proxy-marker/marker.txt
+          retention-days: 1
+
+  protected:
+    needs: seed
+    runs-on: namespace-profile-macos-15
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Install cache-denial proxy before other action hooks
+        uses: astral-sh/uv-dev/.github/actions/cache-proxy@f6e1799283c33cdf86338b887191514e037cd584
+        with:
+          seed-key: ${{ needs.seed.outputs.seed-key }}
+      - name: Download same-run artifact through proxy
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: cache-proxy-seed-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/seed-artifact
+      - name: Attempt restore with the older cache client
+        id: denied
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: cache-proxy-marker
+          key: cache-proxy-probe-${{ github.run_id }}-${{ github.run_attempt }}-old-client
+      - name: Verify the old client did not restore
+        env:
+          CACHE_HIT: ${{ steps.denied.outputs.cache-hit }}
+        run: |
+          test "$CACHE_HIT" != true
+          test ! -e cache-proxy-marker/marker.txt
+          mkdir cache-proxy-write
+          cp "$RUNNER_TEMP/seed-artifact/marker.txt" cache-proxy-write/marker.txt
+      - name: Attempt save with the older cache client
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: cache-proxy-write
+          key: cache-proxy-probe-${{ github.run_id }}-${{ github.run_attempt }}-old-blocked
+      - name: Check pre-hook coverage, raw APIs, direct IPs, and OIDC
+        uses: astral-sh/uv-dev/.github/actions/cache-proxy-probe@f6e1799283c33cdf86338b887191514e037cd584
+        with:
+          operation: probe
+      - name: Upload evidence through proxy
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: cache-proxy-result-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/cache-proxy-evidence.json
+          if-no-files-found: error
+          retention-days: 1
+
+  verify:
+    needs: protected
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
+      - name: Download the artifact uploaded through the proxy
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          script: |
-            const {spawnSync} = require('node:child_process');
-            const endpoints = {};
-            for (const name of ['ACTIONS_CACHE_URL', 'ACTIONS_RESULTS_URL', 'ACTIONS_RUNTIME_URL']) {
-              if (process.env[name]) {
-                const url = new URL(process.env[name]);
-                endpoints[name] = {protocol: url.protocol, hostname: url.hostname, port: url.port};
-              }
-            }
-            const command = (name, args) => {
-              const result = spawnSync(name, args, {encoding: 'utf8', timeout: 10000});
-              return {status: result.status, available: !result.error};
-            };
-            const result = {
-              platform: process.platform, arch: process.arch, endpoints,
-              cacheV2: process.env.ACTIONS_CACHE_SERVICE_V2 || null,
-              sudo: process.platform === 'win32' ? null : command('sudo', ['-n', 'true']),
-              python: command(process.platform === 'win32' ? 'python' : 'python3', ['--version']),
-              openssl: command('openssl', ['version']),
-              systemd: process.platform === 'linux' ? command('systemctl', ['is-system-running']) : null,
-              packetFilter: process.platform === 'darwin' ? command('sudo', ['-n', 'pfctl', '-s', 'info']) : null,
-            };
-            console.log('CACHE_RUNNER_INVENTORY=' + JSON.stringify(result));
+          name: cache-proxy-result-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence
+      - name: Verify acceptance evidence
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          result = json.loads(Path("evidence/cache-proxy-evidence.json").read_text())
+          assert result["rawReadDenied"]
+          assert result["rawWrite"]["denied"]
+          assert result["legacyReadDenied"]
+          assert result["direct"] and all(item["blocked"] for item in result["direct"])
+          assert result["oidcWorks"] and result["artifactMatches"]
+          assert result["audit"]["artifact_forwarded"] > 0
+          print("Cache denial and artifact roundtrip verified.")
+          PY
