@@ -14,14 +14,14 @@ env:
 
 jobs:
   seed:
-    runs-on: namespace-profile-macos-15
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
       seed-key: ${{ steps.raw.outputs.seed-key }}
     steps:
       - name: Create harmless raw cache
         id: raw
-        uses: astral-sh/uv-dev/.github/actions/cache-proxy-probe@f6e1799283c33cdf86338b887191514e037cd584
+        uses: astral-sh/uv-dev/.github/actions/cache-proxy-probe@547c2dccb27e319d4540a44da8993a1a77beaa04
         with:
           operation: seed
       - name: Save with the older cache client
@@ -53,14 +53,14 @@ jobs:
 
   protected:
     needs: seed
-    runs-on: namespace-profile-macos-15
+    runs-on: depot-ubuntu-24.04-4
     timeout-minutes: 10
     permissions:
       contents: read
       id-token: write
     steps:
       - name: Install cache-denial proxy before other action hooks
-        uses: astral-sh/uv-dev/.github/actions/cache-proxy@f6e1799283c33cdf86338b887191514e037cd584
+        uses: astral-sh/uv-dev/.github/actions/cache-proxy@547c2dccb27e319d4540a44da8993a1a77beaa04
         with:
           seed-key: ${{ needs.seed.outputs.seed-key }}
       - name: Download same-run artifact through proxy
@@ -88,7 +88,7 @@ jobs:
           path: cache-proxy-write
           key: cache-proxy-probe-${{ github.run_id }}-${{ github.run_attempt }}-old-blocked
       - name: Check pre-hook coverage, raw APIs, direct IPs, and OIDC
-        uses: astral-sh/uv-dev/.github/actions/cache-proxy-probe@f6e1799283c33cdf86338b887191514e037cd584
+        uses: astral-sh/uv-dev/.github/actions/cache-proxy-probe@547c2dccb27e319d4540a44da8993a1a77beaa04
         with:
           operation: probe
       - name: Upload evidence through proxy
