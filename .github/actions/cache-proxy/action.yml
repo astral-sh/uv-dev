@@ -1,0 +1,11 @@
+name: Disposable cache-denial proxy
+description: Ubuntu-only uv-dev experiment; not a production security boundary
+inputs:
+  seed-key:
+    required: true
+    description: Exact harmless cache key from the seed job
+runs:
+  using: node24
+  pre: pre.cjs
+  main: main.cjs
+  post: post.cjs

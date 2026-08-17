@@ -1,0 +1,15 @@
+name: Disposable cache proxy probe
+description: Exercise harmless same-run cache entries and service compatibility
+inputs:
+  operation:
+    required: true
+    description: seed or probe
+outputs:
+  seed-key:
+    description: Exact disposable raw cache key
+  version:
+    description: Raw cache version
+runs:
+  using: node24
+  pre: pre.cjs
+  main: index.cjs
