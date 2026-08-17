@@ -41,7 +41,7 @@ jobs:
     runs-on: depot-ubuntu-24.04-4
     steps:
       - name: Disable GitHub Actions caches
-        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@c3892c0a9adbb81c11bbda1eb62e020455665b6a
+        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@6098a53dae6d87c6ce7553c00d84012b7004aa70
         with:
           enabled: ${{ !inputs.allow-cache }}
 
@@ -104,7 +104,7 @@ jobs:
     runs-on: namespace-profile-macos-15
     steps:
       - name: Disable GitHub Actions caches
-        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@c3892c0a9adbb81c11bbda1eb62e020455665b6a
+        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@6098a53dae6d87c6ce7553c00d84012b7004aa70
         with:
           enabled: ${{ !inputs.allow-cache }}
 
@@ -184,7 +184,7 @@ jobs:
     runs-on: namespace-profile-macos-15
     steps:
       - name: Disable GitHub Actions caches
-        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@c3892c0a9adbb81c11bbda1eb62e020455665b6a
+        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@6098a53dae6d87c6ce7553c00d84012b7004aa70
         with:
           enabled: ${{ !inputs.allow-cache }}
 
@@ -288,7 +288,7 @@ jobs:
             runner: github-windows-11-aarch64-8
     steps:
       - name: Disable GitHub Actions caches
-        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@c3892c0a9adbb81c11bbda1eb62e020455665b6a
+        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@6098a53dae6d87c6ce7553c00d84012b7004aa70
         with:
           enabled: ${{ !inputs.allow-cache }}
 
@@ -389,7 +389,7 @@ jobs:
           - { target: "x86_64-unknown-linux-gnu", cc: "gcc" }
     steps:
       - name: Disable GitHub Actions caches
-        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@c3892c0a9adbb81c11bbda1eb62e020455665b6a
+        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@6098a53dae6d87c6ce7553c00d84012b7004aa70
         with:
           enabled: ${{ !inputs.allow-cache }}
 
@@ -528,7 +528,7 @@ jobs:
 
     steps:
       - name: Disable GitHub Actions caches
-        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@c3892c0a9adbb81c11bbda1eb62e020455665b6a
+        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@6098a53dae6d87c6ce7553c00d84012b7004aa70
         with:
           enabled: ${{ !inputs.allow-cache }}
 
@@ -651,7 +651,7 @@ jobs:
 
     steps:
       - name: Disable GitHub Actions caches
-        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@c3892c0a9adbb81c11bbda1eb62e020455665b6a
+        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@6098a53dae6d87c6ce7553c00d84012b7004aa70
         with:
           enabled: ${{ !inputs.allow-cache }}
 
@@ -780,7 +780,7 @@ jobs:
 
     steps:
       - name: Disable GitHub Actions caches
-        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@c3892c0a9adbb81c11bbda1eb62e020455665b6a
+        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@6098a53dae6d87c6ce7553c00d84012b7004aa70
         with:
           enabled: ${{ !inputs.allow-cache }}
 
@@ -897,7 +897,7 @@ jobs:
 
     steps:
       - name: Disable GitHub Actions caches
-        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@c3892c0a9adbb81c11bbda1eb62e020455665b6a
+        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@6098a53dae6d87c6ce7553c00d84012b7004aa70
         with:
           enabled: ${{ !inputs.allow-cache }}
 
@@ -1019,7 +1019,7 @@ jobs:
           - i686-unknown-linux-musl
     steps:
       - name: Disable GitHub Actions caches
-        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@c3892c0a9adbb81c11bbda1eb62e020455665b6a
+        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@6098a53dae6d87c6ce7553c00d84012b7004aa70
         with:
           enabled: ${{ !inputs.allow-cache }}
 
@@ -1139,7 +1139,7 @@ jobs:
 
     steps:
       - name: Disable GitHub Actions caches
-        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@c3892c0a9adbb81c11bbda1eb62e020455665b6a
+        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@6098a53dae6d87c6ce7553c00d84012b7004aa70
         with:
           enabled: ${{ !inputs.allow-cache }}
 
@@ -1304,7 +1304,7 @@ jobs:
       - musllinux-cross
     steps:
       - name: Disable GitHub Actions caches
-        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@c3892c0a9adbb81c11bbda1eb62e020455665b6a
+        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@6098a53dae6d87c6ce7553c00d84012b7004aa70
         with:
           enabled: ${{ !inputs.allow-cache }}
 

@@ -13,7 +13,7 @@ SCRIPT = Path(__file__).with_name("check_release_cache_proxy.py")
 RELEASE = ".github/workflows/release.yml"
 BUILD = ".github/workflows/build-release-binaries.yml"
 ACTION = ".github/actions/disable-github-caches/action.yml"
-USES = "astral-sh/uv-dev/.github/actions/disable-github-caches@c3892c0a9adbb81c11bbda1eb62e020455665b6a"
+USES = "astral-sh/uv-dev/.github/actions/disable-github-caches@6098a53dae6d87c6ce7553c00d84012b7004aa70"
 BUILD_ENABLED = "${{ !inputs.allow-cache }}"
 
 

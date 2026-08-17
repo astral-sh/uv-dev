@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parent.parent
 RELEASE = Path(".github/workflows/release.yml")
 BUILD = Path(".github/workflows/build-release-binaries.yml")
 ACTION = Path(".github/actions/disable-github-caches/action.yml")
-USES = "astral-sh/uv-dev/.github/actions/disable-github-caches@c3892c0a9adbb81c11bbda1eb62e020455665b6a"
+USES = "astral-sh/uv-dev/.github/actions/disable-github-caches@6098a53dae6d87c6ce7553c00d84012b7004aa70"
 BUILD_ENABLED = "${{ !inputs.allow-cache }}"
 
 

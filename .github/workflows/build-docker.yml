@@ -50,7 +50,7 @@ jobs:
       extra-images: ${{ steps.extra-images.outputs.matrix }}
     steps:
       - name: Disable GitHub Actions caches
-        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@c3892c0a9adbb81c11bbda1eb62e020455665b6a
+        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@6098a53dae6d87c6ce7553c00d84012b7004aa70
 
       - name: Set push variable
         env:
@@ -149,7 +149,7 @@ jobs:
       image-version: ${{ steps.meta.outputs.version }}
     steps:
       - name: Disable GitHub Actions caches
-        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@c3892c0a9adbb81c11bbda1eb62e020455665b6a
+        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@6098a53dae6d87c6ce7553c00d84012b7004aa70
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -249,7 +249,7 @@ jobs:
       matrix: ${{ fromJson(needs.docker-plan.outputs.extra-images) }}
     steps:
       - name: Disable GitHub Actions caches
-        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@c3892c0a9adbb81c11bbda1eb62e020455665b6a
+        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@6098a53dae6d87c6ce7553c00d84012b7004aa70
 
       # Login to DockerHub (when not pushing, it's to avoid rate-limiting)
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -423,7 +423,7 @@ jobs:
     if: ${{ needs.docker-plan.outputs.push == 'true' }}
     steps:
       - name: Disable GitHub Actions caches
-        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@c3892c0a9adbb81c11bbda1eb62e020455665b6a
+        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@6098a53dae6d87c6ce7553c00d84012b7004aa70
 
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
