@@ -12,12 +12,10 @@ const {
 
 async function main() {
   if (
-    !["linux", "darwin"].includes(process.platform) ||
+    !["linux", "darwin", "win32"].includes(process.platform) ||
     process.env.GITHUB_REPOSITORY !== "astral-sh/uv-dev"
   )
-    throw new Error(
-      "This disposable prototype is restricted to uv-dev Linux/macOS jobs",
-    );
+    throw new Error("This disposable prototype is restricted to uv-dev jobs");
   const key = process.env["INPUT_SEED-KEY"];
   if (key !== `${prefix()}-raw-seed`)
     throw new Error("Unexpected disposable seed key");
@@ -38,6 +36,10 @@ async function main() {
         scheme: "http",
         port: Number(url.port),
         listen_port: Number(url.port) + 19000,
+        forward_origin:
+          url.port === "978"
+            ? "results-receiver.actions.githubusercontent.com"
+            : "artifactcache.actions.githubusercontent.com",
         addresses: [hostname],
       };
       continue;
@@ -79,16 +81,31 @@ async function main() {
   );
   fs.writeFileSync(plan, JSON.stringify(origins));
   const macos = process.platform === "darwin";
-  const directory = macos ? "/var/run/uv-cache-proxy" : "/run/uv-cache-proxy";
-  const installer = macos ? "install-macos.py" : "install.py";
+  const windows = process.platform === "win32";
+  const directory = windows
+    ? path.join(process.env.ProgramData, "uv-cache-proxy")
+    : macos
+      ? "/var/run/uv-cache-proxy"
+      : "/run/uv-cache-proxy";
+  const installer = windows
+    ? "install-windows.py"
+    : macos
+      ? "install-macos.py"
+      : "install.py";
   execFileSync(
-    "sudo",
-    ["python3", path.join(__dirname, installer), "install", plan],
+    windows ? "python" : "sudo",
+    [
+      ...(windows ? [] : ["python3"]),
+      path.join(__dirname, installer),
+      "install",
+      plan,
+    ],
     { stdio: "inherit" },
   );
-  const cert = macos
-    ? `${directory}/ca.crt`
-    : "/usr/local/share/ca-certificates/uv-cache-proxy.crt";
+  const cert =
+    macos || windows
+      ? path.join(directory, "ca.crt")
+      : "/usr/local/share/ca-certificates/uv-cache-proxy.crt";
   const health = serviceUrl(process.env.ACTIONS_RESULTS_URL);
   health.pathname = "/__uv_cache_proxy_health";
   health.search = "";
@@ -122,6 +139,7 @@ async function main() {
   emit("bootstrap", {
     baselineReadable: true,
     proxyHealthy: healthy,
+    directIsolation: !windows,
     serviceHostCount: Object.keys(origins).length,
     blockedAddressCount: new Set(
       Object.values(origins).flatMap((value) => value.addresses),

@@ -143,6 +143,10 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 {"X-UV-Cache-Proxy": "denied"},
             )
             return
+        if origin.get("forward_origin"):
+            authority = origin["forward_origin"]
+            host = authority
+            origin = self.server.origins[authority]
         try:
             body = self.read_body()
             headers = {

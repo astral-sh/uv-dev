@@ -37,6 +37,12 @@ def validate(origins):
                 or hostname != f"{address}:{value['port']}"
             ):
                 raise ValueError("unexpected private cache endpoint")
+            if value.get("forward_origin") != (
+                "results-receiver.actions.githubusercontent.com"
+                if value["port"] == 978
+                else "artifactcache.actions.githubusercontent.com"
+            ):
+                raise ValueError("unexpected forwarding origin")
             continue
         if not hostname.endswith(".actions.githubusercontent.com") or any(
             character not in "abcdefghijklmnopqrstuvwxyz0123456789.-"

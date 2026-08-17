@@ -99,6 +99,7 @@ async function main() {
     )
     .equals(content);
   const result = {
+    directIsolation: process.platform !== "win32",
     rawReadDenied: isDenied(read, "read"),
     rawWrite: write,
     legacyReadDenied:
@@ -127,7 +128,7 @@ async function main() {
     !write.denied ||
     !result.legacyReadDenied ||
     !direct.length ||
-    !direct.every((value) => value.blocked) ||
+    (result.directIsolation && !direct.every((value) => value.blocked)) ||
     !oidcWorks ||
     !artifactMatches
   )
