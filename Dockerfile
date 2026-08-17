@@ -39,10 +39,10 @@ RUN case "$TARGETPLATFORM" in \
   esac
 
 RUN arch="$(uname -m)" && \
-  case "${RUSTUP_VERSION}:${arch}" in \
-  1.28.1:aarch64) checksum="${RUSTUP_CHECKSUM_AARCH64}" ;; \
-  1.28.1:x86_64) checksum="${RUSTUP_CHECKSUM_X86_64}" ;; \
-  *) echo "No trusted rustup checksum for version ${RUSTUP_VERSION} (${arch})" >&2; exit 1 ;; \
+  case "${arch}" in \
+  aarch64) checksum="${RUSTUP_CHECKSUM_AARCH64}" ;; \
+  x86_64) checksum="${RUSTUP_CHECKSUM_X86_64}" ;; \
+  *) echo "Unsupported rustup host architecture: ${arch}" >&2; exit 1 ;; \
   esac && \
   curl --proto '=https' --tlsv1.2 -sSf \
   "https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/${arch}-unknown-linux-gnu/rustup-init" \
