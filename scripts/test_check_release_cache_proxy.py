@@ -13,7 +13,7 @@ SCRIPT = Path(__file__).with_name("check_release_cache_proxy.py")
 RELEASE = ".github/workflows/release.yml"
 BUILD = ".github/workflows/build-release-binaries.yml"
 ACTION = ".github/actions/disable-github-caches/action.yml"
-USES = "astral-sh/uv-dev/.github/actions/disable-github-caches@c3892c0a9adbb81c11bbda1eb62e020455665b6a"
+USES = "astral-sh/uv-dev/.github/actions/disable-github-caches@6098a53dae6d87c6ce7553c00d84012b7004aa70"
 BUILD_ENABLED = "${{ !inputs.allow-cache }}"
 
 
@@ -32,7 +32,7 @@ class ReleaseCacheProxyTest(unittest.TestCase):
             },
         }
         self.write(ACTION, self.action)
-        for name in ("pre.cjs", "main.cjs", "post.cjs"):
+        for name in ("pre.cjs", "main.cjs", "post.cjs", "common.cjs", "action.py"):
             (self.root / Path(ACTION).parent / name).write_text("")
 
     def write(self, path: str, document: dict) -> None:
@@ -115,8 +115,12 @@ class ReleaseCacheProxyTest(unittest.TestCase):
 
     def test_entry_point_files_must_exist(self) -> None:
         self.steps([{"uses": USES}])
-        (self.root / Path(ACTION).parent / "pre.cjs").unlink()
-        self.check(f"{ACTION}: missing pre.cjs")
+        for name in ("pre.cjs", "common.cjs", "action.py"):
+            with self.subTest(name=name):
+                path = self.root / Path(ACTION).parent / name
+                path.unlink()
+                self.check(f"{ACTION}: missing {name}")
+                path.write_text("")
 
 
 if __name__ == "__main__":

@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parent.parent
 RELEASE_WORKFLOW = Path(".github/workflows/release.yml")
 CACHEABLE_BUILD_WORKFLOW = Path(".github/workflows/build-release-binaries.yml")
 CACHE_PROXY_ACTION = Path(".github/actions/disable-github-caches/action.yml")
-CACHE_PROXY_USES = "astral-sh/uv-dev/.github/actions/disable-github-caches@c3892c0a9adbb81c11bbda1eb62e020455665b6a"
+CACHE_PROXY_USES = "astral-sh/uv-dev/.github/actions/disable-github-caches@6098a53dae6d87c6ce7553c00d84012b7004aa70"
 # Recognize only these reviewed expressions, not arbitrary GitHub expressions.
 BUILD_CACHE_MODE = "${{ inputs.allow-cache && 'write' || 'none' }}"
 BUILD_UV_CACHE = "${{ inputs.allow-cache && 'auto' || 'false' }}"

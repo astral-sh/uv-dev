@@ -24,7 +24,7 @@ jobs:
       VERSION: ${{ fromJson(inputs.plan).announcement_tag }}
     steps:
       - name: Disable GitHub Actions caches
-        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@c3892c0a9adbb81c11bbda1eb62e020455665b6a
+        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@6098a53dae6d87c6ce7553c00d84012b7004aa70
 
       - name: "Download GitHub Artifacts"
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1

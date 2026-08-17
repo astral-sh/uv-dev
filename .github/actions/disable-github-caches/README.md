@@ -5,6 +5,9 @@ GitHub load the action before checkout, including on runners too old for `$/` ac
 its `pre` hook runs before later action hooks. The shared binary-build workflow can pass
 `enabled: ${{ !inputs.allow-cache }}` to preserve ordinary CI caching.
 
+The action logic uses the Python standard library. GitHub's `node24` action runtime is retained only
+for the three small launchers needed to run Python during the `pre`, `main`, and `post` hooks.
+
 The action starts a local TLS proxy for the GitHub cache service hostnames. It rejects the legacy
 cache API and v2 `CacheService`, while forwarding artifact traffic. On Depot Linux runners it also
 redirects the injected private HTTP cache endpoints. Linux and macOS block direct TCP connections to
