@@ -14,6 +14,7 @@ CA = Path("/usr/local/share/ca-certificates/uv-cache-proxy.crt")
 USER = "uv-cache-proxy"
 CHAIN = "UV_CACHE_PROXY"
 NAT_CHAIN = "UV_CACHE_PROXY_NAT"
+FORWARD_CHAIN = "UV_CACHE_PROXY_FWD"
 MARKER = "# uv-release-cache-proxy"
 
 
@@ -153,13 +154,16 @@ def install(plan):
     addresses = {
         address for origin in secure_origins.values() for address in origin["addresses"]
     }
+    private_origins = [
+        origin for origin in origins.values() if origin.get("scheme") == "http"
+    ]
     for program, version in (("iptables", 4), ("ip6tables", 6)):
         selected = sorted(
             address
             for address in addresses
             if ipaddress.ip_address(address).version == version
         )
-        if not selected:
+        if not selected and not (version == 4 and private_origins):
             continue
         run(program, "-N", CHAIN)
         run(
@@ -190,9 +194,24 @@ def install(plan):
                 "tcp-reset",
             )
         run(program, "-I", "OUTPUT", "1", "-j", CHAIN)
-    private_origins = [
-        origin for origin in origins.values() if origin.get("scheme") == "http"
-    ]
+        run(program, "-N", FORWARD_CHAIN)
+        for address in selected:
+            run(
+                program,
+                "-A",
+                FORWARD_CHAIN,
+                "-d",
+                address,
+                "-p",
+                "tcp",
+                "--dport",
+                "443",
+                "-j",
+                "REJECT",
+                "--reject-with",
+                "tcp-reset",
+            )
+        run(program, "-I", "FORWARD", "1", "-j", FORWARD_CHAIN)
     if private_origins:
         run("iptables", "-t", "nat", "-N", NAT_CHAIN)
         run(
@@ -209,6 +228,21 @@ def install(plan):
             "RETURN",
         )
         for origin in private_origins:
+            run(
+                "iptables",
+                "-A",
+                FORWARD_CHAIN,
+                "-d",
+                origin["addresses"][0],
+                "-p",
+                "tcp",
+                "--dport",
+                str(origin["port"]),
+                "-j",
+                "REJECT",
+                "--reject-with",
+                "tcp-reset",
+            )
             run(
                 "iptables",
                 "-t",
@@ -237,6 +271,10 @@ def cleanup():
         run("iptables", "-t", "nat", "-F", NAT_CHAIN)
         run("iptables", "-t", "nat", "-X", NAT_CHAIN)
     for program in ("iptables", "ip6tables"):
+        if run(program, "-S", FORWARD_CHAIN, check=False).returncode == 0:
+            run(program, "-D", "FORWARD", "-j", FORWARD_CHAIN, check=False)
+            run(program, "-F", FORWARD_CHAIN)
+            run(program, "-X", FORWARD_CHAIN)
         if run(program, "-S", CHAIN, check=False).returncode == 0:
             run(program, "-D", "OUTPUT", "-j", CHAIN, check=False)
             run(program, "-F", CHAIN)

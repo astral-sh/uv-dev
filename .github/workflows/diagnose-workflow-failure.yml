@@ -63,7 +63,7 @@ jobs:
       id-token: write
     steps:
       - name: Install exact release action before other hooks
-        uses: $/.github/actions/disable-github-caches
+        uses: astral-sh/uv-dev/.github/actions/disable-github-caches@a0ca53c7508f5625011f581f30c5934f881a33be
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: cache-proxy-seed-${{ github.run_id }}-${{ github.run_attempt }}
@@ -101,12 +101,34 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+      - name: Check Docker bridge cannot reach cache services
+        if: runner.os == 'Linux'
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+          image = "ubuntu@sha256:561618e2c15bf2397621dd04f96926663a3b5616c189cf7e38db7e82f5c538ea"
+          def connects(host, port):
+              command = ["docker", "run", "--rm", "--network", "bridge", image, "timeout", "5", "bash", "-c", 'exec 3<>"/dev/tcp/$1/$2"', "probe", host, str(port)]
+              return subprocess.run(command, check=False).returncode == 0
+          assert connects("github.com", 443), "container baseline failed"
+          origins = json.loads(Path(os.environ["UV_CACHE_PROXY_CONFIG"]).read_text())
+          endpoints = [(address, 443) for address in origins["results-receiver.actions.githubusercontent.com"]["addresses"] if ":" not in address]
+          endpoints += [(origin["addresses"][0], origin["port"]) for origin in origins.values() if origin.get("scheme") == "http"]
+          assert endpoints
+          for host, port in endpoints:
+              assert not connects(host, port), "container could reach a cache service"
+          print("Container cache-service connections were blocked.")
+          PY
+
   disabled:
     needs: seed
     runs-on: ubuntu-slim
     timeout-minutes: 5
     steps:
-      - uses: $/.github/actions/disable-github-caches
+      - uses: astral-sh/uv-dev/.github/actions/disable-github-caches@a0ca53c7508f5625011f581f30c5934f881a33be
         with:
           enabled: false
       - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
