@@ -6,6 +6,23 @@ env:
   CARGO_DIST_CHECKSUM: "cd355dab0b4c02fb59038fef87655550021d07f45f1d82f947a34ef98560abb8"
 
 jobs:
+  no-github-caches:
+    name: "release cache policy"
+    runs-on: ubuntu-slim
+    permissions: {}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.5"
+          enable-cache: false
+      - name: Check release cache policy
+        run: uv run --no-project --with pyyaml==6.0.3 python scripts/check_release_caches.py
+      - name: Test release cache policy
+        run: uv run --no-project --with pyyaml==6.0.3 python -m unittest discover -s scripts -p test_check_release_caches.py
+
   dist-plan:
     name: "dist plan"
     runs-on: ubuntu-latest
