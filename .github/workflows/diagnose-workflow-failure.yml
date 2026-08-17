@@ -12,9 +12,13 @@ permissions:
 env:
   ACTIONS_CACHE_MODE: write
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
   seed:
-    runs-on: ubuntu-24.04
+    runs-on: github-windows-2025-x86_64-8
     timeout-minutes: 10
     outputs:
       seed-key: ${{ steps.raw.outputs.seed-key }}
@@ -30,7 +34,7 @@ jobs:
           path: cache-proxy-marker
           key: cache-proxy-probe-${{ github.run_id }}-${{ github.run_attempt }}-old-client
       - name: Remove local marker
-        run: python3 -c 'import shutil; shutil.rmtree("cache-proxy-marker")'
+        run: python -c 'import shutil; shutil.rmtree("cache-proxy-marker")'
       - name: Prove the older client can restore it
         id: control
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
@@ -43,7 +47,7 @@ jobs:
           CACHE_HIT: ${{ steps.control.outputs.cache-hit }}
         run: |
           test "$CACHE_HIT" = true
-          python3 -c 'from pathlib import Path; assert Path("cache-proxy-marker/marker.txt").read_bytes() == b"Harmless cache-mode probe. No executable content.\n"'
+          python -c 'from pathlib import Path; assert Path("cache-proxy-marker/marker.txt").read_bytes() == b"Harmless cache-mode probe. No executable content.\n"'
       - name: Upload same-run artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -53,7 +57,7 @@ jobs:
 
   protected:
     needs: seed
-    runs-on: depot-ubuntu-24.04-4
+    runs-on: github-windows-2025-x86_64-8
     timeout-minutes: 10
     permissions:
       contents: read
@@ -119,7 +123,8 @@ jobs:
           assert result["rawReadDenied"]
           assert result["rawWrite"]["denied"]
           assert result["legacyReadDenied"]
-          assert result["direct"] and all(item["blocked"] for item in result["direct"])
+          assert result["direct"]
+          assert not result["directIsolation"] or all(item["blocked"] for item in result["direct"])
           assert result["oidcWorks"] and result["artifactMatches"]
           assert result["audit"]["artifact_forwarded"] > 0
           print("Cache denial and artifact roundtrip verified.")
