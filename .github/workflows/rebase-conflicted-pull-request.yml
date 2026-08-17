@@ -44,7 +44,7 @@ permissions: {}
 
 jobs:
   rebase:
-    name: "Rebase pull request #${{ inputs.number }}"
+    name: "Rebase ${{ github.repository }}#${{ inputs.number }}"
     runs-on: depot-ubuntu-24.04-4
     environment: automations
     timeout-minutes: 30
@@ -172,7 +172,7 @@ jobs:
           retention-days: 1
 
   push:
-    name: "Push rebased pull request #${{ inputs.number }}"
+    name: "Push rebased ${{ github.repository }}#${{ inputs.number }}"
     needs: rebase
     if: inputs.publish
     runs-on: ubuntu-slim

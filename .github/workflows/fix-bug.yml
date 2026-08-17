@@ -155,10 +155,41 @@ jobs:
 
           if jq --exit-status '.state == "closed"' \
             "$RUNNER_TEMP/bug-regression-pull-request.json" > /dev/null; then
-            python3 scripts/pull_request_promotion.py verify-regression \
-              --number "$pull_request_number" \
-              --head-ref "$PARENT_HEAD_REF" \
-              --head-sha "$PARENT_HEAD_SHA"
+            promotion_ref="automations/promote/$pull_request_number"
+            promotion_marker="<!-- uv-dev-promotion:$pull_request_number:$PARENT_HEAD_SHA -->"
+            dedicated=$(gh pr list --repo astral-sh/uv --state all --head "$promotion_ref" --limit 1000 \
+              --json number,headRefName,headRepository)
+            historical=$(gh pr list --repo astral-sh/uv --state all --head "$PARENT_HEAD_REF" --limit 1000 \
+              --json number,headRefName,headRepository)
+            candidates=$(jq --null-input --compact-output \
+              --argjson dedicated "$dedicated" --argjson historical "$historical" \
+              --arg promotion_ref "$promotion_ref" --arg head_ref "$PARENT_HEAD_REF" '
+                [$dedicated[] | select(.headRefName == $promotion_ref and .headRepository.nameWithOwner == "astral-sh/uv-dev")]
+                + [$historical[] | select(.headRefName == $head_ref and (.headRepository.nameWithOwner | IN("astral-sh/uv", "astral-sh/uv-dev")))]
+              ')
+            if [ "$(jq 'length' <<< "$candidates")" != 1 ]; then
+              echo "The closed regression-test pull request does not have exactly one upstream promotion." >&2
+              exit 1
+            fi
+            upstream_number=$(jq --raw-output '.[0].number' <<< "$candidates")
+            gh api "repos/astral-sh/uv/pulls/$upstream_number" \
+              > "$RUNNER_TEMP/promoted-regression-pull-request.json"
+            if ! jq --exit-status --arg head_ref "$PARENT_HEAD_REF" --arg head_sha "$PARENT_HEAD_SHA" \
+              --arg promotion_ref "$promotion_ref" --arg marker "$promotion_marker" '
+                (.state == "open" or .merged_at != null)
+                and .base.ref == "main" and .base.repo.full_name == "astral-sh/uv"
+                and (
+                  (.head.repo.full_name == "astral-sh/uv-dev" and .head.ref == $promotion_ref
+                    and .user.login == "astral-automations-bot[bot]"
+                    and ((.body // "" | sub("\\s+$"; "")) | endswith($marker)))
+                  or
+                  ((.head.repo.full_name | IN("astral-sh/uv", "astral-sh/uv-dev"))
+                    and .head.ref == $head_ref and .head.sha == $head_sha)
+                )
+              ' "$RUNNER_TEMP/promoted-regression-pull-request.json" > /dev/null; then
+              echo "The closed regression-test pull request was not promoted at its verified head." >&2
+              exit 1
+            fi
           fi
 
           git -c core.hooksPath=/dev/null fetch --no-tags \
@@ -481,10 +512,41 @@ jobs:
 
           if jq --exit-status '.state == "closed"' \
             "$RUNNER_TEMP/bug-regression-pull-request.json" > /dev/null; then
-            python3 scripts/pull_request_promotion.py verify-regression \
-              --number "$pull_request_number" \
-              --head-ref "$PARENT_HEAD_REF" \
-              --head-sha "$PARENT_HEAD_SHA"
+            promotion_ref="automations/promote/$pull_request_number"
+            promotion_marker="<!-- uv-dev-promotion:$pull_request_number:$PARENT_HEAD_SHA -->"
+            dedicated=$(gh pr list --repo astral-sh/uv --state all --head "$promotion_ref" --limit 1000 \
+              --json number,headRefName,headRepository)
+            historical=$(gh pr list --repo astral-sh/uv --state all --head "$PARENT_HEAD_REF" --limit 1000 \
+              --json number,headRefName,headRepository)
+            candidates=$(jq --null-input --compact-output \
+              --argjson dedicated "$dedicated" --argjson historical "$historical" \
+              --arg promotion_ref "$promotion_ref" --arg head_ref "$PARENT_HEAD_REF" '
+                [$dedicated[] | select(.headRefName == $promotion_ref and .headRepository.nameWithOwner == "astral-sh/uv-dev")]
+                + [$historical[] | select(.headRefName == $head_ref and (.headRepository.nameWithOwner | IN("astral-sh/uv", "astral-sh/uv-dev")))]
+              ')
+            if [ "$(jq 'length' <<< "$candidates")" != 1 ]; then
+              echo "The closed regression-test pull request does not have exactly one upstream promotion." >&2
+              exit 1
+            fi
+            upstream_number=$(jq --raw-output '.[0].number' <<< "$candidates")
+            gh api "repos/astral-sh/uv/pulls/$upstream_number" \
+              > "$RUNNER_TEMP/promoted-regression-pull-request.json"
+            if ! jq --exit-status --arg head_ref "$PARENT_HEAD_REF" --arg head_sha "$PARENT_HEAD_SHA" \
+              --arg promotion_ref "$promotion_ref" --arg marker "$promotion_marker" '
+                (.state == "open" or .merged_at != null)
+                and .base.ref == "main" and .base.repo.full_name == "astral-sh/uv"
+                and (
+                  (.head.repo.full_name == "astral-sh/uv-dev" and .head.ref == $promotion_ref
+                    and .user.login == "astral-automations-bot[bot]"
+                    and ((.body // "" | sub("\\s+$"; "")) | endswith($marker)))
+                  or
+                  ((.head.repo.full_name | IN("astral-sh/uv", "astral-sh/uv-dev"))
+                    and .head.ref == $head_ref and .head.sha == $head_sha)
+                )
+              ' "$RUNNER_TEMP/promoted-regression-pull-request.json" > /dev/null; then
+              echo "The closed regression-test pull request was not promoted at its verified head." >&2
+              exit 1
+            fi
           fi
 
           git -c core.hooksPath=/dev/null fetch --no-tags \
