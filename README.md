@@ -19,13 +19,16 @@ default Python, and astral-sh/uv#7684 shows the same tension between a globally 
 `UV_PYTHON` and `uv pip` environment selection under a different, architecture-specific trigger.
 No implementing pull request or requested environment variable was found. The reporter later
 closed astral-sh/uv#21191 after identifying `UV_PYTHON_SEARCH_PATH` as a possible existing solution;
-the current source supports that mechanism, subject to the usage details below. A maintainer has
-since clarified that the best overall way for uv to support Nix's model remains undecided.
+they subsequently confirmed that it appears to provide the behavior they wanted. The current source
+supports that result, subject to the usage details below. A maintainer has since clarified that the
+best overall way for uv to support Nix's model remains undecided.
 
 ## Current status and workaround
 
-The reporter closed the issue while noting uncertainty about whether `UV_PYTHON_SEARCH_PATH`
-already provides the desired behavior. Source inspection confirms the relevant command separation:
+The reporter closed the issue while initially uncertain whether `UV_PYTHON_SEARCH_PATH` provided
+the desired behavior, then confirmed that it appears to work in their environment. They did not
+provide the exact value used or a command transcript. Source inspection independently confirms the
+relevant command separation:
 
 - `UV_PYTHON_SEARCH_PATH`, added in uv 0.11.8, replaces `PATH` specifically for Python executable
   discovery.
@@ -40,10 +43,11 @@ select the Nix interpreter while allowing `uv pip install` to select the activat
 `UV_PYTHON`, the value is a platform-separated list of directories, not the path to one executable,
 and it replaces rather than augments `PATH` for interpreter discovery. Any fallback interpreter
 directories must therefore be included explicitly and ordered as desired. This exact Nix sequence
-has not been executed as part of the handoff, so the conclusion is source-backed rather than a
-recorded reproduction result. The maintainer's follow-up on astral-sh/uv#21191 also means this
-should be treated as a technically plausible current mechanism, not as an endorsed or final design
-for Nix integration.
+has not been executed as part of the handoff, but the reporter now confirms that the mechanism works
+for their use case. The absence of their exact configuration means this is a user-validated
+workaround rather than a fully recorded reproduction. The maintainer's follow-up on
+astral-sh/uv#21191 also means this should not be treated as an endorsed or final design for Nix
+integration.
 
 The previously documented fallback remains valid on older uv versions: scope `UV_PYTHON` to the
 creation command, for example `UV_PYTHON=/path/to/python uv venv new-venv`, or pass
