@@ -17,21 +17,34 @@ and describes the same consequence: `uv venv` uses the desired interpreter, whil
 selects the read-only base Python. astral-sh/uv#6645 discusses the broader idea of a lower-precedence
 default Python, and astral-sh/uv#7684 shows the same tension between a globally exported
 `UV_PYTHON` and `uv pip` environment selection under a different, architecture-specific trigger.
-No implementing pull request or requested environment variable was found.
+No implementing pull request or requested environment variable was found. The reporter later
+closed astral-sh/uv#21191 after identifying `UV_PYTHON_SEARCH_PATH` as a possible existing solution;
+the current source supports that conclusion, subject to the usage details below.
 
-## Draft response
+## Current status and workaround
 
-Thanks — this is the same request as astral-sh/uv#14748. That report likewise asks for a
-venv-scoped Python setting because exporting `UV_PYTHON` selects the desired Nix interpreter for
-`uv venv` but also directs `uv pip` to the read-only base interpreter instead of the activated
-environment.
+The reporter closed the issue while noting uncertainty about whether `UV_PYTHON_SEARCH_PATH`
+already provides the desired behavior. Source inspection confirms the relevant command separation:
 
-`UV_PYTHON` currently behaves like `--python` and is not limited to venv creation. For now, the
-workaround is to scope it to the creation command, for example
-`UV_PYTHON=/path/to/python uv venv new-venv`, or pass
-`uv venv --python /path/to/python`. The earlier issue was closed by its author without a linked
-implementation; the broader default-interpreter discussion remains open in astral-sh/uv#6645. We
-should centralize this venv-scoped request in astral-sh/uv#14748.
+- `UV_PYTHON_SEARCH_PATH`, added in uv 0.11.8, replaces `PATH` specifically for Python executable
+  discovery.
+- `uv venv` requests a system interpreter and therefore consults that executable search path.
+- `uv pip install` without `--python`, `UV_PYTHON`, `--system`, `--target`, or `--prefix` restricts
+  discovery to virtual environments, preferring the environment named by `VIRTUAL_ENV`; system
+  executable search paths are excluded in that mode.
+
+Consequently, setting `UV_PYTHON_SEARCH_PATH` to the directory containing the desired Nix
+interpreter, leaving `UV_PYTHON` unset, creating the venv, and activating it should make `uv venv`
+select the Nix interpreter while allowing `uv pip install` to select the activated venv. Unlike
+`UV_PYTHON`, the value is a platform-separated list of directories, not the path to one executable,
+and it replaces rather than augments `PATH` for interpreter discovery. Any fallback interpreter
+directories must therefore be included explicitly and ordered as desired. This exact Nix sequence
+has not been executed as part of the handoff, so the conclusion is source-backed rather than a
+recorded reproduction result.
+
+The previously documented fallback remains valid on older uv versions: scope `UV_PYTHON` to the
+creation command, for example `UV_PYTHON=/path/to/python uv venv new-venv`, or pass
+`uv venv --python /path/to/python`.
 
 ## Classification
 
@@ -46,6 +59,11 @@ regression: in astral-sh/uv#6645, a maintainer explains that `UV_PYTHON` is equi
 The requested venv-only setting would therefore be new configuration behavior. astral-sh/uv#14748
 was closed by its author, has no linked closing pull request, and the checkout contains none of the
 proposed `UV_BASE_PYTHON`, `UV_PYTHON_VENV`, or `UV_DEFAULT_PYTHON` identifiers.
+
+The later `UV_PYTHON_SEARCH_PATH` finding does not change the duplicate relationship, but it lowers
+the need for a new venv-specific variable on uv 0.11.8 and later. It controls discovery rather than
+expressing a direct interpreter request, which is why it can affect `uv venv` without overriding
+the virtual-only target selection used by a normal `uv pip install` invocation.
 
 ## Related
 
@@ -75,3 +93,9 @@ project commands ignoring active external environments and was resolved by the
 `uv pip` is obeying an explicitly exported `UV_PYTHON` instead of discovering the activated venv.
 astral-sh/uv#12748 was also ruled out because it asks to constrain parent-directory environment
 discovery rather than to separate venv base-interpreter selection from the `uv pip` target.
+
+Source inspection for the follow-up checked the environment-variable definition, Python discovery
+ordering, and the command-specific environment preferences. It confirms that
+`UV_PYTHON_SEARCH_PATH` was added in uv 0.11.8, overrides `PATH` only for executable discovery,
+participates in the system-interpreter lookup used by `uv venv`, and is not consulted by the
+virtual-only lookup used by an ordinary `uv pip install`.
