@@ -37,6 +37,11 @@ relevant command separation:
   discovery to virtual environments, preferring the environment named by `VIRTUAL_ENV`; system
   executable search paths are excluded in that mode.
 
+A maintainer notes that an OS-managed Python is ordinarily already available through `PATH`, so no
+uv-specific variable is generally required. `UV_PYTHON_SEARCH_PATH` is relevant here because the
+reporter wants to constrain or prioritize executable discovery independently of the later
+virtual-environment target selection.
+
 Consequently, setting `UV_PYTHON_SEARCH_PATH` to the directory containing the desired Nix
 interpreter, leaving `UV_PYTHON` unset, creating the venv, and activating it should make `uv venv`
 select the Nix interpreter while allowing `uv pip install` to select the activated venv. Unlike
