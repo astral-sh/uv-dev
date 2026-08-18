@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 14748,
+        "title": "feat: `UV_PYTHON` but only scoped to `uv venv` and similar internal commands which create a `venv`.",
+        "url": "https://github.com/astral-sh/uv/issues/14748",
+        "state": "closed",
+        "reason": "Exact prior request: a Nix user asks for UV_PYTHON_VENV because UV_PYTHON selects the intended venv-creation interpreter but then makes uv pip target the read-only Nix base interpreter. The author closed it without a linked implementation."
+      },
+      {
+        "kind": "issue",
+        "number": 6645,
+        "title": "Add `UV_DEFAULT_PYTHON` environment variable",
+        "url": "https://github.com/astral-sh/uv/issues/6645",
+        "state": "open",
+        "reason": "Broader interpreter-precedence discussion linked by a maintainer from astral-sh/uv#14748. It proposes a lower-precedence default rather than a setting limited to venv creation."
+      },
+      {
+        "kind": "issue",
+        "number": 7684,
+        "title": "python.org's -intel64 suffix confuses uv pip",
+        "url": "https://github.com/astral-sh/uv/issues/7684",
+        "state": "open",
+        "reason": "Adjacent manifestation on macOS: exporting UV_PYTHON for interpreter selection prevents uv pip from using the activated venv. Its architecture-specific discovery request differs from this Nix venv-scoping request."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests using UV_BASE_PYTHON, UV_PYTHON_VENV, UV_DEFAULT_PYTHON, combinations of UV_PYTHON with uv venv, uv pip, and VIRTUAL_ENV, the Nix external-management/read-only symptoms, and conceptual queries for base/default interpreters, activated-environment discovery, venv creation, and per-command selection. Inspected candidate bodies, comments, closure metadata, and linked discussions; no implementing pull request was found. astral-sh/uv#6612 was ruled out as canonical because it concerns project commands ignoring active external environments, while this report concerns uv pip obeying an explicitly exported UV_PYTHON."
+  },
+  "type": "duplicate",
+  "type_reason": "astral-sh/uv#14748 requests the same venv-scoped interpreter setting for the same Nix workflow and uv pip failure against a read-only base interpreter. Duplicate takes precedence over enhancement. Maintainer comments establish that UV_PYTHON is intentionally equivalent to --python and broadly scoped, so this is a request for new configuration behavior rather than a regression.",
+  "summary": "astral-sh/uv#14748 is an exact prior report. astral-sh/uv#6645 covers a broader lower-precedence default Python, while astral-sh/uv#7684 documents the same UV_PYTHON-versus-activated-venv tension under a different trigger. No implementation was found.",
+  "draft_response": "Thanks — this is the same request as astral-sh/uv#14748. That report likewise asks for a venv-scoped Python setting because exporting `UV_PYTHON` selects the desired Nix interpreter for `uv venv` but also directs `uv pip` to the read-only base interpreter instead of the activated environment. `UV_PYTHON` currently behaves like `--python` and is not limited to venv creation. For now, the workaround is to scope it to the creation command, for example `UV_PYTHON=/path/to/python uv venv new-venv`, or pass `uv venv --python /path/to/python`. The earlier issue was closed by its author without a linked implementation; the broader default-interpreter discussion remains open in astral-sh/uv#6645. We should centralize this venv-scoped request in astral-sh/uv#14748."
+}
