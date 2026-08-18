@@ -23,20 +23,21 @@ The reporter clarified that the practical impact is policy enforcement rather th
 exposure: their JFrog/Artifactory scan flags the locked version as critically vulnerable and blocks
 uv's use in their CI/CD environment. This scanner result and policy consequence are user-reported;
 the attached screenshot provides supporting context but has not been independently reproduced.
+A uv maintainer subsequently characterized JFrog's alert as a false positive because the affected
+HTTP/3/QUIC code is not used, advised the reporter to contact their JFrog representative, and said
+the dependency will be updated in due course. Maintainers do not consider the advisories security
+issues in uv itself.
 
 No existing issue or pull request in astral-sh/uv tracks this update. The closest related work is
 astral-sh/uv#20025, a prior merged lockfile-only security bump for the same optional dependency, as
 well as the upstream fix and its 0.11.x backport used to publish `quinn-proto` 0.11.17.
 
-## Draft response
+## Maintainer decision
 
-Thanks. The checkout does retain `quinn-proto` 0.11.15 in `Cargo.lock`, and upstream's 0.11.17
-release contains the fixes from quinn-rs/quinn#2789 and quinn-rs/quinn#2790 for the cited
-advisories. uv does not enable reqwest's HTTP/3 feature, so `quinn-proto` is not selected in the
-resolved uv workspace build graph; this does not indicate exposure in shipped uv binaries.
-Updating the lock entry is still useful dependency maintenance and avoids vulnerable-lockfile
-reports. The next step is a targeted `cargo update -p quinn-proto --precise 0.11.17`, with the
-resulting lockfile diff checked to ensure it contains only the expected dependency changes.
+Maintainers do not consider GHSA-qfwj-vfxf-92j2 or GHSA-2hv7-gw8g-gpq5 security issues in uv
+because uv does not use the affected HTTP/3/QUIC functionality. They consider the JFrog alert a
+false positive and recommend that affected users contact their JFrog representative. The dependency
+will still be updated in due course; no specific release or completion date was given.
 
 ## Classification
 
@@ -44,12 +45,11 @@ This is an enhancement because the requested change improves dependency hygiene 
 an established uv runtime defect. Upstream confirms that 0.11.17 fixes the cited vulnerabilities,
 and the lockfile currently records the affected 0.11.15 version. At the same time, repository and
 Cargo metadata confirm that quinn is optional behind reqwest's disabled `http3` feature, so the
-vulnerable code is not part of uv's selected build graph. A maintainer's confirmation that uv does
-not use HTTP/3 or QUIC reinforces this conclusion, but does not by itself decide whether to update
-the unused lockfile entry. The evidence supports a targeted maintenance update, not a claim that
-current uv binaries expose the upstream QUIC behavior. The reported JFrog/Artifactory CI/CD block
-gives the lockfile-only update concrete user impact and may affect prioritization, while leaving the
-enhancement classification unchanged.
+vulnerable code is not part of uv's selected build graph. Maintainers confirmed that uv does not use
+HTTP/3 or QUIC, do not treat these advisories as uv security issues, and plan to update the
+dependency in due course. The evidence supports a maintenance update, not a claim that current uv
+binaries expose the upstream QUIC behavior. The reported JFrog/Artifactory CI/CD block gives the
+lockfile-only update concrete user impact while leaving the enhancement classification unchanged.
 
 ## Related
 
@@ -75,9 +75,9 @@ No open or closed issue, or open, closed, or merged pull request, was found that
 - `cargo tree --locked --invert quinn-proto --edges all --workspace --target all` reports no reverse
   dependency, confirming that the lockfile entry is not selected for any workspace target or edge
   kind.
-- A repository member confirmed in astral-sh/uv#21177 that uv does not use HTTP/3 or QUIC. This is
-  consistent with the workspace feature configuration and Cargo dependency-tree result; the
-  comment does not state a decision about whether the unused lockfile entry should still be bumped.
+- Repository members confirmed in astral-sh/uv#21177 that uv does not use HTTP/3 or QUIC. They do
+  not consider the advisories security issues in uv, characterize JFrog's alert as a false positive,
+  recommend contacting JFrog, and intend to update the dependency in due course.
 - The reporter says JFrog/Artifactory flags the current uv release for critical vulnerabilities due
   to this lockfile entry, causing their company policy to block uv in CI/CD. Treat the scanner
   finding and policy effect as a user report, not as evidence that uv ships active QUIC code.
