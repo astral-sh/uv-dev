@@ -4,7 +4,15 @@ set -euo pipefail
 
 # GitHub may initially return UNKNOWN while it recalculates mergeability after the base moves.
 for attempt in {1..5}; do
-    pull_requests=$(gh pr list --base main --state open --limit 1000 "$@" --json number,author,mergeable,url,baseRefName,headRefName,headRefOid,headRepository)
+    if ! pull_requests=$(gh pr list --base main --state open --limit 1000 "$@" --json number,author,mergeable,url,baseRefName,headRefName,headRefOid,headRepository); then
+        if (( attempt == 5 )); then
+            echo "Failed to query pull request mergeability after $attempt attempts." >&2
+            exit 1
+        fi
+        echo "GitHub mergeability request failed (attempt $attempt/5); retrying..." >&2
+        sleep 5
+        continue
+    fi
     unknown=$(jq '[.[] | select(.mergeable == "UNKNOWN")] | length' <<< "$pull_requests")
 
     if (( unknown == 0 || attempt == 5 )); then
