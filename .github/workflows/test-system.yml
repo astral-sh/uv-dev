@@ -248,7 +248,21 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - name: "Install GraalPy"
+        id: setup-graalpy
+        continue-on-error: true
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "graalpy24.1"
+
+      - name: "Check GraalPy installation"
+        id: check-graalpy
+        continue-on-error: true
+        run: graalpy --version
+
+      - name: "Retry GraalPy installation"
+        if: steps.setup-graalpy.outcome == 'failure' || steps.check-graalpy.outcome == 'failure'
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "graalpy24.1"
 
@@ -261,7 +275,9 @@ jobs:
         run: chmod +x ./uv
 
       - name: "Print Python path"
-        run: echo $(which graalpy)
+        run: |
+          command -v graalpy
+          graalpy --version
 
       - name: "Validate global Python install"
         run: graalpy scripts/check_system_python.py --uv ./uv
