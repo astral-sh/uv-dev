@@ -16,7 +16,8 @@ with default features disabled and does not enable reqwest's `http3` feature. In
 quinn is an optional dependency selected by `http3`. A locked Cargo reverse-dependency check across
 all workspace targets and all dependency edge kinds reports no package depending on
 `quinn-proto`. The affected crate is therefore retained in the lockfile but is not selected in
-uv's resolved workspace build graph.
+uv's resolved workspace build graph. A uv maintainer has also confirmed in astral-sh/uv#21177 that
+the project does not use HTTP/3 or QUIC.
 
 No existing issue or pull request in astral-sh/uv tracks this update. The closest related work is
 the merged upstream fix and its 0.11.x backport used to publish `quinn-proto` 0.11.17.
@@ -37,8 +38,10 @@ This is an enhancement because the requested change improves dependency hygiene 
 an established uv runtime defect. Upstream confirms that 0.11.17 fixes the cited vulnerabilities,
 and the lockfile currently records the affected 0.11.15 version. At the same time, repository and
 Cargo metadata confirm that quinn is optional behind reqwest's disabled `http3` feature, so the
-vulnerable code is not part of uv's selected build graph. The evidence supports a targeted
-maintenance update, not a claim that current uv binaries expose the upstream QUIC behavior.
+vulnerable code is not part of uv's selected build graph. A maintainer's confirmation that uv does
+not use HTTP/3 or QUIC reinforces this conclusion, but does not by itself decide whether to update
+the unused lockfile entry. The evidence supports a targeted maintenance update, not a claim that
+current uv binaries expose the upstream QUIC behavior.
 
 ## Related
 
@@ -58,6 +61,9 @@ No related open or closed issue, or open, closed, or merged pull request, was fo
 - `cargo tree --locked --invert quinn-proto --edges all --workspace --target all` reports no reverse
   dependency, confirming that the lockfile entry is not selected for any workspace target or edge
   kind.
+- A repository member confirmed in astral-sh/uv#21177 that uv does not use HTTP/3 or QUIC. This is
+  consistent with the workspace feature configuration and Cargo dependency-tree result; the
+  comment does not state a decision about whether the unused lockfile entry should still be bumped.
 - The upstream `quinn-proto` 0.11.17 release says it fixes the cited advisories and identifies
   quinn-rs/quinn#2789 and quinn-rs/quinn#2790 as the implementation and 0.11.x release backport.
 - Literal searches covered `quinn-proto`, `0.11.17`, both GHSA identifiers, and the exact memory and
