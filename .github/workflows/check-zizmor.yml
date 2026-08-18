@@ -15,6 +15,15 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: zizmorcore/zizmor-action@3dc1ecc9bcb9e94e9b2c709687979e1298497054 # v0.6.2
+      - name: "Run zizmor"
+        id: zizmor
+        continue-on-error: true
+        uses: zizmorcore/zizmor-action@3dc1ecc9bcb9e94e9b2c709687979e1298497054 # v0.6.2
+        with:
+          advanced-security: ${{ github.repository == 'astral-sh/uv' }}
+
+      - name: "Retry zizmor"
+        if: steps.zizmor.outcome == 'failure'
+        uses: zizmorcore/zizmor-action@3dc1ecc9bcb9e94e9b2c709687979e1298497054 # v0.6.2
         with:
           advanced-security: ${{ github.repository == 'astral-sh/uv' }}
