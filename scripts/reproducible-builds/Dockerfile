@@ -26,7 +26,8 @@ RUN curl --proto '=https' --tlsv1.2 -fsSL \
 
 # Match scripts/install-cargo-extensions.sh, but install for the GNU host.
 RUN cargo install --locked --version 0.7.4 \
-    --target x86_64-unknown-linux-gnu cargo-auditable
+    --target x86_64-unknown-linux-gnu cargo-auditable \
+    && cargo install --list > /build-tools/cargo-extensions.txt
 
 COPY build.sh /usr/local/bin/build-reproducible-release
 ENTRYPOINT ["bash", "/usr/local/bin/build-reproducible-release"]

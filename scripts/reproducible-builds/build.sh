@@ -48,7 +48,7 @@ export CXXFLAGS="$CFLAGS"
     cargo -V
     "$TARGET_CC" --version
     "$TARGET_CC" -print-sysroot
-    cargo install --list --root /usr/local/cargo
+    cat /build-tools/cargo-extensions.txt
 } > /output/toolchain.txt
 
 cargo auditable build --frozen --release --package uv \
