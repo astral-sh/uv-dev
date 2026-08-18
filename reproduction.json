@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "Using installed uv 0.12.5 with fresh temporary caches, a controlled execution of Pyodide’s Windows-only launcher branch reproduced the failure. After `uv venv simulated-venv --python cpython-3.13.2-emscripten-wasm32-musl`, both `uv pip install --python simulated-venv --no-build click` and the executable-selector equivalent reported environment `/` and attempted `//lib/python3.13/site-packages/`. Linux returned error 30 instead of Windows error 53. Existing Pyodide tests do not cover explicit `--python` installation."
+}
