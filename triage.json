@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 17658,
+        "title": "Support Pyodide interpreter in windows",
+        "url": "https://github.com/astral-sh/uv/pull/17658",
+        "state": "merged",
+        "reason": "Closest implementation history: it enabled Windows + Pyodide `uv pip` and tested an activated uv-created venv, but not either explicit `--python` form reported here."
+      },
+      {
+        "kind": "issue",
+        "number": 12729,
+        "title": "Pyodide support?",
+        "url": "https://github.com/astral-sh/uv/issues/12729",
+        "state": "closed",
+        "reason": "The original Pyodide umbrella covered virtual-environment creation and wheel installation; its discussion identified Windows support as unresolved before astral-sh/uv#17658."
+      },
+      {
+        "kind": "issue",
+        "number": 19963,
+        "title": "Cross-building win->linux using explicit ``--python-platform=`` installs to wrong site-packages dir",
+        "url": "https://github.com/astral-sh/uv/issues/19963",
+        "state": "closed",
+        "reason": "Adjacent host/target layout mismatch, but it uses `--prefix` and `--python-platform` without a venv; maintainers confirmed that API intentionally follows the host layout."
+      }
+    ],
+    "search_scope": "Searched exact fragments including `//lib/python3.13/site-packages`, “network path was not found,” “environment at: /,” `emscripten-wasm32-musl`, and Windows venv layout terms. Conceptual searches covered Pyodide/Emscripten support, Windows virtual environments, `--python` destination inference, sysconfig schemes, mixed POSIX/Windows paths, and cross-platform installation. Closed issues and merged pull requests were checked for historical fixes. No existing tracker contained the same explicit-venv failure. astral-sh/uv#16023 was ruled out because it concerns Pyodide naming/discovery, astral-sh/uv#15709 because it concerns Nix interpreter-selection semantics, and astral-sh/uv#19963 because it uses materially different APIs."
+  },
+  "type": "bug",
+  "type_reason": "Windows + Pyodide package installation is supported by astral-sh/uv#17658, but explicitly selecting a uv-created venv resolves it as `/` and produces an invalid UNC-like destination. No open issue or pull request already tracks this invocation path, so it is a bug rather than a duplicate.",
+  "summary": "No same-symptom duplicate was found. The closest history is Windows Pyodide support in astral-sh/uv#17658; astral-sh/uv#19963 is only adjacent because its intentional `--prefix` behavior does not involve an existing venv.",
+  "draft_response": "Thanks for the clear reproduction. Windows + Pyodide package installation is intended to work; astral-sh/uv#17658 added support and covered installation into an activated uv-created venv. This report exposes a different path: explicitly selecting that venv, either by directory or by `Scripts\\python.exe`, resolves the environment as `/` and produces a destination that is not valid for the Windows venv.\n\nThis differs from the intentional `--prefix` plus `--python-platform` behavior discussed in astral-sh/uv#19963, so this should be treated as a bug. The next useful step is to reproduce both explicit `--python` forms against `main` and extend the Windows Pyodide integration coverage from astral-sh/uv#17658 to cover them."
+}
