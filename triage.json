@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 18967,
+        "title": "Add Windows executable Metadata and Code Signing to uv.exe",
+        "url": "https://github.com/astral-sh/uv/issues/18967",
+        "state": "closed",
+        "reason": "Closest prior request: it asks for Product Name and Company Name in Windows File Properties, but also bundles code signing and concerns executable metadata rather than the Installed Apps entry."
+      },
+      {
+        "kind": "issue",
+        "number": 10336,
+        "title": "Sign published executables for Windows",
+        "url": "https://github.com/astral-sh/uv/issues/10336",
+        "state": "open",
+        "reason": "astral-sh/uv#18967 was closed in favor of this canonical signing discussion. It covers verified publisher identity, not Installed Apps descriptions, icons, or registration metadata."
+      },
+      {
+        "kind": "pull_request",
+        "number": 18280,
+        "title": "Add code signing of release binaries via `cargo-code-sign`",
+        "url": "https://github.com/astral-sh/uv/pull/18280",
+        "state": "open",
+        "reason": "This draft implements signing for astral-sh/uv#10336, but does not add Installed Apps fields or Windows executable version resources."
+      },
+      {
+        "kind": "issue",
+        "number": 11456,
+        "title": "Guide folks to WinGet by default for Windows installations in README",
+        "url": "https://github.com/astral-sh/uv/issues/11456",
+        "state": "open",
+        "reason": "Its discussion establishes that WinGet portable installations create the registry records used by Add or Remove Programs, but it tracks installation guidance rather than richer app metadata."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests using the title and terms including comprehensive description, Apps & Features, Installed apps, Add and Remove Programs, Product Name, Company Name, File Properties, DisplayIcon, AppsAndFeaturesEntries, Windows installer/application metadata, executable resources, generic icons, publisher, WinGet portable registry entries, MSI metadata, uninstall entries, and signing. Inspected the astral-sh/uv#18967 → astral-sh/uv#10336 → astral-sh/uv#18280 chain and WinGet discussion astral-sh/uv#11456. astral-sh/uv#20815 was ruled out because it concerns a release blocked by a missing WinGet manifest property, not installed-entry presentation. No merged fix or regression was found."
+  },
+  "type": "enhancement",
+  "type_reason": "The screenshot establishes a sparse Windows entry, but its visible name and version are not shown to be incorrect. This requests richer product metadata and presentation. Existing signing discussions do not already track the Installed Apps fields shown here.",
+  "summary": "No existing thread clearly tracks richer Windows Installed Apps metadata. astral-sh/uv#18967 is the closest metadata request, while its canonical issue and draft implementation address signing; astral-sh/uv#11456 identifies WinGet portable registration as a possible subsystem.",
+  "draft_response": "Thanks. The screenshot shows a Windows Installed Apps entry with only uv's name and version, plus a generic icon. The current WinGet manifest for 0.12.5 already contains publisher, description, project, support, documentation, and license metadata. astral-sh/uv#18967 previously requested metadata on `uv.exe` and was redirected to the code-signing discussion in astral-sh/uv#10336, but those issues do not establish which layer is responsible for this entry.\n\nCould you confirm how uv was installed, especially whether you used `winget install --id=astral-sh.uv -e`, and which fields you want Windows to show—for example the publisher, a description or support link, or an application icon? Also, the screenshot appears to show 0.12.5 while the report says 0.12.15; please confirm the installed version. That will determine whether this belongs in WinGet's portable-package registration or uv's executable resources."
+}
