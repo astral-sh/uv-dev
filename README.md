@@ -1,21 +1,69 @@
-# Issue context
+# Bump `quinn-proto` to 0.11.17
 
-Issue: owner/repository#number
+Issue: astral-sh/uv#21177
 
-Classification: bug, enhancement, duplicate, or question
+Classification: enhancement
 
 ## Summary
 
-Describe the reported behavior or requested capability and summarize the most important findings.
+The issue requests a targeted update of the `quinn-proto` entry in `Cargo.lock` from 0.11.15 to
+0.11.17. The cited upstream release addresses two high-severity remote-memory-exhaustion
+advisories: GHSA-qfwj-vfxf-92j2, involving a bypass of the stream-reassembly chunk guard, and
+GHSA-2hv7-gw8g-gpq5, involving zero-length DATAGRAM frames bypassing receive-buffer accounting.
+
+The checkout does contain `quinn-proto` 0.11.15 in `Cargo.lock`. However, uv configures reqwest
+with default features disabled and does not enable reqwest's `http3` feature. In reqwest 0.13.4,
+quinn is an optional dependency selected by `http3`. A locked Cargo reverse-dependency check across
+all workspace targets and all dependency edge kinds reports no package depending on
+`quinn-proto`. The affected crate is therefore retained in the lockfile but is not selected in
+uv's resolved workspace build graph.
+
+No existing issue or pull request in astral-sh/uv tracks this update. The closest related work is
+the merged upstream fix and its 0.11.x backport used to publish `quinn-proto` 0.11.17.
 
 ## Draft response
 
-Draft a proposed reply for maintainer review.
+Thanks. The checkout does retain `quinn-proto` 0.11.15 in `Cargo.lock`, and upstream's 0.11.17
+release contains the fixes from quinn-rs/quinn#2789 and quinn-rs/quinn#2790 for the cited
+advisories. uv does not enable reqwest's HTTP/3 feature, so `quinn-proto` is not selected in the
+resolved uv workspace build graph; this does not indicate exposure in shipped uv binaries.
+Updating the lock entry is still useful dependency maintenance and avoids vulnerable-lockfile
+reports. The next step is a targeted `cargo update -p quinn-proto --precise 0.11.17`, with the
+resulting lockfile diff checked to ensure it contains only the expected dependency changes.
 
 ## Classification
 
-Explain why the selected classification fits, distinguishing confirmed findings from hypotheses.
+This is an enhancement because the requested change improves dependency hygiene without correcting
+an established uv runtime defect. Upstream confirms that 0.11.17 fixes the cited vulnerabilities,
+and the lockfile currently records the affected 0.11.15 version. At the same time, repository and
+Cargo metadata confirm that quinn is optional behind reqwest's disabled `http3` feature, so the
+vulnerable code is not part of uv's selected build graph. The evidence supports a targeted
+maintenance update, not a claim that current uv binaries expose the upstream QUIC behavior.
 
 ## Related
 
-List related issues or pull requests, explain their relationship, or state that none were found.
+- quinn-rs/quinn#2789 — Merged upstream implementation titled “Assorted remote memory use fixes.”
+  It rolls up the remote-memory-exhaustion fixes cited by the 0.11.17 release, but it is neither an
+  existing uv tracker nor a downstream uv implementation.
+- quinn-rs/quinn#2790 — Merged 0.11.x backport of quinn-rs/quinn#2789 plus the version bump. This is
+  the direct upstream release-preparation change behind `quinn-proto` 0.11.17.
+
+No related open or closed issue, or open, closed, or merged pull request, was found in astral-sh/uv.
+
+## Supporting evidence
+
+- `Cargo.lock` records `quinn-proto` 0.11.15 via quinn 0.11.9 and reqwest 0.13.4.
+- The workspace's reqwest feature list includes HTTP/2 but not HTTP/3; reqwest declares quinn as an
+  optional dependency of its `http3` feature.
+- `cargo tree --locked --invert quinn-proto --edges all --workspace --target all` reports no reverse
+  dependency, confirming that the lockfile entry is not selected for any workspace target or edge
+  kind.
+- The upstream `quinn-proto` 0.11.17 release says it fixes the cited advisories and identifies
+  quinn-rs/quinn#2789 and quinn-rs/quinn#2790 as the implementation and 0.11.x release backport.
+- Literal searches covered `quinn-proto`, `0.11.17`, both GHSA identifiers, and the exact memory and
+  DATAGRAM symptoms. Conceptual searches covered quinn/QUIC vulnerabilities, memory exhaustion,
+  eviction loops, and dependency-security advisories across every issue and pull-request state.
+  Only astral-sh/uv#21177 matched the substantive report.
+- astral-sh/uv#19630 surfaced in the bare `0.11.17` search solely because its reporter used uv
+  0.11.17. Its corrupt tool-receipt failure and maintainer discussion are unrelated to quinn,
+  HTTP/3, dependency updates, or either advisory.

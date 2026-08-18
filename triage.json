@@ -1,0 +1,27 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 2789,
+        "title": "Assorted remote memory use fixes",
+        "url": "https://github.com/quinn-rs/quinn/pull/2789",
+        "state": "merged",
+        "reason": "Upstream implementation of the remote-memory-exhaustion fixes included in quinn-proto 0.11.17; it is not an existing uv tracker or downstream fix."
+      },
+      {
+        "kind": "pull_request",
+        "number": 2790,
+        "title": "0.11.x: Backport memory use fixes and prepare release",
+        "url": "https://github.com/quinn-rs/quinn/pull/2790",
+        "state": "merged",
+        "reason": "Backports quinn-rs/quinn#2789 and prepares the 0.11.17 release, making it the direct upstream change behind the requested version."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged pull requests for quinn, quinn-proto, 0.11.17, both GHSA identifiers, memory exhaustion, zero-length DATAGRAMs, eviction loops, QUIC vulnerabilities, and dependency-security terminology. Only astral-sh/uv#21177 matched substantively; no existing uv tracker or fix was found. Inspected upstream quinn-rs/quinn#2789 and quinn-rs/quinn#2790. astral-sh/uv#19630 appeared only because its report named uv 0.11.17; its tool-receipt failure is unrelated."
+  },
+  "type": "enhancement",
+  "type_reason": "This is dependency maintenance rather than an established uv correctness defect. Cargo.lock contains quinn-proto 0.11.15, and upstream confirms 0.11.17 fixes the advisories. However, uv does not enable reqwest's HTTP/3 feature, quinn is optional behind that feature, and Cargo reports no quinn-proto reverse dependency across workspace targets and dependency edge kinds. The vulnerable crate is retained in the lockfile but not selected in uv's build graph.",
+  "summary": "No existing uv issue or pull request tracks this update. The closest items are upstream fix quinn-rs/quinn#2789 and release backport quinn-rs/quinn#2790; quinn-proto 0.11.15 is currently an unselected optional reqwest dependency.",
+  "draft_response": "Thanks. The checkout retains quinn-proto 0.11.15 in Cargo.lock, and upstream's 0.11.17 release contains the fixes from quinn-rs/quinn#2789 and quinn-rs/quinn#2790. uv does not enable reqwest's HTTP/3 feature, so quinn-proto is not selected in the resolved uv workspace build graph; this does not indicate exposure in shipped uv binaries. Updating the lock entry is still useful dependency maintenance and avoids vulnerable-lockfile reports. The next step is a targeted `cargo update -p quinn-proto --precise 0.11.17`, checking that the lockfile diff contains only the expected dependency changes."
+}
