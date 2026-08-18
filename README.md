@@ -19,7 +19,8 @@ default Python, and astral-sh/uv#7684 shows the same tension between a globally 
 `UV_PYTHON` and `uv pip` environment selection under a different, architecture-specific trigger.
 No implementing pull request or requested environment variable was found. The reporter later
 closed astral-sh/uv#21191 after identifying `UV_PYTHON_SEARCH_PATH` as a possible existing solution;
-the current source supports that conclusion, subject to the usage details below.
+the current source supports that mechanism, subject to the usage details below. A maintainer has
+since clarified that the best overall way for uv to support Nix's model remains undecided.
 
 ## Current status and workaround
 
@@ -40,7 +41,9 @@ select the Nix interpreter while allowing `uv pip install` to select the activat
 and it replaces rather than augments `PATH` for interpreter discovery. Any fallback interpreter
 directories must therefore be included explicitly and ordered as desired. This exact Nix sequence
 has not been executed as part of the handoff, so the conclusion is source-backed rather than a
-recorded reproduction result.
+recorded reproduction result. The maintainer's follow-up on astral-sh/uv#21191 also means this
+should be treated as a technically plausible current mechanism, not as an endorsed or final design
+for Nix integration.
 
 The previously documented fallback remains valid on older uv versions: scope `UV_PYTHON` to the
 creation command, for example `UV_PYTHON=/path/to/python uv venv new-venv`, or pass
