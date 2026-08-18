@@ -19,8 +19,14 @@ all workspace targets and all dependency edge kinds reports no package depending
 uv's resolved workspace build graph. A uv maintainer has also confirmed in astral-sh/uv#21177 that
 the project does not use HTTP/3 or QUIC.
 
+The reporter clarified that the practical impact is policy enforcement rather than runtime QUIC
+exposure: their JFrog/Artifactory scan flags the locked version as critically vulnerable and blocks
+uv's use in their CI/CD environment. This scanner result and policy consequence are user-reported;
+the attached screenshot provides supporting context but has not been independently reproduced.
+
 No existing issue or pull request in astral-sh/uv tracks this update. The closest related work is
-the merged upstream fix and its 0.11.x backport used to publish `quinn-proto` 0.11.17.
+astral-sh/uv#20025, a prior merged lockfile-only security bump for the same optional dependency, as
+well as the upstream fix and its 0.11.x backport used to publish `quinn-proto` 0.11.17.
 
 ## Draft response
 
@@ -41,17 +47,25 @@ Cargo metadata confirm that quinn is optional behind reqwest's disabled `http3` 
 vulnerable code is not part of uv's selected build graph. A maintainer's confirmation that uv does
 not use HTTP/3 or QUIC reinforces this conclusion, but does not by itself decide whether to update
 the unused lockfile entry. The evidence supports a targeted maintenance update, not a claim that
-current uv binaries expose the upstream QUIC behavior.
+current uv binaries expose the upstream QUIC behavior. The reported JFrog/Artifactory CI/CD block
+gives the lockfile-only update concrete user impact and may affect prioritization, while leaving the
+enhancement classification unchanged.
 
 ## Related
 
+- astral-sh/uv#20025 — Merged prior update from `quinn-proto` 0.11.14 to 0.11.15 for an earlier
+  remote-memory-exhaustion advisory. Its description explicitly records the same situation: uv did
+  not enable reqwest's HTTP/3 feature and was not affected at runtime, but the lockfile entry was
+  updated anyway. The pull request changed only `Cargo.lock`, making it strong repository precedent
+  rather than a tracker for the new 0.11.17 bump.
 - quinn-rs/quinn#2789 — Merged upstream implementation titled “Assorted remote memory use fixes.”
   It rolls up the remote-memory-exhaustion fixes cited by the 0.11.17 release, but it is neither an
   existing uv tracker nor a downstream uv implementation.
 - quinn-rs/quinn#2790 — Merged 0.11.x backport of quinn-rs/quinn#2789 plus the version bump. This is
   the direct upstream release-preparation change behind `quinn-proto` 0.11.17.
 
-No related open or closed issue, or open, closed, or merged pull request, was found in astral-sh/uv.
+No open or closed issue, or open, closed, or merged pull request, was found that tracks the current
+0.11.17 update; astral-sh/uv#20025 is historical precedent for the same kind of lockfile-only bump.
 
 ## Supporting evidence
 
@@ -64,6 +78,12 @@ No related open or closed issue, or open, closed, or merged pull request, was fo
 - A repository member confirmed in astral-sh/uv#21177 that uv does not use HTTP/3 or QUIC. This is
   consistent with the workspace feature configuration and Cargo dependency-tree result; the
   comment does not state a decision about whether the unused lockfile entry should still be bumped.
+- The reporter says JFrog/Artifactory flags the current uv release for critical vulnerabilities due
+  to this lockfile entry, causing their company policy to block uv in CI/CD. Treat the scanner
+  finding and policy effect as a user report, not as evidence that uv ships active QUIC code.
+- astral-sh/uv#20025 independently confirms that maintainers previously accepted a lockfile-only
+  `quinn-proto` security update despite uv not enabling HTTP/3; its entire diff was two additions
+  and two deletions in `Cargo.lock`.
 - The upstream `quinn-proto` 0.11.17 release says it fixes the cited advisories and identifies
   quinn-rs/quinn#2789 and quinn-rs/quinn#2790 as the implementation and 0.11.x release backport.
 - Literal searches covered `quinn-proto`, `0.11.17`, both GHSA identifiers, and the exact memory and
