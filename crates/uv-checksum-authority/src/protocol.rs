@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fmt;
 use std::str::FromStr;
 
@@ -88,7 +89,7 @@ impl TryFrom<WireArtifactId> for ArtifactId {
 }
 
 /// A SHA-256 digest, serialized as lowercase hexadecimal.
-#[derive(Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct Sha256Digest([u8; 32]);
 
@@ -172,7 +173,7 @@ impl fmt::Display for AuthorityPublicKey {
 }
 
 /// The digest and length of the complete, compressed archive bytes.
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ChecksumRecord {
     artifact: ArtifactId,
@@ -209,6 +210,34 @@ pub struct VerifiedRecord(ChecksumRecord);
 impl VerifiedRecord {
     pub fn record(&self) -> &ChecksumRecord {
         &self.0
+    }
+}
+
+/// The archive authorizations observed while producing a cached build artifact.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(try_from = "Vec<ChecksumRecord>", into = "Vec<ChecksumRecord>")]
+pub struct VerificationReceipt(BTreeSet<ChecksumRecord>);
+
+impl VerificationReceipt {
+    pub(crate) fn records(&self) -> &BTreeSet<ChecksumRecord> {
+        &self.0
+    }
+}
+
+impl TryFrom<Vec<ChecksumRecord>> for VerificationReceipt {
+    type Error = Error;
+
+    fn try_from(records: Vec<ChecksumRecord>) -> Result<Self, Self::Error> {
+        if records.is_empty() {
+            return Err(Error::InvalidReceipt);
+        }
+        Ok(Self(records.into_iter().collect()))
+    }
+}
+
+impl From<VerificationReceipt> for Vec<ChecksumRecord> {
+    fn from(receipt: VerificationReceipt) -> Self {
+        receipt.0.into_iter().collect()
     }
 }
 
