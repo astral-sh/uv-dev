@@ -12,18 +12,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { label: github-drop, runner: ubuntu-24.04, privileges: drop }
           - { label: github-retain, runner: ubuntu-24.04, privileges: retain }
-          - {
-              label: depot-retain,
-              runner: depot-ubuntu-24.04-4,
-              privileges: retain,
-            }
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 10
     steps:
       - name: Capture trusted pre-install baseline
-        uses: astral-sh/uv-dev/.github/actions/runner-network-policy-probe@35ff9f713ca1b0fae604247daa1c6379ad841d55
+        uses: astral-sh/uv-dev/.github/actions/runner-network-policy-probe@9389bb135ee94ca5084a79002385127ed71fd4a7
         with:
           operation: baseline
       - name: Install policy before later action hooks
@@ -33,7 +27,7 @@ jobs:
           privileges: ${{ matrix.privileges }}
           disposable: true
       - name: Check early hooks and bypass attempts
-        uses: astral-sh/uv-dev/.github/actions/runner-network-policy-probe@35ff9f713ca1b0fae604247daa1c6379ad841d55
+        uses: astral-sh/uv-dev/.github/actions/runner-network-policy-probe@9389bb135ee94ca5084a79002385127ed71fd4a7
         with:
           operation: probe
       - name: Upload evidence through the policy
@@ -43,12 +37,14 @@ jobs:
           path: ${{ runner.temp }}/network-policy-evidence.json
           if-no-files-found: error
           retention-days: 1
-      - name: Inspect failed setup
-        if: failure()
+      - name: Inspect setup
+        if: always()
         shell: bash
         run: |
           if sudo -n true 2>/dev/null; then
             sudo journalctl -u uv-network-policy.service --no-pager -n 30
+            sudo cat /run/uv-network-policy-diagnostics.txt || true
+            cat /etc/resolv.conf
           fi
           if test -r /run/uv-network-policy/audit/events.json; then
             cat /run/uv-network-policy/audit/events.json
