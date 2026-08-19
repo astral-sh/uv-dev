@@ -40,18 +40,18 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Capture trusted pre-install baseline
-        uses: astral-sh/uv-dev/.github/actions/runner-network-policy-probe@8e1e57a0c5c633b74f9328a64c6796f8eb0468f7
+        uses: astral-sh/uv-dev/.github/actions/runner-network-policy-probe@c2d610ae291724fd34489912f1e0ef1b21b9abf0
         with:
           operation: baseline
           containers: ${{ matrix.containers }}
       - name: Install policy before later action hooks
-        uses: astral-sh/uv-dev/.github/actions/runner-network-policy@8e1e57a0c5c633b74f9328a64c6796f8eb0468f7
+        uses: astral-sh/uv-dev/.github/actions/runner-network-policy@c2d610ae291724fd34489912f1e0ef1b21b9abf0
         with:
           profile: github
           privileges: ${{ matrix.privileges }}
           disposable: true
       - name: Check early hooks and bypass attempts
-        uses: astral-sh/uv-dev/.github/actions/runner-network-policy-probe@8e1e57a0c5c633b74f9328a64c6796f8eb0468f7
+        uses: astral-sh/uv-dev/.github/actions/runner-network-policy-probe@c2d610ae291724fd34489912f1e0ef1b21b9abf0
         with:
           operation: probe
           containers: ${{ matrix.containers }}
@@ -80,14 +80,14 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: astral-sh/uv-dev/.github/actions/runner-network-policy-probe@8e1e57a0c5c633b74f9328a64c6796f8eb0468f7
+      - uses: astral-sh/uv-dev/.github/actions/runner-network-policy-probe@c2d610ae291724fd34489912f1e0ef1b21b9abf0
         with:
           operation: baseline
-      - uses: astral-sh/uv-dev/.github/actions/runner-network-policy@8e1e57a0c5c633b74f9328a64c6796f8eb0468f7
+      - uses: astral-sh/uv-dev/.github/actions/runner-network-policy@c2d610ae291724fd34489912f1e0ef1b21b9abf0
         with:
           profile: github
           disposable: true
-      - uses: astral-sh/uv-dev/.github/actions/runner-network-policy-probe@8e1e57a0c5c633b74f9328a64c6796f8eb0468f7
+      - uses: astral-sh/uv-dev/.github/actions/runner-network-policy-probe@c2d610ae291724fd34489912f1e0ef1b21b9abf0
         with:
           operation: probe
           oidc: true
@@ -95,5 +95,34 @@ jobs:
         with:
           name: network-policy-oidc-${{ github.run_id }}
           path: ${{ runner.temp }}/network-policy-evidence.json
+          if-no-files-found: error
+          retention-days: 1
+
+  python-cold:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      UV_DEFAULT_INDEX: https://pypi.org/simple
+    steps:
+      - uses: astral-sh/uv-dev/.github/actions/runner-network-policy@c2d610ae291724fd34489912f1e0ef1b21b9abf0
+        with:
+          profile: python-checks
+          disposable: true
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 67537ee5494df2920018969040af9c8cfee16723
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
+        with:
+          version: "0.12.5"
+          enable-cache: false
+      - name: Run the Python formatting check with an empty cache
+        env:
+          UV_CACHE_DIR: ${{ runner.temp }}/network-policy-cold-${{ github.run_id }}-${{ github.run_attempt }}
+        run: uv run --only-group=check ruff format --diff .
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: network-policy-python-cold-${{ github.run_id }}
+          path: /run/uv-network-policy/audit/events.json
           if-no-files-found: error
           retention-days: 1
