@@ -23,17 +23,17 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Capture trusted pre-install baseline
-        uses: astral-sh/uv-dev/.github/actions/runner-network-policy-probe@a944e65636289865d3def3d5ad888fe612bb45d4
+        uses: astral-sh/uv-dev/.github/actions/runner-network-policy-probe@23e8a32de60a3f156133c1ba66a6374df65424dc
         with:
           operation: baseline
       - name: Install policy before later action hooks
-        uses: astral-sh/uv-dev/.github/actions/runner-network-policy@a944e65636289865d3def3d5ad888fe612bb45d4
+        uses: astral-sh/uv-dev/.github/actions/runner-network-policy@23e8a32de60a3f156133c1ba66a6374df65424dc
         with:
           profile: github
           privileges: ${{ matrix.privileges }}
           disposable: true
       - name: Check early hooks and bypass attempts
-        uses: astral-sh/uv-dev/.github/actions/runner-network-policy-probe@a944e65636289865d3def3d5ad888fe612bb45d4
+        uses: astral-sh/uv-dev/.github/actions/runner-network-policy-probe@23e8a32de60a3f156133c1ba66a6374df65424dc
         with:
           operation: probe
       - name: Upload evidence through the policy
