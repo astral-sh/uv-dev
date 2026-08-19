@@ -42,11 +42,11 @@ def baseline():
             "systemd-run",
             "--unit=uv-network-probe-rescue",
             "--on-active=90s",
-            "/usr/sbin/nft",
-            "delete",
-            "table",
-            "inet",
-            "uv_network_policy",
+            "/bin/sh",
+            "-c",
+            "nft -a list table inet uv_network_policy > /run/uv-network-policy-diagnostics.txt; "
+            "journalctl -u uv-network-policy.service --no-pager -n 50 >> /run/uv-network-policy-diagnostics.txt; "
+            "nft delete table inet uv_network_policy",
         ],
         check=True,
     )
