@@ -6,7 +6,9 @@ use tracing::{Instrument, debug, info_span, warn};
 
 use uv_cache::{Cache, CacheBucket};
 use uv_cache_key::cache_digest;
-use uv_distribution_types::{File, FileLocation, IndexEntryFilename, IndexUrl, UrlString};
+use uv_distribution_types::{
+    DistInfoMetadata, File, FileLocation, IndexEntryFilename, IndexUrl, UrlString,
+};
 use uv_pypi_types::HashDigests;
 use uv_redacted::SafeUrl;
 use uv_small_str::SmallString;
@@ -363,7 +365,7 @@ impl<'a> FlatIndexClient<'a> {
             let url = SafeUrl::from_file_path(entry.path()).unwrap();
 
             let file = File {
-                dist_info_metadata: None,
+                dist_info_metadata: DistInfoMetadata::Unavailable,
                 filename: filename.into(),
                 hashes: HashDigests::empty(),
                 requires_python: None,
@@ -413,18 +415,20 @@ mod tests {
             &url,
         )?;
         assert_eq!(files.len(), 1);
-        let metadata_hashes = files[0].dist_info_metadata.clone();
-        assert!(
-            metadata_hashes
-                .as_ref()
-                .is_some_and(|hashes| !hashes.is_empty())
-        );
+        let dist_info_metadata = files[0].dist_info_metadata.clone();
+        let DistInfoMetadata::Available(metadata_hashes) = &dist_info_metadata else {
+            return Err("expected advertised metadata".into());
+        };
+        assert!(!metadata_hashes.is_empty());
         let archived = OwnedArchive::from_unarchived(&files)?;
         let files = OwnedArchive::deserialize(&archived);
         let entries =
             FlatIndexClient::entries_from_files(files, &IndexUrl::parse(url.as_str(), None)?);
         assert_eq!(entries.entries.len(), 1);
-        assert_eq!(entries.entries[0].file.dist_info_metadata, metadata_hashes);
+        assert_eq!(
+            entries.entries[0].file.dist_info_metadata,
+            dist_info_metadata
+        );
         Ok(())
     }
 
