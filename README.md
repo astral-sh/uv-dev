@@ -17,13 +17,17 @@ matrix to older Python versions and additional platform combinations after the s
 Maintainers state there that they do not plan to expand historical coverage because the build matrix
 already carries substantial compute, hosting, platform-limit, and maintenance costs.
 
-## Draft response
+The new maintainer response resolves the support question directly: uv does not support an exact
+version as old as CPython 3.6.0 because it is far past end of life. The maintainer also directed the
+reporter to astral-sh/uv#9452, the repository's issue-reporting guidance. That reference is procedural
+rather than a canonical discussion of Python download coverage.
 
-Thanks. This is covered by astral-sh/uv#20088, which tracks requests to expand managed Python
-download coverage for older versions and platform combinations. uv does not currently have a
-managed download for cpython-3.6.0-windows-x86_64-none, and the maintainers have indicated there are
-no plans to expand the historical build matrix because of its build and maintenance costs. I’m
-closing this as a duplicate; please follow astral-sh/uv#20088 for any future changes.
+## Maintainer decision
+
+Maintainer zanieb states that uv does not support versions as old as CPython 3.6.0 because it is very
+end of life. No additional reproduction or investigation was requested. The response points to
+astral-sh/uv#9452, which asks reporters to search for existing discussions and include the uv
+version, operating system, command, verbose output, and a minimal reproduction when applicable.
 
 ## Classification
 
@@ -35,10 +39,12 @@ a different underlying capability or establish that a previously supported build
 This is substantively an enhancement request, rather than a correctness bug, but the open canonical
 request makes `duplicate` take precedence. uv's documented Tier 2 support for Python 3.6 means uv is
 expected to work with that interpreter; it does not establish that uv provides managed builds for
-every 3.6 patch/platform combination. Historical evidence also cuts against a regression: the
-separate Python 3.7 metadata regression in astral-sh/uv#8213 was restored by astral-sh/uv#8216, while
-astral-sh/uv#13022 later intentionally removed old Python 3.7 managed downloads. No corresponding
-history was found showing that uv previously offered cpython-3.6.0-windows-x86_64-none.
+every 3.6 patch/platform combination, and the maintainer has now explicitly said that the exact
+3.6.0 version is too old to be supported. Historical evidence also cuts against a regression: the
+separate Python 3.7 metadata regression in astral-sh/uv#8213 was restored by astral-sh/uv#8216,
+while astral-sh/uv#13022 later intentionally removed old Python 3.7 managed downloads. No
+corresponding history was found showing that uv previously offered
+cpython-3.6.0-windows-x86_64-none.
 
 ## Related
 
