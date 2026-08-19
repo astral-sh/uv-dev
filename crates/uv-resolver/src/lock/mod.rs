@@ -33,11 +33,11 @@ use uv_distribution_filename::{
 };
 use uv_distribution_types::{
     BuiltDist, DependencyMetadata, DirectUrlBuiltDist, DirectUrlSourceDist, DirectorySourceDist,
-    Dist, FileLocation, FirstParty, GitDirectorySourceDist, GitPathBuiltDist, GitPathSourceDist,
-    Identifier, IndexLocations, IndexMetadata, IndexUrl, Name, PYPI_URL, PathBuiltDist,
-    PathSourceDist, RegistryBuiltDist, RegistryBuiltWheel, RegistrySourceDist, RemoteSource,
-    Requirement, RequirementSource, RequiresPython, ResolvedDist, SimplifiedMarkerTree,
-    StaticMetadata, ToUrlError, UrlString,
+    Dist, DistInfoMetadata, FileLocation, FirstParty, GitDirectorySourceDist, GitPathBuiltDist,
+    GitPathSourceDist, Identifier, IndexLocations, IndexMetadata, IndexUrl, Name, PYPI_URL,
+    PathBuiltDist, PathSourceDist, RegistryBuiltDist, RegistryBuiltWheel, RegistrySourceDist,
+    RemoteSource, Requirement, RequirementSource, RequiresPython, ResolvedDist,
+    SimplifiedMarkerTree, StaticMetadata, ToUrlError, UrlString,
 };
 use uv_fs::{PortablePath, PortablePathBuf, Simplified, normalize_path, try_relative_to_if};
 use uv_git::{RepositoryReference, ResolvedRepositoryReference};
@@ -4269,7 +4269,7 @@ impl Package {
                     }
                 })?;
                 let file = Box::new(uv_distribution_types::File {
-                    dist_info_metadata: false,
+                    dist_info_metadata: DistInfoMetadata::Unavailable,
                     filename: SmallString::from(filename),
                     hashes: sdist.hash().map_or(HashDigests::empty(), |hash| {
                         HashDigests::from(hash.0.clone())
@@ -4345,7 +4345,7 @@ impl Package {
                     }
                 })?;
                 let file = Box::new(uv_distribution_types::File {
-                    dist_info_metadata: false,
+                    dist_info_metadata: DistInfoMetadata::Unavailable,
                     filename: SmallString::from(filename),
                     hashes: sdist.hash().map_or(HashDigests::empty(), |hash| {
                         HashDigests::from(hash.0.clone())
@@ -6125,7 +6125,7 @@ impl Wheel {
                     }
                 };
                 let file = Box::new(uv_distribution_types::File {
-                    dist_info_metadata: false,
+                    dist_info_metadata: DistInfoMetadata::Unavailable,
                     filename: SmallString::from(filename.to_string()),
                     hashes: self.hash.iter().map(|h| h.0.clone()).collect(),
                     requires_python: None,
@@ -6169,7 +6169,7 @@ impl Wheel {
                     }
                 };
                 let file = Box::new(uv_distribution_types::File {
-                    dist_info_metadata: false,
+                    dist_info_metadata: DistInfoMetadata::Unavailable,
                     filename: SmallString::from(filename.to_string()),
                     hashes: self.hash.iter().map(|h| h.0.clone()).collect(),
                     requires_python: None,

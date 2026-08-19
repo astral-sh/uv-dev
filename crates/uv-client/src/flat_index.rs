@@ -8,7 +8,7 @@ use url::Url;
 use uv_cache::{Cache, CacheBucket};
 use uv_cache_key::cache_digest;
 use uv_distribution_filename::DistFilename;
-use uv_distribution_types::{File, FileLocation, IndexUrl, UrlString};
+use uv_distribution_types::{DistInfoMetadata, File, FileLocation, IndexUrl, UrlString};
 use uv_pypi_types::HashDigests;
 use uv_redacted::DisplaySafeUrl;
 use uv_small_str::SmallString;
@@ -356,7 +356,7 @@ impl<'a> FlatIndexClient<'a> {
             let url = DisplaySafeUrl::from_file_path(entry.path()).unwrap();
 
             let file = File {
-                dist_info_metadata: false,
+                dist_info_metadata: DistInfoMetadata::Unavailable,
                 filename: filename.into(),
                 hashes: HashDigests::empty(),
                 requires_python: None,

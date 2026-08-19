@@ -23,7 +23,7 @@ pub enum FileConversionError {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, rkyv::Archive, rkyv::Deserialize, rkyv::Serialize)]
 #[rkyv(derive(Debug))]
 pub struct File {
-    pub dist_info_metadata: bool,
+    pub dist_info_metadata: DistInfoMetadata,
     pub filename: SmallString,
     pub hashes: HashDigests,
     pub requires_python: Option<Arc<VersionSpecifiers>>,
@@ -51,7 +51,8 @@ impl File {
             dist_info_metadata: file
                 .core_metadata
                 .as_ref()
-                .is_some_and(CoreMetadata::is_available),
+                .is_some_and(CoreMetadata::is_available)
+                .into(),
             filename: file.filename,
             hashes: HashDigests::from(file.hashes),
             requires_python: file
@@ -64,6 +65,30 @@ impl File {
             yanked: file.yanked,
             zstd: None,
         })
+    }
+}
+
+/// Whether a registry file has a separately served Core Metadata file.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, rkyv::Archive, rkyv::Deserialize, rkyv::Serialize,
+)]
+#[rkyv(derive(Debug))]
+pub enum DistInfoMetadata {
+    /// The index does not advertise a metadata file.
+    Unavailable,
+    /// The index advertises a metadata file.
+    Available,
+    /// The index may serve an unadvertised metadata file.
+    Unadvertised,
+}
+
+impl From<bool> for DistInfoMetadata {
+    fn from(available: bool) -> Self {
+        if available {
+            Self::Available
+        } else {
+            Self::Unavailable
+        }
     }
 }
 

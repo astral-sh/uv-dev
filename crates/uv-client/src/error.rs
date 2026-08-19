@@ -19,6 +19,7 @@ use uv_distribution_types::IndexUrl;
 use uv_errors::{Hint, Hints};
 use uv_git::GitError;
 use uv_normalize::PackageName;
+use uv_pep440::Version;
 use uv_redacted::DisplaySafeUrl;
 
 /// RFC 9457 Problem Details for HTTP APIs
@@ -477,6 +478,9 @@ pub enum ErrorKind {
         given: PackageName,
         metadata: PackageName,
     },
+
+    #[error("Package metadata version `{metadata}` does not match given version `{given}`")]
+    VersionMismatch { given: Version, metadata: Version },
 
     #[error("Failed to unzip wheel: {0}")]
     Zip(WheelFilename, #[source] ZipError),
