@@ -31,10 +31,12 @@ does not grant general access to private networks or arbitrary ports.
 Existing runner-owned HTTPS connections from trusted bootstrap are retained by exact destination and
 source port. Action downloads, runner startup, and container preparation can happen before the first
 action's `pre` hook. This is therefore an early-job hardening control, not isolation of the entire
-VM lifecycle. A process retaining host root, another privileged service, or a permitted
-application-layer relay can bypass the intended domain boundary. Domain rules do not constrain HTTPS
-paths, methods, tenants, or credentials. TLS without cleartext SNI and other network protocols fail
-closed. Local loopback services remain available for tests.
+VM lifecycle. GitHub can also run later `pre` hooks after an earlier hook fails, so a setup failure
+before the firewall is installed is not a fail-closed runner boundary. Strict startup isolation
+requires a runner-managed hook or external network boundary. A process retaining host root, another
+privileged service, or a permitted application-layer relay can bypass the intended domain boundary.
+Domain rules do not constrain HTTPS paths, methods, tenants, or credentials. TLS without cleartext
+SNI and other network protocols fail closed. Local loopback services remain available for tests.
 
 The post hook saves aggregate hostname/event counts but does not restore network or sudo access. The
 disposable runner's trusted destruction is the cleanup boundary. Do not use this action on a machine
