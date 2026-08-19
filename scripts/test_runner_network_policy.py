@@ -5,6 +5,7 @@ import http.client
 import http.server
 import io
 import json
+import os
 import socket
 import ssl
 import stat
@@ -22,6 +23,7 @@ ROOT = Path(__file__).resolve().parent.parent
 ACTION = ROOT / ".github/actions/runner-network-policy"
 sys.path.insert(0, str(ACTION))
 
+import action
 import install
 import proxy
 from generate_runner_network_policy import generate
@@ -117,6 +119,44 @@ class LoopbackState(proxy.State):
 
 
 class PolicyTests(unittest.TestCase):
+    def test_post_reports_observed_destinations_without_removing_policy(self):
+        scratch = Path.home() / "code/tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(
+            prefix="uv-network-policy-summary-", dir=scratch
+        ) as temporary:
+            directory = Path(temporary)
+            (directory / "audit").mkdir()
+            (directory / "settings.json").write_text(
+                json.dumps({"profile": "github", "privileges": "drop"})
+            )
+            events = [
+                {"event": "connected", "host": "api.github.com", "count": 2},
+                {"event": "denied", "host": "example.com", "count": 1},
+            ]
+            (directory / "audit/events.json").write_text(json.dumps(events))
+            summary = directory / "summary.md"
+            with (
+                patch.object(action, "DIRECTORY", directory),
+                patch.object(action, "health"),
+                patch.dict(
+                    os.environ,
+                    {
+                        "RUNNER_TEMP": str(directory),
+                        "GITHUB_STEP_SUMMARY": str(summary),
+                    },
+                ),
+            ):
+                action.post()
+            self.assertEqual(
+                json.loads((directory / "network-policy-audit.json").read_text()),
+                events,
+            )
+            self.assertEqual(
+                summary.read_text(),
+                "### Runner network policy\n\nProfile: `github`. Privileges: `drop`.\n\n| Event | Host | Count |\n| --- | --- | ---: |\n| connected | `api.github.com` | 2 |\n| denied | `example.com` | 1 |\n",
+            )
+
     def test_default_deny_and_label_boundaries(self):
         policy = Policy(("github.com", "*.example.com"), ("private.example.com",))
         self.assertTrue(policy.permits("GITHUB.COM."))
