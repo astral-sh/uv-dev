@@ -65,6 +65,10 @@ pub(crate) struct BuiltWheelFile {
 }
 
 impl BuiltWheelFile {
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
     /// Find a compatible wheel in the cache.
     pub(crate) fn find_in_cache(
         tags: &Tags,

@@ -2,16 +2,20 @@
 
 mod protocol;
 
+use std::collections::BTreeSet;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
+use tokio::sync::Mutex;
 use tokio_util::io::ReaderStream;
 use url::{Host, Url};
 
 pub use protocol::{
-    ArtifactId, AuthorityPublicKey, ChecksumRecord, Sha256Digest, SignedRecord, VerifiedRecord,
+    ArtifactId, AuthorityPublicKey, ChecksumRecord, Sha256Digest, SignedRecord,
+    VerificationReceipt, VerifiedRecord,
 };
 
 const MAX_RESPONSE_SIZE: usize = 16 * 1024;
@@ -22,6 +26,7 @@ pub struct ChecksumAuthority {
     endpoint: Url,
     public_key: AuthorityPublicKey,
     client: reqwest::Client,
+    records: Arc<Mutex<BTreeSet<ChecksumRecord>>>,
 }
 
 impl ChecksumAuthority {
@@ -51,6 +56,7 @@ impl ChecksumAuthority {
             endpoint,
             public_key,
             client,
+            records: Arc::default(),
         })
     }
 
@@ -74,7 +80,46 @@ impl ChecksumAuthority {
             body.extend_from_slice(&chunk);
         }
         let signed: SignedRecord = serde_json::from_slice(&body)?;
-        signed.verify(artifact, &self.public_key)
+        let verified = signed.verify(artifact, &self.public_key)?;
+        self.records.lock().await.insert(verified.record().clone());
+        Ok(verified)
+    }
+
+    pub fn public_key(&self) -> AuthorityPublicKey {
+        self.public_key
+    }
+
+    /// Capture all authorizations observed by clients sharing this authority configuration.
+    /// A conservative superset also covers dependencies resolved before a build starts.
+    pub async fn receipt(&self) -> Result<VerificationReceipt, Error> {
+        self.records
+            .lock()
+            .await
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>()
+            .try_into()
+    }
+
+    /// Reauthorize a cached build's inputs against the current authority.
+    pub async fn verify_receipt(&self, receipt: &VerificationReceipt) -> Result<(), Error> {
+        for record in receipt.records() {
+            let current = self.lookup(record.artifact()).await?;
+            if current.record().sha256() != record.sha256() {
+                return Err(Error::Mismatch {
+                    filename: record.artifact().filename().to_owned(),
+                    expected: current.record().sha256(),
+                    actual: record.sha256(),
+                });
+            }
+            if current.record().size() != record.size() {
+                return Err(Error::SizeMismatch {
+                    filename: record.artifact().filename().to_owned(),
+                    expected: current.record().size(),
+                });
+            }
+        }
+        Ok(())
     }
 
     /// Spool the complete response to disk and authenticate it before exposing any archive bytes.
@@ -85,8 +130,22 @@ impl ChecksumAuthority {
         artifact: &ArtifactId,
         temporary_directory: &Path,
     ) -> Result<reqwest::Response, Error> {
-        let verified = self.lookup(artifact).await?;
-        let record = verified.record();
+        self.lookup(artifact)
+            .await?
+            .verify_response(response, temporary_directory)
+            .await
+    }
+}
+
+impl VerifiedRecord {
+    /// Authenticate complete archive bytes against this already verified authority record.
+    pub async fn verify_response(
+        &self,
+        response: reqwest::Response,
+        temporary_directory: &Path,
+    ) -> Result<reqwest::Response, Error> {
+        let record = self.record();
+        let artifact = record.artifact();
         if response.status() != reqwest::StatusCode::OK {
             return Err(Error::ArtifactStatus(response.status()));
         }
@@ -134,6 +193,10 @@ impl ChecksumAuthority {
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("Checksum authority verification is unavailable in offline mode")]
+    Offline,
+    #[error("Checksum authority build receipt must contain at least one archive")]
+    InvalidReceipt,
     #[error("Invalid checksum authority artifact identity")]
     InvalidIdentity,
     #[error("Checksum authority records require a lowercase SHA-256 digest")]
