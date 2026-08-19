@@ -237,6 +237,11 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
 
                 // If the URL is a file URL, load the wheel directly.
                 if url.scheme() == "file" {
+                    if self.client.unmanaged.has_checksum_authority()
+                        && matches!(wheel.index.url().scheme(), "http" | "https")
+                    {
+                        return Err(Error::ChecksumAuthorityLocalArchive(url));
+                    }
                     let path = url
                         .to_file_path()
                         .map_err(|()| Error::NonFileUrl(url.clone()))?;
@@ -571,7 +576,9 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
 
         // Fetch the entire wheel only when we need to compute a hash for resolution.
         // TODO(charlie): Request the hashes via a separate method, to reduce the coupling in this API.
-        if hash_policy == ArchiveHashPolicy::Generate {
+        if hash_policy == ArchiveHashPolicy::Generate
+            || self.client.unmanaged.has_checksum_authority()
+        {
             let wheel = self.get_wheel(dist, hash_policy).await?;
             // If the metadata was provided by the user directly, prefer it.
             let metadata = if let Some(metadata) = self
@@ -721,6 +728,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         hashes: ArchiveHashPolicy<'_>,
     ) -> Result<Archive, Error> {
         // Sometimes we can promote the size hint to a trusted effective size.
+        let authority_source = index.map_or(&url, IndexUrl::url).clone();
         let expected_size = match dist {
             BuiltDist::Registry(dist) if dist.best_wheel().size_is_authoritative => {
                 progress_size_hint
@@ -737,6 +745,11 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
 
         let download = |response: reqwest::Response, _: &mut RetryState| {
             async {
+                let response = self
+                    .client
+                    .unmanaged
+                    .verify_archive_response(response, &authority_source, &filename.to_string())
+                    .await?;
                 let progress_size_hint = progress_size_hint.or_else(|| content_length(&response));
 
                 let progress = self.reporter.as_ref().map(|reporter| {
@@ -908,6 +921,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         hashes: ArchiveHashPolicy<'_>,
     ) -> Result<Archive, Error> {
         // Sometimes we can promote the size hint to a trusted effective size.
+        let authority_source = index.map_or(&url, IndexUrl::url).clone();
         let expected_size = match dist {
             BuiltDist::Registry(dist) if dist.best_wheel().size_is_authoritative => {
                 progress_size_hint
@@ -928,6 +942,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
             self.download_wheel_response(
                 response,
                 &download_url,
+                &authority_source,
                 retry_state,
                 filename,
                 progress_size_hint,
@@ -1031,6 +1046,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         &self,
         mut response: reqwest::Response,
         url: &DisplaySafeUrl,
+        authority_source: &DisplaySafeUrl,
         retry_state: &mut RetryState,
         filename: &WheelFilename,
         progress_size_hint: Option<u64>,
@@ -1039,6 +1055,11 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         dist: &BuiltDist,
         hashes: ArchiveHashPolicy<'_>,
     ) -> Result<Archive, Error> {
+        response = self
+            .client
+            .unmanaged
+            .verify_archive_response(response, authority_source, &filename.to_string())
+            .await?;
         let progress_size_hint = progress_size_hint.or_else(|| content_length(&response));
         let mut download_size = content_length(&response).or(expected_size);
 
