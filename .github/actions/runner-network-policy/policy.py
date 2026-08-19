@@ -59,6 +59,9 @@ class Policy:
             matches(value, rule) for rule in self.allow
         )
 
+    def forbids(self, value):
+        return any(matches(hostname(value), rule) for rule in self.deny)
+
 
 def load(path, name):
     document = json.loads(Path(path).read_text())

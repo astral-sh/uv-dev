@@ -20,6 +20,10 @@ authorized hostname itself, and refuses non-public upstream addresses. Explicit 
 are also exported for clients that support them. HTTPS is forwarded without decrypting it or
 installing a certificate authority.
 
+DNS CNAME targets discovered in an authorized answer chain are allowed for DNS resolution only, with
+a bounded lifetime. They do not become permitted HTTP or TLS destinations. Unrelated answer records
+and additional query records do not expand the policy.
+
 Existing runner-owned HTTPS connections from trusted bootstrap are retained by exact destination and
 source port. Action downloads, runner startup, and container preparation can happen before the first
 action's `pre` hook. This is therefore an early-job hardening control, not isolation of the entire

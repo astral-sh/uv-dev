@@ -10,6 +10,7 @@ import socket
 import socketserver
 import struct
 import threading
+import time
 from collections import Counter
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -152,6 +153,76 @@ def dns_refused(packet):
     )
 
 
+def dns_name(packet, offset):
+    """Decode a bounded DNS name, including backwards compression pointers."""
+    labels = []
+    visited = set()
+    end = None
+    while offset < len(packet) and offset not in visited:
+        visited.add(offset)
+        size = packet[offset]
+        offset += 1
+        if size == 0:
+            return hostname(".".join(labels)), end or offset
+        if size & 0xC0 == 0xC0:
+            if offset >= len(packet):
+                break
+            pointer = ((size & 0x3F) << 8) | packet[offset]
+            if pointer >= offset - 1:
+                break
+            end = end or offset + 1
+            offset = pointer
+            continue
+        if size > 63 or offset + size > len(packet) or len(labels) >= 127:
+            break
+        labels.append(packet[offset : offset + size].decode("ascii"))
+        offset += size
+    raise ValueError("invalid compressed DNS name")
+
+
+def dns_aliases(packet, original):
+    """Return only CNAMEs reachable through this answer's authorized chain."""
+    if len(packet) < 12:
+        raise ValueError("truncated DNS response")
+    _, flags, questions, answers, _, _ = struct.unpack("!6H", packet[:12])
+    if not flags & 0x8000 or flags & 15 or questions != 1 or answers > 256:
+        return []
+    question, offset = dns_name(packet, 12)
+    if question != original or offset + 4 > len(packet):
+        raise ValueError("unexpected DNS response question")
+    offset += 4
+    aliases = {}
+    for _ in range(answers):
+        owner, offset = dns_name(packet, offset)
+        if offset + 10 > len(packet):
+            raise ValueError("truncated DNS answer")
+        kind, record_class, ttl, size = struct.unpack(
+            "!HHIH", packet[offset : offset + 10]
+        )
+        offset += 10
+        end = offset + size
+        if end > len(packet):
+            raise ValueError("truncated DNS record")
+        if kind == 5 and record_class == 1:
+            target, target_end = dns_name(packet, offset)
+            if target_end != end or owner in aliases:
+                raise ValueError("invalid CNAME answer")
+            aliases[owner] = (target, ttl)
+        offset = end
+    result = []
+    ttl = 300
+    current = original
+    seen = {original}
+    while current in aliases and len(result) < 16:
+        current, record_ttl = aliases[current]
+        ttl = min(ttl, record_ttl)
+        if current in seen:
+            raise ValueError("CNAME cycle")
+        seen.add(current)
+        result.append((current, ttl))
+    return result
+
+
 class State:
     def __init__(self, policy, resolvers, audit):
         self.policy = policy
@@ -159,6 +230,8 @@ class State:
         self.audit = audit
         self.counts = Counter()
         self.lock = threading.Lock()
+        self.aliases = {}
+        self.alias_lock = threading.Lock()
 
     def count(self, category, name=""):
         with self.lock:
@@ -203,8 +276,19 @@ class State:
 
     def dns(self, packet, tcp=False):
         try:
-            name, _ = dns_question(packet)
-            self.require(name)
+            name, end = dns_question(packet)
+            with self.alias_lock:
+                alias_allowed = self.aliases.get(name, 0) > time.monotonic()
+            if self.policy.forbids(name) or not (
+                self.policy.permits(name) or alias_allowed
+            ):
+                self.count("denied", name)
+                return dns_refused(packet)
+            # Forward only the authorized question. Additional records and EDNS
+            # options must not become an unrestricted outbound data channel.
+            packet = (
+                packet[:2] + struct.pack("!5H", 0x0100, 1, 0, 0, 0) + packet[12:end]
+            )
             for resolver in self.resolvers:
                 family = socket.AF_INET6 if ":" in resolver else socket.AF_INET
                 kind = socket.SOCK_STREAM if tcp else socket.SOCK_DGRAM
@@ -225,6 +309,19 @@ class State:
                         and response[:2] == packet[:2]
                         and response[2] & 0x80
                     ):
+                        discovered = dns_aliases(response, name)
+                        with self.alias_lock:
+                            now = time.monotonic()
+                            self.aliases = {
+                                key: expiry
+                                for key, expiry in self.aliases.items()
+                                if expiry > now
+                            }
+                            for alias, ttl in discovered:
+                                if len(self.aliases) < 4096 and not self.policy.forbids(
+                                    alias
+                                ):
+                                    self.aliases[alias] = now + ttl
                         self.count("dns", name)
                         return response
                 except OSError:

@@ -14,7 +14,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 ROOT = Path(__file__).resolve().parent.parent
 ACTION = ROOT / ".github/actions/runner-network-policy"
@@ -34,6 +34,25 @@ def query(name, kind=1):
         + b"\0"
         + struct.pack("!HH", kind, 1)
     )
+
+
+def encoded_name(name):
+    return (
+        b"".join(bytes([len(part)]) + part.encode() for part in name.split(".")) + b"\0"
+    )
+
+
+def cname_response(name, records):
+    original = query(name)
+    response = (
+        original[:2] + struct.pack("!5H", 0x8180, 1, len(records), 0, 0) + original[12:]
+    )
+    for owner, target, ttl in records:
+        value = encoded_name(target)
+        response += (
+            encoded_name(owner) + struct.pack("!HHIH", 5, 1, ttl, len(value)) + value
+        )
+    return response
 
 
 def hello(name):
@@ -178,6 +197,78 @@ class PolicyTests(unittest.TestCase):
         )
         with self.assertRaises(ValueError):
             proxy.dns_question(query("allowed.example", 16))
+
+    def test_dns_strips_additional_records(self):
+        original = query("allowed.example")
+        incoming = (
+            original[:10] + b"\x00\x01" + original[12:] + b"untrusted-additional-data"
+        )
+        response = original[:2] + b"\x81\x80" + original[4:]
+        stream = MagicMock()
+        stream.__enter__.return_value = stream
+        stream.recv.return_value = response
+        state = proxy.State(Policy(("allowed.example",)), ["1.1.1.1"], None)
+        with patch.object(socket, "socket", return_value=stream):
+            self.assertEqual(state.dns(incoming), response)
+        stream.sendall.assert_called_once_with(original)
+
+    def test_dns_aliases_are_dns_only_and_expire(self):
+        answer = cname_response(
+            "allowed.example",
+            [
+                ("unrelated.example", "injected.example", 300),
+                ("allowed.example", "first.cdn.example", 100),
+                ("first.cdn.example", "second.cdn.example", 30),
+            ],
+        )
+        self.assertEqual(
+            proxy.dns_aliases(answer, "allowed.example"),
+            [("first.cdn.example", 100), ("second.cdn.example", 30)],
+        )
+        stream = MagicMock()
+        stream.__enter__.return_value = stream
+        stream.recv.return_value = answer
+        state = proxy.State(Policy(("allowed.example",)), ["1.1.1.1"], None)
+        with (
+            patch.object(socket, "socket", return_value=stream),
+            patch.object(proxy.time, "monotonic", return_value=10),
+        ):
+            self.assertEqual(state.dns(query("allowed.example")), answer)
+        self.assertEqual(
+            state.aliases, {"first.cdn.example": 110, "second.cdn.example": 40}
+        )
+        with self.assertRaises(PermissionError):
+            state.require("first.cdn.example")
+        with (
+            patch.object(proxy.time, "monotonic", return_value=111),
+            patch.object(socket, "socket") as connect,
+        ):
+            self.assertEqual(state.dns(query("first.cdn.example"))[3] & 15, 5)
+            connect.assert_not_called()
+
+    def test_dns_aliases_cannot_override_deny(self):
+        answer = cname_response(
+            "allowed.example", [("allowed.example", "denied.example", 300)]
+        )
+        stream = MagicMock()
+        stream.__enter__.return_value = stream
+        stream.recv.return_value = answer
+        state = proxy.State(
+            Policy(("allowed.example",), ("denied.example",)), ["1.1.1.1"], None
+        )
+        with patch.object(socket, "socket", return_value=stream):
+            self.assertEqual(state.dns(query("allowed.example")), answer)
+        self.assertEqual(state.aliases, {})
+
+    def test_compressed_dns_name_validation(self):
+        packet = b"\0" * 12 + encoded_name("allowed.example")
+        pointer = len(packet)
+        packet += b"\xc0\x0c"
+        self.assertEqual(
+            proxy.dns_name(packet, pointer), ("allowed.example", pointer + 2)
+        )
+        with self.assertRaises(ValueError):
+            proxy.dns_name(b"\xc0\x00", 0)
 
     def test_client_hello_and_fragmentation(self):
         original = hello("allowed.example")
