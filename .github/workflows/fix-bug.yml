@@ -20,6 +20,10 @@ on:
         description: "The immutable artifact ID of the reproduction Codex thread"
         required: true
         type: string
+      reproduction-run-id:
+        description: "The trusted workflow run containing the reproduction thread"
+        required: false
+        type: string
       parent-pull-request:
         description: "The draft regression-test pull request URL"
         required: true
@@ -31,6 +35,10 @@ on:
       parent-head-sha:
         description: "The verified regression-test commit"
         required: true
+        type: string
+      trusted-base-sha:
+        description: "The workflow revision that produced the regression test"
+        required: false
         type: string
       runner:
         description: "The runner to use for bug fixing"
@@ -67,6 +75,7 @@ jobs:
       publish: ${{ steps.commit-fix.outputs.publish }}
       pull-request-title: ${{ steps.commit-fix.outputs.pull-request-title }}
       result: ${{ steps.commit-fix.outputs.result }}
+      trusted-base-sha: ${{ steps.prepare.outputs.trusted-base-sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -85,7 +94,7 @@ jobs:
         uses: ./.github/actions/load-codex-thread
         with:
           repository: ${{ github.repository }}
-          run-id: ${{ github.run_id }}
+          run-id: ${{ inputs.reproduction-run-id || github.run_id }}
           artifact-id: ${{ inputs.reproduction-thread-artifact-id }}
           github-token: ${{ github.token }}
           path: ${{ runner.temp }}/codex-home/sessions
@@ -111,7 +120,9 @@ jobs:
           PARENT_HEAD_REF: ${{ inputs.parent-head-ref }}
           PARENT_HEAD_SHA: ${{ inputs.parent-head-sha }}
           PARENT_PULL_REQUEST: ${{ inputs.parent-pull-request }}
+          RECOVERY_RUN_ID: ${{ inputs.reproduction-run-id }}
           REPRODUCTION_RESULT: ${{ inputs.reproduction-result }}
+          TRUSTED_BASE_SHA: ${{ inputs.trusted-base-sha || github.sha }}
         run: |
           mkdir -p "$RUNNER_TEMP/codex-home"
           cp agents/codex/config.toml "$RUNNER_TEMP/codex-home/config.toml"
@@ -129,6 +140,7 @@ jobs:
             [ "$issue_number" != "$ISSUE_NUMBER" ] ||
             [ "$PARENT_HEAD_REF" != "zb/reproduce-bug/$issue_number" ] ||
             ! [[ "$PARENT_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] ||
+            ! [[ "$TRUSTED_BASE_SHA" =~ ^[0-9a-f]{40}$ ]] ||
             ! [[ "$PARENT_PULL_REQUEST" =~ ^https://github\.com/astral-sh/uv-dev/pull/[1-9][0-9]*$ ]]; then
             echo "The regression-test pull request context is invalid." >&2
             exit 1
@@ -152,6 +164,10 @@ jobs:
           expected_parent_head_sha="$PARENT_HEAD_SHA"
           PARENT_HEAD_SHA="$(jq --raw-output '.head.sha' \
             "$RUNNER_TEMP/bug-regression-pull-request.json")"
+          if [ -n "$RECOVERY_RUN_ID" ] && [ "$PARENT_HEAD_SHA" != "$expected_parent_head_sha" ]; then
+            echo "The regression-test branch changed after recovery was requested." >&2
+            exit 1
+          fi
 
           if jq --exit-status '.state == "closed"' \
             "$RUNNER_TEMP/bug-regression-pull-request.json" > /dev/null; then
@@ -184,7 +200,8 @@ jobs:
             exit 1
           fi
 
-          if ! git merge-base --is-ancestor "$GITHUB_SHA" "$PARENT_HEAD_SHA" ||
+          if ! git merge-base --is-ancestor "$TRUSTED_BASE_SHA" "$GITHUB_SHA" ||
+            ! git merge-base --is-ancestor "$TRUSTED_BASE_SHA" "$PARENT_HEAD_SHA" ||
             ! git merge-base --is-ancestor "$expected_parent_head_sha" "$PARENT_HEAD_SHA"; then
             echo "The regression-test branch does not extend its verified revision." >&2
             exit 1
@@ -198,7 +215,7 @@ jobs:
                 exit 1
                 ;;
             esac
-          done < <(git diff --name-only -z "$GITHUB_SHA" "$PARENT_HEAD_SHA")
+          done < <(git diff --name-only -z "$TRUSTED_BASE_SHA" "$PARENT_HEAD_SHA")
 
           fix_branch="automations/fix-bug/$issue_number"
           gh pr list \
@@ -282,6 +299,7 @@ jobs:
             echo "existing=$existing"
             echo "existing-head=$fix_head"
             echo "parent-head-sha=$PARENT_HEAD_SHA"
+            echo "trusted-base-sha=$TRUSTED_BASE_SHA"
           } >> "$GITHUB_OUTPUT"
 
       - name: "Fix reproduced bug"
@@ -320,6 +338,7 @@ jobs:
           EXISTING_FIX: ${{ steps.prepare.outputs.existing }}
           FIX_RESULT: ${{ steps.fix-bug.outputs.final-message }}
           PARENT_HEAD_SHA: ${{ steps.prepare.outputs.parent-head-sha }}
+          TRUSTED_BASE_SHA: ${{ steps.prepare.outputs.trusted-base-sha }}
         run: |
           if [ "$EXISTING_FIX" = "true" ]; then
             FIX_RESULT="$(jq --null-input --compact-output \
@@ -371,7 +390,7 @@ jobs:
                 source_changed=true
                 ;;
               crates/uv/tests/*|crates/uv-client/tests/it/*)
-                if git diff --name-only "$GITHUB_SHA" "$PARENT_HEAD_SHA" -- "$path" |
+                if git diff --name-only "$TRUSTED_BASE_SHA" "$PARENT_HEAD_SHA" -- "$path" |
                   grep -Fxq "$path"; then
                   regression_changed=true
                 fi
@@ -476,6 +495,7 @@ jobs:
           PARENT_HEAD_REF: ${{ inputs.parent-head-ref }}
           PARENT_HEAD_SHA: ${{ needs.fix.outputs.parent-head-sha }}
           PARENT_PULL_REQUEST: ${{ inputs.parent-pull-request }}
+          TRUSTED_BASE_SHA: ${{ needs.fix.outputs.trusted-base-sha }}
         run: |
           pull_request_number="${PARENT_PULL_REQUEST##*/}"
           gh api "repos/astral-sh/uv-dev/pulls/$pull_request_number" \
@@ -566,7 +586,7 @@ jobs:
                 source_changed=true
                 ;;
               crates/uv/tests/*|crates/uv-client/tests/it/*)
-                if git diff --name-only "$GITHUB_SHA" "$PARENT_HEAD_SHA" -- "$path" |
+                if git diff --name-only "$TRUSTED_BASE_SHA" "$PARENT_HEAD_SHA" -- "$path" |
                   grep -Fxq "$path"; then
                   regression_changed=true
                 fi

@@ -10,12 +10,23 @@ on:
         description: "An issue URL or number"
         required: true
         type: string
+      recovery-run:
+        description: "A previous issue-triage run to resume from the fix stage"
+        required: false
+        type: string
+      recovery-head-sha:
+        description: "The current verified regression-test commit"
+        required: false
+        type: string
 
 permissions: {}
 
 jobs:
   initialize-context:
-    if: github.repository == 'astral-sh/uv'
+    if: >-
+      github.repository == 'astral-sh/uv' &&
+      inputs.recovery-run == '' &&
+      inputs.recovery-head-sha == ''
     runs-on: ubuntu-latest
     environment: automations
     timeout-minutes: 10
@@ -284,5 +295,140 @@ jobs:
       parent-pull-request: ${{ needs.reproduce-bug.outputs.pull-request }}
       parent-head-ref: ${{ needs.reproduce-bug.outputs.head-ref }}
       parent-head-sha: ${{ needs.reproduce-bug.outputs.head-sha }}
+      runner: ubuntu-latest
+    secrets: inherit
+
+  prepare-fix-recovery:
+    if: >-
+      github.repository == 'astral-sh/uv' &&
+      github.event_name == 'workflow_dispatch' &&
+      (inputs.recovery-run != '' || inputs.recovery-head-sha != '')
+    runs-on: ubuntu-latest
+    environment: automations
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+      issues: read
+    outputs:
+      issue-number: ${{ steps.prepare.outputs.issue-number }}
+      reproduction-result: ${{ steps.prepare.outputs.reproduction-result }}
+      reproduction-thread-artifact-id: ${{ steps.prepare.outputs.reproduction-thread-artifact-id }}
+      parent-pull-request: ${{ steps.prepare.outputs.parent-pull-request }}
+      trusted-base-sha: ${{ steps.prepare.outputs.trusted-base-sha }}
+    steps:
+      - name: "Prepare verified fix recovery"
+        id: prepare
+        env:
+          EXPECTED_HEAD_SHA: ${{ inputs.recovery-head-sha }}
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ inputs.issue }}
+          RUN_ID: ${{ inputs.recovery-run }}
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ] ||
+            ! [[ "$RUN_ID" =~ ^[1-9][0-9]*$ ]] ||
+            ! [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Fix recovery requires a trusted run and pinned regression-test revision." >&2
+            exit 1
+          fi
+
+          gh issue view "$ISSUE" --repo "$GITHUB_REPOSITORY" --json number,url \
+            > "$RUNNER_TEMP/recovery-issue.json"
+          if ! jq --exit-status --arg repository "$GITHUB_REPOSITORY" '
+            .number > 0
+            and .url == ("https://github.com/" + $repository + "/issues/" + (.number | tostring))
+          ' "$RUNNER_TEMP/recovery-issue.json" > /dev/null; then
+            echo "The recovery issue does not belong to the trusted repository." >&2
+            exit 1
+          fi
+          issue_number="$(jq --raw-output '.number' "$RUNNER_TEMP/recovery-issue.json")"
+
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" \
+            > "$RUNNER_TEMP/recovery-run.json"
+          if ! jq --exit-status --arg repository "$GITHUB_REPOSITORY" --argjson id "$RUN_ID" '
+            .id == $id
+            and .repository.full_name == $repository
+            and .head_repository.full_name == $repository
+            and .head_branch == "main"
+            and .path == ".github/workflows/issue-triage.yml"
+            and (.event | IN("issues", "workflow_dispatch"))
+            and .status == "completed"
+            and (.head_sha | test("^[0-9a-f]{40}$"))
+          ' "$RUNNER_TEMP/recovery-run.json" > /dev/null; then
+            echo "The reproduction did not come from a trusted issue-triage run." >&2
+            exit 1
+          fi
+          attempt="$(jq --raw-output '.run_attempt' "$RUNNER_TEMP/recovery-run.json")"
+
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/artifacts?per_page=100" \
+            > "$RUNNER_TEMP/recovery-artifacts.json"
+          thread="codex-thread-reproduce-bug-$RUN_ID-$attempt"
+          if ! jq --exit-status \
+            --arg thread "$thread" \
+            --arg issue "issue-context-$issue_number-$RUN_ID-$attempt" '
+              ([.artifacts[] | select(.name == $thread and .expired == false)] | length) == 1
+              and any(.artifacts[]; .name == $issue)
+            ' "$RUNNER_TEMP/recovery-artifacts.json" > /dev/null; then
+            echo "The trusted run does not contain this issue and its reproduction thread." >&2
+            exit 1
+          fi
+
+          parent_head_ref="zb/reproduce-bug/$issue_number"
+          gh pr list --repo astral-sh/uv-dev --state all --head "$parent_head_ref" --limit 2 \
+            --json baseRefName,headRefName,headRefOid,headRepository,url \
+            > "$RUNNER_TEMP/recovery-pull-requests.json"
+          if ! jq --exit-status --arg ref "$parent_head_ref" --arg sha "$EXPECTED_HEAD_SHA" '
+            length == 1
+            and .[0].baseRefName == "main"
+            and .[0].headRepository.nameWithOwner == "astral-sh/uv-dev"
+            and .[0].headRefName == $ref
+            and .[0].headRefOid == $sha
+          ' "$RUNNER_TEMP/recovery-pull-requests.json" > /dev/null; then
+            echo "The regression-test pull request does not match its pinned revision." >&2
+            exit 1
+          fi
+
+          gh api repos/astral-sh/uv-dev/contents/reproduction.json \
+            --method GET --raw-field ref="issue/$issue_number" --jq .content |
+            base64 --decode > "$RUNNER_TEMP/recovery-reproduction.json"
+          if ! jq --exit-status '
+            .reproduction == "reproducible" and (.reason | type == "string" and length > 0)
+          ' "$RUNNER_TEMP/recovery-reproduction.json" > /dev/null; then
+            echo "The issue context does not contain a confirmed reproduction." >&2
+            exit 1
+          fi
+
+          {
+            echo "issue-number=$issue_number"
+            jq --raw-output '"reproduction-result=\(tojson)"' \
+              "$RUNNER_TEMP/recovery-reproduction.json"
+            jq --raw-output --arg thread "$thread" \
+              '.artifacts[] | select(.name == $thread and .expired == false)
+               | "reproduction-thread-artifact-id=\(.id)"' \
+              "$RUNNER_TEMP/recovery-artifacts.json"
+            jq --raw-output '"parent-pull-request=\(.[0].url)"' \
+              "$RUNNER_TEMP/recovery-pull-requests.json"
+            jq --raw-output '"trusted-base-sha=\(.head_sha)"' \
+              "$RUNNER_TEMP/recovery-run.json"
+          } >> "$GITHUB_OUTPUT"
+
+  recover-fix:
+    needs: prepare-fix-recovery
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+      issues: read
+    uses: $/.github/workflows/fix-bug.yml
+    with:
+      issue: ${{ inputs.issue }}
+      issue-number: ${{ needs.prepare-fix-recovery.outputs.issue-number }}
+      reproduction-result: ${{ needs.prepare-fix-recovery.outputs.reproduction-result }}
+      reproduction-thread-artifact-id: ${{ needs.prepare-fix-recovery.outputs.reproduction-thread-artifact-id }}
+      reproduction-run-id: ${{ inputs.recovery-run }}
+      parent-pull-request: ${{ needs.prepare-fix-recovery.outputs.parent-pull-request }}
+      parent-head-ref: ${{ format('zb/reproduce-bug/{0}', needs.prepare-fix-recovery.outputs.issue-number) }}
+      parent-head-sha: ${{ inputs.recovery-head-sha }}
+      trusted-base-sha: ${{ needs.prepare-fix-recovery.outputs.trusted-base-sha }}
       runner: ubuntu-latest
     secrets: inherit
