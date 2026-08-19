@@ -8,6 +8,7 @@ pub use cached_client::{CacheControl, CachedClient, CachedClientError, DataWithC
 pub use error::{Error, ErrorKind, ProblemDetails, WrappedReqwestError};
 pub use file_hash::FileHashError;
 pub use flat_index::{FlatIndexClient, FlatIndexEntries, FlatIndexEntry, FlatIndexError};
+pub use packed::PackedArchive;
 pub use registry_client::{
     Connectivity, MetadataFormat, MetadataRangeRequest, RegistryClient, RegistryClientBuilder,
     SimpleDetailMetadata, SimpleDetailMetadatum, SimpleIndexMetadata, VersionFiles,
@@ -26,6 +27,7 @@ mod html;
 mod httpcache;
 mod linehaul;
 mod middleware;
+mod packed;
 mod registry_client;
 mod remote_metadata;
 mod retry;

@@ -4436,6 +4436,37 @@ fn resolve_pip_build_hash_checking(
     )
 }
 
+#[derive(Debug)]
+pub(crate) struct DownloadSettings {
+    pub(crate) refresh: Refresh,
+    pub(crate) settings: ResolverSettings,
+}
+
+impl DownloadSettings {
+    pub(crate) fn resolve(
+        args: uv_cli::DownloadArgs,
+        filesystem: Option<FilesystemOptions>,
+        environment: &EnvironmentOptions,
+    ) -> Result<Self> {
+        let indexes = args
+            .index
+            .resolve(configured_indexes(filesystem.as_ref()))?;
+        Ok(Self {
+            refresh: Refresh::try_from(args.refresh)?,
+            settings: combine_resolver_settings(
+                ResolverOptions {
+                    indexes,
+                    keyring_provider: args.registry.keyring_provider,
+                    index_strategy: args.registry.index_strategy,
+                    ..ResolverOptions::default()
+                },
+                filesystem,
+                environment,
+            ),
+        })
+    }
+}
+
 /// Return the indexes from the effective filesystem configuration.
 fn configured_indexes(filesystem: Option<&FilesystemOptions>) -> &[Index] {
     filesystem
