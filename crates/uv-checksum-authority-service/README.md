@@ -77,9 +77,13 @@ apply. The service's `/health` endpoint reports readiness of the loaded catalog.
 
 ## Verification policy
 
-- Authority mode uses a fresh temporary `uv` cache. Existing cache entries lack verification
-  receipts, so they cannot establish that an authority approved their contents. Persistent verified
-  caching, offline operation, and revocation need a separate design.
+- Cached archives are reused when their locally computed SHA-256 digest and size match a fresh
+  authority record. Entries missing that evidence are downloaded again. Backend-produced metadata
+  and wheels use a separate cache keyed by the authority public key. Their build receipts record the
+  archive authorizations observed by the invocation, including build dependencies, and those records
+  are rechecked before reuse. Receipts also bind the exact output bytes, so replacing a build does
+  not preserve its previous approval. Builds made without an authority are rebuilt once. The
+  authority must remain reachable even when all archive bytes are cached.
 - Wheel metadata is read from the complete verified wheel. PEP 658 sidecars, range reads, and
   alternate compressed-wheel representations are not trusted in this mode.
 - Remote wheels and source archives are checked, including archives fetched while resolving and
