@@ -44,10 +44,10 @@
       ]
     },
     "build-constraint-dependencies": {
-      "description": "PEP 508-style requirements, e.g., `ruff==0.5.0`, or `ruff @ https://...`.",
+      "description": "Constraints to apply when solving build dependencies.\n\nBuild constraints are used to restrict the versions of build dependencies that are selected\nwhen building a package during resolution or installation.\n\nIncluding a package as a constraint will _not_ trigger installation of the package during\na build; instead, the package must be requested elsewhere in the project's build dependency\ngraph.\n\nUse a table with `requirement` and `hashes` to restrict the accepted distribution archives.\nHashes use the same `algorithm:digest` format as requirements-file hashes.\n\n!!! note\n    In `uv lock`, `uv sync`, and `uv run`, uv will only read `build-constraint-dependencies` from\n    the `pyproject.toml` at the workspace root, and will ignore any declarations in other\n    workspace members or `uv.toml` files.",
       "type": ["array", "null"],
       "items": {
-        "type": "string"
+        "$ref": "#/definitions/BuildConstraintDependency"
       }
     },
     "cache-dir": {
@@ -514,6 +514,10 @@
         "$ref": "#/definitions/PackageName"
       }
     },
+    "require-build-hashes": {
+      "description": "Require hashes for every dependency installed into an isolated build environment during\nproject resolution and installation.\n\nOnly the `pyproject.toml` at the workspace root is read. Declarations in workspace members\nand `uv.toml` files are ignored. Use `--require-build-hashes` to override this setting for\n`uv lock` or `uv sync`.",
+      "type": ["boolean", "null"]
+    },
     "required-environments": {
       "description": "A list of environment markers, e.g., `sys_platform == 'darwin'.",
       "type": ["array", "null"],
@@ -773,6 +777,37 @@
           }
         }
       }
+    },
+    "BuildConstraintDependency": {
+      "description": "A build constraint with optional archive hashes.",
+      "anyOf": [
+        {
+          "description": "A PEP 508 requirement without explicit archive hashes.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Requirement"
+            }
+          ]
+        },
+        {
+          "description": "A PEP 508 requirement with explicit archive hashes.",
+          "type": "object",
+          "properties": {
+            "hashes": {
+              "type": "array",
+              "default": [],
+              "items": {
+                "type": "string"
+              }
+            },
+            "requirement": {
+              "$ref": "#/definitions/Requirement"
+            }
+          },
+          "additionalProperties": false,
+          "required": ["requirement"]
+        }
+      ]
     },
     "CacheKey": {
       "anyOf": [

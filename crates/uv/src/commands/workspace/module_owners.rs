@@ -74,6 +74,7 @@ pub(crate) async fn collect_module_owners(
 
         do_sync(
             target,
+            None,
             venv,
             &extras,
             &groups,

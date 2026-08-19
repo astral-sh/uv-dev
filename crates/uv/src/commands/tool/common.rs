@@ -22,8 +22,8 @@ use uv_distribution::{
     DistributionDatabase, LoweredExtraBuildDependencies, StaticMetadataDatabase,
 };
 use uv_distribution_types::{
-    DependencyMetadata, HashGeneration, Index, IndexLocations, InstalledDist, Name, Requirement,
-    RequiresPython, Resolution, UnresolvedRequirement,
+    DependencyMetadata, HashGeneration, Index, IndexLocations, InstalledDist, Name,
+    NameRequirementSpecification, Requirement, RequiresPython, Resolution, UnresolvedRequirement,
 };
 use uv_errors::{ErrorWithHints, Hint, Hints};
 #[cfg(unix)]
@@ -325,7 +325,10 @@ impl ToolLock {
             constraints.iter().cloned(),
             overrides.iter().cloned().map(Override::Requirement),
             excludes.iter().cloned(),
-            build_constraints.iter().cloned(),
+            build_constraints
+                .iter()
+                .cloned()
+                .map(NameRequirementSpecification::from),
             std::iter::empty::<(GroupName, Vec<Requirement>)>(),
             dependency_metadata.values().cloned(),
         )
@@ -518,7 +521,12 @@ impl ToolLock {
             .map(Override::Requirement)
             .collect::<Vec<_>>();
         let Self { root, lock } = self;
-        let validated = ValidatedLock::validate(
+        let build_constraints = build_constraints
+            .iter()
+            .cloned()
+            .map(NameRequirementSpecification::from)
+            .collect::<Vec<_>>();
+        let validated = Box::pin(ValidatedLock::validate(
             lock,
             &root,
             &BTreeMap::new(),
@@ -529,7 +537,7 @@ impl ToolLock {
             constraints,
             &overrides,
             excludes,
-            build_constraints,
+            &build_constraints,
             &Conflicts::empty(),
             None,
             None,
@@ -545,7 +553,7 @@ impl ToolLock {
             &database,
             preview,
             printer,
-        )
+        ))
         .await?;
         let satisfied = validated.is_satisfied();
         let usable = validated.is_usable();

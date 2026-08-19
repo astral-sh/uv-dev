@@ -2426,6 +2426,7 @@ async fn run_project(
 
             Box::pin(commands::sync(
                 project_dir,
+                args.require_build_hashes,
                 args.lock_check,
                 args.frozen,
                 args.dry_run,
@@ -2489,6 +2490,7 @@ async fn run_project(
 
             Box::pin(commands::lock(
                 project_dir,
+                args.require_build_hashes,
                 args.lock_check,
                 args.frozen,
                 args.dry_run,

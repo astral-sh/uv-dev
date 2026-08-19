@@ -456,6 +456,7 @@ pub(crate) async fn check(
         };
         match project::sync::do_sync(
             target,
+            None,
             &venv,
             &extras,
             &groups,
@@ -685,6 +686,7 @@ pub(crate) async fn check(
             let sync_state = state.fork();
             match project::sync::do_sync(
                 target,
+                None,
                 &venv,
                 &extras,
                 &groups,

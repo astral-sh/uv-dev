@@ -2722,6 +2722,45 @@ fn lock_project_with_build_constraints() -> Result<()> {
     Ok(())
 }
 
+/// Preserve hashes on project build constraints through lock and replay.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_project_with_hashed_build_constraints() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["anyio==3.7.0"]
+
+        [tool.uv]
+        build-constraint-dependencies = [
+            { requirement = "setuptools==1", hashes = ["sha256:0000000000000000000000000000000000000000000000000000000000000000"] },
+        ]
+        "#,
+    )?;
+
+    uv_snapshot!(context.filters(), context.lock(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+    assert!(context.read("uv.lock").contains(
+        "hashes = [\"sha256:0000000000000000000000000000000000000000000000000000000000000000\"]"
+    ));
+
+    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+
+    Ok(())
+}
+
 /// Lock a project with `uv.tool.build-constraint-dependencies` that reference `tool.uv.sources`.
 #[cfg(feature = "test-universal")]
 #[test]

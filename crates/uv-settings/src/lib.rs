@@ -304,6 +304,7 @@ fn validate_uv_toml(path: &Path, options: &Options) -> Result<(), Error> {
         exclude_dependencies: _,
         constraint_dependencies: _,
         build_constraint_dependencies: _,
+        require_build_hashes: _,
         environments,
         required_environments,
         conflicts,
@@ -454,6 +455,7 @@ fn warn_uv_toml_masked_fields(options: &Options) {
         exclude_dependencies,
         constraint_dependencies,
         build_constraint_dependencies,
+        require_build_hashes,
         environments: _,
         required_environments: _,
         conflicts: _,
@@ -653,6 +655,9 @@ fn warn_uv_toml_masked_fields(options: &Options) {
     }
     if build_constraint_dependencies.is_some() {
         masked_fields.push("build-constraint-dependencies");
+    }
+    if require_build_hashes.is_some() {
+        masked_fields.push("require-build-hashes");
     }
     if !masked_fields.is_empty() {
         let field_listing = masked_fields.join("\n- ");
