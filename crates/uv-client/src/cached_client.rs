@@ -13,7 +13,7 @@ use tracing::{Instrument, Span, debug, info_span, instrument, trace, warn};
 use zerocopy::byteorder::little_endian::{U32, U64};
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned};
 
-use uv_cache::{CacheEntry, Freshness};
+use uv_cache::{Cache, CacheEntry, Freshness};
 use uv_fastid::Id;
 use uv_fs::write_atomic;
 use uv_redacted::DisplaySafeUrl;
@@ -22,7 +22,9 @@ use crate::base_client::CertificateSource;
 use crate::httpcache::{
     AfterResponse, ArchivedCachePolicy, BeforeRequest, CachePolicy, CachePolicyBuilder,
 };
-use crate::{BaseClient, Error, ErrorKind, OwnedArchive, ProblemDetails, RetryState};
+use crate::{
+    BaseClient, Error, ErrorKind, OwnedArchive, PackedArchive, ProblemDetails, RetryState,
+};
 
 /// A trait the generalizes (de)serialization at a high level.
 ///
@@ -213,11 +215,32 @@ impl From<Freshness> for CacheControl {
 /// Again unlike `http-cache`, the caller gets full control over the cache key with the assumption
 /// that it's a file.
 #[derive(Debug, Clone)]
-pub struct CachedClient(BaseClient);
+pub struct CachedClient(BaseClient, Option<Cache>);
 
 impl CachedClient {
     pub fn new(client: BaseClient) -> Self {
-        Self(client)
+        Self(client, None)
+    }
+
+    pub(crate) fn with_packed_cache(mut self, cache: Cache) -> Self {
+        self.1 = Some(cache);
+        self
+    }
+
+    async fn packed_response(
+        &self,
+        req: &Request,
+        cache_control: &CacheControl,
+    ) -> Result<Option<Response>, Error> {
+        if matches!(cache_control, CacheControl::MustRevalidate) {
+            return Ok(None);
+        }
+        let Some(cache) = &self.1 else {
+            return Ok(None);
+        };
+        PackedArchive::response(cache, req)
+            .await
+            .map_err(|err| ErrorKind::Io(std::io::Error::other(err)).into())
     }
 
     /// The underlying [`BaseClient`] without caching.
@@ -611,14 +634,23 @@ impl CachedClient {
         let url = DisplaySafeUrl::from_url(req.url().clone());
         debug!("Sending revalidation request for: {url}");
         let start = Instant::now();
-        let mut response = self
-            .0
-            .execute(req)
-            .instrument(info_span!("revalidation_request", url = %url))
-            .await
-            .map_err(|err| {
-                Error::from_reqwest_middleware(url.clone(), err, start, self.certificate_source())
-            })?;
+        let mut response =
+            if let Some(response) = self.packed_response(&req, &cache_control).await? {
+                response
+            } else {
+                self.0
+                    .execute(req)
+                    .instrument(info_span!("revalidation_request", url = %url))
+                    .await
+                    .map_err(|err| {
+                        Error::from_reqwest_middleware(
+                            url.clone(),
+                            err,
+                            start,
+                            self.certificate_source(),
+                        )
+                    })?
+            };
         trace!(
             "Received response for revalidation request with status {} for: {}",
             response.status(),
@@ -681,9 +713,15 @@ impl CachedClient {
         debug!("Sending fresh {} request for: {}", req.method(), url);
         let cache_policy_builder = CachePolicyBuilder::new(&req);
         let start = Instant::now();
-        let mut response = self.0.execute(req).await.map_err(|err| {
-            Error::from_reqwest_middleware(url.clone(), err, start, self.certificate_source())
-        })?;
+        let mut response = if let Some(response) =
+            self.packed_response(&req, &cache_control).await?
+        {
+            response
+        } else {
+            self.0.execute(req).await.map_err(|err| {
+                Error::from_reqwest_middleware(url.clone(), err, start, self.certificate_source())
+            })?
+        };
         trace!(
             "Received response for fresh request with status {} for: {}",
             response.status(),
