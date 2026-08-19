@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 20088,
+        "title": "Support older versions of Python on various architectures (`uv python install`)",
+        "url": "https://github.com/astral-sh/uv/issues/20088",
+        "state": "open",
+        "reason": "Canonical match: astral-sh/uv#20088 requests broader managed-download coverage for historical CPython versions and platforms after the same error. Maintainers discuss the matrix and maintenance limits there."
+      },
+      {
+        "kind": "issue",
+        "number": 9394,
+        "title": "Unable to download Python 3.11.2 on Windows",
+        "url": "https://github.com/astral-sh/uv/issues/9394",
+        "state": "closed",
+        "reason": "Same Windows x86_64 symptom for an exact CPython patch release. Maintainers said unavailable or skipped patch builds were unlikely to be added and suggested using a nearby patch release."
+      },
+      {
+        "kind": "pull_request",
+        "number": 13022,
+        "title": "Omit Python 3.7 downloads from managed versions",
+        "url": "https://github.com/astral-sh/uv/pull/13022",
+        "state": "merged",
+        "reason": "Historical evidence that managed downloads for an older EOL CPython line were intentionally removed, distinguishing this coverage request from a current download regression."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests using the full error, cpython-3.6.0-windows-x86_64-none, cpython-3.6, Python 3.6, Windows x86_64, and uv python install. Conceptual searches covered managed-Python coverage, old/EOL Python support, skipped patch releases, platform matrices, and python-build-standalone. Fix-oriented searches covered restored, removed, and refreshed download metadata. astral-sh/uv#8213 and astral-sh/uv#8216 were ruled out as a temporary Python 3.7 metadata regression; astral-sh/uv#6089 involved release lag for an existing build, and astral-sh/uv#4848 concerned error formatting rather than availability."
+  },
+  "type": "duplicate",
+  "type_reason": "astral-sh/uv#20088 already tracks the same underlying enhancement: expanding uv’s managed-download matrix for older CPython versions and additional platform combinations. The new report adds a specific Windows tuple but provides no evidence that cpython-3.6.0-windows-x86_64-none was previously available or has regressed.",
+  "summary": "astral-sh/uv#20088 is the canonical open request. astral-sh/uv#9394 documents the analogous exact-patch Windows limitation, while astral-sh/uv#13022 provides historical context for intentionally limiting older managed downloads.",
+  "draft_response": "Thanks. This is covered by astral-sh/uv#20088, which tracks requests to expand managed Python download coverage for older versions and platform combinations. uv does not currently have a managed download for cpython-3.6.0-windows-x86_64-none, and the maintainers have indicated there are no plans to expand the historical build matrix because of its build and maintenance costs. I’m closing this as a duplicate; please follow astral-sh/uv#20088 for any future changes."
+}
