@@ -3546,6 +3546,7 @@ pub(crate) struct PipSyncSettings {
     pub(crate) src_file: Vec<PathBuf>,
     pub(crate) constraints: Vec<PathBuf>,
     pub(crate) build_constraints: Vec<PathBuf>,
+    pub(crate) require_build_hashes: bool,
     pub(crate) dry_run: DryRun,
     pub(crate) refresh: Refresh,
     pub(crate) settings: PipSettings,
@@ -3562,6 +3563,7 @@ impl PipSyncSettings {
             src_file,
             constraints,
             build_constraints,
+            require_build_hashes,
             extra,
             all_extras,
             no_all_extras,
@@ -3607,6 +3609,7 @@ impl PipSyncSettings {
                 .into_iter()
                 .filter_map(Maybe::into_option)
                 .collect(),
+            require_build_hashes,
             dry_run: DryRun::from_args(dry_run),
             refresh: Refresh::try_from(refresh)?,
             settings: PipSettings::combine(
@@ -3657,6 +3660,7 @@ pub(crate) struct PipInstallSettings {
     pub(crate) overrides: Vec<PathBuf>,
     pub(crate) excludes: Vec<PathBuf>,
     pub(crate) build_constraints: Vec<PathBuf>,
+    pub(crate) require_build_hashes: bool,
     pub(crate) dry_run: DryRun,
     pub(crate) constraints_from_workspace: Vec<Requirement>,
     pub(crate) overrides_from_workspace: Vec<Override<Requirement>>,
@@ -3684,6 +3688,7 @@ impl PipInstallSettings {
             overrides,
             excludes,
             build_constraints,
+            require_build_hashes,
             extra,
             all_extras,
             no_all_extras,
@@ -3780,6 +3785,7 @@ impl PipInstallSettings {
                 .into_iter()
                 .filter_map(Maybe::into_option)
                 .collect(),
+            require_build_hashes,
             dry_run: DryRun::from_args(dry_run),
             constraints_from_workspace,
             overrides_from_workspace,
