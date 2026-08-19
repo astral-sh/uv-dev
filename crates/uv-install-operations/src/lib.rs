@@ -223,6 +223,7 @@ impl InstallationPlan {
     /// Determine the changes required to make an environment satisfy a resolution.
     pub fn build(
         resolution: &Resolution,
+        revalidate_remote: bool,
         site_packages: SitePackages,
         installation: InstallationStrategy,
         reinstall: &Reinstall,
@@ -238,7 +239,7 @@ impl InstallationPlan {
         tags: &Tags,
     ) -> Result<Self, Error> {
         let start = Instant::now();
-        let plan = Planner::new(resolution)
+        let plan = Planner::new(resolution, revalidate_remote)
             .build(
                 site_packages,
                 installation,
@@ -341,6 +342,7 @@ pub async fn install(
 ) -> Result<Changelog, Error> {
     let plan = InstallationPlan::build(
         resolution,
+        client.has_checksum_authority(),
         site_packages,
         installation,
         reinstall,
