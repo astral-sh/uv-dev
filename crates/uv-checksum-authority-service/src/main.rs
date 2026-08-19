@@ -12,11 +12,12 @@ use ring::signature::Ed25519KeyPair;
 use sha2::{Digest, Sha256};
 use tokio::net::TcpListener;
 use url::Url;
-use uv_checksum_authority::{ArtifactId, ChecksumRecord, public_key_hex};
+use uv_checksum_authority::{ArtifactId, AuthorityPublicKey, ChecksumRecord, Sha256Digest};
 use uv_checksum_authority_service::{AuthorityService, Catalog};
+use zeroize::Zeroizing;
 
 #[derive(Parser)]
-#[command(about = "Experimental signed checksum authority for uv")]
+#[command(about = "Signed checksum authority for uv")]
 struct Args {
     #[command(subcommand)]
     command: Command,
@@ -56,28 +57,35 @@ fn read_catalog(path: &Path) -> Result<Catalog> {
 }
 
 fn read_key(path: &Path) -> Result<Ed25519KeyPair> {
-    let encoded = fs_err::read_to_string(path)?;
-    let mut seed = [0; 32];
-    hex::decode_to_slice(encoded.trim(), &mut seed).context("Invalid signing seed")?;
-    Ed25519KeyPair::from_seed_unchecked(&seed).map_err(|_| anyhow!("Invalid signing seed"))
+    let encoded = Zeroizing::new(fs_err::read_to_string(path)?);
+    let mut seed = Zeroizing::new([0; 32]);
+    hex::decode_to_slice(encoded.trim(), seed.as_mut()).context("Invalid signing seed")?;
+    Ed25519KeyPair::from_seed_unchecked(seed.as_ref()).map_err(|_| anyhow!("Invalid signing seed"))
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     match Args::parse().command {
         Command::Keygen { signing_key } => {
-            let mut seed = [0; 32];
+            let mut seed = Zeroizing::new([0; 32]);
             SystemRandom::new()
-                .fill(&mut seed)
+                .fill(seed.as_mut())
                 .map_err(|_| anyhow!("Failed to generate signing seed"))?;
-            let key = Ed25519KeyPair::from_seed_unchecked(&seed)
+            let key = Ed25519KeyPair::from_seed_unchecked(seed.as_ref())
                 .map_err(|_| anyhow!("Invalid signing seed"))?;
             let mut options = OpenOptions::new();
             options.write(true).create_new(true);
             #[cfg(unix)]
             options.mode(0o600);
-            writeln!(options.open(signing_key)?, "{}", hex::encode(seed))?;
-            writeln!(std::io::stdout(), "{}", public_key_hex(&key))?;
+            let encoded = Zeroizing::new(hex::encode(seed.as_ref()));
+            let mut file = options.open(signing_key)?;
+            writeln!(file, "{}", encoded.as_str())?;
+            file.sync_all()?;
+            writeln!(
+                std::io::stdout(),
+                "{}",
+                AuthorityPublicKey::from_signing_key(&key)
+            )?;
         }
         Command::Add {
             catalog,
@@ -90,6 +98,7 @@ async fn main() -> Result<()> {
                 .context("Pass --filename for an archive without a UTF-8 filename")?;
             let mut reader = BufReader::new(File::open(artifact)?);
             let mut hasher = Sha256::new();
+            let mut archive_size = 0;
             let mut buffer = vec![0; 64 * 1024];
             loop {
                 let size = reader.read(&mut buffer)?;
@@ -97,6 +106,7 @@ async fn main() -> Result<()> {
                     break;
                 }
                 hasher.update(&buffer[..size]);
+                archive_size += size as u64;
             }
             // Serialize cooperating writers across the atomic replacement of the catalog.
             let mut lock_path = catalog.as_os_str().to_owned();
@@ -113,10 +123,11 @@ async fn main() -> Result<()> {
             } else {
                 Catalog::default()
             };
-            records.insert(ChecksumRecord {
-                artifact: ArtifactId::new(&source, &filename)?,
-                sha256: hex::encode(hasher.finalize()),
-            })?;
+            records.insert(ChecksumRecord::new(
+                ArtifactId::new(&source, &filename)?,
+                Sha256Digest::from_bytes(hasher.finalize().into()),
+                archive_size,
+            ))?;
             let parent = catalog
                 .parent()
                 .filter(|path| !path.as_os_str().is_empty())

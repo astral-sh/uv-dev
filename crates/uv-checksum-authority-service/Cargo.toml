@@ -30,6 +30,12 @@ sha2 = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["net", "rt-multi-thread"] }
 url = { workspace = true }
+zeroize = { workspace = true }
 
 [dev-dependencies]
+assert_cmd = { workspace = true }
+assert_fs = { workspace = true }
 insta = { workspace = true }
+reqwest = { workspace = true }
+uv-test = { workspace = true }
+wiremock = { workspace = true }
