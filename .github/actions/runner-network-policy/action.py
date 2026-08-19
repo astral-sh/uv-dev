@@ -8,7 +8,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from policy import load
+from policy import load, private_origins
 
 DIRECTORY = Path("/run/uv-network-policy")
 
@@ -64,11 +64,13 @@ def pre():
             "sudo",
             "-n",
             "/usr/bin/python3",
-            "-I",
+            "-E",
+            "-s",
             str(Path(__file__).with_name("install.py")),
             profile,
             privileges,
             str(os.getuid()),
+            json.dumps(private_origins(os.environ)),
         ],
         check=True,
     )

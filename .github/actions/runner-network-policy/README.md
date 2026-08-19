@@ -24,6 +24,10 @@ DNS CNAME targets discovered in an authorized answer chain are allowed for DNS r
 a bounded lifetime. They do not become permitted HTTP or TLS destinations. Unrelated answer records
 and additional query records do not expand the policy.
 
+On Depot, only the private cache/results addresses injected by the runner are redirected. Their
+requests are forwarded to the corresponding public GitHub Actions service over verified TLS; this
+does not grant general access to private networks or arbitrary ports.
+
 Existing runner-owned HTTPS connections from trusted bootstrap are retained by exact destination and
 source port. Action downloads, runner startup, and container preparation can happen before the first
 action's `pre` hook. This is therefore an early-job hardening control, not isolation of the entire

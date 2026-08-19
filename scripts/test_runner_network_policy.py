@@ -7,6 +7,7 @@ import io
 import json
 import socket
 import ssl
+import stat
 import struct
 import subprocess
 import sys
@@ -14,6 +15,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -23,7 +25,7 @@ sys.path.insert(0, str(ACTION))
 import install
 import proxy
 from generate_runner_network_policy import generate
-from policy import Policy, hostname
+from policy import Policy, hostname, private_origins, validate_private_origins
 
 
 def query(name, kind=1):
@@ -182,6 +184,45 @@ class PolicyTests(unittest.TestCase):
         ):
             state.connect("denied.example", 443)
         resolve.assert_not_called()
+
+    def test_private_actions_origins_are_narrow(self):
+        expected = {"10.2.3.4:978": "results-receiver.actions.githubusercontent.com"}
+        self.assertEqual(
+            private_origins({"ACTIONS_RESULTS_URL": "http://10.2.3.4:978/"}), expected
+        )
+        self.assertEqual(
+            private_origins(
+                {
+                    "ACTIONS_RESULTS_URL": "https://results-receiver.actions.githubusercontent.com/"
+                }
+            ),
+            {},
+        )
+        for value in (
+            {"127.0.0.1:978": expected["10.2.3.4:978"]},
+            {"10.2.3.4:443": expected["10.2.3.4:978"]},
+            {"10.2.3.4:978": "attacker.example"},
+            {"user@10.2.3.4:978": expected["10.2.3.4:978"]},
+        ):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                validate_private_origins(value)
+        rules = install.firewall(991, 1001, ["10.0.0.2"], [], expected)
+        self.assertIn("ip daddr 10.2.3.4 tcp dport 978 redirect to :18080", rules)
+
+    def test_only_root_owned_regular_sudoers_files_are_normalized(self):
+        path = MagicMock()
+        path.exists.return_value = True
+        path.lstat.return_value = SimpleNamespace(
+            st_uid=0, st_mode=stat.S_IFREG | 0o644
+        )
+        install.normalize_runner_sudoers(path)
+        path.chmod.assert_called_once_with(0o440)
+        for owner, mode in ((1001, stat.S_IFREG), (0, stat.S_IFLNK)):
+            path.reset_mock()
+            path.lstat.return_value = SimpleNamespace(st_uid=owner, st_mode=mode)
+            with self.subTest(owner=owner, mode=mode), self.assertRaises(RuntimeError):
+                install.normalize_runner_sudoers(path)
+            path.chmod.assert_not_called()
 
     def test_dns_refusal(self):
         packet = query("denied.example")
@@ -394,7 +435,7 @@ class HTTPTests(unittest.TestCase):
                     "-subj",
                     "/CN=allowed.example",
                     "-addext",
-                    "subjectAltName=DNS:allowed.example",
+                    "subjectAltName=DNS:allowed.example,DNS:results-receiver.actions.githubusercontent.com",
                     "-keyout",
                     str(key),
                     "-out",
@@ -410,6 +451,35 @@ class HTTPTests(unittest.TestCase):
             origin.socket = context.wrap_socket(origin.socket, server_side=True)
             trust = ssl.create_default_context(cafile=certificate)
             with serving(origin) as origin_port:
+                private_target = "results-receiver.actions.githubusercontent.com"
+                private_server = proxy.TCPServer(("127.0.0.1", 0), proxy.HTTPHandler)
+                private_server.state = LoopbackState(origin_port)
+                private_server.state.policy = Policy((private_target,))
+                private_server.state.private_origins = validate_private_origins(
+                    {"10.2.3.4:978": private_target}
+                )
+                private_server.state.upstream_context = trust
+                with serving(private_server) as port:
+                    for tunneled in (False, True):
+                        with self.subTest(private_tunnel=tunneled):
+                            connection = http.client.HTTPConnection(
+                                "127.0.0.1", port, timeout=5
+                            )
+                            if tunneled:
+                                connection.set_tunnel("10.2.3.4", 978)
+                            connection.request(
+                                "GET",
+                                "/artifact"
+                                if tunneled
+                                else "http://10.2.3.4:978/artifact",
+                                headers={"Host": "10.2.3.4:978"},
+                            )
+                            response = connection.getresponse()
+                            self.assertEqual(response.status, 200)
+                            self.assertEqual(
+                                json.loads(response.read())["host"], private_target
+                            )
+                            connection.close()
                 for handler in (proxy.TLSHandler, proxy.HTTPHandler):
                     server = proxy.TCPServer(("127.0.0.1", 0), handler)
                     server.state = LoopbackState(origin_port)

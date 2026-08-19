@@ -8,6 +8,7 @@ import json
 import selectors
 import socket
 import socketserver
+import ssl
 import struct
 import threading
 import time
@@ -15,7 +16,7 @@ from collections import Counter
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from policy import hostname, load
+from policy import hostname, load, validate_private_origins
 
 HTTP_PORT = 18080
 TLS_PORT = 18443
@@ -224,7 +225,7 @@ def dns_aliases(packet, original):
 
 
 class State:
-    def __init__(self, policy, resolvers, audit):
+    def __init__(self, policy, resolvers, audit, private_services=None):
         self.policy = policy
         self.resolvers = resolvers
         self.audit = audit
@@ -232,6 +233,8 @@ class State:
         self.lock = threading.Lock()
         self.aliases = {}
         self.alias_lock = threading.Lock()
+        self.private_origins = validate_private_origins(private_services or {})
+        self.upstream_context = ssl.create_default_context()
 
     def count(self, category, name=""):
         with self.lock:
@@ -416,6 +419,16 @@ class HTTPHandler(http.server.BaseHTTPRequestHandler):
         self.close_connection = True
 
     def do_CONNECT(self):
+        if getattr(self, "_private_authority", None) is not None:
+            self.reply(403)
+            return
+        if self.path in self.server.state.private_origins:
+            self._private_authority = self.path
+            self.send_response(200, "Connection Established")
+            self.end_headers()
+            self.handle_one_request()
+            self.close_connection = True
+            return
         try:
             name, port = authority(self.path, 443)
             self.server.state.require(name)
@@ -442,20 +455,32 @@ class HTTPHandler(http.server.BaseHTTPRequestHandler):
             hosts = self.headers.get_all("Host", [])
             if len(hosts) != 1:
                 raise ValueError("one Host header required")
-            name, port = authority(hosts[0], 80)
+            requested = hosts[0]
+            if getattr(self, "_private_authority", requested) != requested:
+                raise PermissionError("private tunnel authority differs")
+            private_target = self.server.state.private_origins.get(requested)
+            name, port = (
+                (private_target, 443) if private_target else authority(requested, 80)
+            )
             target = urlsplit(self.path)
             if target.scheme:
-                if target.scheme != "http" or authority(target.netloc, 80) != (
-                    name,
-                    port,
-                ):
+                same_authority = (
+                    target.netloc == requested
+                    if private_target
+                    else authority(target.netloc, 80) == (name, port)
+                )
+                if target.scheme != "http" or not same_authority:
                     raise ValueError("unexpected request target")
                 path = target.path or "/"
                 if target.query:
                     path += "?" + target.query
             else:
                 path = self.path
-            if not path.startswith("/") or path.startswith("//") or port != 80:
+            if (
+                not path.startswith("/")
+                or path.startswith("//")
+                or port != (443 if private_target else 80)
+            ):
                 raise ValueError("unexpected request target")
             lengths = self.headers.get_all("Content-Length", [])
             if self.headers.get("Transfer-Encoding") or len(lengths) > 1:
@@ -466,6 +491,10 @@ class HTTPHandler(http.server.BaseHTTPRequestHandler):
             # Resolve and authorize before reading a potentially large request body.
             connection = http.client.HTTPConnection(name, port, timeout=30)
             connection.sock = self.server.state.connect(name, port)
+            if private_target:
+                connection.sock = self.server.state.upstream_context.wrap_socket(
+                    connection.sock, server_hostname=name
+                )
             body = self.rfile.read(length)
             if len(body) != length:
                 raise ValueError("truncated body")
@@ -539,6 +568,7 @@ def serve(directory):
         load(directory / "policies.json", settings["profile"]),
         settings["resolvers"],
         directory / "audit" / "events.json",
+        settings.get("private_origins", {}),
     )
     servers = []
     for family, address in ((socket.AF_INET, "127.0.0.1"), (socket.AF_INET6, "::1")):
