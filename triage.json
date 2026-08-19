@@ -1,0 +1,59 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 8523,
+        "title": "uv tool upgrade - problem with private indexes due to short living credentials",
+        "url": "https://github.com/astral-sh/uv/issues/8523",
+        "state": "open",
+        "reason": "Canonical match: astral-sh/uv#8523 tracks `uv tool upgrade` preferring receipt-stored private-index configuration over current user configuration, making refreshed authentication unavailable."
+      },
+      {
+        "kind": "issue",
+        "number": 14806,
+        "title": "uv tool upgrade does not authenticate against GitLab private pypi package registry",
+        "url": "https://github.com/astral-sh/uv/issues/14806",
+        "state": "closed",
+        "reason": "Historical near-match: maintainers confirmed that removing credentials from the receipt and failing to transfer matching credentials from `uv.toml` were bugs."
+      },
+      {
+        "kind": "pull_request",
+        "number": 14855,
+        "title": "Avoid writing redacted credentials to tool receipt",
+        "url": "https://github.com/astral-sh/uv/pull/14855",
+        "state": "merged",
+        "reason": "This deliberately removed both usernames and passwords from receipt index URLs, establishing that later commands must recover authentication safely rather than persist credential-bearing URLs."
+      },
+      {
+        "kind": "pull_request",
+        "number": 14858,
+        "title": "Respect credentials from all defined indexes",
+        "url": "https://github.com/astral-sh/uv/pull/14858",
+        "state": "merged",
+        "reason": "Fixed credential transfer for duplicated named/default index definitions, but not the scalar legacy `index-url` precedence used here."
+      },
+      {
+        "kind": "issue",
+        "number": 18120,
+        "title": "`uv tool upgrade` says \"Nothing to upgrade\" when index auth is invalid",
+        "url": "https://github.com/astral-sh/uv/issues/18120",
+        "state": "closed",
+        "reason": "Exact historical match for the misleading no-op result after private-index authentication fails."
+      },
+      {
+        "kind": "pull_request",
+        "number": 18246,
+        "title": "Promote authentication policy when saving tool receipts",
+        "url": "https://github.com/astral-sh/uv/pull/18246",
+        "state": "merged",
+        "reason": "Fixed silent no-ops for embedded or environment credentials, but explicitly did not cover keyring-provided credentials."
+      }
+    ],
+    "search_scope": "Searched authenticated GitHub results across open and closed issues and open, closed, and merged pull requests. Literal searches covered `uv-receipt.toml`, `index-url`, username stripping, `tool upgrade`, `Nothing to upgrade`, 401, and the keyring skip message. Conceptual and fix-oriented searches covered receipt precedence, credential persistence/removal, refreshed private-index authentication, subprocess keyring, and historical fixes. astral-sh/uv#16597 was ruled out because it concerns `uv tool run` with an embedded token; astral-sh/uv#15034 concerns Git source serialization during `uv add`; and astral-sh/uv#6420 concerns an SSH Git username."
+  },
+  "type": "duplicate",
+  "type_reason": "astral-sh/uv#8523 already tracks the same underlying bug: `uv tool upgrade` uses receipt-persisted private-index settings instead of usable current authentication from user configuration. astral-sh/uv#21216 adds a username-only subprocess-keyring reproduction. The named-index fix in astral-sh/uv#14858 and invalid-auth fix in astral-sh/uv#18246 do not cover this legacy `index-url`/keyring combination, so this is not a regression of their covered cases and can be centralized in astral-sh/uv#8523.",
+  "summary": "astral-sh/uv#21216 is a specific keyring-based reproduction of astral-sh/uv#8523. Historical fixes explain why named indexes and embedded or environment credentials behave differently, while the misleading no-op symptom is documented by astral-sh/uv#18120.",
+  "draft_response": "Thanks for the detailed reproduction. This is the same underlying issue as astral-sh/uv#8523. `uv tool upgrade` prefers the `index-url` recorded in the receipt over the current user configuration, while receipt serialization removes URL credentials, including a username without a password. In this case that leaves subprocess keyring without the username it needs, and the failed index queries are then reported as `Nothing to upgrade`.\n\nThe equivalent named `[[index]]` credential-transfer path was fixed in astral-sh/uv#14858, and astral-sh/uv#18246 made invalid embedded credentials fail loudly, but that fix explicitly did not cover keyring. Let’s keep the remaining `index-url`/keyring work in astral-sh/uv#8523; your reproduction is a useful concrete case for that issue."
+}
