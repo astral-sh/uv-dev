@@ -66,6 +66,8 @@ pub const DEFAULT_READ_TIMEOUT_UPLOAD: Duration = Duration::from_mins(15);
 
 #[derive(Debug, Error)]
 pub enum ClientBuildError {
+    #[error("checksum authority requires a temporary cache")]
+    ChecksumAuthorityCache,
     #[error("failed to build HTTP client")]
     Reqwest(#[from] reqwest::Error),
     #[error(transparent)]
