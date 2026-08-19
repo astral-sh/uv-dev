@@ -100,6 +100,23 @@ def post():
     destination = Path(os.environ["RUNNER_TEMP"]) / "network-policy-audit.json"
     destination.write_text(json.dumps(events, indent=2) + "\n")
     denied = sum(event["count"] for event in events if event["event"] == "denied")
+    if summary := os.environ.get("GITHUB_STEP_SUMMARY"):
+        settings = json.loads((DIRECTORY / "settings.json").read_text())
+        rows = [
+            "### Runner network policy",
+            "",
+            f"Profile: `{settings['profile']}`. Privileges: `{settings['privileges']}`.",
+            "",
+            "| Event | Host | Count |",
+            "| --- | --- | ---: |",
+        ]
+        rows.extend(
+            f"| {event['event']} | `{event['host']}` | {event['count']} |"
+            for event in events
+            if event["event"] in {"connected", "denied", "nonpublic_address"}
+        )
+        with Path(summary).open("a") as destination:
+            destination.write("\n".join(rows) + "\n")
     print(
         f"Network policy recorded {denied} denied requests; policy remains active until VM teardown."
     )

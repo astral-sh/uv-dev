@@ -1,5 +1,6 @@
 """Harmless hosted acceptance checks. Never prints response bodies or tokens."""
 
+import base64
 import http.client
 import ipaddress
 import json
@@ -10,10 +11,52 @@ import struct
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 DENIED = "example.com"
 ALLOWED = "api.github.com"
 DIRECTORY = Path("/run/uv-network-policy")
+IMAGE = "ubuntu@sha256:561618e2c15bf2397621dd04f96926663a3b5616c189cf7e38db7e82f5c538ea"
+
+
+def ipv4(name, port):
+    return socket.getaddrinfo(
+        name, port, family=socket.AF_INET, type=socket.SOCK_STREAM
+    )[0][4][0]
+
+
+def connects(address, port):
+    try:
+        with socket.create_connection((address, port), timeout=5):
+            return True
+    except OSError:
+        return False
+
+
+def container_connects(address):
+    return (
+        subprocess.run(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "--network",
+                "bridge",
+                IMAGE,
+                "timeout",
+                "5",
+                "bash",
+                "-c",
+                'exec 3<>"/dev/tcp/$1/443"',
+                "probe",
+                address,
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        ).returncode
+        == 0
+    )
 
 
 def tls_request(address, name):
@@ -49,7 +92,22 @@ def baseline():
             continue
     if not any(ipaddress.ip_address(address).version == 4 for address in reachable):
         raise RuntimeError("denied-origin IPv4 baseline failed")
-    baseline_path().write_text(json.dumps({"denied_addresses": reachable}) + "\n")
+    value = {"denied_addresses": reachable}
+    ssh_address = ipv4("ssh.github.com", 443)
+    with socket.create_connection((ssh_address, 443), timeout=5) as stream:
+        value["ssh_on_https"] = stream.recv(128).startswith(b"SSH-")
+    if not value["ssh_on_https"]:
+        raise RuntimeError("non-TLS baseline failed")
+    value["ssh_address"] = ssh_address
+    alternate_address = ipv4("github.com", 22)
+    value["alternate_address"] = alternate_address
+    value["alternate_port_reachable"] = connects(alternate_address, 22)
+    if os.environ.get("INPUT_CONTAINERS") == "true":
+        subprocess.run(["docker", "pull", IMAGE], check=True, stdout=subprocess.DEVNULL)
+        value["container_address"] = ipv4(ALLOWED, 443)
+        if not container_connects(value["container_address"]):
+            raise RuntimeError("container network baseline failed")
+    baseline_path().write_text(json.dumps(value) + "\n")
     print("Captured reachable denied-origin addresses before hardening.")
 
 
@@ -110,6 +168,30 @@ def main_probe():
     results["allowed_sni"] = tls_request(baseline_value["denied_addresses"][0], ALLOWED)
     if not results["allowed_sni"]:
         raise RuntimeError("authorized SNI did not work through transparent routing")
+    try:
+        with socket.create_connection(
+            (baseline_value["ssh_address"], 443), timeout=3
+        ) as stream:
+            stream.sendall(b"SSH-2.0-uv-network-policy-probe\r\n")
+            raw_ssh = stream.recv(128).startswith(b"SSH-")
+    except OSError:
+        raw_ssh = False
+    results["non_tls_denied"] = not raw_ssh
+    if raw_ssh:
+        raise RuntimeError("non-TLS traffic bypassed HTTPS policy")
+    results["alternate_port_baseline"] = baseline_value["alternate_port_reachable"]
+    if baseline_value["alternate_port_reachable"]:
+        results["alternate_port_denied"] = not connects(
+            baseline_value["alternate_address"], 22
+        )
+        if not results["alternate_port_denied"]:
+            raise RuntimeError("alternate TCP port bypassed policy")
+    if "container_address" in baseline_value:
+        results["container_forwarding_denied"] = not container_connects(
+            baseline_value["container_address"]
+        )
+        if not results["container_forwarding_denied"]:
+            raise RuntimeError("container forwarding bypassed policy")
     for tcp in (False, True):
         if dns_query(DENIED, tcp) != 5 or dns_query(ALLOWED, tcp) != 0:
             raise RuntimeError("external DNS bypass check failed")
@@ -142,6 +224,39 @@ def main_probe():
                 if stream.connect_ex(name) == 0:
                     raise RuntimeError("privileged container socket is accessible")
         results["container_sockets_denied"] = True
+    if os.environ.get("INPUT_OIDC") == "true":
+        url = urlsplit(os.environ["ACTIONS_ID_TOKEN_REQUEST_URL"])
+        if (
+            url.scheme != "https"
+            or not url.hostname.endswith(".actions.githubusercontent.com")
+            or url.port not in {None, 443}
+        ):
+            raise RuntimeError("unexpected OIDC endpoint")
+        audience = "urn:uv-network-policy-probe"
+        query = urlencode([*parse_qsl(url.query), ("audience", audience)])
+        connection = http.client.HTTPSConnection(url.hostname, timeout=10)
+        connection.request(
+            "GET",
+            urlunsplit(("", "", url.path, query, "")),
+            headers={
+                "Authorization": "Bearer "
+                + os.environ["ACTIONS_ID_TOKEN_REQUEST_TOKEN"]
+            },
+        )
+        response = connection.getresponse()
+        payload = json.loads(response.read(1024 * 1024))["value"].split(".")[1]
+        claims = json.loads(
+            base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4))
+        )
+        results["oidc"] = (
+            response.status == 200
+            and claims["aud"] == audience
+            and claims["repository"] == "astral-sh/uv-dev"
+            and str(claims["run_id"]) == os.environ["GITHUB_RUN_ID"]
+        )
+        connection.close()
+        if not results["oidc"]:
+            raise RuntimeError("OIDC claims did not match this probe")
     results["audit"] = json.loads((DIRECTORY / "audit/events.json").read_text())
     destination = Path(os.environ["RUNNER_TEMP"]) / "network-policy-evidence.json"
     destination.write_text(json.dumps(results, indent=2) + "\n")

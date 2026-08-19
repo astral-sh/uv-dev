@@ -4,6 +4,14 @@ inputs:
   operation:
     description: Capture the unrestricted baseline or probe the installed policy
     required: true
+  containers:
+    description: Check Docker bridge egress with a preloaded pinned image
+    required: false
+    default: "false"
+  oidc:
+    description: Check a harmless job-scoped OIDC request without exchanging it
+    required: false
+    default: "false"
 runs:
   using: node24
   pre: pre.cjs
