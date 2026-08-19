@@ -235,6 +235,11 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
 
                 // If the URL is a file URL, load the wheel directly.
                 if url.scheme() == "file" {
+                    if self.client.unmanaged.has_checksum_authority()
+                        && matches!(wheel.index.url().scheme(), "http" | "https")
+                    {
+                        return Err(Error::ChecksumAuthorityLocalArchive(url));
+                    }
                     let path = url
                         .to_file_path()
                         .map_err(|()| Error::NonFileUrl(url.clone()))?;
@@ -557,7 +562,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         // not even be a compatible distribution!
         //
         // TODO(charlie): Request the hashes via a separate method, to reduce the coupling in this API.
-        if hashes.is_generate(dist) {
+        if hashes.is_generate(dist) || self.client.unmanaged.has_checksum_authority() {
             let wheel = self.get_wheel(dist, hashes).await?;
             // If the metadata was provided by the user directly, prefer it.
             let metadata = if let Some(metadata) = self
@@ -682,6 +687,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         dist: &BuiltDist,
         hashes: HashPolicy<'_>,
     ) -> Result<Archive, Error> {
+        let authority_source = index.map_or(&url, IndexUrl::url).clone();
         let expected_size = match dist {
             BuiltDist::Registry(dist) if dist.best_wheel().size_is_authoritative => size,
             BuiltDist::DirectUrl(_) => size,
@@ -696,6 +702,11 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
 
         let download = |response: reqwest::Response| {
             async {
+                let response = self
+                    .client
+                    .unmanaged
+                    .verify_archive_response(response, &authority_source, &filename.to_string())
+                    .await?;
                 let progress_size = size.or_else(|| content_length(&response));
 
                 let progress = self.reporter.as_ref().map(|reporter| {
@@ -862,6 +873,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         dist: &BuiltDist,
         hashes: HashPolicy<'_>,
     ) -> Result<Archive, Error> {
+        let authority_source = index.map_or(&url, IndexUrl::url).clone();
         let expected_size = match dist {
             BuiltDist::Registry(dist) if dist.best_wheel().size_is_authoritative => size,
             BuiltDist::DirectUrl(_) => size,
@@ -878,6 +890,11 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
 
         let download = |response: reqwest::Response| {
             async {
+                let response = self
+                    .client
+                    .unmanaged
+                    .verify_archive_response(response, &authority_source, &filename.to_string())
+                    .await?;
                 let progress_size = size.or_else(|| content_length(&response));
 
                 let progress = self.reporter.as_ref().map(|reporter| {

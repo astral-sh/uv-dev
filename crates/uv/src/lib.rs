@@ -80,6 +80,7 @@ pub(crate) fn base_client_builder<'a>(globals: &GlobalSettings) -> BaseClientBui
         globals.network_settings.retries,
     )
     .metadata_range_request(globals.network_settings.metadata_range_request)
+    .checksum_authority(globals.checksum_authority.clone())
     .cache_read_concurrency(globals.concurrency.cache_reads)
     .http_proxy(globals.network_settings.http_proxy.clone())
     .https_proxy(globals.network_settings.https_proxy.clone())
@@ -612,7 +613,12 @@ async fn run_with_workspace_cache(
     if cache_settings.no_cache {
         debug!("Disabling the uv cache due to `--no-cache`");
     }
-    let cache = Cache::from_settings(cache_settings.no_cache, cache_settings.cache_dir)?;
+    // Existing cached artifacts and metadata do not have authority-verification receipts. Keep
+    // prototype invocations isolated until those receipts have a persistent cache format.
+    let cache = Cache::from_settings(
+        cache_settings.no_cache || globals.checksum_authority.is_some(),
+        cache_settings.cache_dir,
+    )?;
     // This check happens after the first (fallible) workspace discovery, which we need to resolve
     // the settings that go into the cache constructor, but the check happens before the first
     // workspace discovery that's used beyond settings discovery.

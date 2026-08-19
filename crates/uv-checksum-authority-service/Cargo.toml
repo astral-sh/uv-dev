@@ -1,0 +1,35 @@
+[package]
+name = "uv-checksum-authority-service"
+version = "0.0.77"
+description = "Experimental signed checksum authority service for uv"
+edition = { workspace = true }
+rust-version = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+uv-checksum-authority = { workspace = true }
+anyhow = { workspace = true }
+bytes = { workspace = true }
+clap = { workspace = true }
+fs-err = { workspace = true }
+hex = { workspace = true }
+http = { workspace = true }
+http-body-util = { workspace = true }
+hyper = { workspace = true }
+hyper-util = { workspace = true }
+ring = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["net", "rt-multi-thread"] }
+url = { workspace = true }
+
+[dev-dependencies]
+insta = { workspace = true }

@@ -25,6 +25,7 @@ uv-cache-info = { workspace = true }
 uv-cache-key = { workspace = true }
 uv-cli = { workspace = true }
 uv-client = { workspace = true }
+uv-checksum-authority = { workspace = true }
 uv-configuration = { workspace = true }
 uv-console = { workspace = true }
 uv-dispatch = { workspace = true }
@@ -127,6 +128,7 @@ uv-version = { workspace = true }
 embed-manifest = { workspace = true }
 
 [dev-dependencies]
+uv-checksum-authority-service = { workspace = true }
 uv-publish = { workspace = true, features = ["test"] }
 uv-test = { workspace = true }
 
@@ -145,6 +147,7 @@ indoc = { workspace = true }
 insta = { workspace = true }
 predicates = { workspace = true }
 regex = { workspace = true }
+ring = { workspace = true }
 reqwest = { workspace = true, features = ["blocking"], default-features = false }
 sha2 = { workspace = true }
 tempfile = { workspace = true }

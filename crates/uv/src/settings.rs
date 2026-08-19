@@ -12,6 +12,7 @@ use rustc_hash::FxHashSet;
 use uv_audit::{VulnerabilityID, VulnerabilityServiceFormat};
 use uv_auth::Service;
 use uv_cache::{CacheArgs, Refresh};
+use uv_checksum_authority::ChecksumAuthority;
 use uv_cli::comma::CommaSeparatedRequirements;
 use uv_cli::{
     AddArgs, AuditArgs, AuditCommonArgs, AuditOutputFormat, AuthLoginArgs, AuthLogoutArgs,
@@ -78,6 +79,7 @@ const PYPI_PUBLISH_URL: &str = "https://upload.pypi.org/legacy/";
 /// The resolved global settings to use for any invocation of the CLI.
 #[derive(Debug, Clone)]
 pub(crate) struct GlobalSettings {
+    pub(crate) checksum_authority: Option<ChecksumAuthority>,
     pub(crate) required_version: Option<RequiredVersion>,
     pub(crate) quiet: u8,
     pub(crate) verbose: u8,
@@ -105,6 +107,12 @@ impl GlobalSettings {
         let python_preference = resolve_python_preference(args, workspace, environment)?;
         let color = resolve_color(args);
         Ok(Self {
+            checksum_authority: args
+                .checksum_authority
+                .clone()
+                .zip(args.checksum_authority_key.as_deref())
+                .map(|(url, key)| ChecksumAuthority::new(url, key))
+                .transpose()?,
             required_version: workspace
                 .and_then(|workspace| workspace.globals.required_version.clone()),
             quiet: args.quiet,

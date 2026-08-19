@@ -16,6 +16,7 @@ use url::Url;
 
 use uv_auth::{CredentialsCache, Indexes};
 use uv_cache::{Cache, CacheBucket, CacheEntry, WheelCache};
+use uv_checksum_authority::{ArtifactId, ChecksumAuthority, Error as ChecksumAuthorityError};
 use uv_configuration::IndexStrategy;
 use uv_configuration::KeyringProviderType;
 use uv_distribution_filename::{DistFilename, WheelFilename};
@@ -179,6 +180,10 @@ impl<'a> RegistryClientBuilder<'a> {
         existing: Option<&BaseClient>,
     ) -> Result<RegistryClient, ClientBuildError> {
         self.cache_index_credentials()?;
+        let checksum_authority = self
+            .base_client_builder
+            .checksum_authority_config()
+            .cloned();
 
         // Wrap in any relevant middleware and handle connectivity.
         let builder = self
@@ -197,6 +202,7 @@ impl<'a> RegistryClientBuilder<'a> {
         let client = CachedClient::new(client);
 
         Ok(RegistryClient {
+            checksum_authority,
             indexes: self.index_locations,
             index_strategy: self.index_strategy,
             torch_backend: self.torch_backend,
@@ -213,6 +219,7 @@ impl<'a> RegistryClientBuilder<'a> {
 /// A client for fetching packages from a `PyPI`-compatible index.
 #[derive(Debug, Clone)]
 pub struct RegistryClient {
+    checksum_authority: Option<ChecksumAuthority>,
     /// The indexes to use for fetching packages.
     indexes: IndexLocations,
     /// The strategy to use when fetching across multiple indexes.
@@ -263,6 +270,27 @@ pub enum MetadataFormat {
 }
 
 impl RegistryClient {
+    /// Whether remote package archives must be authenticated by a checksum authority.
+    pub fn has_checksum_authority(&self) -> bool {
+        self.checksum_authority.is_some()
+    }
+
+    /// Authenticate a complete archive response before allowing extraction or metadata parsing.
+    pub async fn verify_archive_response(
+        &self,
+        response: Response,
+        source: &DisplaySafeUrl,
+        filename: &str,
+    ) -> Result<Response, ChecksumAuthorityError> {
+        let Some(authority) = &self.checksum_authority else {
+            return Ok(response);
+        };
+        let artifact = ArtifactId::new(source, filename)?;
+        authority
+            .verify_response(response, &artifact, self.cache.root())
+            .await
+    }
+
     /// Return the [`CachedClient`] used by this client.
     pub fn cached_client(&self) -> &CachedClient {
         &self.client

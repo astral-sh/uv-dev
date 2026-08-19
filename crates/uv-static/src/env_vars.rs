@@ -824,6 +824,16 @@ impl EnvVars {
     #[attr_added_in("0.1.7")]
     pub const UV_HTTP_TIMEOUT: &'static str = "UV_HTTP_TIMEOUT";
 
+    /// The URL of an experimental checksum authority for remote package archives.
+    #[attr_hidden]
+    #[attr_added_in("next release")]
+    pub const UV_CHECKSUM_AUTHORITY: &'static str = "UV_CHECKSUM_AUTHORITY";
+
+    /// The hexadecimal Ed25519 public key trusted for checksum authority records.
+    #[attr_hidden]
+    #[attr_added_in("next release")]
+    pub const UV_CHECKSUM_AUTHORITY_KEY: &'static str = "UV_CHECKSUM_AUTHORITY_KEY";
+
     /// Timeout (in seconds) to connect to a server. (default: 10 s)
     ///
     /// If `UV_HTTP_TIMEOUT` is lower than this value, `UV_HTTP_TIMEOUT` will be used instead.

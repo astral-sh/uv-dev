@@ -279,6 +279,11 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
 
                 // If the URL is a file URL, use the local path directly.
                 if url.scheme() == "file" {
+                    if client.unmanaged.has_checksum_authority()
+                        && matches!(dist.index.url().scheme(), "http" | "https")
+                    {
+                        return Err(Error::ChecksumAuthorityLocalArchive(url));
+                    }
                     let path = url
                         .to_file_path()
                         .map_err(|()| Error::NonFileUrl(url.clone()))?;
@@ -442,6 +447,11 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
 
                 // If the URL is a file URL, use the local path directly.
                 if url.scheme() == "file" {
+                    if client.unmanaged.has_checksum_authority()
+                        && matches!(dist.index.url().scheme(), "http" | "https")
+                    {
+                        return Err(Error::ChecksumAuthorityLocalArchive(url));
+                    }
                     let path = url
                         .to_file_path()
                         .map_err(|()| Error::NonFileUrl(url.clone()))?;
@@ -983,7 +993,17 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 debug!("Downloading source distribution: {source}");
                 let entry = cache_shard.shard(revision.id()).entry(SOURCE);
                 let (hashes, size) = self
-                    .download_archive(response, source, ext, entry.path(), hashes, &[])
+                    .download_archive(
+                        response,
+                        source,
+                        ext,
+                        url,
+                        index,
+                        client.unmanaged,
+                        entry.path(),
+                        hashes,
+                        &[],
+                    )
                     .await?;
 
                 Ok(revision
@@ -2774,6 +2794,9 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                         response,
                         source,
                         ext,
+                        url,
+                        index,
+                        client.unmanaged,
                         entry.path(),
                         hashes,
                         revision.hashes(),
@@ -2812,10 +2835,20 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         response: Response,
         source: &BuildableSource<'_>,
         ext: SourceDistExtension,
+        url: &DisplaySafeUrl,
+        index: Option<&IndexUrl>,
+        client: &RegistryClient,
         target: &Path,
         hash_policy: HashPolicy<'_>,
         existing_hashes: &[HashDigest],
     ) -> Result<(Vec<HashDigest>, u64), Error> {
+        let filename = match source.as_dist() {
+            Some(SourceDist::Registry(dist)) => &dist.file.filename,
+            _ => url.path().rsplit('/').next().unwrap_or_default(),
+        };
+        let response = client
+            .verify_archive_response(response, index.map_or(url, IndexUrl::url), filename)
+            .await?;
         let reader = response
             .bytes_stream()
             .map_err(std::io::Error::other)

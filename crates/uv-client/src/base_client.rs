@@ -24,6 +24,7 @@ use url::Url;
 use uv_auth::{
     AuthMiddleware, Credentials, CredentialsCache, CredentialsFromUrlError, Indexes, RealmRef,
 };
+use uv_checksum_authority::ChecksumAuthority;
 use uv_configuration::ProxyUrlKind;
 use uv_configuration::{Concurrency, KeyringProviderType, ProxyUrl, TrustedHost};
 use uv_distribution_types::IndexCredentialsError;
@@ -89,6 +90,7 @@ pub enum AuthIntegration {
 /// A builder for an [`BaseClient`].
 #[derive(Debug, Clone)]
 pub struct BaseClientBuilder<'a> {
+    checksum_authority: Option<ChecksumAuthority>,
     keyring: KeyringProviderType,
     preview: Preview,
     allow_insecure_host: Vec<TrustedHost>,
@@ -201,6 +203,7 @@ impl Debug for ExtraMiddleware {
 impl Default for BaseClientBuilder<'_> {
     fn default() -> Self {
         Self {
+            checksum_authority: None,
             keyring: KeyringProviderType::default(),
             preview: Preview::default(),
             allow_insecure_host: vec![],
@@ -233,6 +236,17 @@ impl Default for BaseClientBuilder<'_> {
 }
 
 impl<'a> BaseClientBuilder<'a> {
+    /// Set the experimental checksum authority for package distribution clients.
+    #[must_use]
+    pub fn checksum_authority(mut self, authority: Option<ChecksumAuthority>) -> Self {
+        self.checksum_authority = authority;
+        self
+    }
+
+    pub(crate) fn checksum_authority_config(&self) -> Option<&ChecksumAuthority> {
+        self.checksum_authority.as_ref()
+    }
+
     pub fn new(
         connectivity: Connectivity,
         system_certs: bool,
