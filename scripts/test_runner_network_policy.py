@@ -196,6 +196,13 @@ class PolicyTests(unittest.TestCase):
             "static.rust-lang.org", document["profiles"]["rust-checks"]["allow"]
         )
         self.assertNotIn("pypi.org", document["profiles"]["rustfmt"]["allow"])
+        self.assertNotIn("pypi.org", document["profiles"]["rust-checks"]["allow"])
+        self.assertNotIn(
+            "*.blob.core.windows.net", document["profiles"]["github"]["allow"]
+        )
+        self.assertIn(
+            "releases.astral.sh", document["profiles"]["python-checks"]["allow"]
+        )
 
     def test_private_and_mixed_dns_answers_are_rejected(self):
         state = proxy.State(Policy(("allowed.example",)), [], None)
