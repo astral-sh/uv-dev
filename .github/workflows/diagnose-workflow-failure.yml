@@ -12,30 +12,49 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { label: github-drop, runner: ubuntu-24.04, privileges: drop }
-          - { label: github-retain, runner: ubuntu-24.04, privileges: retain }
+          - {
+              label: github-drop,
+              runner: ubuntu-24.04,
+              privileges: drop,
+              containers: false,
+            }
+          - {
+              label: github-retain,
+              runner: ubuntu-24.04,
+              privileges: retain,
+              containers: true,
+            }
+          - {
+              label: depot-drop,
+              runner: depot-ubuntu-24.04-4,
+              privileges: drop,
+              containers: false,
+            }
           - {
               label: depot-retain,
               runner: depot-ubuntu-24.04-4,
               privileges: retain,
+              containers: true,
             }
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 10
     steps:
       - name: Capture trusted pre-install baseline
-        uses: astral-sh/uv-dev/.github/actions/runner-network-policy-probe@23e8a32de60a3f156133c1ba66a6374df65424dc
+        uses: astral-sh/uv-dev/.github/actions/runner-network-policy-probe@8e1e57a0c5c633b74f9328a64c6796f8eb0468f7
         with:
           operation: baseline
+          containers: ${{ matrix.containers }}
       - name: Install policy before later action hooks
-        uses: astral-sh/uv-dev/.github/actions/runner-network-policy@23e8a32de60a3f156133c1ba66a6374df65424dc
+        uses: astral-sh/uv-dev/.github/actions/runner-network-policy@8e1e57a0c5c633b74f9328a64c6796f8eb0468f7
         with:
           profile: github
           privileges: ${{ matrix.privileges }}
           disposable: true
       - name: Check early hooks and bypass attempts
-        uses: astral-sh/uv-dev/.github/actions/runner-network-policy-probe@23e8a32de60a3f156133c1ba66a6374df65424dc
+        uses: astral-sh/uv-dev/.github/actions/runner-network-policy-probe@8e1e57a0c5c633b74f9328a64c6796f8eb0468f7
         with:
           operation: probe
+          containers: ${{ matrix.containers }}
       - name: Upload evidence through the policy
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
@@ -53,3 +72,28 @@ jobs:
           if test -r /run/uv-network-policy/audit/events.json; then
             cat /run/uv-network-policy/audit/events.json
           fi
+
+  oidc:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: astral-sh/uv-dev/.github/actions/runner-network-policy-probe@8e1e57a0c5c633b74f9328a64c6796f8eb0468f7
+        with:
+          operation: baseline
+      - uses: astral-sh/uv-dev/.github/actions/runner-network-policy@8e1e57a0c5c633b74f9328a64c6796f8eb0468f7
+        with:
+          profile: github
+          disposable: true
+      - uses: astral-sh/uv-dev/.github/actions/runner-network-policy-probe@8e1e57a0c5c633b74f9328a64c6796f8eb0468f7
+        with:
+          operation: probe
+          oidc: true
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: network-policy-oidc-${{ github.run_id }}
+          path: ${{ runner.temp }}/network-policy-evidence.json
+          if-no-files-found: error
+          retention-days: 1
