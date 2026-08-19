@@ -23,8 +23,7 @@ pub enum FileConversionError {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, rkyv::Archive, rkyv::Deserialize, rkyv::Serialize)]
 #[rkyv(derive(Debug))]
 pub struct File {
-    /// Hashes for separately available metadata, or an empty list when no hashes were provided.
-    pub dist_info_metadata: Option<HashDigests>,
+    pub dist_info_metadata: DistInfoMetadata,
     pub filename: SmallString,
     pub hashes: HashDigests,
     pub requires_python: Option<Arc<VersionSpecifiers>>,
@@ -59,11 +58,35 @@ impl File {
         })
     }
 
-    fn dist_info_metadata(metadata: Option<CoreMetadata>) -> Option<HashDigests> {
-        match metadata? {
-            CoreMetadata::Bool(false) => None,
-            CoreMetadata::Bool(true) => Some(HashDigests::empty()),
-            CoreMetadata::Hashes(hashes) => Some(HashDigests::from(hashes)),
+    fn dist_info_metadata(metadata: Option<CoreMetadata>) -> DistInfoMetadata {
+        match metadata {
+            None | Some(CoreMetadata::Bool(false)) => DistInfoMetadata::Unavailable,
+            Some(CoreMetadata::Bool(true)) => DistInfoMetadata::Available(HashDigests::empty()),
+            Some(CoreMetadata::Hashes(hashes)) => {
+                DistInfoMetadata::Available(HashDigests::from(hashes))
+            }
+        }
+    }
+}
+
+/// Whether a registry file has a separately served Core Metadata file.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, rkyv::Archive, rkyv::Deserialize, rkyv::Serialize)]
+#[rkyv(derive(Debug))]
+pub enum DistInfoMetadata {
+    /// The index does not advertise a metadata file.
+    Unavailable,
+    /// The index advertises a metadata file, with any hashes it provided.
+    Available(HashDigests),
+    /// The index may serve an unadvertised metadata file.
+    Unadvertised,
+}
+
+impl DistInfoMetadata {
+    /// Returns `true` if the index advertises a metadata file.
+    pub fn is_available(&self) -> bool {
+        match self {
+            Self::Available(_) => true,
+            Self::Unavailable | Self::Unadvertised => false,
         }
     }
 }
