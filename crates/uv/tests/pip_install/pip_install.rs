@@ -3031,8 +3031,21 @@ async fn install_git_public_rejects_mismatched_github_api_commit() -> Result<()>
 
 #[tokio::test]
 #[cfg(feature = "test-git")]
-async fn install_git_public_github_fast_path_percent_encoded_ref() {
-    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION);
+async fn install_git_public_github_fast_path_percent_encoded_ref() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [[tool.uv.dependency-metadata]]
+        name = "uv-public-pypackage"
+        version = "0.1.0"
+    "#})?;
 
     let server = MockServer::start().await;
     Mock::given(method("GET"))
@@ -3046,14 +3059,22 @@ async fn install_git_public_github_fast_path_percent_encoded_ref() {
         .mount(&server)
         .await;
 
-    context
+    uv_snapshot!(context.filters(), context
         .pip_install()
-        .arg("--no-build")
+        .arg("--dry-run")
+        .arg("--no-index")
         .arg("uv-public-pypackage @ git+https://github.com/astral-test/uv-public-pypackage@feature/foo%23bar%25baz")
-        .env(EnvVars::UV_GITHUB_FAST_PATH_URL, server.uri())
-        .assert()
-        .failure();
+        .env(EnvVars::UV_GITHUB_FAST_PATH_URL, server.uri()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
+     + uv-public-pypackage @ git+https://github.com/astral-test/uv-public-pypackage@b270df1a2fb5d012294e9aaf05e7e0bab1e6a389
+    ");
     server.verify().await;
+
+    Ok(())
 }
 
 #[tokio::test]
