@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 16854,
+        "title": "Allow disabling `exclude-newer` per package",
+        "url": "https://github.com/astral-sh/uv/pull/16854",
+        "state": "merged",
+        "reason": "astral-sh/uv#16854 implemented the exact `PACKAGE=false` opt-out, confirming that package-specific disabling overrides a global cutoff. It covers the general resolver feature, not `uv check` tool selection."
+      },
+      {
+        "kind": "pull_request",
+        "number": 19605,
+        "title": "Add `uv check` to run `ty` from uv",
+        "url": "https://github.com/astral-sh/uv/pull/19605",
+        "state": "merged",
+        "reason": "astral-sh/uv#19605 introduced standalone `ty` selection using only the global `exclude-newer` timestamp. The same omission remains, making this the affected path's origin rather than an existing bug tracker."
+      },
+      {
+        "kind": "pull_request",
+        "number": 19989,
+        "title": "Use locked dependency selection for `uv check --script`",
+        "url": "https://github.com/astral-sh/uv/pull/19989",
+        "state": "merged",
+        "reason": "astral-sh/uv#19989 is the closest prior work on script-specific `ty` selection, but it handles directly declared, locked `ty` dependencies. This reproduction has no dependencies and uses the standalone resolver."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests using exact identifiers and fragments including `exclude-newer-package`, `exclude-newer`, `uv check --script`, `ty`, `Using ty`, and `preview-features=check-command`. Conceptual and fix-oriented searches covered ignored package overrides, per-package cutoffs, configuration propagation, standalone tool selection, `exclude_newer`, and command history while omitting incidental versions and platform. No duplicate or later fix was found. The strongest false positive, astral-sh/uv#19239, was ruled out because its reporter confirmed that non-exempt transitive dependencies—not an ignored override—forced the older version."
+  },
+  "type": "bug",
+  "type_reason": "The documented package override is parsed and retained in resolver settings, but `uv check` forwards only the global cutoff when resolving standalone `ty`. Discarding the more-specific override is established incorrect behavior, not a missing feature, duplicate, or regression of a prior `uv check` fix.",
+  "summary": "No duplicate was found. Related merged pull requests establish the exemption contract, the global-only `uv check` handoff, and the distinct locked-script selection path.",
+  "draft_response": "Thanks for the clear reproduction. This is a bug. astral-sh/uv#16854 added `false` as a package-specific opt-out from the global `exclude-newer` cutoff, but the standalone `ty` path in `uv check` currently reduces the resolved settings to the global timestamp before selecting a version. That means the `ty = false` entry cannot affect this selection. This is separate from the locked direct-dependency selection added in astral-sh/uv#19989, since this script does not declare `ty`. The next step is to pass `ty`’s effective package cutoff—including a disabled cutoff—to the standalone resolver and add integration coverage for `uv check --script`."
+}
