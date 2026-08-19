@@ -6308,6 +6308,8 @@ name = "uv-checksum-authority-service"
 version = "0.0.79"
 dependencies = [
  "anyhow",
+ "assert_cmd",
+ "assert_fs",
  "bytes",
  "clap",
  "fs-err",
@@ -6317,6 +6319,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "insta",
+ "reqwest",
  "ring",
  "serde_json",
  "sha2 0.11.0",
@@ -6324,6 +6327,9 @@ dependencies = [
  "tokio",
  "url",
  "uv-checksum-authority",
+ "uv-test",
+ "wiremock",
+ "zeroize",
 ]
 
 [[package]]
