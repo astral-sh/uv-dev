@@ -10,7 +10,7 @@ use tokio::sync::oneshot;
 use url::Url;
 use uv_checksum_authority::{
     ArtifactId, AuthorityPublicKey, ChecksumAuthority, ChecksumRecord, Error, Sha256Digest,
-    SignedRecord,
+    SignedRecord, VerificationReceipt,
 };
 use uv_checksum_authority_service::{AuthorityService, Catalog};
 use uv_test::uv_snapshot;
@@ -236,6 +236,7 @@ fn catalog_cli_is_append_only() -> Result<()> {
 /// Invalid wire values must fail during deserialization, not at their next use.
 #[test]
 fn parse_record() -> Result<()> {
+    insta::assert_snapshot!(serde_json::from_str::<VerificationReceipt>("[]").expect_err("empty receipt"), @"Checksum authority build receipt must contain at least one archive");
     let record = record()?;
     let value = serde_json::to_value(&record)?;
     assert_eq!(
@@ -264,6 +265,37 @@ fn parse_record() -> Result<()> {
         .expect("record object")
         .remove("size");
     insta::assert_snapshot!(serde_json::from_value::<ChecksumRecord>(invalid).expect_err("missing size"), @"missing field `size`");
+    Ok(())
+}
+
+/// Build receipts must be checked against the current catalog, even when its key is unchanged.
+#[tokio::test]
+async fn reauthorize_build_receipt() -> Result<()> {
+    let server = MockServer::start().await;
+    let signing_key = key(7)?;
+    let record = record()?;
+    let authority = ChecksumAuthority::new(
+        Url::parse(&server.uri())?,
+        AuthorityPublicKey::from_signing_key(&signing_key),
+    )?;
+    Mock::given(method("GET"))
+        .and(path("/v1/checksum"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(SignedRecord::sign(&record, &signing_key)?),
+        )
+        .mount(&server)
+        .await;
+    authority.lookup(record.artifact()).await?;
+    let receipt = authority.receipt().await?;
+    authority.verify_receipt(&receipt).await?;
+
+    server.reset().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/checksum"))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+    insta::assert_snapshot!(authority.verify_receipt(&receipt).await.expect_err("withdrawn input"), @"Checksum authority has no trusted record for `example-1.0-py3-none-any.whl`");
     Ok(())
 }
 

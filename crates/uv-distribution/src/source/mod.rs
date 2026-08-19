@@ -24,6 +24,7 @@ use url::Url;
 use uv_auth::CredentialsCache;
 use uv_cache::{Cache, CacheBucket, CacheEntry, CacheShard, Removal, WheelCache};
 use uv_cache_info::CacheInfo;
+use uv_checksum_authority::VerifiedRecord;
 use uv_client::{
     BaseClientBuilder, CacheControl, CachedClientError, Connectivity, DataWithCachePolicy,
     RegistryClient, RetryState,
@@ -50,12 +51,17 @@ use uv_workspace::pyproject::ToolUvSources;
 
 use crate::distribution_database::ManagedClient;
 use crate::error::Error;
+use crate::hash::matches_authority;
 use crate::metadata::{ArchiveMetadata, GitWorkspaceMember, Metadata};
+use crate::source::authority::{
+    authority_build_shard, read_authority_receipt, write_authority_receipt,
+};
 use crate::source::built_wheel_metadata::{BuiltWheelFile, BuiltWheelMetadata};
 use crate::source::revision::Revision;
 use crate::source::validated_archive::{ArchiveValidation, ValidatedSourceArchive};
 use crate::{Reporter, RequiresDist};
 
+mod authority;
 mod built_wheel_metadata;
 mod revision;
 mod validated_archive;
@@ -665,6 +671,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         // freshness, since entries have to be fresher than the revision itself.
         let cache_shard = cache_shard.shard(revision.id());
         let source_dist_entry = cache_shard.entry(SOURCE);
+        let cache_shard = authority_build_shard(client.unmanaged, cache_shard);
 
         // We don't track any cache information for URL-based source distributions; they're assumed
         // to be immutable.
@@ -689,6 +696,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .ok()
             .flatten()
             .filter(|file| file.matches(source.name(), source.version()))
+            && read_authority_receipt(client.unmanaged, &CacheEntry::from_path(file.path())).await?
         {
             return Ok(BuiltWheelMetadata::from_file(
                 file,
@@ -740,6 +748,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 NoSources::None,
             )
             .await?;
+        write_authority_receipt(client.unmanaged, &cache_shard.entry(&disk_filename)).await?;
 
         if let Some(task) = task {
             if let Some(reporter) = self.reporter.as_ref() {
@@ -752,6 +761,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         write_atomic(metadata_entry.path(), rmp_serde::to_vec(&metadata)?)
             .await
             .map_err(Error::CacheWrite)?;
+        write_authority_receipt(client.unmanaged, &metadata_entry).await?;
 
         Ok(BuiltWheelMetadata {
             path: cache_shard.join(&disk_filename).into_boxed_path(),
@@ -798,6 +808,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         // freshness, since entries have to be fresher than the revision itself.
         let cache_shard = cache_shard.shard(revision.id());
         let source_dist_entry = cache_shard.entry(SOURCE);
+        let cache_shard = authority_build_shard(client.unmanaged, cache_shard);
 
         // If the metadata is static, return it.
         let dynamic =
@@ -814,7 +825,12 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
 
         // If the cache contains compatible metadata, return it.
         let metadata_entry = cache_shard.entry(METADATA);
-        match CachedMetadata::read(&metadata_entry).await {
+        let cached_metadata = if read_authority_receipt(client.unmanaged, &metadata_entry).await? {
+            CachedMetadata::read(&metadata_entry).await
+        } else {
+            Ok(None)
+        };
+        match cached_metadata {
             Ok(Some(metadata)) => {
                 if metadata.matches(source.name(), source.version()) {
                     debug!("Using cached metadata for: {source}");
@@ -887,6 +903,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             write_atomic(metadata_entry.path(), rmp_serde::to_vec(&metadata)?)
                 .await
                 .map_err(Error::CacheWrite)?;
+            write_authority_receipt(client.unmanaged, &metadata_entry).await?;
 
             return Ok(ArchiveMetadata {
                 metadata: Metadata::from_metadata23(metadata),
@@ -914,7 +931,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .map(|reporter| reporter.on_build_start(source));
 
         // Build the source distribution.
-        let (_disk_filename, _wheel_filename, metadata) = self
+        let (disk_filename, _wheel_filename, metadata) = self
             .build_distribution(
                 source,
                 source_dist_entry.path(),
@@ -923,6 +940,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 NoSources::None,
             )
             .await?;
+        write_authority_receipt(client.unmanaged, &cache_shard.entry(&disk_filename)).await?;
 
         if let Some(task) = task {
             if let Some(reporter) = self.reporter.as_ref() {
@@ -944,6 +962,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         write_atomic(metadata_entry.path(), rmp_serde::to_vec(&metadata)?)
             .await
             .map_err(Error::CacheWrite)?;
+        write_authority_receipt(client.unmanaged, &metadata_entry).await?;
 
         Ok(ArchiveMetadata {
             metadata: Metadata::from_metadata23(metadata),
@@ -963,6 +982,13 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         client: &ManagedClient<'_>,
     ) -> Result<Revision, Error> {
         let cache_entry = cache_shard.entry(HTTP_REVISION);
+        let authority = client
+            .unmanaged
+            .checksum_authority_record(
+                index.map_or(url, IndexUrl::url),
+                archive_filename(source, url),
+            )
+            .await?;
 
         // Determine the cache control policy for the request.
         let cache_control = match client.unmanaged.connectivity() {
@@ -998,9 +1024,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                         response,
                         source,
                         ext,
-                        url,
-                        index,
-                        client.unmanaged,
+                        authority.as_ref(),
                         entry.path(),
                         hashes,
                         &[],
@@ -1048,7 +1072,10 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         }
 
         // If the archive is missing the required hashes or size, force a refresh.
-        if revision.has_digests(hashes) && (expected_size.is_none() || revision.size().is_some()) {
+        if revision.has_digests(hashes)
+            && (expected_size.is_none() || revision.size().is_some())
+            && matches_authority(authority.as_ref(), revision.hashes(), revision.size())
+        {
             Ok(revision)
         } else {
             client
@@ -2767,6 +2794,13 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
     ) -> Result<Revision, Error> {
         warn!("Re-downloading missing source distribution: {source}");
         let cache_entry = entry.shard().entry(HTTP_REVISION);
+        let authority = client
+            .unmanaged
+            .checksum_authority_record(
+                index.map_or(url, IndexUrl::url),
+                archive_filename(source, url),
+            )
+            .await?;
 
         // Determine the cache control policy for the request.
         let cache_control = match client.unmanaged.connectivity() {
@@ -2795,9 +2829,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                         response,
                         source,
                         ext,
-                        url,
-                        index,
-                        client.unmanaged,
+                        authority.as_ref(),
                         entry.path(),
                         hashes,
                         revision.hashes(),
@@ -2836,20 +2868,18 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         response: Response,
         source: &BuildableSource<'_>,
         ext: SourceDistExtension,
-        url: &DisplaySafeUrl,
-        index: Option<&IndexUrl>,
-        client: &RegistryClient,
+        authority: Option<&VerifiedRecord>,
         target: &Path,
         hash_policy: ArchiveHashPolicy<'_>,
         existing_hashes: &[HashDigest],
     ) -> Result<(Vec<HashDigest>, u64), Error> {
-        let filename = match source.as_dist() {
-            Some(SourceDist::Registry(dist)) => &dist.file.filename,
-            _ => url.path().rsplit('/').next().unwrap_or_default(),
+        let response = if let Some(authority) = authority {
+            authority
+                .verify_response(response, self.build_context.cache().root())
+                .await?
+        } else {
+            response
         };
-        let response = client
-            .verify_archive_response(response, index.map_or(url, IndexUrl::url), filename)
-            .await?;
         let reader = response
             .bytes_stream()
             .map_err(std::io::Error::other)
@@ -3701,4 +3731,12 @@ fn read_wheel_metadata(
     let dist_info = read_archive_metadata(filename, reader)
         .map_err(|err| Error::WheelMetadata(wheel.to_path_buf(), Box::new(err)))?;
     Ok(ResolutionMetadata::parse_metadata(&dist_info)?)
+}
+
+/// Return the original archive filename used by the checksum authority.
+fn archive_filename<'a>(source: &'a BuildableSource<'_>, url: &'a DisplaySafeUrl) -> &'a str {
+    match source.as_dist() {
+        Some(SourceDist::Registry(dist)) => &dist.file.filename,
+        _ => url.path().rsplit('/').next().unwrap_or_default(),
+    }
 }
