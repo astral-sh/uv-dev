@@ -188,6 +188,14 @@ pub struct TopLevelArgs {
 #[derive(Parser, Debug, Clone)]
 #[command(next_help_heading = "Global options", next_display_order = 1000)]
 pub struct GlobalArgs {
+    /// Require remote package archives to match an experimental checksum authority.
+    #[arg(global = true, long, env = EnvVars::UV_CHECKSUM_AUTHORITY, requires = "checksum_authority_key", hide = true)]
+    pub checksum_authority: Option<url::Url>,
+
+    /// The hexadecimal Ed25519 public key trusted for checksum authority records.
+    #[arg(global = true, long, env = EnvVars::UV_CHECKSUM_AUTHORITY_KEY, requires = "checksum_authority", hide = true)]
+    pub checksum_authority_key: Option<String>,
+
     #[arg(
         global = true,
         long,
