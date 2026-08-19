@@ -9,6 +9,11 @@ jobs:
     timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
+      - name: Apply the Rustfmt network policy
+        uses: astral-sh/uv-dev/.github/actions/runner-network-policy@c2d610ae291724fd34489912f1e0ef1b21b9abf0
+        with:
+          profile: rustfmt
+          disposable: true
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -18,8 +23,13 @@ jobs:
 
   prettier:
     timeout-minutes: 10
-    runs-on: ubuntu-slim
+    runs-on: ubuntu-24.04
     steps:
+      - name: Apply the Prettier network policy
+        uses: astral-sh/uv-dev/.github/actions/runner-network-policy@c2d610ae291724fd34489912f1e0ef1b21b9abf0
+        with:
+          profile: prettier
+          disposable: true
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -27,8 +37,13 @@ jobs:
 
   python:
     timeout-minutes: 10
-    runs-on: ubuntu-slim
+    runs-on: ubuntu-24.04
     steps:
+      - name: Apply the Python-check network policy
+        uses: astral-sh/uv-dev/.github/actions/runner-network-policy@c2d610ae291724fd34489912f1e0ef1b21b9abf0
+        with:
+          profile: python-checks
+          disposable: true
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
