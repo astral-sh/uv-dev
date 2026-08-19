@@ -19,7 +19,7 @@ use uv_pep440::{Version, VersionSpecifiers};
 use uv_platform_tags::Platform;
 use uv_pypi_types::{HashAlgorithm, HashDigest};
 use uv_python_types::PythonVariant;
-use uv_redacted::SafeUrl;
+use uv_redacted::{DisplaySafeUrl, SafeUrl};
 use uv_types::AnyErrorBuild;
 
 #[derive(Debug, Clone, Copy)]
@@ -44,6 +44,10 @@ pub enum Error {
         label: VariantLabel,
         properties: UnsupportedVariantProperties,
     },
+    #[error(transparent)]
+    ChecksumAuthority(#[from] uv_checksum_authority::Error),
+    #[error("Checksum authority does not support a local archive supplied by a remote index: {0}")]
+    ChecksumAuthorityLocalArchive(DisplaySafeUrl),
     #[error("Building source distributions is disabled")]
     NoBuild,
     #[error("Building source distributions for `{0}` is disabled")]
