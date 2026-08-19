@@ -111,7 +111,7 @@ impl GlobalSettings {
                 .checksum_authority
                 .clone()
                 .zip(args.checksum_authority_key.as_deref())
-                .map(|(url, key)| ChecksumAuthority::new(url, key))
+                .map(|(url, key)| ChecksumAuthority::new(url, key.parse()?))
                 .transpose()?,
             required_version: workspace
                 .and_then(|workspace| workspace.globals.required_version.clone()),
