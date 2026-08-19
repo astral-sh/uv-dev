@@ -979,6 +979,11 @@ pub trait CleanReporter: Send + Sync {
 /// are subdirectories of the cache root.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub enum CacheBucket {
+    /// Original, packed distributions explicitly fetched by `uv download`.
+    ///
+    /// Each URL has a shard containing a package name, an atomic metadata pointer, and
+    /// the original archive named by its SHA-256 digest.
+    Packed,
     /// Wheels (excluding built wheels), alongside their metadata and cache policy.
     ///
     /// There are three kinds from cache entries: Wheel metadata and policy as `MsgPack` files, the
@@ -1231,6 +1236,7 @@ pub enum CacheBucket {
 impl CacheBucket {
     fn to_str(self) -> &'static str {
         match self {
+            Self::Packed => "packed-v0",
             // Note that when bumping this, you'll also need to bump it
             // in `crates/uv/tests/build/cache_prune.rs`.
             Self::SourceDistributions => "sdists-v9",
@@ -1273,6 +1279,15 @@ impl CacheBucket {
 
         let mut summary = cache.removal();
         match self {
+            Self::Packed => {
+                for directory in directories(cache.bucket(self))? {
+                    if fs_err::read_to_string(directory.join("package"))
+                        .is_ok_and(|package| package == name.as_ref())
+                    {
+                        summary += cache.remove_path(directory)?;
+                    }
+                }
+            }
             Self::Wheels => {
                 // For `pypi` wheels, we expect a directory per package (indexed by name).
                 let root = cache.bucket(self).join(WheelCacheKind::Pypi);
@@ -1371,6 +1386,7 @@ impl CacheBucket {
     /// Return an iterator over all cache buckets.
     fn iter() -> impl Iterator<Item = Self> {
         [
+            Self::Packed,
             Self::Wheels,
             Self::SourceDistributions,
             Self::FlatIndex,
