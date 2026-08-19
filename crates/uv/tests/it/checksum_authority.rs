@@ -1,11 +1,10 @@
-use std::fmt::Write as _;
+use std::collections::BTreeMap;
 use std::process::Command;
+use std::str::FromStr;
 
 use anyhow::{Result, anyhow};
 use assert_cmd::assert::OutputAssertExt;
-use assert_fs::fixture::{FileWriteStr, PathChild};
-use async_zip::base::write::ZipFileWriter;
-use async_zip::{Compression, ZipEntryBuilder};
+use assert_fs::prelude::*;
 use ring::signature::Ed25519KeyPair;
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -15,10 +14,13 @@ use url::Url;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use uv_checksum_authority::{ArtifactId, ChecksumRecord};
+use uv_checksum_authority::{ArtifactId, ChecksumRecord, Sha256Digest};
 use uv_checksum_authority_service::{AuthorityService, Catalog};
+use uv_normalize::PackageName;
+use uv_pep440::Version;
 use uv_static::EnvVars;
 use uv_test::archive::write_tar_gz;
+use uv_test::packse::generate_wheel;
 use uv_test::uv_snapshot;
 
 const WHEEL: &str = "checksum_example-1.0.0-py3-none-any.whl";
@@ -34,7 +36,7 @@ impl Authority {
         let key = Ed25519KeyPair::from_seed_unchecked(&[17; 32])
             .map_err(|_| anyhow!("invalid test key"))?;
         let service = AuthorityService::new(Catalog::from_records(records)?, &key)?;
-        let public_key = service.public_key().to_owned();
+        let public_key = service.public_key().to_string();
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let url = format!("http://{}", listener.local_addr()?);
         let task = tokio::spawn(service.serve(listener, std::future::pending()));
@@ -59,43 +61,24 @@ impl Drop for Authority {
 }
 
 fn record(source: &str, filename: &str, bytes: &[u8]) -> Result<ChecksumRecord> {
-    Ok(ChecksumRecord {
-        artifact: ArtifactId::new(&Url::parse(source)?, filename)?,
-        sha256: hex::encode(Sha256::digest(bytes)),
-    })
+    Ok(ChecksumRecord::new(
+        ArtifactId::new(&Url::parse(source)?, filename)?,
+        Sha256Digest::from_bytes(Sha256::digest(bytes).into()),
+        bytes.len() as u64,
+    ))
 }
 
-async fn wheel() -> Result<Vec<u8>> {
-    let mut writer = ZipFileWriter::new(Vec::new());
-    let mut record = String::new();
-    for (name, contents) in [
-        ("checksum_example/__init__.py", "VALUE = 42\n"),
-        (
-            "checksum_example-1.0.0.dist-info/METADATA",
-            "Metadata-Version: 2.1\nName: checksum-example\nVersion: 1.0.0\n",
-        ),
-        (
-            "checksum_example-1.0.0.dist-info/WHEEL",
-            "Wheel-Version: 1.0\nGenerator: uv-test\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
-        ),
-    ] {
-        writer
-            .write_entry_whole(
-                ZipEntryBuilder::new(name.into(), Compression::Stored),
-                contents.as_bytes(),
-            )
-            .await?;
-        writeln!(record, "{name},,")?;
-    }
-    let name = "checksum_example-1.0.0.dist-info/RECORD";
-    writeln!(record, "{name},,")?;
-    writer
-        .write_entry_whole(
-            ZipEntryBuilder::new(name.into(), Compression::Stored),
-            record.as_bytes(),
-        )
-        .await?;
-    Ok(writer.close().await?)
+fn wheel() -> Result<Vec<u8>> {
+    let (filename, bytes) = generate_wheel(
+        &PackageName::from_str("checksum-example")?,
+        &Version::from_str("1.0.0")?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+    );
+    assert_eq!(filename, WHEEL);
+    Ok(bytes)
 }
 
 async fn index(server: &MockServer, filename: &str, bytes: &[u8], metadata: bool) {
@@ -133,16 +116,21 @@ async fn index(server: &MockServer, filename: &str, bytes: &[u8], metadata: bool
 async fn checksum_authority_install_and_authenticated_metadata() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let server = MockServer::start().await;
-    let bytes = wheel().await?;
+    let bytes = wheel()?;
     index(&server, WHEEL, &bytes, true).await;
     // The registry's metadata sidecar lies. Authority mode must read the verified wheel instead.
-    Mock::given(method("GET")).and(path(format!("/files/{WHEEL}.metadata")))
+    Mock::given(method("GET"))
+        .and(path(format!("/files/{WHEEL}.metadata")))
         .respond_with(ResponseTemplate::new(200).set_body_string("Metadata-Version: 2.1\nName: checksum-example\nVersion: 1.0.0\nRequires-Dist: nonexistent-malicious-dependency\n"))
-        .expect(0).mount(&server).await;
+        .expect(0)
+        .mount(&server)
+        .await;
     let index_url = format!("{}/simple", server.uri());
     let authority = Authority::start(vec![record(&index_url, WHEEL, &bytes)?]).await?;
     uv_snapshot!(context.filters(), authority.configure(context.pip_install()
-        .arg("--index-url").arg(&index_url).arg("checksum-example")), @"
+        .arg("--index-url")
+        .arg(&index_url)
+        .arg("checksum-example")), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
@@ -150,7 +138,7 @@ async fn checksum_authority_install_and_authenticated_metadata() -> Result<()> {
      + checksum-example==1.0.0
     ");
     context
-        .assert_command("from checksum_example import VALUE; assert VALUE == 42")
+        .assert_command("from checksum_example import __version__; assert __version__ == '1.0.0'")
         .success();
     Ok(())
 }
@@ -159,7 +147,7 @@ async fn checksum_authority_install_and_authenticated_metadata() -> Result<()> {
 async fn checksum_authority_rejects_replacement_and_old_cache() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let server = MockServer::start().await;
-    let bytes = wheel().await?;
+    let bytes = wheel()?;
     index(&server, WHEEL, &bytes, false).await;
     let index_url = format!("{}/simple", server.uri());
     // Populate the ordinary cache without the authority, then remove the installation.
@@ -176,14 +164,16 @@ async fn checksum_authority_rejects_replacement_and_old_cache() -> Result<()> {
         .assert()
         .success();
     let authority =
-        Authority::start(vec![record(&index_url, WHEEL, b"different trusted bytes")?]).await?;
+        Authority::start(vec![record(&index_url, WHEEL, &vec![0; bytes.len()])?]).await?;
     let filters = context
         .filters()
         .into_iter()
         .chain([(r"sha256:[a-f0-9]{64}", "sha256:[HASH]")])
         .collect::<Vec<_>>();
     uv_snapshot!(filters, authority.configure(context.pip_install()
-        .arg("--index-url").arg(&index_url).arg("checksum-example")), @"
+        .arg("--index-url")
+        .arg(&index_url)
+        .arg("checksum-example")), @"
     exit_code: 1 (failure)
     ----- stderr -----
       × Failed to download `checksum-example==1.0.0`
@@ -197,12 +187,14 @@ async fn checksum_authority_rejects_replacement_and_old_cache() -> Result<()> {
 async fn checksum_authority_unknown_and_wrong_key() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let server = MockServer::start().await;
-    let bytes = wheel().await?;
+    let bytes = wheel()?;
     index(&server, WHEEL, &bytes, false).await;
     let index_url = format!("{}/simple", server.uri());
     let unknown = Authority::start(vec![]).await?;
     uv_snapshot!(context.filters(), unknown.configure(context.pip_install()
-        .arg("--index-url").arg(&index_url).arg("checksum-example")), @"
+        .arg("--index-url")
+        .arg(&index_url)
+        .arg("checksum-example")), @"
     exit_code: 1 (failure)
     ----- stderr -----
       × Failed to download `checksum-example==1.0.0`
@@ -210,7 +202,9 @@ async fn checksum_authority_unknown_and_wrong_key() -> Result<()> {
     ");
     let authority = Authority::start(vec![record(&index_url, WHEEL, &bytes)?]).await?;
     uv_snapshot!(context.filters(), authority.configure(context.pip_install()
-        .arg("--index-url").arg(&index_url).arg("checksum-example"))
+        .arg("--index-url")
+        .arg(&index_url)
+        .arg("checksum-example"))
         .env(EnvVars::UV_CHECKSUM_AUTHORITY_KEY, "00".repeat(32)), @"
     exit_code: 1 (failure)
     ----- stderr -----
@@ -243,7 +237,8 @@ async fn checksum_authority_rejects_sdist_before_backend() -> Result<()> {
     )?;
     index(&server, filename, &bytes, false).await;
     let index_url = format!("{}/simple", server.uri());
-    let authority = Authority::start(vec![record(&index_url, filename, b"trusted sdist")?]).await?;
+    let authority =
+        Authority::start(vec![record(&index_url, filename, &vec![0; bytes.len()])?]).await?;
     context
         .temp_dir
         .child("requirements.in")
@@ -254,7 +249,9 @@ async fn checksum_authority_rejects_sdist_before_backend() -> Result<()> {
         .chain([(r"sha256:[a-f0-9]{64}", "sha256:[HASH]")])
         .collect::<Vec<_>>();
     uv_snapshot!(filters, authority.configure(context.pip_compile()
-        .arg("--index-url").arg(&index_url).arg("requirements.in")), @"
+        .arg("--index-url")
+        .arg(&index_url)
+        .arg("requirements.in")), @"
     exit_code: 1 (failure)
     ----- stderr -----
       × Failed to download and build `checksum-example==1.0.0`
@@ -268,7 +265,7 @@ async fn checksum_authority_rejects_sdist_before_backend() -> Result<()> {
 async fn checksum_authority_project_lock_and_sync() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let server = MockServer::start().await;
-    let bytes = wheel().await?;
+    let bytes = wheel()?;
     index(&server, WHEEL, &bytes, true).await;
     let index_url = format!("{}/simple", server.uri());
     let authority = Authority::start(vec![record(&index_url, WHEEL, &bytes)?]).await?;
@@ -276,7 +273,8 @@ async fn checksum_authority_project_lock_and_sync() -> Result<()> {
         "[project]\nname = 'checksum-project'\nversion = '0.1.0'\nrequires-python = '>=3.12'\ndependencies = ['checksum-example']\n",
     )?;
     uv_snapshot!(context.filters(), authority.configure(context.lock()
-        .arg("--index-url").arg(&index_url)), @"
+        .arg("--index-url")
+        .arg(&index_url)), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
@@ -290,7 +288,7 @@ async fn checksum_authority_project_lock_and_sync() -> Result<()> {
      + checksum-example==1.0.0
     ");
     context
-        .assert_command("from checksum_example import VALUE; assert VALUE == 42")
+        .assert_command("from checksum_example import __version__; assert __version__ == '1.0.0'")
         .success();
     Ok(())
 }
@@ -299,7 +297,7 @@ async fn checksum_authority_project_lock_and_sync() -> Result<()> {
 async fn checksum_authority_direct_url_keeps_required_hashes() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let server = MockServer::start().await;
-    let bytes = wheel().await?;
+    let bytes = wheel()?;
     index(&server, WHEEL, &bytes, false).await;
     let url = format!("{}/files/{WHEEL}", server.uri());
     let authority = Authority::start(vec![record(&url, WHEEL, &bytes)?]).await?;
@@ -311,7 +309,10 @@ async fn checksum_authority_direct_url_keeps_required_hashes() -> Result<()> {
             "0".repeat(64),
         ))?;
     uv_snapshot!(context.filters(), authority.configure(context.pip_install()
-        .arg("--no-index").arg("--require-hashes").arg("-r").arg("requirements.txt")), @"
+        .arg("--no-index")
+        .arg("--require-hashes")
+        .arg("-r")
+        .arg("requirements.txt")), @"
     exit_code: 1 (failure)
     ----- stderr -----
     Resolved 1 package in [TIME]
@@ -322,7 +323,7 @@ async fn checksum_authority_direct_url_keeps_required_hashes() -> Result<()> {
             sha256:0000000000000000000000000000000000000000000000000000000000000000
 
           Computed:
-            sha256:ffb0d4491308737c7dc01ef2f5ae4748636cf430928b4cdd578fb730fbf3f3ec
+            sha256:de957d73d37350560035ae6ac5ff08831f3b910331970a929255dc2f85162a93
     ");
     context.assert_command("import checksum_example").failure();
     context
@@ -333,7 +334,10 @@ async fn checksum_authority_direct_url_keeps_required_hashes() -> Result<()> {
             hex::encode(Sha256::digest(&bytes)),
         ))?;
     uv_snapshot!(context.filters(), authority.configure(context.pip_install()
-        .arg("--no-index").arg("--require-hashes").arg("-r").arg("requirements.txt")), @"
+        .arg("--no-index")
+        .arg("--require-hashes")
+        .arg("-r")
+        .arg("requirements.txt")), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
@@ -347,7 +351,7 @@ async fn checksum_authority_direct_url_keeps_required_hashes() -> Result<()> {
 async fn checksum_authority_build_dependencies() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let server = MockServer::start().await;
-    let wheel_bytes = wheel().await?;
+    let wheel_bytes = wheel()?;
     index(&server, WHEEL, &wheel_bytes, true).await;
     let filename = "checksum_source-1.0.0.tar.gz";
     let backend = r"from pathlib import Path
@@ -397,7 +401,9 @@ def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
     let source_record = record(&index_url, filename, &source_bytes)?;
     let incomplete = Authority::start(vec![source_record.clone()]).await?;
     uv_snapshot!(context.filters(), incomplete.configure(context.pip_install()
-        .arg("--index-url").arg(&index_url).arg("checksum-source")), @"
+        .arg("--index-url")
+        .arg(&index_url)
+        .arg("checksum-source")), @"
     exit_code: 1 (failure)
     ----- stderr -----
       × Failed to download and build `checksum-source==1.0.0`
@@ -412,7 +418,9 @@ def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
     ])
     .await?;
     uv_snapshot!(context.filters(), authority.configure(context.pip_install()
-        .arg("--index-url").arg(&index_url).arg("checksum-source")), @"
+        .arg("--index-url")
+        .arg(&index_url)
+        .arg("checksum-source")), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
@@ -430,7 +438,7 @@ def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
 async fn checksum_authority_unavailable_fails_closed() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let server = MockServer::start().await;
-    let bytes = wheel().await?;
+    let bytes = wheel()?;
     index(&server, WHEEL, &bytes, false).await;
     let authority = MockServer::start().await;
     Mock::given(method("GET"))
@@ -439,7 +447,9 @@ async fn checksum_authority_unavailable_fails_closed() -> Result<()> {
         .mount(&authority)
         .await;
     uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--index-url").arg(format!("{}/simple", server.uri())).arg("checksum-example")
+        .arg("--index-url")
+        .arg(format!("{}/simple", server.uri()))
+        .arg("checksum-example")
         .env(EnvVars::UV_CHECKSUM_AUTHORITY, authority.uri())
         .env(EnvVars::UV_CHECKSUM_AUTHORITY_KEY, "00".repeat(32)), @"
     exit_code: 1 (failure)
@@ -455,7 +465,7 @@ async fn checksum_authority_unavailable_fails_closed() -> Result<()> {
 async fn checksum_authority_remote_index_cannot_use_local_archive() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let server = MockServer::start().await;
-    let bytes = wheel().await?;
+    let bytes = wheel()?;
     let local = context.temp_dir.child(WHEEL);
     fs_err::write(&local, &bytes)?;
     let url =
@@ -473,7 +483,9 @@ async fn checksum_authority_remote_index_cannot_use_local_archive() -> Result<()
         .await;
     let authority = Authority::start(vec![]).await?;
     uv_snapshot!(context.filters(), authority.configure(context.pip_install()
-        .arg("--index-url").arg(format!("{}/simple", server.uri())).arg("checksum-example")), @"
+        .arg("--index-url")
+        .arg(format!("{}/simple", server.uri()))
+        .arg("checksum-example")), @"
     exit_code: 1 (failure)
     ----- stderr -----
       × Failed to download `checksum-example==1.0.0`
