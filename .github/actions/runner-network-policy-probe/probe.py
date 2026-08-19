@@ -33,6 +33,23 @@ def baseline_path():
 
 
 def baseline():
+    # Diagnostics only: restore communication if the experimental firewall
+    # cuts off the runner. Never use this timer for acceptance evidence.
+    subprocess.run(
+        [
+            "sudo",
+            "-n",
+            "systemd-run",
+            "--unit=uv-network-probe-rescue",
+            "--on-active=90s",
+            "/usr/sbin/nft",
+            "delete",
+            "table",
+            "inet",
+            "uv_network_policy",
+        ],
+        check=True,
+    )
     addresses = sorted(
         {
             item[4][0]
