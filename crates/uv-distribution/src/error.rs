@@ -34,6 +34,10 @@ impl fmt::Display for PythonVersion {
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error(transparent)]
+    ChecksumAuthority(#[from] uv_checksum_authority::Error),
+    #[error("Checksum authority does not support a local archive supplied by a remote index: {0}")]
+    ChecksumAuthorityLocalArchive(DisplaySafeUrl),
     #[error("Building source distributions is disabled")]
     NoBuild,
     #[error("Building source distributions for `{0}` is disabled")]
