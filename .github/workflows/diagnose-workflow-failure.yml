@@ -21,7 +21,7 @@ jobs:
         with:
           operation: baseline
       - name: Install policy before later action hooks
-        uses: astral-sh/uv-dev/.github/actions/runner-network-policy@35ff9f713ca1b0fae604247daa1c6379ad841d55
+        uses: astral-sh/uv-dev/.github/actions/runner-network-policy@ebf87e47c4d5ca90d2e2578a916c8fee5fb81fb6
         with:
           profile: github
           privileges: ${{ matrix.privileges }}
