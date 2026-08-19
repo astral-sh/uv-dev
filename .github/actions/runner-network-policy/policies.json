@@ -1,0 +1,105 @@
+{
+  "jobs": {
+    "check-fmt.yml/prettier": {
+      "privileges": "drop",
+      "profile": "prettier"
+    },
+    "check-fmt.yml/python": {
+      "privileges": "drop",
+      "profile": "python-checks"
+    },
+    "check-fmt.yml/rust": {
+      "privileges": "drop",
+      "profile": "rustfmt"
+    },
+    "check-lint.yml/clippy-ubuntu": {
+      "privileges": "drop",
+      "profile": "rust-checks"
+    },
+    "check-lint.yml/ruff": {
+      "privileges": "drop",
+      "profile": "python-checks"
+    },
+    "check-lint.yml/ty": {
+      "privileges": "drop",
+      "profile": "python-checks"
+    },
+    "check-lock.yml/lock": {
+      "privileges": "drop",
+      "profile": "python-checks"
+    }
+  },
+  "profiles": {
+    "github": {
+      "allow": [
+        "*.actions.githubusercontent.com",
+        "*.blob.core.windows.net",
+        "api.github.com",
+        "codeload.github.com",
+        "github.com"
+      ],
+      "deny": []
+    },
+    "prettier": {
+      "allow": [
+        "*.actions.githubusercontent.com",
+        "*.blob.core.windows.net",
+        "api.github.com",
+        "codeload.github.com",
+        "github.com",
+        "nodejs.org",
+        "registry.npmjs.org"
+      ],
+      "deny": []
+    },
+    "python-checks": {
+      "allow": [
+        "*.actions.githubusercontent.com",
+        "*.blob.core.windows.net",
+        "api.github.com",
+        "codeload.github.com",
+        "files.pythonhosted.org",
+        "github.com",
+        "objects-origin.githubusercontent.com",
+        "objects.githubusercontent.com",
+        "pypi.org",
+        "raw.githubusercontent.com",
+        "release-assets.githubusercontent.com"
+      ],
+      "deny": []
+    },
+    "rust-checks": {
+      "allow": [
+        "*.actions.githubusercontent.com",
+        "*.blob.core.windows.net",
+        "api.github.com",
+        "codeload.github.com",
+        "crates.io",
+        "files.pythonhosted.org",
+        "github.com",
+        "index.crates.io",
+        "objects-origin.githubusercontent.com",
+        "objects.githubusercontent.com",
+        "pypi.org",
+        "raw.githubusercontent.com",
+        "release-assets.githubusercontent.com",
+        "static.crates.io",
+        "static.rust-lang.org"
+      ],
+      "deny": []
+    },
+    "rustfmt": {
+      "allow": [
+        "*.actions.githubusercontent.com",
+        "*.blob.core.windows.net",
+        "api.github.com",
+        "codeload.github.com",
+        "github.com",
+        "static.rust-lang.org"
+      ],
+      "deny": []
+    }
+  },
+  "source_revision": "67537ee5494df2920018969040af9c8cfee16723",
+  "version": 1
+}

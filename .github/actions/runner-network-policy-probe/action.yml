@@ -1,0 +1,10 @@
+name: Probe runner network policy
+description: Verify early-hook ordering and network denial on a disposable runner
+inputs:
+  operation:
+    description: Capture the unrestricted baseline or probe the installed policy
+    required: true
+runs:
+  using: node24
+  pre: pre.cjs
+  main: main.cjs

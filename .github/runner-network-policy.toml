@@ -1,0 +1,80 @@
+# The reviewed policy source is compiled into the action so its pre hook does not
+# depend on checking out or executing the pull request's repository contents.
+version = 1
+source_revision = "67537ee5494df2920018969040af9c8cfee16723"
+
+[groups.actions]
+allow = [
+  "github.com",
+  "api.github.com",
+  "codeload.github.com",
+  "*.actions.githubusercontent.com",
+  "*.blob.core.windows.net",
+]
+
+[groups.github-downloads]
+allow = [
+  "objects.githubusercontent.com",
+  "objects-origin.githubusercontent.com",
+  "release-assets.githubusercontent.com",
+  "raw.githubusercontent.com",
+]
+
+[groups.rust-toolchain]
+allow = ["static.rust-lang.org"]
+
+[groups.rust-registry]
+allow = ["crates.io", "index.crates.io", "static.crates.io"]
+
+[groups.python]
+allow = ["pypi.org", "files.pythonhosted.org"]
+
+[groups.node]
+allow = ["registry.npmjs.org", "nodejs.org"]
+
+[profiles.github]
+groups = ["actions"]
+codex = ["issue-triage"]
+
+[profiles.rustfmt]
+groups = ["actions", "rust-toolchain"]
+
+[profiles.prettier]
+groups = ["actions", "node"]
+
+[profiles.python-checks]
+groups = ["actions", "github-downloads", "python"]
+
+[profiles.rust-checks]
+groups = ["actions", "github-downloads", "rust-toolchain", "rust-registry"]
+codex = ["create-bug-test"]
+
+# Initial rollout candidates. These are reviewed starting policies, not claims
+# that an unobserved job has already passed or that its dependencies are fixed.
+[jobs."check-fmt.yml/rust"]
+profile = "rustfmt"
+privileges = "drop"
+
+[jobs."check-fmt.yml/prettier"]
+profile = "prettier"
+privileges = "drop"
+
+[jobs."check-fmt.yml/python"]
+profile = "python-checks"
+privileges = "drop"
+
+[jobs."check-lock.yml/lock"]
+profile = "python-checks"
+privileges = "drop"
+
+[jobs."check-lint.yml/ruff"]
+profile = "python-checks"
+privileges = "drop"
+
+[jobs."check-lint.yml/ty"]
+profile = "python-checks"
+privileges = "drop"
+
+[jobs."check-lint.yml/clippy-ubuntu"]
+profile = "rust-checks"
+privileges = "drop"
