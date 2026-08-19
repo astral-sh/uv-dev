@@ -184,6 +184,9 @@ impl<'a> RegistryClientBuilder<'a> {
             .base_client_builder
             .checksum_authority_config()
             .cloned();
+        if checksum_authority.is_some() && !self.cache.is_temporary() {
+            return Err(ClientBuildError::ChecksumAuthorityCache);
+        }
 
         // Wrap in any relevant middleware and handle connectivity.
         let builder = self
@@ -1818,6 +1821,7 @@ mod tests {
 
     use tokio::sync::Semaphore;
     use url::Url;
+    use uv_checksum_authority::ChecksumAuthority;
     use uv_normalize::PackageName;
     use uv_pypi_types::{HashDigests, PypiSimpleDetail};
     use uv_redacted::DisplaySafeUrl;
@@ -1837,6 +1841,24 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     type Error = Box<dyn std::error::Error>;
+
+    #[test]
+    fn checksum_authority_requires_temporary_cache() -> Result<(), Error> {
+        let authority = ChecksumAuthority::new(
+            Url::parse("https://checksums.example.com")?,
+            "00".repeat(32).parse()?,
+        )?;
+        let directory = tempfile::tempdir()?;
+        let builder = BaseClientBuilder::default().checksum_authority(Some(authority));
+        insta::assert_snapshot!(
+            RegistryClientBuilder::new(builder.clone(), Cache::from_path(directory.path()))
+                .build()
+                .expect_err("persistent cache must be rejected"),
+            @"checksum authority requires a temporary cache"
+        );
+        RegistryClientBuilder::new(builder, Cache::temp()?).build()?;
+        Ok(())
+    }
 
     async fn start_test_server(username: &'static str, password: &'static str) -> MockServer {
         let server = MockServer::start().await;
