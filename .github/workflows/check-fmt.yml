@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Apply the Rustfmt network policy
-        uses: astral-sh/uv-dev/.github/actions/runner-network-policy@8e1e57a0c5c633b74f9328a64c6796f8eb0468f7
+        uses: astral-sh/uv-dev/.github/actions/runner-network-policy@c2d610ae291724fd34489912f1e0ef1b21b9abf0
         with:
           profile: rustfmt
           disposable: true
@@ -26,7 +26,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Apply the Prettier network policy
-        uses: astral-sh/uv-dev/.github/actions/runner-network-policy@8e1e57a0c5c633b74f9328a64c6796f8eb0468f7
+        uses: astral-sh/uv-dev/.github/actions/runner-network-policy@c2d610ae291724fd34489912f1e0ef1b21b9abf0
         with:
           profile: prettier
           disposable: true
@@ -40,7 +40,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Apply the Python-check network policy
-        uses: astral-sh/uv-dev/.github/actions/runner-network-policy@8e1e57a0c5c633b74f9328a64c6796f8eb0468f7
+        uses: astral-sh/uv-dev/.github/actions/runner-network-policy@c2d610ae291724fd34489912f1e0ef1b21b9abf0
         with:
           profile: python-checks
           disposable: true
