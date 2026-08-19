@@ -25,10 +25,10 @@ use uv_distribution_filename::{
     SourceDistFilenameError, WheelFilename, WheelFilenameError,
 };
 use uv_distribution_types::{
-    BuiltDist, DirectUrlBuiltDist, DirectUrlSourceDist, DirectorySourceDist, Dist, Edge,
-    FileLocation, FirstParty, GitDirectorySourceDist, IndexUrl, Name, Node, PathBuiltDist,
-    PathSourceDist, RegistryBuiltDist, RegistryBuiltWheel, RegistrySourceDist, RemoteSource,
-    RequiresPython, Resolution, ResolvedDist, SourceDist, ToUrlError, UrlString,
+    BuiltDist, DirectUrlBuiltDist, DirectUrlSourceDist, DirectorySourceDist, Dist,
+    DistInfoMetadata, Edge, FileLocation, FirstParty, GitDirectorySourceDist, IndexUrl, Name, Node,
+    PathBuiltDist, PathSourceDist, RegistryBuiltDist, RegistryBuiltWheel, RegistrySourceDist,
+    RemoteSource, RequiresPython, Resolution, ResolvedDist, SourceDist, ToUrlError, UrlString,
 };
 use uv_fs::{PortablePathBuf, normalize_path, try_relative_to_if};
 use uv_git::{RepositoryReference, ResolvedRepositoryReference};
@@ -1649,7 +1649,7 @@ impl PylockTomlWheel {
         };
 
         let file = Box::new(uv_distribution_types::File {
-            dist_info_metadata: None,
+            dist_info_metadata: DistInfoMetadata::Unavailable,
             filename: SmallString::from(filename.to_string()),
             hashes: HashDigests::from(self.hashes.clone()),
             requires_python: None,
@@ -1812,7 +1812,7 @@ impl PylockTomlSdist {
         };
 
         let file = Box::new(uv_distribution_types::File {
-            dist_info_metadata: None,
+            dist_info_metadata: DistInfoMetadata::Unavailable,
             filename,
             hashes: HashDigests::from(self.hashes.clone()),
             requires_python: None,
