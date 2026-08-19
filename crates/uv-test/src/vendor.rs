@@ -37,7 +37,7 @@ impl VendorArtifact {
     }
 }
 
-static VENDOR_ARTIFACTS: [VendorArtifact; 17] = [
+static VENDOR_ARTIFACTS: [VendorArtifact; 15] = [
     VendorArtifact {
         filename: "calver-2022.6.26-py3-none-any.whl",
         url: "https://files.pythonhosted.org/packages/f7/39/e421c06f42ca00fa9cf8929c2466e58a837e8e97b8ab3ff4f4ff9a15e33e/calver-2022.6.26-py3-none-any.whl",
@@ -54,18 +54,6 @@ static VENDOR_ARTIFACTS: [VendorArtifact; 17] = [
         filename: "flit_core-3.9.0-py3-none-any.whl",
         url: "https://files.pythonhosted.org/packages/38/45/618e84e49a6c51e5dd15565ec2fcd82ab273434f236b8f108f065ded517a/flit_core-3.9.0-py3-none-any.whl",
         sha256: "7aada352fb0c7f5538c4fafeddf314d3a6a92ee8e2b1de70482329e42de70301",
-        bytes: OnceLock::new(),
-    },
-    VendorArtifact {
-        filename: "futzed_bz2-0.1.0-py3-none-any.whl",
-        url: "https://github.com/astral-sh/futzed-wheels/releases/download/v2026.02.09.2/futzed_bz2-0.1.0-py3-none-any.whl",
-        sha256: "3c106ea0433a90f767271c322a8cb8bf5145f210adf8a357152796475b00b316",
-        bytes: OnceLock::new(),
-    },
-    VendorArtifact {
-        filename: "futzed_lzma-0.1.0-py3-none-any.whl",
-        url: "https://github.com/astral-sh/futzed-wheels/releases/download/v2026.02.09.2/futzed_lzma-0.1.0-py3-none-any.whl",
-        sha256: "9f39b4686926ffbed723450d700cca524001af259949eb5e4b973e7846df23d2",
         bytes: OnceLock::new(),
     },
     VendorArtifact {
