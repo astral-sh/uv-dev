@@ -6,73 +6,112 @@ Classification: bug
 
 ## Summary
 
-The report shows `uv check --script` selecting `ty` 0.0.70 under a global seven-day
-`exclude-newer` cutoff even though the script's inline `[tool.uv]` configuration explicitly sets
-`exclude-newer-package = { ty = false }`. A cutoff-free `uvx ty@latest` selects 0.0.73. The expected
-semantics are established by astral-sh/uv#16854: a package value of `false` disables the global
-cutoff for that package.
+The reported behavior is reproducible with the installed uv 0.12.5. An isolated PEP 723 script
+with a global seven-day `exclude-newer` cutoff and `exclude-newer-package = { ty = false }` selected
+ty 0.0.70. The same script without any cutoff selected ty 0.0.73, while a global-cutoff-only
+control selected ty 0.0.70. This shows that the package-specific exemption does not affect
+standalone ty selection in `uv check --script`.
 
-The current source confirms the mismatch. `ResolverSettings` retains the full `ExcludeNewer`
-value, including package overrides, but `crates/uv/src/commands/project/check.rs` extracts only
-`settings.resolver.exclude_newer.global` and passes its timestamp to `ty::run`. The standalone
-binary resolver in `crates/uv/src/commands/project/check/ty.rs` therefore has no way to observe the
-`ty = false` override. This is not specific to the reported package versions or macOS platform.
+The script's inline metadata is sufficient to reproduce the behavior; the reported project-level
+`pyproject.toml` is not required. The behavior was observed on Linux as well as reported on macOS,
+so it is not limited to the reporter's platform.
 
-No existing issue or pull request tracks this exact defect. The closest history establishes the
-configuration contract, the origin of the affected command path, and a separate locked-tool
-selection path for scripts.
+## Reproduction
+
+Outcome: **reproducible**.
+
+Environment:
+
+- uv 0.12.5 (`x86_64-unknown-linux-gnu`)
+- Python 3.12.3
+- Linux x86_64
+- Reproduced on 2026-08-19 with all files, caches, tool directories, and XDG state under fresh
+  `$RUNNER_TEMP` directories
+
+Minimal `script.py`:
+
+```python
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+#
+# [tool.uv]
+# exclude-newer = "P7D"
+# exclude-newer-package = { ty = false }
+# ///
+
+value: int = 1
+```
+
+Commands and observed results:
+
+```console
+$ uvx --no-config ty@latest --version
+ty 0.0.73
+
+$ uv check --script script.py --show-version --preview-features=check-command
+Using ty 0.0.70
+All checks passed!
+```
+
+Two isolated controls disambiguate the result. Removing only
+`exclude-newer-package = { ty = false }` still selected ty 0.0.70. Removing the entire `[tool.uv]`
+table selected ty 0.0.73. The same three-way result was observed with `--ty-version latest`:
+exemption and global-only both selected 0.0.70, while no cutoff selected 0.0.73.
+
+There is no existing integration test for the package-specific override on standalone ty
+selection. `crates/uv/tests/project/check.rs::check_script` covers basic PEP 723 checking, and
+`crates/uv/tests/project/check.rs::check_script_ignores_transitive_ty_for_tool_selection` covers a
+global `--exclude-newer` cutoff, but neither supplies `exclude-newer-package`. General resolver
+semantics are covered by
+`crates/uv/tests/lock/lock.rs::lock_exclude_newer_package_disable`, which asserts that
+`idna=false` exempts `idna` from the global cutoff while a non-exempt dependency remains filtered.
+
+The observed behavior is consistent with the current command boundary:
+`crates/uv/src/commands/project/check.rs` extracts only
+`settings.resolver.exclude_newer.global` before calling the standalone ty resolver. The behavioral
+controls, rather than source inspection alone, establish the reproduction.
 
 ## Draft response
 
-Thanks for the clear reproduction. This is a bug. astral-sh/uv#16854 added `false` as a
-package-specific opt-out from the global `exclude-newer` cutoff, but the standalone `ty` path in
-`uv check` currently reduces the resolved settings to the global timestamp before selecting a
-version. That means the `ty = false` entry cannot affect this selection.
+Thanks for the clear report. This is reproducible with uv 0.12.5 on Linux as well as the reported
+macOS platform. In an isolated script, the `ty = false` case selected ty 0.0.70, the same as a
+global-cutoff-only control, while removing the cutoff selected ty 0.0.73. The inline script metadata
+alone is enough to reproduce the issue.
 
-This is separate from the locked direct-dependency selection added in astral-sh/uv#19989, since
-this script does not declare `ty`. The next step is to pass `ty`'s effective package cutoff—including
-a disabled cutoff—to the standalone resolver and add integration coverage for `uv check --script`.
+The general `false` exemption is covered for dependency resolution, but there is no equivalent
+integration coverage for standalone ty selection in `uv check --script`. The current command path
+passes only the global timestamp to that resolver, consistent with the observed result.
 
 ## Classification
 
-`bug` is the appropriate classification because uv applies the global setting while discarding a
-more-specific override whose documented and implemented purpose is to take precedence. The source
-confirms the setting is parsed and retained before being reduced to the global timestamp at the
-`uv check`/`ty` boundary.
+`bug` is appropriate. A package-specific value of `false` is documented and tested as an exemption
+from the global `exclude-newer` cutoff, but the targeted reproduction shows that standalone ty
+selection behaves identically with the exemption present and absent.
 
-This is not a duplicate: searches found no open or closed issue and no open, closed, or merged pull
-request tracking the same `uv check` omission. It is also not a regression of the general exemption
-feature. astral-sh/uv#16854 predates `uv check`, and astral-sh/uv#19605 introduced the command with
-the global-only extraction already present.
+This is not a duplicate based on the existing related-issue search. astral-sh/uv#16854 established
+the general exemption behavior, while astral-sh/uv#19605 and astral-sh/uv#19989 concern the command
+path and locked-tool selection rather than a prior fix for this omission.
 
 ## Related
 
 - astral-sh/uv#16854 — **Allow disabling `exclude-newer` per package** (merged pull request). It
-  implemented the exact `PACKAGE=false` opt-out and confirms that a package-specific disabled value
-  overrides the global cutoff. It concerns the general resolver feature, not a prior fix for
-  standalone tool selection in `uv check`.
+  implemented the `PACKAGE=false` opt-out and establishes that a disabled package-specific value
+  overrides the global cutoff.
 - astral-sh/uv#19605 — **Add `uv check` to run `ty` from uv** (merged pull request). Its diff
-  introduced standalone `ty` selection by extracting only `settings.resolver.exclude_newer.global`.
-  The same global-only boundary remains in current source, so this is the origin of the affected
-  path rather than a separate tracker for the bug.
+  introduced standalone ty selection with the global-only cutoff handoff that remains in the
+  current source.
 - astral-sh/uv#19989 — **Use locked dependency selection for `uv check --script`** (merged pull
-  request). This is the closest prior work on choosing `ty` for a PEP 723 script, but it handles a
-  directly declared and locked `ty` dependency. The new reproduction declares no dependencies and
-  reaches the standalone resolver instead.
+  request). This handles a directly declared and locked ty dependency; the minimal reproduction
+  declares no dependencies and reaches standalone tool selection instead.
 
 ## Search evidence
 
-Authenticated searches covered open and closed issues and open, closed, and merged pull requests.
-Literal queries included `exclude-newer-package`, `exclude-newer`, `uv check --script`, `ty`,
-`Using ty`, and `preview-features=check-command`. Conceptual queries covered ignored or silently
-ignored overrides, package-specific and per-package cutoffs, configuration propagation, standalone
-tool selection, and selecting the latest checker. Fix-oriented searches used `exclude_newer`, the
-`uv check` label and command history, and removed the incidental versions and platform from the
-query.
+Existing searches covered open and closed issues and open, closed, and merged pull requests using
+literal and conceptual variants of `exclude-newer-package`, `exclude-newer`, `uv check --script`,
+`ty`, package-specific cutoffs, configuration propagation, and standalone tool selection. No exact
+prior report or fix was found.
 
-The strongest apparent match, astral-sh/uv#19239, was ruled out. It reported an older package after
-using an exemption with `uv pip compile`, but the reporter later confirmed that non-exempt transitive
-dependencies constrained the selected version; the override itself was not ignored. Open reports
-about persisting exemptions, configuration merging, structured bypasses, glob support, and stale
-entries concern different resolver policies or lockfile behavior. No later fix for the `uv check`
-global-only handoff was found.
+The strongest apparent match, astral-sh/uv#19239, was ruled out: that report involved non-exempt
+transitive dependencies constraining `uv pip compile`, not a discarded exemption during standalone
+tool selection.
