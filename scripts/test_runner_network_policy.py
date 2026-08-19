@@ -196,6 +196,25 @@ class PolicyTests(unittest.TestCase):
             with self.subTest(value=value[:5]), self.assertRaises(ValueError):
                 proxy.client_hello(BytesSocket(value))
 
+    def test_connect_authority_must_match_sni(self):
+        state = proxy.State(Policy(("allowed.example", "other.example")), [], None)
+        client, server = socket.socketpair()
+        with client, server, patch.object(state, "connect") as connect:
+            client.sendall(hello("other.example"))
+            with self.assertRaises(PermissionError):
+                proxy.tunnel(server, state, "allowed.example")
+            connect.assert_not_called()
+
+    def test_tls_without_sni_is_rejected(self):
+        outgoing = ssl.MemoryBIO()
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.check_hostname = False
+        stream = context.wrap_bio(ssl.MemoryBIO(), outgoing)
+        with contextlib.suppress(ssl.SSLWantReadError):
+            stream.do_handshake()
+        with self.assertRaises(ValueError):
+            proxy.client_hello(BytesSocket(outgoing.read()))
+
     def test_firewall_is_default_deny_for_both_families(self):
         rules = install.firewall(
             991,
@@ -206,6 +225,10 @@ class PolicyTests(unittest.TestCase):
         self.assertIn("table inet uv_network_policy", rules)
         self.assertIn("udp dport 53 redirect to :1053", rules)
         self.assertIn("tcp dport 443 redirect to :18443", rules)
+        self.assertIn(
+            "ip daddr 127.0.0.1 tcp dport { 1053, 18080, 18443 } accept", rules
+        )
+        self.assertIn("ip6 daddr ::1 tcp dport { 1053, 18080, 18443 } accept", rules)
         self.assertIn(
             "meta skuid 1001 ct state established ip daddr 140.82.112.3 tcp sport 45678 tcp dport 443 accept",
             rules,

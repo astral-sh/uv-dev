@@ -24,7 +24,7 @@ def run(*arguments, capture=False, check=True):
         check=check,
         text=True,
         stdout=subprocess.PIPE if capture else subprocess.DEVNULL,
-        stderr=subprocess.PIPE if capture else subprocess.DEVNULL,
+        stderr=subprocess.PIPE if capture else None,
     )
 
 
@@ -100,6 +100,10 @@ def firewall(proxy_uid, runner_uid, dns_servers, connections):
   chain egress {{
     type filter hook output priority -10; policy accept;
     oifname \"lo\" accept
+    ip daddr 127.0.0.1 tcp dport {{ 1053, 18080, 18443 }} accept
+    ip daddr 127.0.0.1 udp dport 1053 accept
+    ip6 daddr ::1 tcp dport {{ 1053, 18080, 18443 }} accept
+    ip6 daddr ::1 udp dport 1053 accept
     {exceptions}
     meta skuid {proxy_uid} tcp dport {{ 80, 443 }} accept
     reject with icmpx type admin-prohibited
@@ -212,6 +216,7 @@ RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 ReadWritePaths={DIRECTORY}/audit
 """)
     run("systemctl", "daemon-reload")
+    print("Starting the root-owned policy service.", flush=True)
     run("systemctl", "start", SERVICE)
     for attempt in range(30):
         try:
@@ -226,12 +231,15 @@ ReadWritePaths={DIRECTORY}/audit
         firewall(proxy_account.pw_uid, runner_uid, dns_servers, connections)
     )
     run("nft", "--check", "--file", str(rules))
+    print("Applying the default-deny firewall.", flush=True)
     run("nft", "--file", str(rules))
     # Once installed, the policy is deliberately not removed by action post
     # hooks. A disposable VM's trusted teardown owns that boundary.
     if privileges == "drop":
+        print("Removing sudo and privileged container access.", flush=True)
         drop_privileges(account)
     health()
+    print("Runner network policy is active.", flush=True)
 
 
 if __name__ == "__main__":
