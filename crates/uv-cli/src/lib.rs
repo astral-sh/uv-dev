@@ -1199,6 +1199,15 @@ pub enum ProjectCommand {
         after_long_help = ""
     )]
     Sync(SyncArgs),
+    /// Download all distribution archives recorded in the project's existing lockfile.
+    ///
+    /// Archives for all platforms are kept packed in the cache. This does not resolve
+    /// dependencies, build packages, or create an environment.
+    ///
+    /// Git repositories and local source trees are not downloaded. Building a source
+    /// distribution offline may require separately cached build dependencies.
+    #[command(hide = true)]
+    Download(DownloadArgs),
     /// Update the project's lockfile.
     ///
     /// If the project lockfile (`uv.lock`) does not exist, it will be created. If a lockfile is
@@ -4055,6 +4064,16 @@ pub struct SyncArgs {
 
     #[arg(long, overrides_with("check"), hide = true)]
     pub no_check: bool,
+}
+
+#[derive(Args)]
+pub struct DownloadArgs {
+    #[command(flatten)]
+    pub index: IndexArgs,
+    #[command(flatten)]
+    pub registry: RegistryClientArgs,
+    #[command(flatten)]
+    pub refresh: RefreshArgs,
 }
 
 #[derive(Args)]

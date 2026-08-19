@@ -191,7 +191,7 @@ impl<'a> RegistryClientBuilder<'a> {
         let connectivity = client.connectivity();
 
         // Wrap in the cache middleware.
-        let client = CachedClient::new(client);
+        let client = CachedClient::new(client).with_packed_cache(self.cache.clone());
 
         Ok(RegistryClient {
             indexes: self.index_locations,
@@ -985,6 +985,35 @@ impl RegistryClient {
     }
 
     /// Fetch the metadata from a wheel file.
+    async fn packed_wheel_metadata(
+        &self,
+        filename: &WheelFilename,
+        url: &DisplaySafeUrl,
+    ) -> Result<Option<ResolutionMetadata>, Error> {
+        if self.connectivity != Connectivity::Offline
+            && self.cache.must_revalidate_package(&filename.name)
+        {
+            return Ok(None);
+        }
+        let Some(archive) = crate::PackedArchive::read(&self.cache, url, None, None)
+            .await
+            .map_err(|err| ErrorKind::Io(std::io::Error::other(err)))?
+        else {
+            return Ok(None);
+        };
+        let contents =
+            read_metadata_async_seek(filename, tokio::io::BufReader::new(archive.into_file()))
+                .await
+                .map_err(|err| ErrorKind::Metadata(url.to_string(), err))?;
+        ResolutionMetadata::parse_metadata(&contents)
+            .map(Some)
+            .map_err(|err| {
+                ErrorKind::MetadataParseError(filename.clone(), url.to_string(), Box::new(err))
+                    .into()
+            })
+    }
+
+    /// Fetch the metadata from a wheel file.
     async fn wheel_metadata_registry(
         &self,
         wheel: &RegistryBuiltWheel,
@@ -997,6 +1026,10 @@ impl RegistryClient {
             index,
             ..
         } = wheel;
+
+        if let Some(metadata) = self.packed_wheel_metadata(filename, url).await? {
+            return Ok(metadata);
+        }
 
         // If the metadata file is available at its own url (PEP 658), download it from there.
         if file.dist_info_metadata {
@@ -1080,6 +1113,9 @@ impl RegistryClient {
         cache_shard: WheelCache<'data>,
         capabilities: &'data IndexCapabilities,
     ) -> Result<ResolutionMetadata, Error> {
+        if let Some(metadata) = self.packed_wheel_metadata(filename, url).await? {
+            return Ok(metadata);
+        }
         let cache_entry = self.cache.entry(
             CacheBucket::Wheels,
             cache_shard.wheel_dir(filename.name.as_ref()),

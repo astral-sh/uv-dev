@@ -4369,6 +4369,37 @@ pub(crate) struct InstallerSettingsRef<'a> {
     pub(crate) sources: NoSources,
 }
 
+#[derive(Debug)]
+pub(crate) struct DownloadSettings {
+    pub(crate) refresh: Refresh,
+    pub(crate) settings: ResolverSettings,
+}
+
+impl DownloadSettings {
+    pub(crate) fn resolve(
+        args: uv_cli::DownloadArgs,
+        filesystem: Option<FilesystemOptions>,
+        environment: &EnvironmentOptions,
+    ) -> Result<Self> {
+        let indexes = args
+            .index
+            .resolve(configured_indexes(filesystem.as_ref()))?;
+        Ok(Self {
+            refresh: Refresh::try_from(args.refresh)?,
+            settings: ResolverSettings::combine(
+                ResolverOptions {
+                    indexes,
+                    keyring_provider: args.registry.keyring_provider,
+                    index_strategy: args.registry.index_strategy,
+                    ..ResolverOptions::default()
+                },
+                filesystem,
+                environment,
+            ),
+        })
+    }
+}
+
 /// The resolved settings to use for an invocation of the uv CLI when resolving dependencies.
 ///
 /// Combines the `[tool.uv]` persistent configuration with the command-line arguments

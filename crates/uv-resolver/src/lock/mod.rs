@@ -3797,7 +3797,78 @@ pub struct Package {
     metadata: PackageMetadata,
 }
 
+/// A distribution archive recorded in a lockfile, independent of platform compatibility.
+#[derive(Debug, Clone)]
+pub struct LockedArtifact {
+    pub url: DisplaySafeUrl,
+    pub hash: Option<HashDigest>,
+    pub size: Option<u64>,
+}
+
 impl Package {
+    /// Return every wheel and source archive recorded for this package.
+    pub fn artifacts(&self, root: &Path) -> Result<Vec<LockedArtifact>, LockError> {
+        let mut artifacts = Vec::new();
+        for wheel in &self.wheels {
+            let url = match (&self.id.source, &wheel.url) {
+                (Source::Registry(source), _) => wheel
+                    .to_registry_wheel(source, root)?
+                    .file
+                    .url
+                    .to_url()
+                    .map_err(LockErrorKind::InvalidUrl)?,
+                (_, WheelWireSource::Url { url }) => {
+                    url.to_url().map_err(LockErrorKind::InvalidUrl)?
+                }
+                (Source::Direct(url, _), _) => url.to_url().map_err(LockErrorKind::InvalidUrl)?,
+                (Source::Path(path), _) => {
+                    let path = absolute_path(root, path)?;
+                    DisplaySafeUrl::from_file_path(&path).map_err(|()| {
+                        LockErrorKind::PathToUrl {
+                            path: path.into_boxed_path(),
+                        }
+                    })?
+                }
+                _ => continue,
+            };
+            if let Some(zstd) = &wheel.zstd {
+                let mut url = url.clone();
+                let path = format!("{}.tar.zst", url.path());
+                url.set_path(&path);
+                artifacts.push(LockedArtifact {
+                    url,
+                    hash: zstd.hash.as_ref().map(|hash| hash.0.clone()),
+                    size: zstd.size,
+                });
+            }
+            artifacts.push(LockedArtifact {
+                url,
+                hash: wheel.hash.as_ref().map(|hash| hash.0.clone()),
+                size: wheel.size,
+            });
+        }
+        if let Some(sdist) = &self.sdist
+            && let Some(dist) = self.to_source_dist(root)?
+        {
+            let url = match dist {
+                uv_distribution_types::SourceDist::Registry(dist) => {
+                    Some(dist.file.url.to_url().map_err(LockErrorKind::InvalidUrl)?)
+                }
+                uv_distribution_types::SourceDist::DirectUrl(dist) => Some(*dist.location),
+                uv_distribution_types::SourceDist::Path(dist) => Some(dist.url.to_url()),
+                _ => None,
+            };
+            if let Some(url) = url {
+                artifacts.push(LockedArtifact {
+                    url,
+                    hash: sdist.hash().map(|hash| hash.0.clone()),
+                    size: sdist.size(),
+                });
+            }
+        }
+        Ok(artifacts)
+    }
+
     pub fn is_from_pypi_registry(&self) -> bool {
         self.id.source.is_pypi_registry()
     }
