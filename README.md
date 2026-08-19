@@ -29,6 +29,11 @@ and temporary overlay environments. On the reporter's CentOS system, the copied 
 Outcome: **reproducible** with both the reported uv 0.12.2 and the installed uv 0.12.3 on Linux
 x86_64.
 
+A second user reports the same problem on uv 0.12.5, indicating that it remains present in that
+release. They did not provide platform, interpreter-layout, or copied-environment metadata and were
+unsure when the behavior began, so this report does not establish a regression boundary or provide
+an additional independently verified reproduction.
+
 All files, Python installations, uv tool installations, and caches were isolated under a new `/tmp`
 directory. The fixture used Python 3.13.15 for the active environment and `/usr/bin/python3` 3.12.3
 as the default interpreter. To reproduce the CentOS layout without changing the host, a temporary
