@@ -11,7 +11,7 @@ jobs:
     name: "uv lockfiles"
     steps:
       - name: Apply the lockfile network policy
-        uses: astral-sh/uv-dev/.github/actions/runner-network-policy@23e8a32de60a3f156133c1ba66a6374df65424dc
+        uses: astral-sh/uv-dev/.github/actions/runner-network-policy@8e1e57a0c5c633b74f9328a64c6796f8eb0468f7
         with:
           profile: python-checks
           disposable: true
