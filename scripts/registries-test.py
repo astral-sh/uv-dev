@@ -253,8 +253,15 @@ def run_test(
                     f"{Fore.RED}{registry_name}: FAIL{Fore.RESET} - Failed to install {package}."
                 )
 
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as error:
             print(f"{Fore.RED}{registry_name}: TIMEOUT{Fore.RESET} (>{timeout}s)")
+            for stream, output in (("stdout", error.stdout), ("stderr", error.stderr)):
+                if output:
+                    if isinstance(output, bytes):
+                        output = output.decode(errors="replace")
+                    if token:
+                        output = output.replace(token, "****")
+                    print(f"{Fore.RED} {stream}:{Fore.RESET} {output.strip()}")
         except FileNotFoundError:
             print(f"{Fore.RED}{registry_name}: ERROR{Fore.RESET} - uv not found")
         except (subprocess.SubprocessError, OSError, ValueError) as e:
