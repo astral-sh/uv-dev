@@ -10,7 +10,7 @@ use futures::{FutureExt, StreamExt, TryStreamExt};
 use http::{HeaderMap, StatusCode};
 use itertools::Either;
 use reqwest::{Proxy, Response};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use tokio::sync::{Mutex, Semaphore};
 use tracing::{Instrument, Span, debug, info_span, instrument, trace, warn};
 use url::Url;
@@ -21,9 +21,9 @@ use uv_configuration::IndexStrategy;
 use uv_configuration::KeyringProviderType;
 use uv_distribution_filename::{DistFilename, WheelFilename};
 use uv_distribution_types::{
-    BuiltDist, File, FileLocation, IndexCapabilities, IndexFormat, IndexLocations,
-    IndexMetadataRef, IndexStatusCodeDecision, IndexStatusCodeStrategy, IndexUrl, Name,
-    RegistryBuiltWheel,
+    BuiltDist, DistInfoMetadata, File, FileLocation, IndexCapabilities, IndexFormat,
+    IndexLocations, IndexMetadataRef, IndexStatusCodeDecision, IndexStatusCodeStrategy, IndexUrl,
+    Name, RegistryBuiltWheel,
 };
 use uv_extract::hash::Hasher;
 use uv_git::{GIT_LFS, GitError, GitHttpSettings, GitResolver, Reporter};
@@ -213,6 +213,7 @@ impl<'a> RegistryClientBuilder<'a> {
             )),
             parse_memory: Arc::new(Semaphore::new(8 * 1024 * 1024)),
             metadata_range_request: self.metadata_range_request,
+            unavailable_metadata: Arc::default(),
         })
     }
 }
@@ -242,6 +243,8 @@ pub struct RegistryClient {
     parse_memory: Arc<Semaphore>,
     /// The behavior when metadata range requests are unsupported.
     metadata_range_request: MetadataRangeRequest,
+    /// Optional sidecars that failed during this client lifetime. Retry on the next invocation.
+    unavailable_metadata: Arc<Mutex<FxHashSet<(IndexUrl, DisplaySafeUrl)>>>,
 }
 
 /// The behavior when wheel metadata cannot be fetched with HTTP range requests.
@@ -581,7 +584,7 @@ impl RegistryClient {
         let result = if matches!(index, IndexUrl::Path(_)) {
             self.fetch_local_simple_detail(package_name, &url).await
         } else {
-            self.fetch_remote_simple_detail(package_name, &url, &cache_entry, cache_control)
+            self.fetch_remote_simple_detail(package_name, &url, index, &cache_entry, cache_control)
                 .await
         };
 
@@ -622,6 +625,7 @@ impl RegistryClient {
         &self,
         package_name: &PackageName,
         url: &DisplaySafeUrl,
+        index: &IndexUrl,
         cache_entry: &CacheEntry,
         cache_control: CacheControl,
     ) -> Result<OwnedArchive<SimpleDetailMetadata>, Error> {
@@ -636,6 +640,15 @@ impl RegistryClient {
             })?;
         let parse_simple_response = |response: Response, _: &mut RetryState| {
             async {
+                // Some Artifactory repositories serve wheel metadata without advertising it.
+                // Only the configured index's own response can establish this capability.
+                let metadata_origin = (response.url().origin() == index.url().origin()
+                    && response
+                        .headers()
+                        .get("x-jfrog-version")
+                        .and_then(|value| value.to_str().ok())
+                        .is_some_and(|value| value.starts_with("Artifactory/")))
+                .then(|| index.url().clone());
                 // Use the response URL, rather than the request URL, as the base for relative URLs.
                 // This ensures that we handle redirects and other URL transformations correctly.
                 let url = DisplaySafeUrl::from_url(response.url().clone());
@@ -674,6 +687,7 @@ impl RegistryClient {
                                 &package_name,
                                 data.project_status,
                                 &url,
+                                metadata_origin.as_ref(),
                             );
                             OwnedArchive::from_unarchived(&unarchived)
                         })
@@ -688,8 +702,12 @@ impl RegistryClient {
                             )
                         })?;
                         self.parse_simple_body(text.len(), move || {
-                            let unarchived =
-                                SimpleDetailMetadata::from_html(&text, &package_name, &url)?;
+                            let unarchived = SimpleDetailMetadata::from_html(
+                                &text,
+                                &package_name,
+                                &url,
+                                metadata_origin.as_ref(),
+                            )?;
                             OwnedArchive::from_unarchived(&unarchived)
                         })
                         .await
@@ -771,7 +789,7 @@ impl RegistryClient {
                 return Err(Error::from(ErrorKind::Io(err)));
             }
         };
-        let metadata = SimpleDetailMetadata::from_html(&text, package_name, url)?;
+        let metadata = SimpleDetailMetadata::from_html(&text, package_name, url, None)?;
         OwnedArchive::from_unarchived(&metadata)
     }
 
@@ -1081,44 +1099,89 @@ impl RegistryClient {
             ..
         } = wheel;
 
-        // If the metadata file is available at its own url (PEP 658), download it from there.
-        if let Some(hashes) = &file.dist_info_metadata {
-            let mut url = url.clone();
-            let path = format!("{}.metadata", url.path());
-            url.set_path(&path);
-
-            let cache_entry = self.cache.entry(
-                CacheBucket::Wheels,
-                WheelCache::Index(index).wheel_dir(filename.name.as_ref()),
-                format!("{}.msgpack", filename.cache_key()),
-            );
-            let cache_control = match self.connectivity {
-                Connectivity::Online
-                    if let Some(header) = self.indexes.artifact_cache_control_for(index) =>
-                {
-                    CacheControl::Override(header)
+        match &file.dist_info_metadata {
+            DistInfoMetadata::Available(hashes) => {
+                return self
+                    .wheel_metadata_pep658(filename, url, index, Some(hashes), false)
+                    .await;
+            }
+            DistInfoMetadata::Unadvertised if url.origin() == index.url().origin() => {
+                let key = (index.clone(), url.clone());
+                if !self.unavailable_metadata.lock().await.contains(&key) {
+                    match self
+                        .wheel_metadata_pep658(filename, url, index, None, true)
+                        .await
+                    {
+                        Ok(metadata) => return Ok(metadata),
+                        Err(err) if optional_metadata_unavailable(&err) => {
+                            debug!("Unadvertised metadata unavailable for {filename}: {err}");
+                            self.unavailable_metadata.lock().await.insert(key);
+                        }
+                        Err(err) => return Err(err),
+                    }
                 }
-                Connectivity::Online => CacheControl::from(
-                    self.cache
-                        .freshness(&cache_entry, Some(&filename.name), None)
-                        .map_err(ErrorKind::Io)?,
-                ),
-                Connectivity::Offline => CacheControl::AllowStale,
-            };
+            }
+            DistInfoMetadata::Unadvertised | DistInfoMetadata::Unavailable => {}
+        }
 
-            // Acquire an advisory lock, to guard against concurrent writes.
-            #[cfg(windows)]
-            let _lock = {
-                let lock_entry = cache_entry.with_file(format!("{}.lock", filename.stem()));
-                lock_entry.lock().await.map_err(ErrorKind::CacheLock)?
-            };
+        // Fall back to range requests, then streaming the original wheel.
+        self.wheel_metadata_no_pep658(
+            filename,
+            url,
+            Some(index),
+            WheelCache::Index(index),
+            capabilities,
+        )
+        .await
+    }
 
-            let response_callback = async |response: Response, _: &mut RetryState| {
-                let bytes = response.bytes().await.map_err(|err| {
-                    ErrorKind::from_reqwest(url.clone(), err, self.client.certificate_source())
-                })?;
+    /// Fetch a separately served wheel metadata file.
+    async fn wheel_metadata_pep658(
+        &self,
+        filename: &WheelFilename,
+        url: &DisplaySafeUrl,
+        index: &IndexUrl,
+        hashes: Option<&HashDigests>,
+        unadvertised: bool,
+    ) -> Result<ResolutionMetadata, Error> {
+        let mut url = url.clone();
+        let path = format!("{}.metadata", url.path());
+        url.set_path(&path);
+        url.set_fragment(None);
 
-                // Verify the downloaded bytes before parsing or caching the metadata.
+        let cache_entry = self.cache.entry(
+            CacheBucket::Wheels,
+            WheelCache::Index(index).wheel_dir(filename.name.as_ref()),
+            format!("{}.msgpack", filename.cache_key()),
+        );
+        let cache_control = match self.connectivity {
+            Connectivity::Online
+                if let Some(header) = self.indexes.artifact_cache_control_for(index) =>
+            {
+                CacheControl::Override(header)
+            }
+            Connectivity::Online => CacheControl::from(
+                self.cache
+                    .freshness(&cache_entry, Some(&filename.name), None)
+                    .map_err(ErrorKind::Io)?,
+            ),
+            Connectivity::Offline => CacheControl::AllowStale,
+        };
+
+        // Acquire an advisory lock, to guard against concurrent writes.
+        #[cfg(windows)]
+        let _lock = {
+            let lock_entry = cache_entry.with_file(format!("{}.lock", filename.stem()));
+            lock_entry.lock().await.map_err(ErrorKind::CacheLock)?
+        };
+
+        let response_callback = async |response: Response, _: &mut RetryState| {
+            let bytes = response.bytes().await.map_err(|err| {
+                ErrorKind::from_reqwest(url.clone(), err, self.client.certificate_source())
+            })?;
+
+            // Verify the downloaded bytes before parsing or caching the metadata.
+            if let Some(hashes) = hashes {
                 for expected in hashes.iter() {
                     let mut hasher = Hasher::from(expected.algorithm());
                     hasher.update(&bytes);
@@ -1131,41 +1194,37 @@ impl RegistryClient {
                         }));
                     }
                 }
+            }
 
-                info_span!("parse_metadata21")
-                    .in_scope(|| ResolutionMetadata::parse_metadata(bytes.as_ref()))
-                    .map_err(|err| {
-                        Error::from(ErrorKind::MetadataParseError(
-                            filename.clone(),
-                            url.to_string(),
-                            Box::new(err),
-                        ))
-                    })
-            };
-            let req = self
-                .uncached_client(&url)
-                .get(Url::from(url.clone()))
-                .build()
+            let metadata = info_span!("parse_metadata21")
+                .in_scope(|| ResolutionMetadata::parse_metadata(bytes.as_ref()))
                 .map_err(|err| {
-                    ErrorKind::from_reqwest(url.clone(), err, self.client.certificate_source())
+                    Error::from(ErrorKind::MetadataParseError(
+                        filename.clone(),
+                        url.to_string(),
+                        Box::new(err),
+                    ))
                 })?;
-            Ok(self
-                .cached_client()
-                .get_serde_with_retry(req, &cache_entry, cache_control, response_callback)
-                .await?)
-        } else {
-            // If we lack PEP 658 support, try using HTTP range requests to read only the
-            // `.dist-info/METADATA` file from the zip, and if that also fails, download the whole wheel
-            // into the cache and read from there
-            self.wheel_metadata_no_pep658(
-                filename,
-                url,
-                Some(index),
-                WheelCache::Index(index),
-                capabilities,
-            )
-            .await
+            if unadvertised {
+                validate_sidecar_metadata(filename, &metadata)?;
+            }
+            Ok::<_, Error>(metadata)
+        };
+        let req = self
+            .uncached_client(&url)
+            .get(Url::from(url.clone()))
+            .build()
+            .map_err(|err| {
+                ErrorKind::from_reqwest(url.clone(), err, self.client.certificate_source())
+            })?;
+        let metadata = self
+            .cached_client()
+            .get_serde_with_retry(req, &cache_entry, cache_control, response_callback)
+            .await?;
+        if unadvertised {
+            validate_sidecar_metadata(filename, &metadata)?;
         }
+        Ok(metadata)
     }
 
     /// Get the wheel metadata if it isn't available in an index through PEP 658
@@ -1353,6 +1412,45 @@ impl RegistryClient {
     }
 }
 
+/// An optional sidecar can be absent or unusable without making the wheel unusable.
+/// Authentication, policy, transport, and server errors are not optional.
+fn optional_metadata_unavailable(error: &Error) -> bool {
+    match error.kind() {
+        ErrorKind::WrappedReqwestError(_, error) => matches!(
+            error.status(),
+            Some(StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED)
+        ),
+        ErrorKind::MetadataParseError(..)
+        | ErrorKind::Offline(_)
+        | ErrorKind::NameMismatch { .. }
+        | ErrorKind::VersionMismatch { .. } => true,
+        _ => false,
+    }
+}
+
+fn validate_sidecar_metadata(
+    filename: &WheelFilename,
+    metadata: &ResolutionMetadata,
+) -> Result<(), Error> {
+    if metadata.name != filename.name {
+        return Err(ErrorKind::NameMismatch {
+            given: filename.name.clone(),
+            metadata: metadata.name.clone(),
+        }
+        .into());
+    }
+    if metadata.version != filename.version
+        && metadata.version != filename.version.clone().without_local()
+    {
+        return Err(ErrorKind::VersionMismatch {
+            given: filename.version.clone(),
+            metadata: metadata.version.clone(),
+        }
+        .into());
+    }
+    Ok(())
+}
+
 #[derive(Debug)]
 enum SimpleMetadataSearchOutcome {
     /// Simple metadata was found
@@ -1424,6 +1522,14 @@ impl VersionFiles {
 /// Filenames recoverable from the URL and false `yanked` markers are omitted, while optional
 /// scalar values use presence bits. Converting back to [`File`] restores equivalent Simple API
 /// metadata.
+#[derive(Debug, Clone, Copy, rkyv::Archive, rkyv::Deserialize, rkyv::Serialize)]
+#[rkyv(derive(Debug))]
+enum CachedDistInfoMetadata {
+    Unavailable,
+    Available,
+    Unadvertised,
+}
+
 #[derive(Debug, rkyv::Archive, rkyv::Deserialize, rkyv::Serialize)]
 #[rkyv(derive(Debug))]
 pub struct CachedFile {
@@ -1438,7 +1544,7 @@ pub struct CachedFile {
     yanked: Option<Box<Yanked>>,
     #[rkyv(with = rkyv::with::Niche)]
     metadata_hashes: Option<Box<CachedHashDigests>>,
-    dist_info_metadata: bool,
+    dist_info_metadata: CachedDistInfoMetadata,
     has_size: bool,
     has_upload_time: bool,
 }
@@ -1471,12 +1577,14 @@ impl From<File> for CachedFile {
             (file.url.raw_filename() != file.filename.as_ref()).then(|| Box::new(file.filename));
         let has_size = file.size.is_some();
         let has_upload_time = file.upload_time_utc_ms.is_some();
-        let dist_info_metadata = file.dist_info_metadata.is_some();
-        let metadata_hashes = file
-            .dist_info_metadata
-            .filter(|hashes| !hashes.is_empty())
-            .map(CachedHashDigests::from)
-            .map(Box::new);
+        let (dist_info_metadata, metadata_hashes) = match file.dist_info_metadata {
+            DistInfoMetadata::Unavailable => (CachedDistInfoMetadata::Unavailable, None),
+            DistInfoMetadata::Available(hashes) => (
+                CachedDistInfoMetadata::Available,
+                (!hashes.is_empty()).then(|| Box::new(CachedHashDigests::from(hashes))),
+            ),
+            DistInfoMetadata::Unadvertised => (CachedDistInfoMetadata::Unadvertised, None),
+        };
         Self {
             dist_info_metadata,
             metadata_hashes,
@@ -1496,10 +1604,14 @@ impl From<File> for CachedFile {
 impl From<CachedFile> for File {
     fn from(file: CachedFile) -> Self {
         let filename = SmallString::from(file.filename());
-        let dist_info_metadata = file.dist_info_metadata.then(|| {
-            file.metadata_hashes
-                .map_or_else(HashDigests::empty, |hashes| HashDigests::from(*hashes))
-        });
+        let dist_info_metadata = match file.dist_info_metadata {
+            CachedDistInfoMetadata::Unavailable => DistInfoMetadata::Unavailable,
+            CachedDistInfoMetadata::Available => DistInfoMetadata::Available(
+                file.metadata_hashes
+                    .map_or_else(HashDigests::empty, |hashes| HashDigests::from(*hashes)),
+            ),
+            CachedDistInfoMetadata::Unadvertised => DistInfoMetadata::Unadvertised,
+        };
         Self {
             dist_info_metadata,
             filename,
@@ -1694,6 +1806,7 @@ impl SimpleDetailMetadata {
         package_name: &PackageName,
         project_status: ProjectStatus,
         base: &Url,
+        metadata_origin: Option<&DisplaySafeUrl>,
     ) -> Self {
         let mut version_map: BTreeMap<Version, VersionFiles> = BTreeMap::default();
 
@@ -1713,7 +1826,9 @@ impl SimpleDetailMetadata {
                         continue;
                     }
                 };
-            let file = match File::try_from_pypi(file, &base) {
+            let unadvertised_metadata =
+                file.core_metadata.is_none() && matches!(filename, DistFilename::WheelFilename(_));
+            let mut file = match File::try_from_pypi(file, &base) {
                 Ok(file) => file,
                 Err(err) => {
                     // Ignore files with unparsable version specifiers.
@@ -1721,6 +1836,15 @@ impl SimpleDetailMetadata {
                     continue;
                 }
             };
+            if unadvertised_metadata
+                && let Some(origin) = metadata_origin
+                && file
+                    .url
+                    .to_url()
+                    .is_ok_and(|url| url.origin() == origin.origin())
+            {
+                file.dist_info_metadata = DistInfoMetadata::Unadvertised;
+            }
             match version_map.entry(filename.version().clone()) {
                 std::collections::btree_map::Entry::Occupied(mut entry) => {
                     entry.get_mut().push(&filename, file);
@@ -1761,6 +1885,7 @@ impl SimpleDetailMetadata {
         text: &str,
         package_name: &PackageName,
         url: &DisplaySafeUrl,
+        metadata_origin: Option<&DisplaySafeUrl>,
     ) -> Result<Self, Error> {
         let SimpleDetailHTML {
             project_status,
@@ -1774,6 +1899,7 @@ impl SimpleDetailMetadata {
             package_name,
             project_status,
             base.as_url(),
+            metadata_origin,
         ))
     }
 }
@@ -1878,8 +2004,8 @@ mod tests {
     };
     use uv_cache::Cache;
     use uv_distribution_types::{
-        FileLocation, Index, IndexCapabilities, IndexFormat, IndexLocations, IndexMetadataRef,
-        IndexUrl, ToUrlError,
+        DistInfoMetadata, FileLocation, Index, IndexCapabilities, IndexFormat, IndexLocations,
+        IndexMetadataRef, IndexUrl, ToUrlError,
     };
     use uv_small_str::SmallString;
     use wiremock::matchers::{basic_auth, method, path_regex};
@@ -2213,6 +2339,7 @@ mod tests {
             &PackageName::from_str("pyflyby").unwrap(),
             data.project_status,
             &base,
+            None,
         );
         let versions: Vec<String> = simple_metadata
             .iter()
@@ -2250,6 +2377,7 @@ mod tests {
             &package_name,
             data.project_status,
             &base,
+            None,
         );
         let archived = super::OwnedArchive::from_unarchived(&simple_metadata)?;
         let simple_metadata = super::OwnedArchive::deserialize(&archived);
@@ -2267,13 +2395,13 @@ mod tests {
             filenames,
             ["example_1-1.0.0.tar.gz", "example_1-1.0.0-py3-none-any.whl"]
         );
-        assert!(files[0].1.dist_info_metadata.is_none());
+        assert_eq!(files[0].1.dist_info_metadata, DistInfoMetadata::Unavailable);
         let metadata_hashes = HashDigests::from(HashDigest::from_str(
             "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
         )?);
         assert_eq!(
-            files[1].1.dist_info_metadata.as_ref(),
-            Some(&metadata_hashes)
+            files[1].1.dist_info_metadata,
+            DistInfoMetadata::Available(metadata_hashes)
         );
 
         Ok(())
@@ -2323,6 +2451,7 @@ mod tests {
             &PackageName::from_str("pepy").unwrap(),
             data.project_status,
             &base,
+            None,
         );
 
         insta::assert_debug_snapshot!(simple_metadata, @r#"
@@ -2361,7 +2490,7 @@ mod tests {
                                 filename: None,
                                 yanked: None,
                                 metadata_hashes: None,
-                                dist_info_metadata: false,
+                                dist_info_metadata: Unavailable,
                                 has_size: true,
                                 has_upload_time: true,
                             },
@@ -2394,9 +2523,13 @@ mod tests {
         "#;
 
         let base = DisplaySafeUrl::parse("https://pypi.org/simple/pepy/").unwrap();
-        let simple_metadata =
-            SimpleDetailMetadata::from_html(html, &PackageName::from_str("pepy").unwrap(), &base)
-                .unwrap();
+        let simple_metadata = SimpleDetailMetadata::from_html(
+            html,
+            &PackageName::from_str("pepy").unwrap(),
+            &base,
+            None,
+        )
+        .unwrap();
         insta::assert_debug_snapshot!(simple_metadata, @r#"
         SimpleDetailMetadata {
             project_status: ProjectStatus {
@@ -2433,7 +2566,7 @@ mod tests {
                                 filename: None,
                                 yanked: None,
                                 metadata_hashes: None,
-                                dist_info_metadata: false,
+                                dist_info_metadata: Unavailable,
                                 has_size: false,
                                 has_upload_time: false,
                             },
