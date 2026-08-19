@@ -148,6 +148,7 @@ insta = { workspace = true }
 predicates = { workspace = true }
 regex = { workspace = true }
 ring = { workspace = true }
+rmp-serde = { workspace = true }
 reqwest = { workspace = true, features = ["blocking"], default-features = false }
 sha2 = { workspace = true }
 tempfile = { workspace = true }

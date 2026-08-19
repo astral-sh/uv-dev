@@ -765,7 +765,7 @@ pub(crate) async fn install(
             let tags = resolution_tags(None, python_platform.as_ref(), environment.interpreter())?;
             let hash_strategy =
                 HashStrategy::from_resolution(&resolution, HashCheckingMode::Verify)?;
-            let plan = Planner::new(&resolution).build(
+            let plan = Planner::new(&resolution, client_builder.has_checksum_authority()).build(
                 site_packages,
                 InstallationStrategy::Permissive,
                 &settings.reinstall,

@@ -392,7 +392,7 @@ impl BuildContext for BuildDispatch<'_> {
             remote,
             reinstalls,
             extraneous: _,
-        } = Planner::new(resolution).build(
+        } = Planner::new(resolution, self.client.has_checksum_authority()).build(
             site_packages,
             InstallationStrategy::Permissive,
             &Reinstall::default(),

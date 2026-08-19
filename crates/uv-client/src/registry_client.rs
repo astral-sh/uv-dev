@@ -16,7 +16,9 @@ use url::Url;
 
 use uv_auth::{CredentialsCache, Indexes};
 use uv_cache::{Cache, CacheBucket, CacheEntry, WheelCache};
-use uv_checksum_authority::{ArtifactId, ChecksumAuthority, Error as ChecksumAuthorityError};
+use uv_checksum_authority::{
+    ArtifactId, ChecksumAuthority, Error as ChecksumAuthorityError, VerifiedRecord,
+};
 use uv_configuration::IndexStrategy;
 use uv_configuration::KeyringProviderType;
 use uv_distribution_filename::{DistFilename, WheelFilename};
@@ -184,9 +186,6 @@ impl<'a> RegistryClientBuilder<'a> {
             .base_client_builder
             .checksum_authority_config()
             .cloned();
-        if checksum_authority.is_some() && !self.cache.is_temporary() {
-            return Err(ClientBuildError::ChecksumAuthorityCache);
-        }
 
         // Wrap in any relevant middleware and handle connectivity.
         let builder = self
@@ -278,20 +277,24 @@ impl RegistryClient {
         self.checksum_authority.is_some()
     }
 
-    /// Authenticate a complete archive response before allowing extraction or metadata parsing.
-    pub async fn verify_archive_response(
+    pub fn checksum_authority(&self) -> Option<&ChecksumAuthority> {
+        self.checksum_authority.as_ref()
+    }
+
+    /// Retrieve the independently authenticated record for an archive, if configured.
+    pub async fn checksum_authority_record(
         &self,
-        response: Response,
         source: &DisplaySafeUrl,
         filename: &str,
-    ) -> Result<Response, ChecksumAuthorityError> {
+    ) -> Result<Option<VerifiedRecord>, ChecksumAuthorityError> {
         let Some(authority) = &self.checksum_authority else {
-            return Ok(response);
+            return Ok(None);
         };
+        if self.connectivity == Connectivity::Offline {
+            return Err(ChecksumAuthorityError::Offline);
+        }
         let artifact = ArtifactId::new(source, filename)?;
-        authority
-            .verify_response(response, &artifact, self.cache.root())
-            .await
+        authority.lookup(&artifact).await.map(Some)
     }
 
     /// Return the [`CachedClient`] used by this client.
@@ -1821,7 +1824,6 @@ mod tests {
 
     use tokio::sync::Semaphore;
     use url::Url;
-    use uv_checksum_authority::ChecksumAuthority;
     use uv_normalize::PackageName;
     use uv_pypi_types::{HashDigests, PypiSimpleDetail};
     use uv_redacted::DisplaySafeUrl;
@@ -1841,24 +1843,6 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     type Error = Box<dyn std::error::Error>;
-
-    #[test]
-    fn checksum_authority_requires_temporary_cache() -> Result<(), Error> {
-        let authority = ChecksumAuthority::new(
-            Url::parse("https://checksums.example.com")?,
-            "00".repeat(32).parse()?,
-        )?;
-        let directory = tempfile::tempdir()?;
-        let builder = BaseClientBuilder::default().checksum_authority(Some(authority));
-        insta::assert_snapshot!(
-            RegistryClientBuilder::new(builder.clone(), Cache::from_path(directory.path()))
-                .build()
-                .expect_err("persistent cache must be rejected"),
-            @"checksum authority requires a temporary cache"
-        );
-        RegistryClientBuilder::new(builder, Cache::temp()?).build()?;
-        Ok(())
-    }
 
     async fn start_test_server(username: &'static str, password: &'static str) -> MockServer {
         let server = MockServer::start().await;

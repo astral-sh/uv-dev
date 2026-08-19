@@ -66,8 +66,6 @@ pub const DEFAULT_READ_TIMEOUT_UPLOAD: Duration = Duration::from_mins(15);
 
 #[derive(Debug, Error)]
 pub enum ClientBuildError {
-    #[error("checksum authority requires a temporary cache")]
-    ChecksumAuthorityCache,
     #[error("failed to build HTTP client")]
     Reqwest(#[from] reqwest::Error),
     #[error(transparent)]
@@ -243,6 +241,11 @@ impl<'a> BaseClientBuilder<'a> {
     pub fn checksum_authority(mut self, authority: Option<ChecksumAuthority>) -> Self {
         self.checksum_authority = authority;
         self
+    }
+
+    /// Whether remote archives require independent checksum verification.
+    pub fn has_checksum_authority(&self) -> bool {
+        self.checksum_authority.is_some()
     }
 
     pub(crate) fn checksum_authority_config(&self) -> Option<&ChecksumAuthority> {

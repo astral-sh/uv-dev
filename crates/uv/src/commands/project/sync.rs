@@ -815,6 +815,7 @@ pub(crate) async fn do_sync<'a>(
     let site_packages = SitePackages::from_environment(venv)?;
     let installation_plan = operations::InstallationPlan::build(
         &resolution,
+        client_builder.has_checksum_authority(),
         site_packages,
         InstallationStrategy::Strict,
         reinstall,

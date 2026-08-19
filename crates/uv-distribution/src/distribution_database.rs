@@ -41,7 +41,7 @@ use uv_types::{BuildContext, BuildStack};
 use crate::archive::Archive;
 use crate::error::PythonVersion;
 use crate::extracted_wheel::{ExtractedWheel, HashedWheel, WheelExtractor};
-use crate::hash::http_hash_algorithms;
+use crate::hash::{http_hash_algorithms, matches_authority, sha256_file};
 use crate::metadata::{ArchiveMetadata, Metadata};
 use crate::source::SourceDistributionBuilder;
 use crate::{Error, LocalWheel, Reporter, RequiresDist};
@@ -458,11 +458,23 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         tags: &Tags,
         hashes: HashPolicy<'_>,
     ) -> Result<LocalWheel, Error> {
-        let built_wheel = self
+        let mut built_wheel = self
             .builder
             .download_and_build(&BuildableSource::Dist(dist), tags, hashes, &self.client)
             .boxed_local()
             .await?;
+
+        // A rebuilt wheel can have different bytes at the same source revision and filename.
+        // Keep its unpacked cache entry tied to the exact output covered by the build receipt.
+        if self.client.unmanaged.has_checksum_authority() {
+            let digest = sha256_file(&built_wheel.path)
+                .await
+                .map_err(Error::CacheRead)?;
+            built_wheel.target = built_wheel
+                .target
+                .with_file_name(format!("{}-{digest}", built_wheel.filename.stem()))
+                .into_boxed_path();
+        }
 
         // Check that the wheel is compatible with its install target.
         //
@@ -687,7 +699,11 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         dist: &BuiltDist,
         hashes: HashPolicy<'_>,
     ) -> Result<Archive, Error> {
-        let authority_source = index.map_or(&url, IndexUrl::url).clone();
+        let authority = self
+            .client
+            .unmanaged
+            .checksum_authority_record(index.map_or(&url, IndexUrl::url), &filename.to_string())
+            .await?;
         let expected_size = match dist {
             BuiltDist::Registry(dist) if dist.best_wheel().size_is_authoritative => size,
             BuiltDist::DirectUrl(_) => size,
@@ -702,11 +718,13 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
 
         let download = |response: reqwest::Response| {
             async {
-                let response = self
-                    .client
-                    .unmanaged
-                    .verify_archive_response(response, &authority_source, &filename.to_string())
-                    .await?;
+                let response = if let Some(authority) = &authority {
+                    authority
+                        .verify_response(response, self.build_context.cache().root())
+                        .await?
+                } else {
+                    response
+                };
                 let progress_size = size.or_else(|| content_length(&response));
 
                 let progress = self.reporter.as_ref().map(|reporter| {
@@ -834,6 +852,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         // If the archive is missing the required hashes or size, or has since been removed, force a refresh.
         let archive = Some(archive)
             .filter(|archive| archive.has_digests(hashes))
+            .filter(|archive| matches_authority(authority.as_ref(), archive.hashes(), archive.size))
             .filter(|archive| archive.exists(self.build_context.cache()))
             .filter(|archive| expected_size.is_none() || archive.size.is_some());
 
@@ -873,7 +892,11 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         dist: &BuiltDist,
         hashes: HashPolicy<'_>,
     ) -> Result<Archive, Error> {
-        let authority_source = index.map_or(&url, IndexUrl::url).clone();
+        let authority = self
+            .client
+            .unmanaged
+            .checksum_authority_record(index.map_or(&url, IndexUrl::url), &filename.to_string())
+            .await?;
         let expected_size = match dist {
             BuiltDist::Registry(dist) if dist.best_wheel().size_is_authoritative => size,
             BuiltDist::DirectUrl(_) => size,
@@ -890,11 +913,13 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
 
         let download = |response: reqwest::Response| {
             async {
-                let response = self
-                    .client
-                    .unmanaged
-                    .verify_archive_response(response, &authority_source, &filename.to_string())
-                    .await?;
+                let response = if let Some(authority) = &authority {
+                    authority
+                        .verify_response(response, self.build_context.cache().root())
+                        .await?
+                } else {
+                    response
+                };
                 let progress_size = size.or_else(|| content_length(&response));
 
                 let progress = self.reporter.as_ref().map(|reporter| {
@@ -1040,6 +1065,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         // If the archive is missing the required hashes or size, or has since been removed, force a refresh.
         let archive = Some(archive)
             .filter(|archive| archive.has_digests(hashes))
+            .filter(|archive| matches_authority(authority.as_ref(), archive.hashes(), archive.size))
             .filter(|archive| archive.exists(self.build_context.cache()))
             .filter(|archive| expected_size.is_none() || archive.size.is_some());
 
