@@ -15,7 +15,8 @@ use uv_cache::Cache;
 use uv_client::{BaseClientBuilder, FlatIndexClient, RegistryClientBuilder};
 use uv_configuration::{
     BuildIsolation, BuildOptions, Concurrency, Constraints, ExcludeDependency, ExtrasSpecification,
-    IndexStrategy, NoBinary, NoBuild, NoSources, Override, PipCompileFormat, Reinstall, Upgrade,
+    HashCheckingMode, IndexStrategy, NoBinary, NoBuild, NoSources, Override, PipCompileFormat,
+    Reinstall, Upgrade,
 };
 use uv_configuration::{KeyringProviderType, TargetTriple};
 use uv_dispatch::{BuildDispatch, SharedState};
@@ -70,7 +71,7 @@ pub(crate) async fn pip_compile(
     constraints_from_workspace: Vec<Requirement>,
     overrides_from_workspace: Vec<Override<Requirement>>,
     excludes_from_workspace: Vec<ExcludeDependency>,
-    build_constraints_from_workspace: Vec<Requirement>,
+    build_constraints_from_workspace: Vec<NameRequirementSpecification>,
     environments: SupportedEnvironments,
     required_environments: SupportedEnvironments,
     extras: ExtrasSpecification,
@@ -256,11 +257,7 @@ pub(crate) async fn pip_compile(
         operations::read_constraints(build_constraints, &client_builder)
             .await?
             .into_iter()
-            .chain(
-                build_constraints_from_workspace
-                    .into_iter()
-                    .map(NameRequirementSpecification::from),
-            )
+            .chain(build_constraints_from_workspace)
             .collect();
 
     // If all the metadata could be statically resolved, validate that every extra was used. If we
@@ -507,8 +504,15 @@ pub(crate) async fn pip_compile(
         }
     };
 
-    // Don't enforce hashes in `pip compile`.
-    let build_hashes = HashStrategy::default();
+    // Verify any explicitly provided build-constraint hashes independently of output generation.
+    let build_hashes = HashStrategy::from_requirements(
+        std::iter::empty(),
+        build_constraints
+            .iter()
+            .map(|entry| (&entry.requirement, entry.hashes.as_slice())),
+        Some(&interpreter.to_resolver_marker_environment()),
+        HashCheckingMode::Verify,
+    )?;
     let build_constraints = Constraints::from_requirements(
         build_constraints
             .iter()

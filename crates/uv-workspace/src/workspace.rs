@@ -873,7 +873,7 @@ impl Workspace {
     }
 
     /// Returns the set of build constraints for the workspace.
-    pub fn build_constraints(&self) -> Vec<uv_pep508::Requirement<VerbatimParsedUrl>> {
+    pub fn build_constraints(&self) -> Vec<crate::pyproject::BuildConstraintDependency> {
         let Some(build_constraints) = self
             .pyproject_toml
             .tool
@@ -2588,6 +2588,7 @@ mod tests {
                       "exclude-dependencies": null,
                       "constraint-dependencies": null,
                       "build-constraint-dependencies": null,
+                      "require-build-hashes": null,
                       "environments": null,
                       "required-environments": null,
                       "conflicts": null,
@@ -2689,6 +2690,7 @@ mod tests {
                       "exclude-dependencies": null,
                       "constraint-dependencies": null,
                       "build-constraint-dependencies": null,
+                      "require-build-hashes": null,
                       "environments": null,
                       "required-environments": null,
                       "conflicts": null,
@@ -3024,6 +3026,7 @@ mod tests {
                       "exclude-dependencies": null,
                       "constraint-dependencies": null,
                       "build-constraint-dependencies": null,
+                      "require-build-hashes": null,
                       "environments": null,
                       "required-environments": null,
                       "conflicts": null,
@@ -3134,6 +3137,7 @@ mod tests {
                       "exclude-dependencies": null,
                       "constraint-dependencies": null,
                       "build-constraint-dependencies": null,
+                      "require-build-hashes": null,
                       "environments": null,
                       "required-environments": null,
                       "conflicts": null,
@@ -3257,6 +3261,7 @@ mod tests {
                       "exclude-dependencies": null,
                       "constraint-dependencies": null,
                       "build-constraint-dependencies": null,
+                      "require-build-hashes": null,
                       "environments": null,
                       "required-environments": null,
                       "conflicts": null,
@@ -3354,6 +3359,7 @@ mod tests {
                       "exclude-dependencies": null,
                       "constraint-dependencies": null,
                       "build-constraint-dependencies": null,
+                      "require-build-hashes": null,
                       "environments": null,
                       "required-environments": null,
                       "conflicts": null,

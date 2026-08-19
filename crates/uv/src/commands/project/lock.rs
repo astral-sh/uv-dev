@@ -13,7 +13,7 @@ use uv_cache::{Cache, Refresh};
 use uv_client::{BaseClientBuilder, FlatIndexClient, RegistryClientBuilder};
 use uv_configuration::{
     Concurrency, Constraints, DependencyGroupsWithDefaults, DryRun, ExcludeDependency,
-    ExtrasSpecification, Override, PackageOverride, Reinstall, Upgrade,
+    ExtrasSpecification, HashCheckingMode, Override, PackageOverride, Reinstall, Upgrade,
 };
 use uv_dispatch::BuildDispatch;
 use uv_distribution::{DistributionDatabase, LoweredExtraBuildDependencies};
@@ -87,6 +87,7 @@ impl LockResult {
 /// Resolve the project requirements into a lockfile.
 pub(crate) async fn lock(
     project_dir: &Path,
+    require_build_hashes: Option<bool>,
     lock_check: LockCheck,
     frozen: Option<FrozenSource>,
     dry_run: DryRun,
@@ -219,6 +220,7 @@ pub(crate) async fn lock(
             printer,
             preview,
         )
+        .with_require_build_hashes(require_build_hashes)
         .with_refresh(&refresh)
         .with_lockfile_contents_check(
             matches!(&refresh, Refresh::All(..))
@@ -301,6 +303,7 @@ pub(crate) enum LockMode<'env> {
 /// A lock operation.
 pub(crate) struct LockOperation<'env> {
     mode: LockMode<'env>,
+    require_build_hashes: Option<bool>,
     constraints: Vec<NameRequirementSpecification>,
     refresh: Option<&'env Refresh>,
     check_lockfile_contents: bool,
@@ -331,6 +334,7 @@ impl<'env> LockOperation<'env> {
     ) -> Self {
         Self {
             mode,
+            require_build_hashes: None,
             constraints: vec![],
             refresh: None,
             check_lockfile_contents: false,
@@ -344,6 +348,13 @@ impl<'env> LockOperation<'env> {
             printer,
             preview,
         }
+    }
+
+    /// Override the project build hash policy for this lock operation.
+    #[must_use]
+    pub(crate) fn with_require_build_hashes(mut self, require_build_hashes: Option<bool>) -> Self {
+        self.require_build_hashes = require_build_hashes;
+        self
     }
 
     /// Set the external constraints for the [`LockOperation`].
@@ -427,6 +438,7 @@ impl<'env> LockOperation<'env> {
                     Some(existing),
                     check_lockfile_contents,
                     self.constraints,
+                    self.require_build_hashes,
                     self.refresh,
                     self.settings,
                     self.client_builder,
@@ -480,6 +492,7 @@ impl<'env> LockOperation<'env> {
                     existing,
                     check_lockfile_contents,
                     self.constraints,
+                    self.require_build_hashes,
                     self.refresh,
                     self.settings,
                     self.client_builder,
@@ -513,6 +526,7 @@ async fn do_lock(
     existing_lock: Option<Lock>,
     check_lockfile_contents: Option<String>,
     external: Vec<NameRequirementSpecification>,
+    require_build_hashes: Option<bool>,
     refresh: Option<&Refresh>,
     settings: &ResolverSettings,
     client_builder: &BaseClientBuilder<'_>,
@@ -559,6 +573,7 @@ async fn do_lock(
     let excludes = target.exclude_dependencies();
     let constraints = target.constraints();
     let build_constraints = target.build_constraints();
+    let require_build_hashes = target.require_build_hashes(require_build_hashes);
     let dependency_groups = target.dependency_groups()?;
     let source_trees = vec![];
 
@@ -623,16 +638,27 @@ async fn do_lock(
             client_builder.credentials_cache(),
         )
         .await?;
-    let build_constraints = target
-        .lower(
-            build_constraints,
-            index_locations,
-            sources,
-            cache,
-            workspace_cache,
-            client_builder.credentials_cache(),
-        )
-        .await?;
+    let mut lowered_build_constraints = Vec::new();
+    for build_constraint in build_constraints {
+        let (requirement, hashes) = build_constraint.into_parts();
+        let requirements = target
+            .lower(
+                vec![requirement],
+                index_locations,
+                sources,
+                cache,
+                workspace_cache,
+                client_builder.credentials_cache(),
+            )
+            .await?;
+        lowered_build_constraints.extend(requirements.into_iter().map(|requirement| {
+            NameRequirementSpecification {
+                requirement,
+                hashes: hashes.clone(),
+            }
+        }));
+    }
+    let build_constraints = lowered_build_constraints;
     let mut lowered_dependency_groups = BTreeMap::new();
     for (name, group) in dependency_groups {
         let requirements = target
@@ -837,9 +863,18 @@ async fn do_lock(
         .build();
     let hasher = HashStrategy::generate(HashGeneration::Url);
 
-    // TODO(charlie): These are all default values. We should consider whether we want to make them
-    // optional on the downstream APIs.
-    let build_hasher = HashStrategy::default();
+    let build_hasher = HashStrategy::from_requirements(
+        std::iter::empty(),
+        build_constraints
+            .iter()
+            .map(|constraint| (&constraint.requirement, constraint.hashes.as_slice())),
+        Some(&interpreter.to_resolver_marker_environment()),
+        if require_build_hashes {
+            HashCheckingMode::Require
+        } else {
+            HashCheckingMode::Verify
+        },
+    )?;
     let extras = ExtrasSpecification::default();
     let groups = BTreeMap::new();
 
@@ -881,7 +916,11 @@ async fn do_lock(
     .into_inner();
 
     // Convert to the `Constraints` format.
-    let dispatch_constraints = Constraints::from_requirements(build_constraints.iter().cloned());
+    let dispatch_constraints = Constraints::from_requirements(
+        build_constraints
+            .iter()
+            .map(|constraint| constraint.requirement.clone()),
+    );
 
     // Create a build dispatch.
     let build_dispatch = BuildDispatch::new(
@@ -1164,7 +1203,7 @@ impl ValidatedLock {
         constraints: &[Requirement],
         overrides: &[Override<Requirement>],
         excludes: &[ExcludeDependency],
-        build_constraints: &[Requirement],
+        build_constraints: &[NameRequirementSpecification],
         conflicts: &Conflicts,
         environments: Option<&SupportedEnvironments>,
         required_environments: Option<&SupportedEnvironments>,

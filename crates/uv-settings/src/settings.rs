@@ -157,7 +157,21 @@ pub struct Options {
     pub constraint_dependencies: Option<Vec<Requirement<VerbatimParsedUrl>>>,
 
     #[cfg_attr(feature = "schemars", schemars(skip))]
-    pub build_constraint_dependencies: Option<Vec<Requirement<VerbatimParsedUrl>>>,
+    pub build_constraint_dependencies:
+        Option<Vec<uv_workspace::pyproject::BuildConstraintDependency>>,
+
+    /// Require hashes for every dependency installed into an isolated build environment during
+    /// project resolution and installation.
+    ///
+    /// Only the `pyproject.toml` at the workspace root is read. Declarations in workspace members
+    /// and `uv.toml` files are ignored. Use `--require-build-hashes` to override this setting for
+    /// `uv lock` or `uv sync`.
+    #[option(
+        default = "false",
+        value_type = "bool",
+        example = "require-build-hashes = true"
+    )]
+    pub require_build_hashes: Option<bool>,
 
     #[cfg_attr(feature = "schemars", schemars(skip))]
     pub environments: Option<SupportedEnvironments>,
@@ -2635,7 +2649,8 @@ struct OptionsWire {
     override_dependencies: Option<Vec<OverrideDependency>>,
     exclude_dependencies: Option<Vec<ExcludeDependency>>,
     constraint_dependencies: Option<Vec<Requirement<VerbatimParsedUrl>>>,
-    build_constraint_dependencies: Option<Vec<Requirement<VerbatimParsedUrl>>>,
+    build_constraint_dependencies: Option<Vec<uv_workspace::pyproject::BuildConstraintDependency>>,
+    require_build_hashes: Option<bool>,
     environments: Option<SupportedEnvironments>,
     required_environments: Option<SupportedEnvironments>,
 
@@ -2719,6 +2734,7 @@ impl TryFrom<OptionsWire> for Options {
             exclude_dependencies,
             constraint_dependencies,
             build_constraint_dependencies,
+            require_build_hashes,
             environments,
             required_environments,
             conflicts,
@@ -2801,6 +2817,7 @@ impl TryFrom<OptionsWire> for Options {
             exclude_dependencies,
             constraint_dependencies,
             build_constraint_dependencies,
+            require_build_hashes,
             environments,
             required_environments,
             install_mirrors: PythonInstallMirrors {

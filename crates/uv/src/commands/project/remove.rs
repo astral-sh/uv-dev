@@ -368,6 +368,7 @@ pub(crate) async fn remove(
 
     match project::sync::do_sync(
         target,
+        None,
         venv,
         &extras,
         &groups,

@@ -24,7 +24,7 @@ use uv_distribution_filename::{
 };
 use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, ExtraBuildVariables, Index, IndexLocations,
-    PackageConfigSettings, Requirement, SourceDist,
+    NameRequirementSpecification, PackageConfigSettings, SourceDist,
 };
 use uv_errors::{ErrorOptions, Hint, Hints, write_error_chain_with_options};
 use uv_fs::{Simplified, normalize_path, relative_to};
@@ -202,7 +202,7 @@ pub(crate) async fn build_frontend(
     force_pep517: bool,
     clear: bool,
     build_constraints: Vec<RequirementsSource>,
-    build_constraints_from_workspace: Vec<Requirement>,
+    build_constraints_from_workspace: Vec<NameRequirementSpecification>,
     hash_checking: Option<HashCheckingMode>,
     python: Option<String>,
     install_mirrors: PythonInstallMirrors,
@@ -280,7 +280,7 @@ async fn build_impl(
     force_pep517: bool,
     clear: bool,
     build_constraints: &[RequirementsSource],
-    build_constraints_from_workspace: &[Requirement],
+    build_constraints_from_workspace: &[NameRequirementSpecification],
     hash_checking: Option<HashCheckingMode>,
     python_request: Option<&str>,
     install_mirrors: PythonInstallMirrors,
@@ -558,7 +558,7 @@ async fn build_package(
     force_pep517: bool,
     clear: bool,
     build_constraints: &[RequirementsSource],
-    build_constraints_from_workspace: &[Requirement],
+    build_constraints_from_workspace: &[NameRequirementSpecification],
     build_isolation: &BuildIsolation,
     extra_build_dependencies: &ExtraBuildDependencies,
     extra_build_variables: &ExtraBuildVariables,
@@ -635,8 +635,11 @@ async fn build_package(
     .into_interpreter();
 
     // Read build constraints.
-    let build_constraints =
-        operations::read_constraints(build_constraints, &client_builder).await?;
+    let build_constraints = operations::read_constraints(build_constraints, &client_builder)
+        .await?
+        .into_iter()
+        .chain(build_constraints_from_workspace.iter().cloned())
+        .collect::<Vec<_>>();
 
     // Collect the set of required hashes.
     let hasher = if let Some(hash_checking) = hash_checking {
@@ -655,8 +658,7 @@ async fn build_package(
     let build_constraints = Constraints::from_requirements(
         build_constraints
             .into_iter()
-            .map(|constraint| constraint.requirement)
-            .chain(build_constraints_from_workspace.iter().cloned()),
+            .map(|constraint| constraint.requirement),
     );
 
     // Initialize the registry client.

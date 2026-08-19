@@ -89,6 +89,35 @@ pub struct PyProjectToml {
     build_system: Option<serde::de::IgnoredAny>,
 }
 
+/// A build constraint with optional archive hashes.
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(test, derive(Serialize))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(untagged, deny_unknown_fields)]
+pub enum BuildConstraintDependency {
+    /// A PEP 508 requirement without explicit archive hashes.
+    Requirement(uv_pep508::Requirement<VerbatimParsedUrl>),
+    /// A PEP 508 requirement with explicit archive hashes.
+    Hashed {
+        requirement: uv_pep508::Requirement<VerbatimParsedUrl>,
+        #[serde(default)]
+        hashes: Vec<String>,
+    },
+}
+
+impl BuildConstraintDependency {
+    /// Split the build constraint into its requirement and explicit hashes.
+    pub fn into_parts(self) -> (uv_pep508::Requirement<VerbatimParsedUrl>, Vec<String>) {
+        match self {
+            Self::Requirement(requirement) => (requirement, Vec::new()),
+            Self::Hashed {
+                requirement,
+                hashes,
+            } => (requirement, hashes),
+        }
+    }
+}
+
 impl PyProjectToml {
     /// Parse a `PyProjectToml` from a raw TOML string.
     #[instrument("toml::from_str workspace", skip_all, fields(path = %_path.as_ref().display()))]
@@ -557,28 +586,36 @@ pub struct ToolUv {
     /// a build; instead, the package must be requested elsewhere in the project's build dependency
     /// graph.
     ///
+    /// Use a table with `requirement` and `hashes` to restrict the accepted distribution archives.
+    /// Hashes use the same `algorithm:digest` format as requirements-file hashes.
+    ///
     /// !!! note
     ///     In `uv lock`, `uv sync`, and `uv run`, uv will only read `build-constraint-dependencies` from
     ///     the `pyproject.toml` at the workspace root, and will ignore any declarations in other
     ///     workspace members or `uv.toml` files.
-    #[cfg_attr(
-        feature = "schemars",
-        schemars(
-            with = "Option<Vec<String>>",
-            description = "PEP 508-style requirements, e.g., `ruff==0.5.0`, or `ruff @ https://...`."
-        )
-    )]
     #[option(
         default = "[]",
-        value_type = "list[str]",
+        value_type = "list[str | dict]",
         example = r#"
             # Ensure that the setuptools v60.0.0 is used whenever a package has a build dependency
             # on setuptools.
             build-constraint-dependencies = ["setuptools==60.0.0"]
         "#
     )]
-    pub(crate) build_constraint_dependencies:
-        Option<Vec<uv_pep508::Requirement<VerbatimParsedUrl>>>,
+    pub(crate) build_constraint_dependencies: Option<Vec<BuildConstraintDependency>>,
+
+    /// Require hashes for every dependency installed into an isolated build environment during
+    /// project resolution and installation.
+    ///
+    /// Only the `pyproject.toml` at the workspace root is read. Declarations in workspace members
+    /// and `uv.toml` files are ignored. Use `--require-build-hashes` to override this setting for
+    /// `uv lock` or `uv sync`.
+    #[option(
+        default = "false",
+        value_type = "bool",
+        example = "require-build-hashes = true"
+    )]
+    pub require_build_hashes: Option<bool>,
 
     /// A list of supported environments against which to resolve dependencies.
     ///

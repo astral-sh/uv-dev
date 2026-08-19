@@ -10,11 +10,15 @@ use crate::{Requirement, RequirementSource, VerbatimParsedUrl};
 
 /// An [`UnresolvedRequirement`] with additional metadata from `requirements.txt`, currently only
 /// hashes but in the future also editable and similar information.
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+#[derive(
+    Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub struct NameRequirementSpecification {
     /// The actual requirement.
+    #[serde(flatten)]
     pub requirement: Requirement,
     /// Hashes of the downloadable packages.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hashes: Vec<String>,
 }
 

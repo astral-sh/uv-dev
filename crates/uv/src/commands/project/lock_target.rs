@@ -106,7 +106,9 @@ impl<'lock> LockTarget<'lock> {
     }
 
     /// Returns the set of build constraints for the [`LockTarget`].
-    pub(crate) fn build_constraints(self) -> Vec<uv_pep508::Requirement<VerbatimParsedUrl>> {
+    pub(crate) fn build_constraints(
+        self,
+    ) -> Vec<uv_workspace::pyproject::BuildConstraintDependency> {
         match self {
             Self::Workspace(workspace) => workspace.build_constraints(),
             Self::Script(script) => script
@@ -118,8 +120,23 @@ impl<'lock> LockTarget<'lock> {
                 .into_iter()
                 .flatten()
                 .cloned()
+                .map(uv_workspace::pyproject::BuildConstraintDependency::Requirement)
                 .collect(),
         }
+    }
+
+    /// Returns whether build dependencies must have explicit hashes.
+    pub(crate) fn require_build_hashes(self, override_value: Option<bool>) -> bool {
+        override_value.unwrap_or_else(|| match self {
+            Self::Workspace(workspace) => workspace
+                .pyproject_toml()
+                .tool
+                .as_ref()
+                .and_then(|tool| tool.uv.as_ref())
+                .and_then(|uv| uv.require_build_hashes)
+                .unwrap_or(false),
+            Self::Script(_) => false,
+        })
     }
 
     /// Return the dependency groups that are attached to the target directly, as opposed to being

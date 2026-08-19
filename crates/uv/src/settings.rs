@@ -42,7 +42,7 @@ use uv_configuration::{
 };
 use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, ExtraBuildVariables, Index, IndexLocations, IndexUrl,
-    PackageConfigSettings, Requirement,
+    NameRequirementSpecification, PackageConfigSettings, Requirement,
 };
 use uv_install_wheel::LinkMode;
 use uv_normalize::{ExtraName, PackageName, PipGroupName};
@@ -1830,6 +1830,7 @@ impl PythonPinSettings {
 #[expect(dead_code)]
 #[derive(Debug, Clone)]
 pub(crate) struct SyncSettings {
+    pub(super) require_build_hashes: Option<bool>,
     pub(super) lock_check: LockCheck,
     pub(super) frozen: Option<FrozenSource>,
     pub(super) dry_run: DryRun,
@@ -1859,6 +1860,8 @@ impl SyncSettings {
         environment: EnvironmentOptions,
     ) -> anyhow::Result<Self> {
         let SyncArgs {
+            require_build_hashes,
+            no_require_build_hashes,
             extra,
             all_extras,
             no_extra,
@@ -1985,6 +1988,11 @@ impl SyncSettings {
         let only_install_local = only_install_local.is_enabled();
 
         Ok(Self {
+            require_build_hashes: flag(
+                require_build_hashes,
+                no_require_build_hashes,
+                "require-build-hashes",
+            )?,
             output_format,
             lock_check: resolve_lock_check(locked),
             frozen: resolve_frozen(frozen),
@@ -2048,6 +2056,7 @@ impl SyncSettings {
 /// The resolved settings to use for a `lock` invocation.
 #[derive(Debug, Clone)]
 pub(crate) struct LockSettings {
+    pub(crate) require_build_hashes: Option<bool>,
     pub(crate) lock_check: LockCheck,
     pub(crate) frozen: Option<FrozenSource>,
     pub(crate) dry_run: DryRun,
@@ -2066,6 +2075,8 @@ impl LockSettings {
         environment: EnvironmentOptions,
     ) -> anyhow::Result<Self> {
         let LockArgs {
+            require_build_hashes,
+            no_require_build_hashes,
             check,
             locked,
             check_exists,
@@ -2096,6 +2107,11 @@ impl LockSettings {
         };
 
         Ok(Self {
+            require_build_hashes: flag(
+                require_build_hashes,
+                no_require_build_hashes,
+                "require-build-hashes",
+            )?,
             lock_check,
             frozen: resolve_frozen(frozen),
             dry_run: DryRun::from_args(dry_run),
@@ -3342,7 +3358,7 @@ pub(crate) struct PipCompileSettings {
     pub(crate) constraints_from_workspace: Vec<Requirement>,
     pub(crate) overrides_from_workspace: Vec<Override<Requirement>>,
     pub(crate) excludes_from_workspace: Vec<ExcludeDependency>,
-    pub(crate) build_constraints_from_workspace: Vec<Requirement>,
+    pub(crate) build_constraints_from_workspace: Vec<NameRequirementSpecification>,
     pub(crate) environments: SupportedEnvironments,
     pub(crate) required_environments: SupportedEnvironments,
     pub(crate) refresh: Refresh,
@@ -3442,7 +3458,13 @@ impl PipCompileSettings {
                 .unwrap_or_default()
                 .into_iter()
                 .map(|requirement| {
-                    Requirement::from(requirement.with_origin(RequirementOrigin::Workspace))
+                    let (requirement, hashes) = requirement.into_parts();
+                    NameRequirementSpecification {
+                        requirement: Requirement::from(
+                            requirement.with_origin(RequirementOrigin::Workspace),
+                        ),
+                        hashes,
+                    }
                 })
                 .collect()
         } else {
@@ -3671,7 +3693,7 @@ pub(crate) struct PipInstallSettings {
     pub(crate) constraints_from_workspace: Vec<Requirement>,
     pub(crate) overrides_from_workspace: Vec<Override<Requirement>>,
     pub(crate) excludes_from_workspace: Vec<ExcludeDependency>,
-    pub(crate) build_constraints_from_workspace: Vec<Requirement>,
+    pub(crate) build_constraints_from_workspace: Vec<NameRequirementSpecification>,
     pub(crate) modifications: Modifications,
     pub(crate) refresh: Refresh,
     pub(crate) settings: PipSettings,
@@ -3765,7 +3787,13 @@ impl PipInstallSettings {
                 .unwrap_or_default()
                 .into_iter()
                 .map(|requirement| {
-                    Requirement::from(requirement.with_origin(RequirementOrigin::Workspace))
+                    let (requirement, hashes) = requirement.into_parts();
+                    NameRequirementSpecification {
+                        requirement: Requirement::from(
+                            requirement.with_origin(RequirementOrigin::Workspace),
+                        ),
+                        hashes,
+                    }
                 })
                 .collect()
         } else {
@@ -4165,7 +4193,7 @@ pub(crate) struct BuildSettings {
     pub(crate) force_pep517: bool,
     pub(crate) clear: bool,
     pub(crate) build_constraints: Vec<PathBuf>,
-    pub(crate) build_constraints_from_workspace: Vec<Requirement>,
+    pub(crate) build_constraints_from_workspace: Vec<NameRequirementSpecification>,
     pub(crate) hash_checking: Option<HashCheckingMode>,
     pub(crate) python: Option<String>,
     pub(crate) install_mirrors: PythonInstallMirrors,
@@ -4218,7 +4246,13 @@ impl BuildSettings {
                 .unwrap_or_default()
                 .into_iter()
                 .map(|requirement| {
-                    Requirement::from(requirement.with_origin(RequirementOrigin::Workspace))
+                    let (requirement, hashes) = requirement.into_parts();
+                    NameRequirementSpecification {
+                        requirement: Requirement::from(
+                            requirement.with_origin(RequirementOrigin::Workspace),
+                        ),
+                        hashes,
+                    }
                 })
                 .collect()
         } else {
