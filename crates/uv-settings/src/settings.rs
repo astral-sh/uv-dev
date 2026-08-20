@@ -1006,18 +1006,12 @@ pub struct ResolverInstallerSchema {
     pub prerelease_package: Option<PrereleasePackage>,
     /// Control whether packages may be built from source.
     ///
-    /// `if-necessary` preserves version selection and omits registry source distributions when the
-    /// selected version has a compatible wheel. For universal resolutions, the wheels must cover
-    /// all applicable environment markers. uv may still build source distributions to obtain
-    /// metadata.
+    /// The policy also applies to build dependencies. Existing [`no-build`](#no-build) and
+    /// [`no-binary`](#no-binary) restrictions take precedence over build policies.
     ///
-    /// `disallow` uses the same restrictions as [`no-build`](#no-build): cached wheels built from
-    /// source may be reused, and editable requirements may still be built. `force` uses the same
-    /// restrictions as [`no-binary`](#no-binary): pre-built wheels may still be used to read metadata.
-    /// Existing build and binary restrictions take precedence over build policies.
+    /// See the [resolution documentation](../concepts/resolution.md#source-build-policies) for details.
     ///
-    /// Requires the `build-policy` preview feature. See the
-    /// [resolution documentation](../concepts/resolution.md#source-build-policies) for details.
+    /// This option is in preview and may change in any future release.
     #[option(
         default = "\"allow\"",
         value_type = "str",
@@ -1031,7 +1025,8 @@ pub struct ResolverInstallerSchema {
     ///
     /// Package-specific policies override the global [`build-policy`](#build-policy) setting.
     /// Accepts a dictionary mapping package names to any supported build policy.
-    /// Requires the `build-policy` preview feature.
+    ///
+    /// This option is in preview and may change in any future release.
     #[option(
         default = "{}",
         value_type = "dict",
@@ -1436,18 +1431,13 @@ impl PythonInstallMirrors {
 pub struct PipOptions {
     /// Control whether packages may be built from source.
     ///
-    /// `if-necessary` preserves version selection and omits registry source distributions when the
-    /// selected version has a compatible wheel. For universal resolutions, the wheels must cover
-    /// all applicable environment markers. uv may still build source distributions to obtain
-    /// metadata.
+    /// The policy also applies to build dependencies. Existing [`no-build`](#no-build),
+    /// [`no-binary`](#no-binary), and [`only-binary`](#only-binary) restrictions take precedence over
+    /// build policies.
     ///
-    /// `disallow` uses the same restrictions as [`no-build`](#no-build): cached wheels built from
-    /// source may be reused, and editable requirements may still be built. `force` uses the same
-    /// restrictions as [`no-binary`](#no-binary): pre-built wheels may still be used to read metadata.
-    /// Existing build and binary restrictions take precedence over build policies.
+    /// See the [resolution documentation](../concepts/resolution.md#source-build-policies) for details.
     ///
-    /// Requires the `build-policy` preview feature. See the
-    /// [resolution documentation](../concepts/resolution.md#source-build-policies) for details.
+    /// This option is in preview and may change in any future release.
     #[option(
         default = "\"allow\"",
         value_type = "str",
@@ -1461,7 +1451,8 @@ pub struct PipOptions {
     ///
     /// Package-specific policies override the global [`build-policy`](#build-policy) setting.
     /// Accepts a dictionary mapping package names to any supported build policy.
-    /// Requires the `build-policy` preview feature.
+    ///
+    /// This option is in preview and may change in any future release.
     #[option(
         default = "{}",
         value_type = "dict",
