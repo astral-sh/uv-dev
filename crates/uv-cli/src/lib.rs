@@ -15,8 +15,9 @@ use uv_audit::VulnerabilityServiceFormat;
 use uv_auth::Service;
 use uv_cache::CacheArgs;
 use uv_configuration::{
-    ExportFormat, IndexStrategy, KeyringProviderType, PackageNameSpecifier, PipCompileFormat,
-    ProjectBuildBackend, TargetTriple, TrustedHost, TrustedPublishing, VersionControlSystem,
+    BuildPolicySpecifier, ExportFormat, IndexStrategy, KeyringProviderType, PackageNameSpecifier,
+    PipCompileFormat, ProjectBuildBackend, TargetTriple, TrustedHost, TrustedPublishing,
+    VersionControlSystem,
 };
 use uv_distribution_types::{
     ConfigSettingEntry, ConfigSettingPackageEntry, Index, IndexName, IndexSourceError, IndexUrl,
@@ -1540,6 +1541,15 @@ fn parse_maybe_string(input: &str) -> Result<Maybe<String>, String> {
 #[derive(Args)]
 #[command(group = clap::ArgGroup::new("sources").required(true).multiple(true))]
 pub struct PipCompileArgs {
+    /// Control source builds with `allow`, `fallback`, `deny`, or `force`.
+    ///
+    /// `fallback` preserves version selection and omits source artifacts when the selected
+    /// version has sufficient wheel coverage. It may still build source metadata. Repeat with
+    /// `PACKAGE=POLICY` to override the global policy for a package.
+    ///
+    /// Requires `--preview-features build-policy`.
+    #[arg(long, value_name = "[PACKAGE=]POLICY", value_delimiter = ',')]
+    pub build_policy: Option<Vec<BuildPolicySpecifier>>,
     /// Include the packages listed in the given files.
     ///
     /// The following formats are supported: `requirements.txt`, `.py` files with inline metadata,
@@ -1937,6 +1947,12 @@ pub struct PipCompileArgs {
 
 #[derive(Args)]
 pub struct PipSyncArgs {
+    /// Control source builds with `allow`, `fallback`, `deny`, or `force`.
+    ///
+    /// Repeat with `PACKAGE=POLICY` to override the global policy for a package.
+    /// Requires `--preview-features build-policy`.
+    #[arg(long, value_name = "[PACKAGE=]POLICY", value_delimiter = ',')]
+    pub build_policy: Option<Vec<BuildPolicySpecifier>>,
     /// Include the packages listed in the given files.
     ///
     /// The following formats are supported: `requirements.txt`, `.py` files with inline metadata,
@@ -2215,6 +2231,12 @@ pub struct PipSyncArgs {
 #[derive(Args)]
 #[command(group = clap::ArgGroup::new("sources").required(true).multiple(true))]
 pub struct PipInstallArgs {
+    /// Control source builds with `allow`, `fallback`, `deny`, or `force`.
+    ///
+    /// Repeat with `PACKAGE=POLICY` to override the global policy for a package.
+    /// Requires `--preview-features build-policy`.
+    #[arg(long, value_name = "[PACKAGE=]POLICY", value_delimiter = ',')]
+    pub build_policy: Option<Vec<BuildPolicySpecifier>>,
     /// Install all listed packages.
     ///
     /// The order of the packages is used to determine priority during resolution.

@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
@@ -10,17 +10,20 @@ use petgraph::{
 };
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 
-use uv_configuration::{BuildOptions, Constraints, Overrides};
+use uv_configuration::{BuildOptions, BuildPolicy, Constraints, NoBinary, NoBuild, Overrides};
 use uv_distribution::Metadata;
 use uv_distribution_types::{
     BuiltDist, Dist, DistributionId, Edge, Identifier, IndexUrl, Name, Node, Requirement,
-    RequiresPython, ResolutionDiagnostic, ResolvedDist, SourceDist,
+    RequiresPython, ResolutionDiagnostic, ResolvedDist, SourceDist, implied_markers,
 };
 use uv_git::GitResolver;
 use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep440::{Version, VersionSpecifier};
 use uv_pep508::{MarkerEnvironment, MarkerTree, MarkerTreeKind};
-use uv_pypi_types::{Conflicts, HashDigests, ParsedUrlError, VerbatimParsedUrl, Yanked};
+use uv_platform_tags::Tags;
+use uv_pypi_types::{
+    Conflicts, HashDigests, ParsedUrlError, SupportedEnvironments, VerbatimParsedUrl, Yanked,
+};
 
 use crate::graph_ops::{marker_reachability, simplify_conflict_markers};
 use crate::pins::FilePins;
@@ -613,6 +616,87 @@ impl ResolverOutput {
         self.base_dists().next().is_none()
     }
 
+    /// Return packages whose source fallback can be omitted because their wheels provide coverage.
+    ///
+    /// Concrete resolutions inspect compatible wheel tags. Universal resolutions use the same
+    /// marker-based wheel-coverage heuristic as required environments.
+    pub fn packages_with_available_wheels(
+        &self,
+        tags: Option<&Tags>,
+        environments: &SupportedEnvironments,
+        build_options: &BuildOptions,
+    ) -> Vec<PackageName> {
+        let mut available = FxHashMap::default();
+        for (_, distribution) in self.base_dists() {
+            if build_options.policy().get(&distribution.name) != Some(BuildPolicy::Fallback)
+                || build_options.no_binary_package(&distribution.name)
+            {
+                continue;
+            }
+            let ResolvedDist::Installable { dist, .. } = &distribution.dist else {
+                continue;
+            };
+            let wheels = match dist.as_ref() {
+                Dist::Built(BuiltDist::Registry(dist)) => dist.wheels.as_slice(),
+                Dist::Source(SourceDist::Registry(dist)) => dist.wheels.as_slice(),
+                _ => continue,
+            };
+
+            let covered = if let Some(tags) = tags {
+                wheels
+                    .iter()
+                    .any(|wheel| wheel.filename.is_compatible(tags))
+            } else {
+                let wheel_coverage = wheels.iter().fold(MarkerTree::FALSE, |marker, wheel| {
+                    marker.or(implied_markers(&wheel.filename))
+                });
+                let package_marker = distribution
+                    .marker
+                    .pep508()
+                    .and(self.requires_python.to_marker_tree());
+
+                if environments.is_empty() {
+                    package_marker.and(wheel_coverage.negate()).is_false()
+                } else {
+                    environments
+                        .iter()
+                        .copied()
+                        .map(|environment| environment.and(package_marker))
+                        .filter(|environment| !environment.is_false())
+                        .all(|environment| !wheel_coverage.is_disjoint(environment))
+                }
+            };
+
+            available
+                .entry(distribution.name.clone())
+                .and_modify(|existing| *existing &= covered)
+                .or_insert(covered);
+        }
+
+        available
+            .into_iter()
+            .filter_map(|(name, covered)| covered.then_some(name))
+            .collect()
+    }
+
+    /// Express the effective policy for a resolved set of packages using pip-compatible options.
+    pub fn materialize_build_options(&self, build_options: &BuildOptions) -> BuildOptions {
+        let mut no_binary = BTreeSet::new();
+        let mut no_build = BTreeSet::new();
+        for (_, distribution) in self.base_dists() {
+            if build_options.no_binary_package(&distribution.name) {
+                no_binary.insert(distribution.name.clone());
+            }
+            if build_options.no_build_package(&distribution.name) {
+                no_build.insert(distribution.name.clone());
+            }
+        }
+        BuildOptions::new(
+            NoBinary::from_args(None, no_binary.into_iter().collect()),
+            NoBuild::from_args(None, no_build.into_iter().collect()),
+        )
+    }
+
     /// Retain registry hashes only for artifacts permitted by package-specific build options.
     ///
     /// All available wheel hashes remain eligible when source builds are disabled so the
@@ -630,6 +714,15 @@ impl ResolverOutput {
                     if build_options.no_build_package(&distribution.name) =>
                 {
                     dist.wheels
+                        .iter()
+                        .flat_map(|wheel| wheel.file.hashes.iter())
+                        .collect::<FxHashSet<_>>()
+                }
+                Dist::Source(SourceDist::Registry(source))
+                    if build_options.no_build_package(&distribution.name) =>
+                {
+                    source
+                        .wheels
                         .iter()
                         .flat_map(|wheel| wheel.file.hashes.iter())
                         .collect::<FxHashSet<_>>()
