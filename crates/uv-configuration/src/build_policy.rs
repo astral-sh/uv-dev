@@ -95,6 +95,12 @@ impl FromStr for BuildPolicyPackageEntry {
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct BuildPolicyPackage(BTreeMap<PackageName, BuildPolicy>);
 
+impl BuildPolicyPackage {
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
 impl Deref for BuildPolicyPackage {
     type Target = BTreeMap<PackageName, BuildPolicy>;
     fn deref(&self) -> &Self::Target {
@@ -126,65 +132,9 @@ impl IntoIterator for BuildPolicyPackage {
     }
 }
 
-/// Resolved global and package-specific build policies.
-#[derive(Debug, Default, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "kebab-case", deny_unknown_fields)]
-pub struct BuildPolicies {
-    default: Option<BuildPolicy>,
-    packages: BTreeMap<PackageName, BuildPolicy>,
-}
-
-impl BuildPolicies {
-    pub fn new(default: Option<BuildPolicy>, packages: BuildPolicyPackage) -> Self {
-        Self {
-            default,
-            packages: packages.0,
-        }
-    }
-
-    pub fn global(&self) -> Option<BuildPolicy> {
-        self.default
-    }
-
-    pub fn packages(&self) -> &BTreeMap<PackageName, BuildPolicy> {
-        &self.packages
-    }
-
-    /// Return the explicit package policy, falling back to the global policy.
-    pub fn get(&self, package: &PackageName) -> Option<BuildPolicy> {
-        self.packages.get(package).copied().or(self.default)
-    }
-
-    /// Whether builds can be rejected before a package name is known.
-    pub(crate) fn denies_all(&self) -> bool {
-        self.default == Some(BuildPolicy::Disallow)
-            && self
-                .packages
-                .values()
-                .all(|policy| *policy == BuildPolicy::Disallow)
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.default.is_none() && self.packages.is_empty()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn package_overrides_global() -> Result<(), BuildPolicyError> {
-        let policies = BuildPolicies::new(
-            Some(BuildPolicy::Disallow),
-            ["numpy=force".parse()?, "numpy=allow".parse()?]
-                .into_iter()
-                .collect(),
-        );
-        assert_eq!(policies.get(&"numpy".parse()?), Some(BuildPolicy::Allow));
-        assert_eq!(policies.get(&"other".parse()?), Some(BuildPolicy::Disallow));
-        Ok(())
-    }
 
     #[test]
     fn parse_policy() -> Result<(), BuildPolicyError> {
