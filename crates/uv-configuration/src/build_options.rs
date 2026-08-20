@@ -144,17 +144,7 @@ impl BuildOptions {
     }
 
     fn no_build_all(&self) -> bool {
-        matches!(self.no_build, NoBuild::All)
-            || (self.build_policy_denies_all()
-                && match &self.no_binary {
-                    NoBinary::None => true,
-                    NoBinary::All => false,
-                    // An unnamed source may be one of the packages whose legacy restriction
-                    // overrides the global policy. Wait until its name is known to reject it.
-                    NoBinary::Packages(packages) => packages
-                        .iter()
-                        .all(|package| self.legacy_no_build_package(package)),
-                })
+        matches!(self.no_build, NoBuild::All) || self.build_policy_denies_all()
     }
 
     #[must_use]
