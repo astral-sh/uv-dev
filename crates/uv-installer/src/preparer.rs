@@ -5,7 +5,7 @@ use futures::{FutureExt, Stream, TryFutureExt, TryStreamExt, stream::FuturesUnor
 use tracing::{debug, instrument};
 
 use uv_cache::Cache;
-use uv_configuration::BuildOptions;
+use uv_configuration::BuildPolicies;
 use uv_distribution::{DistributionDatabase, LocalWheel};
 use uv_distribution_types::{
     BuildableSource, CachedDist, DerivationChain, Dist, DistErrorKind, Hashed, Identifier, Name,
@@ -23,7 +23,7 @@ pub struct Preparer<'a, Context: BuildContext> {
     tags: &'a Tags,
     cache: &'a Cache,
     hashes: &'a HashStrategy,
-    build_options: &'a BuildOptions,
+    build_options: &'a BuildPolicies,
     database: DistributionDatabase<'a, Context>,
     reporter: Option<Arc<dyn Reporter>>,
 }
@@ -33,7 +33,7 @@ impl<'a, Context: BuildContext> Preparer<'a, Context> {
         cache: &'a Cache,
         tags: &'a Tags,
         hashes: &'a HashStrategy,
-        build_options: &'a BuildOptions,
+        build_options: &'a BuildPolicies,
         database: DistributionDatabase<'a, Context>,
     ) -> Self {
         Self {
