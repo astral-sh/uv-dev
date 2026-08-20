@@ -988,14 +988,11 @@ impl Lock {
         let mut packages = BTreeMap::new();
         let build_options = &resolution.options.build_options;
         let output_build_options = (!build_options.policy().is_empty()).then(|| {
-            let packages = resolution.packages_with_available_wheels(
+            resolution.materialize_build_options(
+                build_options,
                 None,
                 &resolution.options.artifact_environments,
-                build_options,
-            );
-            build_options
-                .clone()
-                .combine(NoBinary::None, NoBuild::Packages(packages))
+            )
         });
         let requires_python = resolution.requires_python.clone();
         let supported_environments = supported_environments

@@ -620,12 +620,12 @@ impl ResolverOutput {
     ///
     /// Concrete resolutions inspect compatible wheel tags. Universal resolutions require the
     /// wheel markers to cover every applicable target marker, rather than merely overlap it.
-    pub fn packages_with_available_wheels(
+    fn packages_with_available_wheels(
         &self,
         tags: Option<&Tags>,
         environments: &SupportedEnvironments,
         build_options: &BuildOptions,
-    ) -> Vec<PackageName> {
+    ) -> FxHashSet<PackageName> {
         let mut available = FxHashMap::default();
         for (_, distribution) in self.base_dists() {
             if build_options.policy().get(&distribution.name) != Some(BuildPolicy::IfNecessary)
@@ -679,15 +679,28 @@ impl ResolverOutput {
             .collect()
     }
 
-    /// Express the effective policy for a resolved set of packages using pip-compatible options.
-    pub fn materialize_build_options(&self, build_options: &BuildOptions) -> BuildOptions {
+    /// Express the effective artifact restrictions for the selected package versions.
+    ///
+    /// This is the only point where `if-necessary` is resolved from wheel coverage. The result uses
+    /// the existing `NoBinary` and `NoBuild` representation consumed by lock and export writers.
+    pub fn materialize_build_options(
+        &self,
+        build_options: &BuildOptions,
+        tags: Option<&Tags>,
+        environments: &SupportedEnvironments,
+    ) -> BuildOptions {
+        let packages_with_wheels =
+            self.packages_with_available_wheels(tags, environments, build_options);
         let mut no_binary = BTreeSet::new();
         let mut no_build = BTreeSet::new();
         for (_, distribution) in self.base_dists() {
             if build_options.no_binary_package(&distribution.name) {
                 no_binary.insert(distribution.name.clone());
             }
-            if build_options.no_build_package(&distribution.name) {
+            if build_options.no_build_package_with_compatible_wheel(
+                &distribution.name,
+                packages_with_wheels.contains(&distribution.name),
+            ) {
                 no_build.insert(distribution.name.clone());
             }
         }
