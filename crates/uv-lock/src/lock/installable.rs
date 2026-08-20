@@ -10,7 +10,7 @@ use petgraph::Graph;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use uv_configuration::{
-    BuildPolicies, DependencyGroupsWithDefaults, ExtrasSpecification,
+    BuildOptions, DependencyGroupsWithDefaults, ExtrasSpecification,
     ExtrasSpecificationWithDefaults, InstallOptions,
 };
 use uv_distribution_types::{Edge, FirstParty, Node, Resolution, ResolvedDist};
@@ -130,7 +130,7 @@ pub trait Installable<'lock> {
         tags: &Tags,
         extras: &ExtrasSpecificationWithDefaults,
         groups: &DependencyGroupsWithDefaults,
-        build_options: &BuildPolicies,
+        build_options: &BuildOptions,
         install_options: &InstallOptions,
     ) -> Result<Resolution, LockError> {
         let resolve_root = |root_name: &PackageName| {
@@ -172,7 +172,7 @@ pub trait Installable<'lock> {
         package: &Package,
         tags: &Tags,
         marker_env: &ResolverMarkerEnvironment,
-        build_options: &BuildPolicies,
+        build_options: &BuildOptions,
     ) -> Result<Node, LockError> {
         let tag_policy = TagPolicy::Required(tags);
         let HashedDist { dist, hashes } = package.to_dist(
@@ -208,7 +208,7 @@ pub trait Installable<'lock> {
         let HashedDist { dist, .. } = package.to_dist(
             self.install_path(),
             TagPolicy::Preferred(tags),
-            &BuildPolicies::default(),
+            &BuildOptions::default(),
             marker_env,
             FirstParty::No,
         )?;
@@ -230,7 +230,7 @@ pub trait Installable<'lock> {
         &self,
         package: &Package,
         tags: &Tags,
-        build_options: &BuildPolicies,
+        build_options: &BuildOptions,
         install_options: &InstallOptions,
         marker_env: &ResolverMarkerEnvironment,
     ) -> Result<Node, LockError> {
@@ -262,7 +262,7 @@ trait InstallableExt<'lock>: Installable<'lock> {
         tags: &Tags,
         extras: &ExtrasSpecificationWithDefaults,
         groups: &DependencyGroupsWithDefaults,
-        build_options: &BuildPolicies,
+        build_options: &BuildOptions,
         install_options: &InstallOptions,
     ) -> Result<Resolution, LockError> {
         let size_guess = self.lock().packages.len();
@@ -917,7 +917,7 @@ impl Lock {
         project_name: Option<&'lock PackageName>,
         marker_env: &ResolverMarkerEnvironment,
         tags: &Tags,
-        build_options: &BuildPolicies,
+        build_options: &BuildOptions,
         install_options: &InstallOptions,
     ) -> Result<Resolution, LockError> {
         let selected_package = dependency.package();
@@ -979,7 +979,7 @@ impl Lock {
         tags: &Tags,
         extras: &ExtrasSpecificationWithDefaults,
         groups: &DependencyGroupsWithDefaults,
-        build_options: &BuildPolicies,
+        build_options: &BuildOptions,
         install_options: &InstallOptions,
     ) -> Result<Resolution, LockError> {
         let mut seen = FxHashSet::default();
@@ -1335,7 +1335,7 @@ provides-extras = ["cli"]
             &TAGS,
             &extras,
             &groups,
-            &BuildPolicies::default(),
+            &BuildOptions::default(),
             &InstallOptions::default(),
         )
         .expect("valid resolution")
@@ -1357,7 +1357,7 @@ provides-extras = ["cli"]
             &TAGS,
             &extras,
             &groups,
-            &BuildPolicies::default(),
+            &BuildOptions::default(),
             &InstallOptions::default(),
         )
     }
@@ -1381,7 +1381,7 @@ provides-extras = ["cli"]
             Some(&project_name),
             &DARWIN_MARKERS,
             &TAGS,
-            &BuildPolicies::default(),
+            &BuildOptions::default(),
             &InstallOptions::default(),
         )
         .expect("valid resolution")
@@ -1442,7 +1442,7 @@ source = { registry = "https://example.com/simple" }
             &self,
             _package: &Package,
             _tags: &Tags,
-            _build_options: &BuildPolicies,
+            _build_options: &BuildOptions,
             _install_options: &InstallOptions,
             _marker_env: &ResolverMarkerEnvironment,
         ) -> Result<Node, LockError> {
@@ -1551,7 +1551,7 @@ source = { registry = "https://example.com/simple" }
             &TAGS,
             &extras,
             &groups,
-            &BuildPolicies::default(),
+            &BuildOptions::default(),
             &InstallOptions::default(),
         )
         .expect("valid resolution");
@@ -1760,7 +1760,7 @@ source = { registry = "https://example.com/simple" }
                 &TAGS,
                 &extras,
                 &groups,
-                &BuildPolicies::default(),
+                &BuildOptions::default(),
                 &InstallOptions::default(),
             )
             .expect("valid resolution");
