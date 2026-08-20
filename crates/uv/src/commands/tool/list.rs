@@ -132,8 +132,7 @@ pub(crate) async fn list(
                     let capabilities = IndexCapabilities::default();
                     let settings = ResolverInstallerSettings::from(args.combine(
                         ResolverInstallerOptions::from(tool.options().clone()).combine(filesystem),
-                    ))
-                    .validate_build_policy()?;
+                    ));
                     let interpreter = tool_env.environment().interpreter();
 
                     let client = RegistryClientBuilder::new(
