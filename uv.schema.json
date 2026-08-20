@@ -51,7 +51,7 @@
       }
     },
     "build-policy": {
-      "description": "Control whether packages may be built from source.\n\n`if-necessary` preserves version selection and omits registry source distributions when the\nselected version has a compatible wheel. For universal resolutions, the wheels must cover\nall applicable environment markers. uv may still build source distributions to obtain\nmetadata.\n\n`disallow` uses the same restrictions as [`no-build`](#no-build): cached wheels built from\nsource may be reused, and editable requirements may still be built. `force` uses the same\nrestrictions as [`no-binary`](#no-binary): pre-built wheels may still be used to read metadata.\nExisting build and binary restrictions take precedence over build policies.\n\nRequires the `build-policy` preview feature. See the\n[resolution documentation](../concepts/resolution.md#source-build-policies) for details.",
+      "description": "Control whether packages may be built from source.\n\nThe policy also applies to build dependencies. Existing [`no-build`](#no-build) and\n[`no-binary`](#no-binary) restrictions take precedence over build policies.\n\nSee the [resolution documentation](../concepts/resolution.md#source-build-policies) for details.\n\nThis option is in preview and may change in any future release.",
       "anyOf": [
         {
           "$ref": "#/definitions/BuildPolicy"
@@ -62,7 +62,7 @@
       ]
     },
     "build-policy-package": {
-      "description": "Source-build policies for individual packages.\n\nPackage-specific policies override the global [`build-policy`](#build-policy) setting.\nAccepts a dictionary mapping package names to any supported build policy.\nRequires the `build-policy` preview feature.",
+      "description": "Source-build policies for individual packages.\n\nPackage-specific policies override the global [`build-policy`](#build-policy) setting.\nAccepts a dictionary mapping package names to any supported build policy.\n\nThis option is in preview and may change in any future release.",
       "anyOf": [
         {
           "$ref": "#/definitions/BuildPolicyPackage"
@@ -805,17 +805,17 @@
           "const": "allow"
         },
         {
-          "description": "Keep source distributions only when the selected version lacks sufficient wheel coverage.",
+          "description": "Keep source distributions only when the selected version lacks sufficient wheel coverage.\nPackage versions are selected normally. uv does not select an older version just because\nthat version has a wheel. For platform-specific resolutions, the selected version must have\na compatible wheel. For universal resolutions, the wheels must cover all applicable\nenvironment markers.\nuv may still build source distributions to obtain metadata.",
           "type": "string",
           "const": "if-necessary"
         },
         {
-          "description": "Require wheels, even when doing so changes the selected version.",
+          "description": "Require wheels, even when doing so changes the selected version.\nAs with `--no-build`, uv may reuse cached wheels built from source. Editable requirements\nmay still be built, and their build backends may run arbitrary Python code.",
           "type": "string",
           "const": "disallow"
         },
         {
-          "description": "Require source distributions instead of pre-built wheels.",
+          "description": "Require source distributions instead of pre-built wheels.\nAs with `--no-binary`, uv may still use pre-built wheels to read package metadata and reuse\ncached wheels built from source.",
           "type": "string",
           "const": "force"
         }
@@ -1412,7 +1412,7 @@
           "type": ["boolean", "null"]
         },
         "build-policy": {
-          "description": "Control whether packages may be built from source.\n\n`if-necessary` preserves version selection and omits registry source distributions when the\nselected version has a compatible wheel. For universal resolutions, the wheels must cover\nall applicable environment markers. uv may still build source distributions to obtain\nmetadata.\n\n`disallow` uses the same restrictions as [`no-build`](#no-build): cached wheels built from\nsource may be reused, and editable requirements may still be built. `force` uses the same\nrestrictions as [`no-binary`](#no-binary): pre-built wheels may still be used to read metadata.\nExisting build and binary restrictions take precedence over build policies.\n\nRequires the `build-policy` preview feature. See the\n[resolution documentation](../concepts/resolution.md#source-build-policies) for details.",
+          "description": "Control whether packages may be built from source.\n\nThe policy also applies to build dependencies. Existing [`no-build`](#no-build),\n[`no-binary`](#no-binary), and [`only-binary`](#only-binary) restrictions take precedence over\nbuild policies.\n\nSee the [resolution documentation](../concepts/resolution.md#source-build-policies) for details.\n\nThis option is in preview and may change in any future release.",
           "anyOf": [
             {
               "$ref": "#/definitions/BuildPolicy"
@@ -1423,7 +1423,7 @@
           ]
         },
         "build-policy-package": {
-          "description": "Source-build policies for individual packages.\n\nPackage-specific policies override the global [`build-policy`](#build-policy) setting.\nAccepts a dictionary mapping package names to any supported build policy.\nRequires the `build-policy` preview feature.",
+          "description": "Source-build policies for individual packages.\n\nPackage-specific policies override the global [`build-policy`](#build-policy) setting.\nAccepts a dictionary mapping package names to any supported build policy.\n\nThis option is in preview and may change in any future release.",
           "anyOf": [
             {
               "$ref": "#/definitions/BuildPolicyPackage"

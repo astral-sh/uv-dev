@@ -223,8 +223,9 @@ whether a source distribution must be retained in the lockfile.
 
 !!! note
 
-    Build policies are in [preview](./preview.md). Enable them with
-    `--preview-features build-policy` or `preview-features = ["build-policy"]`.
+    Build policies are in [preview](./preview.md) and may change in any future release. Using a
+    build policy displays a warning. Pass `--preview-features build-policy` or set
+    `preview-features = ["build-policy"]` to disable the warning.
 
 The `build-policy` setting controls whether dependencies may be built from source and which
 artifacts are retained in `uv.lock` and `pylock.toml`:
@@ -258,7 +259,8 @@ $ uv pip compile requirements.in --preview-features build-policy --build-policy 
 ```
 
 For `requirements.txt` output, `--emit-build-options` writes the corresponding pip-compatible build
-restrictions.
+restrictions for the selected packages. These package-specific restrictions do not reproduce a
+global policy for build dependencies discovered later during installation.
 
 During [platform-specific resolution](#platform-specific-resolution), `if-necessary` retains the
 source distribution unless the selected version has a wheel compatible with the target Python
