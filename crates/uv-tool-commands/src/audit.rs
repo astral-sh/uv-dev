@@ -200,8 +200,7 @@ pub async fn audit(
 
         let settings = ResolverInstallerSettings::from(
             ResolverInstallerOptions::from(tool.options().clone()).combine(filesystem.clone()),
-        )
-        .validate_build_policy()?;
+        );
         let outcome = audit_lock(
             &lock,
             &root,
