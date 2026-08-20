@@ -1,21 +1,71 @@
-# Issue context
+# UV run package conflicts with binaries installed on the operating system
 
-Issue: owner/repository#number
+Issue: astral-sh/uv#21238
 
-Classification: bug, enhancement, duplicate, or question
+Classification: question
 
 ## Summary
 
-Describe the reported behavior or requested capability and summarize the most important findings.
+The reporter clarified that running `uv run logger` in a uv workspace executed
+`/usr/bin/logger` rather than their workspace's Python package named `logger`. This rules out the
+previously ambiguous `uvx` case and identifies `uv run` command resolution as the relevant
+subsystem.
 
-## Draft response
+`uv run` runs a command with the project environment on `PATH`; it does not interpret an arbitrary
+command argument as a request to run or import the same-named Python package. A Python distribution
+must declare a matching console-script entry point for installation to create a `logger` executable.
+If the workspace package does not provide that executable, resolving the existing
+`/usr/bin/logger` is consistent with the current non-strict behavior tracked by
+astral-sh/uv#3097. If the package does declare a `logger` entry point and the workspace environment
+was synchronized, selecting `/usr/bin/logger` instead could indicate a separate command-precedence
+problem.
 
-Draft a proposed reply for maintainer review.
+## Reproduction status
+
+Partial reproduction reported by the issue author:
+
+1. Use a uv workspace containing a custom Python package named `logger`.
+2. Run `uv run logger`.
+3. Observe that `/usr/bin/logger` is executed.
+4. The reporter expected the workspace Python package to run instead.
+
+The report still lacks the uv and macOS versions, a minimal workspace, command output, and the
+package metadata needed to determine whether it provides a `logger` executable.
+
+## Information needed
+
+- The relevant `pyproject.toml` sections, particularly `[project.scripts]` or other entry-point
+  declarations for `logger`.
+- Whether the workspace package is installed in the project environment and whether
+  `.venv/bin/logger` exists after `uv sync`.
+- The output of `uv --version`, the macOS version, and a verbose invocation such as
+  `uv run --verbose logger`.
+- Whether the intended operation is to invoke a console script or import/run a Python module. For a
+  module, the relevant comparison is `uv run python -m logger`, assuming the package supports module
+  execution.
 
 ## Classification
 
-Explain why the selected classification fits, distinguishing confirmed findings from hypotheses.
+`question` remains the best classification with the current evidence. The newly reported behavior
+is concrete, but the expectation that `uv run logger` selects a same-named Python package is not how
+`uv run` identifies commands. No correctness defect is established unless the workspace package
+actually installs a `logger` executable that should take precedence over `/usr/bin/logger`.
+
+If the package does not provide that executable, astral-sh/uv#3097 already tracks the enhancement
+that would prevent commands outside the current environment from being run. If a minimal
+reproduction confirms that `.venv/bin/logger` exists but uv still selects `/usr/bin/logger`, the
+classification should be reassessed as a bug.
 
 ## Related
 
-List related issues or pull requests, explain their relationship, or state that none were found.
+- astral-sh/uv#3097 — Closest existing issue. It tracks a strict `uv run` mode in which only commands
+  provided by the current environment may run, avoiding fallback to same-named operating-system
+  commands. It would reject a missing workspace entry point rather than infer and run a Python
+  package.
+- astral-sh/uv#15384 — Discusses the intended distinction between `uv run` for project-context
+  commands and `uvx`/`uv tool run` for tools in isolated environments.
+- astral-sh/uv#7804 — Similar name-collision symptom for `uvx`, but not the command used here. That
+  issue concerned fallback to an unrelated executable on `PATH` when an inferred tool package did
+  not provide the requested command.
+- astral-sh/uv#11603 — Merged fix for the `uvx` behavior in astral-sh/uv#7804. It does not establish
+  equivalent strict command provenance for `uv run`.
