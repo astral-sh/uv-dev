@@ -193,11 +193,23 @@ impl BuildOptions {
 
     /// Whether builds can be rejected before a package name is known.
     fn build_policy_denies_all(&self) -> bool {
-        self.build_policy == Some(BuildPolicy::Disallow)
-            && self
-                .build_policy_package
-                .values()
-                .all(|policy| *policy == BuildPolicy::Disallow)
+        if self.build_policy != Some(BuildPolicy::Disallow) {
+            return false;
+        }
+
+        let mut policy_exceptions = self
+            .build_policy_package
+            .iter()
+            .filter_map(|(package, policy)| (*policy != BuildPolicy::Disallow).then_some(package));
+        match &self.no_binary {
+            // Every package is a potential source-build exception.
+            NoBinary::All => false,
+            NoBinary::None => policy_exceptions.all(|package| self.no_build_package(package)),
+            // Legacy binary exclusions can also override the global source restriction.
+            NoBinary::Packages(packages) => policy_exceptions
+                .chain(packages)
+                .all(|package| self.no_build_package(package)),
+        }
     }
 
     /// Return the [`NoBuild`] strategy to use.
@@ -508,6 +520,17 @@ mod tests {
         assert!(options.no_build_requirement(Some(&other)));
 
         let options = options.combine(NoBinary::None, NoBuild::Packages(vec![package.clone()]));
+        assert!(options.no_build_requirement(None));
+        assert!(options.no_build_requirement(Some(&package)));
+
+        // A configured exception does not permit an unnamed build when a legacy restriction
+        // cancels the exception for that package.
+        let options = BuildOptions::default()
+            .with_build_policy(
+                Some(BuildPolicy::Disallow),
+                ["example=allow".parse()?].into_iter().collect(),
+            )
+            .combine(NoBinary::None, NoBuild::Packages(vec![package.clone()]));
         assert!(options.no_build_requirement(None));
         assert!(options.no_build_requirement(Some(&package)));
 
