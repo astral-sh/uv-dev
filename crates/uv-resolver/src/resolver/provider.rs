@@ -4,7 +4,7 @@ pub use uv_resolver_types::MetadataResponse;
 pub(crate) use uv_resolver_types::MetadataUnavailable;
 
 use uv_client::MetadataFormat;
-use uv_configuration::BuildOptions;
+use uv_configuration::BuildPolicies;
 use uv_distribution::{DistributionDatabase, Reporter};
 use uv_distribution_types::{
     Dist, IndexCapabilities, IndexLocations, IndexMetadata, IndexMetadataRef, InstalledDist,
@@ -79,7 +79,7 @@ pub struct DefaultResolverProvider<'a, Context: BuildContext> {
     exclude_newer: ExcludeNewer,
     available_version_cutoff: Option<jiff::Timestamp>,
     index_locations: &'a IndexLocations,
-    build_options: &'a BuildOptions,
+    build_options: &'a BuildPolicies,
     capabilities: &'a IndexCapabilities,
     minimum_libc_version: Option<MinimumLibcVersion>,
 }
@@ -95,7 +95,7 @@ impl<'a, Context: BuildContext> DefaultResolverProvider<'a, Context> {
         hasher: &'a HashStrategy,
         exclude_newer: ExcludeNewer,
         index_locations: &'a IndexLocations,
-        build_options: &'a BuildOptions,
+        build_options: &'a BuildPolicies,
         capabilities: &'a IndexCapabilities,
         minimum_libc_version: Option<MinimumLibcVersion>,
     ) -> Self {
