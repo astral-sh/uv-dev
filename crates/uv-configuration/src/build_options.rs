@@ -40,6 +40,28 @@ impl BuildOptions {
         }
     }
 
+    /// Return equivalent build options with sorted, deduplicated package restrictions.
+    ///
+    /// This provides a stable representation when persisting or comparing build options.
+    #[must_use]
+    pub fn normalized(mut self) -> Self {
+        if let NoBinary::Packages(packages) = &mut self.no_binary {
+            packages.sort_unstable();
+            packages.dedup();
+            if packages.is_empty() {
+                self.no_binary = NoBinary::None;
+            }
+        }
+        if let NoBuild::Packages(packages) = &mut self.no_build {
+            packages.sort_unstable();
+            packages.dedup();
+            if packages.is_empty() {
+                self.no_build = NoBuild::None;
+            }
+        }
+        self
+    }
+
     pub fn no_binary_package(&self, package_name: &PackageName) -> bool {
         self.legacy_no_binary_package(package_name)
             || (!self.legacy_no_build_package(package_name)
@@ -85,7 +107,16 @@ impl BuildOptions {
 
     fn no_build_all(&self) -> bool {
         matches!(self.no_build, NoBuild::All)
-            || (!matches!(self.no_binary, NoBinary::All) && self.policy.denies_all())
+            || (self.policy.denies_all()
+                && match &self.no_binary {
+                    NoBinary::None => true,
+                    NoBinary::All => false,
+                    // An unnamed source may be one of the packages whose legacy restriction
+                    // overrides the global policy. Wait until its name is known to reject it.
+                    NoBinary::Packages(packages) => packages
+                        .iter()
+                        .all(|package| self.legacy_no_build_package(package)),
+                })
     }
 
     #[must_use]
@@ -377,6 +408,61 @@ mod tests {
         );
         assert!(options.no_build_package(&package));
         assert!(!options.no_binary_package(&package));
+        Ok(())
+    }
+
+    #[test]
+    fn build_policy_unnamed_legacy_exceptions() -> Result<(), Error> {
+        let package = PackageName::from_str("example")?;
+        let other = PackageName::from_str("other")?;
+        let policy = BuildPolicies::new(Some(BuildPolicy::Disallow), BuildPolicyPackage::default());
+        let options = BuildOptions::default().with_policy(policy.clone());
+        assert!(options.no_build_requirement(None));
+
+        let options = options.combine(NoBinary::Packages(vec![package.clone()]), NoBuild::None);
+        assert!(!options.no_build_requirement(None));
+        assert!(!options.no_build_requirement(Some(&package)));
+        assert!(options.no_build_requirement(Some(&other)));
+
+        let options = options.combine(NoBinary::None, NoBuild::Packages(vec![package.clone()]));
+        assert!(options.no_build_requirement(None));
+        assert!(options.no_build_requirement(Some(&package)));
+
+        // Preserve the existing behavior of the explicit global no-build restriction.
+        let options = BuildOptions::new(NoBinary::Packages(vec![package.clone()]), NoBuild::All)
+            .with_policy(policy);
+        assert!(options.no_build_requirement(None));
+        assert!(!options.no_build_requirement(Some(&package)));
+        Ok(())
+    }
+
+    #[test]
+    fn normalized_build_policy_options() -> Result<(), Error> {
+        let alpha = PackageName::from_str("alpha")?;
+        let beta = PackageName::from_str("beta")?;
+        let policy = BuildPolicies::new(
+            Some(BuildPolicy::IfNecessary),
+            ["example=allow".parse()?].into_iter().collect(),
+        );
+        let options = BuildOptions::new(
+            NoBinary::Packages(vec![beta.clone(), alpha.clone(), beta.clone()]),
+            NoBuild::Packages(vec![beta.clone(), beta.clone(), alpha.clone()]),
+        )
+        .with_policy(policy.clone())
+        .normalized();
+        assert_eq!(
+            options,
+            BuildOptions::new(
+                NoBinary::Packages(vec![alpha.clone(), beta.clone()]),
+                NoBuild::Packages(vec![alpha, beta]),
+            )
+            .with_policy(policy)
+        );
+        assert_eq!(options.clone().normalized(), options);
+        assert_eq!(
+            BuildOptions::new(NoBinary::Packages(vec![]), NoBuild::Packages(vec![])).normalized(),
+            BuildOptions::default()
+        );
         Ok(())
     }
 
