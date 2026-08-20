@@ -61,7 +61,7 @@ impl BuildOptions {
     pub fn no_build_package(&self, package_name: &PackageName) -> bool {
         self.legacy_no_build_package(package_name)
             || (!self.legacy_no_binary_package(package_name)
-                && self.policy.get(package_name) == Some(BuildPolicy::Deny))
+                && self.policy.get(package_name) == Some(BuildPolicy::Disallow))
     }
 
     fn legacy_no_build_package(&self, package_name: &PackageName) -> bool {
@@ -354,15 +354,16 @@ mod tests {
     use anyhow::Error;
 
     use super::*;
+    use crate::BuildPolicyPackage;
 
     #[test]
     fn build_policy_overrides() -> Result<(), Error> {
         let package = PackageName::from_str("example")?;
         let other = PackageName::from_str("other")?;
-        let options = BuildOptions::default().with_policy(BuildPolicies::from_specifiers([
-            "deny".parse()?,
-            "example=allow".parse()?,
-        ]));
+        let options = BuildOptions::default().with_policy(BuildPolicies::new(
+            Some(BuildPolicy::Disallow),
+            ["example=allow".parse()?].into_iter().collect(),
+        ));
         assert!(!options.no_build_package(&package));
         assert!(options.no_build_package(&other));
         assert!(!options.no_build_requirement(None));
@@ -371,8 +372,9 @@ mod tests {
         let options = options.combine(NoBinary::Packages(vec![other.clone()]), NoBuild::None);
         assert!(options.no_binary_package(&other));
         assert!(!options.no_build_package(&other));
-        let options = BuildOptions::new(NoBinary::None, NoBuild::All)
-            .with_policy(BuildPolicies::from_specifiers(["force".parse()?]));
+        let options = BuildOptions::new(NoBinary::None, NoBuild::All).with_policy(
+            BuildPolicies::new(Some(BuildPolicy::Force), BuildPolicyPackage::default()),
+        );
         assert!(options.no_build_package(&package));
         assert!(!options.no_binary_package(&package));
         Ok(())

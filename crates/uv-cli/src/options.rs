@@ -6,7 +6,8 @@ use anyhow::bail;
 
 use uv_cache::Refresh;
 use uv_configuration::{
-    BuildIsolation, ExcludeNewerPackage, PrereleaseMode, PrereleasePackage, Reinstall, Upgrade,
+    BuildIsolation, BuildPolicyPackage, ExcludeNewerPackage, PrereleaseMode, PrereleasePackage,
+    Reinstall, Upgrade,
 };
 use uv_distribution_types::{ConfigSettings, Index, PackageConfigSettings, Requirement};
 use uv_normalize::PackageName;
@@ -16,8 +17,8 @@ use uv_settings::{
 use uv_warnings::owo_colors::OwoColorize;
 
 use crate::{
-    BuildIsolationArgs, BuildOptionsArgs, CompileBytecodeArgs, ExcludeNewerArgs, FetchArgs,
-    IndexArgs, InstallerArgs, Maybe, PackageBuildIsolationArgs, PackageExcludeNewerArgs,
+    BuildIsolationArgs, BuildOptionsArgs, BuildPolicyArgs, CompileBytecodeArgs, ExcludeNewerArgs,
+    FetchArgs, IndexArgs, InstallerArgs, Maybe, PackageBuildIsolationArgs, PackageExcludeNewerArgs,
     RefreshArgs, RegistryClientArgs, ReinstallArgs, ResolverArgs, ResolverInstallerArgs,
     SourcesArgs, UpgradeArgs, VersionSelectionArgs,
 };
@@ -627,6 +628,11 @@ pub fn resolver_options(
     } = resolver_args;
 
     let BuildOptionsArgs {
+        build_policy:
+            BuildPolicyArgs {
+                build_policy,
+                build_policy_package,
+            },
         no_build,
         build,
         no_build_package,
@@ -651,6 +657,8 @@ pub fn resolver_options(
             prerelease
         },
         prerelease_package: prerelease_package.map(PrereleasePackage::from_iter),
+        build_policy,
+        build_policy_package: build_policy_package.map(BuildPolicyPackage::from_iter),
         fork_strategy,
         dependency_metadata: None,
         config_settings: config_setting
@@ -780,6 +788,11 @@ pub fn resolver_installer_options(
     } = resolver_installer_args;
 
     let BuildOptionsArgs {
+        build_policy:
+            BuildPolicyArgs {
+                build_policy,
+                build_policy_package,
+            },
         no_build,
         build,
         no_build_package,
@@ -808,6 +821,8 @@ pub fn resolver_installer_options(
             prerelease
         },
         prerelease_package: prerelease_package.map(PrereleasePackage::from_iter),
+        build_policy,
+        build_policy_package: build_policy_package.map(BuildPolicyPackage::from_iter),
         fork_strategy,
         dependency_metadata: None,
         config_settings: config_setting
