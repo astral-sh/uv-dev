@@ -1318,6 +1318,15 @@ impl ValidatedLock {
             };
         }
 
+        // A policy change can require artifacts omitted from the existing lockfile.
+        if lock.build_options().policy() != options.build_options.policy()
+            || (!options.build_options.policy().is_empty()
+                && lock.build_options() != &options.build_options)
+        {
+            debug!("Resolving despite existing lockfile due to change in build policy");
+            return Ok(Self::Preferable(lock));
+        }
+
         // If the pre-release mode has changed, we have to re-resolve, but can retain the existing
         // versions and forks.
         if lock.prerelease() != &options.prerelease {

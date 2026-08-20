@@ -15,9 +15,9 @@ use uv_audit::VulnerabilityServiceFormat;
 use uv_auth::Service;
 use uv_cache::CacheArgs;
 use uv_configuration::{
-    BuildPolicySpecifier, ExportFormat, IndexStrategy, KeyringProviderType, PackageNameSpecifier,
-    PipCompileFormat, ProjectBuildBackend, TargetTriple, TrustedHost, TrustedPublishing,
-    VersionControlSystem,
+    BuildPolicy, BuildPolicyPackageEntry, ExportFormat, IndexStrategy, KeyringProviderType,
+    PackageNameSpecifier, PipCompileFormat, ProjectBuildBackend, TargetTriple, TrustedHost,
+    TrustedPublishing, VersionControlSystem,
 };
 use uv_distribution_types::{
     ConfigSettingEntry, ConfigSettingPackageEntry, Index, IndexName, IndexSourceError, IndexUrl,
@@ -1533,15 +1533,8 @@ fn parse_maybe_string(input: &str) -> Result<Maybe<String>, String> {
 #[derive(Args)]
 #[command(group = clap::ArgGroup::new("sources").required(true).multiple(true))]
 pub struct PipCompileArgs {
-    /// Control source builds with `allow`, `fallback`, `deny`, or `force`.
-    ///
-    /// `fallback` preserves version selection and omits source artifacts when the selected
-    /// version has sufficient wheel coverage. It may still build source metadata. Repeat with
-    /// `PACKAGE=POLICY` to override the global policy for a package.
-    ///
-    /// Requires `--preview-features build-policy`.
-    #[arg(long, value_name = "[PACKAGE=]POLICY", value_delimiter = ',')]
-    pub build_policy: Option<Vec<BuildPolicySpecifier>>,
+    #[command(flatten)]
+    pub build_policy: BuildPolicyArgs,
     /// Include the packages listed in the given files.
     ///
     /// The following formats are supported: `requirements.txt`, `.py` files with inline metadata,
@@ -1939,12 +1932,8 @@ pub struct PipCompileArgs {
 
 #[derive(Args)]
 pub struct PipSyncArgs {
-    /// Control source builds with `allow`, `fallback`, `deny`, or `force`.
-    ///
-    /// Repeat with `PACKAGE=POLICY` to override the global policy for a package.
-    /// Requires `--preview-features build-policy`.
-    #[arg(long, value_name = "[PACKAGE=]POLICY", value_delimiter = ',')]
-    pub build_policy: Option<Vec<BuildPolicySpecifier>>,
+    #[command(flatten)]
+    pub build_policy: BuildPolicyArgs,
     /// Include the packages listed in the given files.
     ///
     /// The following formats are supported: `requirements.txt`, `.py` files with inline metadata,
@@ -2223,12 +2212,8 @@ pub struct PipSyncArgs {
 #[derive(Args)]
 #[command(group = clap::ArgGroup::new("sources").required(true).multiple(true))]
 pub struct PipInstallArgs {
-    /// Control source builds with `allow`, `fallback`, `deny`, or `force`.
-    ///
-    /// Repeat with `PACKAGE=POLICY` to override the global policy for a package.
-    /// Requires `--preview-features build-policy`.
-    #[arg(long, value_name = "[PACKAGE=]POLICY", value_delimiter = ',')]
-    pub build_policy: Option<Vec<BuildPolicySpecifier>>,
+    #[command(flatten)]
+    pub build_policy: BuildPolicyArgs,
     /// Install all listed packages.
     ///
     /// The order of the packages is used to determine priority during resolution.
@@ -7175,8 +7160,32 @@ pub struct RefreshArgs {
     refresh_package: Vec<PackageName>,
 }
 
+/// Arguments that configure source-build policies.
+#[derive(Args)]
+#[group(skip)]
+pub struct BuildPolicyArgs {
+    /// Control whether packages may be built from source.
+    ///
+    /// `if-necessary` preserves version selection and omits source artifacts when the selected
+    /// version has sufficient wheel coverage. It may still build source metadata.
+    ///
+    /// Requires `--preview-features build-policy`.
+    #[arg(long, value_enum, env = EnvVars::UV_BUILD_POLICY, help_heading = "Build options")]
+    pub build_policy: Option<BuildPolicy>,
+
+    /// Control source builds for a specific package.
+    ///
+    /// Accepts `PACKAGE=POLICY`, where `POLICY` is any value accepted by `--build-policy`.
+    /// May be provided multiple times for different packages. Package-specific policies override
+    /// the global policy. Requires `--preview-features build-policy`.
+    #[arg(long, help_heading = "Build options", value_hint = ValueHint::Other)]
+    pub build_policy_package: Option<Vec<BuildPolicyPackageEntry>>,
+}
+
 #[derive(Args)]
 pub struct BuildOptionsArgs {
+    #[command(flatten)]
+    build_policy: BuildPolicyArgs,
     /// Don't build source distributions.
     ///
     /// When enabled, uv will reuse cached wheels from previously built source distributions, but
