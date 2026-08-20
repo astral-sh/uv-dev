@@ -2483,15 +2483,12 @@ impl Lock {
     ) -> Result<Self, LockError> {
         let mut packages = BTreeMap::new();
         let build_options = &resolution.options.build_options;
-        let output_build_options = (!build_options.policy().is_empty()).then(|| {
-            let packages = resolution.packages_with_available_wheels(
+        let output_build_options = build_options.is_configured().then(|| {
+            resolution.build_options_for_output(
+                build_options,
                 None,
                 &resolution.options.artifact_environments,
-                build_options,
-            );
-            build_options
-                .clone()
-                .combine(NoBinary::None, NoBuild::Packages(packages))
+            )
         });
         let requires_python = resolution.requires_python.clone();
         let supported_environments = supported_environments
@@ -2566,11 +2563,14 @@ impl Lock {
             if let Some(build_options) = &output_build_options
                 && matches!(package.id.source, Source::Registry(_))
             {
-                if build_options.no_build_package(&package.id.name) {
-                    package.sdist = None;
-                }
-                if build_options.no_binary_package(&package.id.name) {
-                    package.wheels.clear();
+                match build_options.effective_policy(&package.id.name) {
+                    Some(BuildPolicy::Allow | BuildPolicy::IfNecessary) => {}
+                    Some(BuildPolicy::Disallow) => package.sdist = None,
+                    Some(BuildPolicy::Force) => package.wheels.clear(),
+                    None => {
+                        package.sdist = None;
+                        package.wheels.clear();
+                    }
                 }
             }
 
@@ -2647,8 +2647,8 @@ impl Lock {
         let packages = packages.into_values().collect();
 
         let options = ResolverOptions {
-            build_options: Box::new(if build_options.policy().is_empty() {
-                BuildOptions::default()
+            build_options: Box::new(if !build_options.is_configured() {
+                BuildPolicies::default()
             } else {
                 build_options.clone().normalized()
             }),
@@ -3154,7 +3154,7 @@ impl Lock {
     }
 
     /// Return the build options used to select this lockfile's artifacts.
-    pub fn build_options(&self) -> &BuildOptions {
+    pub fn build_options(&self) -> &BuildPolicies {
         &self.options.build_options
     }
 
@@ -4249,7 +4249,7 @@ impl Lock {
         indexes: Option<&IndexLocations>,
         tags: &Tags,
         markers: &MarkerEnvironment,
-        build_options: &BuildOptions,
+        build_options: &BuildPolicies,
         hasher: &HashStrategy,
         index: &DistributionMetadataIndex,
         database: &DistributionDatabase<'_, Context>,
@@ -5223,7 +5223,7 @@ impl Lock {
         root: &Path,
         tags: &Tags,
         markers: &MarkerEnvironment,
-        build_options: &BuildOptions,
+        build_options: &BuildPolicies,
         hasher: &HashStrategy,
         index: &DistributionMetadataIndex,
         database: &DistributionDatabase<'_, Context>,
@@ -5925,7 +5925,7 @@ impl Lock {
         root: &Path,
         tags: &Tags,
         markers: &MarkerEnvironment,
-        build_options: &BuildOptions,
+        build_options: &BuildPolicies,
         hasher: &HashStrategy,
         index: &DistributionMetadataIndex,
         database: &DistributionDatabase<'_, Context>,
@@ -6233,7 +6233,7 @@ pub enum SatisfiesResult<'lock> {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct ResolverOptions {
     /// The build options used to select this lockfile's artifacts, when a build policy is set.
-    build_options: Box<BuildOptions>,
+    build_options: Box<BuildPolicies>,
     /// The [`ResolutionMode`] used to generate this lock.
     resolution_mode: ResolutionMode,
     /// The [`Prerelease`] policy used to generate this lock.
@@ -6618,14 +6618,12 @@ impl TryFrom<LockWire> for Lock {
         }
         let options = ResolverOptions {
             build_options: Box::new(
-                BuildOptions::new(
+                BuildPolicies::new(
                     NoBinary::from_args(options_wire.no_binary, options_wire.no_binary_package),
                     NoBuild::from_args(options_wire.no_build, options_wire.no_build_package),
-                )
-                .with_policy(BuildPolicies::new(
                     options_wire.build_policy,
                     options_wire.build_policy_package,
-                ))
+                )
                 .normalized(),
             ),
             resolution_mode: options_wire.resolution_mode,
@@ -6774,7 +6772,7 @@ impl Package {
         &self,
         workspace_root: &Path,
         tag_policy: TagPolicy<'_>,
-        build_options: &BuildOptions,
+        build_options: &BuildPolicies,
         markers: &MarkerEnvironment,
         first_party: FirstParty,
     ) -> Result<HashedDist, LockError> {

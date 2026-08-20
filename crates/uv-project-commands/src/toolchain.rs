@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use uv_configuration::{BuildOptions, DependencyGroupsWithDefaults, InstallOptions};
+use uv_configuration::{BuildPolicies, DependencyGroupsWithDefaults, InstallOptions};
 use uv_distribution_types::Resolution;
 use uv_lock::{Lock, SelectedDependency};
 use uv_normalize::{GroupName, PackageName};
@@ -63,7 +63,7 @@ pub(super) fn resolution_from_lock(
     lock: &Lock,
     tool: &LockedTool<'_>,
     interpreter: &Interpreter,
-    build_options: &BuildOptions,
+    build_options: &BuildPolicies,
 ) -> Result<Resolution> {
     let marker_environment = resolution_markers(None, None, interpreter);
     let tags = resolution_tags(None, None, interpreter)?;

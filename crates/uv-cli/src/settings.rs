@@ -17,7 +17,7 @@ use uv_auth::Service;
 use uv_cache::{CacheArgs, Refresh};
 use uv_client::{Certificates, Connectivity, MetadataRangeRequest};
 use uv_configuration::{
-    ActiveEnvironment, AddBoundsKind, AnnotationStyle, BuildIsolation, BuildOptions, BuildPolicies,
+    ActiveEnvironment, AddBoundsKind, AnnotationStyle, BuildIsolation, BuildPolicies,
     BuildPolicyPackage, Concurrency, DependencyGroups, DependencyMode, DevMode, DryRun, EditableMode,
     EnvFile, ExcludeDependency, ExcludeNewer, ExcludeNewerPackage, ExportFormat,
     ExtrasSpecification, ForkStrategy, GitLfsSetting, HashCheckingMode, IndexStrategy, InitKind,
@@ -4462,7 +4462,7 @@ fn resolve_pip_build_hash_checking(
 }
 
 fn warn_build_policy_preview(policy: &BuildPolicies) {
-    if !policy.is_empty() && !uv_preview::is_enabled(PreviewFeature::BuildPolicy) {
+    if policy.is_configured() && !uv_preview::is_enabled(PreviewFeature::BuildPolicy) {
         warn_user_once!(
             "The `--build-policy` and `--build-policy-package` options are experimental and may change without warning. Pass `--preview-features {}` to disable this warning.",
             PreviewFeature::BuildPolicy
@@ -4608,7 +4608,7 @@ pub struct PipSettings {
     pub build_isolation: BuildIsolation,
     pub extra_build_dependencies: ExtraBuildDependencies,
     pub extra_build_variables: ExtraBuildVariables,
-    pub build_options: BuildOptions,
+    pub build_options: BuildPolicies,
     pub allow_empty_requirements: bool,
     pub strict: bool,
     pub dependency_mode: DependencyMode,
@@ -4646,7 +4646,7 @@ pub struct PipSettings {
 
 impl PipSettings {
     fn warn_build_policy_preview(self) -> Self {
-        warn_build_policy_preview(self.build_options.policy());
+        warn_build_policy_preview(&self.build_options);
         self
     }
 
@@ -5015,7 +5015,7 @@ impl PipSettings {
                 reinstall_package.unwrap_or_default(),
             ))
             .unwrap_or_default(),
-            build_options: BuildOptions::new(
+            build_options: BuildPolicies::new(
                 NoBinary::from_pip_args(args.no_binary.combine(no_binary).unwrap_or_default())
                     .combine(NoBinary::from_args(
                         top_level_no_binary,
@@ -5029,8 +5029,6 @@ impl PipSettings {
                     top_level_no_build,
                     top_level_no_build_package.unwrap_or_default(),
                 )),
-            )
-            .with_policy(BuildPolicies::new(
                 args.build_policy
                     .combine(build_policy)
                     .combine(top_level_build_policy),
@@ -5038,7 +5036,7 @@ impl PipSettings {
                     .combine(build_policy_package)
                     .combine(top_level_build_policy_package)
                     .unwrap_or_default(),
-            )),
+            ),
             install_mirrors: environment
                 .install_mirrors
                 .combine(filesystem_install_mirrors),

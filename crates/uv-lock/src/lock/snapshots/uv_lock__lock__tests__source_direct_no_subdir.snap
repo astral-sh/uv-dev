@@ -33,12 +33,18 @@ Ok(
             ),
         },
         options: ResolverOptions {
-            build_options: BuildOptions {
-                no_binary: None,
-                no_build: None,
-                policy: BuildPolicies {
-                    default: None,
-                    packages: {},
+            build_options: BuildPolicies {
+                default: Some(
+                    Allow,
+                ),
+                packages: {},
+                inputs: BuildPolicyInputs {
+                    no_binary: None,
+                    no_build: None,
+                    policy: ConfiguredBuildPolicies {
+                        default: None,
+                        packages: {},
+                    },
                 },
             },
             resolution_mode: Highest,
