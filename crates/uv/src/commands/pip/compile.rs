@@ -625,10 +625,6 @@ pub(crate) async fn pip_compile(
         resolution.retain_allowed_distribution_hashes(&build_options);
     }
 
-    if generate_hashes && preview.is_enabled(PreviewFeature::BuildPolicy) {
-        resolution.retain_allowed_distribution_hashes(output_build_options);
-    }
-
     // Write the resolved dependencies to the output channel.
     let mut writer = OutputWriter::new(!quiet || output_file.is_none(), output_file);
 
