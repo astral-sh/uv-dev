@@ -600,7 +600,7 @@ pub(crate) async fn pip_compile(
         }
     };
 
-    let output_build_options = (!build_options.policy().is_empty()).then(|| {
+    let output_build_options = build_options.has_build_policy().then(|| {
         resolution.materialize_build_options(
             &build_options,
             tags.as_deref(),
@@ -770,7 +770,7 @@ pub(crate) async fn pip_compile(
                 &no_emit_packages,
                 install_path,
                 tags.as_deref(),
-                output_build_options,
+                &build_options,
             )?;
             write!(writer, "{}", export.to_toml()?)?;
         }
