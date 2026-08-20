@@ -3097,8 +3097,6 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .build_context
             .build_options()
             .no_build_requirement(source_name)
-            // Unnamed editables need metadata to apply package-specific build settings.
-            && !(source_name.is_none() && source.is_editable())
             && !self.is_first_party(source)
         {
             return if let Some(name) = source_name {

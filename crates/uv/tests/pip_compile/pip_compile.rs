@@ -6292,6 +6292,8 @@ fn build_policy_unnamed_source_metadata() -> Result<()> {
     project.child("backend.py").write_str(indoc! {r#"
         from pathlib import Path
 
+        Path(__file__).with_name("import-ran").touch()
+
 
         def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
             Path(__file__).with_name("metadata-ran").touch()
@@ -6306,9 +6308,19 @@ fn build_policy_unnamed_source_metadata() -> Result<()> {
             return directory.name
 
 
+        def prepare_metadata_for_build_editable(metadata_directory, config_settings=None):
+            Path(__file__).with_name("editable-metadata-ran").touch()
+            return prepare_metadata_for_build_wheel(metadata_directory, config_settings)
+
+
         def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
             Path(__file__).with_name("build-ran").touch()
             raise RuntimeError("wheel build should not run")
+
+
+        def build_editable(wheel_directory, config_settings=None, metadata_directory=None):
+            Path(__file__).with_name("editable-build-ran").touch()
+            raise RuntimeError("editable build should not run")
     "#})?;
 
     uv_snapshot!(context.filters(), context.pip_compile()
@@ -6319,6 +6331,7 @@ fn build_policy_unnamed_source_metadata() -> Result<()> {
     ----- stderr -----
     error: Building source distributions is disabled
     ");
+    assert!(!project.child("import-ran").exists());
     assert!(!project.child("metadata-ran").exists());
 
     // An unnamed source cannot run its backend to discover whether a package exception applies.
@@ -6331,6 +6344,7 @@ fn build_policy_unnamed_source_metadata() -> Result<()> {
     ----- stderr -----
     error: Building source distributions is disabled
     ");
+    assert!(!project.child("import-ran").exists());
     assert!(!project.child("metadata-ran").exists());
 
     // Editable mode cannot bypass the fail-closed check for an unnamed source.
@@ -6352,7 +6366,10 @@ fn build_policy_unnamed_source_metadata() -> Result<()> {
             .contains("Building source distributions is disabled"),
         "{output:?}"
     );
+    assert!(!project.child("import-ran").exists());
     assert!(!project.child("metadata-ran").exists());
+    assert!(!project.child("editable-metadata-ran").exists());
+    assert!(!project.child("editable-build-ran").exists());
 
     // Legacy package exceptions also require a trustworthy pre-execution identity.
     uv_snapshot!(context.filters(), context.pip_compile()
@@ -6364,6 +6381,7 @@ fn build_policy_unnamed_source_metadata() -> Result<()> {
     ----- stderr -----
     error: Building source distributions is disabled
     ");
+    assert!(!project.child("import-ran").exists());
     assert!(!project.child("metadata-ran").exists());
 
     // A named requirement provides a trustworthy identity before the backend is invoked.
@@ -6383,7 +6401,9 @@ fn build_policy_unnamed_source_metadata() -> Result<()> {
         .env(EnvVars::UV_PREVIEW_FEATURES, "build-policy")
         .output()?;
     assert!(output.status.success(), "{output:?}");
+    assert!(project.child("import-ran").exists());
     assert!(project.child("metadata-ran").exists());
+    fs::remove_file(project.child("import-ran"))?;
     fs::remove_file(project.child("metadata-ran"))?;
 
     // A permissive global policy allows metadata discovery, but a restriction for the discovered
@@ -6406,9 +6426,11 @@ fn build_policy_unnamed_source_metadata() -> Result<()> {
         ),
         "{output:?}"
     );
+    assert!(project.child("import-ran").exists());
     assert!(project.child("metadata-ran").exists());
     assert!(!project.child("build-ran").exists());
 
+    fs::remove_file(project.child("import-ran"))?;
     fs::remove_file(project.child("metadata-ran"))?;
     context
         .temp_dir
