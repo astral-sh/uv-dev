@@ -16,6 +16,9 @@ with the generated lockfile requests the repository-relative wheel path and succ
 The reproduction used uv 0.12.5 on x86_64 Linux with CPython 3.12.3. The report additionally lists
 uv 0.12.0 and 0.12.5, macOS and Linux, and Python 3.12.12 and 3.13.11.
 
+The checkout now contains a focused production fix and regression coverage for fresh syncs of both
+Git-hosted wheels and source archives.
+
 ## Classification
 
 This is a reproducible bug. The same dependency graph identifies different installation paths
@@ -24,8 +27,9 @@ from the lockfile. In both cases, the wheel is part of the enclosing Git reposit
 addressed by the same repository-relative path.
 
 Merged astral-sh/uv#10072 establishes that pre-built archives within Git repositories are supported.
-The existing integration test verifies lockfile serialization and installation from an existing
-lockfile, but does not exercise this fresh-sync and Git-subdirectory combination.
+Before this fix, the existing `sync_git_path_archive` integration test verified lockfile
+serialization and installation from an existing lockfile, but did not exercise this fresh-sync and
+Git-subdirectory combination. The updated parent regression now covers that combination.
 
 ## Reproduction
 
@@ -121,9 +125,35 @@ is at the repository root rather than selected with `subdirectory`.
   astral-sh/uv#21244 because the new report's lockfile is already correct and the bad absolute path
   appears only in the fresh sync's installation request.
 
-## Maintainer notes
+## Fix
 
-The observed mismatch is sufficient to reproduce the issue, but this handoff does not claim a
-confirmed source-level root cause. A regression test needs both distinguishing conditions: the
-parent dependency selected from a Git `subdirectory`, and `uv sync` performing resolution and
-installation without a pre-existing lockfile.
+Outcome: fixed.
+
+The confirmed root cause was in the resolver's in-memory lock producer. A Git archive's
+`install_path` is already relative to the Git repository, but `Source::from_git_path_built_dist` and
+`Source::from_git_path_source_dist` tried to make it relative to the downstream workspace root.
+Because the repository-relative path and absolute workspace root could not be relativized, the
+fallback resolved the path against the process working directory. The in-memory `GitSource.path`
+therefore pointed under the downstream project. At the same time, the lockfile URL was generated
+from the original repository-relative path, so the serialized `uv.lock` was correct and reparsing
+it repaired the bad in-memory state. This accounts for the fresh-sync failure and successful second
+sync.
+
+The production change preserves `GitPathBuiltDist::install_path` and
+`GitPathSourceDist::install_path` as repository-relative paths when constructing the lock. The
+parent `sync_git_metadata_archive_dependency` integration test now requires the first fresh sync to
+install the transitive wheel successfully, retains the lockfile source assertion, and verifies that
+the second sync is a no-op. The existing `lock_sdist_git_archive` fixture now begins with a fresh
+sync, demonstrating and covering the same cause through the separate source-distribution producer.
+
+Successful focused validation:
+
+- `cargo test --package uv --test sync sync::sync_git_metadata_archive_dependency -- --exact`
+- `cargo test --package uv --test lock lock::lock_sdist_git_archive -- --exact`
+- `cargo test --package uv --test sync sync::sync_git_path_archive -- --exact`
+- `cargo test --package uv --test lock lock::lock_wheel_git_archive -- --exact`
+- `cargo +stable clippy --package uv-resolver --lib --locked -- -D warnings`
+- `cargo +stable fmt --all`
+- `git diff --check`
+
+Pull request: https://github.com/astral-sh/uv-dev/pull/826

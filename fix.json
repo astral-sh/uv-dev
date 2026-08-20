@@ -1,0 +1,13 @@
+{
+  "outcome": "fixed",
+  "summary": "Fresh syncs incorrectly rebased repository-relative Git archive paths against the downstream workspace. The lock producer now preserves those paths, with regression coverage for transitive wheels, direct source archives, and locked replay.",
+  "validation": [
+    "Parent transitive wheel sync regression test",
+    "Direct source archive sync regression test",
+    "Existing Git wheel sync test",
+    "Existing Git wheel lock round trip",
+    "Focused uv-resolver clippy check",
+    "Rust formatting and diff check"
+  ],
+  "pull_request": "https://github.com/astral-sh/uv-dev/pull/826"
+}
