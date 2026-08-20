@@ -2884,13 +2884,16 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         debug!("Building: {source}");
 
         // Guard against build of source distributions when disabled.
+        let source_name = source.name();
         if self
             .build_context
             .build_options()
-            .no_build_requirement(source.name())
+            .no_build_requirement(source_name, source.is_editable())
         {
-            if source.is_editable() || source.is_first_party() {
-                debug!("Allowing build for first-party or editable source distribution: {source}");
+            if source.is_first_party() || (source_name.is_some() && source.is_editable()) {
+                debug!(
+                    "Allowing build for first-party or named editable source distribution: {source}"
+                );
             } else {
                 return Err(Error::NoBuild);
             }
@@ -3048,7 +3051,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         if self
             .build_context
             .build_options()
-            .no_build_requirement(source_name)
+            .no_build_requirement(source_name, source.is_editable())
         {
             return if let Some(name) = source_name {
                 Err(Error::NoBuildPackage(name.clone()))

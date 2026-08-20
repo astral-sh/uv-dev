@@ -5135,6 +5135,10 @@ impl PipSettings {
                     top_level_no_build_package.unwrap_or_default(),
                 )),
             )
+            .with_no_build_unnamed_editable(
+                args.no_build.combine(no_build).unwrap_or_default()
+                    || top_level_no_build.unwrap_or_default(),
+            )
             .with_build_policy(
                 args.build_policy
                     .combine(build_policy)
