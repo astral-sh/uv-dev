@@ -224,7 +224,7 @@ fn catalog_cli_is_append_only() -> Result<()> {
     ");
     assert_eq!(fs_err::read(catalog.path())?, original);
     archive.write_str("replacement")?;
-    uv_snapshot!(add(), @"
+    uv_snapshot!(add().env("RUST_BACKTRACE", "1").env("RUST_LIB_BACKTRACE", "1"), @"
     exit_code: 1 (failure)
     ----- stderr -----
     Error: Conflicting checksum for `example.whl`; existing records cannot be replaced

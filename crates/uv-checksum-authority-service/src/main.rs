@@ -3,6 +3,7 @@ use fs_err::os::unix::fs::OpenOptionsExt;
 use std::io::{BufReader, Read, Write};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::process::ExitCode;
 
 use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand};
@@ -64,7 +65,17 @@ fn read_key(path: &Path) -> Result<Ed25519KeyPair> {
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> ExitCode {
+    match run().await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            let _ = writeln!(std::io::stderr(), "Error: {error:#}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+async fn run() -> Result<()> {
     match Args::parse().command {
         Command::Keygen { signing_key } => {
             let mut seed = Zeroizing::new([0; 32]);
