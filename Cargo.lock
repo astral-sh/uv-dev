@@ -6286,7 +6286,7 @@ dependencies = [
 
 [[package]]
 name = "uv-checksum-authority"
-version = "0.0.79"
+version = "0.0.80"
 dependencies = [
  "base64 0.22.1",
  "fs-err",
@@ -6306,11 +6306,12 @@ dependencies = [
 
 [[package]]
 name = "uv-checksum-authority-service"
-version = "0.0.79"
+version = "0.0.80"
 dependencies = [
  "anyhow",
  "assert_cmd",
  "assert_fs",
+ "base64 0.22.1",
  "bytes",
  "clap",
  "fs-err",
