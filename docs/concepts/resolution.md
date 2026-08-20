@@ -269,6 +269,7 @@ Each configured libc version needs coverage in `required-environments`. If a req
 has no compatible wheel or usable source distribution, uv will try another version of the package.
 Generic Linux wheels, such as `linux_x86_64`, do not constrain libc and can satisfy either
 implementation.
+
 The [`if-necessary` build policy](#source-build-policies) also uses these environments to determine
 whether a source distribution must be retained in the lockfile.
 

@@ -19,7 +19,7 @@ use uv_cache::{Cache, CacheBucket};
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_command_support::{ExitStatus, Printer};
 use uv_configuration::{
-    BuildIsolation, BuildKind, BuildOptions, BuildOutput, Concurrency, Constraints,
+    BuildIsolation, BuildKind, BuildOutput, BuildPolicies, Concurrency, Constraints,
     DependencyGroupsWithDefaults, DependencyMode, DependencyModifiers, HashCheckingMode,
     IndexStrategy, KeyringProviderType, NoSources,
 };
@@ -512,7 +512,7 @@ async fn build_package(
     exclude_newer: ExcludeNewer,
     sources: NoSources,
     concurrency: &Concurrency,
-    build_options: &BuildOptions,
+    build_options: &BuildPolicies,
     sdist: bool,
     wheel: bool,
     list: bool,
