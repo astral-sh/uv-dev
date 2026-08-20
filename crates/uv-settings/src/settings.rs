@@ -6,10 +6,10 @@ use serde::{Deserialize, Serialize};
 
 use uv_cache_info::CacheKey;
 use uv_configuration::{
-    AnnotationStyle, BuildIsolation, ExcludeDependency, ExcludeNewerPackage, ForkStrategy,
-    IndexStrategy, KeyringProviderType, PackageNameSpecifier, PrereleaseMode, PrereleasePackage,
-    ProxyUrl, Reinstall, RequiredVersion, ResolutionMode, TargetTriple, TrustedHost,
-    TrustedPublishing, Upgrade, serialize_exclude_newer_package_with_spans,
+    AnnotationStyle, BuildIsolation, BuildPolicySpecifier, ExcludeDependency, ExcludeNewerPackage,
+    ForkStrategy, IndexStrategy, KeyringProviderType, PackageNameSpecifier, PrereleaseMode,
+    PrereleasePackage, ProxyUrl, Reinstall, RequiredVersion, ResolutionMode, TargetTriple,
+    TrustedHost, TrustedPublishing, Upgrade, serialize_exclude_newer_package_with_spans,
 };
 use uv_distribution_types::{
     ConfigSettings, ExcludeNewerOverride, ExcludeNewerSpan, ExcludeNewerValue, ExtraBuildVariables,
@@ -1392,6 +1392,22 @@ impl PythonInstallMirrors {
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct PipOptions {
+    /// Control whether packages may be built from source.
+    ///
+    /// Use `allow` for normal behavior, `fallback` to omit source artifacts when the selected
+    /// version has sufficient wheel coverage, `deny` to require wheels, or `force` to require
+    /// source distributions. Package-specific entries override the global policy. Existing
+    /// `no-build`, `only-binary`, and `no-binary` restrictions take precedence.
+    ///
+    /// Requires the `build-policy` preview feature. `fallback` does not prevent metadata builds.
+    #[option(
+        default = "[]",
+        value_type = "list[str]",
+        example = r#"
+            build-policy = ["fallback", "numpy=deny"]
+        "#
+    )]
+    pub build_policy: Option<Vec<BuildPolicySpecifier>>,
     /// The Python interpreter into which packages should be installed.
     ///
     /// By default, uv installs into the virtual environment in the current working directory or
