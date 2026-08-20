@@ -989,8 +989,7 @@ impl ToolRunSettings {
             .map(|options| options.install_mirrors.clone())
             .unwrap_or_default();
 
-        let mut settings =
-            ResolverInstallerSettings::from(options.clone()).validate_build_policy()?;
+        let mut settings = ResolverInstallerSettings::from(options.clone());
         if torch_backend.is_some() {
             settings.resolver.torch_backend = torch_backend;
         }
@@ -1119,8 +1118,7 @@ impl ToolInstallSettings {
             .map(|options| options.install_mirrors.clone())
             .unwrap_or_default();
 
-        let mut settings =
-            ResolverInstallerSettings::from(options.clone()).validate_build_policy()?;
+        let mut settings = ResolverInstallerSettings::from(options.clone());
         if torch_backend.is_some() {
             settings.resolver.torch_backend = torch_backend;
         }
@@ -2112,8 +2110,7 @@ impl UpgradeSettings {
             .unwrap_or_default();
         let (packages, exclude, options) =
             upgrade_options(args, configured_indexes(filesystem.as_ref()))?;
-        let mut settings =
-            combine_resolver_settings(options, filesystem, &environment).validate_build_policy()?;
+        let mut settings = combine_resolver_settings(options, filesystem, &environment);
         settings.upgrade = if packages.is_empty() {
             Upgrade::default()
         } else {
@@ -2471,8 +2468,7 @@ impl AddSettings {
             extras: extra.unwrap_or_default(),
             refresh,
             indexes,
-            settings: combine_resolver_installer_settings(options, filesystem, &environment)
-                .validate_build_policy()?,
+            settings: combine_resolver_installer_settings(options, filesystem, &environment),
             install_mirrors: environment
                 .install_mirrors
                 .combine(filesystem_install_mirrors),
@@ -3572,7 +3568,7 @@ impl PipCompileSettings {
                 filesystem,
                 environment,
             )
-            .validate_build_policy()?,
+            .warn_build_policy_preview(),
         })
     }
 }
@@ -3703,7 +3699,7 @@ impl PipSyncSettings {
                 filesystem,
                 environment,
             )
-            .validate_build_policy()?,
+            .warn_build_policy_preview(),
         })
     }
 }
@@ -3917,7 +3913,7 @@ impl PipInstallSettings {
                 filesystem,
                 environment,
             )
-            .validate_build_policy()?,
+            .warn_build_policy_preview(),
         })
     }
 }
@@ -4465,31 +4461,12 @@ fn resolve_pip_build_hash_checking(
     )
 }
 
-fn validate_build_policy(options: &BuildOptions) -> anyhow::Result<()> {
-    if !options.policy().is_empty() && !uv_preview::is_enabled(PreviewFeature::BuildPolicy) {
-        anyhow::bail!("The build policy options require `--preview-features build-policy`");
-    }
-    Ok(())
-}
-
-trait ValidateBuildPolicy: Sized {
-    fn build_options(&self) -> &BuildOptions;
-
-    fn validate_build_policy(self) -> anyhow::Result<Self> {
-        validate_build_policy(self.build_options())?;
-        Ok(self)
-    }
-}
-
-impl ValidateBuildPolicy for ResolverSettings {
-    fn build_options(&self) -> &BuildOptions {
-        &self.build_options
-    }
-}
-
-impl ValidateBuildPolicy for ResolverInstallerSettings {
-    fn build_options(&self) -> &BuildOptions {
-        &self.resolver.build_options
+fn warn_build_policy_preview(policy: &BuildPolicies) {
+    if !policy.is_empty() && !uv_preview::is_enabled(PreviewFeature::BuildPolicy) {
+        warn_user_once!(
+            "The `--build-policy` and `--build-policy-package` options are experimental and may change without warning. Pass `--preview-features {}` to disable this warning.",
+            PreviewFeature::BuildPolicy
+        );
     }
 }
 
@@ -4509,7 +4486,7 @@ fn resolve_resolver_settings(
 ) -> Result<ResolverSettings> {
     let args = resolver_options(args, build, configured_indexes(filesystem.as_ref()))?;
 
-    combine_resolver_settings(args, filesystem, environment).validate_build_policy()
+    Ok(combine_resolver_settings(args, filesystem, environment))
 }
 
 /// Resolve the [`ResolverSettings`] from the CLI and filesystem configuration.
@@ -4556,7 +4533,11 @@ fn resolve_resolver_installer_settings(
 ) -> Result<ResolverInstallerSettings> {
     let args = resolver_installer_options(args, build, configured_indexes(filesystem.as_ref()))?;
 
-    combine_resolver_installer_settings(args, filesystem, environment).validate_build_policy()
+    Ok(combine_resolver_installer_settings(
+        args,
+        filesystem,
+        environment,
+    ))
 }
 
 /// Reconcile the [`ResolverInstallerSettings`] from the CLI and filesystem configuration.
@@ -4664,9 +4645,9 @@ pub struct PipSettings {
 }
 
 impl PipSettings {
-    fn validate_build_policy(self) -> anyhow::Result<Self> {
-        validate_build_policy(&self.build_options)?;
-        Ok(self)
+    fn warn_build_policy_preview(self) -> Self {
+        warn_build_policy_preview(self.build_options.policy());
+        self
     }
 
     /// Resolve the [`PipSettings`] from the CLI and filesystem configuration.

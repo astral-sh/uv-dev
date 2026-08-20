@@ -1,8 +1,7 @@
 use uv_configuration::{
-    BuildIsolation, BuildOptions, BuildPolicies, ExcludeNewer, ForkStrategy, HashCheckingMode,
-    IndexStrategy,
-    KeyringProviderType, NoBinary, NoBuild, NoSources, Prerelease, PrereleaseMode,
-    PrereleasePackage, Reinstall, ResolutionMode, Upgrade,
+    BuildIsolation, BuildOptions, BuildPolicies, BuildPolicy, BuildPolicyPackage, ExcludeNewer,
+    ForkStrategy, HashCheckingMode, IndexStrategy, KeyringProviderType, NoBinary, NoBuild, NoSources,
+    Prerelease, PrereleaseMode, PrereleasePackage, Reinstall, ResolutionMode, Upgrade,
 };
 use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, ExtraBuildVariables, IndexLocations, PackageConfigSettings,
@@ -195,6 +194,17 @@ pub fn resolve_prerelease(global: PrereleaseMode, mut package: PrereleasePackage
     }
 }
 
+fn resolve_build_policy(global: Option<BuildPolicy>, package: BuildPolicyPackage) -> BuildPolicies {
+    let policy = BuildPolicies::new(global, package);
+    if !policy.is_empty() && !uv_preview::is_enabled(PreviewFeature::BuildPolicy) {
+        warn_user_once!(
+            "The `--build-policy` and `--build-policy-package` options are experimental and may change without warning. Pass `--preview-features {}` to disable this warning.",
+            PreviewFeature::BuildPolicy
+        );
+    }
+    policy
+}
+
 impl From<ResolverOptions> for ResolverSettings {
     fn from(value: ResolverOptions) -> Self {
         Self {
@@ -238,7 +248,7 @@ impl From<ResolverOptions> for ResolverSettings {
                 NoBinary::from_args(value.no_binary, value.no_binary_package.unwrap_or_default()),
                 NoBuild::from_args(value.no_build, value.no_build_package.unwrap_or_default()),
             )
-            .with_policy(BuildPolicies::new(
+            .with_policy(resolve_build_policy(
                 value.build_policy,
                 value.build_policy_package.unwrap_or_default(),
             )),
@@ -270,7 +280,7 @@ impl From<ResolverInstallerOptions> for ResolverInstallerSettings {
                     ),
                     NoBuild::from_args(value.no_build, value.no_build_package.unwrap_or_default()),
                 )
-                .with_policy(BuildPolicies::new(
+                .with_policy(resolve_build_policy(
                     value.build_policy,
                     value.build_policy_package.unwrap_or_default(),
                 )),
