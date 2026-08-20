@@ -474,4 +474,3 @@ fn has_lower_bound(
     }
     false
 }
-

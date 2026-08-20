@@ -342,7 +342,7 @@ pub enum PreviewFeature {
     BatchExport,
     /// Allows setting minimum libc versions for universal resolutions.
     MinimumLibcVersion,
-    /// Controls source builds and the artifacts retained in compiled requirements.
+    /// Controls source builds and the artifacts retained in lockfiles and compiled requirements.
     BuildPolicy,
 }
 
