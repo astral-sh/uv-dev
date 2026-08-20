@@ -21,13 +21,12 @@ use url::Url;
 
 use uv_cache_key::RepositoryUrl;
 use uv_configuration::{
-    BuildOptions, BuildPolicies, BuildPolicy, BuildPolicyPackage, Constraints,
-    DependencyGroupsWithDefaults, DependencyModifierScope, DependencyModifiers, ExcludeDependency,
-    ExcludeNewer, ExcludeNewerPackage, Excludes, ExtrasSpecificationWithDefaults, ForkStrategy,
-    InstallTarget, NoBinary, NoBuild, NormalizedConstraints, NormalizedExcludes,
-    NormalizedOverrideEntries, NormalizedRequirements, Override, Overrides, PackageOverride,
-    Prerelease, PrereleaseMode, PrereleasePackage, ResolutionMode, ScopedOverrideSourceError,
-    Upgrade,
+    BuildOptions, BuildPolicy, BuildPolicyPackage, Constraints, DependencyGroupsWithDefaults,
+    DependencyModifierScope, DependencyModifiers, ExcludeDependency, ExcludeNewer,
+    ExcludeNewerPackage, Excludes, ExtrasSpecificationWithDefaults, ForkStrategy, InstallTarget,
+    NoBinary, NoBuild, NormalizedConstraints, NormalizedExcludes, NormalizedOverrideEntries,
+    NormalizedRequirements, Override, Overrides, PackageOverride, Prerelease, PrereleaseMode,
+    PrereleasePackage, ResolutionMode, ScopedOverrideSourceError, Upgrade,
 };
 use uv_distribution::{
     DistributionDatabase, FlatRequiresDist, Metadata as DistributionMetadata, RequiresDist,
@@ -2483,13 +2482,6 @@ impl Lock {
     ) -> Result<Self, LockError> {
         let mut packages = BTreeMap::new();
         let build_options = &resolution.options.build_options;
-        let output_build_options = (!build_options.policy().is_empty()).then(|| {
-            resolution.materialize_build_options(
-                build_options,
-                None,
-                &resolution.options.artifact_environments,
-            )
-        });
         let requires_python = resolution.requires_python.clone();
         let supported_environments = supported_environments
             .into_iter()
@@ -2560,10 +2552,14 @@ impl Lock {
                 )
             });
 
-            if let Some(build_options) = &output_build_options
-                && matches!(package.id.source, Source::Registry(_))
+            if build_options.has_build_policy() && matches!(package.id.source, Source::Registry(_))
             {
-                if build_options.no_build_package(&package.id.name) {
+                if resolution.no_build_distribution(
+                    dist,
+                    build_options,
+                    None,
+                    &resolution.options.artifact_environments,
+                ) {
                     package.sdist = None;
                 }
                 if build_options.no_binary_package(&package.id.name) {
@@ -2644,10 +2640,10 @@ impl Lock {
         let packages = packages.into_values().collect();
 
         let options = ResolverOptions {
-            build_options: Box::new(if build_options.policy().is_empty() {
-                BuildOptions::default()
-            } else {
+            build_options: Box::new(if build_options.has_build_policy() {
                 build_options.clone().normalized()
+            } else {
+                BuildOptions::default()
             }),
             resolution_mode: resolution.options.resolution_mode,
             prerelease: resolution.options.prerelease.clone(),
@@ -6619,10 +6615,7 @@ impl TryFrom<LockWire> for Lock {
                     NoBinary::from_args(options_wire.no_binary, options_wire.no_binary_package),
                     NoBuild::from_args(options_wire.no_build, options_wire.no_build_package),
                 )
-                .with_policy(BuildPolicies::new(
-                    options_wire.build_policy,
-                    options_wire.build_policy_package,
-                ))
+                .with_build_policy(options_wire.build_policy, options_wire.build_policy_package)
                 .normalized(),
             ),
             resolution_mode: options_wire.resolution_mode,

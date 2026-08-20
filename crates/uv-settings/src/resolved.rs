@@ -1,5 +1,5 @@
 use uv_configuration::{
-    BuildIsolation, BuildOptions, BuildPolicies, BuildPolicy, BuildPolicyPackage, ExcludeNewer,
+    BuildIsolation, BuildOptions, BuildPolicy, BuildPolicyPackage, ExcludeNewer,
     ForkStrategy, HashCheckingMode, IndexStrategy, KeyringProviderType, NoBinary, NoBuild, NoSources,
     Prerelease, PrereleaseMode, PrereleasePackage, Reinstall, ResolutionMode, Upgrade,
 };
@@ -194,18 +194,20 @@ pub fn resolve_prerelease(global: PrereleaseMode, mut package: PrereleasePackage
     }
 }
 
-fn resolve_build_policy(
+fn resolve_build_options(
+    no_binary: NoBinary,
+    no_build: NoBuild,
     global: Option<BuildPolicy>,
     package: BuildPolicyPackage,
-) -> BuildPolicies {
-    let policy = BuildPolicies::new(global, package);
-    if !policy.is_empty() && !uv_preview::is_enabled(PreviewFeature::BuildPolicy) {
+) -> BuildOptions {
+    let options = BuildOptions::new(no_binary, no_build).with_build_policy(global, package);
+    if options.has_build_policy() && !uv_preview::is_enabled(PreviewFeature::BuildPolicy) {
         warn_user_once!(
             "The `--build-policy` and `--build-policy-package` options are experimental and may change without warning. Pass `--preview-features {}` to disable this warning.",
             PreviewFeature::BuildPolicy
         );
     }
-    policy
+    options
 }
 
 impl From<ResolverOptions> for ResolverSettings {
@@ -247,14 +249,12 @@ impl From<ResolverOptions> for ResolverSettings {
                 value.no_sources_package.unwrap_or_default(),
             ),
             upgrade: value.upgrade.unwrap_or_default(),
-            build_options: BuildOptions::new(
+            build_options: resolve_build_options(
                 NoBinary::from_args(value.no_binary, value.no_binary_package.unwrap_or_default()),
                 NoBuild::from_args(value.no_build, value.no_build_package.unwrap_or_default()),
-            )
-            .with_policy(resolve_build_policy(
                 value.build_policy,
                 value.build_policy_package.unwrap_or_default(),
-            )),
+            ),
         }
     }
 }
@@ -276,17 +276,15 @@ impl From<ResolverInstallerOptions> for ResolverInstallerSettings {
         let index_locations = value.indexes.into();
         Self {
             resolver: ResolverSettings {
-                build_options: BuildOptions::new(
+                build_options: resolve_build_options(
                     NoBinary::from_args(
                         value.no_binary,
                         value.no_binary_package.unwrap_or_default(),
                     ),
                     NoBuild::from_args(value.no_build, value.no_build_package.unwrap_or_default()),
-                )
-                .with_policy(resolve_build_policy(
                     value.build_policy,
                     value.build_policy_package.unwrap_or_default(),
-                )),
+                ),
                 config_setting: value.config_settings.unwrap_or_default(),
                 config_settings_package: value.config_settings_package.unwrap_or_default(),
                 dependency_metadata: DependencyMetadata::from_entries(
