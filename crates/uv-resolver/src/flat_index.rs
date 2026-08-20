@@ -5,7 +5,7 @@ use rustc_hash::FxHashMap;
 use tracing::instrument;
 
 use uv_client::{FlatIndexEntries, FlatIndexEntry};
-use uv_configuration::BuildPolicies;
+use uv_configuration::BuildOptions;
 use uv_distribution_filename::{DistFilename, SourceDistFilename, WheelFilename};
 use uv_distribution_types::{
     File, HashComparison, IncompatibleSource, IncompatibleWheel, IndexUrl, PrioritizedDist,
@@ -68,7 +68,7 @@ impl FlatDistributions {
         entries: impl IntoIterator<Item = FlatIndexEntry>,
         tags: Option<&Tags>,
         hasher: &HashStrategy,
-        build_options: &BuildPolicies,
+        build_options: &BuildOptions,
     ) -> Self {
         let mut distributions = Self::default();
         for entry in entries {
@@ -90,7 +90,7 @@ impl FlatDistributions {
         filename: DistFilename,
         tags: Option<&Tags>,
         hasher: &HashStrategy,
-        build_options: &BuildPolicies,
+        build_options: &BuildOptions,
         index: IndexUrl,
     ) {
         // No `requires-python` here: for source distributions, we don't have that information;
@@ -153,7 +153,7 @@ impl FlatDistributions {
         filename: &SourceDistFilename,
         hashes: &[HashDigest],
         hasher: &HashStrategy,
-        build_options: &BuildPolicies,
+        build_options: &BuildOptions,
     ) -> SourceDistCompatibility {
         // Check if source distributions are allowed for this package.
         if build_options.no_build_package(&filename.name) {
@@ -190,7 +190,7 @@ impl FlatDistributions {
         hashes: &[HashDigest],
         tags: Option<&Tags>,
         hasher: &HashStrategy,
-        build_options: &BuildPolicies,
+        build_options: &BuildOptions,
     ) -> WheelCompatibility {
         // Check if binaries are allowed for this package.
         if build_options.no_binary_package(&filename.name) {

@@ -8,7 +8,7 @@ use tracing::{debug, warn};
 
 use uv_cache::{Cache, CacheBucket, WheelCache};
 use uv_cache_info::Timestamp;
-use uv_configuration::{BuildPolicies, Reinstall};
+use uv_configuration::{BuildOptions, Reinstall};
 use uv_distribution::{
     BuiltWheelIndex, HttpArchivePointer, PathArchivePointer, RegistryWheelIndex,
 };
@@ -259,7 +259,7 @@ impl<'a> Planner<'a> {
         mut site_packages: SitePackages,
         installation: InstallationStrategy,
         reinstall: &Reinstall,
-        build_options: &BuildPolicies,
+        build_options: &BuildOptions,
         hasher: &HashStrategy,
         index_locations: &IndexLocations,
         config_settings: &ConfigSettings,

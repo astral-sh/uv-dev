@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use uv_configuration::{BuildPolicies, DependencyGroupsWithDefaults, InstallOptions};
+use uv_configuration::{BuildOptions, DependencyGroupsWithDefaults, InstallOptions};
 use uv_distribution_types::Resolution;
 use uv_normalize::{GroupName, PackageName};
 use uv_python::Interpreter;
@@ -64,7 +64,7 @@ pub(crate) fn resolution_from_lock(
     lock: &Lock,
     tool: &LockedTool<'_>,
     interpreter: &Interpreter,
-    build_options: &BuildPolicies,
+    build_options: &BuildOptions,
 ) -> Result<Resolution> {
     let marker_environment = resolution_markers(None, None, interpreter);
     let tags = resolution_tags(None, None, interpreter)?;
