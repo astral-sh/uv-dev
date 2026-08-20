@@ -564,7 +564,7 @@ pub(crate) async fn pip_compile(
         .index_strategy(index_strategy)
         .torch_backend(torch_backend)
         .build_options(build_options.clone())
-        .artifact_environments(artifact_environments)
+        .artifact_environments(artifact_environments.clone())
         .build();
 
     // Resolve the requirements.
@@ -608,8 +608,25 @@ pub(crate) async fn pip_compile(
         }
     };
 
+    let output_build_options = (!build_options.policy().is_empty()).then(|| {
+        let packages = resolution.packages_with_available_wheels(
+            tags.as_deref(),
+            &artifact_environments,
+            &build_options,
+        );
+        let output_build_options = build_options
+            .clone()
+            .combine(NoBinary::None, NoBuild::Packages(packages));
+        resolution.materialize_build_options(&output_build_options)
+    });
+    let output_build_options = output_build_options.as_ref().unwrap_or(&build_options);
+
     if generate_hashes && preview.is_enabled(PreviewFeature::ArtifactHashFiltering) {
         resolution.retain_allowed_distribution_hashes(&build_options);
+    }
+
+    if generate_hashes && preview.is_enabled(PreviewFeature::BuildPolicy) {
+        resolution.retain_allowed_distribution_hashes(output_build_options);
     }
 
     // Write the resolved dependencies to the output channel.
@@ -679,7 +696,7 @@ pub(crate) async fn pip_compile(
 
             // If necessary, include the `--no-binary` and `--only-binary` options.
             if include_build_options {
-                match build_options.no_binary() {
+                match output_build_options.no_binary() {
                     NoBinary::None => {}
                     NoBinary::All => {
                         writeln!(writer, "--no-binary :all:")?;
@@ -692,7 +709,7 @@ pub(crate) async fn pip_compile(
                         }
                     }
                 }
-                match build_options.no_build() {
+                match output_build_options.no_build() {
                     NoBuild::None => {}
                     NoBuild::All => {
                         writeln!(writer, "--only-binary :all:")?;
@@ -769,7 +786,7 @@ pub(crate) async fn pip_compile(
                 &no_emit_packages,
                 install_path,
                 tags.as_deref(),
-                &build_options,
+                output_build_options,
             )?;
             write!(writer, "{}", export.to_toml()?)?;
         }

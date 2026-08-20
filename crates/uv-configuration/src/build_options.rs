@@ -1,7 +1,7 @@
 use uv_normalize::PackageName;
 pub use uv_pypi_types::BuildKind;
 
-use crate::{PackageNameSpecifier, PackageNameSpecifiers};
+use crate::{BuildPolicies, BuildPolicy, PackageNameSpecifier, PackageNameSpecifiers};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum BuildOutput {
@@ -18,6 +18,8 @@ pub enum BuildOutput {
 pub struct BuildOptions {
     no_binary: NoBinary,
     no_build: NoBuild,
+    #[serde(default, skip_serializing_if = "BuildPolicies::is_empty")]
+    policy: BuildPolicies,
 }
 
 impl BuildOptions {
@@ -25,6 +27,7 @@ impl BuildOptions {
         Self {
             no_binary,
             no_build,
+            policy: BuildPolicies::default(),
         }
     }
 
@@ -33,10 +36,17 @@ impl BuildOptions {
         Self {
             no_binary: self.no_binary.combine(no_binary),
             no_build: self.no_build.combine(no_build),
+            policy: self.policy,
         }
     }
 
     pub fn no_binary_package(&self, package_name: &PackageName) -> bool {
+        self.legacy_no_binary_package(package_name)
+            || (!self.legacy_no_build_package(package_name)
+                && self.policy.get(package_name) == Some(BuildPolicy::Force))
+    }
+
+    fn legacy_no_binary_package(&self, package_name: &PackageName) -> bool {
         match &self.no_binary {
             NoBinary::None => false,
             NoBinary::All => match &self.no_build {
@@ -49,6 +59,12 @@ impl BuildOptions {
     }
 
     pub fn no_build_package(&self, package_name: &PackageName) -> bool {
+        self.legacy_no_build_package(package_name)
+            || (!self.legacy_no_binary_package(package_name)
+                && self.policy.get(package_name) == Some(BuildPolicy::Deny))
+    }
+
+    fn legacy_no_build_package(&self, package_name: &PackageName) -> bool {
         match &self.no_build {
             NoBuild::All => match &self.no_binary {
                 // Allow `all` to be overridden by specific binary exclusions
@@ -69,6 +85,17 @@ impl BuildOptions {
 
     fn no_build_all(&self) -> bool {
         matches!(self.no_build, NoBuild::All)
+            || (!matches!(self.no_binary, NoBinary::All) && self.policy.denies_all())
+    }
+
+    #[must_use]
+    pub fn with_policy(mut self, policy: BuildPolicies) -> Self {
+        self.policy = policy;
+        self
+    }
+
+    pub fn policy(&self) -> &BuildPolicies {
+        &self.policy
     }
 
     /// Return the [`NoBuild`] strategy to use.
@@ -327,6 +354,29 @@ mod tests {
     use anyhow::Error;
 
     use super::*;
+
+    #[test]
+    fn build_policy_overrides() -> Result<(), Error> {
+        let package = PackageName::from_str("example")?;
+        let other = PackageName::from_str("other")?;
+        let options = BuildOptions::default().with_policy(BuildPolicies::from_specifiers([
+            "deny".parse()?,
+            "example=allow".parse()?,
+        ]));
+        assert!(!options.no_build_package(&package));
+        assert!(options.no_build_package(&other));
+        assert!(!options.no_build_requirement(None));
+
+        // Explicit legacy restrictions take precedence over the new policy.
+        let options = options.combine(NoBinary::Packages(vec![other.clone()]), NoBuild::None);
+        assert!(options.no_binary_package(&other));
+        assert!(!options.no_build_package(&other));
+        let options = BuildOptions::new(NoBinary::None, NoBuild::All)
+            .with_policy(BuildPolicies::from_specifiers(["force".parse()?]));
+        assert!(options.no_build_package(&package));
+        assert!(!options.no_binary_package(&package));
+        Ok(())
+    }
 
     #[test]
     fn no_build_from_args() -> Result<(), Error> {

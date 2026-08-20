@@ -337,6 +337,8 @@ pub enum PreviewFeature {
     ArtifactHashFiltering,
     /// Enables content-addressed wheel archives in the cache.
     ContentAddressedCache,
+    /// Controls source builds and the artifacts retained in compiled requirements.
+    BuildPolicy,
 }
 
 impl Display for PreviewFeature {
