@@ -498,6 +498,13 @@ mod tests {
         assert!(options.no_build_requirement(None));
         assert!(!options.no_build_requirement(Some(&package)));
 
+        // A global source-only restriction cannot authorize backend execution when the package
+        // identity is unknown. The build policy remains the pre-execution decision.
+        let options = BuildOptions::new(NoBinary::All, NoBuild::None)
+            .with_build_policy(Some(BuildPolicy::Disallow), BuildPolicyPackage::default());
+        assert!(options.no_build_requirement(None));
+        assert!(!options.no_build_requirement(Some(&package)));
+
         // A permissive global policy allows metadata discovery. Restrictions for the discovered
         // package still apply to subsequent named build work.
         let options = BuildOptions::default().with_build_policy(
