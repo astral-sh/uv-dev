@@ -2606,7 +2606,7 @@ impl Lock {
             build_options: Box::new(if build_options.policy().is_empty() {
                 BuildOptions::default()
             } else {
-                build_options.clone()
+                build_options.clone().normalized()
             }),
             resolution_mode: resolution.options.resolution_mode,
             prerelease: resolution.options.prerelease.clone(),
@@ -6331,7 +6331,8 @@ impl TryFrom<LockWire> for Lock {
                 .with_policy(BuildPolicies::new(
                     options_wire.build_policy,
                     options_wire.build_policy_package,
-                )),
+                ))
+                .normalized(),
             ),
             resolution_mode: options_wire.resolution_mode,
             prerelease: options_wire.prerelease.into(),
