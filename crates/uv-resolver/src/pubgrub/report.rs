@@ -12,7 +12,7 @@ use pubgrub::{DerivationTree, Derived, External, Map, ReportFormatter, Term};
 use reqwest::StatusCode;
 use rustc_hash::FxHashMap;
 
-use uv_configuration::{IndexStrategy, NoBinary, NoBuild};
+use uv_configuration::{BuildPolicy, IndexStrategy, NoBinary, NoBuild};
 use uv_distribution_types::{
     IncompatibleDist, IncompatibleSource, IncompatibleWheel, Index, IndexCapabilities,
     IndexLocations, IndexMetadata, IndexUrl, RequiresPython,
@@ -811,12 +811,22 @@ impl PubGrubReportFormatter<'_> {
                                     output_hints.insert(PubGrubHint::NoBinary {
                                         package: name.clone(),
                                         option: options.build_options.no_binary().clone(),
+                                        policy: options
+                                            .build_options
+                                            .policy()
+                                            .get(name)
+                                            .filter(|policy| *policy == BuildPolicy::Force),
                                     });
                                 }
                                 IncompatibleDist::Source(IncompatibleSource::NoBuild) => {
                                     output_hints.insert(PubGrubHint::NoBuild {
                                         package: name.clone(),
                                         option: options.build_options.no_build().clone(),
+                                        policy: options
+                                            .build_options
+                                            .policy()
+                                            .get(name)
+                                            .filter(|policy| *policy == BuildPolicy::Deny),
                                     });
                                 }
                                 // Check for unavailable versions due to incompatible tags.
@@ -1617,12 +1627,14 @@ pub enum PubGrubHint {
         package: PackageName,
         // excluded from `PartialEq` and `Hash`
         option: NoBuild,
+        policy: Option<BuildPolicy>,
     },
     /// No source distributions are available for a package, and using pre-built wheels was disabled.
     NoBinary {
         package: PackageName,
         // excluded from `PartialEq` and `Hash`
         option: NoBinary,
+        policy: Option<BuildPolicy>,
     },
     /// An index returned an Unauthorized (401) response.
     UnauthorizedIndex { index: IndexUrl },
@@ -2180,7 +2192,18 @@ impl std::fmt::Display for PubGrubHint {
                     )
                 }
             }
-            Self::NoBuild { package, option } => {
+            Self::NoBuild {
+                package,
+                option,
+                policy,
+            } => {
+                if let Some(policy) = policy {
+                    return write!(
+                        f,
+                        "Wheels are required for `{}` because its build policy is `{policy}`",
+                        package.cyan()
+                    );
+                }
                 let option = match option {
                     NoBuild::All => "for all packages (i.e., with `--no-build`)".to_string(),
                     NoBuild::Packages(_) => {
@@ -2194,7 +2217,18 @@ impl std::fmt::Display for PubGrubHint {
                     package.cyan(),
                 )
             }
-            Self::NoBinary { package, option } => {
+            Self::NoBinary {
+                package,
+                option,
+                policy,
+            } => {
+                if let Some(policy) = policy {
+                    return write!(
+                        f,
+                        "A source distribution is required for `{}` because its build policy is `{policy}`",
+                        package.cyan()
+                    );
+                }
                 let option = match option {
                     NoBinary::All => "for all packages (i.e., with `--no-binary`)".to_string(),
                     NoBinary::Packages(_) => {
