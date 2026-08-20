@@ -4,7 +4,7 @@ use std::sync::Arc;
 use reqwest::StatusCode;
 
 use uv_client::MetadataFormat;
-use uv_configuration::BuildPolicies;
+use uv_configuration::BuildOptions;
 use uv_distribution::{ArchiveMetadata, DistributionDatabase, Reporter};
 use uv_distribution_types::{
     Dist, IndexCapabilities, IndexLocations, IndexMetadata, IndexMetadataRef, InstalledDist,
@@ -125,7 +125,7 @@ pub struct DefaultResolverProvider<'a, Context: BuildContext> {
     exclude_newer: ExcludeNewer,
     available_version_cutoff: Option<jiff::Timestamp>,
     index_locations: &'a IndexLocations,
-    build_options: &'a BuildPolicies,
+    build_options: &'a BuildOptions,
     capabilities: &'a IndexCapabilities,
 }
 
@@ -140,7 +140,7 @@ impl<'a, Context: BuildContext> DefaultResolverProvider<'a, Context> {
         hasher: &'a HashStrategy,
         exclude_newer: ExcludeNewer,
         index_locations: &'a IndexLocations,
-        build_options: &'a BuildPolicies,
+        build_options: &'a BuildOptions,
         capabilities: &'a IndexCapabilities,
     ) -> Self {
         Self {
