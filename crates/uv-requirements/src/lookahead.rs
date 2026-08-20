@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, sync::Arc};
+use std::{borrow::Cow, collections::VecDeque, sync::Arc};
 
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
@@ -40,6 +40,8 @@ pub struct LookaheadResolver<'a, Context: BuildContext> {
     excludes: &'a Excludes,
     /// The required hashes for the project.
     hasher: &'a HashStrategy,
+    /// Whether metadata-discovered hashes can authorize new distributions.
+    preserve_hash_authority: bool,
     /// The in-memory index for resolving dependencies.
     index: &'a InMemoryIndex,
     /// The database for fetching and building distributions.
@@ -63,9 +65,18 @@ impl<'a, Context: BuildContext> LookaheadResolver<'a, Context> {
             overrides,
             excludes,
             hasher,
+            preserve_hash_authority: false,
             index,
             database,
         }
+    }
+
+    /// Prevent metadata-discovered hashes from authorizing new distributions under a required
+    /// hash policy.
+    #[must_use]
+    pub fn preserve_hash_authority(mut self) -> Self {
+        self.preserve_hash_authority = true;
+        self
     }
 
     /// Set the [`Reporter`] to use for this resolver.
@@ -112,28 +123,32 @@ impl<'a, Context: BuildContext> LookaheadResolver<'a, Context> {
 
             while let Some(result) = futures.next().await {
                 if let Some(lookahead) = result? {
-                    hasher = hasher.augment_with_requirements(
-                        lookahead.requirements().iter().filter(|requirement| {
+                    let requirements = self
+                        .constraints
+                        .apply(self.overrides.apply_for(
+                            lookahead.package(),
+                            lookahead.version(),
+                            lookahead.requirements(),
+                        ))
+                        .filter(|requirement| {
                             !self.excludes.contains_for(
                                 lookahead.package(),
                                 lookahead.version(),
                                 &requirement.name,
                             )
-                        }),
-                    )?;
-                    for requirement in self.constraints.apply(self.overrides.apply_for(
-                        lookahead.package(),
-                        lookahead.version(),
-                        lookahead.requirements(),
-                    )) {
-                        if !self.excludes.contains_for(
-                            lookahead.package(),
-                            lookahead.version(),
-                            &requirement.name,
-                        ) && requirement
+                        })
+                        .map(Cow::into_owned)
+                        .collect::<Vec<_>>();
+                    hasher = if self.preserve_hash_authority {
+                        hasher.constrain_with_requirements(requirements.iter())?
+                    } else {
+                        hasher.augment_with_requirements(requirements.iter())?
+                    };
+                    for requirement in requirements {
+                        if requirement
                             .evaluate_markers(env.marker_environment(), lookahead.extras())
                         {
-                            queue.push_back((*requirement).clone());
+                            queue.push_back(requirement);
                         }
                     }
                     results.push(lookahead);
