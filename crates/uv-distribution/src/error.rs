@@ -299,6 +299,8 @@ impl Error {
     pub fn is_user_failure(&self) -> bool {
         match self {
             Self::UnsupportedWheelVariant(_)
+            | Self::ChecksumAuthority(_)
+            | Self::ChecksumAuthorityLocalArchive(_)
             | Self::NoBuild
             | Self::NoBuildPackage(_)
             | Self::InvalidUrl(_)
