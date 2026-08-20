@@ -826,7 +826,7 @@ impl PubGrubReportFormatter<'_> {
                                             .build_options
                                             .policy()
                                             .get(name)
-                                            .filter(|policy| *policy == BuildPolicy::Deny),
+                                            .filter(|policy| *policy == BuildPolicy::Disallow),
                                     });
                                 }
                                 // Check for unavailable versions due to incompatible tags.

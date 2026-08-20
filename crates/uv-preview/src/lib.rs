@@ -463,7 +463,7 @@ pub enum PreviewFeature {
     /// Enables experimental support for [wheel variants](https://peps.python.org/pep-0825/).
     /// Variant wheels are not yet selectable.
     WheelVariants,
-    /// Controls source builds and the artifacts retained in compiled requirements.
+    /// Controls source builds and the artifacts retained in lockfiles and compiled requirements.
     BuildPolicy,
 }
 
