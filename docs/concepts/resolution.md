@@ -216,6 +216,69 @@ required-environments = [
 ]
 ```
 
+The [`if-necessary` build policy](#source-build-policies) also uses these environments to determine
+whether a source distribution must be retained in the lockfile.
+
+## Source build policies
+
+!!! note
+
+    Build policies are in [preview](./preview.md). Enable them with
+    `--preview-features build-policy` or `preview-features = ["build-policy"]`.
+
+The `build-policy` setting controls whether dependencies may be built from source and which
+artifacts are retained in `uv.lock` and `pylock.toml`:
+
+- `allow` allows both wheels and source distributions. This is the default.
+- `if-necessary` selects package versions normally, then omits source distributions when the
+  selected versions have sufficient wheel coverage. It does not select an older version just because
+  that version has a wheel.
+- `disallow` requires wheels, even if that means selecting a different package version.
+- `force` requires source distributions instead of pre-built wheels.
+
+For example, to keep source distributions only when needed, while requiring wheels for NumPy:
+
+```toml title="pyproject.toml"
+[tool.uv]
+preview-features = ["build-policy"]
+build-policy = "if-necessary"
+build-policy-package = { numpy = "disallow" }
+```
+
+Package-specific policies override the global policy. The global policy also applies to build
+dependencies, so use `build-policy-package` to build one package from source without also requiring
+source builds for its build dependencies.
+
+The same settings can be placed under `[tool.uv.pip]` to apply only to the pip interface. In
+`uv.toml`, use the top level or `[pip]`, respectively. On the command line, use `--build-policy` and
+repeat `--build-policy-package PACKAGE=POLICY` for individual packages:
+
+```console
+$ uv pip compile requirements.in --preview-features build-policy --build-policy if-necessary --build-policy-package numpy=disallow --emit-build-options
+```
+
+For `requirements.txt` output, `--emit-build-options` writes the corresponding pip-compatible build
+restrictions.
+
+During [platform-specific resolution](#platform-specific-resolution), `if-necessary` retains the
+source distribution unless the selected version has a wheel compatible with the target Python
+version and platform. During [universal resolution](#universal-resolution), uv infers environment
+markers from the wheel filenames. Those markers must cover every applicable
+[`environments`](#limited-resolution-environments) and
+[`required-environments`](#required-environments) entry, taking the package's markers and the
+project's `requires-python` into account. If neither setting is configured, the wheels must cover
+the package's entire marker range. This is a marker-based check; environment markers cannot express
+every wheel compatibility constraint, such as the minimum glibc version.
+
+Build policies do not guarantee that package code will not be executed. `if-necessary` may still
+[build a source distribution to obtain its metadata](#dependency-metadata). Like `--no-build`,
+`disallow` permits reuse of cached wheels built from source, and editable requirements may still be
+built. Like `--no-binary`, `force` permits reading metadata from pre-built wheels and reusing cached
+wheels built from source. Existing `--no-build`, `--no-binary`, and `--only-binary` restrictions
+take precedence over build policies. See the
+[pip compatibility documentation](../pip/compatibility.md#-only-binary-enforcement) for details of
+these restrictions.
+
 ## Common marker values
 
 The `environments` and `required-environments` settings accept
