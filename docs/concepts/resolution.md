@@ -246,9 +246,12 @@ build-policy = "if-necessary"
 build-policy-package = { numpy = "disallow" }
 ```
 
-Package-specific policies override the global policy. The global policy also applies to build
-dependencies, so use `build-policy-package` to build one package from source without also requiring
-source builds for its build dependencies.
+Package-specific policies override the global policy when the package identity is known before a
+build backend is invoked, such as for a named requirement, an index record, or a lockfile entry. An
+unnamed source cannot run its backend to discover whether a package-specific exception applies. If
+the global policy is `disallow`, uv rejects such a source before generating its metadata. The global
+policy also applies to build dependencies, so use `build-policy-package` to build one known package
+from source without also requiring source builds for its build dependencies.
 
 The same settings can be placed under `[tool.uv.pip]` to apply only to the pip interface. In
 `uv.toml`, use the top level or `[pip]`, respectively. On the command line, use `--build-policy` and
@@ -272,12 +275,14 @@ project's `requires-python` into account. If neither setting is configured, the 
 the package's entire marker range. This is a marker-based check; environment markers cannot express
 every wheel compatibility constraint, such as the minimum glibc version.
 
-Build policies do not guarantee that package code will not be executed. `if-necessary` may still
-[build a source distribution to obtain its metadata](#dependency-metadata). Like `--no-build`,
-`disallow` permits reuse of cached wheels built from source, and editable requirements may still be
-built. Like `--no-binary`, `force` permits reading metadata from pre-built wheels and reusing cached
-wheels built from source. Existing `--no-build`, `--no-binary`, and `--only-binary` restrictions
-take precedence over build policies. See the
+Invoking a build backend to generate source metadata counts as a source build. Consequently,
+`disallow` rejects unnamed sources before metadata generation; provide a trustworthy package name or
+[static dependency metadata](#dependency-metadata) when a package-specific exception is needed.
+Sandboxed metadata generation and narrower metadata-only authorization are not part of this preview
+feature. Like `--no-build`, `disallow` permits reuse of cached wheels built from source, and editable
+requirements with a known identity may still be built. Like `--no-binary`, `force` permits reading
+metadata from pre-built wheels and reusing cached wheels built from source. Existing `--no-build`,
+`--no-binary`, and `--only-binary` restrictions take precedence over build policies. See the
 [pip compatibility documentation](../pip/compatibility.md#-only-binary-enforcement) for details of
 these restrictions.
 
