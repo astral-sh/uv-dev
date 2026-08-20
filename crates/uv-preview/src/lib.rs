@@ -350,7 +350,7 @@ pub enum PreviewFeature {
     /// Enables lazy imports in build backend invocations on CPython 3.15 and later.
     /// This can affect import-time side effects in third-party build backends.
     BuildLazyImports,
-    /// Controls source builds and the artifacts retained in compiled requirements.
+    /// Controls source builds and the artifacts retained in lockfiles and compiled requirements.
     BuildPolicy,
 }
 

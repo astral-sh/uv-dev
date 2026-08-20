@@ -22,10 +22,11 @@ use url::Url;
 
 use uv_cache_key::RepositoryUrl;
 use uv_configuration::{
-    BuildOptions, Constraints, DependencyGroupsWithDefaults, ExcludeDependency, ExcludeNewer,
-    ExcludeNewerPackage, Excludes, ExtrasSpecificationWithDefaults, ForkStrategy, InstallTarget,
-    Override, Overrides, PackageOverride, Prerelease, PrereleaseMode, PrereleasePackage,
-    ResolutionMode, ScopedOverrideSourceError,
+    BuildOptions, BuildPolicies, BuildPolicy, BuildPolicyPackage, Constraints,
+    DependencyGroupsWithDefaults, ExcludeDependency, ExcludeNewer, ExcludeNewerPackage, Excludes,
+    ExtrasSpecificationWithDefaults, ForkStrategy, InstallTarget, NoBinary, NoBuild, Override,
+    Overrides, PackageOverride, Prerelease, PrereleaseMode, PrereleasePackage, ResolutionMode,
+    ScopedOverrideSourceError,
 };
 use uv_distribution::{
     DistributionDatabase, FlatRequiresDist, Metadata as DistributionMetadata, RequiresDist,
@@ -2437,6 +2438,17 @@ impl Lock {
         metadata_free: bool,
     ) -> Result<Self, LockError> {
         let mut packages = BTreeMap::new();
+        let build_options = &resolution.options.build_options;
+        let output_build_options = (!build_options.policy().is_empty()).then(|| {
+            let packages = resolution.packages_with_available_wheels(
+                None,
+                &resolution.options.artifact_environments,
+                build_options,
+            );
+            build_options
+                .clone()
+                .combine(NoBinary::None, NoBuild::Packages(packages))
+        });
         let requires_python = resolution.requires_python.clone();
         let supported_environments = supported_environments
             .into_iter()
@@ -2506,6 +2518,17 @@ impl Lock {
                     None,
                 )
             });
+
+            if let Some(build_options) = &output_build_options
+                && matches!(package.id.source, Source::Registry(_))
+            {
+                if build_options.no_build_package(&package.id.name) {
+                    package.sdist = None;
+                }
+                if build_options.no_binary_package(&package.id.name) {
+                    package.wheels.clear();
+                }
+            }
 
             package.add_dependencies(
                 DependencyContext::Production,
@@ -2580,6 +2603,11 @@ impl Lock {
         let packages = packages.into_values().collect();
 
         let options = ResolverOptions {
+            build_options: Box::new(if build_options.policy().is_empty() {
+                BuildOptions::default()
+            } else {
+                build_options.clone()
+            }),
             resolution_mode: resolution.options.resolution_mode,
             prerelease: resolution.options.prerelease.clone(),
             fork_strategy: resolution.options.fork_strategy,
@@ -2973,6 +3001,11 @@ impl Lock {
     /// Returns the pre-release policy used to generate this lock.
     pub fn prerelease(&self) -> &Prerelease {
         &self.options.prerelease
+    }
+
+    /// Return the build options used to select this lockfile's artifacts.
+    pub fn build_options(&self) -> &BuildOptions {
+        &self.options.build_options
     }
 
     /// Returns the multi-version mode used to generate this lock.
@@ -5977,6 +6010,8 @@ pub enum SatisfiesResult<'lock> {
 /// We discard the lockfile if these options match.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct ResolverOptions {
+    /// The build options used to select this lockfile's artifacts, when a build policy is set.
+    build_options: Box<BuildOptions>,
     /// The [`ResolutionMode`] used to generate this lock.
     resolution_mode: ResolutionMode,
     /// The [`Prerelease`] policy used to generate this lock.
@@ -5993,6 +6028,15 @@ struct ResolverOptions {
 #[derive(Clone, Debug, Default, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 struct ResolverOptionsWire {
+    build_policy: Option<BuildPolicy>,
+    #[serde(default)]
+    build_policy_package: BuildPolicyPackage,
+    no_binary: Option<bool>,
+    #[serde(default)]
+    no_binary_package: Vec<PackageName>,
+    no_build: Option<bool>,
+    #[serde(default)]
+    no_build_package: Vec<PackageName>,
     /// The [`ResolutionMode`] used to generate this lock.
     #[serde(default)]
     resolution_mode: ResolutionMode,
@@ -6279,6 +6323,16 @@ impl TryFrom<LockWire> for Lock {
             options_wire.exclude_newer.exclude_newer = None;
         }
         let options = ResolverOptions {
+            build_options: Box::new(
+                BuildOptions::new(
+                    NoBinary::from_args(options_wire.no_binary, options_wire.no_binary_package),
+                    NoBuild::from_args(options_wire.no_build, options_wire.no_build_package),
+                )
+                .with_policy(BuildPolicies::new(
+                    options_wire.build_policy,
+                    options_wire.build_policy_package,
+                )),
+            ),
             resolution_mode: options_wire.resolution_mode,
             prerelease: options_wire.prerelease.into(),
             fork_strategy: options_wire.fork_strategy,
