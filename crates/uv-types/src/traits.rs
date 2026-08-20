@@ -7,7 +7,7 @@ use anyhow::Result;
 use rustc_hash::FxHashSet;
 
 use uv_cache::Cache;
-use uv_configuration::{BuildKind, BuildOptions, BuildOutput, NoSources};
+use uv_configuration::{BuildKind, BuildOutput, BuildPolicies, NoSources};
 use uv_distribution_filename::DistFilename;
 use uv_distribution_types::{
     CachedDist, ConfigSettings, DependencyMetadata, DistributionId, ExtraBuildRequires,
@@ -114,7 +114,7 @@ pub trait BuildContext {
     /// Whether building source distributions or installing pre-built wheels is disabled.
     ///
     /// This method exists to avoid fetching source distributions if we know we can't build them.
-    fn build_options(&self) -> &BuildOptions;
+    fn build_options(&self) -> &BuildPolicies;
 
     /// The isolation mode used for building source distributions.
     fn build_isolation(&self) -> BuildIsolation<'_>;

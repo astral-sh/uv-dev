@@ -8,7 +8,7 @@ use uv_cache::Cache;
 use uv_client::{
     FlatIndexClient, FlatIndexEntries, FlatIndexEntry, FlatIndexError, RegistryClient,
 };
-use uv_configuration::BuildOptions;
+use uv_configuration::BuildPolicies;
 use uv_distribution_filename::{DistFilename, SourceDistFilename, WheelFilename};
 use uv_distribution_types::{
     File, HashComparison, IncompatibleSource, IncompatibleWheel, Index, IndexLocations, IndexUrl,
@@ -85,7 +85,7 @@ impl FlatDistributions {
         entries: impl IntoIterator<Item = FlatIndexEntry>,
         tags: Option<&Tags>,
         hasher: &HashStrategy,
-        build_options: &BuildOptions,
+        build_options: &BuildPolicies,
     ) -> Self {
         let mut distributions = Self::default();
         for entry in entries {
@@ -107,7 +107,7 @@ impl FlatDistributions {
         filename: DistFilename,
         tags: Option<&Tags>,
         hasher: &HashStrategy,
-        build_options: &BuildOptions,
+        build_options: &BuildPolicies,
         index: IndexUrl,
     ) {
         // No `requires-python` here: for source distributions, we don't have that information;
@@ -170,7 +170,7 @@ impl FlatDistributions {
         filename: &SourceDistFilename,
         hashes: &[HashDigest],
         hasher: &HashStrategy,
-        build_options: &BuildOptions,
+        build_options: &BuildPolicies,
     ) -> SourceDistCompatibility {
         // Check if source distributions are allowed for this package.
         if build_options.no_build_package(&filename.name) {
@@ -207,7 +207,7 @@ impl FlatDistributions {
         hashes: &[HashDigest],
         tags: Option<&Tags>,
         hasher: &HashStrategy,
-        build_options: &BuildOptions,
+        build_options: &BuildPolicies,
     ) -> WheelCompatibility {
         // Check if binaries are allowed for this package.
         if build_options.no_binary_package(&filename.name) {

@@ -18,7 +18,7 @@ use url::Url;
 
 use uv_client::{RegistryClient, WrappedReqwestError};
 use uv_configuration::{
-    BuildOptions, DependencyGroupsWithDefaults, EditableMode, ExtrasSpecificationWithDefaults,
+    BuildPolicies, DependencyGroupsWithDefaults, EditableMode, ExtrasSpecificationWithDefaults,
     InstallOptions,
 };
 use uv_distribution_filename::{
@@ -522,7 +522,7 @@ impl<'lock> PylockToml {
         omit: &[PackageName],
         install_path: &Path,
         tags: Option<&Tags>,
-        build_options: &BuildOptions,
+        build_options: &BuildPolicies,
     ) -> Result<Self, PylockTomlErrorKind> {
         // The lock version is always `1.0` at time of writing.
         let lock_version = Version::new([1, 0]);
@@ -1290,7 +1290,7 @@ impl<'lock> PylockToml {
         extras: &[ExtraName],
         groups: &[GroupName],
         tags: &Tags,
-        build_options: &BuildOptions,
+        build_options: &BuildPolicies,
     ) -> Result<Resolution, PylockTomlError> {
         // Convert the extras and dependency groups specifications to a concrete environment.
         let mut graph =

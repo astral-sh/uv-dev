@@ -8,7 +8,7 @@ use pubgrub::Ranges;
 use tracing::{instrument, trace};
 
 use uv_client::{FlatIndexEntry, OwnedArchive, SimpleDetailMetadata, VersionFiles};
-use uv_configuration::BuildOptions;
+use uv_configuration::BuildPolicies;
 use uv_distribution_filename::{DistFilename, SourceDistFilename, WheelFilename};
 use uv_distribution_types::{
     HashComparison, IncompatibleSource, IncompatibleWheel, IndexUrl, PrioritizedDist,
@@ -54,7 +54,7 @@ impl VersionMap {
         included_version_cutoff: Option<Timestamp>,
         available_version_cutoff: Option<Timestamp>,
         flat_index: Option<FlatDistributions>,
-        build_options: &BuildOptions,
+        build_options: &BuildPolicies,
     ) -> Self {
         let mut local = false;
         let mut entries = Vec::with_capacity(simple_metadata.iter().size_hint().0);
@@ -113,7 +113,7 @@ impl VersionMap {
         flat_metadata: Vec<FlatIndexEntry>,
         tags: Option<&Tags>,
         hasher: &HashStrategy,
-        build_options: &BuildOptions,
+        build_options: &BuildPolicies,
     ) -> Self {
         let mut local = false;
         let mut map = BTreeMap::new();
