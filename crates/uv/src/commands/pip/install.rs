@@ -12,7 +12,7 @@ use uv_cache::Cache;
 use uv_cli::PipInstallFormat;
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_configuration::{
-    BuildIsolation, BuildPolicies, Concurrency, Constraints, DryRun, EditableMode,
+    BuildIsolation, BuildOptions, Concurrency, Constraints, DryRun, EditableMode,
     ExcludeDependency, ExtrasSpecification, HashCheckingMode, IndexStrategy, NoSources, Override,
     Reinstall, Upgrade,
 };
@@ -113,7 +113,7 @@ pub(crate) async fn pip_install(
     build_isolation: BuildIsolation,
     extra_build_dependencies: &ExtraBuildDependencies,
     extra_build_variables: &ExtraBuildVariables,
-    build_options: BuildPolicies,
+    build_options: BuildOptions,
     modifications: Modifications,
     python_version: Option<PythonVersion>,
     python_platform: Option<TargetTriple>,
