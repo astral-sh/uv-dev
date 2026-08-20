@@ -2,7 +2,7 @@
 
 mod protocol;
 
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -12,6 +12,8 @@ use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::Mutex;
 use tokio_util::io::ReaderStream;
 use url::{Host, Url};
+
+use protocol::insert_record;
 
 pub use protocol::{
     ArtifactId, AuthorityPublicKey, ChecksumRecord, Sha256Digest, SignedRecord,
@@ -26,7 +28,7 @@ pub struct ChecksumAuthority {
     endpoint: Url,
     public_key: AuthorityPublicKey,
     client: reqwest::Client,
-    records: Arc<Mutex<BTreeSet<ChecksumRecord>>>,
+    records: Arc<Mutex<BTreeMap<ArtifactId, ChecksumRecord>>>,
 }
 
 impl ChecksumAuthority {
@@ -81,7 +83,8 @@ impl ChecksumAuthority {
         }
         let signed: SignedRecord = serde_json::from_slice(&body)?;
         let verified = signed.verify(artifact, &self.public_key)?;
-        self.records.lock().await.insert(verified.record().clone());
+        let mut records = self.records.lock().await;
+        insert_record(&mut records, verified.record().clone())?;
         Ok(verified)
     }
 
@@ -95,7 +98,7 @@ impl ChecksumAuthority {
         self.records
             .lock()
             .await
-            .iter()
+            .values()
             .cloned()
             .collect::<Vec<_>>()
             .try_into()
@@ -211,6 +214,8 @@ pub enum Error {
     InvalidSignature,
     #[error("Checksum authority returned a record for a different artifact")]
     WrongArtifact,
+    #[error("Conflicting checksum authority records for `{0}`")]
+    ConflictingRecord(String),
     #[error("Checksum authority has no trusted record for `{0}`")]
     UnknownArtifact(String),
     #[error("Checksum authority returned HTTP {0}")]
