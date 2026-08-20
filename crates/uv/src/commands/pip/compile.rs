@@ -618,7 +618,11 @@ pub(crate) async fn pip_compile(
     let output_build_options = output_build_options.as_ref().unwrap_or(&build_options);
 
     if generate_hashes && preview.is_enabled(PreviewFeature::ArtifactHashFiltering) {
-        resolution.retain_allowed_distribution_hashes(output_build_options);
+        resolution.retain_allowed_distribution_hashes(
+            &build_options,
+            tags.as_deref(),
+            &artifact_environments,
+        );
     }
 
     // Write the resolved dependencies to the output channel.

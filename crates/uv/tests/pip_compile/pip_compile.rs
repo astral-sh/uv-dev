@@ -6179,6 +6179,29 @@ fn build_policy_if_necessary_multiple_versions() -> Result<()> {
     assert!(output.status.success(), "{output:?}");
     let requirements = fs_err::read_to_string(context.temp_dir.child("requirements.txt"))?;
     assert!(!requirements.contains("--only-binary foo"));
+
+    // Hash filtering remains per selected version even though emitted pip options must be
+    // aggregated by package. The Linux version retains only its wheel hash, while the Windows
+    // version retains only its source hash.
+    let output = context
+        .pip_compile()
+        .arg("requirements.in")
+        .arg("--index-url")
+        .arg(server.index_url())
+        .arg("--universal")
+        .arg("--build-policy")
+        .arg("if-necessary")
+        .arg("--generate-hashes")
+        .arg("-o")
+        .arg("requirements-hashes.txt")
+        .env(
+            EnvVars::UV_PREVIEW_FEATURES,
+            "artifact-hash-filtering,build-policy",
+        )
+        .output()?;
+    assert!(output.status.success(), "{output:?}");
+    let requirements = fs_err::read_to_string(context.temp_dir.child("requirements-hashes.txt"))?;
+    assert_eq!(requirements.matches("--hash=").count(), 2, "{requirements}");
     Ok(())
 }
 

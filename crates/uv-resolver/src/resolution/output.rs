@@ -719,27 +719,49 @@ impl ResolverOutput {
         )
     }
 
-    /// Retain registry hashes only for artifacts permitted by package-specific build options.
+    /// Retain registry hashes only for artifacts permitted by build options.
     ///
     /// All available wheel hashes remain eligible when source builds are disabled so the
     /// resulting requirements can still be installed on other supported platforms.
-    pub fn retain_allowed_distribution_hashes(&mut self, build_options: &BuildOptions) {
-        for node in self.graph.node_weights_mut() {
-            let ResolutionGraphNode::Dist(distribution) = node else {
+    pub fn retain_allowed_distribution_hashes(
+        &mut self,
+        build_options: &BuildOptions,
+        tags: Option<&Tags>,
+        environments: &SupportedEnvironments,
+    ) {
+        let distributions = self
+            .graph
+            .node_indices()
+            .filter_map(|index| {
+                let ResolutionGraphNode::Dist(distribution) = &self.graph[index] else {
+                    return None;
+                };
+                Some((
+                    index,
+                    self.no_build_distribution(distribution, build_options, tags, environments),
+                ))
+            })
+            .collect::<Vec<_>>();
+
+        for (index, no_build_distribution) in distributions {
+            let Some(ResolutionGraphNode::Dist(distribution)) = self.graph.node_weight_mut(index)
+            else {
                 continue;
             };
             let ResolvedDist::Installable { dist, .. } = &distribution.dist else {
                 continue;
             };
             let allowed_hashes = match dist.as_ref() {
-                Dist::Built(BuiltDist::Registry(dist))
-                    if build_options.no_build_package(&distribution.name) =>
-                {
-                    dist.wheels
-                        .iter()
-                        .flat_map(|wheel| wheel.file.hashes.iter())
-                        .collect::<FxHashSet<_>>()
-                }
+                Dist::Built(BuiltDist::Registry(dist)) if no_build_distribution => dist
+                    .wheels
+                    .iter()
+                    .flat_map(|wheel| wheel.file.hashes.iter())
+                    .collect::<FxHashSet<_>>(),
+                Dist::Source(SourceDist::Registry(source)) if no_build_distribution => source
+                    .wheels
+                    .iter()
+                    .flat_map(|wheel| wheel.file.hashes.iter())
+                    .collect::<FxHashSet<_>>(),
                 Dist::Source(SourceDist::Registry(source))
                     if build_options.no_binary_package(&distribution.name) =>
                 {
