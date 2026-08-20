@@ -137,8 +137,9 @@ fn write_lock(writer: &mut LockWriter, lock: &Lock) -> Result<(), WriteError> {
 
 fn write_options(writer: &mut LockWriter, options: &ResolverOptions) -> Result<(), WriteError> {
     let build_options = &options.build_options;
+    let build_policy = build_options.policy();
     let has_options = options.resolution_mode != ResolutionMode::default()
-        || build_options.is_configured()
+        || !build_policy.is_empty()
         || options.prerelease.global != PrereleaseMode::default()
         || !options.prerelease.package.is_empty()
         || options.fork_strategy != ForkStrategy::default()
@@ -148,10 +149,10 @@ fn write_options(writer: &mut LockWriter, options: &ResolverOptions) -> Result<(
     }
 
     writer.table(&["options"])?;
-    if let Some(policy) = build_options.configured_global() {
+    if let Some(policy) = build_policy.global() {
         writer.key_value("build-policy", policy.to_string())?;
     }
-    if build_options.is_configured() {
+    if !build_policy.is_empty() {
         match build_options.no_binary() {
             NoBinary::None => {}
             NoBinary::All => writer.key_value("no-binary", true)?,
@@ -193,9 +194,9 @@ fn write_options(writer: &mut LockWriter, options: &ResolverOptions) -> Result<(
         }
     }
 
-    if !build_options.configured_packages().is_empty() {
+    if !build_policy.packages().is_empty() {
         writer.table(&["options", "build-policy-package"])?;
-        for (name, policy) in build_options.configured_packages() {
+        for (name, policy) in build_policy.packages() {
             writer.key_value(name.as_ref(), policy.to_string())?;
         }
     }

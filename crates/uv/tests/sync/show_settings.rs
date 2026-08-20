@@ -154,18 +154,12 @@ fn pip_compile_baseline() {
             extra_build_variables: ExtraBuildVariables(
                 {},
             ),
-            build_options: BuildPolicies {
-                default: Some(
-                    Allow,
-                ),
-                packages: {},
-                inputs: BuildPolicyInputs {
-                    no_binary: None,
-                    no_build: None,
-                    policy: ConfiguredBuildPolicies {
-                        default: None,
-                        packages: {},
-                    },
+            build_options: BuildOptions {
+                no_binary: None,
+                no_build: None,
+                policy: BuildPolicies {
+                    default: None,
+                    packages: {},
                 },
             },
             allow_empty_requirements: false,
@@ -533,18 +527,12 @@ fn pip_install_baseline() {
             extra_build_variables: ExtraBuildVariables(
                 {},
             ),
-            build_options: BuildPolicies {
-                default: Some(
-                    Allow,
-                ),
-                packages: {},
-                inputs: BuildPolicyInputs {
-                    no_binary: None,
-                    no_build: None,
-                    policy: ConfiguredBuildPolicies {
-                        default: None,
-                        packages: {},
-                    },
+            build_options: BuildOptions {
+                no_binary: None,
+                no_build: None,
+                policy: BuildPolicies {
+                    default: None,
+                    packages: {},
                 },
             },
             allow_empty_requirements: false,
@@ -677,18 +665,12 @@ fn lock_baseline() {
             ),
         ),
         settings: ResolverSettings {
-            build_options: BuildPolicies {
-                default: Some(
-                    Allow,
-                ),
-                packages: {},
-                inputs: BuildPolicyInputs {
-                    no_binary: None,
-                    no_build: None,
-                    policy: ConfiguredBuildPolicies {
-                        default: None,
-                        packages: {},
-                    },
+            build_options: BuildOptions {
+                no_binary: None,
+                no_build: None,
+                policy: BuildPolicies {
+                    default: None,
+                    packages: {},
                 },
             },
             config_setting: ConfigSettings(
@@ -820,18 +802,12 @@ fn version_baseline() {
         ),
         settings: ResolverInstallerSettings {
             resolver: ResolverSettings {
-                build_options: BuildPolicies {
-                    default: Some(
-                        Allow,
-                    ),
-                    packages: {},
-                    inputs: BuildPolicyInputs {
-                        no_binary: None,
-                        no_build: None,
-                        policy: ConfiguredBuildPolicies {
-                            default: None,
-                            packages: {},
-                        },
+                build_options: BuildOptions {
+                    no_binary: None,
+                    no_build: None,
+                    policy: BuildPolicies {
+                        default: None,
+                        packages: {},
                     },
                 },
                 config_setting: ConfigSettings(
@@ -1006,18 +982,12 @@ fn tool_install_baseline() {
         },
         settings: ResolverInstallerSettings {
             resolver: ResolverSettings {
-                build_options: BuildPolicies {
-                    default: Some(
-                        Allow,
-                    ),
-                    packages: {},
-                    inputs: BuildPolicyInputs {
-                        no_binary: None,
-                        no_build: None,
-                        policy: ConfiguredBuildPolicies {
-                            default: None,
-                            packages: {},
-                        },
+                build_options: BuildOptions {
+                    no_binary: None,
+                    no_build: None,
+                    policy: BuildPolicies {
+                        default: None,
+                        packages: {},
                     },
                 },
                 config_setting: ConfigSettings(
