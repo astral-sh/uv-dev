@@ -634,14 +634,21 @@ impl ResolverOutput {
             Dist::Source(SourceDist::Registry(dist)) => dist.wheels.as_slice(),
             _ => return false,
         };
+        // Yanked wheels are retained for metadata discovery, but cannot establish that the
+        // selected distribution can be installed without its source artifact.
+        let mut wheels = wheels.iter().filter(|wheel| {
+            wheel
+                .file
+                .yanked
+                .as_deref()
+                .is_none_or(|yanked| !yanked.is_yanked())
+        });
 
         if let Some(tags) = tags {
-            return wheels
-                .iter()
-                .any(|wheel| wheel.filename.is_compatible(tags));
+            return wheels.any(|wheel| wheel.filename.is_compatible(tags));
         }
 
-        let wheel_coverage = wheels.iter().fold(MarkerTree::FALSE, |marker, wheel| {
+        let wheel_coverage = wheels.fold(MarkerTree::FALSE, |marker, wheel| {
             marker.or(implied_markers(&wheel.filename))
         });
         let package_marker = distribution
