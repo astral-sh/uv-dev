@@ -308,6 +308,8 @@ impl Error {
         match self {
             Self::UnsupportedWheelVariant(_)
             | Self::IncompatibleWheelVariant { .. }
+            | Self::ChecksumAuthority(_)
+            | Self::ChecksumAuthorityLocalArchive(_)
             | Self::NoBuild
             | Self::NoBuildPackage(_)
             | Self::InvalidUrl(_)
