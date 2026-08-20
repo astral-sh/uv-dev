@@ -11,8 +11,8 @@ use tracing::warn;
 use uv_cache::Cache;
 use uv_client::{BaseClientBuilder, FlatIndexClient, RegistryClientBuilder};
 use uv_configuration::{
-    ActiveEnvironment, BuildOptions, Concurrency, Constraints, DependencyGroups, DryRun,
-    IndexStrategy, KeyringProviderType, NoBinary, NoBuild, NoSources,
+    ActiveEnvironment, BuildPolicies, BuildPolicyPackage, Concurrency, Constraints,
+    DependencyGroups, DryRun, IndexStrategy, KeyringProviderType, NoBinary, NoBuild, NoSources,
 };
 use uv_dispatch::{BuildDispatch, SharedState};
 use uv_distribution_types::{
@@ -320,7 +320,12 @@ pub(crate) async fn venv(
         let sources = NoSources::All;
 
         // Do not allow builds
-        let build_options = BuildOptions::new(NoBinary::None, NoBuild::All);
+        let build_options = BuildPolicies::new(
+            NoBinary::None,
+            NoBuild::All,
+            None,
+            BuildPolicyPackage::default(),
+        );
         let extra_build_requires = ExtraBuildRequires::default();
         let extra_build_variables = uv_distribution_types::ExtraBuildVariables::default();
         // Prep the build context.

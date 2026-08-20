@@ -1,4 +1,4 @@
-use uv_configuration::{BuildOptions, IndexStrategy};
+use uv_configuration::{BuildPolicies, IndexStrategy};
 use uv_pypi_types::SupportedEnvironments;
 use uv_torch::TorchStrategy;
 
@@ -16,7 +16,7 @@ pub struct Options {
     pub index_strategy: IndexStrategy,
     pub artifact_environments: SupportedEnvironments,
     pub flexibility: Flexibility,
-    pub build_options: BuildOptions,
+    pub build_options: BuildPolicies,
     pub torch_backend: Option<TorchStrategy>,
 }
 
@@ -31,7 +31,7 @@ pub struct OptionsBuilder {
     index_strategy: IndexStrategy,
     artifact_environments: SupportedEnvironments,
     flexibility: Flexibility,
-    build_options: BuildOptions,
+    build_options: BuildPolicies,
     torch_backend: Option<TorchStrategy>,
 }
 
@@ -97,9 +97,9 @@ impl OptionsBuilder {
         self
     }
 
-    /// Sets the [`BuildOptions`].
+    /// Sets the [`BuildPolicies`].
     #[must_use]
-    pub fn build_options(mut self, build_options: BuildOptions) -> Self {
+    pub fn build_options(mut self, build_options: BuildPolicies) -> Self {
         self.build_options = build_options;
         self
     }
