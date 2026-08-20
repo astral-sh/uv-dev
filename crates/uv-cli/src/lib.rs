@@ -7243,19 +7243,12 @@ pub struct RefreshArgs {
 pub struct BuildPolicyArgs {
     /// Control whether packages may be built from source.
     ///
-    /// `if-necessary` preserves version selection and omits registry source distributions when the
-    /// selected version has a compatible wheel. For universal resolutions, the wheels must cover
-    /// all applicable environment markers. uv may still build source distributions to obtain
-    /// metadata.
-    ///
-    /// `disallow` uses the same restrictions as `--no-build`: cached wheels built from source may
-    /// be reused, and editable requirements may still be built. `force` uses the same restrictions
-    /// as `--no-binary`: pre-built wheels may still be used to read metadata. Existing build and
-    /// binary restrictions take precedence over build policies.
+    /// The policy also applies to build dependencies. Existing build and binary restrictions take
+    /// precedence over build policies.
     ///
     /// See <https://docs.astral.sh/uv/concepts/resolution/#source-build-policies> for details.
     ///
-    /// Requires `--preview-features build-policy`.
+    /// This option is in preview and may change in any future release.
     #[arg(long, value_enum, env = EnvVars::UV_BUILD_POLICY, help_heading = "Build options")]
     pub build_policy: Option<BuildPolicy>,
 
@@ -7265,7 +7258,7 @@ pub struct BuildPolicyArgs {
     /// May be provided multiple times for different packages. Package-specific policies override
     /// the global policy.
     ///
-    /// Requires `--preview-features build-policy`.
+    /// This option is in preview and may change in any future release.
     #[arg(long, help_heading = "Build options", value_hint = ValueHint::Other)]
     pub build_policy_package: Option<Vec<BuildPolicyPackageEntry>>,
 }

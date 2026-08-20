@@ -14,11 +14,23 @@ pub enum BuildPolicy {
     /// Allow wheels and source distributions.
     #[default]
     Allow,
+
     /// Keep source distributions only when the selected version lacks sufficient wheel coverage.
+    /// Package versions are selected normally. uv does not select an older version just because
+    /// that version has a wheel. For platform-specific resolutions, the selected version must have
+    /// a compatible wheel. For universal resolutions, the wheels must cover all applicable
+    /// environment markers.
+    /// uv may still build source distributions to obtain metadata.
     IfNecessary,
+
     /// Require wheels, even when doing so changes the selected version.
+    /// As with `--no-build`, uv may reuse cached wheels built from source. Editable requirements
+    /// may still be built, and their build backends may run arbitrary Python code.
     Disallow,
+
     /// Require source distributions instead of pre-built wheels.
+    /// As with `--no-binary`, uv may still use pre-built wheels to read package metadata and reuse
+    /// cached wheels built from source.
     Force,
 }
 
