@@ -601,15 +601,11 @@ pub(crate) async fn pip_compile(
     };
 
     let output_build_options = (!build_options.policy().is_empty()).then(|| {
-        let packages = resolution.packages_with_available_wheels(
+        resolution.materialize_build_options(
+            &build_options,
             tags.as_deref(),
             &artifact_environments,
-            &build_options,
-        );
-        let output_build_options = build_options
-            .clone()
-            .combine(NoBinary::None, NoBuild::Packages(packages));
-        resolution.materialize_build_options(&output_build_options)
+        )
     });
     let output_build_options = output_build_options.as_ref().unwrap_or(&build_options);
 
