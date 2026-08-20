@@ -1,7 +1,7 @@
 use uv_normalize::PackageName;
 pub use uv_pypi_types::BuildKind;
 
-use crate::{BuildPolicies, BuildPolicy, PackageNameSpecifier, PackageNameSpecifiers};
+use crate::{BuildPolicy, BuildPolicyPackage, PackageNameSpecifier, PackageNameSpecifiers};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum BuildOutput {
@@ -18,8 +18,10 @@ pub enum BuildOutput {
 pub struct BuildOptions {
     no_binary: NoBinary,
     no_build: NoBuild,
-    #[serde(default, skip_serializing_if = "BuildPolicies::is_empty")]
-    policy: BuildPolicies,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    build_policy: Option<BuildPolicy>,
+    #[serde(default, skip_serializing_if = "BuildPolicyPackage::is_empty")]
+    build_policy_package: BuildPolicyPackage,
 }
 
 impl BuildOptions {
@@ -27,7 +29,8 @@ impl BuildOptions {
         Self {
             no_binary,
             no_build,
-            policy: BuildPolicies::default(),
+            build_policy: None,
+            build_policy_package: BuildPolicyPackage::default(),
         }
     }
 
@@ -36,7 +39,8 @@ impl BuildOptions {
         Self {
             no_binary: self.no_binary.combine(no_binary),
             no_build: self.no_build.combine(no_build),
-            policy: self.policy,
+            build_policy: self.build_policy,
+            build_policy_package: self.build_policy_package,
         }
     }
 
@@ -121,7 +125,10 @@ impl BuildOptions {
             return (no_binary, no_build);
         }
 
-        match self.policy.get(package_name).unwrap_or_default() {
+        match self
+            .configured_build_policy(package_name)
+            .unwrap_or_default()
+        {
             BuildPolicy::Allow => (false, false),
             BuildPolicy::IfNecessary => (false, has_compatible_wheel),
             BuildPolicy::Disallow => (false, true),
@@ -138,7 +145,7 @@ impl BuildOptions {
 
     fn no_build_all(&self) -> bool {
         matches!(self.no_build, NoBuild::All)
-            || (self.policy.denies_all()
+            || (self.build_policy_denies_all()
                 && match &self.no_binary {
                     NoBinary::None => true,
                     NoBinary::All => false,
@@ -151,13 +158,46 @@ impl BuildOptions {
     }
 
     #[must_use]
-    pub fn with_policy(mut self, policy: BuildPolicies) -> Self {
-        self.policy = policy;
+    pub fn with_build_policy(
+        mut self,
+        build_policy: Option<BuildPolicy>,
+        build_policy_package: BuildPolicyPackage,
+    ) -> Self {
+        self.build_policy = build_policy;
+        self.build_policy_package = build_policy_package;
         self
     }
 
-    pub fn policy(&self) -> &BuildPolicies {
-        &self.policy
+    /// Return the policy configured for a package, falling back to the global policy.
+    pub fn configured_build_policy(&self, package_name: &PackageName) -> Option<BuildPolicy> {
+        self.build_policy_package
+            .get(package_name)
+            .copied()
+            .or(self.build_policy)
+    }
+
+    /// Return the configured global build policy.
+    pub fn build_policy(&self) -> Option<BuildPolicy> {
+        self.build_policy
+    }
+
+    /// Return the configured package-specific build policies.
+    pub fn build_policy_package(&self) -> &BuildPolicyPackage {
+        &self.build_policy_package
+    }
+
+    /// Whether a global or package-specific build policy was configured.
+    pub fn has_build_policy(&self) -> bool {
+        self.build_policy.is_some() || !self.build_policy_package.is_empty()
+    }
+
+    /// Whether builds can be rejected before a package name is known.
+    fn build_policy_denies_all(&self) -> bool {
+        self.build_policy == Some(BuildPolicy::Disallow)
+            && self
+                .build_policy_package
+                .values()
+                .all(|policy| *policy == BuildPolicy::Disallow)
     }
 
     /// Return the [`NoBuild`] strategy to use.
@@ -422,10 +462,10 @@ mod tests {
     fn build_policy_overrides() -> Result<(), Error> {
         let package = PackageName::from_str("example")?;
         let other = PackageName::from_str("other")?;
-        let options = BuildOptions::default().with_policy(BuildPolicies::new(
+        let options = BuildOptions::default().with_build_policy(
             Some(BuildPolicy::Disallow),
             ["example=allow".parse()?].into_iter().collect(),
-        ));
+        );
         assert!(!options.no_build_package(&package));
         assert!(options.no_build_package(&other));
         assert!(!options.no_build_requirement(None));
@@ -434,16 +474,15 @@ mod tests {
         let options = options.combine(NoBinary::Packages(vec![other.clone()]), NoBuild::None);
         assert!(options.no_binary_package(&other));
         assert!(!options.no_build_package(&other));
-        let options = BuildOptions::new(NoBinary::None, NoBuild::All).with_policy(
-            BuildPolicies::new(Some(BuildPolicy::Force), BuildPolicyPackage::default()),
-        );
+        let options = BuildOptions::new(NoBinary::None, NoBuild::All)
+            .with_build_policy(Some(BuildPolicy::Force), BuildPolicyPackage::default());
         assert!(options.no_build_package(&package));
         assert!(!options.no_binary_package(&package));
 
-        let options = BuildOptions::default().with_policy(BuildPolicies::new(
+        let options = BuildOptions::default().with_build_policy(
             Some(BuildPolicy::IfNecessary),
             BuildPolicyPackage::default(),
-        ));
+        );
         assert!(!options.no_build_package(&package));
         assert!(!options.no_build_package_with_compatible_wheel(&package, false));
         assert!(options.no_build_package_with_compatible_wheel(&package, true));
@@ -459,8 +498,8 @@ mod tests {
     fn build_policy_unnamed_legacy_exceptions() -> Result<(), Error> {
         let package = PackageName::from_str("example")?;
         let other = PackageName::from_str("other")?;
-        let policy = BuildPolicies::new(Some(BuildPolicy::Disallow), BuildPolicyPackage::default());
-        let options = BuildOptions::default().with_policy(policy.clone());
+        let options = BuildOptions::default()
+            .with_build_policy(Some(BuildPolicy::Disallow), BuildPolicyPackage::default());
         assert!(options.no_build_requirement(None));
 
         let options = options.combine(NoBinary::Packages(vec![package.clone()]), NoBuild::None);
@@ -474,7 +513,7 @@ mod tests {
 
         // Preserve the existing behavior of the explicit global no-build restriction.
         let options = BuildOptions::new(NoBinary::Packages(vec![package.clone()]), NoBuild::All)
-            .with_policy(policy);
+            .with_build_policy(Some(BuildPolicy::Disallow), BuildPolicyPackage::default());
         assert!(options.no_build_requirement(None));
         assert!(!options.no_build_requirement(Some(&package)));
         Ok(())
@@ -484,15 +523,14 @@ mod tests {
     fn normalized_build_policy_options() -> Result<(), Error> {
         let alpha = PackageName::from_str("alpha")?;
         let beta = PackageName::from_str("beta")?;
-        let policy = BuildPolicies::new(
-            Some(BuildPolicy::IfNecessary),
-            ["example=allow".parse()?].into_iter().collect(),
-        );
+        let packages = ["example=allow".parse()?]
+            .into_iter()
+            .collect::<BuildPolicyPackage>();
         let options = BuildOptions::new(
             NoBinary::Packages(vec![beta.clone(), alpha.clone(), beta.clone()]),
             NoBuild::Packages(vec![beta.clone(), beta.clone(), alpha.clone()]),
         )
-        .with_policy(policy.clone())
+        .with_build_policy(Some(BuildPolicy::IfNecessary), packages.clone())
         .normalized();
         assert_eq!(
             options,
@@ -500,7 +538,7 @@ mod tests {
                 NoBinary::Packages(vec![alpha.clone(), beta.clone()]),
                 NoBuild::Packages(vec![alpha, beta]),
             )
-            .with_policy(policy)
+            .with_build_policy(Some(BuildPolicy::IfNecessary), packages)
         );
         assert_eq!(options.clone().normalized(), options);
         assert_eq!(
