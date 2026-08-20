@@ -616,97 +616,99 @@ impl ResolverOutput {
         self.base_dists().next().is_none()
     }
 
-    /// Return packages whose source fallback can be omitted because their wheels provide coverage.
+    /// Return whether the selected distribution has sufficient wheel coverage.
     ///
     /// Concrete resolutions inspect compatible wheel tags. Universal resolutions require the
     /// wheel markers to cover every applicable target marker, rather than merely overlap it.
-    fn packages_with_available_wheels(
+    fn has_sufficient_wheel_coverage(
         &self,
+        distribution: &AnnotatedDist,
         tags: Option<&Tags>,
         environments: &SupportedEnvironments,
-        build_options: &BuildOptions,
-    ) -> FxHashSet<PackageName> {
-        let mut available = FxHashMap::default();
-        for (_, distribution) in self.base_dists() {
-            if build_options.policy().get(&distribution.name) != Some(BuildPolicy::IfNecessary)
-                || build_options.no_binary_package(&distribution.name)
-            {
-                continue;
-            }
-            let ResolvedDist::Installable { dist, .. } = &distribution.dist else {
-                continue;
-            };
-            let wheels = match dist.as_ref() {
-                Dist::Built(BuiltDist::Registry(dist)) => dist.wheels.as_slice(),
-                Dist::Source(SourceDist::Registry(dist)) => dist.wheels.as_slice(),
-                _ => continue,
-            };
+    ) -> bool {
+        let ResolvedDist::Installable { dist, .. } = &distribution.dist else {
+            return false;
+        };
+        let wheels = match dist.as_ref() {
+            Dist::Built(BuiltDist::Registry(dist)) => dist.wheels.as_slice(),
+            Dist::Source(SourceDist::Registry(dist)) => dist.wheels.as_slice(),
+            _ => return false,
+        };
 
-            let covered = if let Some(tags) = tags {
-                wheels
-                    .iter()
-                    .any(|wheel| wheel.filename.is_compatible(tags))
-            } else {
-                let wheel_coverage = wheels.iter().fold(MarkerTree::FALSE, |marker, wheel| {
-                    marker.or(implied_markers(&wheel.filename))
-                });
-                let package_marker = distribution
-                    .marker
-                    .pep508()
-                    .and(self.requires_python.to_marker_tree());
-
-                if environments.is_empty() {
-                    package_marker.and(wheel_coverage.negate()).is_false()
-                } else {
-                    environments
-                        .iter()
-                        .copied()
-                        .map(|environment| environment.and(package_marker))
-                        .filter(|environment| !environment.is_false())
-                        .all(|environment| environment.and(wheel_coverage.negate()).is_false())
-                }
-            };
-
-            available
-                .entry(distribution.name.clone())
-                .and_modify(|existing| *existing &= covered)
-                .or_insert(covered);
+        if let Some(tags) = tags {
+            return wheels
+                .iter()
+                .any(|wheel| wheel.filename.is_compatible(tags));
         }
 
-        available
-            .into_iter()
-            .filter_map(|(name, covered)| covered.then_some(name))
-            .collect()
+        let wheel_coverage = wheels.iter().fold(MarkerTree::FALSE, |marker, wheel| {
+            marker.or(implied_markers(&wheel.filename))
+        });
+        let package_marker = distribution
+            .marker
+            .pep508()
+            .and(self.requires_python.to_marker_tree());
+
+        if environments.is_empty() {
+            package_marker.and(wheel_coverage.negate()).is_false()
+        } else {
+            environments
+                .iter()
+                .copied()
+                .map(|environment| environment.and(package_marker))
+                .filter(|environment| !environment.is_false())
+                .all(|environment| environment.and(wheel_coverage.negate()).is_false())
+        }
     }
 
-    /// Express the effective artifact restrictions for the selected package versions.
+    /// Return whether source artifacts should be omitted for a selected distribution.
+    pub(crate) fn no_build_distribution(
+        &self,
+        distribution: &AnnotatedDist,
+        build_options: &BuildOptions,
+        tags: Option<&Tags>,
+        environments: &SupportedEnvironments,
+    ) -> bool {
+        let has_compatible_wheel = build_options.configured_build_policy(&distribution.name)
+            == Some(BuildPolicy::IfNecessary)
+            && !build_options.no_binary_package(&distribution.name)
+            && self.has_sufficient_wheel_coverage(distribution, tags, environments);
+        build_options
+            .no_build_package_with_compatible_wheel(&distribution.name, has_compatible_wheel)
+    }
+
+    /// Express the selected package versions' artifact restrictions as pip-compatible options.
     ///
-    /// This is the only point where `if-necessary` is resolved from wheel coverage. The result uses
-    /// the existing `NoBinary` and `NoBuild` representation consumed by lock and export writers.
+    /// Since pip's options are package-wide, a source restriction is emitted only when every
+    /// selected version of a package has sufficient wheel coverage.
     pub fn materialize_build_options(
         &self,
         build_options: &BuildOptions,
         tags: Option<&Tags>,
         environments: &SupportedEnvironments,
     ) -> BuildOptions {
-        let packages_with_wheels =
-            self.packages_with_available_wheels(tags, environments, build_options);
         let mut no_binary = BTreeSet::new();
-        let mut no_build = BTreeSet::new();
+        let mut no_build = BTreeMap::new();
         for (_, distribution) in self.base_dists() {
             if build_options.no_binary_package(&distribution.name) {
                 no_binary.insert(distribution.name.clone());
             }
-            if build_options.no_build_package_with_compatible_wheel(
-                &distribution.name,
-                packages_with_wheels.contains(&distribution.name),
-            ) {
-                no_build.insert(distribution.name.clone());
-            }
+            let no_build_distribution =
+                self.no_build_distribution(distribution, build_options, tags, environments);
+            no_build
+                .entry(distribution.name.clone())
+                .and_modify(|no_build| *no_build &= no_build_distribution)
+                .or_insert(no_build_distribution);
         }
         BuildOptions::new(
             NoBinary::from_args(None, no_binary.into_iter().collect()),
-            NoBuild::from_args(None, no_build.into_iter().collect()),
+            NoBuild::from_args(
+                None,
+                no_build
+                    .into_iter()
+                    .filter_map(|(name, no_build)| no_build.then_some(name))
+                    .collect(),
+            ),
         )
     }
 

@@ -34,12 +34,12 @@ use uv_cli::{
 };
 use uv_client::{Certificates, Connectivity};
 use uv_configuration::{
-    BuildIsolation, BuildOptions, BuildPolicies, BuildPolicy, BuildPolicyPackage, Concurrency,
-    DependencyGroups, DevMode, DryRun, EditableMode, EnvFile, ExcludeDependency, ExportFormat,
-    ExtrasSpecification, GitLfsSetting, HashCheckingMode, IndexStrategy, InstallOptions,
-    KeyringProviderType, NoBinary, NoBuild, NoSources, Override, PackageOverride, PipCompileFormat,
-    ProjectBuildBackend, ProxyUrl, Reinstall, RequiredVersion, TargetTriple, TrustedHost,
-    TrustedPublishing, Upgrade, VersionControlSystem,
+    BuildIsolation, BuildOptions, BuildPolicy, BuildPolicyPackage, Concurrency, DependencyGroups,
+    DevMode, DryRun, EditableMode, EnvFile, ExcludeDependency, ExportFormat, ExtrasSpecification,
+    GitLfsSetting, HashCheckingMode, IndexStrategy, InstallOptions, KeyringProviderType, NoBinary,
+    NoBuild, NoSources, Override, PackageOverride, PipCompileFormat, ProjectBuildBackend, ProxyUrl,
+    Reinstall, RequiredVersion, TargetTriple, TrustedHost, TrustedPublishing, Upgrade,
+    VersionControlSystem,
 };
 use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, ExtraBuildVariables, Index, IndexLocations, IndexUrl,
@@ -4434,14 +4434,20 @@ fn warn_if_deprecated_prerelease_mode(prerelease: PrereleaseMode) -> PrereleaseM
     }
 }
 
-fn resolve_build_policy(global: Option<BuildPolicy>, package: BuildPolicyPackage) -> BuildPolicies {
-    let policy = BuildPolicies::new(global, package);
-    warn_build_policy_preview(&policy);
-    policy
+fn resolve_build_options(
+    no_binary: NoBinary,
+    no_build: NoBuild,
+    build_policy: Option<BuildPolicy>,
+    build_policy_package: BuildPolicyPackage,
+) -> BuildOptions {
+    let options = BuildOptions::new(no_binary, no_build)
+        .with_build_policy(build_policy, build_policy_package);
+    warn_build_policy_preview(&options);
+    options
 }
 
-fn warn_build_policy_preview(policy: &BuildPolicies) {
-    if !policy.is_empty() && !uv_preview::is_enabled(PreviewFeature::BuildPolicy) {
+fn warn_build_policy_preview(options: &BuildOptions) {
+    if options.has_build_policy() && !uv_preview::is_enabled(PreviewFeature::BuildPolicy) {
         warn_user_once!(
             "The `--build-policy` and `--build-policy-package` options are experimental and may change without warning. Pass `--preview-features {}` to disable this warning.",
             PreviewFeature::BuildPolicy
@@ -4551,14 +4557,12 @@ impl From<ResolverOptions> for ResolverSettings {
                 value.no_sources_package.unwrap_or_default(),
             ),
             upgrade: value.upgrade.unwrap_or_default(),
-            build_options: BuildOptions::new(
+            build_options: resolve_build_options(
                 NoBinary::from_args(value.no_binary, value.no_binary_package.unwrap_or_default()),
                 NoBuild::from_args(value.no_build, value.no_build_package.unwrap_or_default()),
-            )
-            .with_policy(resolve_build_policy(
                 value.build_policy,
                 value.build_policy_package.unwrap_or_default(),
-            )),
+            ),
         }
     }
 }
@@ -4637,17 +4641,15 @@ impl From<ResolverInstallerOptions> for ResolverInstallerSettings {
         let index_locations = value.indexes.into();
         Self {
             resolver: ResolverSettings {
-                build_options: BuildOptions::new(
+                build_options: resolve_build_options(
                     NoBinary::from_args(
                         value.no_binary,
                         value.no_binary_package.unwrap_or_default(),
                     ),
                     NoBuild::from_args(value.no_build, value.no_build_package.unwrap_or_default()),
-                )
-                .with_policy(resolve_build_policy(
                     value.build_policy,
                     value.build_policy_package.unwrap_or_default(),
-                )),
+                ),
                 config_setting: value.config_settings.unwrap_or_default(),
                 config_settings_package: value.config_settings_package.unwrap_or_default(),
                 dependency_metadata: DependencyMetadata::from_entries(
@@ -4751,7 +4753,7 @@ pub(crate) struct PipSettings {
 
 impl PipSettings {
     fn warn_build_policy_preview(self) -> Self {
-        warn_build_policy_preview(self.build_options.policy());
+        warn_build_policy_preview(&self.build_options);
         self
     }
 
@@ -5133,7 +5135,7 @@ impl PipSettings {
                     top_level_no_build_package.unwrap_or_default(),
                 )),
             )
-            .with_policy(BuildPolicies::new(
+            .with_build_policy(
                 args.build_policy
                     .combine(build_policy)
                     .combine(top_level_build_policy),
@@ -5141,7 +5143,7 @@ impl PipSettings {
                     .combine(build_policy_package)
                     .combine(top_level_build_policy_package)
                     .unwrap_or_default(),
-            )),
+            ),
             install_mirrors: environment
                 .install_mirrors
                 .combine(filesystem_install_mirrors),

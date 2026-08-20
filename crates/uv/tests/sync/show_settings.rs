@@ -157,10 +157,10 @@ fn pip_compile_baseline() {
             build_options: BuildOptions {
                 no_binary: None,
                 no_build: None,
-                policy: BuildPolicies {
-                    default: None,
-                    packages: {},
-                },
+                build_policy: None,
+                build_policy_package: BuildPolicyPackage(
+                    {},
+                ),
             },
             allow_empty_requirements: false,
             strict: false,
@@ -530,10 +530,10 @@ fn pip_install_baseline() {
             build_options: BuildOptions {
                 no_binary: None,
                 no_build: None,
-                policy: BuildPolicies {
-                    default: None,
-                    packages: {},
-                },
+                build_policy: None,
+                build_policy_package: BuildPolicyPackage(
+                    {},
+                ),
             },
             allow_empty_requirements: false,
             strict: false,
@@ -668,10 +668,10 @@ fn lock_baseline() {
             build_options: BuildOptions {
                 no_binary: None,
                 no_build: None,
-                policy: BuildPolicies {
-                    default: None,
-                    packages: {},
-                },
+                build_policy: None,
+                build_policy_package: BuildPolicyPackage(
+                    {},
+                ),
             },
             config_setting: ConfigSettings(
                 {},
@@ -805,10 +805,10 @@ fn version_baseline() {
                 build_options: BuildOptions {
                     no_binary: None,
                     no_build: None,
-                    policy: BuildPolicies {
-                        default: None,
-                        packages: {},
-                    },
+                    build_policy: None,
+                    build_policy_package: BuildPolicyPackage(
+                        {},
+                    ),
                 },
                 config_setting: ConfigSettings(
                     {},
@@ -985,10 +985,10 @@ fn tool_install_baseline() {
                 build_options: BuildOptions {
                     no_binary: None,
                     no_build: None,
-                    policy: BuildPolicies {
-                        default: None,
-                        packages: {},
-                    },
+                    build_policy: None,
+                    build_policy_package: BuildPolicyPackage(
+                        {},
+                    ),
                 },
                 config_setting: ConfigSettings(
                     {},
