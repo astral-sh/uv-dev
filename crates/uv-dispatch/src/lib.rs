@@ -18,7 +18,7 @@ use uv_build_frontend::{SourceBuild, SourceBuildContext};
 use uv_cache::Cache;
 use uv_client::RegistryClient;
 use uv_configuration::{
-    BuildKind, BuildPolicies, Constraints, DependencyModifiers, HashCheckingMode, IndexStrategy,
+    BuildKind, BuildOptions, Constraints, DependencyModifiers, HashCheckingMode, IndexStrategy,
     NoSources, Reinstall,
 };
 use uv_configuration::{BuildOutput, Concurrency};
@@ -164,7 +164,7 @@ pub struct BuildDispatch<'a> {
     extra_build_requires: &'a ExtraBuildRequires,
     extra_build_variables: &'a ExtraBuildVariables,
     link_mode: uv_install_wheel::LinkMode,
-    build_options: &'a BuildPolicies,
+    build_options: &'a BuildOptions,
     config_settings: &'a ConfigSettings,
     config_settings_package: &'a PackageConfigSettings,
     base_hasher: &'a HashStrategy,
@@ -197,7 +197,7 @@ impl<'a> BuildDispatch<'a> {
         extra_build_requires: &'a ExtraBuildRequires,
         extra_build_variables: &'a ExtraBuildVariables,
         link_mode: uv_install_wheel::LinkMode,
-        build_options: &'a BuildPolicies,
+        build_options: &'a BuildOptions,
         hasher: &'a HashStrategy,
         exclude_newer: ExcludeNewer,
         sources: NoSources,
@@ -320,7 +320,7 @@ impl BuildContext for BuildDispatch<'_> {
         self.dependency_metadata
     }
 
-    fn build_options(&self) -> &BuildPolicies {
+    fn build_options(&self) -> &BuildOptions {
         self.build_options
     }
 

@@ -7,7 +7,7 @@ use uv_cache::Cache;
 use uv_client::{
     FlatIndexClient, FlatIndexEntries, FlatIndexEntry, FlatIndexError, RegistryClient,
 };
-use uv_configuration::BuildPolicies;
+use uv_configuration::BuildOptions;
 use uv_distribution_filename::{DistFilename, SourceDistFilename, WheelFilename};
 use uv_distribution_types::{
     File, Index, IndexLocations, IndexUrl, MinimumLibcVersion, RegistryBuiltWheel,
@@ -88,7 +88,7 @@ impl FlatDistributions {
         entries: impl IntoIterator<Item = FlatIndexEntry>,
         tags: Option<&Tags>,
         hasher: &HashStrategy,
-        build_options: &BuildPolicies,
+        build_options: &BuildOptions,
         minimum_libc_version: Option<MinimumLibcVersion>,
     ) -> Self {
         let mut distributions = Self::default();
@@ -119,7 +119,7 @@ impl FlatDistributions {
         filename: DistFilename,
         tags: Option<&Tags>,
         hasher: &HashStrategy,
-        build_options: &BuildPolicies,
+        build_options: &BuildOptions,
         index: IndexUrl,
         minimum_libc_version: Option<MinimumLibcVersion>,
     ) {
@@ -178,7 +178,7 @@ impl FlatDistributions {
         filename: &SourceDistFilename,
         hashes: &[HashDigest],
         hasher: &HashStrategy,
-        build_options: &BuildPolicies,
+        build_options: &BuildOptions,
     ) -> SourceDistCompatibility {
         // Check if source distributions are allowed for this package.
         if build_options.no_build_package(&filename.name) {
@@ -215,7 +215,7 @@ impl FlatDistributions {
         hashes: &[HashDigest],
         tags: Option<&Tags>,
         hasher: &HashStrategy,
-        build_options: &BuildPolicies,
+        build_options: &BuildOptions,
     ) -> WheelCompatibility {
         // Check if binaries are allowed for this package.
         if build_options.no_binary_package(&filename.name) {

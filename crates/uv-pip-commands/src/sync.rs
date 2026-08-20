@@ -9,7 +9,7 @@ use tracing::{debug, warn};
 use uv_cache::Cache;
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_configuration::{
-    BuildIsolation, BuildPolicies, Concurrency, Constraints, DryRun, ExtrasSpecification,
+    BuildIsolation, BuildOptions, Concurrency, Constraints, DryRun, ExtrasSpecification,
     HashCheckingMode, IndexStrategy, KeyringProviderType, Modifications, NoSources,
     PipInstallFormat, Reinstall, TargetTriple, Upgrade,
 };
@@ -85,7 +85,7 @@ pub async fn pip_sync(
     build_isolation: BuildIsolation,
     extra_build_dependencies: &ExtraBuildDependencies,
     extra_build_variables: &ExtraBuildVariables,
-    build_options: BuildPolicies,
+    build_options: BuildOptions,
     python_version: Option<PythonVersion>,
     python_platform: Option<TargetTriple>,
     python_downloads: PythonDownloads,
