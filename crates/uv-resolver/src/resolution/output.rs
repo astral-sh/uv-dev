@@ -628,7 +628,7 @@ impl ResolverOutput {
     ) -> Vec<PackageName> {
         let mut available = FxHashMap::default();
         for (_, distribution) in self.base_dists() {
-            if build_options.policy().get(&distribution.name) != Some(BuildPolicy::Fallback)
+            if build_options.policy().get(&distribution.name) != Some(BuildPolicy::IfNecessary)
                 || build_options.no_binary_package(&distribution.name)
             {
                 continue;

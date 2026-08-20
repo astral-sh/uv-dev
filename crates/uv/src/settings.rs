@@ -24,9 +24,9 @@ use uv_cli::{
     TreeArgs, TreeFormat, UpgradeArgs, VenvArgs, VersionArgs, VersionBumpSpec, VersionFormat,
 };
 use uv_cli::{
-    AuthorFrom, BuildArgs, BuildOptionsArgs, CheckArgs, ExcludeNewerArgs, ExportArgs, FormatArgs,
-    HashCheckingArgs, PackageExcludeNewerArgs, PublishArgs, PythonDirArgs, RegistryClientArgs,
-    ResolverArgs, ResolverInstallerArgs, ToolUpgradeArgs,
+    AuthorFrom, BuildArgs, BuildOptionsArgs, BuildPolicyArgs, CheckArgs, ExcludeNewerArgs,
+    ExportArgs, FormatArgs, HashCheckingArgs, PackageExcludeNewerArgs, PublishArgs, PythonDirArgs,
+    RegistryClientArgs, ResolverArgs, ResolverInstallerArgs, ToolUpgradeArgs,
     options::{
         Flag, FlagSource, IntoPipOptions, check_conflicts, flag, resolve_flag, resolve_flag_pair,
         resolver_installer_options, resolver_options,
@@ -34,10 +34,11 @@ use uv_cli::{
 };
 use uv_client::{Certificates, Connectivity, MetadataRangeRequest};
 use uv_configuration::{
-    ActiveEnvironment, BuildIsolation, BuildOptions, BuildPolicies, Concurrency, DependencyGroups,
-    DevMode, DryRun, EditableMode, EnvFile, ExcludeDependency, ExportFormat, ExtrasSpecification,
-    GitLfsSetting, HashCheckingMode, IndexStrategy, InstallOptions, KeyringProviderType, NoBinary,
-    NoBuild, NoSources, Override, PackageOverride, PipCompileFormat, ProjectBuildBackend, ProxyUrl,
+    ActiveEnvironment, BuildIsolation, BuildOptions, BuildPolicies, BuildPolicyPackage, Concurrency,
+    DependencyGroups, DevMode, DryRun, EditableMode, EnvFile, ExcludeDependency, ExportFormat,
+    ExtrasSpecification, GitLfsSetting, HashCheckingMode, IndexStrategy, InstallOptions,
+    KeyringProviderType, NoBinary, NoBuild, NoSources, Override, PackageOverride, PipCompileFormat,
+    ProjectBuildBackend, ProxyUrl,
     Reinstall, RequiredVersion, TargetTriple, TrustedHost, TrustedPublishing, Upgrade,
     VersionControlSystem,
 };
@@ -1064,7 +1065,8 @@ impl ToolRunSettings {
             .map(|options| options.install_mirrors.clone())
             .unwrap_or_default();
 
-        let mut settings = ResolverInstallerSettings::from(options.clone());
+        let mut settings =
+            ResolverInstallerSettings::from(options.clone()).validate_build_policy()?;
         if torch_backend.is_some() {
             settings.resolver.torch_backend = torch_backend;
         }
@@ -1196,7 +1198,8 @@ impl ToolInstallSettings {
             .map(|options| options.install_mirrors.clone())
             .unwrap_or_default();
 
-        let mut settings = ResolverInstallerSettings::from(options.clone());
+        let mut settings =
+            ResolverInstallerSettings::from(options.clone()).validate_build_policy()?;
         if torch_backend.is_some() {
             settings.resolver.torch_backend = torch_backend;
         }
@@ -2244,7 +2247,7 @@ impl UpgradeSettings {
         args: UpgradeArgs,
         filesystem: Option<FilesystemOptions>,
         environment: EnvironmentOptions,
-    ) -> Self {
+    ) -> Result<Self> {
         let filesystem_install_mirrors = filesystem
             .as_ref()
             .map(|fs| fs.install_mirrors.clone())
@@ -2252,21 +2255,22 @@ impl UpgradeSettings {
         let packages = args.packages;
         let exclude = args.exclude;
         let mut settings =
-            ResolverSettings::combine(ResolverOptions::default(), filesystem, &environment);
+            ResolverSettings::combine(ResolverOptions::default(), filesystem, &environment)
+                .validate_build_policy()?;
         settings.upgrade = if packages.is_empty() {
             Upgrade::default()
         } else {
             Upgrade::from_packages(packages.clone())
         };
 
-        Self {
+        Ok(Self {
             packages,
             exclude,
             install_mirrors: environment
                 .install_mirrors
                 .combine(filesystem_install_mirrors),
             settings,
-        }
+        })
     }
 }
 
@@ -2616,7 +2620,8 @@ impl AddSettings {
             extras: extra.unwrap_or_default(),
             refresh,
             indexes,
-            settings: ResolverInstallerSettings::combine(options, filesystem, &environment),
+            settings: ResolverInstallerSettings::combine(options, filesystem, &environment)
+                .validate_build_policy()?,
             install_mirrors: environment
                 .install_mirrors
                 .combine(filesystem_install_mirrors),
@@ -3490,7 +3495,11 @@ impl PipCompileSettings {
         environment: EnvironmentOptions,
     ) -> anyhow::Result<Self> {
         let PipCompileArgs {
-            build_policy,
+            build_policy:
+                BuildPolicyArgs {
+                    build_policy,
+                    build_policy_package,
+                },
             src_file,
             constraints,
             overrides,
@@ -3627,6 +3636,7 @@ impl PipCompileSettings {
             settings: PipSettings::combine(
                 PipOptions {
                     build_policy,
+                    build_policy_package: build_policy_package.map(BuildPolicyPackage::from_iter),
                     python: python.and_then(Maybe::into_option),
                     system: flag(system, no_system, "system")?,
                     no_build: flag(no_build, build, "build")?,
@@ -3695,7 +3705,11 @@ impl PipSyncSettings {
         environment: EnvironmentOptions,
     ) -> anyhow::Result<Self> {
         let PipSyncArgs {
-            build_policy,
+            build_policy:
+                BuildPolicyArgs {
+                    build_policy,
+                    build_policy_package,
+                },
             src_file,
             constraints,
             build_constraints,
@@ -3749,6 +3763,7 @@ impl PipSyncSettings {
             settings: PipSettings::combine(
                 PipOptions {
                     build_policy,
+                    build_policy_package: build_policy_package.map(BuildPolicyPackage::from_iter),
                     python: python.and_then(Maybe::into_option),
                     system: flag(system, no_system, "system")?,
                     break_system_packages: flag(
@@ -3814,7 +3829,11 @@ impl PipInstallSettings {
         environment: EnvironmentOptions,
     ) -> anyhow::Result<Self> {
         let PipInstallArgs {
-            build_policy,
+            build_policy:
+                BuildPolicyArgs {
+                    build_policy,
+                    build_policy_package,
+                },
             package,
             requirements,
             editable,
@@ -3942,6 +3961,7 @@ impl PipInstallSettings {
             settings: PipSettings::combine(
                 PipOptions {
                     build_policy,
+                    build_policy_package: build_policy_package.map(BuildPolicyPackage::from_iter),
                     python: python.and_then(Maybe::into_option),
                     system: flag(system, no_system, "system")?,
                     break_system_packages: flag(
@@ -4551,6 +4571,13 @@ fn warn_if_deprecated_prerelease_mode(prerelease: PrereleaseMode) -> PrereleaseM
     }
 }
 
+fn validate_build_policy(options: &BuildOptions) -> anyhow::Result<()> {
+    if !options.policy().is_empty() && !uv_preview::is_enabled(PreviewFeature::BuildPolicy) {
+        anyhow::bail!("The build policy options require `--preview-features build-policy`");
+    }
+    Ok(())
+}
+
 fn resolve_prerelease(global: PrereleaseMode, mut package: PrereleasePackage) -> Prerelease {
     for mode in package.values_mut() {
         *mode = warn_if_deprecated_prerelease_mode(*mode);
@@ -4570,6 +4597,11 @@ fn configured_indexes(filesystem: Option<&FilesystemOptions>) -> &[Index] {
 }
 
 impl ResolverSettings {
+    fn validate_build_policy(self) -> anyhow::Result<Self> {
+        validate_build_policy(&self.build_options)?;
+        Ok(self)
+    }
+
     /// Resolve the [`ResolverSettings`] from the CLI, environment, and filesystem configuration.
     fn resolve(
         args: ResolverArgs,
@@ -4579,7 +4611,7 @@ impl ResolverSettings {
     ) -> Result<Self> {
         let args = resolver_options(args, build, configured_indexes(filesystem.as_ref()))?;
 
-        Ok(Self::combine(args, filesystem, environment))
+        Self::combine(args, filesystem, environment).validate_build_policy()
     }
 
     /// Resolve the [`ResolverSettings`] from the CLI and filesystem configuration.
@@ -4656,7 +4688,11 @@ impl From<ResolverOptions> for ResolverSettings {
             build_options: BuildOptions::new(
                 NoBinary::from_args(value.no_binary, value.no_binary_package.unwrap_or_default()),
                 NoBuild::from_args(value.no_build, value.no_build_package.unwrap_or_default()),
-            ),
+            )
+            .with_policy(BuildPolicies::new(
+                value.build_policy,
+                value.build_policy_package.unwrap_or_default(),
+            )),
         }
     }
 }
@@ -4674,6 +4710,11 @@ pub(crate) struct ResolverInstallerSettings {
 }
 
 impl ResolverInstallerSettings {
+    pub(crate) fn validate_build_policy(self) -> anyhow::Result<Self> {
+        validate_build_policy(&self.resolver.build_options)?;
+        Ok(self)
+    }
+
     /// Resolve the [`ResolverInstallerSettings`] from CLI, environment, and filesystem options.
     fn resolve(
         args: ResolverInstallerArgs,
@@ -4684,7 +4725,7 @@ impl ResolverInstallerSettings {
         let args =
             resolver_installer_options(args, build, configured_indexes(filesystem.as_ref()))?;
 
-        Ok(Self::combine(args, filesystem, environment))
+        Self::combine(args, filesystem, environment).validate_build_policy()
     }
 
     /// Reconcile the [`ResolverInstallerSettings`] from the CLI and filesystem configuration.
@@ -4741,7 +4782,11 @@ impl From<ResolverInstallerOptions> for ResolverInstallerSettings {
                         value.no_binary_package.unwrap_or_default(),
                     ),
                     NoBuild::from_args(value.no_build, value.no_build_package.unwrap_or_default()),
-                ),
+                )
+                .with_policy(BuildPolicies::new(
+                    value.build_policy,
+                    value.build_policy_package.unwrap_or_default(),
+                )),
                 config_setting: value.config_settings.unwrap_or_default(),
                 config_settings_package: value.config_settings_package.unwrap_or_default(),
                 dependency_metadata: DependencyMetadata::from_entries(
@@ -4845,11 +4890,7 @@ pub(crate) struct PipSettings {
 
 impl PipSettings {
     fn validate_build_policy(self) -> anyhow::Result<Self> {
-        if !self.build_options.policy().is_empty()
-            && !uv_preview::is_enabled(PreviewFeature::BuildPolicy)
-        {
-            anyhow::bail!("The `--build-policy` option requires `--preview-features build-policy`");
-        }
+        validate_build_policy(&self.build_options)?;
         Ok(self)
     }
 
@@ -4870,6 +4911,7 @@ impl PipSettings {
 
         let PipOptions {
             build_policy,
+            build_policy_package,
             python,
             system,
             break_system_packages,
@@ -4936,6 +4978,8 @@ impl PipSettings {
         } = pip.unwrap_or_default();
 
         let ResolverInstallerSchema {
+            build_policy: top_level_build_policy,
+            build_policy_package: top_level_build_policy_package,
             index: top_level_index,
             index_url: top_level_index_url,
             extra_index_url: top_level_extra_index_url,
@@ -5228,12 +5272,14 @@ impl PipSettings {
                     top_level_no_build_package.unwrap_or_default(),
                 )),
             )
-            .with_policy(BuildPolicies::from_specifiers(
+            .with_policy(BuildPolicies::new(
                 args.build_policy
-                    .unwrap_or_default()
-                    .into_iter()
-                    .rev()
-                    .chain(build_policy.into_iter().flatten()),
+                    .combine(build_policy)
+                    .combine(top_level_build_policy),
+                args.build_policy_package
+                    .combine(build_policy_package)
+                    .combine(top_level_build_policy_package)
+                    .unwrap_or_default(),
             )),
             install_mirrors: environment
                 .install_mirrors
@@ -5469,7 +5515,7 @@ mod tests {
             },
             None,
             EnvironmentOptions::new()?,
-        );
+        )?;
         let expected = FxHashSet::from_iter([package]);
 
         assert!(!settings.settings.upgrade.is_all());
