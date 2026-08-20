@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 10072,
+        "title": "Add support for direct archive dependencies in Git",
+        "url": "https://github.com/astral-sh/uv/pull/10072",
+        "state": "merged",
+        "reason": "Closest implementation evidence. It added support for pre-built archives inside Git repositories, but current integration coverage only exercises a parent package at the repository root, not one selected via a Git subdirectory."
+      },
+      {
+        "kind": "issue",
+        "number": 9516,
+        "title": "Adding Git repo at subdirectory that points to source in same repo does not work",
+        "url": "https://github.com/astral-sh/uv/issues/9516",
+        "state": "closed",
+        "reason": "Same Git-subdirectory and sibling-relative-path topology. It involved a directory dependency written incorrectly into the lockfile, whereas astral-sh/uv#21244 involves a wheel path misresolved during fresh installation."
+      },
+      {
+        "kind": "issue",
+        "number": 19152,
+        "title": "`uv lock` with transitive poetry path depedencies results in machine-specific path in lockfile",
+        "url": "https://github.com/astral-sh/uv/issues/19152",
+        "state": "closed",
+        "reason": "Closely related source-identity failure for a transitive relative dependency in Git-sourced metadata. Its faulty path appeared in uv.lock; in astral-sh/uv#21244 the lockfile is correct and the fresh installation request is wrong."
+      }
+    ],
+    "search_scope": "Searched exact cache and metadata errors, Path mismatch, relative path, uv.lock, first/second sync, GitPath, and Git path fragments. Conceptual and fix-oriented searches covered Git subdirectories, transitive path and wheel dependencies, direct archives in Git, cache portability, path canonicalization, and Git source preservation across open and closed issues and pull requests. astral-sh/uv#10012 was ruled out as canonical because its package dynamically emitted absolute build-directory URLs. astral-sh/uv#18443 concerns relative local Git source URLs rather than dependencies inside a remote Git checkout. No open issue or pull request tracks this exact inconsistency."
+  },
+  "type": "bug",
+  "type_reason": "Repository history and current integration coverage establish that archives inside Git repositories are supported. Fresh resolution and lockfile replay should preserve the same Git-relative archive path; rebasing it against the downstream project only during fresh installation is incorrect. The closest prior reports are closed and cover different variants, so this is not a duplicate.",
+  "summary": "No open duplicate was found. Merged astral-sh/uv#10072 added the intended wheel-in-Git support but lacks coverage for a parent selected via a Git subdirectory; astral-sh/uv#9516 and astral-sh/uv#19152 cover analogous directory-path failures.",
+  "draft_response": "Thanks for the clear reproduction. This is a bug: astral-sh/uv#10072 added support for pre-built archives inside Git repositories, and fresh resolution and lockfile replay should preserve the same repository-relative wheel path. Existing coverage exercises a Git dependency at the repository root; your case adds a Git subdirectory, where the fresh sync incorrectly rebases the wheel path against the downstream project even though uv.lock retains the correct Git-relative path. The next step is to add coverage for a transitive wheel path from a Git subdirectory and make the fresh installation request use the same path represented in uv.lock."
+}
