@@ -71,6 +71,36 @@ fn create_venv() {
     context.venv.assert(predicates::path::is_dir());
 }
 
+/// Do not warn about build policies when a command does not use them.
+#[test]
+fn build_policy_unused_by_venv_and_freeze() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    context.temp_dir.child("uv.toml").write_str(indoc! {r#"
+        build-policy = "disallow"
+
+        [pip]
+        build-policy = "force"
+        build-policy-package = { example = "if-necessary" }
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.venv()
+        .arg(context.venv.as_os_str())
+        .arg("--python")
+        .arg("3.12"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Creating virtual environment at: .venv
+    Activate with: source .venv/[BIN]/activate
+    ");
+
+    uv_snapshot!(context.filters(), context.pip_freeze(), @"
+    exit_code: 0 (success)
+    ");
+
+    Ok(())
+}
+
 #[test]
 fn create_venv_preview_skips_distutils_patch_on_py310_plus() {
     let context = uv_test::test_context_with_versions!(&["3.12"]);
