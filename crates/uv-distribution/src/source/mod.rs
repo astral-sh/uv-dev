@@ -3049,9 +3049,6 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .build_context
             .build_options()
             .no_build_requirement(source_name)
-            // Editable requirements without a known name need metadata to apply
-            // package-specific build settings; named editables must respect `--no-build`.
-            && !(source_name.is_none() && source.is_editable())
         {
             return if let Some(name) = source_name {
                 Err(Error::NoBuildPackage(name.clone()))
