@@ -2278,12 +2278,9 @@ fn install_editable_unnamed_no_build() -> Result<()> {
         .arg("--no-build")
         .arg("-e")
         .arg("editable"), @"
-    exit_code: 0 (success)
+    exit_code: 2 (failure)
     ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + example==0.1.0 (from file://[TEMP_DIR]/editable)
+    error: Building source distributions is disabled
     "
     );
 
