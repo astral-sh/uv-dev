@@ -6207,7 +6207,7 @@ async fn build_policy_if_necessary_yanked_wheel() -> Result<()> {
         .env(EnvVars::UV_PREVIEW_FEATURES, "build-policy")
         .output()?;
     assert!(output.status.success(), "{output:?}");
-    let lock = fs::read_to_string(context.temp_dir.child("pylock.toml"))?;
+    let lock = fs_err::read_to_string(context.temp_dir.child("pylock.toml"))?;
     let lock = toml::from_str::<toml::Value>(&lock)?;
     assert!(lock["packages"][0].get("sdist").is_some(), "{lock:#?}");
 
@@ -6265,7 +6265,7 @@ fn build_policy_if_necessary_multiple_versions() -> Result<()> {
         .output()?;
     assert!(output.status.success(), "{output:?}");
 
-    let lock = fs::read_to_string(context.temp_dir.child("pylock.toml"))?;
+    let lock = fs_err::read_to_string(context.temp_dir.child("pylock.toml"))?;
     let lock = toml::from_str::<toml::Value>(&lock)?;
     let packages = lock["packages"].as_array().unwrap();
     let foo_1 = packages
@@ -6295,7 +6295,7 @@ fn build_policy_if_necessary_multiple_versions() -> Result<()> {
         .env(EnvVars::UV_PREVIEW_FEATURES, "build-policy")
         .output()?;
     assert!(output.status.success(), "{output:?}");
-    let requirements = fs::read_to_string(context.temp_dir.child("requirements.txt"))?;
+    let requirements = fs_err::read_to_string(context.temp_dir.child("requirements.txt"))?;
     assert!(!requirements.contains("--only-binary foo"));
     Ok(())
 }
@@ -6429,8 +6429,8 @@ fn build_policy_unnamed_source_metadata() -> Result<()> {
     assert!(output.status.success(), "{output:?}");
     assert!(project.child("import-ran").exists());
     assert!(project.child("metadata-ran").exists());
-    fs::remove_file(project.child("import-ran"))?;
-    fs::remove_file(project.child("metadata-ran"))?;
+    fs_err::remove_file(project.child("import-ran"))?;
+    fs_err::remove_file(project.child("metadata-ran"))?;
 
     // A permissive global policy allows metadata discovery, but a restriction for the discovered
     // package prevents the subsequent wheel build.
@@ -6456,8 +6456,8 @@ fn build_policy_unnamed_source_metadata() -> Result<()> {
     assert!(project.child("metadata-ran").exists());
     assert!(!project.child("build-ran").exists());
 
-    fs::remove_file(project.child("import-ran"))?;
-    fs::remove_file(project.child("metadata-ran"))?;
+    fs_err::remove_file(project.child("import-ran"))?;
+    fs_err::remove_file(project.child("metadata-ran"))?;
     context
         .temp_dir
         .child("requirements.in")
