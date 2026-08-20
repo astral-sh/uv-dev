@@ -13,15 +13,35 @@ pub enum BuildOutput {
     Quiet,
 }
 
-#[derive(Debug, Default, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Default, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct BuildOptions {
     no_binary: NoBinary,
     no_build: NoBuild,
+    /// Whether an unnamed editable is covered by an explicit global no-build restriction.
+    ///
+    /// Pip's `--only-binary :all:` and `--no-build` both map to [`NoBuild::All`], but only the
+    /// latter applies to editable requirements. This runtime-only override preserves that input
+    /// distinction without changing the persisted build-options format.
+    #[serde(skip)]
+    no_build_unnamed_editable: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     build_policy: Option<BuildPolicy>,
     #[serde(default, skip_serializing_if = "BuildPolicyPackage::is_empty")]
     build_policy_package: BuildPolicyPackage,
+}
+
+/// Custom `Debug` to hide runtime-only provenance from `--show-settings` output.
+#[expect(clippy::missing_fields_in_debug)]
+impl std::fmt::Debug for BuildOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BuildOptions")
+            .field("no_binary", &self.no_binary)
+            .field("no_build", &self.no_build)
+            .field("build_policy", &self.build_policy)
+            .field("build_policy_package", &self.build_policy_package)
+            .finish()
+    }
 }
 
 impl BuildOptions {
@@ -29,6 +49,7 @@ impl BuildOptions {
         Self {
             no_binary,
             no_build,
+            no_build_unnamed_editable: None,
             build_policy: None,
             build_policy_package: BuildPolicyPackage::default(),
         }
@@ -39,6 +60,7 @@ impl BuildOptions {
         Self {
             no_binary: self.no_binary.combine(no_binary),
             no_build: self.no_build.combine(no_build),
+            no_build_unnamed_editable: self.no_build_unnamed_editable,
             build_policy: self.build_policy,
             build_policy_package: self.build_policy_package,
         }
@@ -140,9 +162,14 @@ impl BuildOptions {
     ///
     /// Package-specific exceptions are considered only when `package_name` is known before the
     /// build backend is invoked.
-    pub fn no_build_requirement(&self, package_name: Option<&PackageName>) -> bool {
+    pub fn no_build_requirement(&self, package_name: Option<&PackageName>, editable: bool) -> bool {
         match package_name {
             Some(name) => self.no_build_package(name),
+            None if editable => {
+                self.no_build_unnamed_editable
+                    .unwrap_or(matches!(self.no_build, NoBuild::All))
+                    || self.build_policy == Some(BuildPolicy::Disallow)
+            }
             None => self.no_build_unnamed(),
         }
     }
@@ -159,6 +186,13 @@ impl BuildOptions {
     ) -> Self {
         self.build_policy = build_policy;
         self.build_policy_package = build_policy_package;
+        self
+    }
+
+    /// Set whether an explicit global no-build restriction applies to unnamed editables.
+    #[must_use]
+    pub fn with_no_build_unnamed_editable(mut self, no_build: bool) -> Self {
+        self.no_build_unnamed_editable = Some(no_build);
         self
     }
 
@@ -453,7 +487,7 @@ mod tests {
         );
         assert!(!options.no_build_package(&package));
         assert!(options.no_build_package(&other));
-        assert!(options.no_build_requirement(None));
+        assert!(options.no_build_requirement(None, false));
 
         // Explicit legacy restrictions take precedence over the new policy.
         let options = options.combine(NoBinary::Packages(vec![other.clone()]), NoBuild::None);
@@ -490,20 +524,23 @@ mod tests {
             Some(BuildPolicy::Disallow),
             ["example=allow".parse()?].into_iter().collect(),
         );
-        assert!(options.no_build_requirement(None));
-        assert!(!options.no_build_requirement(Some(&package)));
-        assert!(options.no_build_requirement(Some(&other)));
+        assert!(options.no_build_requirement(None, false));
+        assert!(options.no_build_requirement(None, true));
+        assert!(!options.no_build_requirement(Some(&package), false));
+        assert!(options.no_build_requirement(Some(&other), false));
 
         let options = options.combine(NoBinary::Packages(vec![package.clone()]), NoBuild::None);
-        assert!(options.no_build_requirement(None));
-        assert!(!options.no_build_requirement(Some(&package)));
+        assert!(options.no_build_requirement(None, false));
+        assert!(options.no_build_requirement(None, true));
+        assert!(!options.no_build_requirement(Some(&package), false));
 
         // A global source-only restriction cannot authorize backend execution when the package
         // identity is unknown. The build policy remains the pre-execution decision.
         let options = BuildOptions::new(NoBinary::All, NoBuild::None)
             .with_build_policy(Some(BuildPolicy::Disallow), BuildPolicyPackage::default());
-        assert!(options.no_build_requirement(None));
-        assert!(!options.no_build_requirement(Some(&package)));
+        assert!(options.no_build_requirement(None, false));
+        assert!(options.no_build_requirement(None, true));
+        assert!(!options.no_build_requirement(Some(&package), false));
 
         // A permissive global policy allows metadata discovery. Restrictions for the discovered
         // package still apply to subsequent named build work.
@@ -511,15 +548,24 @@ mod tests {
             Some(BuildPolicy::Allow),
             ["example=disallow".parse()?].into_iter().collect(),
         );
-        assert!(!options.no_build_requirement(None));
-        assert!(options.no_build_requirement(Some(&package)));
-        assert!(!options.no_build_requirement(Some(&other)));
+        assert!(!options.no_build_requirement(None, false));
+        assert!(!options.no_build_requirement(None, true));
+        assert!(options.no_build_requirement(Some(&package), false));
+        assert!(!options.no_build_requirement(Some(&other), false));
 
         // Preserve the existing behavior of the explicit global no-build restriction.
         let options = BuildOptions::new(NoBinary::Packages(vec![package.clone()]), NoBuild::All)
             .with_build_policy(Some(BuildPolicy::Disallow), BuildPolicyPackage::default());
-        assert!(options.no_build_requirement(None));
-        assert!(!options.no_build_requirement(Some(&package)));
+        assert!(options.no_build_requirement(None, false));
+        assert!(options.no_build_requirement(None, true));
+        assert!(!options.no_build_requirement(Some(&package), false));
+
+        // Pip's `--only-binary :all:` preserves the editable exemption, while `--no-build`
+        // rejects the unnamed editable before backend execution.
+        let options = BuildOptions::new(NoBinary::None, NoBuild::All);
+        assert!(options.no_build_requirement(None, true));
+        let options = options.with_no_build_unnamed_editable(false);
+        assert!(!options.no_build_requirement(None, true));
         Ok(())
     }
 
