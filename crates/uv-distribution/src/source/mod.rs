@@ -985,7 +985,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .unmanaged
             .checksum_authority_record(
                 index.map_or(url, IndexUrl::url),
-                archive_filename(source, url),
+                archive_source(source, url),
             )
             .await?;
 
@@ -2797,7 +2797,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .unmanaged
             .checksum_authority_record(
                 index.map_or(url, IndexUrl::url),
-                archive_filename(source, url),
+                archive_source(source, url),
             )
             .await?;
 
@@ -3732,10 +3732,13 @@ fn read_wheel_metadata(
     Ok(ResolutionMetadata::parse_metadata(&dist_info)?)
 }
 
-/// Return the original archive filename used by the checksum authority.
-fn archive_filename<'a>(source: &'a BuildableSource<'_>, url: &'a DisplaySafeUrl) -> &'a str {
+/// Return the original archive whose filename is used by the checksum authority.
+fn archive_source<'a>(
+    source: &'a BuildableSource<'_>,
+    url: &'a DisplaySafeUrl,
+) -> &'a (dyn RemoteSource + Sync) {
     match source.as_dist() {
-        Some(SourceDist::Registry(dist)) => &dist.file.filename,
-        _ => url.path().rsplit('/').next().unwrap_or_default(),
+        Some(dist) => dist,
+        None => &**url,
     }
 }

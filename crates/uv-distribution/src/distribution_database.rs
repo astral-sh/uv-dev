@@ -702,7 +702,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         let authority = self
             .client
             .unmanaged
-            .checksum_authority_record(index.map_or(&url, IndexUrl::url), &filename.to_string())
+            .checksum_authority_record(index.map_or(&url, IndexUrl::url), dist)
             .await?;
         let expected_size = match dist {
             BuiltDist::Registry(dist) if dist.best_wheel().size_is_authoritative => size,
@@ -895,7 +895,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         let authority = self
             .client
             .unmanaged
-            .checksum_authority_record(index.map_or(&url, IndexUrl::url), &filename.to_string())
+            .checksum_authority_record(index.map_or(&url, IndexUrl::url), dist)
             .await?;
         let expected_size = match dist {
             BuiltDist::Registry(dist) if dist.best_wheel().size_is_authoritative => size,

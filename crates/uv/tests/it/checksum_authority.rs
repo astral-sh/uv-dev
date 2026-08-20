@@ -95,7 +95,8 @@ async fn index(server: &MockServer, filename: &str, bytes: &[u8], metadata: bool
         .split('-')
         .next()
         .unwrap_or_default()
-        .replace('_', "-");
+        .replace('_', "-")
+        .to_ascii_lowercase();
     let body = json!({
         "name": name,
         "files": [{
@@ -155,6 +156,89 @@ async fn checksum_authority_install_and_authenticated_metadata() -> Result<()> {
     context
         .assert_command("from checksum_example import __version__; assert __version__ == '1.0.0'")
         .success();
+    Ok(())
+}
+
+/// An authority admission names the original filename, not its normalized wheel spelling.
+#[tokio::test(flavor = "multi_thread")]
+async fn checksum_authority_preserves_wheel_filename() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    let filename = "Checksum_Example-1.0.0-py3-none-any.whl";
+    let bytes = wheel()?;
+    index(&server, filename, &bytes, false).await;
+    let index_url = format!("{}/simple", server.uri());
+    let normalized = Authority::start(vec![record(&index_url, WHEEL, &bytes)?]).await?;
+    uv_snapshot!(context.filters(), normalized.configure(context.pip_install()
+        .arg("--index-url")
+        .arg(&index_url)
+        .arg("checksum-example")), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+      × Failed to download `checksum-example==1.0.0`
+      ╰─▶ Checksum authority has no trusted record for `Checksum_Example-1.0.0-py3-none-any.whl`
+    ");
+    context.assert_command("import checksum_example").failure();
+
+    let authority = Authority::start(vec![record(&index_url, filename, &bytes)?]).await?;
+    uv_snapshot!(context.filters(), authority.configure(context.pip_install()
+        .arg("--index-url")
+        .arg(&index_url)
+        .arg("checksum-example")), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + checksum-example==1.0.0
+    ");
+    context.assert_command("import checksum_example").success();
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn checksum_authority_decodes_direct_url_filename() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    let filename = "Checksum_Example-1.0.0.tar.gz";
+    let encoded_filename = "Checksum_Example%2D1.0.0.tar.gz";
+    let backend = formatdoc! {r"
+        from pathlib import Path
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            Path(wheel_directory, {WHEEL:?}).write_bytes(bytes.fromhex({wheel:?}))
+            return {WHEEL:?}
+        ", wheel = hex::encode(wheel()?),
+    };
+    let mut bytes = Vec::new();
+    write_tar_gz(
+        &mut bytes,
+        &[
+            (
+                "checksum_example-1.0.0/pyproject.toml",
+                "[build-system]\nrequires = []\nbuild-backend = 'backend'\nbackend-path = ['.']\n[project]\nname = 'checksum-example'\nversion = '1.0.0'\n",
+            ),
+            ("checksum_example-1.0.0/backend.py", backend.as_str()),
+        ],
+    )?;
+    Mock::given(method("GET"))
+        .and(path(format!("/files/{encoded_filename}")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(bytes.clone()))
+        .mount(&server)
+        .await;
+    let url = format!("{}/files/{encoded_filename}", server.uri());
+    let authority = Authority::start(vec![record(&url, filename, &bytes)?]).await?;
+    uv_snapshot!(context.filters(), authority.configure(context.pip_install()
+        .arg("--no-index")
+        .arg(&url)), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + checksum-example==1.0.0 (from http://[LOCALHOST]/files/Checksum_Example%2D1.0.0.tar.gz)
+    ");
+    context.assert_command("import checksum_example").success();
     Ok(())
 }
 

@@ -25,7 +25,7 @@ use uv_distribution_filename::{DistFilename, WheelFilename};
 use uv_distribution_types::{
     BuiltDist, File, FileLocation, IndexCapabilities, IndexFormat, IndexLocations,
     IndexMetadataRef, IndexStatusCodeDecision, IndexStatusCodeStrategy, IndexUrl, Name,
-    RegistryBuiltWheel, Zstd,
+    RegistryBuiltWheel, RemoteSource, Zstd,
 };
 use uv_git::{GIT_LFS, GitError, GitHttpSettings, GitResolver, Reporter};
 use uv_metadata::{read_metadata_async_seek, read_metadata_async_stream};
@@ -285,7 +285,7 @@ impl RegistryClient {
     pub async fn checksum_authority_record(
         &self,
         source: &DisplaySafeUrl,
-        filename: &str,
+        archive: &(dyn RemoteSource + Sync),
     ) -> Result<Option<VerifiedRecord>, ChecksumAuthorityError> {
         let Some(authority) = &self.checksum_authority else {
             return Ok(None);
@@ -293,7 +293,11 @@ impl RegistryClient {
         if self.connectivity == Connectivity::Offline {
             return Err(ChecksumAuthorityError::Offline);
         }
-        let artifact = ArtifactId::new(source, filename)?;
+        // The signed identity uses the original filename, not a normalized distribution name.
+        let filename = archive
+            .filename()
+            .map_err(|_| ChecksumAuthorityError::InvalidIdentity)?;
+        let artifact = ArtifactId::new(source, &filename)?;
         authority.lookup(&artifact).await.map(Some)
     }
 
