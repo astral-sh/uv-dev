@@ -1006,22 +1006,31 @@ pub struct ResolverInstallerSchema {
     pub prerelease_package: Option<PrereleasePackage>,
     /// Control whether packages may be built from source.
     ///
-    /// Use `allow` for normal behavior, `if-necessary` to omit source artifacts when the selected
-    /// version has sufficient wheel coverage, `disallow` to require wheels, or `force` to require
-    /// source distributions. Existing build and binary restrictions take precedence.
+    /// `if-necessary` preserves version selection and omits registry source distributions when the
+    /// selected version has a compatible wheel. For universal resolutions, the wheels must cover
+    /// all applicable environment markers. uv may still build source distributions to obtain
+    /// metadata.
     ///
-    /// Requires the `build-policy` preview feature. `if-necessary` does not prevent metadata builds.
+    /// `disallow` uses the same restrictions as [`no-build`](#no-build): cached wheels built from
+    /// source may be reused, and editable requirements may still be built. `force` uses the same
+    /// restrictions as [`no-binary`](#no-binary): pre-built wheels may still be used to read metadata.
+    /// Existing build and binary restrictions take precedence over build policies.
+    ///
+    /// Requires the `build-policy` preview feature. See the
+    /// [resolution documentation](../concepts/resolution.md#source-build-policies) for details.
     #[option(
         default = "\"allow\"",
         value_type = "str",
         example = r#"
             build-policy = "if-necessary"
-        "#
+        "#,
+        possible_values = true
     )]
     pub build_policy: Option<BuildPolicy>,
     /// Source-build policies for individual packages.
     ///
-    /// Package-specific policies override the global `build-policy` setting.
+    /// Package-specific policies override the global [`build-policy`](#build-policy) setting.
+    /// Accepts a dictionary mapping package names to any supported build policy.
     /// Requires the `build-policy` preview feature.
     #[option(
         default = "{}",
@@ -1427,22 +1436,31 @@ impl PythonInstallMirrors {
 pub struct PipOptions {
     /// Control whether packages may be built from source.
     ///
-    /// Use `allow` for normal behavior, `if-necessary` to omit source artifacts when the selected
-    /// version has sufficient wheel coverage, `disallow` to require wheels, or `force` to require
-    /// source distributions. Existing build and binary restrictions take precedence.
+    /// `if-necessary` preserves version selection and omits registry source distributions when the
+    /// selected version has a compatible wheel. For universal resolutions, the wheels must cover
+    /// all applicable environment markers. uv may still build source distributions to obtain
+    /// metadata.
     ///
-    /// Requires the `build-policy` preview feature. `if-necessary` does not prevent metadata builds.
+    /// `disallow` uses the same restrictions as [`no-build`](#no-build): cached wheels built from
+    /// source may be reused, and editable requirements may still be built. `force` uses the same
+    /// restrictions as [`no-binary`](#no-binary): pre-built wheels may still be used to read metadata.
+    /// Existing build and binary restrictions take precedence over build policies.
+    ///
+    /// Requires the `build-policy` preview feature. See the
+    /// [resolution documentation](../concepts/resolution.md#source-build-policies) for details.
     #[option(
         default = "\"allow\"",
         value_type = "str",
         example = r#"
             build-policy = "if-necessary"
-        "#
+        "#,
+        possible_values = true
     )]
     pub build_policy: Option<BuildPolicy>,
     /// Source-build policies for individual packages.
     ///
-    /// Package-specific policies override the global `build-policy` setting.
+    /// Package-specific policies override the global [`build-policy`](#build-policy) setting.
+    /// Accepts a dictionary mapping package names to any supported build policy.
     /// Requires the `build-policy` preview feature.
     #[option(
         default = "{}",

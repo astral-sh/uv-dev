@@ -1331,7 +1331,7 @@ impl ValidatedLock {
         // A policy change can require artifacts omitted from the existing lockfile.
         if lock.build_options().policy() != options.build_options.policy()
             || (!options.build_options.policy().is_empty()
-                && lock.build_options() != &options.build_options)
+                && lock.build_options() != &options.build_options.clone().normalized())
         {
             debug!("Resolving despite existing lockfile due to change in build policy");
             return Ok(Self::Preferable(lock));

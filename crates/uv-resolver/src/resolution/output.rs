@@ -618,8 +618,8 @@ impl ResolverOutput {
 
     /// Return packages whose source fallback can be omitted because their wheels provide coverage.
     ///
-    /// Concrete resolutions inspect compatible wheel tags. Universal resolutions use the same
-    /// marker-based wheel-coverage heuristic as required environments.
+    /// Concrete resolutions inspect compatible wheel tags. Universal resolutions require the
+    /// wheel markers to cover every applicable target marker, rather than merely overlap it.
     pub fn packages_with_available_wheels(
         &self,
         tags: Option<&Tags>,
@@ -663,7 +663,7 @@ impl ResolverOutput {
                         .copied()
                         .map(|environment| environment.and(package_marker))
                         .filter(|environment| !environment.is_false())
-                        .all(|environment| !wheel_coverage.is_disjoint(environment))
+                        .all(|environment| environment.and(wheel_coverage.negate()).is_false())
                 }
             };
 
@@ -714,15 +714,6 @@ impl ResolverOutput {
                     if build_options.no_build_package(&distribution.name) =>
                 {
                     dist.wheels
-                        .iter()
-                        .flat_map(|wheel| wheel.file.hashes.iter())
-                        .collect::<FxHashSet<_>>()
-                }
-                Dist::Source(SourceDist::Registry(source))
-                    if build_options.no_build_package(&distribution.name) =>
-                {
-                    source
-                        .wheels
                         .iter()
                         .flat_map(|wheel| wheel.file.hashes.iter())
                         .collect::<FxHashSet<_>>()
