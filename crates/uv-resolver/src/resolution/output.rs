@@ -723,7 +723,7 @@ impl ResolverOutput {
     ///
     /// All available wheel hashes remain eligible when source builds are disabled so the
     /// resulting requirements can still be installed on other supported platforms.
-    pub fn retain_allowed_distribution_hashes(&mut self, build_options: &BuildPolicies) {
+    pub fn retain_allowed_distribution_hashes(&mut self, build_options: &BuildOptions) {
         for node in self.graph.node_weights_mut() {
             let ResolutionGraphNode::Dist(distribution) = node else {
                 continue;
