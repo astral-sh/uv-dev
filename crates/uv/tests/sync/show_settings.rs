@@ -295,6 +295,10 @@ fn pip_compile_baseline() {
             build_options: BuildOptions {
                 no_binary: None,
                 no_build: None,
+                policy: BuildPolicies {
+                    default: None,
+                    packages: {},
+                },
             },
             allow_empty_requirements: false,
             strict: false,
@@ -670,6 +674,10 @@ fn pip_install_baseline() {
             build_options: BuildOptions {
                 no_binary: None,
                 no_build: None,
+                policy: BuildPolicies {
+                    default: None,
+                    packages: {},
+                },
             },
             allow_empty_requirements: false,
             strict: false,
@@ -805,6 +813,10 @@ fn lock_baseline() {
             build_options: BuildOptions {
                 no_binary: None,
                 no_build: None,
+                policy: BuildPolicies {
+                    default: None,
+                    packages: {},
+                },
             },
             config_setting: ConfigSettings(
                 {},
@@ -939,6 +951,10 @@ fn version_baseline() {
                 build_options: BuildOptions {
                     no_binary: None,
                     no_build: None,
+                    policy: BuildPolicies {
+                        default: None,
+                        packages: {},
+                    },
                 },
                 config_setting: ConfigSettings(
                     {},
@@ -1114,6 +1130,10 @@ fn tool_install_baseline() {
                 build_options: BuildOptions {
                     no_binary: None,
                     no_build: None,
+                    policy: BuildPolicies {
+                        default: None,
+                        packages: {},
+                    },
                 },
                 config_setting: ConfigSettings(
                     {},
@@ -3952,6 +3972,7 @@ fn preview_features() {
     +            MinimumLibcVersion,
     +            BuildDependencyCheck,
     +            BuildLazyImports,
+    +            BuildPolicy,
     +        ],
          },
          python_preference: Managed,
