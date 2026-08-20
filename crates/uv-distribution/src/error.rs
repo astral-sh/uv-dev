@@ -296,7 +296,9 @@ impl Error {
     /// Return whether this is an expected user-facing failure.
     pub fn is_user_failure(&self) -> bool {
         match self {
-            Self::NoBuild
+            Self::ChecksumAuthority(_)
+            | Self::ChecksumAuthorityLocalArchive(_)
+            | Self::NoBuild
             | Self::NoBuildPackage(_)
             | Self::InvalidUrl(_)
             | Self::NonFileUrl(_)
