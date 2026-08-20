@@ -17,7 +17,7 @@ use uv_auth::Service;
 use uv_cache::{CacheArgs, Refresh};
 use uv_client::{Certificates, Connectivity, MetadataRangeRequest};
 use uv_configuration::{
-    ActiveEnvironment, AddBoundsKind, AnnotationStyle, BuildIsolation, BuildOptions, BuildPolicies,
+    ActiveEnvironment, AddBoundsKind, AnnotationStyle, BuildIsolation, BuildOptions,
     BuildPolicyPackage, Concurrency, DependencyGroups, DependencyMode, DevMode, DryRun, EditableMode,
     EnvFile, ExcludeDependency, ExcludeNewer, ExcludeNewerPackage, ExportFormat,
     ExtrasSpecification, ForkStrategy, GitLfsSetting, HashCheckingMode, IndexStrategy, InitKind,
@@ -4461,8 +4461,8 @@ fn resolve_pip_build_hash_checking(
     )
 }
 
-fn warn_build_policy_preview(policy: &BuildPolicies) {
-    if !policy.is_empty() && !uv_preview::is_enabled(PreviewFeature::BuildPolicy) {
+fn warn_build_policy_preview(options: &BuildOptions) {
+    if options.has_build_policy() && !uv_preview::is_enabled(PreviewFeature::BuildPolicy) {
         warn_user_once!(
             "The `--build-policy` and `--build-policy-package` options are experimental and may change without warning. Pass `--preview-features {}` to disable this warning.",
             PreviewFeature::BuildPolicy
@@ -4646,7 +4646,7 @@ pub struct PipSettings {
 
 impl PipSettings {
     fn warn_build_policy_preview(self) -> Self {
-        warn_build_policy_preview(self.build_options.policy());
+        warn_build_policy_preview(&self.build_options);
         self
     }
 
@@ -5030,7 +5030,7 @@ impl PipSettings {
                     top_level_no_build_package.unwrap_or_default(),
                 )),
             )
-            .with_policy(BuildPolicies::new(
+            .with_build_policy(
                 args.build_policy
                     .combine(build_policy)
                     .combine(top_level_build_policy),
@@ -5038,7 +5038,7 @@ impl PipSettings {
                     .combine(build_policy_package)
                     .combine(top_level_build_policy_package)
                     .unwrap_or_default(),
-            )),
+            ),
             install_mirrors: environment
                 .install_mirrors
                 .combine(filesystem_install_mirrors),
