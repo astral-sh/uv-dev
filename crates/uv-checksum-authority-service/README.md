@@ -69,7 +69,8 @@ The Ed25519 signature covers the ASCII bytes `uv-checksum-authority/v1\n` follow
 decoded payload bytes. Clients verify the signature, parse the record, and require an exact identity
 match. `404` means the artifact has not been admitted. Neither missing records nor connection
 failures permit an unverified installation. Credentials, fragments, and query strings are not sent
-to the authority; identities containing query strings are unsupported.
+to the authority; identities containing query strings are unsupported. A client rejects conflicting
+records for the same artifact within an invocation.
 
 The signed size bounds the download. The SHA-256 digest covers the complete original archive, before
 extraction. It is independent of hashes supplied by an index or lockfile: those checks continue to

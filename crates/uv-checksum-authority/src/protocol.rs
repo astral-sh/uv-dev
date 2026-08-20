@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, btree_map::Entry};
 use std::fmt;
 use std::str::FromStr;
 
@@ -203,6 +203,25 @@ impl ChecksumRecord {
     }
 }
 
+/// Keep one immutable admission per artifact identity.
+pub(crate) fn insert_record(
+    records: &mut BTreeMap<ArtifactId, ChecksumRecord>,
+    record: ChecksumRecord,
+) -> Result<(), Error> {
+    match records.entry(record.artifact().clone()) {
+        Entry::Occupied(existing) if existing.get() != &record => {
+            return Err(Error::ConflictingRecord(
+                record.artifact().filename().to_owned(),
+            ));
+        }
+        Entry::Occupied(_) => {}
+        Entry::Vacant(entry) => {
+            entry.insert(record);
+        }
+    }
+    Ok(())
+}
+
 /// A record whose signature and requested artifact identity have been checked.
 #[derive(Debug, Clone)]
 pub struct VerifiedRecord(ChecksumRecord);
@@ -216,11 +235,11 @@ impl VerifiedRecord {
 /// The archive authorizations observed while producing a cached build artifact.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(try_from = "Vec<ChecksumRecord>", into = "Vec<ChecksumRecord>")]
-pub struct VerificationReceipt(BTreeSet<ChecksumRecord>);
+pub struct VerificationReceipt(BTreeMap<ArtifactId, ChecksumRecord>);
 
 impl VerificationReceipt {
-    pub(crate) fn records(&self) -> &BTreeSet<ChecksumRecord> {
-        &self.0
+    pub(crate) fn records(&self) -> impl Iterator<Item = &ChecksumRecord> {
+        self.0.values()
     }
 }
 
@@ -231,13 +250,17 @@ impl TryFrom<Vec<ChecksumRecord>> for VerificationReceipt {
         if records.is_empty() {
             return Err(Error::InvalidReceipt);
         }
-        Ok(Self(records.into_iter().collect()))
+        let mut admitted = BTreeMap::new();
+        for record in records {
+            insert_record(&mut admitted, record)?;
+        }
+        Ok(Self(admitted))
     }
 }
 
 impl From<VerificationReceipt> for Vec<ChecksumRecord> {
     fn from(receipt: VerificationReceipt) -> Self {
-        receipt.0.into_iter().collect()
+        receipt.0.into_values().collect()
     }
 }
 
