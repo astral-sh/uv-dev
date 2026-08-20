@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "Reproduced astral-sh/uv#21244 using uv 0.12.5 on x86_64 Linux with CPython 3.12.3 and a temporary local Git fixture. A fresh `UV_CACHE_DIR=/tmp/.../cache TMPDIR=/tmp/.../tmp uv sync --python /usr/bin/python3 --verbose` exited 1 because the transitive wheel’s repository-relative path was incorrectly requested under the downstream project. The generated lockfile retained the correct Git-relative path; repeating the command exited 0 and installed all three packages. `crates/uv/tests/sync/sync.rs::sync_git_path_archive` covers `uv lock` followed by locked sync for a Git-root package, but not fresh sync or a package selected via `subdirectory`. Findings were written to the issue-context README."
+}
