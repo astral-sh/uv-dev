@@ -14,9 +14,8 @@ use tracing::debug;
 use uv_cache::Cache;
 use uv_client::{BaseClientBuilder, FlatIndexClient, RegistryClientBuilder};
 use uv_configuration::{
-    BuildIsolation, BuildPolicies, BuildPolicy, Concurrency, Constraints, ExcludeDependency,
-    ExtrasSpecification, IndexStrategy, NoBinary, NoBuild, NoSources, Override, PipCompileFormat,
-    Reinstall, Upgrade,
+    BuildIsolation, BuildOptions, Concurrency, Constraints, ExcludeDependency, ExtrasSpecification,
+    IndexStrategy, NoBinary, NoBuild, NoSources, Override, PipCompileFormat, Reinstall, Upgrade,
 };
 use uv_configuration::{KeyringProviderType, TargetTriple};
 use uv_dispatch::{BuildDispatch, SharedState};
@@ -108,7 +107,7 @@ pub(crate) async fn pip_compile(
     build_isolation: BuildIsolation,
     extra_build_dependencies: &ExtraBuildDependencies,
     extra_build_variables: &ExtraBuildVariables,
-    build_options: BuildPolicies,
+    build_options: BuildOptions,
     install_mirrors: PythonInstallMirrors,
     mut python_version: Option<PythonVersion>,
     python_platform: Option<TargetTriple>,
@@ -601,11 +600,18 @@ pub(crate) async fn pip_compile(
         }
     };
 
-    let output_build_options = resolution.build_options_for_output(
-        &build_options,
-        tags.as_deref(),
-        &artifact_environments,
-    );
+    let output_build_options = (!build_options.policy().is_empty()).then(|| {
+        let packages = resolution.packages_with_available_wheels(
+            tags.as_deref(),
+            &artifact_environments,
+            &build_options,
+        );
+        let output_build_options = build_options
+            .clone()
+            .combine(NoBinary::None, NoBuild::Packages(packages));
+        resolution.materialize_build_options(&output_build_options)
+    });
+    let output_build_options = output_build_options.as_ref().unwrap_or(&build_options);
 
     if generate_hashes && preview.is_enabled(PreviewFeature::ArtifactHashFiltering) {
         resolution.retain_allowed_distribution_hashes(&build_options);
@@ -677,21 +683,7 @@ pub(crate) async fn pip_compile(
             }
 
             // If necessary, include the `--no-binary` and `--only-binary` options.
-            if include_build_options && build_options.is_configured() {
-                let policies = resolution.package_policies(&output_build_options);
-                for (package, policy) in &policies {
-                    if matches!(policy, Some(BuildPolicy::Force) | None) {
-                        writeln!(writer, "--no-binary {package}")?;
-                        wrote_preamble = true;
-                    }
-                }
-                for (package, policy) in &policies {
-                    if matches!(policy, Some(BuildPolicy::Disallow) | None) {
-                        writeln!(writer, "--only-binary {package}")?;
-                        wrote_preamble = true;
-                    }
-                }
-            } else if include_build_options {
+            if include_build_options {
                 match output_build_options.no_binary() {
                     NoBinary::None => {}
                     NoBinary::All => {
@@ -782,7 +774,7 @@ pub(crate) async fn pip_compile(
                 &no_emit_packages,
                 install_path,
                 tags.as_deref(),
-                &output_build_options,
+                output_build_options,
             )?;
             write!(writer, "{}", export.to_toml()?)?;
         }

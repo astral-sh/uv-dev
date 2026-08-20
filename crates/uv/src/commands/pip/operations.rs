@@ -14,7 +14,7 @@ use tracing::debug;
 use uv_cache::Cache;
 use uv_client::{BaseClientBuilder, RegistryClient};
 use uv_configuration::{
-    BuildPolicies, Concurrency, Constraints, DependencyGroups, DryRun, ExcludeDependency, Excludes,
+    BuildOptions, Concurrency, Constraints, DependencyGroups, DryRun, ExcludeDependency, Excludes,
     ExtrasSpecification, Override, Overrides, Reinstall, Upgrade,
 };
 use uv_dispatch::BuildDispatch;
@@ -579,7 +579,7 @@ impl InstallationPlan {
         site_packages: SitePackages,
         installation: InstallationStrategy,
         reinstall: &Reinstall,
-        build_options: &BuildPolicies,
+        build_options: &BuildOptions,
         hasher: &HashStrategy,
         index_locations: &IndexLocations,
         config_settings: &ConfigSettings,
@@ -675,7 +675,7 @@ pub(crate) async fn install(
     installation: InstallationStrategy,
     modifications: Modifications,
     reinstall: &Reinstall,
-    build_options: &BuildPolicies,
+    build_options: &BuildOptions,
     link_mode: LinkMode,
     compile: Option<BytecodeCompilation>,
     hasher: &HashStrategy,
@@ -738,7 +738,7 @@ impl InstallationPlan {
         self,
         resolution: &Resolution,
         modifications: Modifications,
-        build_options: &BuildPolicies,
+        build_options: &BuildOptions,
         link_mode: LinkMode,
         compile: Option<BytecodeCompilation>,
         hasher: &HashStrategy,
@@ -1015,7 +1015,7 @@ async fn execute_plan(
     plan: Plan,
     phase: Option<InstallPhase>,
     resolution: &Resolution,
-    build_options: &BuildPolicies,
+    build_options: &BuildOptions,
     link_mode: LinkMode,
     hasher: &HashStrategy,
     tags: &Tags,

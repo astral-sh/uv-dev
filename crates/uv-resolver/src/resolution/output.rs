@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
@@ -10,7 +10,7 @@ use petgraph::{
 };
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 
-use uv_configuration::{BuildPolicies, BuildPolicy, Constraints, Overrides};
+use uv_configuration::{BuildOptions, BuildPolicy, Constraints, NoBinary, NoBuild, Overrides};
 use uv_distribution::Metadata;
 use uv_distribution_types::{
     BuiltDist, Dist, DistributionId, Edge, Identifier, IndexUrl, Name, Node, Requirement,
@@ -616,22 +616,20 @@ impl ResolverOutput {
         self.base_dists().next().is_none()
     }
 
-    /// Resolve conditional build policies for the selected package versions.
+    /// Return packages whose source fallback can be omitted because their wheels provide coverage.
     ///
     /// Concrete resolutions inspect compatible wheel tags. Universal resolutions require the
     /// wheel markers to cover every applicable target marker, rather than merely overlap it.
-    pub fn build_options_for_output<'a>(
+    pub fn packages_with_available_wheels(
         &self,
-        build_options: &'a BuildPolicies,
         tags: Option<&Tags>,
         environments: &SupportedEnvironments,
-    ) -> Cow<'a, BuildPolicies> {
-        if !build_options.has_if_necessary() {
-            return Cow::Borrowed(build_options);
-        }
+        build_options: &BuildOptions,
+    ) -> Vec<PackageName> {
         let mut available = FxHashMap::default();
         for (_, distribution) in self.base_dists() {
-            if build_options.effective_policy(&distribution.name) != Some(BuildPolicy::IfNecessary)
+            if build_options.policy().get(&distribution.name) != Some(BuildPolicy::IfNecessary)
+                || build_options.no_binary_package(&distribution.name)
             {
                 continue;
             }
@@ -675,24 +673,28 @@ impl ResolverOutput {
                 .or_insert(covered);
         }
 
-        if available.is_empty() {
-            return Cow::Borrowed(build_options);
-        }
-        let mut build_options = build_options.clone();
-        for (package, covered) in available {
-            build_options.resolve_if_necessary(package, covered);
-        }
-        Cow::Owned(build_options)
+        available
+            .into_iter()
+            .filter_map(|(name, covered)| covered.then_some(name))
+            .collect()
     }
 
-    /// Return the effective policy for each selected package, sorted by name.
-    pub fn package_policies<'a>(
-        &'a self,
-        build_options: &BuildPolicies,
-    ) -> BTreeMap<&'a PackageName, Option<BuildPolicy>> {
-        self.base_dists()
-            .map(|(_, dist)| (&dist.name, build_options.effective_policy(&dist.name)))
-            .collect()
+    /// Express the effective policy for a resolved set of packages using pip-compatible options.
+    pub fn materialize_build_options(&self, build_options: &BuildOptions) -> BuildOptions {
+        let mut no_binary = BTreeSet::new();
+        let mut no_build = BTreeSet::new();
+        for (_, distribution) in self.base_dists() {
+            if build_options.no_binary_package(&distribution.name) {
+                no_binary.insert(distribution.name.clone());
+            }
+            if build_options.no_build_package(&distribution.name) {
+                no_build.insert(distribution.name.clone());
+            }
+        }
+        BuildOptions::new(
+            NoBinary::from_args(None, no_binary.into_iter().collect()),
+            NoBuild::from_args(None, no_build.into_iter().collect()),
+        )
     }
 
     /// Retain registry hashes only for artifacts permitted by package-specific build options.

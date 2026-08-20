@@ -14,7 +14,7 @@ use tracing::{debug, warn};
 use uv_cache::{Cache, Refresh};
 use uv_client::{BaseClientBuilder, FlatIndexClient, RegistryClientBuilder};
 use uv_configuration::{
-    BuildPolicies, Concurrency, Constraints, DependencyGroupsWithDefaults, ExcludeDependency,
+    BuildOptions, Concurrency, Constraints, DependencyGroupsWithDefaults, ExcludeDependency,
     ExtrasSpecification, GitLfsSetting, InstallOptions, Override, TargetTriple,
 };
 use uv_dispatch::BuildDispatch;
@@ -566,7 +566,7 @@ impl ToolLock {
         project_name: Option<&PackageName>,
         interpreter: &Interpreter,
         python_platform: Option<&TargetTriple>,
-        build_options: &BuildPolicies,
+        build_options: &BuildOptions,
     ) -> anyhow::Result<Resolution> {
         struct ToolLockInstallTarget<'lock> {
             tool_lock: &'lock ToolLock,

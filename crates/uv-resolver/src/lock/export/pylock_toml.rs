@@ -14,7 +14,7 @@ use toml_edit::{Array, ArrayOfTables, Item, Table, Value, value};
 use url::Url;
 
 use uv_configuration::{
-    BuildPolicies, DependencyGroupsWithDefaults, EditableMode, ExtrasSpecificationWithDefaults,
+    BuildOptions, DependencyGroupsWithDefaults, EditableMode, ExtrasSpecificationWithDefaults,
     InstallOptions,
 };
 use uv_distribution_filename::{
@@ -405,7 +405,7 @@ impl<'lock> PylockToml {
         omit: &[PackageName],
         install_path: &Path,
         tags: Option<&Tags>,
-        build_options: &BuildPolicies,
+        build_options: &BuildOptions,
     ) -> Result<Self, PylockTomlErrorKind> {
         // The lock version is always `1.0` at time of writing.
         let lock_version = Version::new([1, 0]);
@@ -1084,7 +1084,7 @@ impl<'lock> PylockToml {
         extras: &[ExtraName],
         groups: &[GroupName],
         tags: &Tags,
-        build_options: &BuildPolicies,
+        build_options: &BuildOptions,
     ) -> Result<Resolution, PylockTomlError> {
         // Convert the extras and dependency groups specifications to a concrete environment.
         let mut graph =

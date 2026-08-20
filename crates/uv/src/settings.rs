@@ -34,8 +34,9 @@ use uv_cli::{
 };
 use uv_client::{Certificates, Connectivity, MetadataRangeRequest};
 use uv_configuration::{
-    ActiveEnvironment, BuildIsolation, BuildPolicies, BuildPolicy, BuildPolicyPackage, Concurrency,
-    DependencyGroups, DevMode, DryRun, EditableMode, EnvFile, ExcludeDependency, ExportFormat,
+    ActiveEnvironment, BuildIsolation, BuildOptions, BuildPolicies, BuildPolicy, BuildPolicyPackage,
+    Concurrency, DependencyGroups, DevMode, DryRun, EditableMode, EnvFile, ExcludeDependency,
+    ExportFormat,
     ExtrasSpecification, GitLfsSetting, HashCheckingMode, IndexStrategy, InstallOptions,
     KeyringProviderType, NoBinary, NoBuild, NoSources, Override, PackageOverride, PipCompileFormat,
     ProjectBuildBackend, ProxyUrl, Reinstall, RequiredVersion, TargetTriple, TrustedHost,
@@ -4522,7 +4523,7 @@ pub(crate) struct InstallerSettingsRef<'a> {
     pub(crate) link_mode: LinkMode,
     pub(crate) compile_bytecode: bool,
     pub(crate) reinstall: &'a Reinstall,
-    pub(crate) build_options: &'a BuildPolicies,
+    pub(crate) build_options: &'a BuildOptions,
     pub(crate) sources: NoSources,
 }
 
@@ -4532,7 +4533,7 @@ pub(crate) struct InstallerSettingsRef<'a> {
 /// ([`ResolverArgs`], represented as [`ResolverOptions`]).
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ResolverSettings {
-    pub(crate) build_options: BuildPolicies,
+    pub(crate) build_options: BuildOptions,
     pub(crate) config_setting: ConfigSettings,
     pub(crate) config_settings_package: PackageConfigSettings,
     pub(crate) dependency_metadata: DependencyMetadata,
@@ -4566,19 +4567,14 @@ fn warn_if_deprecated_prerelease_mode(prerelease: PrereleaseMode) -> PrereleaseM
     }
 }
 
-fn resolve_build_policy(
-    no_binary: NoBinary,
-    no_build: NoBuild,
-    global: Option<BuildPolicy>,
-    package: BuildPolicyPackage,
-) -> BuildPolicies {
-    let policy = BuildPolicies::new(no_binary, no_build, global, package);
+fn resolve_build_policy(global: Option<BuildPolicy>, package: BuildPolicyPackage) -> BuildPolicies {
+    let policy = BuildPolicies::new(global, package);
     warn_build_policy_preview(&policy);
     policy
 }
 
 fn warn_build_policy_preview(policy: &BuildPolicies) {
-    if policy.is_configured() && !uv_preview::is_enabled(PreviewFeature::BuildPolicy) {
+    if !policy.is_empty() && !uv_preview::is_enabled(PreviewFeature::BuildPolicy) {
         warn_user_once!(
             "The `--build-policy` and `--build-policy-package` options are experimental and may change without warning. Pass `--preview-features {}` to disable this warning.",
             PreviewFeature::BuildPolicy
@@ -4688,12 +4684,14 @@ impl From<ResolverOptions> for ResolverSettings {
                 value.no_sources_package.unwrap_or_default(),
             ),
             upgrade: value.upgrade.unwrap_or_default(),
-            build_options: resolve_build_policy(
+            build_options: BuildOptions::new(
                 NoBinary::from_args(value.no_binary, value.no_binary_package.unwrap_or_default()),
                 NoBuild::from_args(value.no_build, value.no_build_package.unwrap_or_default()),
+            )
+            .with_policy(resolve_build_policy(
                 value.build_policy,
                 value.build_policy_package.unwrap_or_default(),
-            ),
+            )),
         }
     }
 }
@@ -4772,15 +4770,17 @@ impl From<ResolverInstallerOptions> for ResolverInstallerSettings {
         let index_locations = value.indexes.into();
         Self {
             resolver: ResolverSettings {
-                build_options: resolve_build_policy(
+                build_options: BuildOptions::new(
                     NoBinary::from_args(
                         value.no_binary,
                         value.no_binary_package.unwrap_or_default(),
                     ),
                     NoBuild::from_args(value.no_build, value.no_build_package.unwrap_or_default()),
+                )
+                .with_policy(resolve_build_policy(
                     value.build_policy,
                     value.build_policy_package.unwrap_or_default(),
-                ),
+                )),
                 config_setting: value.config_settings.unwrap_or_default(),
                 config_settings_package: value.config_settings_package.unwrap_or_default(),
                 dependency_metadata: DependencyMetadata::from_entries(
@@ -4846,7 +4846,7 @@ pub(crate) struct PipSettings {
     pub(crate) build_isolation: BuildIsolation,
     pub(crate) extra_build_dependencies: ExtraBuildDependencies,
     pub(crate) extra_build_variables: ExtraBuildVariables,
-    pub(crate) build_options: BuildPolicies,
+    pub(crate) build_options: BuildOptions,
     pub(crate) allow_empty_requirements: bool,
     pub(crate) strict: bool,
     pub(crate) dependency_mode: DependencyMode,
@@ -4884,7 +4884,7 @@ pub(crate) struct PipSettings {
 
 impl PipSettings {
     fn warn_build_policy_preview(self) -> Self {
-        warn_build_policy_preview(&self.build_options);
+        warn_build_policy_preview(self.build_options.policy());
         self
     }
 
@@ -5251,7 +5251,7 @@ impl PipSettings {
                 reinstall_package.unwrap_or_default(),
             ))
             .unwrap_or_default(),
-            build_options: BuildPolicies::new(
+            build_options: BuildOptions::new(
                 NoBinary::from_pip_args(args.no_binary.combine(no_binary).unwrap_or_default())
                     .combine(NoBinary::from_args(
                         top_level_no_binary,
@@ -5265,6 +5265,8 @@ impl PipSettings {
                     top_level_no_build,
                     top_level_no_build_package.unwrap_or_default(),
                 )),
+            )
+            .with_policy(BuildPolicies::new(
                 args.build_policy
                     .combine(build_policy)
                     .combine(top_level_build_policy),
@@ -5272,7 +5274,7 @@ impl PipSettings {
                     .combine(build_policy_package)
                     .combine(top_level_build_policy_package)
                     .unwrap_or_default(),
-            ),
+            )),
             install_mirrors: environment
                 .install_mirrors
                 .combine(filesystem_install_mirrors),

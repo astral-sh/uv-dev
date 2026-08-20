@@ -7,7 +7,7 @@ use itertools::Either;
 use rustc_hash::FxHashSet;
 
 use uv_configuration::{
-    BuildPolicies, Constraints, DependencyGroupsWithDefaults, ExtrasSpecification,
+    BuildOptions, Constraints, DependencyGroupsWithDefaults, ExtrasSpecification,
     ExtrasSpecificationWithDefaults, InstallOptions,
 };
 use uv_distribution_types::{Index, Resolution};
@@ -204,7 +204,7 @@ impl<'lock> InstallTarget<'lock> {
         tags: &Tags,
         extras: &ExtrasSpecificationWithDefaults,
         groups: &DependencyGroupsWithDefaults,
-        build_options: &BuildPolicies,
+        build_options: &BuildOptions,
         install_options: &InstallOptions,
     ) -> Result<Resolution, LockError> {
         // Package-backed project and workspace targets without conflicts can use concrete roots.
