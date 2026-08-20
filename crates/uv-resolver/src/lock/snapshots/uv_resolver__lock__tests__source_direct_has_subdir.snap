@@ -33,6 +33,14 @@ Ok(
             ),
         },
         options: ResolverOptions {
+            build_options: BuildOptions {
+                no_binary: None,
+                no_build: None,
+                policy: BuildPolicies {
+                    default: None,
+                    packages: {},
+                },
+            },
             resolution_mode: Highest,
             prerelease: Prerelease {
                 global: IfNecessary,
