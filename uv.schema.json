@@ -50,6 +50,28 @@
         "type": "string"
       }
     },
+    "build-policy": {
+      "description": "Control whether packages may be built from source.\n\nUse `allow` for normal behavior, `if-necessary` to omit source artifacts when the selected\nversion has sufficient wheel coverage, `disallow` to require wheels, or `force` to require\nsource distributions. Existing build and binary restrictions take precedence.\n\nRequires the `build-policy` preview feature. `if-necessary` does not prevent metadata builds.",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/BuildPolicy"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "build-policy-package": {
+      "description": "Source-build policies for individual packages.\n\nPackage-specific policies override the global `build-policy` setting.\nRequires the `build-policy` preview feature.",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/BuildPolicyPackage"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "cache-dir": {
       "description": "Path to the cache directory.\n\nDefaults to `$XDG_CACHE_HOME/uv` or `$HOME/.cache/uv` on Linux and macOS, and\n`%LOCALAPPDATA%\\uv\\cache` on Windows.",
       "type": ["string", "null"]
@@ -774,10 +796,37 @@
         }
       }
     },
-    "BuildPolicySpecifier": {
-      "description": "A build policy, optionally prefixed with a package name and `=`.",
-      "type": "string",
-      "pattern": "^(([a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9._-]*[a-zA-Z0-9])=)?(allow|fallback|deny|force)$"
+    "BuildPolicy": {
+      "description": "Whether source distributions may be used for a package.",
+      "oneOf": [
+        {
+          "description": "Allow wheels and source distributions.",
+          "type": "string",
+          "const": "allow"
+        },
+        {
+          "description": "Keep source distributions only when the selected version lacks sufficient wheel coverage.",
+          "type": "string",
+          "const": "if-necessary"
+        },
+        {
+          "description": "Require wheels, even when doing so changes the selected version.",
+          "type": "string",
+          "const": "disallow"
+        },
+        {
+          "description": "Require source distributions instead of pre-built wheels.",
+          "type": "string",
+          "const": "force"
+        }
+      ]
+    },
+    "BuildPolicyPackage": {
+      "description": "Source-build policies that apply to individual packages.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/BuildPolicy"
+      }
     },
     "CacheKey": {
       "anyOf": [
@@ -1363,11 +1412,26 @@
           "type": ["boolean", "null"]
         },
         "build-policy": {
-          "description": "Control whether packages may be built from source.\n\nUse `allow` for normal behavior, `fallback` to omit source artifacts when the selected\nversion has sufficient wheel coverage, `deny` to require wheels, or `force` to require\nsource distributions. Package-specific entries override the global policy. Existing\n`no-build`, `only-binary`, and `no-binary` restrictions take precedence.\n\nRequires the `build-policy` preview feature. `fallback` does not prevent metadata builds.",
-          "type": ["array", "null"],
-          "items": {
-            "$ref": "#/definitions/BuildPolicySpecifier"
-          }
+          "description": "Control whether packages may be built from source.\n\nUse `allow` for normal behavior, `if-necessary` to omit source artifacts when the selected\nversion has sufficient wheel coverage, `disallow` to require wheels, or `force` to require\nsource distributions. Existing build and binary restrictions take precedence.\n\nRequires the `build-policy` preview feature. `if-necessary` does not prevent metadata builds.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/BuildPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "build-policy-package": {
+          "description": "Source-build policies for individual packages.\n\nPackage-specific policies override the global `build-policy` setting.\nRequires the `build-policy` preview feature.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/BuildPolicyPackage"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "compile-bytecode": {
           "description": "Compile Python files to bytecode after installation.\n\nBy default, uv does not compile Python (`.py`) files to bytecode (`__pycache__/*.pyc`);\ninstead, compilation is performed lazily the first time a module is imported. For use-cases\nin which start time is critical, such as CLI applications and Docker containers, this option\ncan be enabled to trade longer installation times for faster start times.\n\nWhen enabled, uv will process the entire site-packages directory (including packages that\nare not being modified by the current operation) for consistency. Like pip, it will also\nignore errors.",

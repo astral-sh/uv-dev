@@ -338,7 +338,7 @@ pub enum PreviewFeature {
     /// Exclude `exclude-newer-package` entries from the lockfile when not included in the
     /// project's resolved dependencies.
     MissingExcludeNewerPackageLock,
-    /// Controls source builds and the artifacts retained in compiled requirements.
+    /// Controls source builds and the artifacts retained in lockfiles and compiled requirements.
     BuildPolicy,
 }
 

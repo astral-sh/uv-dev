@@ -400,6 +400,8 @@ fn warn_uv_toml_masked_fields(options: &Options) {
             },
         top_level:
             ResolverInstallerSchema {
+                build_policy,
+                build_policy_package,
                 index,
                 index_url,
                 extra_index_url,
@@ -468,6 +470,13 @@ fn warn_uv_toml_masked_fields(options: &Options) {
     } = options;
 
     let mut masked_fields = vec![];
+
+    if build_policy.is_some() {
+        masked_fields.push("build-policy");
+    }
+    if build_policy_package.is_some() {
+        masked_fields.push("build-policy-package");
+    }
 
     if required_version.is_some() {
         masked_fields.push("required-version");

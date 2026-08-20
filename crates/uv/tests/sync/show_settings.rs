@@ -960,6 +960,8 @@ fn tool_install_baseline() {
             resolution: None,
             prerelease: None,
             prerelease_package: None,
+            build_policy: None,
+            build_policy_package: None,
             fork_strategy: None,
             dependency_metadata: None,
             config_settings: None,

@@ -1,7 +1,6 @@
-#[cfg(feature = "schemars")]
-use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt::{self, Display};
+use std::ops::{Deref, DerefMut};
 use std::str::FromStr;
 
 use uv_normalize::PackageName;
@@ -16,9 +15,9 @@ pub enum BuildPolicy {
     #[default]
     Allow,
     /// Keep source distributions only when the selected version lacks sufficient wheel coverage.
-    Fallback,
+    IfNecessary,
     /// Require wheels, even when doing so changes the selected version.
-    Deny,
+    Disallow,
     /// Require source distributions instead of pre-built wheels.
     Force,
 }
@@ -27,8 +26,8 @@ impl Display for BuildPolicy {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::Allow => "allow",
-            Self::Fallback => "fallback",
-            Self::Deny => "deny",
+            Self::IfNecessary => "if-necessary",
+            Self::Disallow => "disallow",
             Self::Force => "force",
         })
     }
@@ -40,8 +39,8 @@ impl FromStr for BuildPolicy {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
             "allow" => Ok(Self::Allow),
-            "fallback" => Ok(Self::Fallback),
-            "deny" => Ok(Self::Deny),
+            "if-necessary" => Ok(Self::IfNecessary),
+            "disallow" => Ok(Self::Disallow),
             "force" => Ok(Self::Force),
             _ => Err(BuildPolicyError::Policy(value.to_owned())),
         }
@@ -50,52 +49,68 @@ impl FromStr for BuildPolicy {
 
 #[derive(Debug, thiserror::Error)]
 pub enum BuildPolicyError {
-    #[error("unknown build policy `{0}`; expected `allow`, `fallback`, `deny`, or `force`")]
+    #[error("unknown build policy `{0}`; expected `allow`, `if-necessary`, `disallow`, or `force`")]
     Policy(String),
+    #[error("invalid `build-policy-package` value `{0}`: expected `PACKAGE=POLICY`")]
+    Format(String),
     #[error(transparent)]
     Package(#[from] uv_normalize::InvalidNameError),
 }
 
-/// A global build policy or a `package=policy` override.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
-#[serde(try_from = "String")]
-pub enum BuildPolicySpecifier {
-    Global(BuildPolicy),
-    Package(PackageName, BuildPolicy),
+/// A package-specific source-build policy from the command line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BuildPolicyPackageEntry {
+    package: PackageName,
+    policy: BuildPolicy,
 }
 
-impl FromStr for BuildPolicySpecifier {
+impl FromStr for BuildPolicyPackageEntry {
     type Err = BuildPolicyError;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        if let Some((package, policy)) = value.split_once('=') {
-            Ok(Self::Package(package.parse()?, policy.parse()?))
-        } else {
-            Ok(Self::Global(value.parse()?))
-        }
-    }
-}
-
-impl TryFrom<String> for BuildPolicySpecifier {
-    type Error = BuildPolicyError;
-
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        value.parse()
-    }
-}
-
-#[cfg(feature = "schemars")]
-impl schemars::JsonSchema for BuildPolicySpecifier {
-    fn schema_name() -> Cow<'static, str> {
-        Cow::Borrowed("BuildPolicySpecifier")
-    }
-
-    fn json_schema(_generator: &mut schemars::generate::SchemaGenerator) -> schemars::Schema {
-        schemars::json_schema!({
-            "type": "string",
-            "pattern": r"^(([a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9._-]*[a-zA-Z0-9])=)?(allow|fallback|deny|force)$",
-            "description": "A build policy, optionally prefixed with a package name and `=`.",
+        let Some((package, policy)) = value.split_once('=') else {
+            return Err(BuildPolicyError::Format(value.to_owned()));
+        };
+        Ok(Self {
+            package: package.parse()?,
+            policy: policy.parse()?,
         })
+    }
+}
+
+/// Source-build policies that apply to individual packages.
+#[derive(Debug, Default, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct BuildPolicyPackage(BTreeMap<PackageName, BuildPolicy>);
+
+impl Deref for BuildPolicyPackage {
+    type Target = BTreeMap<PackageName, BuildPolicy>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for BuildPolicyPackage {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl FromIterator<BuildPolicyPackageEntry> for BuildPolicyPackage {
+    fn from_iter<T: IntoIterator<Item = BuildPolicyPackageEntry>>(iter: T) -> Self {
+        Self(
+            iter.into_iter()
+                .map(|entry| (entry.package, entry.policy))
+                .collect(),
+        )
+    }
+}
+
+impl IntoIterator for BuildPolicyPackage {
+    type Item = (PackageName, BuildPolicy);
+    type IntoIter = std::collections::btree_map::IntoIter<PackageName, BuildPolicy>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
     }
 }
 
@@ -108,20 +123,19 @@ pub struct BuildPolicies {
 }
 
 impl BuildPolicies {
-    /// Resolve entries in precedence order, with higher-precedence entries first.
-    pub fn from_specifiers(specifiers: impl IntoIterator<Item = BuildPolicySpecifier>) -> Self {
-        let mut policies = Self::default();
-        for specifier in specifiers {
-            match specifier {
-                BuildPolicySpecifier::Global(policy) => {
-                    policies.default.get_or_insert(policy);
-                }
-                BuildPolicySpecifier::Package(package, policy) => {
-                    policies.packages.entry(package).or_insert(policy);
-                }
-            }
+    pub fn new(default: Option<BuildPolicy>, packages: BuildPolicyPackage) -> Self {
+        Self {
+            default,
+            packages: packages.0,
         }
-        policies
+    }
+
+    pub fn global(&self) -> Option<BuildPolicy> {
+        self.default
+    }
+
+    pub fn packages(&self) -> &BTreeMap<PackageName, BuildPolicy> {
+        &self.packages
     }
 
     /// Return the explicit package policy, falling back to the global policy.
@@ -130,12 +144,12 @@ impl BuildPolicies {
     }
 
     /// Whether builds can be rejected before a package name is known.
-    pub fn denies_all(&self) -> bool {
-        self.default == Some(BuildPolicy::Deny)
+    pub(crate) fn denies_all(&self) -> bool {
+        self.default == Some(BuildPolicy::Disallow)
             && self
                 .packages
                 .values()
-                .all(|policy| *policy == BuildPolicy::Deny)
+                .all(|policy| *policy == BuildPolicy::Disallow)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -149,30 +163,38 @@ mod tests {
 
     #[test]
     fn package_overrides_global() -> Result<(), BuildPolicyError> {
-        let policies = BuildPolicies::from_specifiers([
-            "numpy=allow".parse()?,
-            "deny".parse()?,
-            "numpy=force".parse()?,
-            "fallback".parse::<BuildPolicySpecifier>()?,
-        ]);
+        let policies = BuildPolicies::new(
+            Some(BuildPolicy::Disallow),
+            ["numpy=force".parse()?, "numpy=allow".parse()?]
+                .into_iter()
+                .collect(),
+        );
         assert_eq!(policies.get(&"numpy".parse()?), Some(BuildPolicy::Allow));
-        assert_eq!(policies.get(&"other".parse()?), Some(BuildPolicy::Deny));
+        assert_eq!(policies.get(&"other".parse()?), Some(BuildPolicy::Disallow));
         Ok(())
     }
 
     #[test]
     fn parse_policy() -> Result<(), BuildPolicyError> {
         assert_eq!(
-            "fallback".parse::<BuildPolicySpecifier>()?,
-            BuildPolicySpecifier::Global(BuildPolicy::Fallback)
+            "if-necessary".parse::<BuildPolicy>()?,
+            BuildPolicy::IfNecessary
         );
         assert_eq!(
-            "Num_Py=deny".parse::<BuildPolicySpecifier>()?,
-            BuildPolicySpecifier::Package("num-py".parse()?, BuildPolicy::Deny)
+            "Num_Py=disallow".parse::<BuildPolicyPackageEntry>()?,
+            BuildPolicyPackageEntry {
+                package: "num-py".parse()?,
+                policy: BuildPolicy::Disallow
+            }
         );
-        assert!("unknown".parse::<BuildPolicySpecifier>().is_err());
-        assert!("=deny".parse::<BuildPolicySpecifier>().is_err());
-        assert!("numpy=deny=force".parse::<BuildPolicySpecifier>().is_err());
+        assert!("numpy=allow".parse::<BuildPolicy>().is_err());
+        assert!("allow".parse::<BuildPolicyPackageEntry>().is_err());
+        assert!("=disallow".parse::<BuildPolicyPackageEntry>().is_err());
+        assert!(
+            "numpy=disallow=force"
+                .parse::<BuildPolicyPackageEntry>()
+                .is_err()
+        );
         Ok(())
     }
 }
