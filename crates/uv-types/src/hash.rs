@@ -73,6 +73,11 @@ impl HashStrategy {
         &self.verification
     }
 
+    /// Returns `true` if every distribution must have a matching trusted hash.
+    pub fn requires_hashes(&self) -> bool {
+        matches!(self.verification, HashVerification::Required(_))
+    }
+
     /// Return the [`HashPolicy`] for the given distribution.
     pub fn get<T: DistributionMetadata>(&self, distribution: &T) -> HashPolicy<'_> {
         self.get_id(|| distribution.version_id())
@@ -159,6 +164,26 @@ impl HashStrategy {
             return Ok(self);
         }
         self.augment_with_requirements(requirements)
+    }
+
+    /// Apply hashes discovered in additional requirements without allowing them to authorize new
+    /// distributions under a required hash policy.
+    pub fn constrain_with_requirements<'a>(
+        self,
+        requirements: impl Iterator<Item = &'a Requirement>,
+    ) -> Result<Self, HashStrategyError> {
+        let requirements = requirements.collect::<Vec<_>>();
+        if let HashVerification::Required(allowed) = &self.verification
+            && let Some(requirement) = requirements.iter().find(|requirement| {
+                Self::requirement_hashes(requirement)
+                    .is_some_and(|(id, _)| !allowed.contains_key(&id))
+            })
+        {
+            return Err(HashStrategyError::UntrustedRequirementHashes(
+                requirement.to_string(),
+            ));
+        }
+        self.augment_with_requirements(requirements.into_iter())
     }
 
     /// Generate the required hashes from a set of [`UnresolvedRequirement`] entries.
@@ -513,6 +538,10 @@ pub enum HashStrategyError {
     #[error("Conflicting archive URL hashes for `{0}`: `{1}` conflicts with `{2}`")]
     ConflictingArchiveUrlHashes(String, HashDigest, HashDigest),
     #[error(
+        "Hashes for `{0}` were discovered from package metadata and cannot authorize a new distribution in `--require-hashes` mode"
+    )]
+    UntrustedRequirementHashes(String),
+    #[error(
         "In `{1}` mode, all requirements must have their versions pinned with `==`, but found: {0}"
     )]
     UnpinnedRequirement(String, HashCheckingMode),
@@ -546,7 +575,7 @@ mod tests {
     use uv_pypi_types::HashDigest;
     use uv_redacted::DisplaySafeUrl;
 
-    use super::{HashStrategy, HashVerification};
+    use super::{HashStrategy, HashStrategyError, HashVerification};
 
     fn requirement(url: &str) -> Requirement {
         Requirement {
@@ -659,6 +688,25 @@ mod tests {
         assert_eq!(strategy.get_package(&name, &version), HashPolicy::Any(&[]));
         assert!(!strategy.allows_url(&url));
         assert!(!strategy.allows_package(&name, &version));
+        Ok(())
+    }
+
+    #[test]
+    fn discovered_requirements_do_not_expand_required_hash_authority()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let requirement = requirement(
+            "https://files.pythonhosted.org/packages/36/55/ad4de788d84a630656ece71059665e01ca793c04294c463fd84132f40fe6/anyio-4.0.0-py3-none-any.whl#sha256=cfdb2b588b9fc25ede96d8db56ed50848b0b649dca3dd1df0b11f683bb9e0b5f",
+        );
+        let url: DisplaySafeUrl = "https://files.pythonhosted.org/packages/36/55/ad4de788d84a630656ece71059665e01ca793c04294c463fd84132f40fe6/anyio-4.0.0-py3-none-any.whl".parse()?;
+        let strategy = HashStrategy::require(Arc::default());
+        assert!(strategy.requires_hashes());
+        assert!(!strategy.allows_url(&url));
+        assert_eq!(strategy.get_url(&url), HashPolicy::All(&[]));
+        assert!(matches!(
+            strategy.constrain_with_requirements(std::iter::once(&requirement)),
+            Err(HashStrategyError::UntrustedRequirementHashes(_))
+        ));
+
         Ok(())
     }
 }

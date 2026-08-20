@@ -242,6 +242,10 @@ impl BuildContext for BuildDispatch<'_> {
         self.build_isolation
     }
 
+    fn requires_build_hashes(&self) -> bool {
+        self.hasher.requires_hashes()
+    }
+
     fn config_settings(&self) -> &ConfigSettings {
         self.config_settings
     }
@@ -292,7 +296,7 @@ impl BuildContext for BuildDispatch<'_> {
         let hasher = self
             .hasher
             .clone()
-            .augment_with_requirements(requirements.iter())
+            .constrain_with_requirements(requirements.iter())
             .map_err(uv_requirements::Error::from)?;
         let overrides = Overrides::default();
         let excludes = Excludes::default();
