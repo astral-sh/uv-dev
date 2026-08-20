@@ -357,6 +357,39 @@ async fn checksum_authority_rejects_sdist_before_backend() -> Result<()> {
       ╰─▶ Checksum authority mismatch for `checksum_example-1.0.0.tar.gz`: expected sha256:[HASH], received sha256:[HASH]
     ");
     assert!(!marker.path().exists());
+
+    // Independent authority approval does not replace the requirements file's hash policy.
+    let url = format!("{}/files/{filename}", server.uri());
+    let authority = Authority::start(vec![record(&url, filename, &bytes)?]).await?;
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str(&format!(
+            "checksum-example @ {url} --hash=sha256:{}\n",
+            "0".repeat(64),
+        ))?;
+    let filters = context
+        .filters()
+        .into_iter()
+        .chain([(r"sha256:[a-f0-9]{64}", "sha256:[HASH]")])
+        .collect::<Vec<_>>();
+    uv_snapshot!(filters, authority.configure(context.pip_install()
+        .arg("--no-index")
+        .arg("--require-hashes")
+        .arg("-r")
+        .arg("requirements.txt")), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+      × Failed to download and build `checksum-example @ http://[LOCALHOST]/files/checksum_example-1.0.0.tar.gz`
+      ╰─▶ Hash mismatch for `checksum-example @ http://[LOCALHOST]/files/checksum_example-1.0.0.tar.gz`
+
+          Expected:
+            sha256:[HASH]
+
+          Computed:
+            sha256:[HASH]
+    ");
+    assert!(!marker.path().exists());
     Ok(())
 }
 

@@ -1,11 +1,15 @@
 use std::process::Command;
+use std::time::Duration;
 
 use anyhow::{Result, anyhow};
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use ring::signature::Ed25519KeyPair;
 use sha2::{Digest, Sha256};
-use tokio::net::TcpListener;
+use tokio::io::AsyncWriteExt;
+use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
 use url::Url;
 use uv_checksum_authority::{
@@ -160,6 +164,30 @@ fn immutable_catalog_and_signed_identity() -> Result<()> {
     Ok(())
 }
 
+/// The protocol version is part of the signature, even if the payload is otherwise valid.
+#[test]
+fn signature_domain_separation() -> Result<()> {
+    let record = record()?;
+    let key = key(7)?;
+    let public_key = AuthorityPublicKey::from_signing_key(&key);
+    let payload = serde_json::to_vec(&record)?;
+    let envelope = |context: &[u8]| -> Result<SignedRecord> {
+        Ok(serde_json::from_value(serde_json::json!({
+            "payload": STANDARD.encode(&payload),
+            "signature": STANDARD.encode(key.sign(&[context, &payload].concat()).as_ref()),
+        }))?)
+    };
+    assert_eq!(
+        envelope(b"uv-checksum-authority/v1\n")?
+            .verify(record.artifact(), &public_key)?
+            .record(),
+        &record,
+    );
+    insta::assert_snapshot!(envelope(b"")?.verify(record.artifact(), &public_key).expect_err("missing domain"), @"Checksum authority signature verification failed");
+    insta::assert_snapshot!(envelope(b"uv-checksum-authority/v2\n")?.verify(record.artifact(), &public_key).expect_err("wrong protocol version"), @"Checksum authority signature verification failed");
+    Ok(())
+}
+
 #[test]
 fn identities_do_not_leak_credentials() -> Result<()> {
     let identity = ArtifactId::new(
@@ -233,6 +261,33 @@ fn catalog_cli_is_append_only() -> Result<()> {
     Ok(())
 }
 
+/// Atomic replacement must not lose records admitted by other cooperating writers.
+#[test]
+fn concurrent_catalog_admission() -> Result<()> {
+    let directory = assert_fs::TempDir::new()?;
+    let catalog = directory.child("catalog.json");
+    let mut children = Vec::new();
+    for index in 0..8 {
+        let archive = directory.child(format!("example-{index}.whl"));
+        archive.write_str("trusted archive")?;
+        children.push(
+            Command::new(env!("CARGO_BIN_EXE_uv-checksum-authority-service"))
+                .args(["add", "--catalog"])
+                .arg(catalog.path())
+                .args(["--source", "https://pypi.org/simple"])
+                .arg(archive.path())
+                .spawn()?,
+        );
+    }
+    for child in children {
+        child.wait_with_output()?.assert().success();
+    }
+    let records: Vec<ChecksumRecord> = serde_json::from_slice(&fs_err::read(catalog.path())?)?;
+    let catalog = Catalog::from_records(records)?;
+    assert_eq!(catalog.records().count(), 8);
+    Ok(())
+}
+
 /// Invalid wire values must fail during deserialization, not at their next use.
 #[test]
 fn parse_record() -> Result<()> {
@@ -296,6 +351,115 @@ async fn reauthorize_build_receipt() -> Result<()> {
         .mount(&server)
         .await;
     insta::assert_snapshot!(authority.verify_receipt(&receipt).await.expect_err("withdrawn input"), @"Checksum authority has no trusted record for `example-1.0-py3-none-any.whl`");
+    Ok(())
+}
+
+/// One invocation cannot combine contradictory admissions for the same artifact.
+#[tokio::test]
+async fn rejects_conflicting_authority_records() -> Result<()> {
+    let server = MockServer::start().await;
+    let signing_key = key(7)?;
+    let record = record()?;
+    let authority = ChecksumAuthority::new(
+        Url::parse(&server.uri())?,
+        AuthorityPublicKey::from_signing_key(&signing_key),
+    )?;
+    Mock::given(method("GET"))
+        .and(path("/v1/checksum"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(SignedRecord::sign(&record, &signing_key)?),
+        )
+        .mount(&server)
+        .await;
+    authority.lookup(record.artifact()).await?;
+    let receipt = authority.receipt().await?;
+
+    server.reset().await;
+    let changed = ChecksumRecord::new(record.artifact().clone(), [0; 32].into(), record.size());
+    Mock::given(method("GET"))
+        .and(path("/v1/checksum"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(SignedRecord::sign(&changed, &signing_key)?),
+        )
+        .mount(&server)
+        .await;
+    insta::assert_snapshot!(authority.lookup(record.artifact()).await.expect_err("conflicting admission"), @"Conflicting checksum authority records for `example-1.0-py3-none-any.whl`");
+    assert_eq!(
+        serde_json::to_value(authority.receipt().await?)?,
+        serde_json::to_value(receipt)?
+    );
+    insta::assert_snapshot!(VerificationReceipt::try_from(vec![record, changed]).expect_err("conflicting receipt"), @"Conflicting checksum authority records for `example-1.0-py3-none-any.whl`");
+    Ok(())
+}
+
+#[tokio::test]
+async fn reauthorize_changed_build_receipt() -> Result<()> {
+    let server = MockServer::start().await;
+    let signing_key = key(7)?;
+    let record = record()?;
+    let receipt = VerificationReceipt::try_from(vec![record.clone()])?;
+    let changed_digest =
+        ChecksumRecord::new(record.artifact().clone(), [0; 32].into(), record.size());
+    Mock::given(method("GET"))
+        .and(path("/v1/checksum"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(SignedRecord::sign(&changed_digest, &signing_key)?),
+        )
+        .mount(&server)
+        .await;
+    let authority = ChecksumAuthority::new(
+        Url::parse(&server.uri())?,
+        AuthorityPublicKey::from_signing_key(&signing_key),
+    )?;
+    assert!(matches!(
+        authority.verify_receipt(&receipt).await,
+        Err(Error::Mismatch { expected, actual, .. })
+            if expected == changed_digest.sha256() && actual == record.sha256()
+    ));
+
+    server.reset().await;
+    let changed_size = ChecksumRecord::new(
+        record.artifact().clone(),
+        record.sha256(),
+        record.size() + 1,
+    );
+    Mock::given(method("GET"))
+        .and(path("/v1/checksum"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(SignedRecord::sign(&changed_size, &signing_key)?),
+        )
+        .mount(&server)
+        .await;
+    let authority = ChecksumAuthority::new(
+        Url::parse(&server.uri())?,
+        AuthorityPublicKey::from_signing_key(&signing_key),
+    )?;
+    insta::assert_snapshot!(authority.verify_receipt(&receipt).await.expect_err("changed size"), @"Checksum authority size mismatch for `example-1.0-py3-none-any.whl`: expected 16 bytes");
+    Ok(())
+}
+
+/// Shutdown must not wait for a client that has stopped midway through its headers.
+#[tokio::test]
+async fn shutdown_interrupts_incomplete_requests() -> Result<()> {
+    let service = AuthorityService::new(Catalog::default(), &key(7)?)?;
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    let (shutdown, stopped) = oneshot::channel();
+    let server = tokio::spawn(service.serve(listener, async {
+        let _ = stopped.await;
+    }));
+    let mut incomplete = TcpStream::connect(address).await?;
+    incomplete
+        .write_all(b"GET /v1/checksum HTTP/1.1\r\nHost:")
+        .await?;
+    let response = reqwest::get(format!("http://{address}/health")).await?;
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    shutdown
+        .send(())
+        .map_err(|()| anyhow!("server exited early"))?;
+    tokio::time::timeout(Duration::from_secs(5), server).await???;
     Ok(())
 }
 
