@@ -34,8 +34,8 @@ use uv_cli::{
 };
 use uv_client::{Certificates, Connectivity, MetadataRangeRequest};
 use uv_configuration::{
-    ActiveEnvironment, BuildIsolation, BuildOptions, Concurrency, DependencyGroups, DevMode,
-    DryRun, EditableMode, EnvFile, ExcludeDependency, ExportFormat, ExtrasSpecification,
+    ActiveEnvironment, BuildIsolation, BuildOptions, BuildPolicies, Concurrency, DependencyGroups,
+    DevMode, DryRun, EditableMode, EnvFile, ExcludeDependency, ExportFormat, ExtrasSpecification,
     GitLfsSetting, HashCheckingMode, IndexStrategy, InstallOptions, KeyringProviderType, NoBinary,
     NoBuild, NoSources, Override, PackageOverride, PipCompileFormat, ProjectBuildBackend, ProxyUrl,
     Reinstall, RequiredVersion, TargetTriple, TrustedHost, TrustedPublishing, Upgrade,
@@ -49,7 +49,7 @@ use uv_install_wheel::LinkMode;
 use uv_normalize::{ExtraName, PackageName, PipGroupName};
 use uv_pep440::Version;
 use uv_pep508::{MarkerTree, RequirementOrigin};
-use uv_preview::Preview;
+use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::SupportedEnvironments;
 use uv_python::{Prefix, PythonDownloads, PythonPreference, PythonVersion, Target};
 use uv_redacted::DisplaySafeUrl;
@@ -3493,6 +3493,7 @@ impl PipCompileSettings {
         environment: EnvironmentOptions,
     ) -> anyhow::Result<Self> {
         let PipCompileArgs {
+            build_policy,
             src_file,
             constraints,
             overrides,
@@ -3634,6 +3635,7 @@ impl PipCompileSettings {
             refresh: Refresh::try_from(refresh)?,
             settings: PipSettings::combine(
                 PipOptions {
+                    build_policy,
                     python: python.and_then(Maybe::into_option),
                     system: flag(system, no_system, "system")?,
                     no_build: flag(no_build, build, "build")?,
@@ -3677,7 +3679,8 @@ impl PipCompileSettings {
                 },
                 filesystem,
                 environment,
-            ),
+            )
+            .validate_build_policy()?,
         })
     }
 }
@@ -3701,6 +3704,7 @@ impl PipSyncSettings {
         environment: EnvironmentOptions,
     ) -> anyhow::Result<Self> {
         let PipSyncArgs {
+            build_policy,
             src_file,
             constraints,
             build_constraints,
@@ -3753,6 +3757,7 @@ impl PipSyncSettings {
             refresh: Refresh::try_from(refresh)?,
             settings: PipSettings::combine(
                 PipOptions {
+                    build_policy,
                     python: python.and_then(Maybe::into_option),
                     system: flag(system, no_system, "system")?,
                     break_system_packages: flag(
@@ -3783,7 +3788,8 @@ impl PipSyncSettings {
                 },
                 filesystem,
                 environment,
-            ),
+            )
+            .validate_build_policy()?,
         })
     }
 }
@@ -3817,6 +3823,7 @@ impl PipInstallSettings {
         environment: EnvironmentOptions,
     ) -> anyhow::Result<Self> {
         let PipInstallArgs {
+            build_policy,
             package,
             requirements,
             editable,
@@ -3949,6 +3956,7 @@ impl PipInstallSettings {
             refresh: Refresh::try_from(refresh)?,
             settings: PipSettings::combine(
                 PipOptions {
+                    build_policy,
                     python: python.and_then(Maybe::into_option),
                     system: flag(system, no_system, "system")?,
                     break_system_packages: flag(
@@ -3975,7 +3983,8 @@ impl PipInstallSettings {
                 },
                 filesystem,
                 environment,
-            ),
+            )
+            .validate_build_policy()?,
         })
     }
 }
@@ -4856,6 +4865,15 @@ pub(crate) struct PipSettings {
 }
 
 impl PipSettings {
+    fn validate_build_policy(self) -> anyhow::Result<Self> {
+        if !self.build_options.policy().is_empty()
+            && !uv_preview::is_enabled(PreviewFeature::BuildPolicy)
+        {
+            anyhow::bail!("The `--build-policy` option requires `--preview-features build-policy`");
+        }
+        Ok(self)
+    }
+
     /// Resolve the [`PipSettings`] from the CLI and filesystem configuration.
     fn combine(
         args: PipOptions,
@@ -4872,6 +4890,7 @@ impl PipSettings {
             .unwrap_or_default();
 
         let PipOptions {
+            build_policy,
             python,
             system,
             break_system_packages,
@@ -5229,7 +5248,14 @@ impl PipSettings {
                     top_level_no_build,
                     top_level_no_build_package.unwrap_or_default(),
                 )),
-            ),
+            )
+            .with_policy(BuildPolicies::from_specifiers(
+                args.build_policy
+                    .unwrap_or_default()
+                    .into_iter()
+                    .rev()
+                    .chain(build_policy.into_iter().flatten()),
+            )),
             install_mirrors: environment
                 .install_mirrors
                 .combine(filesystem_install_mirrors),
