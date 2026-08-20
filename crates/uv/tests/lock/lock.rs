@@ -10436,20 +10436,24 @@ fn lock_build_policy_configuration() -> Result<()> {
         "#);
     });
 
-    // Project commands enforce the preview boundary for either option on its own.
+    // Project commands warn when either option is used without the preview feature.
     uv_snapshot!(context.filters(), context.lock()
         .arg("--no-config")
+        .arg("--index-url").arg(server.index_url())
         .arg("--build-policy").arg("if-necessary"), @"
-    exit_code: 2 (failure)
+    exit_code: 0 (success)
     ----- stderr -----
-    error: The build policy options require `--preview-features build-policy`
+    warning: The `--build-policy` and `--build-policy-package` options are experimental and may change without warning. Pass `--preview-features build-policy` to disable this warning.
+    Resolved 5 packages in [TIME]
     ");
     uv_snapshot!(context.filters(), context.lock()
         .arg("--no-config")
+        .arg("--index-url").arg(server.index_url())
         .arg("--build-policy-package").arg("wheel-backed=disallow"), @"
-    exit_code: 2 (failure)
+    exit_code: 0 (success)
     ----- stderr -----
-    error: The build policy options require `--preview-features build-policy`
+    warning: The `--build-policy` and `--build-policy-package` options are experimental and may change without warning. Pass `--preview-features build-policy` to disable this warning.
+    Resolved 5 packages in [TIME]
     ");
     Ok(())
 }
