@@ -460,7 +460,7 @@ pub enum PreviewFeature {
     /// project resolution, and installation. See [project build dependency
     /// hashes](./projects/build.md#project-build-dependency-hashes) for configuration and exceptions.
     BuildDependencyHashes,
-    /// Controls source builds and the artifacts retained in compiled requirements.
+    /// Controls source builds and the artifacts retained in lockfiles and compiled requirements.
     BuildPolicy,
 }
 

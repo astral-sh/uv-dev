@@ -1,5 +1,6 @@
 use uv_configuration::{
-    BuildIsolation, BuildOptions, ExcludeNewer, ForkStrategy, HashCheckingMode, IndexStrategy,
+    BuildIsolation, BuildOptions, BuildPolicies, ExcludeNewer, ForkStrategy, HashCheckingMode,
+    IndexStrategy,
     KeyringProviderType, NoBinary, NoBuild, NoSources, Prerelease, PrereleaseMode,
     PrereleasePackage, Reinstall, ResolutionMode, Upgrade,
 };
@@ -236,7 +237,11 @@ impl From<ResolverOptions> for ResolverSettings {
             build_options: BuildOptions::new(
                 NoBinary::from_args(value.no_binary, value.no_binary_package.unwrap_or_default()),
                 NoBuild::from_args(value.no_build, value.no_build_package.unwrap_or_default()),
-            ),
+            )
+            .with_policy(BuildPolicies::new(
+                value.build_policy,
+                value.build_policy_package.unwrap_or_default(),
+            )),
         }
     }
 }
@@ -264,7 +269,11 @@ impl From<ResolverInstallerOptions> for ResolverInstallerSettings {
                         value.no_binary_package.unwrap_or_default(),
                     ),
                     NoBuild::from_args(value.no_build, value.no_build_package.unwrap_or_default()),
-                ),
+                )
+                .with_policy(BuildPolicies::new(
+                    value.build_policy,
+                    value.build_policy_package.unwrap_or_default(),
+                )),
                 config_setting: value.config_settings.unwrap_or_default(),
                 config_settings_package: value.config_settings_package.unwrap_or_default(),
                 dependency_metadata: DependencyMetadata::from_entries(
