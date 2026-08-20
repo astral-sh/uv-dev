@@ -428,6 +428,16 @@ impl std::fmt::Display for MalwareFindings {
 impl uv_errors::Hint for ProjectError {
     fn hints(&self) -> uv_errors::Hints<'_> {
         match self {
+            Self::LockMismatch(Some(previous), current, _)
+                if previous.supports_missing_package_metadata()
+                    && !current.supports_missing_package_metadata() =>
+            {
+                let mut hints = uv_errors::Hints::from(
+                    "The existing lockfile uses the `lock-without-metadata` preview format, but that preview feature is not enabled. To keep using this format, pass `--preview-features lock-without-metadata`.",
+                );
+                hints.push("To update the lockfile, run `uv lock`.".to_string());
+                hints
+            }
             Self::LockMismatch(..) | Self::LockWorkspaceMismatch(..) => {
                 uv_errors::Hints::from("To update the lockfile, run `uv lock`.")
             }
