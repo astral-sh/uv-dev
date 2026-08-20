@@ -136,15 +136,19 @@ impl BuildOptions {
         }
     }
 
+    /// Return whether a source build is disabled for a known or unknown package identity.
+    ///
+    /// Package-specific exceptions are considered only when `package_name` is known before the
+    /// build backend is invoked.
     pub fn no_build_requirement(&self, package_name: Option<&PackageName>) -> bool {
         match package_name {
             Some(name) => self.no_build_package(name),
-            None => self.no_build_all(),
+            None => self.no_build_unnamed(),
         }
     }
 
-    fn no_build_all(&self) -> bool {
-        matches!(self.no_build, NoBuild::All) || self.build_policy_denies_all()
+    fn no_build_unnamed(&self) -> bool {
+        matches!(self.no_build, NoBuild::All) || self.build_policy == Some(BuildPolicy::Disallow)
     }
 
     #[must_use]
@@ -179,27 +183,6 @@ impl BuildOptions {
     /// Whether a global or package-specific build policy was configured.
     pub fn has_build_policy(&self) -> bool {
         self.build_policy.is_some() || !self.build_policy_package.is_empty()
-    }
-
-    /// Whether builds can be rejected before a package name is known.
-    fn build_policy_denies_all(&self) -> bool {
-        if self.build_policy != Some(BuildPolicy::Disallow) {
-            return false;
-        }
-
-        let mut policy_exceptions = self
-            .build_policy_package
-            .iter()
-            .filter_map(|(package, policy)| (*policy != BuildPolicy::Disallow).then_some(package));
-        match &self.no_binary {
-            // Every package is a potential source-build exception.
-            NoBinary::All => false,
-            NoBinary::None => policy_exceptions.all(|package| self.no_build_package(package)),
-            // Legacy binary exclusions can also override the global source restriction.
-            NoBinary::Packages(packages) => policy_exceptions
-                .chain(packages)
-                .all(|package| self.no_build_package(package)),
-        }
     }
 
     /// Return the [`NoBuild`] strategy to use.
@@ -470,7 +453,7 @@ mod tests {
         );
         assert!(!options.no_build_package(&package));
         assert!(options.no_build_package(&other));
-        assert!(!options.no_build_requirement(None));
+        assert!(options.no_build_requirement(None));
 
         // Explicit legacy restrictions take precedence over the new policy.
         let options = options.combine(NoBinary::Packages(vec![other.clone()]), NoBuild::None);
@@ -497,32 +480,33 @@ mod tests {
     }
 
     #[test]
-    fn build_policy_unnamed_legacy_exceptions() -> Result<(), Error> {
+    fn build_policy_unnamed_requirements() -> Result<(), Error> {
         let package = PackageName::from_str("example")?;
         let other = PackageName::from_str("other")?;
-        let options = BuildOptions::default()
-            .with_build_policy(Some(BuildPolicy::Disallow), BuildPolicyPackage::default());
-        assert!(options.no_build_requirement(None));
 
-        let options = options.combine(NoBinary::Packages(vec![package.clone()]), NoBuild::None);
-        assert!(!options.no_build_requirement(None));
+        // Package exceptions apply when the package identity is known, but cannot authorize
+        // metadata execution for an unnamed source.
+        let options = BuildOptions::default().with_build_policy(
+            Some(BuildPolicy::Disallow),
+            ["example=allow".parse()?].into_iter().collect(),
+        );
+        assert!(options.no_build_requirement(None));
         assert!(!options.no_build_requirement(Some(&package)));
         assert!(options.no_build_requirement(Some(&other)));
 
-        let options = options.combine(NoBinary::None, NoBuild::Packages(vec![package.clone()]));
+        let options = options.combine(NoBinary::Packages(vec![package.clone()]), NoBuild::None);
         assert!(options.no_build_requirement(None));
-        assert!(options.no_build_requirement(Some(&package)));
+        assert!(!options.no_build_requirement(Some(&package)));
 
-        // A configured exception does not permit an unnamed build when a legacy restriction
-        // cancels the exception for that package.
-        let options = BuildOptions::default()
-            .with_build_policy(
-                Some(BuildPolicy::Disallow),
-                ["example=allow".parse()?].into_iter().collect(),
-            )
-            .combine(NoBinary::None, NoBuild::Packages(vec![package.clone()]));
-        assert!(options.no_build_requirement(None));
+        // A permissive global policy allows metadata discovery. Restrictions for the discovered
+        // package still apply to subsequent named build work.
+        let options = BuildOptions::default().with_build_policy(
+            Some(BuildPolicy::Allow),
+            ["example=disallow".parse()?].into_iter().collect(),
+        );
+        assert!(!options.no_build_requirement(None));
         assert!(options.no_build_requirement(Some(&package)));
+        assert!(!options.no_build_requirement(Some(&other)));
 
         // Preserve the existing behavior of the explicit global no-build restriction.
         let options = BuildOptions::new(NoBinary::Packages(vec![package.clone()]), NoBuild::All)
