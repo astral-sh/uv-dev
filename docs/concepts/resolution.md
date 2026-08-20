@@ -279,12 +279,12 @@ Invoking a build backend to generate source metadata counts as a source build. C
 `disallow` rejects unnamed sources before metadata generation; provide a trustworthy package name or
 [static dependency metadata](#dependency-metadata) when a package-specific exception is needed.
 Sandboxed metadata generation and narrower metadata-only authorization are not part of this preview
-feature. Like `--no-build`, `disallow` permits reuse of cached wheels built from source, and editable
-requirements with a known identity may still be built. Like `--no-binary`, `force` permits reading
-metadata from pre-built wheels and reusing cached wheels built from source. Existing `--no-build`,
-`--no-binary`, and `--only-binary` restrictions take precedence over build policies. See the
-[pip compatibility documentation](../pip/compatibility.md#-only-binary-enforcement) for details of
-these restrictions.
+feature. Like `--no-build`, `disallow` permits reuse of cached wheels built from source, and
+editable requirements with a known identity may still be built. Like `--no-binary`, `force` permits
+reading metadata from pre-built wheels and reusing cached wheels built from source. Existing
+`--no-build`, `--no-binary`, and `--only-binary` restrictions take precedence over build policies.
+See the [pip compatibility documentation](../pip/compatibility.md#-only-binary-enforcement) for
+details of these restrictions.
 
 ## Common marker values
 
