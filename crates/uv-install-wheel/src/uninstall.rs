@@ -6,7 +6,7 @@ use std::sync::{LazyLock, Mutex, OnceLock};
 
 use tracing::trace;
 
-use uv_fs::write_atomic_sync;
+use uv_fs::{Simplified, write_atomic_sync};
 use uv_pypi_types::Identifier;
 use uv_warnings::warn_user;
 
@@ -24,6 +24,7 @@ pub fn uninstall_wheel(
             "dist-info directory is not in a site-packages directory".to_string(),
         ));
     };
+    let resolved_site_packages = site_packages.simple_canonicalize()?;
 
     // Read the RECORD file.
     let record = {
@@ -49,7 +50,7 @@ pub fn uninstall_wheel(
     for entry in &record {
         let path = site_packages.join(&entry.path);
 
-        if !is_path_in_scheme(&entry.path, site_packages, &distribution, layout) {
+        if !is_path_in_scheme(&entry.path, &resolved_site_packages, &distribution, layout) {
             continue;
         }
 
@@ -172,11 +173,11 @@ static WARNED_FOR_EGG_TOP_LEVEL_PACKAGE: OnceLock<Mutex<HashSet<String>>> = Once
 /// of arbitrary files on uninstall.
 fn is_path_in_scheme(
     path: &str,
-    site_packages: &Path,
+    resolved_site_packages: &Path,
     distribution: impl Display,
     layout: &Layout,
 ) -> bool {
-    let normalized = normalize_path(&site_packages.join(path));
+    let normalized = normalize_path(&resolved_site_packages.join(path));
 
     // `purelib` or `platlib` are site-packages (depending on `Root-Is-Purelib`). As
     // `.data/*` goes into the directories of `scheme`, `.dist-info` goes into site-packages
@@ -187,7 +188,8 @@ fn is_path_in_scheme(
     // `.data/data`. For a system environment, wheels are allowed to write to
     // whole system directories, for example `data` is `/usr/local` for system Python on
     // Ubuntu 24.04.
-    if normalized.starts_with(&layout.scheme.data)
+    if normalized.starts_with(resolved_site_packages)
+        || normalized.starts_with(&layout.scheme.data)
         || normalized.starts_with(&layout.scheme.purelib)
         || normalized.starts_with(&layout.scheme.platlib)
         || normalized.starts_with(&layout.scheme.scripts)
