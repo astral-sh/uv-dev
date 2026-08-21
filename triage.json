@@ -1,0 +1,19 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 19464,
+        "title": "Enforce that entry points cannot escape in the scripts directory",
+        "url": "https://github.com/astral-sh/uv/pull/19464",
+        "state": "merged",
+        "reason": "This historical change retained the site-packages-relative launcher write but changed the Unix permission lookup to the intended scripts path. With the reported lib symlink, those paths resolve to different files."
+      }
+    ],
+    "search_scope": "Searched exact error fragments, console_scripts and entry-point installation, site-packages/RECORD-relative paths, usr/bin, virtual-environment symlinks, script.as_path, and the cited commit across open and closed issues and all pull request states. No existing tracker covers this Unix failure. astral-sh/uv#18728, astral-sh/uv#19374, and astral-sh/uv#11048 were inspected but concern package listing, Windows launcher execution, and shebang selection, respectively."
+  },
+  "type": "bug",
+  "type_reason": "The installer writes the launcher through a site-packages-relative path and then queries permissions through the intended scripts path. A lib symlink can make those paths resolve differently, causing incorrect placement and installation failure. astral-sh/uv#19464 is historical context, not a duplicate tracker.",
+  "summary": "No canonical duplicate was found. Merged security hardening astral-sh/uv#19464 is the closest related change and exposes the path mismatch under this symlinked layout.",
+  "draft_response": "Thanks for the focused reproduction. This is a bug, and the current installer code matches the behavior you found: the launcher is written using a path relative to site-packages, while the executable-permission step introduced in astral-sh/uv#19464 queries the intended scripts path directly. With `lib` resolving through `usr/lib`, those paths can refer to different locations, so the launcher lands under `usr/bin` and the subsequent lookup under `bin` fails.\n\nThe reproduction is sufficient. The next step is to add a Unix integration regression test for this virtual-environment layout and ensure the launcher write and permission update target the same scripts path while preserving the correct `RECORD` entry."
+}
