@@ -1,0 +1,15 @@
+{
+  "outcome": "fixed",
+  "summary": "Resolve site-packages before deriving RECORD-relative script paths, ensuring console entry points and wheel data scripts install into the configured scripts directory and uninstall correctly through symlinked layouts. The updated regressions cover both producer paths and their uninstall round trips.",
+  "validation": [
+    "cargo test --package uv --test pip_install install_script_with_symlinked_lib",
+    "cargo test --package uv --test pip_install install_editable_uv_build_data",
+    "cargo test --package uv --test pip_install install_relocatable",
+    "cargo test --package uv --test pip_install launcher",
+    "cargo test --package uv --test pip uninstall_record_path_traversal",
+    "cargo test --package uv-install-wheel test_uninstall_record_path_traversal",
+    "cargo +stable clippy --package uv-install-wheel --all-targets -- -D warnings",
+    "cargo +stable fmt --all -- --check"
+  ],
+  "pull_request": "https://github.com/astral-sh/uv-dev/pull/832"
+}
