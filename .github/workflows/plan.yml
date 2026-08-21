@@ -95,6 +95,9 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: "Check trampoline build inputs"
+        run: python3 scripts/check-trampoline-build-inputs.py
+
       - name: "Plan"
         id: plan
         shell: bash
@@ -143,7 +146,10 @@ jobs:
             [[ "$file" =~ ^crates/uv-publish/ || "$file" =~ ^scripts/publish/ || "$file" == "crates/uv/src/commands/publish.rs" ]] && publish_code_changed=1
             [[ "$file" == ".github/workflows/test-windows-trampolines.yml" ]] && trampoline_workflow_changed=1
             [[ "$file" =~ ^crates/uv-trampoline/ || "$file" =~ ^crates/uv-trampoline-builder/ ]] && trampoline_code_changed=1
-            [[ "$file" =~ ^crates/uv-trampoline/.*\.rs$ || "$file" =~ ^crates/uv-trampoline-builder/trampolines/ ]] && trampoline_repro_changed=1
+            # Include the local dependencies of the trampoline and the host-side PE normalizer.
+            # scripts/check-trampoline-build-inputs.py checks this closure against the manifests.
+            [[ "$file" =~ ^crates/(uv-trampoline|uv-trampoline-builder|uv-windows|uv-static|uv-macros|uv-version|uv-fs|uv-warnings|uv-errors)/ ]] && trampoline_repro_changed=1
+            [[ "$file" == "rust-toolchain.toml" || "$file" =~ ^(crates/)?\.cargo/ ]] && trampoline_repro_changed=1
             [[ "$file" == "scripts/build-trampolines.sh" || "$file" == "scripts/build-trampolines-in-docker.sh" ]] && trampoline_build_scripts_changed=1
             [[ "$file" == "scripts/build-trampolines.sh" || "$file" == "scripts/build-trampolines-in-docker.sh" || "$file" == "scripts/check-trampoline-version-consistency.py" ]] && trampoline_scripts_changed=1
             [[ "$file" =~ ^crates/uv-build/ ]] && uv_build_changed=1
@@ -159,6 +165,7 @@ jobs:
 
           # Derived groups
           [[ $rust_code_changed || $rust_deps_changed || $rust_config_changed ]] && any_rust_changed=1
+          [[ $rust_deps_changed || $trampoline_build_scripts_changed || $trampoline_workflow_changed || $ci_workflow_changed ]] && trampoline_repro_changed=1
           [[ $python_config_changed || $rust_deps_changed || $rust_config_changed || $uv_build_changed || $release_workflow_changed ]] && release_build_changed=1
           [[ $publish_code_changed || $ci_workflow_changed ]] && publish_changed=1
           [[ $rust_deps_changed || $rust_config_changed || $workflow_changed ]] && cache_relevant_changed=1
@@ -171,8 +178,8 @@ jobs:
           [[ ! $has_skip_label && ! $has_build_skip_label && ! $has_build_skip_release_label && ($release_build_changed || $has_build_release_label) ]] && build_release_binaries=1
           [[ ! $has_skip_label ]] && run_checks=1
           [[ $publish_changed || $has_publish_label || $has_extended_label || $on_main_branch ]] && test_publish=1
-          [[ ! $has_skip_label && ($trampoline_code_changed || $trampoline_scripts_changed || $trampoline_workflow_changed || $rust_deps_changed || $has_build_windows_trampoline_label || $on_main_branch) ]] && test_windows_trampoline=1
-          [[ ! $has_skip_label && ($trampoline_repro_changed || $trampoline_build_scripts_changed || $has_build_windows_trampoline_label) ]] && test_windows_trampoline_check_binary=1
+          [[ ! $has_skip_label && ($trampoline_code_changed || $trampoline_scripts_changed || $trampoline_repro_changed || $has_build_windows_trampoline_label || $on_main_branch) ]] && test_windows_trampoline=1
+          [[ ! $has_skip_label && ($trampoline_repro_changed || $has_build_windows_trampoline_label) ]] && test_windows_trampoline_check_binary=1
           [[ $on_main_branch || $cache_relevant_changed ]] && save_rust_cache=1
           [[ ! $has_skip_label && ($any_rust_changed || $bench_workflow_changed || $on_main_branch) ]] && run_bench=1
           [[ ! $has_skip_label ]] && test_smoke=1

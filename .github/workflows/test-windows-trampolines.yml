@@ -34,9 +34,9 @@ jobs:
 
   # Verify committed trampolines were built with the Docker image
   windows-trampoline-check-binary:
-    # Only run when trampoline sources changed, the trampoline binaries changed
-    # or the `build:windows-trampoline` label is set. Dependency bumps would
-    # otherwise force a trampoline rebuild on every dependency update.
+    # Run when production build inputs change, including shared dependencies,
+    # toolchains, and the committed binaries, or the `build:windows-trampoline`
+    # label is set.
     if: ${{ inputs.trampoline-build == 'true' }}
     timeout-minutes: 30
     runs-on: ubuntu-latest
