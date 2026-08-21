@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "On Ubuntu x86_64 with Python 3.12.3, a venv modified to use `lib -> usr/lib` reproduced astral-sh/uv#21255 using a local wheel with one console script. Both `VIRTUAL_ENV=$V uv pip install wheel.whl` and `uv sync` failed with uv 0.12.5: the launcher was written to `<venv>/usr/bin/demo-script`, then uv queried `<venv>/bin/demo-script` and exited with os error 2. uv 0.12.0 behaved identically; uv 0.11.1 completed but still misplaced the launcher under `usr/bin`. No existing integration test covers this internal venv symlink layout."
+}
