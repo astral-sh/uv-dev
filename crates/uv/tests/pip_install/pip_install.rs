@@ -9931,21 +9931,30 @@ fn install_script_with_symlinked_lib() -> Result<()> {
     symlink("usr/lib", &lib)?;
     fs::create_dir_all(usr.join("bin"))?;
 
-    // Installing should write the launcher to `bin`; instead, it is misplaced and the install
-    // fails because the relative path from `site-packages` follows the symlink. See
-    // astral-sh/uv#21255.
+    // Installing should write the launcher to `bin`, even though `site-packages` is reached through
+    // the `lib` symlink. See astral-sh/uv#21255.
     uv_snapshot!(context.filters(), context.pip_install()
         .arg(context.workspace_root.join("test/packages/black_editable")), @"
-    exit_code: 2 (failure)
+    exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
-    error: Failed to install: black-0.1.0-py3-none-any.whl (black==0.1.0 (from file://[WORKSPACE]/test/packages/black_editable))
-      Caused by: failed to query metadata of file `[VENV]/bin/black`: No such file or directory (os error 2)
+    Installed 1 package in [TIME]
+     + black==0.1.0 (from file://[WORKSPACE]/test/packages/black_editable)
+    ");
+
+    assert!(context.venv.join("bin/black").exists());
+    assert!(!context.venv.join("usr/bin/black").exists());
+
+    // The RECORD path should resolve to the launcher when the package is uninstalled.
+    uv_snapshot!(context.filters(), context.pip_uninstall().arg("black"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Uninstalled 1 package in [TIME]
+     - black==0.1.0 (from file://[WORKSPACE]/test/packages/black_editable)
     ");
 
     assert!(!context.venv.join("bin/black").exists());
-    assert!(context.venv.join("usr/bin/black").exists());
 
     Ok(())
 }
@@ -15934,6 +15943,15 @@ fn build_backend_wrong_wheel_platform() -> Result<()> {
 fn install_editable_uv_build_data() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
+    #[cfg(unix)]
+    {
+        let lib = context.venv.join("lib");
+        let usr = context.venv.join("usr");
+        fs::create_dir_all(&usr)?;
+        fs::rename(&lib, usr.join("lib"))?;
+        symlink("usr/lib", &lib)?;
+    }
+
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
         [project]
@@ -16021,6 +16039,15 @@ fn install_editable_uv_build_data() -> Result<()> {
             .lines()
             .any(|line| line.contains("/project-config.txt"))
     );
+
+    uv_snapshot!(context.filters(), context.pip_uninstall().arg("project"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Uninstalled 1 package in [TIME]
+     - project==0.1.0 (from file://[TEMP_DIR]/)
+    ");
+
+    assert!(!venv_bin_path(&context.venv).join("project-script").exists());
 
     Ok(())
 }

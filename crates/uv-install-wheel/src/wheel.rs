@@ -317,6 +317,10 @@ impl<'script> ValidatedScript<'script> {
     /// Entry points are installed in the scripts directory, which may sit outside
     /// `site_packages`, so we use a lexical diff rather than stripping a prefix.
     fn relative_to_site_package(&self, site_packages: &Path) -> Result<PathBuf, Error> {
+        // Resolve the base because the resulting path is joined to `site_packages` when the
+        // launcher is installed and uninstalled. Otherwise, a symlink in `site_packages` can
+        // change the meaning of parent components in the relative path.
+        let site_packages = site_packages.simple_canonicalize()?;
         pathdiff::diff_paths(self.as_path(), site_packages).ok_or_else(|| {
             Error::Io(io::Error::other(format!(
                 "Could not find relative path for: {}",
@@ -542,8 +546,9 @@ fn install_script(
 
     let script_absolute = layout.scheme.scripts.join(file.file_name());
     validate_data_script_destination(&script_absolute, &layout.scheme.scripts)?;
-    let script_relative =
-        pathdiff::diff_paths(&script_absolute, site_packages).ok_or_else(|| {
+    let resolved_site_packages = site_packages.simple_canonicalize()?;
+    let script_relative = pathdiff::diff_paths(&script_absolute, resolved_site_packages)
+        .ok_or_else(|| {
             Error::Io(io::Error::other(format!(
                 "Could not find relative path for: {}",
                 script_absolute.simplified_display()
