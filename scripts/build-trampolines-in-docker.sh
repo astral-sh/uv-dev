@@ -17,11 +17,13 @@ export CARGO_TARGET_DIR=/tmp/target
 # Copy workspace to a writable location.
 cp -r /source /workspace
 
-# Normalize all crate versions to 0.0.0 so a uv version bump does not change
-# the binaries, as the crate version is part of cargo's Strict Version Hash
-# which is embedded in the output.
-find /workspace -name Cargo.toml -exec sed -i 's/^version = .*/version = "0.0.0"/' {} +
-sed -i -E 's/version = "[^"]+"(, path = ")/version = "0.0.0"\1/g' /workspace/Cargo.toml
+# Normalize crate versions to reduce version-only changes to cargo's Strict
+# Version Hash in the binaries. Keep uv-version's actual application version
+# and workspace requirement: environment-variable metadata validation compares
+# its introduction versions against this semantically consumed version.
+find /workspace -name Cargo.toml ! -path /workspace/crates/uv-version/Cargo.toml \
+    -exec sed -i 's/^version = .*/version = "0.0.0"/' {} +
+sed -i -E '/^uv-version = /!s/version = "[^"]+"(, path = ")/version = "0.0.0"\1/g' /workspace/Cargo.toml
 
 # The working directory must be the trampoline crate so cargo picks up
 # `.cargo/config.toml`, which enables build-std.
