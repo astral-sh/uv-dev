@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "Using uv 0.12.5 on Ubuntu x86_64 with managed CPython 3.14.4, a minimal project depending on pyramid==2.1 resolved setuptools==81.0.0. Both `uv sync --upgrade` and `uv sync --upgrade --resolution highest` left uv.lock byte-for-byte unchanged. An explicit setuptools==84.0.0 upgrade failed because Pyramid 2.1 requires setuptools<82. The behavior in astral-sh/uv#21273 is therefore reproduced, but it is expected constraint-respecting resolver behavior, not evidence that uv skipped a transitive dependency. The issue-context README was updated with the fixture, commands, and observations."
+}

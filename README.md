@@ -17,8 +17,73 @@ no direct setuptools requirement that relaxes that transitive upper bound. uv's 
 behavior remains subject to the dependency graph's constraints, and `--resolution highest` means
 the highest *compatible* version rather than the highest published version.
 
+The behavior was reproduced with the reported uv and Python versions in a minimal project. The
+lockfile remained byte-for-byte unchanged after the upgrade. An explicit request for the current
+setuptools 84.0.0 failed with a resolver explanation identifying Pyramid's `setuptools<82`
+requirement. This confirms the constraint as the reason for the observed result; it is not evidence
+that uv skipped a transitive dependency.
+
 No existing issue or pull request tracks a uv defect matching this exact report. The closest prior
 issues cover the same constraint rule and a different transitive-upgrade capability.
+
+## Reproduction
+
+Outcome: **reproducible**, as expected resolver behavior rather than a uv defect.
+
+Environment: uv 0.12.5 (`x86_64-unknown-linux-gnu`), CPython 3.14.4 managed by uv, and Ubuntu
+24.04.4 x86_64. All project files, the virtual environment, Python installation, and uv cache were
+isolated in a new directory under `/tmp`.
+
+The linked project's current `pyproject.toml` declares Python `>=3.12`, an unversioned `pyramid`
+runtime dependency, `pyramid>=2.0.2` in the default `dev` group, and unversioned `setuptools` in
+`build-system.requires`. Its lockfile selects Pyramid 2.1 and setuptools 81.0.0. The relevant
+runtime edge is present in Pyramid 2.1's published metadata as `setuptools<82`.
+
+The minimal project was:
+
+```toml
+[project]
+name = "issue-21273-reproduction"
+version = "0.1.0"
+requires-python = "==3.14.4"
+dependencies = ["pyramid==2.1"]
+
+[tool.uv]
+package = false
+```
+
+Using isolated `UV_CACHE_DIR` and `UV_PYTHON_INSTALL_DIR` paths, the targeted commands were:
+
+```console
+$ uv sync --python 3.14.4
+...
++ pyramid==2.1
++ setuptools==81.0.0
+$ cp uv.lock uv.lock.before
+$ uv sync --upgrade --python 3.14.4
+Resolved 13 packages ...
+Checked 12 packages ...
+$ cmp -s uv.lock uv.lock.before
+# exit status 0: the lockfile is unchanged
+$ uv sync --upgrade --resolution highest --python 3.14.4
+Resolved 13 packages ...
+Checked 12 packages ...
+$ cmp -s uv.lock uv.lock.before
+# exit status 0: the lockfile is still unchanged
+```
+
+`uv tree` showed setuptools 81.0.0 below Pyramid 2.1. A constraint probe made the reason explicit:
+
+```console
+$ uv lock --upgrade-package setuptools==84.0.0
+× No solution found when resolving dependencies:
+╰─▶ Because pyramid>=2.1 depends on setuptools<82 and setuptools==84.0.0, we
+    can conclude that pyramid>=2.1 cannot be used.
+```
+
+Thus the reported unchanged setuptools 81.0.0 pin is reproducible, but it is the highest version
+allowed by Pyramid 2.1. The build-system requirement and default dependency group do not remove the
+runtime upper bound.
 
 ## Draft response
 
@@ -35,7 +100,8 @@ newer setuptools release.
 This is a question rather than a bug. The linked project's `uv.lock` contains Pyramid 2.1 and
 setuptools 81.0.0, while Pyramid 2.1's published metadata requires `setuptools<82`. The repository
 documentation states that upgrades are limited by dependency constraints. Consequently, retaining
-81.0.0 is correct resolver behavior, even for a global upgrade and highest resolution.
+81.0.0 is correct resolver behavior, even for a global upgrade and highest resolution. The
+targeted reproduction confirmed this behavior with uv 0.12.5 and Python 3.14.4.
 
 The report's suggestion that transitive dependencies might be skipped is not supported by the
 evidence. The build-system requirement is also not the blocker: the runtime dependency edge from
