@@ -88,6 +88,22 @@ Thus the reported unchanged setuptools 81.0.0 pin is reproducible, but it is the
 allowed by Pyramid 2.1. The build-system requirement and default dependency group do not remove the
 runtime upper bound.
 
+## Workaround and maintainer guidance
+
+Repository member zanieb stated that Pyramid ideally would not impose this upper bound and pointed
+to uv's dependency overrides as an escape hatch. For example, a project that has independently
+confirmed compatibility with newer setuptools versions can replace the declared bound with:
+
+```toml
+[tool.uv]
+override-dependencies = ["setuptools>=83"]
+```
+
+This is a deliberate override of package metadata, not a normal upgrade. uv's documentation
+describes overrides as a last resort for cases where compatibility beyond a declared bound is
+known; without that validation, waiting for Pyramid to relax the requirement remains the safer
+course.
+
 ## Draft response
 
 Pyramid 2.1 declares `setuptools<82`, so setuptools 81.0.0 is the newest version compatible with
