@@ -1,0 +1,27 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 13535,
+        "title": "Add support for `uvx python@latest`",
+        "url": "https://github.com/astral-sh/uv/issues/13535",
+        "state": "open",
+        "reason": "Tracks the same explicit latest-stable Python selector. It references the shared Python request parser, and its discussion covers whether latest means the newest downloadable or installed interpreter."
+      },
+      {
+        "kind": "pull_request",
+        "number": 13873,
+        "title": "Support python@latest for newest, stable, discoverable Python",
+        "url": "https://github.com/astral-sh/uv/pull/13873",
+        "state": "open",
+        "reason": "Pre-existing implementation for astral-sh/uv#13535 that adds latest handling to shared Python request, discovery, and download code. Review is still resolving selection semantics and command coverage."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests for `3.x`, the exact invalid-download-request error, `python install 3`, `sync --python 3`, `.python-version`, setup-python, latest/newest stable Python, version ranges, interpreter resolution, installed-versus-download preference, and Python upgrade fixes. astral-sh/uv#18284 was ruled out because it updates a concrete pin; astral-sh/uv#7892 and merged astral-sh/uv#13954 only upgrade managed patch releases; astral-sh/uv#16333 concerns general lowest/highest resolution rather than an explicit latest selector."
+  },
+  "type": "duplicate",
+  "type_reason": "astral-sh/uv#13535 already tracks the same underlying latest-stable Python request, and astral-sh/uv#13873 is a pre-existing open implementation in the shared Python request layer. The new report adds broader consumers, but that scope can be centralized in the existing discussion.",
+  "summary": "astral-sh/uv#13535 is the canonical latest-Python request, with implementation underway in astral-sh/uv#13873. No separate prior request specifically for `3.x` across install, sync, and version files was found.",
+  "draft_response": "Thanks — the underlying latest-Python request is already tracked in astral-sh/uv#13535, with an open implementation in astral-sh/uv#13873. Although the existing example is `uvx python@latest`, the implementation is in the shared Python request and discovery layer. The review is still settling whether `latest` selects the newest stable download or the newest stable local interpreter.\n\nThe `uv python install`, `uv sync --python`, and `.python-version` coverage you describe is useful additional scope. Please add those use cases to astral-sh/uv#13535 so the syntax and behavior can be resolved in one place."
+}
