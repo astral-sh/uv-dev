@@ -1,0 +1,27 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 12655,
+        "title": "UV lock upgrade not upgrading anything",
+        "url": "https://github.com/astral-sh/uv/issues/12655",
+        "state": "closed",
+        "reason": "Maintainers confirmed that dependency constraints prevented upgrades. Unlike astral-sh/uv#21273, its constraints were direct exact pins rather than Pyramid’s transitive upper bound."
+      },
+      {
+        "kind": "issue",
+        "number": 14213,
+        "title": "No clear way to upgrade transitive dependency using uv",
+        "url": "https://github.com/astral-sh/uv/issues/14213",
+        "state": "closed",
+        "reason": "Related discussion of transitive upgrades. Unlike astral-sh/uv#21273, it requested upgrading every transitive dependency of one parent; here a global upgrade is already requested but constrained."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and all pull request states using literal terms for `uv sync --upgrade`, setuptools, Pyramid, `--resolution highest`, and transitive dependencies; conceptual terms for locked versions, indirect upgrades, constraints, upper bounds, and latest-compatible selection; and version/fix-oriented queries. No matching fix PR was found. astral-sh/uv#11784 was ruled out because it omitted an upgrade request, while astral-sh/uv#18178 involved `lowest-direct` resolution."
+  },
+  "type": "question",
+  "type_reason": "Pyramid 2.1 requires `setuptools<82`, making setuptools 81.0.0 the highest compatible version. Upgrade flags do not override dependency constraints, so no incorrect uv behavior is established.",
+  "summary": "The closest issues concern constraint-limited upgrades and transitive-upgrade selection. The reported result is explained by Pyramid’s setuptools upper bound, not by uv skipping transitive dependencies.",
+  "draft_response": "Pyramid 2.1 declares `setuptools<82`, so setuptools 81.0.0 is the newest version compatible with this dependency graph. `--upgrade` and `--resolution highest` still respect package requirements and therefore cannot select setuptools 83 or newer.\n\nTo use a newer setuptools, you’ll need a Pyramid release that relaxes that bound. An override is also possible, but it should only be used after confirming that Pyramid is compatible with the newer setuptools release."
+}
