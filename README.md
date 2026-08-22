@@ -17,6 +17,9 @@ no direct setuptools requirement that relaxes that transitive upper bound. uv's 
 behavior remains subject to the dependency graph's constraints, and `--resolution highest` means
 the highest *compatible* version rather than the highest published version.
 
+Repository member zanieb confirmed this explanation directly in astral-sh/uv#21273: Pyramid 2.1's
+`setuptools<82` requirement makes 81.0.0 the highest version uv can select.
+
 The behavior was reproduced with the reported uv and Python versions in a minimal project. The
 lockfile remained byte-for-byte unchanged after the upgrade. An explicit request for the current
 setuptools 84.0.0 failed with a resolver explanation identifying Pyramid's `setuptools<82`
