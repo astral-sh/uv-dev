@@ -1,0 +1,19 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 6489,
+        "title": "Scripts that use \"from future\" can result in syntax error when used with uvx",
+        "url": "https://github.com/astral-sh/uv/issues/6489",
+        "state": "open",
+        "reason": "Tracks the same source-mutating POSIX fallback: uv inserts the same three-line shell/Python prelude, breaking Python constructs that must remain at the beginning of the file. Its discussion explicitly covers long shebangs and paths with spaces and considers preserving the original script behind a separate wrapper."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests. Literal searches covered `PEP-263`, `source encoding`, `coding=windows-1252`, `no encoding declared`, `#!python`, and `#!/bin/sh`; conceptual and fix-oriented searches covered data scripts, long or non-simple shebangs, relocatable launchers, trampolines, polyglot scripts, docstrings, future imports, and wrapper scripts, both with and without incidental version and platform details. Inspected astral-sh/uv#6489 and its reference chain. astral-sh/uv#16209 was ruled out because it concerns BusyBox handling of `realpath --`, despite displaying the same prelude. astral-sh/uv#12122 and astral-sh/uv#11847 were ruled out because their similar Windows error results from launcher executable bytes being interpreted as Python. No closer pull request was found."
+  },
+  "type": "duplicate",
+  "type_reason": "astral-sh/uv#6489 already tracks the underlying correctness problem: the POSIX shell prelude inserted for non-simple shebangs changes position-sensitive Python source. This issue adds a PEP 263 encoding-cookie reproduction and a long-path trigger, both within the mechanism and trigger set already discussed there.",
+  "summary": "astral-sh/uv#6489 is the canonical open issue for the shell-prelude source mutation that also displaces this PEP 263 encoding declaration.",
+  "draft_response": "Thanks for the detailed reproduction. This is another manifestation of astral-sh/uv#6489. In both cases, uv's POSIX fallback replaces a non-simple Python shebang with a three-line `/bin/sh`/Python polyglot prelude, changing Python source whose placement at the beginning of the file is significant. astral-sh/uv#6489 demonstrates that with `from __future__`; here, the PEP 263 declaration moves from line 2 to line 4. That discussion also explicitly covers long shebangs and paths with spaces. Let's centralize the launcher design and fix there, so I'm marking this as a duplicate; this encoding-cookie reproduction provides useful additional evidence."
+}
