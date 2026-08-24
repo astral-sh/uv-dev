@@ -10600,8 +10600,8 @@ async fn add_index_credentials_workspace() -> Result<()> {
     Resolved 3 packages in [TIME]
     ");
 
-    // Persisting the credential-free duplicate makes the workspace indexes conflict once both
-    // projects select the index; the root index should be reused instead. See astral-sh/uv#21281.
+    // The existing workspace index should be reused instead of persisting a credential-free
+    // duplicate in the member. See astral-sh/uv#21281.
     insta::with_settings!({
         filters => context.filters(),
     }, {
@@ -10616,12 +10616,28 @@ async fn add_index_credentials_workspace() -> Result<()> {
 
         [tool.uv.sources]
         iniconfig = { index = "private" }
+        "#);
+    });
+
+    // Existing workspace configurations can contain both credential variants. They should resolve
+    // to the same index rather than conflict.
+    member.child("pyproject.toml").write_str(&formatdoc!(
+        r#"
+        [project]
+        name = "member"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig==2.0.0"]
+
+        [tool.uv.sources]
+        iniconfig = {{ index = "private" }}
 
         [[tool.uv.index]]
         name = "private"
-        url = "http://[LOCALHOST]/simple"
-        "#);
-    });
+        url = "{index_url}"
+    "#,
+        index_url = proxy.url("/simple")
+    ))?;
 
     pyproject_toml.write_str(&formatdoc!(
         r#"
@@ -10645,12 +10661,9 @@ async fn add_index_credentials_workspace() -> Result<()> {
     ))?;
 
     uv_snapshot!(context.filters(), context.lock(), @"
-    exit_code: 1 (failure)
+    exit_code: 0 (success)
     ----- stderr -----
-      × Failed to resolve dependencies for `member` (v0.1.0)
-      ╰─▶ Requirements contain conflicting indexes for package `iniconfig` in all marker environments:
-          - http://[LOCALHOST]/simple
-          - http://****@[LOCALHOST]/simple
+    Resolved 3 packages in [TIME]
     ");
 
     Ok(())
