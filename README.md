@@ -20,6 +20,10 @@ the highest *compatible* version rather than the highest published version.
 Repository member zanieb confirmed this explanation directly in astral-sh/uv#21273: Pyramid 2.1's
 `setuptools<82` requirement makes 81.0.0 the highest version uv can select.
 
+The reporter's follow-up shifts the remaining question to discoverability: how a user can identify
+the transitive constraint responsible for holding a package back without searching hundreds of
+verbose resolver log lines.
+
 The behavior was reproduced with the reported uv and Python versions in a minimal project. The
 lockfile remained byte-for-byte unchanged after the upgrade. An explicit request for the current
 setuptools 84.0.0 failed with a resolver explanation identifying Pyramid's `setuptools<82`
@@ -88,6 +92,33 @@ Thus the reported unchanged setuptools 81.0.0 pin is reproducible, but it is the
 allowed by Pyramid 2.1. The build-system requirement and default dependency group do not remove the
 runtime upper bound.
 
+## Constraint visibility
+
+For a synced environment, uv already has a focused way to display this edge:
+
+```console
+$ uv pip tree --show-version-specifiers --invert --package setuptools
+setuptools v81.0.0
+└── pyramid v2.1 [requires: setuptools <82]
+```
+
+The exact tree can include other reverse dependencies, but `--show-version-specifiers` exposes the
+declared bounds and `--invert --package setuptools` narrows the output to packages requiring
+setuptools. This is substantially more targeted than `uv sync --upgrade -v`, where the reporter
+found the same `setuptools<82` edge among more than 450 debug lines.
+
+The project-lockfile command `uv tree` does not currently support `--show-version-specifiers`.
+astral-sh/uv#9059 is the open canonical request for parity with `uv pip tree`; maintainers note that
+transitive specifiers are not stored in `uv.lock`, so implementing it may require expanding the
+lockfile or resolving metadata again. The installed-environment flag was requested in
+astral-sh/uv#5217 and implemented by merged pull request astral-sh/uv#5240.
+
+The reporter also linked upstream context. Pylons/pyramid#3795 proposed the setuptools bound as a
+temporary response to `pkg_resources` removal, but that pull request is closed and was not merged.
+The broader `pkg_resources` migration remains open in Pylons/pyramid#3731, where current discussion
+confirms that replacement work is ongoing. These links explain why Pyramid needs the bound but do
+not change uv's resolver behavior.
+
 ## Workaround and maintainer guidance
 
 Repository member zanieb stated that Pyramid ideally would not impose this upper bound and pointed
@@ -136,11 +167,18 @@ Pyramid imposes the upper bound.
   parent. Maintainers explained that uv supports upgrading one named transitive package or all
   packages, but not selecting all transitives of one parent. In astral-sh/uv#21273, a global upgrade
   is already requested; the package remains unchanged because of a constraint instead.
+- astral-sh/uv#9059 — Open request for `uv tree` to support `--show-version-specifiers`, directly
+  covering the follow-up request to make transitive upper bounds visible from project lock data.
+- astral-sh/uv#5217 — Closed request for version-specifier display in `uv pip tree`, motivated by
+  diagnosing why a dependency remains on an older version.
+- astral-sh/uv#5240 — Merged pull request implementing `uv pip tree --show-version-specifiers`, the
+  currently available workflow for inspecting constraints in the synced environment.
 
-No closely matching pull request was found. astral-sh/uv#11784 was inspected because it also
-mentions `uv sync --resolution highest`, but that command did not include an upgrade request and
-correctly retained lockfile preferences. astral-sh/uv#18178 was also inspected because both a
-targeted and global upgrade appeared ineffective, but its cause was a configured
+No closely matching pull request was found for the original resolver report; astral-sh/uv#5240 is
+related specifically to the follow-up discoverability question. astral-sh/uv#11784 was inspected
+because it also mentions `uv sync --resolution highest`, but that command did not include an
+upgrade request and correctly retained lockfile preferences. astral-sh/uv#18178 was also inspected
+because both a targeted and global upgrade appeared ineffective, but its cause was a configured
 `lowest-direct` resolution mode; the reporter here explicitly tried `highest`. Neither is the same
 case.
 
@@ -149,4 +187,6 @@ Searches covered the literal command and package terms (`uv sync --upgrade`, set
 global and targeted upgrades, latest compatible versions, dependency constraints and upper
 bounds), and fix-oriented searches across open and closed issues plus open, closed, and merged pull
 requests. Searches also removed the package and platform details to look for the underlying
-constraint behavior. No version-specific regression or matching fix was found.
+constraint behavior. The follow-up search also covered displaying constraints and version
+specifiers in `uv tree` and `uv pip tree`, identifying astral-sh/uv#9059 as the canonical open
+request. No version-specific regression or matching resolver fix was found.
