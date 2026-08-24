@@ -1,0 +1,27 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 8441,
+        "title": "Trying to use custom gitconfig location, appears to get ignored",
+        "url": "https://github.com/astral-sh/uv/issues/8441",
+        "state": "open",
+        "reason": "Canonical match: uv performs Git operations in its cache repository, so credential-helper and SSH settings selected from the invoking project's Git context are missed."
+      },
+      {
+        "kind": "pull_request",
+        "number": 20964,
+        "title": "Test Git credential helper authentication",
+        "url": "https://github.com/astral-sh/uv/pull/20964",
+        "state": "open",
+        "reason": "Adjacent work that tests credential-helper retrieval from temporary home/global configuration, but does not support caller-project-local Git configuration."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests using literal terms including `credential helper`, `credential.helper`, `git config --global`, and `local git config`; conceptual terms covering project-scoped Git authentication, custom Git configuration, private Git dependencies, and credential lookup; and historical implementation, documentation, and test fixes. Inspected astral-sh/uv#8441 and its astral-sh/uv#8413 chain, plus astral-sh/uv#8529, astral-sh/uv#12368, astral-sh/uv#2048, astral-sh/uv#20964, astral-sh/uv#1781, astral-sh/uv#13850, astral-sh/uv#19419, and astral-sh/uv#19423. astral-sh/uv#8529 was ruled out as a broader first-class authentication request, while astral-sh/uv#19419 was a distinct, already-fixed workspace credential propagation bug."
+  },
+  "type": "duplicate",
+  "type_reason": "astral-sh/uv#8441 already tracks the same open underlying limitation: Git operations performed in uv's cache do not retain the invoking project's Git configuration context. The new repository-local configuration example is a narrower reproduction of that issue.",
+  "summary": "astral-sh/uv#8441 is the canonical discussion. astral-sh/uv#20964 is related test work limited to home/global credential-helper configuration.",
+  "draft_response": "This is not currently possible through the invoking repository's local `.git/config`. uv performs the dependency fetch from its cached Git repository, so Git does not select the local configuration from the project where uv was invoked.\n\nThe same underlying limitation is tracked in astral-sh/uv#8441, including project- or directory-specific credential-helper configuration, so let's centralize the discussion there. As a command-scoped workaround, you can point `GIT_CONFIG_GLOBAL` at a separate project-specific Git configuration file when invoking uv; other projects and normal Git invocations will remain unaffected."
+}
