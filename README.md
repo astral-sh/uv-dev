@@ -117,6 +117,16 @@ pre-existing duplicated configuration locks successfully. Focused debug-profile 
 - `cargo +stable fmt --all`
 - `git diff --check`
 
+### Contributor follow-up
+
+A commenter reports independently reproducing the issue locally and proposes the same two-part
+approach used by the existing fix: avoid copying an inherited root index into a member, and compare
+exact index endpoints without treating credentials as part of their identity while preserving path,
+trailing-slash, and format distinctions. They asked for maintainer confirmation before submitting a
+pull request with regression tests. The comment adds no configuration or reproduction details, so
+the verified reproduction above remains the evidence for the fix; maintainers should coordinate
+against astral-sh/uv-dev#842 to avoid duplicate implementation work.
+
 ## Related
 
 - astral-sh/uv#17610 — Closest match for copying an index into a workspace member and shadowing a
@@ -129,4 +139,4 @@ pre-existing duplicated configuration locks successfully. Focused debug-profile 
 - astral-sh/uv#20922 — Intended to address astral-sh/uv#20678 by searching member indexes; it does
   not address credential-sensitive equality.
 
-Pull request: https://github.com/astral-sh/uv-dev/pull/842
+Pull request: astral-sh/uv-dev#842
