@@ -2,6 +2,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Write;
 use std::path::Path;
+use std::slice;
 
 use either::Either;
 use itertools::Itertools;
@@ -13,8 +14,10 @@ use petgraph::{Direction, Graph};
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 use serde::Serialize;
 
-use uv_configuration::DependencyGroupsWithDefaults;
+use uv_configuration::{DependencyGroupsWithDefaults, Overrides, ScopedOverrideSourceError};
 use uv_console::human_readable_bytes;
+use uv_distribution::{FlatRequiresDist, Metadata as DistributionMetadata};
+use uv_distribution_types::{Requirement, RequirementSource};
 use uv_fs::PortablePathBuf;
 use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep440::Version;
@@ -65,6 +68,12 @@ pub struct TreeDisplay<'env> {
     lock: &'env Lock,
     /// Whether to show sizes in the rendered output.
     show_sizes: bool,
+    /// The environment used to select individual requirement declarations.
+    markers: Option<&'env ResolverMarkerEnvironment>,
+    /// The declarations used for opt-in, per-edge version specifier annotations.
+    requirements: Option<PackageMap<TreeRequirements>>,
+    /// The locked overrides, kept separate from package declarations.
+    overrides: Overrides,
     /// The marker constraints imposed by declared conflicting extras and groups.
     conflict_marker: UniversalMarker,
 }
@@ -522,7 +531,284 @@ impl<'env> TreeDisplay<'env> {
             groups: groups.clone(),
             lock,
             show_sizes,
+            markers,
+            requirements: None,
+            overrides: Overrides::default(),
             conflict_marker,
+        }
+    }
+
+    /// Return the packages whose metadata is needed to annotate displayed dependency edges.
+    ///
+    /// The requirement belongs to the original parent, even in an inverted tree. Leaves and
+    /// packages beyond the requested depth do not need a metadata lookup.
+    pub fn metadata_packages(&self) -> Vec<&'env Package> {
+        let static_metadata = self.lock.dependency_metadata();
+        let mut package_ids = BTreeSet::new();
+        self.render_with(&mut |cursor: Cursor| {
+            if let Some(edge) = cursor.edge()
+                && let Some((source, target)) = self.graph.edge_endpoints(edge)
+                && let Node::Package(package_index) =
+                    self.graph[if self.invert { target } else { source }]
+            {
+                package_ids.insert(&self.lock.package(package_index).id);
+            }
+        });
+        package_ids
+            .into_iter()
+            .map(|package_id| self.lock.package(self.lock.by_id[package_id]))
+            .filter(|package| {
+                !package.has_metadata()
+                    && static_metadata
+                        .get(package.name(), package.version())
+                        .is_none()
+            })
+            .collect()
+    }
+
+    /// Annotate each dependency edge with its parent's requirement declarations.
+    pub fn with_metadata(
+        mut self,
+        metadata: &PackageMap<DistributionMetadata>,
+    ) -> Result<Self, ScopedOverrideSourceError> {
+        self.overrides =
+            Overrides::from_entries(self.lock.manifest.overrides.iter().cloned().collect())?;
+        let static_metadata = self.lock.dependency_metadata();
+        let mut requirements = PackageMap::default();
+        for node in self.graph.node_weights() {
+            let Node::Package(package_index) = node else {
+                continue;
+            };
+            let package = self.lock.package(*package_index);
+            let (requires_dist, dependency_groups) = if let Some(metadata) =
+                metadata.get(&package.id)
+            {
+                (
+                    metadata.requires_dist.clone(),
+                    metadata.dependency_groups.clone(),
+                )
+            } else if let Some(metadata) = static_metadata.get(package.name(), package.version()) {
+                (
+                    metadata
+                        .requires_dist
+                        .into_iter()
+                        .map(Requirement::from)
+                        .collect(),
+                    BTreeMap::new(),
+                )
+            } else if package.has_metadata() {
+                (
+                    package.metadata.requires_dist.iter().cloned().collect(),
+                    package
+                        .metadata
+                        .dependency_groups
+                        .iter()
+                        .map(|(group, requirements)| {
+                            (group.clone(), requirements.iter().cloned().collect())
+                        })
+                        .collect(),
+                )
+            } else {
+                continue;
+            };
+            requirements.insert(
+                package.clone(),
+                TreeRequirements {
+                    requires_dist: FlatRequiresDist::from_requirements(
+                        requires_dist,
+                        package.name(),
+                    )
+                    .into_iter()
+                    .collect(),
+                    dependency_groups,
+                },
+            );
+        }
+        self.requirements = Some(requirements);
+        Ok(self)
+    }
+
+    /// Append declarations for the immediate dependency relationship, not all paths to the node.
+    fn append_requirements(&self, line: &mut String, cursor: Cursor) {
+        let Some(metadata) = self.requirements.as_ref() else {
+            return;
+        };
+        let Some(edge_id) = cursor.edge() else {
+            return;
+        };
+        let Some((source, target)) = self.graph.edge_endpoints(edge_id) else {
+            return;
+        };
+        let (parent, dependency) = if self.invert {
+            (target, source)
+        } else {
+            (source, target)
+        };
+        let Node::Package(dependency_index) = self.graph[dependency] else {
+            return;
+        };
+        let dependency_id = &self.lock.package(dependency_index).id;
+        let edge = &self.graph[edge_id];
+        let requirements = match self.graph[parent] {
+            Node::Root => match edge {
+                // The synthetic edge to a workspace member isn't a dependency declaration.
+                Edge::Prod(None, _) => return,
+                Edge::Prod(..) | Edge::Optional(..) => {
+                    self.lock.requirements().iter().collect::<Vec<_>>()
+                }
+                Edge::Dev(group, ..) => self
+                    .lock
+                    .dependency_groups()
+                    .get(*group)
+                    .into_iter()
+                    .flatten()
+                    .collect(),
+            },
+            Node::Package(parent_index) => metadata
+                .get(&self.lock.package(parent_index).id)
+                .map_or_else(Vec::new, |metadata| match edge {
+                    Edge::Prod(..) | Edge::Optional(..) => metadata.requires_dist.iter().collect(),
+                    Edge::Dev(group, ..) => metadata
+                        .dependency_groups
+                        .get(*group)
+                        .into_iter()
+                        .flatten()
+                        .collect(),
+                }),
+        };
+        // Scoped package overrides apply to package metadata, not dependency groups.
+        let package_context = match self.graph[parent] {
+            Node::Package(parent_index) if !edge.is_dev() => {
+                let parent_id = &self.lock.package(parent_index).id;
+                parent_id
+                    .version
+                    .as_ref()
+                    .map(|version| (&parent_id.name, version))
+            }
+            Node::Package(_) | Node::Root => None,
+        };
+        let requirement_marker = |marker: MarkerTree| {
+            let production_marker = marker.simplify_not_extras_with(|_| true);
+            match edge {
+                Edge::Optional(extra, ..) => marker
+                    .simplify_extras(slice::from_ref(*extra))
+                    .simplify_not_extras_with(|_| true)
+                    .and(production_marker.negate()),
+                Edge::Prod(..) | Edge::Dev(..) => production_marker,
+            }
+        };
+        let is_applicable = |marker: MarkerTree| {
+            let applicable = marker
+                .and(edge.marker().pep508())
+                .and(cursor.marker().pep508())
+                .and(self.lock.requires_python().to_marker_tree());
+            !applicable.is_false()
+                && self
+                    .markers
+                    .is_none_or(|markers| applicable.evaluate(markers, &[]))
+        };
+        let format_requirement = |requirement: &Requirement, overridden: bool| {
+            let mut value = match &requirement.source {
+                RequirementSource::Registry { specifier, .. } => {
+                    if specifier.is_empty() {
+                        "*".to_string()
+                    } else {
+                        specifier.to_string()
+                    }
+                }
+                RequirementSource::Url { url, .. }
+                | RequirementSource::GitDirectory { url, .. }
+                | RequirementSource::GitPath { url, .. }
+                | RequirementSource::Path { url, .. }
+                | RequirementSource::Directory { url, .. } => url.to_string(),
+            };
+            // An override can replace the marker as well as the version range. Preserve the
+            // superseded declaration's condition even when rendering a single environment.
+            if (self.markers.is_none() || overridden)
+                && let Some(marker) = requirement_marker(requirement.marker).contents()
+            {
+                let _ = write!(value, "; {marker}");
+            }
+            value
+        };
+
+        let mut annotations = BTreeSet::new();
+        for requirement in requirements.iter().copied() {
+            if requirement.name != dependency_id.name {
+                continue;
+            }
+            let overridden = self
+                .overrides
+                .global_requirements()
+                .any(|candidate| candidate.name == requirement.name)
+                || package_context.is_some_and(|(name, version)| {
+                    self.overrides
+                        .scoped_requirements_for(name, version)
+                        .any(|candidate| candidate.name == requirement.name)
+                });
+            let applicable = if overridden {
+                // Use the effective request only to identify the displayed edge; never present
+                // an override's range as a declaration from the parent package.
+                self.overrides
+                    .apply_for_package(package_context, [requirement])
+                    .any(|candidate| {
+                        candidate.name == dependency_id.name
+                            && is_applicable(requirement_marker(candidate.marker))
+                    })
+            } else {
+                is_applicable(requirement_marker(requirement.marker))
+            };
+            if applicable {
+                annotations.insert((format_requirement(requirement, overridden), overridden));
+            }
+        }
+
+        if !requirements
+            .iter()
+            .any(|requirement| requirement.name == dependency_id.name)
+        {
+            // Scoped overrides can add dependencies absent from the original metadata. Those
+            // declarations are known, but belong to the override rather than the package.
+            let additions = self
+                .overrides
+                .apply_for_package(package_context, requirements.iter().copied())
+                .filter(|requirement| {
+                    requirement.name == dependency_id.name
+                        && is_applicable(requirement_marker(requirement.marker))
+                })
+                .map(|requirement| format_requirement(&requirement, false))
+                .collect::<BTreeSet<_>>();
+            if !additions.is_empty() {
+                for addition in additions {
+                    if self.invert {
+                        let _ = write!(
+                            line,
+                            " [added by override: {} {addition}]",
+                            dependency_id.name
+                        );
+                    } else {
+                        let _ = write!(line, " [added by override: {addition}]");
+                    }
+                }
+                return;
+            }
+        }
+
+        // Missing declarations are not the same as a known, unconstrained requirement.
+        if annotations.is_empty() {
+            annotations.insert(("unknown".to_string(), false));
+        }
+        for (annotation, overridden) in annotations {
+            if self.invert {
+                let label = if overridden { "declares" } else { "requires" };
+                let _ = write!(line, " [{label}: {} {annotation}]", dependency_id.name);
+            } else {
+                let label = if overridden { "declared" } else { "required" };
+                let _ = write!(line, " [{label}: {annotation}]");
+            }
+            if overridden {
+                line.push_str(" [overridden]");
+            }
         }
     }
 
@@ -532,6 +818,7 @@ impl<'env> TreeDisplay<'env> {
         cursor: Cursor,
         visited: &mut FxHashMap<VisitedNode<'env>, Vec<PackageIndex>>,
         path: &mut Vec<VisitedNode<'env>>,
+        on_visit: &mut impl FnMut(Cursor),
     ) -> Vec<String> {
         // Short-circuit if the current path is longer than the provided depth.
         if path.len() > self.depth {
@@ -541,6 +828,7 @@ impl<'env> TreeDisplay<'env> {
         let Node::Package(package_index) = self.graph[cursor.node()] else {
             return Vec::new();
         };
+        on_visit(cursor);
         let edge = cursor.edge().map(|edge_id| &self.graph[edge_id]);
         let package = self.lock.package(package_index);
         let package_id = &package.id;
@@ -580,6 +868,8 @@ impl<'env> TreeDisplay<'env> {
                     }
                 }
             }
+
+            self.append_requirements(&mut line, cursor);
 
             // Append compressed wheel size, if available in the lockfile.
             // Keep it simple: use the first wheel entry that includes a size.
@@ -714,7 +1004,8 @@ impl<'env> TreeDisplay<'env> {
             } else {
                 ("├── ", "│   ")
             };
-            for (visited_index, visited_line) in self.visit(*dep, visited, path).iter().enumerate()
+            for (visited_index, visited_line) in
+                self.visit(*dep, visited, path, on_visit).iter().enumerate()
             {
                 let prefix = if visited_index == 0 {
                     prefix_top
@@ -732,6 +1023,11 @@ impl<'env> TreeDisplay<'env> {
 
     /// Depth-first traverse the nodes to render the tree.
     fn render(&self) -> Vec<String> {
+        self.render_with(&mut |_| {})
+    }
+
+    /// Use the same traversal for metadata discovery and rendering, including text deduplication.
+    fn render_with(&self, on_visit: &mut impl FnMut(Cursor)) -> Vec<String> {
         let mut path = Vec::new();
         let mut lines = Vec::with_capacity(self.graph.node_count());
         let mut visited =
@@ -747,6 +1043,7 @@ impl<'env> TreeDisplay<'env> {
                             Cursor::new(node, edge.id(), self.conflict_marker),
                             &mut visited,
                             &mut path,
+                            on_visit,
                         ));
                     }
                 }
@@ -756,6 +1053,7 @@ impl<'env> TreeDisplay<'env> {
                         Cursor::root(*node, self.conflict_marker),
                         &mut visited,
                         &mut path,
+                        on_visit,
                     ));
                 }
             }
@@ -916,6 +1214,13 @@ impl<'env> TreeDisplay<'env> {
 
         JsonTraversal { nodes, edges }
     }
+}
+
+/// Requirement declarations kept separately from the resolved dependency graph.
+#[derive(Debug)]
+struct TreeRequirements {
+    requires_dist: Box<[Requirement]>,
+    dependency_groups: BTreeMap<GroupName, Box<[Requirement]>>,
 }
 
 #[derive(Debug)]
@@ -1638,7 +1943,7 @@ impl std::fmt::Display for TreeDisplay<'_> {
 
         let mut deduped = false;
         for line in self.render() {
-            deduped |= line.contains('*');
+            deduped |= line.ends_with(" (*)");
             writeln!(f, "{line}")?;
         }
 
