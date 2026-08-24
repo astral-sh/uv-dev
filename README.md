@@ -113,6 +113,14 @@ transitive specifiers are not stored in `uv.lock`, so implementing it may requir
 lockfile or resolving metadata again. The installed-environment flag was requested in
 astral-sh/uv#5217 and implemented by merged pull request astral-sh/uv#5240.
 
+Repository member zanieb has opened astral-sh/uv-dev#847 as an implementation sketch for the
+project-tree option. The draft annotates dependency edges using lockfile metadata when available
+and retrieves missing metadata for displayed locked packages only when the flag is requested. This
+approach does not change the lockfile format and respects display filtering such as depth limits
+and deduplication. Its initial scope is text output of individual requirements; it does not combine
+constraints or explain why the resolver selected a particular version. The draft is open with CI
+passing, but the author explicitly gave no timeline for advancing it.
+
 The reporter also linked upstream context. Pylons/pyramid#3795 proposed the setuptools bound as a
 temporary response to `pkg_resources` removal, but that pull request is closed and was not merged.
 The broader `pkg_resources` migration remains open in Pylons/pyramid#3731, where current discussion
@@ -173,14 +181,17 @@ Pyramid imposes the upper bound.
   diagnosing why a dependency remains on an older version.
 - astral-sh/uv#5240 — Merged pull request implementing `uv pip tree --show-version-specifiers`, the
   currently available workflow for inspecting constraints in the synced environment.
+- astral-sh/uv-dev#847 — Open draft implementation sketch for adding
+  `--show-version-specifiers` to project `uv tree` without expanding the lockfile format. It directly
+  addresses the follow-up discoverability request, but has no stated completion timeline.
 
-No closely matching pull request was found for the original resolver report; astral-sh/uv#5240 is
-related specifically to the follow-up discoverability question. astral-sh/uv#11784 was inspected
-because it also mentions `uv sync --resolution highest`, but that command did not include an
-upgrade request and correctly retained lockfile preferences. astral-sh/uv#18178 was also inspected
-because both a targeted and global upgrade appeared ineffective, but its cause was a configured
-`lowest-direct` resolution mode; the reporter here explicitly tried `highest`. Neither is the same
-case.
+No closely matching pull request was found for the original resolver report; astral-sh/uv#5240 and
+astral-sh/uv-dev#847 relate specifically to the follow-up discoverability question.
+astral-sh/uv#11784 was inspected because it also mentions `uv sync --resolution highest`, but that
+command did not include an upgrade request and correctly retained lockfile preferences.
+astral-sh/uv#18178 was also inspected because both a targeted and global upgrade appeared
+ineffective, but its cause was a configured `lowest-direct` resolution mode; the reporter here
+explicitly tried `highest`. Neither is the same case.
 
 Searches covered the literal command and package terms (`uv sync --upgrade`, setuptools, Pyramid,
 `--resolution highest`, transitive/indirect dependency), conceptual terms (locked versions,
