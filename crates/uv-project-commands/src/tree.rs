@@ -2,7 +2,7 @@ use std::fmt::Write;
 use std::path::Path;
 
 use anstream::print;
-use anyhow::{Error, Result, bail};
+use anyhow::{Context, Error, Result, bail};
 use futures::StreamExt;
 
 use uv_cache::{Cache, Refresh};
@@ -12,31 +12,37 @@ use uv_command_support::{ExitStatus, Printer, UvError};
 use uv_configuration::{
     ActiveEnvironment, Concurrency, DependencyGroups, TargetTriple, TreeFormat,
 };
-use uv_dispatch::UniversalState;
+use uv_dispatch::{BuildDispatch, UniversalState};
+use uv_distribution::{DistributionDatabase, LoweredExtraBuildDependencies, Metadata};
 use uv_distribution_types::IndexCapabilities;
 use uv_environment_operations::install_target::{InstallTarget, PackageSelection};
 use uv_environment_operations::{
     EnvironmentError, ProjectEnvironmentPolicy, ProjectEnvironmentTarget, ProjectInterpreter,
 };
-use uv_lock::{PackageMap, TreeDisplay, TreeJsonTarget};
+use uv_lock::{Lock, Package, PackageMap, TreeDisplay, TreeJsonTarget};
 use uv_lock_operations::{DiscoveredProject, FrozenWorkspace, LockMode, LockOperation, LockTarget};
 use uv_normalize::{DefaultGroups, PackageName};
+use uv_pep508::MarkerEnvironment;
 use uv_preview::{Preview, PreviewFeature};
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::ProjectPythonRequest;
 use uv_python_discovery::ScriptInterpreter;
+use uv_python_interpreter::{Interpreter, PythonEnvironment};
 use uv_python_types::{
     PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest, PythonVersion,
 };
+use uv_requirements::script_extra_build_requires;
 use uv_resolve_operations::latest::LatestClient;
 use uv_resolve_operations::loggers::DefaultResolveLogger;
+use uv_resolve_operations::reporters::LatestVersionReporter;
 use uv_resolve_operations::resolution_markers;
+use uv_resolve_operations::resolution_tags;
+use uv_resolver::FlatIndex;
 use uv_scripts::Pep723Script;
 use uv_settings::{FrozenSource, LockCheck, PythonInstallMirrors, ResolverSettings};
+use uv_types::{BuildIsolation, HashStrategy, SourceTreeEditablePolicy};
 use uv_warnings::warn_user;
 use uv_workspace::{DiscoveryOptions, WorkspaceCache};
-
-use uv_resolve_operations::reporters::LatestVersionReporter;
 
 /// A tree reads an existing workspace lock or resolves a project or script manifest.
 #[derive(Clone, Copy)]
@@ -49,6 +55,7 @@ enum TreeSource<'a> {
 #[expect(clippy::fn_params_excessive_bools)]
 pub async fn tree(
     project_dir: &Path,
+    show_version_specifiers: bool,
     groups: DependencyGroups,
     lock_check: LockCheck,
     frozen: Option<FrozenSource>,
@@ -125,11 +132,9 @@ pub async fn tree(
             .resolve_groups(&groups, workspace.lock().root().map(uv_lock::Package::name))?,
     };
 
-    // Find an interpreter for the project, unless `--frozen` and `--universal` are both set.
-    let interpreter = if frozen.is_some() && universal {
-        None
-    } else {
-        Some(match source {
+    // Find an interpreter only if needed for locking, filtering, or retrieving package metadata.
+    let discover_interpreter = async || {
+        Ok::<_, Error>(match source {
             TreeSource::Manifest(LockTarget::Script(script)) => ScriptInterpreter::discover(
                 script.into(),
                 python.as_deref().map(PythonRequest::parse),
@@ -214,8 +219,14 @@ pub async fn tree(
             }
         })
     };
+    let mut interpreter = if frozen.is_some() && universal {
+        None
+    } else {
+        Some(discover_interpreter().await?)
+    };
 
     // Update the lockfile, if necessary.
+    let state = UniversalState::default();
     let resolved_lock;
     let lock = match source {
         TreeSource::Lockfile(workspace) => workspace.lock(),
@@ -230,7 +241,6 @@ pub async fn tree(
             } else {
                 LockMode::Write(interpreter.as_ref().unwrap())
             };
-            let state = UniversalState::default();
             resolved_lock = match Box::pin(
                 LockOperation::new(
                     mode,
@@ -370,7 +380,8 @@ pub async fn tree(
         PackageMap::default()
     };
 
-    // Render the tree.
+    // Construct the tree before retrieving metadata, so pruned or hidden dependencies do not
+    // require downloads or builds just to display their version specifiers.
     let tree = TreeDisplay::new(
         lock,
         markers.as_ref(),
@@ -384,6 +395,47 @@ pub async fn tree(
         show_sizes,
     );
 
+    let metadata = if show_version_specifiers {
+        let packages = tree.metadata_packages();
+        if packages.is_empty() {
+            PackageMap::default()
+        } else {
+            if interpreter.is_none() {
+                interpreter = Some(discover_interpreter().await?);
+            }
+            let interpreter = interpreter
+                .as_ref()
+                .context("An interpreter is required to retrieve package metadata")?;
+            fetch_metadata(
+                source,
+                lock,
+                packages,
+                interpreter,
+                python_version.as_ref(),
+                python_platform.as_ref(),
+                markers
+                    .as_ref()
+                    .map_or_else(|| interpreter.markers(), |markers| markers.markers()),
+                &settings,
+                client_builder,
+                &state,
+                &concurrency,
+                cache,
+                workspace_cache,
+                preview,
+            )
+            .await?
+        }
+    } else {
+        PackageMap::default()
+    };
+    let tree = if show_version_specifiers {
+        tree.with_metadata(&metadata)?
+    } else {
+        tree
+    };
+
+    // Render the tree.
     match format {
         TreeFormat::Text => print!("{tree}"),
         TreeFormat::Json => writeln!(
@@ -401,4 +453,152 @@ pub async fn tree(
     }
 
     Ok(ExitStatus::Success)
+}
+
+/// Retrieve metadata only for the packages whose requirements are displayed in the tree.
+async fn fetch_metadata(
+    source: TreeSource<'_>,
+    lock: &Lock,
+    packages: Vec<&Package>,
+    interpreter: &Interpreter,
+    python_version: Option<&PythonVersion>,
+    python_platform: Option<&TargetTriple>,
+    markers: &MarkerEnvironment,
+    settings: &ResolverSettings,
+    client_builder: &BaseClientBuilder<'_>,
+    state: &UniversalState,
+    concurrency: &Concurrency,
+    cache: &Cache,
+    workspace_cache: &WorkspaceCache,
+    preview: Preview,
+) -> Result<PackageMap<Metadata>> {
+    let tags = resolution_tags(python_version, python_platform, interpreter)?;
+    let client_builder = client_builder.clone().keyring(settings.keyring_provider);
+    if let TreeSource::Manifest(target) = source {
+        for index in target.indexes() {
+            if let Some(credentials) = index.credentials()? {
+                if let Some(root_url) = index.root_url() {
+                    client_builder.store_credentials(&root_url, credentials.clone());
+                }
+                client_builder.store_credentials(index.raw_url(), credentials);
+            }
+        }
+    }
+
+    let client = RegistryClientBuilder::new(client_builder, cache.clone())
+        .index_locations(settings.index_locations.clone())
+        .index_strategy(settings.index_strategy)
+        .markers(interpreter.markers())
+        .platform(interpreter.platform())
+        .build()?;
+
+    let environment;
+    let build_isolation = match &settings.build_isolation {
+        uv_configuration::BuildIsolation::Isolate => BuildIsolation::Isolated,
+        uv_configuration::BuildIsolation::Shared => {
+            environment = PythonEnvironment::from_interpreter(interpreter.clone());
+            BuildIsolation::Shared(&environment)
+        }
+        uv_configuration::BuildIsolation::SharedPackage(packages) => {
+            environment = PythonEnvironment::from_interpreter(interpreter.clone());
+            BuildIsolation::SharedPackage(&environment, packages)
+        }
+    };
+
+    let build_hasher = HashStrategy::default();
+    let flat_index = FlatIndex::load(&client, cache, &settings.index_locations).await?;
+
+    let extra_build_requires = match source {
+        TreeSource::Manifest(LockTarget::Workspace(workspace)) => {
+            LoweredExtraBuildDependencies::from_workspace(
+                settings.extra_build_dependencies.clone(),
+                workspace,
+                &settings.index_locations,
+                &settings.sources,
+                cache,
+                workspace_cache,
+                client.credentials_cache(),
+            )
+            .await?
+        }
+        TreeSource::Manifest(LockTarget::Script(script)) => {
+            script_extra_build_requires(
+                script.into(),
+                &settings.sources,
+                &settings.index_locations,
+                cache,
+                workspace_cache,
+                client.credentials_cache(),
+            )
+            .await?
+        }
+        TreeSource::Lockfile(_) => LoweredExtraBuildDependencies::from_non_lowered(
+            settings.extra_build_dependencies.clone(),
+        ),
+    }
+    .into_inner();
+
+    let install_path = match source {
+        TreeSource::Manifest(target) => target.install_path(),
+        TreeSource::Lockfile(workspace) => workspace.root(),
+    };
+    let build_constraints = lock.build_constraints(install_path);
+    let dependency_metadata = lock.dependency_metadata();
+    let build_dispatch = BuildDispatch::new(
+        &client,
+        cache,
+        &build_constraints,
+        interpreter,
+        &settings.index_locations,
+        &flat_index,
+        &dependency_metadata,
+        state.fork().into_inner(),
+        settings.index_strategy,
+        &settings.config_setting,
+        &settings.config_settings_package,
+        build_isolation,
+        &extra_build_requires,
+        &settings.extra_build_variables,
+        settings.link_mode,
+        &settings.build_options,
+        &build_hasher,
+        settings.exclude_newer.clone(),
+        settings.sources.clone(),
+        SourceTreeEditablePolicy::Project,
+        workspace_cache.clone(),
+        concurrency.clone(),
+        preview,
+    );
+    let database = DistributionDatabase::new(
+        &client,
+        &build_dispatch,
+        concurrency.downloads_semaphore.clone(),
+    );
+
+    let mut fetches = futures::stream::iter(packages)
+        .map(async |package| {
+            let metadata = Lock::locked_package_metadata(
+                package,
+                install_path,
+                &tags,
+                markers,
+                &settings.build_options,
+                state.index().distributions(),
+                &database,
+            )
+            .await
+            .with_context(|| {
+                format!(
+                    "Failed to retrieve version specifiers for `{}`",
+                    package.name()
+                )
+            })?;
+            Ok::<_, Error>((package.clone(), metadata))
+        })
+        .buffer_unordered(concurrency.downloads);
+    let mut metadata = PackageMap::default();
+    while let Some((package, requirements)) = fetches.next().await.transpose()? {
+        metadata.insert(package, requirements);
+    }
+    Ok(metadata)
 }
