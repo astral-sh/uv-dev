@@ -1,0 +1,11 @@
+{
+  "outcome": "fixed",
+  "summary": "Index identity now ignores embedded credentials consistently: workspace members reuse matching root indexes, and existing credential variants no longer conflict during resolution. The parent regression now asserts both behaviors.",
+  "validation": [
+    "Parent workspace credential regression",
+    "Credential persistence and reuse tests",
+    "Different-endpoint conflict regression",
+    "Rust formatting and diff checks"
+  ],
+  "pull_request": "https://github.com/astral-sh/uv-dev/pull/842"
+}
