@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "Using installed uv 0.12.5 on Linux x86_64 with CPython 3.12.3, a workspace member command `uv add iniconfig==2.0.0 --index private=https://pypi.org/simple --no-sync` succeeded but persisted a duplicate credential-free index when the root had the same endpoint with a dummy username. After both root and member selected that index for `iniconfig`, `uv lock` exited 1 with “Requirements contain conflicting indexes.” An offline `--frozen` variant behaved identically. The issue-context README was updated with the fixture, commands, results, and existing test coverage."
+}

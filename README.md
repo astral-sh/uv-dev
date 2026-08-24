@@ -6,79 +6,109 @@ Classification: bug
 
 ## Summary
 
-In a workspace, the root project defines a private CodeArtifact index using a URL that includes a
-username. Running `uv add <package> --index <index>` for a workspace member succeeds, but writes a
-second index definition into the member's `pyproject.toml` without the username. A later `uv lock`
-then rejects requirements for the same package because the root and member definitions are treated
-as conflicting indexes even though they identify the same registry endpoint.
+In a workspace, the root project defines a private index whose URL contains user information.
+Running `uv add <package> --index <index>` in a member can persist a second definition of the same
+index in the member without that user information. If root and member requirements then select
+their respective definitions for the same package, `uv lock` rejects them as conflicting indexes
+even though their registry endpoint is otherwise identical.
 
-The closest existing work concerns `uv add` copying or persisting indexes in workspace members:
-astral-sh/uv#17610, astral-sh/uv#17455, and astral-sh/uv#20678. The open fix in
-astral-sh/uv#20922 would make member indexes participate in candidate search, but it does not change
-how credential variants are compared. No existing issue or pull request covers both the unwanted
-member entry and the resulting credential-variant conflict.
-
-## Draft response
-
-Thanks for the report. This is a bug. The current add path can copy a workspace index into the
-member configuration, and index URLs are persisted without embedded credentials. The resolver can
-then treat that member entry and the credential-bearing root entry as conflicting indexes for the
-same package.
-
-This overlaps with the workspace index-copying behavior in astral-sh/uv#17610 and
-astral-sh/uv#20678, but neither tracks the credential-variant conflict, so this should remain
-separate. Could you provide a minimal root/member pair of `pyproject.toml` files and clarify whether
-the `--index` argument is an index name or a URL? Please use only a dummy endpoint and placeholder
-username, with no real credentials. That will let us cover both the unwanted member entry and the
-subsequent `uv lock` failure in a regression test.
+Both reported behaviors were reproduced with a non-secret placeholder username and a public test
+endpoint. No CodeArtifact access or real credentials were needed.
 
 ## Classification
 
-This is a bug because repository source confirms two correctness gaps behind the reported behavior:
+This is a reproducible bug. `uv add` successfully creates a workspace configuration that a later
+`uv lock` rejects solely because one index URL contains placeholder user information and the other
+does not. The failure was also reproduced without network access using `--frozen` and an invalid
+test endpoint, so it is not specific to CodeArtifact or authentication responses.
 
-- The project-editing path compares an incoming index only with indexes in the target member
-  document. It uses canonical URL comparison, which ignores credentials, but it never checks the
-  equivalent root index before creating the member entry. When it persists the incoming URL, it
-  deliberately removes credentials.
-- The resolver's per-package conflict check compares index metadata directly. Since that metadata
-  contains the original index URL, credential-bearing and credential-free variants can compare as
-  different and produce the reported conflicting-index error. Elsewhere in the repository,
-  canonical URL comparison explicitly strips credentials, establishing that credentials are not
-  intended to distinguish the underlying canonical location.
+Repository implementation is consistent with the observation: project editing writes index URLs
+without credentials, while the resolver's per-package conflict check compares `IndexMetadata`
+values containing the original `IndexUrl`. This describes the exercised paths, but the report does
+not include enough configuration to establish why its generated member URL also had a different
+path shape.
 
-The report is not a duplicate. astral-sh/uv#17610 covers a copied child index shadowing a root index,
-and astral-sh/uv#20678 covers persisted child indexes not being searched. Neither tracks the direct
-credential-sensitive comparison or this lock failure. The exact `--index` form is still useful for
-selecting the right regression-test setup, but it is not required to establish the correctness
-problem.
+## Reproduction
+
+Outcome: reproducible.
+
+Environment used:
+
+- Installed `uv 0.12.5 (x86_64-unknown-linux-gnu)`
+- Linux x86_64
+- CPython 3.12.3 at `/usr/bin/python3`
+- All project files, cache, and Python-install state under `$RUNNER_TEMP`
+
+The workspace root initially contained an empty project, `members = ["member"]`, and this index:
+
+```toml
+[[tool.uv.index]]
+name = "private"
+url = "https://<dummy-user>@pypi.org/simple"
+explicit = true
+```
+
+The member was an empty project. From the member directory, this normal, non-frozen command
+succeeded:
+
+```console
+uv add iniconfig==2.0.0 --index private=https://pypi.org/simple --no-sync
+```
+
+It resolved three workspace packages and added the dependency, source pin, and a second index to
+the member:
+
+```toml
+[tool.uv.sources]
+iniconfig = { index = "private" }
+
+[[tool.uv.index]]
+name = "private"
+url = "https://pypi.org/simple"
+```
+
+Adding `iniconfig==2.0.0` to the root dependencies and selecting the root `private` index for it,
+then running the following from the workspace root, failed with exit status 1:
+
+```console
+uv lock
+```
+
+The observed error was `Requirements contain conflicting indexes for package 'iniconfig' in all
+marker environments`, listing the otherwise identical endpoint once with the placeholder username
+and once without it. A second network-free variant used `uv add iniconfig --index private --frozen`
+with an invalid endpoint; it also copied the root index into the member without user information,
+and `uv lock --offline` produced the same conflict.
+
+Existing integration coverage in `crates/uv/tests/project/edit.rs` is adjacent but does not cover
+the workspace failure. `add_index_credentials` verifies that credentials supplied while adding are
+not persisted. `existing_index_credentials` verifies same-document reuse when a configured index
+without credentials is matched against an authenticated URL. The test
+`crates/uv/tests/lock/lock.rs::lock_multiple_sources_index_overlapping_extras` covers the conflict
+diagnostic for genuinely different endpoints. No existing test found covers root/member index
+definitions that differ only by credentials.
+
+The reporter used macOS Darwin 25.5.0 arm64, uv 0.12.5, and Python 3.13.12. Since the same behavior
+occurs on Linux with Python 3.12.3, neither the reported platform nor Python version appears
+necessary for this reproduction.
 
 ## Related
 
-- astral-sh/uv#17610 — Open bug and the closest match for the workspace mutation. It shows that
-  adding through a member copies an index into that member and can shadow the root definition. It
-  does not cover credential-variant equality or the resulting lock conflict.
+- astral-sh/uv#17610 — Closest match for copying an index into a workspace member and shadowing a
+  root definition; it does not cover credential-variant equality or the lock conflict.
 - astral-sh/uv#17455 — Merged pull request adding support for resolving named `--index` and
   `--default-index` values from workspace configuration. Its implementation copies a resolved root
-  index into a child package, and its review explicitly discusses whether that copy is necessary and
-  whether indexes should be deduplicated by URL.
-- astral-sh/uv#20678 — Open bug involving the same `uv add --index` workspace-member persistence
-  path. It tracks member indexes being written to files that are not consulted for candidate search,
-  which is adjacent but distinct from treating root/member credential variants as conflicts.
-- astral-sh/uv#20922 — Open pull request intended to close astral-sh/uv#20678 by searching workspace
-  members' own indexes. It does not alter credential-sensitive index equality and therefore does not
-  subsume astral-sh/uv#21281.
+  index into a child package.
+- astral-sh/uv#20678 — Tracks persisted member indexes not participating in candidate search, an
+  adjacent workspace-index persistence problem.
+- astral-sh/uv#20922 — Intended to address astral-sh/uv#20678 by searching member indexes; it does
+  not address credential-sensitive equality.
 
-## Search evidence
+## Maintainer handoff
 
-Searches covered open and closed issues and open, closed, and merged pull requests using the exact
-`Requirements contain conflicting indexes` fragment, `uv add --index` workspace persistence,
-root/member index copying and shadowing, duplicate and same-endpoint terminology, username and
-credential variants, CodeArtifact, URL canonicalization, lockfile validation, and historical fixes.
-The strongest candidates and their comments, linked issues, and linked pull requests were inspected.
-
-astral-sh/uv#18250 confirms in maintainer discussion that independently supplied configured and
-command-line/environment indexes are not matched by URL, but its trigger is different.
-astral-sh/uv#20635 and astral-sh/uv#20753 concern trailing-slash lock validation, while
-astral-sh/uv#14511 documents why slash normalization can change semantics. astral-sh/uv#9942 shares
-the error text but involves genuinely different package indexes under extras, and astral-sh/uv#8565
-concerns credential-cache reuse. These were inspected and ruled out as canonical matches.
+A regression test can extend the workspace editing coverage with one root index containing only a
+dummy username, a member dependency added through the same named endpoint without that username,
+and root/member source pins for the same package. It should assert both that `uv add` does not leave
+conflicting duplicate definitions and that the resulting workspace locks successfully. The exact
+path difference in the reporter's CodeArtifact URLs remains unverified and is not required for the
+credential-only reproduction.
