@@ -704,6 +704,16 @@ pub(crate) async fn add(
         let mut indexes = locations.defined_indexes().collect::<Vec<_>>();
         indexes.reverse();
         for index in indexes {
+            if let AddTarget::Project(project, _) = &target
+                && project.root() != project.workspace().install_path()
+                && project.workspace().indexes().iter().any(|workspace_index| {
+                    workspace_index.name.as_ref() == index.name.as_ref()
+                        && workspace_index.format == index.format
+                        && workspace_index.url().is_same_index(index.url())
+                })
+            {
+                continue;
+            }
             toml.add_index(index, root_dir)?;
         }
     }

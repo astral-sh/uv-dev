@@ -23,7 +23,7 @@ impl ForkIndexes {
         env: &ResolverEnvironment,
     ) -> Result<(), ResolveError> {
         if let Some(previous) = self.0.insert(package_name.clone(), index.clone()) {
-            if &previous != index {
+            if previous.format != index.format || !previous.url.is_same_index(&index.url) {
                 let mut conflicts = vec![previous.url, index.url.clone()];
                 conflicts.sort();
                 return Err(ResolveError::ConflictingIndexesForEnvironment {

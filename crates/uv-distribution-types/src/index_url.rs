@@ -118,6 +118,12 @@ impl IndexUrl {
         }
     }
 
+    /// Return `true` if both URLs refer to the same index.
+    pub fn is_same_index(&self, other: &Self) -> bool {
+        RealmRef::from(&**self.url()) == RealmRef::from(&**other.url())
+            && CanonicalUrl::new(self.url().clone()) == CanonicalUrl::new(other.url().clone())
+    }
+
     /// Warn user if the given URL was provided as an ambiguous relative path.
     ///
     /// This is a temporary warning. Ambiguous values will not be
@@ -298,12 +304,6 @@ impl IndexLocations {
     }
 }
 
-/// Returns `true` if two [`IndexUrl`]s refer to the same index.
-fn is_same_index(a: &IndexUrl, b: &IndexUrl) -> bool {
-    RealmRef::from(&**b.url()) == RealmRef::from(&**a.url())
-        && CanonicalUrl::new(a.url().clone()) == CanonicalUrl::new(b.url().clone())
-}
-
 impl<'a> IndexLocations {
     /// Return configured indexes in definition order, keeping the first index for each name.
     fn configured_indexes(&'a self) -> impl Iterator<Item = &'a Index> + 'a {
@@ -479,7 +479,7 @@ impl<'a> IndexLocations {
     fn index_for_url(&self, url: &IndexUrl) -> Option<&Index> {
         self.indexes
             .iter()
-            .find(|index| is_same_index(index.url(), url))
+            .find(|index| index.url().is_same_index(url))
     }
 
     /// Return the [`IndexStatusCodeStrategy`] for an [`IndexUrl`].
