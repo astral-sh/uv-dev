@@ -12,6 +12,12 @@ that satisfies a broad major-version request. The desired selector would work wi
 install`, `uv sync --python`, and `.python-version`; today `3.x` is rejected as an invalid download
 request, while `3` does not express the requested newest-release policy.
 
+A maintainer has pointed out that bare `uv python install` is already the documented way to install
+the latest stable Python. This supplies an existing solution for the install-only case and asks the
+reporter to confirm whether it meets their needs. It does not by itself provide a persistent or
+argument-level latest selector for `uv sync --python` or `.python-version`, so the key remaining
+scope is whether those consumers should accept an explicit rolling request.
+
 The same underlying capability is already tracked by astral-sh/uv#13535. Although that issue's
 example is `uvx python@latest`, it points to uv's generic Python request parser, where current source
 explicitly records the intended addition of a `PythonRequest::Latest` variant. The pre-existing open
@@ -21,18 +27,12 @@ Python when downloads are enabled, and otherwise the newest stable interpreter p
 machine. The broader command and `.python-version` coverage from this report should be captured on
 that canonical discussion.
 
-## Draft response
+## Maintainer follow-up
 
-Thanks — the underlying latest-Python request is already tracked in astral-sh/uv#13535, with an open
-implementation in astral-sh/uv#13873. Although the existing issue uses `uvx python@latest` as its
-example, the implementation is in the shared Python request and discovery layer, and the review is
-already discussing whether `latest` means the newest stable download or the newest stable local
-interpreter. With downloads enabled, the current maintainer direction is the newest available stable
-download; otherwise, the newest stable interpreter on the machine.
-
-The `uv python install`, `uv sync --python`, and `.python-version` coverage you describe is useful
-scope for that work. Please add those use cases to astral-sh/uv#13535 so the syntax and behavior can
-be settled in one place.
+The maintainer asked whether bare `uv python install` works for the reporter and cited the
+documented “install the latest Python version” behavior. A reporter response would help establish
+whether the request is satisfied by a two-step workflow or specifically requires a selector that
+can be passed through `uv sync --python` and stored in `.python-version`.
 
 ## Classification
 
@@ -45,7 +45,8 @@ the existing issue.
 
 This is not a regression or a correctness bug: current broad version requests intentionally accept
 an existing satisfying interpreter, and current source explicitly reports that a latest request is
-not yet supported. The requested rolling selector is new functionality.
+not yet supported. Bare `uv python install` already handles installing the latest stable Python; the
+requested reusable rolling selector remains new functionality.
 
 ## Related
 
