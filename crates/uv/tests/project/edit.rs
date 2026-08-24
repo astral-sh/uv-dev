@@ -10554,6 +10554,108 @@ async fn existing_index_credentials() -> Result<()> {
     Ok(())
 }
 
+/// Add a package from a workspace member using an index that is already defined at the root with
+/// an embedded username.
+#[tokio::test]
+async fn add_index_credentials_workspace() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let proxy = crate::pypi_proxy::start().await;
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(&formatdoc!(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig==2.0.0"]
+
+        [tool.uv.workspace]
+        members = ["member"]
+
+        [[tool.uv.index]]
+        name = "private"
+        url = "{index_url}"
+    "#,
+        index_url = proxy.username_url("public", "/simple")
+    ))?;
+
+    let member = context.temp_dir.child("member");
+    member.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "member"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.add()
+        .current_dir(&member)
+        .arg("iniconfig==2.0.0")
+        .arg("--index")
+        .arg(format!("private={}", proxy.url("/simple")))
+        .arg("--no-sync"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+
+    // Persisting the credential-free duplicate makes the workspace indexes conflict once both
+    // projects select the index; the root index should be reused instead. See astral-sh/uv#21281.
+    insta::with_settings!({
+        filters => context.filters(),
+    }, {
+        assert_snapshot!(context.read("member/pyproject.toml"), @r#"
+        [project]
+        name = "member"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = [
+            "iniconfig==2.0.0",
+        ]
+
+        [tool.uv.sources]
+        iniconfig = { index = "private" }
+
+        [[tool.uv.index]]
+        name = "private"
+        url = "http://[LOCALHOST]/simple"
+        "#);
+    });
+
+    pyproject_toml.write_str(&formatdoc!(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig==2.0.0"]
+
+        [tool.uv.sources]
+        iniconfig = {{ index = "private" }}
+
+        [tool.uv.workspace]
+        members = ["member"]
+
+        [[tool.uv.index]]
+        name = "private"
+        url = "{index_url}"
+    "#,
+        index_url = proxy.username_url("public", "/simple")
+    ))?;
+
+    uv_snapshot!(context.filters(), context.lock(), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+      × Failed to resolve dependencies for `member` (v0.1.0)
+      ╰─▶ Requirements contain conflicting indexes for package `iniconfig` in all marker environments:
+          - http://[LOCALHOST]/simple
+          - http://****@[LOCALHOST]/simple
+    ");
+
+    Ok(())
+}
+
 /// Add an index with a trailing slash.
 #[test]
 fn add_index_with_trailing_slash() -> Result<()> {
