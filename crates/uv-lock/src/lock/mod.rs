@@ -28,7 +28,8 @@ use uv_configuration::{
     ResolutionMode, ScopedOverrideSourceError,
 };
 use uv_distribution::{
-    DistributionDatabase, FlatRequiresDist, Metadata as DistributionMetadata, RequiresDist,
+    DistributionDatabase, Error as DistributionError, FlatRequiresDist,
+    Metadata as DistributionMetadata, RequiresDist,
 };
 use uv_distribution_filename::{
     BuildTag, DistExtension, ExtensionError, SourceDistExtension, WheelFilename,
@@ -37,11 +38,11 @@ use uv_distribution_types::{
     ArchiveHashPolicy, BuiltDist, DependencyMetadata, DirectUrlBuiltDist, DirectUrlSourceDist,
     DirectorySourceDist, Dist, ExcludeNewerOverride, ExcludeNewerSpan, ExcludeNewerValue,
     FileLocation, FirstParty, GitDirectorySourceDist, GitPathBuiltDist, GitPathSourceDist,
-    HashValidation, Identifier, IndexLocations, IndexMetadata, IndexUrl, MetadataHashPolicy,
-    MinimumLibcVersion, Name, NameRequirementSpecification, PYPI_URL, PathBuiltDist,
-    PathSourceDist, RegistryBuiltDist, RegistryBuiltWheel, RegistrySourceDist, RemoteSource,
-    Requirement, RequirementSource, RequiresPython, ResolvedDist, SimplifiedMarkerTree,
-    StaticMetadata, ToUrlError, UrlString, VersionId,
+    HashCollection, HashValidation, Identifier, IndexLocations, IndexMetadata, IndexUrl,
+    MetadataHashPolicy, MinimumLibcVersion, Name, NameRequirementSpecification, PYPI_URL,
+    PathBuiltDist, PathSourceDist, RegistryBuiltDist, RegistryBuiltWheel, RegistrySourceDist,
+    RemoteSource, Requirement, RequirementSource, RequiresPython, ResolvedDist,
+    SimplifiedMarkerTree, StaticMetadata, ToUrlError, UrlString, VersionId,
 };
 use uv_fs::{PortablePath, PortablePathBuf, Simplified, normalize_path, try_relative_to_if};
 use uv_git::{RepositoryReference, ResolvedRepositoryReference};
@@ -3245,6 +3246,11 @@ impl Lock {
         )
     }
 
+    /// Returns the dependency metadata that was used to generate this lock.
+    pub fn dependency_metadata(&self) -> DependencyMetadata {
+        DependencyMetadata::from_entries(self.manifest.dependency_metadata.iter().cloned())
+    }
+
     /// Return the set of packages that should be audited, respecting the
     /// given extras and dependency group filters.
     ///
@@ -5660,6 +5666,77 @@ impl Lock {
         })
     }
 
+    /// Retrieve metadata from a locked package, reusing the resolver's in-memory cache.
+    ///
+    /// The locked artifact hashes are enforced when building source distributions. Wheel metadata
+    /// uses the same metadata-only retrieval as resolution, without downloading the entire archive
+    /// to verify its hash.
+    pub async fn locked_package_metadata<Context: BuildContext>(
+        package: &Package,
+        root: &Path,
+        tags: &Tags,
+        markers: &MarkerEnvironment,
+        build_options: &BuildOptions,
+        index: &DistributionMetadataIndex,
+        database: &DistributionDatabase<'_, Context>,
+    ) -> Result<DistributionMetadata, LockError> {
+        let HashedDist { dist, hashes } = package.to_dist(
+            root,
+            TagPolicy::Preferred(tags),
+            build_options,
+            markers,
+            FirstParty::No,
+        )?;
+        let validation = if hashes.is_empty() {
+            HashValidation::None
+        } else if matches!(package.id.source, Source::Registry(_)) {
+            HashValidation::Any(hashes.as_slice())
+        } else {
+            HashValidation::All(hashes.as_slice())
+        };
+        let locked_hashes = match dist {
+            Dist::Built(_) => None,
+            Dist::Source(_) => Some(validation),
+        };
+        let metadata_hashes = MetadataHashPolicy {
+            collection: HashCollection::None,
+            validation,
+        };
+        let metadata = Self::dist_metadata(
+            package,
+            &dist,
+            metadata_hashes,
+            locked_hashes,
+            index,
+            database,
+        )
+        .await?;
+        if metadata.name != package.id.name {
+            return Err(LockErrorKind::Resolution {
+                id: package.id.clone(),
+                err: DistributionError::WheelMetadataNameMismatch {
+                    given: package.id.name.clone(),
+                    metadata: metadata.name,
+                },
+            }
+            .into());
+        }
+        if let Some(version) = package.id.version.as_ref()
+            && *version != metadata.version
+            && *version != metadata.version.clone().without_local()
+        {
+            return Err(LockErrorKind::Resolution {
+                id: package.id.clone(),
+                err: DistributionError::WheelMetadataVersionMismatch {
+                    given: version.clone(),
+                    metadata: metadata.version,
+                },
+            }
+            .into());
+        }
+        Ok(metadata)
+    }
+
     /// Read the current metadata for a locked package, reusing the resolver's in-memory cache.
     async fn package_metadata<Context: BuildContext>(
         package: &Package,
@@ -5687,6 +5764,34 @@ impl Lock {
             }
             _ => None,
         };
+        let metadata_hashes = if let Some(validation) = locked_hashes {
+            MetadataHashPolicy {
+                collection: hasher.collection(),
+                validation,
+            }
+        } else {
+            hasher.metadata_policy(&dist)
+        };
+        Box::pin(Self::dist_metadata(
+            package,
+            &dist,
+            metadata_hashes,
+            locked_hashes,
+            index,
+            database,
+        ))
+        .await
+    }
+
+    /// Read distribution metadata, reusing the resolver's in-memory cache.
+    async fn dist_metadata<Context: BuildContext>(
+        package: &Package,
+        dist: &Dist,
+        metadata_hashes: MetadataHashPolicy<'_>,
+        locked_hashes: Option<HashValidation<'_>>,
+        index: &DistributionMetadataIndex,
+        database: &DistributionDatabase<'_, Context>,
+    ) -> Result<DistributionMetadata, LockError> {
         let id = dist.distribution_id();
         if let Some(archive) = index.get(&id).as_deref().and_then(|response| {
             if let MetadataResponse::Found(archive, ..) = response {
@@ -5700,16 +5805,8 @@ impl Lock {
             return Ok(archive.metadata.clone());
         }
 
-        let metadata_hashes = if let Some(validation) = locked_hashes {
-            MetadataHashPolicy {
-                collection: hasher.collection(),
-                validation,
-            }
-        } else {
-            hasher.metadata_policy(&dist)
-        };
         let archive = database
-            .get_or_build_wheel_metadata(&dist, metadata_hashes)
+            .get_or_build_wheel_metadata(dist, metadata_hashes)
             .await
             .map_err(|err| LockErrorKind::Resolution {
                 id: package.id.clone(),
