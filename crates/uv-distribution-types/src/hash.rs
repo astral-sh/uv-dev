@@ -27,11 +27,6 @@ impl DistHashPolicy<'_> {
         matches!(self, Self::Any(_) | Self::All(_))
     }
 
-    /// Returns `true` if a hash needs to be supplied for the distribution.
-    pub fn needs_inclusion(&self, dist: &crate::BuiltDist) -> bool {
-        matches!(self, Self::Include) && dist.file().is_none_or(|file| file.hashes.is_empty())
-    }
-
     /// Return the algorithms used in the hash policy.
     pub fn algorithms(&self) -> Vec<HashAlgorithm> {
         match self {

@@ -20,7 +20,7 @@ use uv_client::{
 use uv_distribution_filename::WheelFilename;
 use uv_distribution_types::{
     BuildInfo, BuildableSource, BuiltDist, Dist, DistHashPolicy, DistRef, File, Hashed, IndexUrl,
-    InstalledDist, Name, SourceDist, ToUrlError,
+    InstalledDist, Name, SourceDist, SourceUrl, ToUrlError,
 };
 use uv_extract::hash::Hasher;
 use uv_fs::write_atomic;
@@ -34,7 +34,7 @@ use uv_types::{BuildContext, BuildStack};
 
 use crate::archive::Archive;
 use crate::error::PythonVersion;
-use crate::hash::http_hash_algorithms;
+use crate::hash::{http_hash_algorithms, parse_url_hashes};
 use crate::metadata::{ArchiveMetadata, Metadata};
 use crate::source::SourceDistributionBuilder;
 use crate::{Error, LocalWheel, Reporter, RequiresDist};
@@ -526,32 +526,38 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         })
     }
 
-    /// Fetch the wheel metadata from the index, or from the cache if possible.
+    /// Fetch wheel metadata, along with any hashes requested for resolution.
     ///
-    /// While hashes will be generated in some cases, hash-checking is _not_ enforced and should
-    /// instead be enforced by the caller.
+    /// Declared URL hashes can avoid downloading the wheel to compute a hash. Hash-checking is
+    /// _not_ enforced here; callers must enforce it when retrieving the wheel for installation.
     async fn get_wheel_metadata(
         &self,
         dist: &BuiltDist,
-        hashes: DistHashPolicy<'_>,
+        hash_policy: DistHashPolicy<'_>,
     ) -> Result<ArchiveMetadata, Error> {
-        // If hashes are requested during resolution, and the distribution isn't hosted on a
-        // registry, get the entire wheel to ensure that hashes are included in the response. If
-        // the distribution is hosted on an index, hashes are included in the simple metadata
-        // response.
-        // For hash _validation_, callers are expected to enforce the policy when retrieving the
-        // wheel.
-        //
-        // Historically, for `uv pip compile --universal`, we also generate hashes for
-        // registry-based distributions when the relevant registry doesn't provide them. This was
-        // motivated by `--find-links`. We continue that behavior when missing registry hashes are
-        // computed for backwards compatibility, but it's a little dubious, since we're hashing one
-        // distribution here (as opposed to hashing all distributions for the version), and it may
-        // not even be a compatible distribution!
-        //
+        // Reuse declared URL hashes for resolution, without recording them in the artifact cache
+        // as computed hashes. The installer still validates the downloaded wheel.
+        let declared_hashes = match (hash_policy, dist) {
+            (DistHashPolicy::Include, BuiltDist::DirectUrl(dist)) => parse_url_hashes(&dist.url),
+            _ => None,
+        };
+
+        let compute_hashes = match (hash_policy, dist) {
+            (DistHashPolicy::Include, BuiltDist::Registry(dist)) => {
+                // The inclusion policy has already decided that missing registry hashes should be
+                // computed. This hashes only the selected wheel, not every distribution for the
+                // version.
+                dist.best_wheel().file.hashes.is_empty()
+            }
+            (DistHashPolicy::Include, BuiltDist::DirectUrl(_)) => declared_hashes.is_none(),
+            (DistHashPolicy::Include, BuiltDist::Path(_) | BuiltDist::GitPath(_)) => true,
+            (DistHashPolicy::None | DistHashPolicy::Any(_) | DistHashPolicy::All(_), _) => false,
+        };
+
+        // Fetch the entire wheel only when we need to compute a hash for resolution.
         // TODO(charlie): Request the hashes via a separate method, to reduce the coupling in this API.
-        if hashes.needs_inclusion(dist) {
-            let wheel = self.get_wheel(dist, hashes).await?;
+        if compute_hashes {
+            let wheel = self.get_wheel(dist, hash_policy).await?;
             // If the metadata was provided by the user directly, prefer it.
             let metadata = if let Some(metadata) = self
                 .build_context
@@ -575,7 +581,10 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
             .dependency_metadata()
             .get(dist.name(), Some(dist.version()))
         {
-            return Ok(ArchiveMetadata::from_metadata23(metadata));
+            return Ok(ArchiveMetadata {
+                metadata: Metadata::from_metadata23(metadata),
+                hashes: declared_hashes.unwrap_or_else(HashDigests::empty),
+            });
         }
 
         let result = self
@@ -595,7 +604,10 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         match result {
             Ok(metadata) => {
                 // Validate that the metadata is consistent with the distribution.
-                Ok(ArchiveMetadata::from_metadata23(metadata))
+                Ok(ArchiveMetadata {
+                    metadata: Metadata::from_metadata23(metadata),
+                    hashes: declared_hashes.unwrap_or_else(HashDigests::empty),
+                })
             }
             Err(err) if err.is_http_streaming_unsupported() => {
                 warn!(
@@ -604,9 +616,9 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
 
                 // If the request failed due to an error that could be resolved by
                 // downloading the wheel directly, try that.
-                let wheel = self.get_wheel(dist, hashes).await?;
+                let wheel = self.get_wheel(dist, hash_policy).await?;
                 let metadata = wheel.metadata()?;
-                let hashes = wheel.hashes;
+                let hashes = declared_hashes.unwrap_or(wheel.hashes);
                 Ok(ArchiveMetadata {
                     metadata: Metadata::from_metadata23(metadata),
                     hashes,
@@ -618,13 +630,23 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
 
     /// Build the wheel metadata for a source distribution, or fetch it from the cache if possible.
     ///
-    /// The returned metadata is guaranteed to come from a distribution with a matching hash, and
-    /// no build processes will be executed for distributions with mismatched hashes.
+    /// Requested hashes are validated before executing a build backend. User-provided metadata
+    /// can return declared URL hashes without downloading or validating the source archive.
     pub async fn build_wheel_metadata(
         &self,
         source: &BuildableSource<'_>,
-        hashes: DistHashPolicy<'_>,
+        hash_policy: DistHashPolicy<'_>,
     ) -> Result<ArchiveMetadata, Error> {
+        let declared_hashes = match (hash_policy, source) {
+            (DistHashPolicy::Include, BuildableSource::Dist(SourceDist::DirectUrl(dist))) => {
+                parse_url_hashes(&dist.url)
+            }
+            (DistHashPolicy::Include, BuildableSource::Url(SourceUrl::Direct(source))) => {
+                parse_url_hashes(source.url)
+            }
+            _ => None,
+        };
+
         // If the metadata was provided by the user directly, prefer it.
         if let Some(dist) = source.as_dist() {
             if let Some(metadata) = self
@@ -636,15 +658,27 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
                 // commits.
                 self.builder.resolve_revision(source, &self.client).await?;
 
-                return Ok(ArchiveMetadata::from_metadata23(metadata));
+                return Ok(ArchiveMetadata {
+                    metadata: Metadata::from_metadata23(metadata),
+                    hashes: declared_hashes.unwrap_or_else(HashDigests::empty),
+                });
             }
         }
 
-        let metadata = self
+        // If resolving metadata requires a build, validate the declared hashes before executing
+        // the backend, even when the caller only requested hash inclusion.
+        let build_hash_policy = declared_hashes
+            .as_ref()
+            .map_or(hash_policy, |hashes| DistHashPolicy::All(hashes.as_slice()));
+        let mut metadata = self
             .builder
-            .download_and_build_metadata(source, hashes, &self.client)
+            .download_and_build_metadata(source, build_hash_policy, &self.client)
             .boxed_local()
             .await?;
+
+        if let Some(hashes) = declared_hashes {
+            metadata.hashes = hashes;
+        }
 
         Ok(metadata)
     }
