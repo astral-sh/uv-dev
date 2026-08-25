@@ -1,0 +1,59 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 6255,
+        "title": "Add option to add files that need to be considered for the cache key in pyproject.toml",
+        "url": "https://github.com/astral-sh/uv/issues/6255",
+        "state": "closed",
+        "reason": "The original request for configurable project cache inputs established per-project `cache-keys`, but not inheritance between workspace members."
+      },
+      {
+        "kind": "pull_request",
+        "number": 7136,
+        "title": "Add support for dynamic cache keys",
+        "url": "https://github.com/astral-sh/uv/pull/7136",
+        "state": "merged",
+        "reason": "Implemented the extensible cache-key abstraction and file/Git inputs, but no dependency traversal or inherited project information."
+      },
+      {
+        "kind": "issue",
+        "number": 12399,
+        "title": "Rebuild C Extensions only on change",
+        "url": "https://github.com/astral-sh/uv/issues/12399",
+        "state": "closed",
+        "reason": "The closest workspace/native-extension workflow. Per-project cache keys solved rebuilding changed extensions, but not downstream invalidation when another member changes."
+      },
+      {
+        "kind": "issue",
+        "number": 15809,
+        "title": "`uv sync` and `uv run` not detecting file changes when using `scikit_build_core.build` backend",
+        "url": "https://github.com/astral-sh/uv/issues/15809",
+        "state": "open",
+        "reason": "Uses the same backend and source-change symptom, but concerns inputs within one project rather than inheritance across dependencies."
+      },
+      {
+        "kind": "pull_request",
+        "number": 15705,
+        "title": "Better defaults for native build backend cache keys",
+        "url": "https://github.com/astral-sh/uv/pull/15705",
+        "state": "merged",
+        "reason": "Added native-source cache-key patterns to generated scikit-build-core and maturin projects without propagating invalidation to dependents."
+      },
+      {
+        "kind": "issue",
+        "number": 16013,
+        "title": "How to make git tagging a monorepo only build the affected workspace members in CI?",
+        "url": "https://github.com/astral-sh/uv/issues/16013",
+        "state": "open",
+        "reason": "Conceptually related because dependency changes should affect downstream workspace members, but it concerns CI release selection rather than `uv sync` cache inheritance."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests using literal queries for `cache-keys`, inheritance, relative globs, and scikit-build-core; conceptual queries for workspace-dependent rebuilds, local-dependency invalidation, affected dependents, and transitive invalidation; and fix-oriented queries for cache-key implementations and native-backend defaults. Full candidate discussions, maintainer comments, closing references, and linked pull requests were inspected. astral-sh/uv#6356 was ruled out as a broad CI/Docker change-only-testing discussion, astral-sh/uv#9191 concerns Docker metadata freshness, and astral-sh/uv#15224 concerns forced non-editable reinstalls. No existing item requests cross-package cache-key inheritance."
+  },
+  "type": "enhancement",
+  "type_reason": "The reporter describes the current lack of a dependent rebuild as expected and requests a new `{ inherit = \"foo\" }` cache-key form. Current cache keys support file, directory, Git, and environment inputs evaluated independently for each project, with no dependency-inheritance variant. No canonical duplicate was found.",
+  "summary": "Existing work provides per-project cache keys and native-backend defaults, while adjacent discussions cover same-project rebuilds or CI impact analysis. None allows a dependent to inherit another workspace member's evaluated cache information.",
+  "draft_response": "Thanks. `tool.uv.cache-keys` is currently evaluated independently for each local project, and there is no key type that inherits another workspace member's evaluated cache information. The guidance in astral-sh/uv#12399 and astral-sh/uv#15809 handles changes to a project's own native-build inputs, while astral-sh/uv#16013 covers the separate problem of identifying affected packages in CI.\n\nThis is a new enhancement. For now, `bar` must list the relevant `foo` paths in its own cache keys, relative to `bar`, or be added to `reinstall-package` if always rebuilding it is acceptable. A dependency-aware form would need design around direct versus transitive inheritance and workspace-only resolution, so we cannot promise an implementation timeline."
+}
