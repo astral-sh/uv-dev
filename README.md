@@ -19,6 +19,19 @@ native-backend defaults, while adjacent workspace discussions cover same-project
 CI affected-package queries. None lets a dependent inherit another workspace member's evaluated
 cache information.
 
+## Maintainer follow-up
+
+A maintainer suggested that workspace-level `cache-keys` may be a more general solution than
+requiring every member to name the members whose keys it inherits. Under that model, a root
+configuration such as globs for `**/pyproject.toml`, `**/*.cpp`, and `**/*.h` could globally
+invalidate native workspace builds. The maintainer explicitly noted that this does not currently
+work and presented it as a design direction, not a decision.
+
+The main implementation concern raised is architectural: cache keys are currently per-build
+metadata, so applying workspace-root configuration to member builds may cross the existing metadata
+boundary. Further maintainer input is needed to choose between workspace-level invalidation,
+explicit dependency inheritance, or another mechanism.
+
 ## Draft response
 
 Thanks. `tool.uv.cache-keys` is currently evaluated independently for each local project, and there
@@ -40,7 +53,9 @@ as expected and requests a new cache-key form. Repository documentation and sour
 `tool.uv.cache-keys` currently supports file, directory, Git, and environment inputs evaluated for
 each project directory; there is no dependency-inheritance variant. Related reports establish the
 per-project workaround but do not track this cross-package behavior, so the issue is neither a bug
-nor a duplicate.
+nor a duplicate. A maintainer's follow-up confirms that workspace-level cache keys also do not work
+at present and identifies them as a potentially more general enhancement, with the exact design
+still undecided.
 
 ## Related
 
