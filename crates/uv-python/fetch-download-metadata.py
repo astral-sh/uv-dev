@@ -178,12 +178,22 @@ class PythonDownload:
     sha256: str | None = None
     build_options: list[str] = field(default_factory=list)
     variant: Variant | None = None
+    default: bool = True
+
+    def build_variant(self) -> str | None:
+        tags = [
+            option
+            for option in self.build_options
+            if option not in {"debug", "freethreaded"}
+        ]
+        return "+".join(tags) if tags else None
 
     def key(self) -> str:
-        if self.variant:
-            return f"{self.implementation}-{self.version}+{self.variant}-{self.triple.platform}-{self.triple.arch}-{self.triple.libc}"
-        else:
-            return f"{self.implementation}-{self.version}-{self.triple.platform}-{self.triple.arch}-{self.triple.libc}"
+        tags = [str(self.variant)] if self.variant else []
+        if build_variant := self.build_variant():
+            tags.append(build_variant)
+        variant = f"+{'+'.join(tags)}" if tags else ""
+        return f"{self.implementation}-{self.version}{variant}-{self.triple.platform}-{self.triple.arch}-{self.triple.libc}"
 
 
 class Finder:
@@ -253,16 +263,22 @@ class CPythonFinder(Finder):
                 logger.debug("Found %s (%s)", download.key(), download.filename)
                 downloads_by_version.setdefault(download.version, []).append(download)
 
-        # Collapse CPython variants to a single flavor per triple and variant
+        # Collapse CPython variants to a single flavor per triple, runtime variant, and build
+        # variant. Retain other build variants for explicit selection.
         downloads = []
         for version_downloads in downloads_by_version.values():
             selected: dict[
-                tuple[PlatformTripleKey, Variant | None],
+                tuple[PlatformTripleKey, Variant | None, str | None],
                 tuple[PythonDownload, tuple[int, int]],
             ] = {}
             for download in version_downloads:
                 priority = self._get_priority(download)
-                existing = selected.get((download.triple.key(), download.variant))
+                selection_key = (
+                    download.triple.key(),
+                    download.variant,
+                    download.build_variant(),
+                )
+                existing = selected.get(selection_key)
                 if existing:
                     existing_download, existing_priority = existing
                     # Skip if we have a flavor with higher priority already (indicated by a smaller value)
@@ -275,13 +291,23 @@ class CPythonFinder(Finder):
                             existing_download.flavor,
                         )
                         continue
-                selected[(download.triple.key(), download.variant)] = (
-                    download,
-                    priority,
-                )
+                selected[selection_key] = (download, priority)
 
-            # Drop the priorities
-            downloads.extend([download for download, _ in selected.values()])
+            preferred: dict[
+                tuple[PlatformTripleKey, Variant | None],
+                tuple[PythonDownload, tuple[int, int]],
+            ] = {}
+            for download, priority in selected.values():
+                preference_key = (download.triple.key(), download.variant)
+                existing = preferred.get(preference_key)
+                if existing is None or priority < existing[1]:
+                    preferred[preference_key] = (download, priority)
+
+            for download, _ in selected.values():
+                download.default = (
+                    preferred[(download.triple.key(), download.variant)][0] is download
+                )
+                downloads.append(download)
 
         return downloads
 
@@ -794,6 +820,8 @@ def render(downloads: list[PythonDownload]) -> None:
             "url": download.url,
             "sha256": download.sha256,
             "variant": download.variant if download.variant else None,
+            "build_variant": download.build_variant(),
+            "default": download.default,
             "build": download.build,
         }
 
