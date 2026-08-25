@@ -11759,22 +11759,19 @@ fn sync_script_editable_no_build() -> Result<()> {
         "# })?;
     child.child("src/child/__init__.py").touch()?;
 
-    // This is undesirable: `--no-build` should reject a non-workspace editable dependency before
-    // running its build backend. See astral-sh/uv#12607.
     uv_snapshot!(context.filters(), context.sync()
         .arg("--script")
         .arg("script.py")
         .arg("--no-build"), @r"
-    exit_code: 0 (success)
+    exit_code: 2 (failure)
     ----- stderr -----
     Creating script environment at: [CACHE_DIR]/environments-v2/script-[HASH]
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + child==0.1.0 (from file://[TEMP_DIR]/child)
+    error: Failed to prepare distributions
+      Caused by: Building source distributions is disabled, but attempted to build `child`
     ");
 
-    assert!(child.child("build-backend-called").exists());
+    assert!(!child.child("build-backend-called").exists());
 
     Ok(())
 }

@@ -21,7 +21,8 @@ use uv_configuration::{
 use uv_dispatch::BuildDispatch;
 use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::{
-    Dist, Index, IndexUrl, Name, Requirement, Resolution, ResolvedDist, SourceDist,
+    Dist, Index, IndexUrl, Name, Requirement, RequirementSource, Resolution, ResolvedDist,
+    SourceDist, UnresolvedRequirement,
 };
 use uv_fs::{PortablePathBuf, Simplified};
 use uv_installer::{InstallationStrategy, SitePackages};
@@ -241,7 +242,7 @@ pub(crate) async fn sync(
             }
 
             // Parse the requirements from the script.
-            let spec = script_specification(
+            let mut spec = script_specification(
                 script.into(),
                 &settings.resolver,
                 cache,
@@ -250,6 +251,23 @@ pub(crate) async fn sync(
             )
             .await?
             .unwrap_or_default();
+            // Unlocked scripts use the pip-style resolver, which otherwise permits editable
+            // builds under `--no-build`. Lower those sources as non-editable so the standard
+            // no-build guard rejects them before invoking the backend.
+            for requirement in &mut spec.requirements {
+                let UnresolvedRequirement::Named(requirement) = &mut requirement.requirement else {
+                    continue;
+                };
+                if settings
+                    .resolver
+                    .build_options
+                    .no_build_package(&requirement.name)
+                    && let RequirementSource::Directory { editable, .. } = &mut requirement.source
+                    && *editable == Some(true)
+                {
+                    *editable = Some(false);
+                }
+            }
             let script_extra_build_requires = script_extra_build_requires(
                 script.into(),
                 &settings.resolver,
