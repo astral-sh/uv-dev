@@ -17,6 +17,10 @@ No existing issue or pull request was found that tracks adding these two archite
 manylinux policies for x86_64 and aarch64. Older S390x and PowerPC work concerned building uv's own
 release wheels, not selecting those architectures while resolving Python packages.
 
+A repository member has since said the request is reasonable. This is a positive maintainer signal
+for the enhancement, but the discussion does not yet decide the accepted spellings, default
+manylinux compatibility floor, exact variant set, or implementation plan.
+
 ## Draft response
 
 Thanks. The accepted `--python-platform` values come from uv's explicit `TargetTriple`
@@ -45,6 +49,13 @@ selection, marker-environment mapping, naming, and manylinux baseline are alread
 
 No same-request tracker was found, so the issue is not a duplicate. The repository's earlier
 manylinux target-list request, astral-sh/uv#4966, was also classified as an enhancement.
+
+## Maintainer status
+
+Charlie Marsh responded that the request is reasonable. Treat this as initial acceptance of the
+feature direction, not a completed design decision: no target names or compatibility baselines were
+confirmed, and the comment did not explicitly invite an implementation pull request. The remaining
+next step is to agree on that scope before implementation.
 
 ## Related
 
