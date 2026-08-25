@@ -2,7 +2,7 @@ use std::borrow::Borrow;
 use std::path::Path;
 use std::str::FromStr;
 
-use http::{HeaderValue, StatusCode};
+use http::HeaderValue;
 use serde::{Deserialize, Serialize, Serializer};
 use thiserror::Error;
 use url::Url;
@@ -607,15 +607,6 @@ impl Index {
         }
     }
 
-    /// Return whether the given status code is explicitly ignored for this index.
-    pub(crate) fn ignores_error_code(&self, status_code: StatusCode) -> bool {
-        self.ignore_error_codes.as_ref().is_some_and(|codes| {
-            codes
-                .iter()
-                .any(|ignored_status_code| **ignored_status_code == status_code)
-        })
-    }
-
     /// Return the cache control header for file requests to this index, if any.
     pub(crate) fn artifact_cache_control(&self) -> Option<HeaderValue> {
         self.cache_control
@@ -883,7 +874,7 @@ mod tests {
     use super::*;
     use http::HeaderValue;
 
-    use crate::{IndexLocations, IndexRoutes, ProxyIndexError};
+    use crate::{IndexLocations, ProxyIndexConfigError};
 
     #[test]
     fn test_proxy_index_serialization_redacts_artifact_credentials()
@@ -963,11 +954,10 @@ mod tests {
             );
 
             let index: Index = toml::from_str(&configuration)?;
-            let locations = IndexLocations::new(vec![index], Vec::new(), false);
             assert!(
                 matches!(
-                    IndexRoutes::try_from(&locations),
-                    Err(ProxyIndexError::InvalidMapping { .. })
+                    IndexLocations::new(vec![index], Vec::new(), false),
+                    Err(ProxyIndexConfigError::InvalidMapping { .. })
                 ),
                 "unsafe artifact base was accepted: {path}"
             );

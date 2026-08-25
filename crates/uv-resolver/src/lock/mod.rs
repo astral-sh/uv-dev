@@ -33,10 +33,10 @@ use uv_distribution_filename::{
 use uv_distribution_types::{
     BuiltDist, DependencyMetadata, DirectUrlBuiltDist, DirectUrlSourceDist, DirectorySourceDist,
     Dist, FileLocation, GitDirectorySourceDist, GitPathBuiltDist, GitPathSourceDist, Identifier,
-    IndexLocations, IndexMetadata, IndexRoutes, IndexUrl, Name, PYPI_URL, PathBuiltDist,
-    PathSourceDist, ProxyIndexError, RegistryBuiltDist, RegistryBuiltWheel, RegistrySourceDist,
-    RemoteSource, Requirement, RequirementSource, RequiresPython, ResolvedDist,
-    SimplifiedMarkerTree, StaticMetadata, ToUrlError, UrlString,
+    IndexLocations, IndexMetadata, IndexUrl, Name, PYPI_URL, PathBuiltDist, PathSourceDist,
+    ProxyIndexError, RegistryBuiltDist, RegistryBuiltWheel, RegistrySourceDist, RemoteSource,
+    Requirement, RequirementSource, RequiresPython, ResolvedDist, SimplifiedMarkerTree,
+    StaticMetadata, ToUrlError, UrlString,
 };
 use uv_fs::{PortablePath, PortablePathBuf, Simplified, normalize_path, try_relative_to_if};
 use uv_git::{RepositoryReference, ResolvedRepositoryReference};
@@ -985,7 +985,6 @@ impl Lock {
         supported_environments: Vec<MarkerTree>,
         index_locations: &IndexLocations,
     ) -> Result<Self, LockError> {
-        let index_routes = IndexRoutes::try_from(index_locations)?;
         let mut packages = BTreeMap::new();
         let requires_python = resolution.requires_python.clone();
         let supported_environments = supported_environments
@@ -1051,7 +1050,7 @@ impl Lock {
             });
 
             if let Some(index) = dist.index() {
-                let route = index_routes.route_for(index);
+                let route = index_locations.route_for(index);
                 if route.is_proxy()
                     && let Some(filename) = package
                         .wheels

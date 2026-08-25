@@ -323,7 +323,7 @@ async fn upgrade_tool(
         ResolverInstallerOptions::from(existing_tool_receipt.options().clone())
             .combine(filesystem.clone()),
     );
-    let settings = ResolverInstallerSettings::from(options.clone());
+    let settings = ResolverInstallerSettings::try_from(options.clone())?;
 
     let build_constraint_requirements = existing_tool_receipt.build_constraints().to_vec();
     let build_constraints =

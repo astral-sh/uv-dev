@@ -266,7 +266,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
     ) -> Result<BuiltWheelMetadata, Error> {
         let built_wheel_metadata = match &source {
             BuildableSource::Dist(SourceDist::Registry(dist)) => {
-                let route = client.unmanaged.routes().route_for(&dist.index);
+                let route = client.unmanaged.index_locations().route_for(&dist.index);
 
                 // For registry source distributions, shard by package, then version, for
                 // convenience in debugging.
@@ -441,7 +441,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
     ) -> Result<ArchiveMetadata, Error> {
         let metadata = match &source {
             BuildableSource::Dist(SourceDist::Registry(dist)) => {
-                let route = client.unmanaged.routes().route_for(&dist.index);
+                let route = client.unmanaged.index_locations().route_for(&dist.index);
 
                 // For registry source distributions, shard by package, then version.
                 let cache_shard = self.build_context.cache().shard(
@@ -969,7 +969,8 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 if let Some(header) = index.and_then(|index| {
                     self.build_context
                         .locations()
-                        .artifact_cache_control_for(index)
+                        .route_for(index)
+                        .artifact_cache_control()
                 }) =>
             {
                 CacheControl::Override(header)
@@ -2763,7 +2764,8 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 if let Some(header) = index.and_then(|index| {
                     self.build_context
                         .locations()
-                        .artifact_cache_control_for(index)
+                        .route_for(index)
+                        .artifact_cache_control()
                 }) =>
             {
                 CacheControl::Override(header)

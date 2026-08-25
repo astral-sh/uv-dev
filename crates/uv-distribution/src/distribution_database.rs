@@ -185,7 +185,11 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         match dist {
             BuiltDist::Registry(wheels) => {
                 let wheel = wheels.best_wheel();
-                let route = self.client.unmanaged.routes().route_for(&wheel.index);
+                let route = self
+                    .client
+                    .unmanaged
+                    .index_locations()
+                    .route_for(&wheel.index);
                 let WheelTarget {
                     url,
                     extension,
@@ -810,7 +814,8 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
                 if let Some(header) = index.and_then(|index| {
                     self.build_context
                         .locations()
-                        .artifact_cache_control_for(index)
+                        .route_for(index)
+                        .artifact_cache_control()
                 }) =>
             {
                 CacheControl::Override(header)
@@ -1021,7 +1026,8 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
                 if let Some(header) = index.and_then(|index| {
                     self.build_context
                         .locations()
-                        .artifact_cache_control_for(index)
+                        .route_for(index)
+                        .artifact_cache_control()
                 }) =>
             {
                 CacheControl::Override(header)

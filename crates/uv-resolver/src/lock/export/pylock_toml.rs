@@ -23,10 +23,9 @@ use uv_distribution_filename::{
 };
 use uv_distribution_types::{
     BuiltDist, DirectUrlBuiltDist, DirectUrlSourceDist, DirectorySourceDist, Dist, Edge,
-    FileLocation, GitDirectorySourceDist, IndexLocations, IndexRoutes, IndexUrl, Name, Node,
-    PathBuiltDist, PathSourceDist, ProxyIndexError, RegistryBuiltDist, RegistryBuiltWheel,
-    RegistrySourceDist, RemoteSource, RequiresPython, Resolution, ResolvedDist, SourceDist,
-    ToUrlError, UrlString,
+    FileLocation, GitDirectorySourceDist, IndexLocations, IndexUrl, Name, Node, PathBuiltDist,
+    PathSourceDist, ProxyIndexError, RegistryBuiltDist, RegistryBuiltWheel, RegistrySourceDist,
+    RemoteSource, RequiresPython, Resolution, ResolvedDist, SourceDist, ToUrlError, UrlString,
 };
 use uv_fs::{PortablePathBuf, normalize_path, try_relative_to_if};
 use uv_git::{RepositoryReference, ResolvedRepositoryReference};
@@ -411,8 +410,6 @@ impl<'lock> PylockToml {
         build_options: &BuildOptions,
         index_locations: &IndexLocations,
     ) -> Result<Self, PylockTomlErrorKind> {
-        let index_routes = IndexRoutes::try_from(index_locations)?;
-
         // The lock version is always `1.0` at time of writing.
         let lock_version = Version::new([1, 0]);
 
@@ -452,7 +449,7 @@ impl<'lock> PylockToml {
             // Retain the canonical index so a later install can find its configured proxy.
             let index = dist
                 .index()
-                .filter(|index| index_routes.route_for(index).is_proxy())
+                .filter(|index| index_locations.route_for(index).is_proxy())
                 .map(|index| index.without_credentials().into_owned());
 
             // Create a `pylock.toml`-style package.
@@ -509,7 +506,7 @@ impl<'lock> PylockToml {
                         node_index,
                         &dist.wheels,
                         build_options.no_binary_package(dist.name()),
-                        &index_routes,
+                        index_locations,
                     )?;
 
                     // Filter sdist based on build options (--only-binary).
@@ -518,7 +515,7 @@ impl<'lock> PylockToml {
                     if !no_build {
                         if let Some(sdist) = dist.sdist.as_ref() {
                             Self::validate_proxy_artifact(
-                                &index_routes,
+                                index_locations,
                                 &sdist.index,
                                 &sdist.name,
                                 sdist.file.filename.as_ref(),
@@ -616,7 +613,7 @@ impl<'lock> PylockToml {
                         node_index,
                         &dist.wheels,
                         build_options.no_binary_package(&dist.name),
-                        &index_routes,
+                        index_locations,
                     )?;
 
                     // Filter sdist based on build options (--only-binary).
@@ -624,7 +621,7 @@ impl<'lock> PylockToml {
 
                     if !no_build {
                         Self::validate_proxy_artifact(
-                            &index_routes,
+                            index_locations,
                             &dist.index,
                             &dist.name,
                             dist.file.filename.as_ref(),
@@ -686,7 +683,7 @@ impl<'lock> PylockToml {
         node_index: NodeIndex,
         wheels: &[RegistryBuiltWheel],
         no_binary: bool,
-        index_routes: &IndexRoutes,
+        index_locations: &IndexLocations,
     ) -> Result<Option<Vec<PylockTomlWheel>>, PylockTomlErrorKind> {
         if no_binary {
             return Ok(None);
@@ -714,7 +711,7 @@ impl<'lock> PylockToml {
             .into_iter()
             .map(|wheel| {
                 Self::validate_proxy_artifact(
-                    index_routes,
+                    index_locations,
                     &wheel.index,
                     &wheel.filename.name,
                     wheel.file.filename.as_ref(),
@@ -758,7 +755,7 @@ impl<'lock> PylockToml {
 
     /// Require a hash for each proxied artifact retained in a new lock.
     fn validate_proxy_artifact(
-        index_routes: &IndexRoutes,
+        index_locations: &IndexLocations,
         index: &IndexUrl,
         package: &PackageName,
         filename: &str,
@@ -768,7 +765,7 @@ impl<'lock> PylockToml {
             return Ok(());
         }
 
-        let route = index_routes.route_for(index);
+        let route = index_locations.route_for(index);
         if !route.is_proxy() {
             return Ok(());
         }
