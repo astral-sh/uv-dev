@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 4966,
+        "title": "Support `manylinux_x_y` in `--python-platform`",
+        "url": "https://github.com/astral-sh/uv/issues/4966",
+        "state": "closed",
+        "reason": "Closest conceptual CLI-target discussion. It addressed the static target list but only added manylinux selectors for existing architectures."
+      },
+      {
+        "kind": "pull_request",
+        "number": 9234,
+        "title": "Add manylinux target triples up to glibc 2.40",
+        "url": "https://github.com/astral-sh/uv/pull/9234",
+        "state": "merged",
+        "reason": "Closest implementation precedent. It expanded the same `TargetTriple` enum, CLI help, and schema, but not with s390x or ppc64le."
+      },
+      {
+        "kind": "issue",
+        "number": 4956,
+        "title": "Support more platforms in --python-platforms",
+        "url": "https://github.com/astral-sh/uv/issues/4956",
+        "state": "closed",
+        "reason": "Earlier request to expand accepted values, specifically for additional aarch64 manylinux policies rather than new CPU architectures."
+      },
+      {
+        "kind": "issue",
+        "number": 1015,
+        "title": "Re-enable support for S390x and PowerPC wheels",
+        "url": "https://github.com/astral-sh/uv/issues/1015",
+        "state": "closed",
+        "reason": "The only strong historical match on both architectures, but it concerned uv release wheels rather than `uv pip compile` target selection."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests for `s390x`, `ppc64le`, `powerpc64le`, `s390x-unknown-linux-gnu`, `powerpc64le-unknown-linux-gnu`, `invalid value`, and `--python-platform`, plus PowerPC, cross-platform resolution, target triples, platform tags, unsupported architectures, PEP 600, and manylinux selectors. Inspected candidate comments, timelines, closure links, and referenced pull requests. Followed astral-sh/uv#4956 to astral-sh/uv#4966 and astral-sh/uv#9234, and astral-sh/uv#1015 to astral-sh/uv#1017. Also inspected astral-sh/uv#10210 and astral-sh/uv#10217. The plausible astral-sh/uv#7957 was ruled out because it requests runnable cross-platform environments and cross-build metadata. No existing tracker or pull request adds these architectures to `--python-platform`."
+  },
+  "type": "enhancement",
+  "type_reason": "The accepted values are explicitly defined by `TargetTriple`. Current source exposes Linux targets for x86_64, aarch64, and riscv64 but not S390x or little-endian PowerPC, while the lower-level platform-tags crate recognizes both. Adding them is new functionality, and no duplicate tracker was found.",
+  "summary": "No duplicate was found. Existing work expanded manylinux policies for current architectures or supported uv release wheels on S390x/PowerPC; it did not add these `--python-platform` targets.",
+  "draft_response": "Thanks. The accepted `--python-platform` values come from uv’s explicit `TargetTriple` configuration enum. It currently has Linux targets for x86_64, aarch64, and riscv64, but not s390x or ppc64le; the lower-level platform-tag code does already recognize both architectures. Existing work such as astral-sh/uv#4966 and astral-sh/uv#9234 only added manylinux policies for existing architectures, so this is a distinct enhancement request. The next step is maintainer agreement on the target spellings and default manylinux compatibility floor before adding the enum mappings, marker behavior, schema/help entries, and integration coverage. Please hold off on a pull request until that scope is confirmed."
+}
