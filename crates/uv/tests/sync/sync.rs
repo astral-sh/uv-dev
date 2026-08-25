@@ -11710,6 +11710,75 @@ fn sync_script() -> Result<()> {
     Ok(())
 }
 
+/// Repro for: <https://github.com/astral-sh/uv/issues/12607>
+#[test]
+fn sync_script_editable_no_build() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context.temp_dir.child("script.py").write_str(indoc! { r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = [
+        #   "child",
+        # ]
+        #
+        # [tool.uv.sources]
+        # child = { path = "child", editable = true }
+        # ///
+        "# })?;
+
+    let child = context.temp_dir.child("child");
+    child.child("pyproject.toml").write_str(indoc! { r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = ["hatchling"]
+        backend-path = ["."]
+        build-backend = "build_backend"
+        "# })?;
+    child.child("build_backend.py").write_str(indoc! { r#"
+        import pathlib
+        import hatchling.build as _hatchling
+
+        from hatchling.build import *
+
+        def prepare_metadata_for_build_editable(metadata_directory, config_settings=None):
+            pathlib.Path("build-backend-called").touch()
+            return _hatchling.prepare_metadata_for_build_editable(
+                metadata_directory, config_settings
+            )
+
+        def build_editable(wheel_directory, config_settings=None, metadata_directory=None):
+            pathlib.Path("build-backend-called").touch()
+            return _hatchling.build_editable(
+                wheel_directory, config_settings, metadata_directory
+            )
+        "# })?;
+    child.child("src/child/__init__.py").touch()?;
+
+    // This is undesirable: `--no-build` should reject a non-workspace editable dependency before
+    // running its build backend. See astral-sh/uv#12607.
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--script")
+        .arg("script.py")
+        .arg("--no-build"), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Creating script environment at: [CACHE_DIR]/environments-v2/script-[HASH]
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + child==0.1.0 (from file://[TEMP_DIR]/child)
+    ");
+
+    assert!(child.child("build-backend-called").exists());
+
+    Ok(())
+}
+
 #[test]
 fn sync_locked_script() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.9", "3.12"]);
