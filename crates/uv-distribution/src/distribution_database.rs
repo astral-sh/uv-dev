@@ -20,8 +20,8 @@ use uv_client::{
 };
 use uv_distribution_filename::WheelFilename;
 use uv_distribution_types::{
-    BuildInfo, BuildableSource, BuiltDist, Dist, DistRef, File, HashPolicy, Hashed, IndexUrl,
-    InstalledDist, Name, SourceDist, ToUrlError,
+    BuildInfo, BuildableSource, BuiltDist, CanonicalArtifactUrl, Dist, DistRef, HashPolicy, Hashed,
+    IndexUrl, InstalledDist, Name, RegistryFile, SourceDist, ToUrlError,
 };
 use uv_extract::hash::Hasher;
 use uv_fs::write_atomic;
@@ -206,7 +206,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
                     ArtifactHashPolicy::from(hashes)
                 };
                 let url = route
-                    .to_proxy_url(&url)
+                    .artifact_url_for_request(&url)
                     .map_err(|error| Error::Client(ClientErrorKind::ProxyIndex(error).into()))?;
 
                 // Create a cache entry for the wheel.
@@ -1471,28 +1471,28 @@ impl PathArchivePointer {
 #[derive(Debug, Clone)]
 struct WheelTarget {
     /// The URL from which the wheel can be downloaded.
-    url: DisplaySafeUrl,
+    url: CanonicalArtifactUrl,
     /// The expected extension of the wheel file.
     extension: WheelExtension,
     /// The expected size of the wheel file, if known.
     size: Option<u64>,
 }
 
-impl TryFrom<&File> for WheelTarget {
+impl TryFrom<&RegistryFile> for WheelTarget {
     type Error = ToUrlError;
 
-    /// Determine the [`WheelTarget`] from a [`File`].
-    fn try_from(file: &File) -> Result<Self, Self::Error> {
+    /// Determine the [`WheelTarget`] from a canonical registry file.
+    fn try_from(file: &RegistryFile) -> Result<Self, Self::Error> {
         let url = file.url.to_url()?;
         if let Some(zstd) = file.zstd.as_ref() {
             Ok(Self {
-                url: add_tar_zst_extension(url),
+                url: CanonicalArtifactUrl::from_url(add_tar_zst_extension(url)),
                 extension: WheelExtension::WhlZst,
                 size: zstd.size,
             })
         } else {
             Ok(Self {
-                url,
+                url: CanonicalArtifactUrl::from_url(url),
                 extension: WheelExtension::Whl,
                 size: file.size,
             })

@@ -968,7 +968,11 @@ impl RegistryClient {
                     /// A local file path.
                     Path(PathBuf),
                     /// A remote URL.
-                    Url(DisplaySafeUrl),
+                    ///
+                    /// The request URL is intentionally not carried here. It is derived from the
+                    /// canonical registry file and its index route in `wheel_metadata_registry`,
+                    /// preserving proxy routing.
+                    Url,
                 }
 
                 let wheel = wheels.best_wheel();
@@ -980,7 +984,7 @@ impl RegistryClient {
                         .map_err(|()| ErrorKind::NonFileUrl(url.clone()))?;
                     WheelLocation::Path(path)
                 } else {
-                    WheelLocation::Url(url)
+                    WheelLocation::Url
                 };
 
                 match location {
@@ -1002,10 +1006,7 @@ impl RegistryClient {
                             )
                         })?
                     }
-                    WheelLocation::Url(url) => {
-                        self.wheel_metadata_registry(wheel, &url, capabilities)
-                            .await?
-                    }
+                    WheelLocation::Url => self.wheel_metadata_registry(wheel, capabilities).await?,
                 }
             }
             BuiltDist::DirectUrl(wheel) => {
@@ -1097,7 +1098,6 @@ impl RegistryClient {
     async fn wheel_metadata_registry(
         &self,
         wheel: &RegistryBuiltWheel,
-        url: &DisplaySafeUrl,
         capabilities: &IndexCapabilities,
     ) -> Result<ResolutionMetadata, Error> {
         let RegistryBuiltWheel {
@@ -1108,7 +1108,9 @@ impl RegistryClient {
         } = wheel;
         let route = self.indexes.route_for(index);
         let index = route.effective_url();
-        let url = route.to_proxy_url(url).map_err(ErrorKind::ProxyIndex)?;
+        let url = route
+            .artifact_url_for_request(&file.url)
+            .map_err(ErrorKind::ProxyIndex)?;
 
         // If the metadata file is available at its own url (PEP 658), download it from there.
         if file.dist_info_metadata {
@@ -1967,8 +1969,8 @@ mod tests {
     };
     use uv_cache::Cache;
     use uv_distribution_types::{
-        FileLocation, Index, IndexCapabilities, IndexFormat, IndexLocations, IndexMetadataRef,
-        IndexName, IndexUrl, ToUrlError,
+        CanonicalArtifactUrl, FileLocation, Index, IndexCapabilities, IndexFormat, IndexLocations,
+        IndexMetadataRef, IndexName, IndexUrl, ToUrlError,
     };
     use uv_small_str::SmallString;
     use wiremock::matchers::{basic_auth, method, path, path_regex};
@@ -2285,7 +2287,8 @@ mod tests {
                 .index_locations(locations)
                 .build()?;
             let route = client.index_locations().route_for(&canonical);
-            let physical_artifact = route.to_proxy_url(&canonical_artifact)?;
+            let physical_artifact = route
+                .artifact_url_for_request(&CanonicalArtifactUrl::from_url(canonical_artifact))?;
 
             let response = client
                 .uncached_client(&physical_artifact)

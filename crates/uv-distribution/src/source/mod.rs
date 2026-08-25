@@ -278,7 +278,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 );
 
                 let url = route
-                    .to_proxy_url(&dist.file.url.to_url()?)
+                    .artifact_url_for_request(&dist.file.url)
                     .map_err(|err| Error::Client(ClientErrorKind::ProxyIndex(err).into()))?;
 
                 // If the URL is a file URL, use the local path directly.
@@ -452,7 +452,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 );
 
                 let url = route
-                    .to_proxy_url(&dist.file.url.to_url()?)
+                    .artifact_url_for_request(&dist.file.url)
                     .map_err(|err| Error::Client(ClientErrorKind::ProxyIndex(err).into()))?;
 
                 // If the URL is a file URL, use the local path directly.

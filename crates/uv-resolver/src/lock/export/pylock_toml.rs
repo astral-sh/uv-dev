@@ -22,10 +22,11 @@ use uv_distribution_filename::{
     SourceDistFilenameError, WheelFilename, WheelFilenameError,
 };
 use uv_distribution_types::{
-    BuiltDist, DirectUrlBuiltDist, DirectUrlSourceDist, DirectorySourceDist, Dist, Edge,
-    FileLocation, GitDirectorySourceDist, IndexLocations, IndexUrl, Name, Node, PathBuiltDist,
-    PathSourceDist, ProxyIndexError, RegistryBuiltDist, RegistryBuiltWheel, RegistrySourceDist,
-    RemoteSource, RequiresPython, Resolution, ResolvedDist, SourceDist, ToUrlError, UrlString,
+    BuiltDist, CanonicalArtifactUrl, DirectUrlBuiltDist, DirectUrlSourceDist, DirectorySourceDist,
+    Dist, Edge, FileLocation, GitDirectorySourceDist, IndexLocations, IndexUrl, Name, Node,
+    PathBuiltDist, PathSourceDist, ProxyIndexError, RegistryBuiltDist, RegistryBuiltWheel,
+    RegistrySourceDist, RemoteSource, RequiresPython, Resolution, ResolvedDist, SourceDist,
+    ToUrlError, UrlString,
 };
 use uv_fs::{PortablePathBuf, normalize_path, try_relative_to_if};
 use uv_git::{RepositoryReference, ResolvedRepositoryReference};
@@ -1571,7 +1572,7 @@ impl PylockTomlWheel {
             requires_python: None,
             size: self.size,
             upload_time_utc_ms: self.upload_time.map(Timestamp::as_millisecond),
-            url: FileLocation::AbsoluteUrl(file_url),
+            url: CanonicalArtifactUrl::from_location(FileLocation::AbsoluteUrl(file_url)),
             yanked: None,
             zstd: None,
         });
@@ -1734,7 +1735,7 @@ impl PylockTomlSdist {
             requires_python: None,
             size: self.size,
             upload_time_utc_ms: self.upload_time.map(Timestamp::as_millisecond),
-            url: FileLocation::AbsoluteUrl(file_url),
+            url: CanonicalArtifactUrl::from_location(FileLocation::AbsoluteUrl(file_url)),
             yanked: None,
             zstd: None,
         });
