@@ -4,7 +4,6 @@ use std::str::FromStr;
 use jiff::{Span, Timestamp, ToSpan, Unit, tz::TimeZone};
 use serde::Deserialize;
 use serde::de::value::MapAccessDeserializer;
-use uv_warnings::warn_user_once;
 
 #[derive(Debug, Copy, Clone)]
 pub struct ExcludeNewerSpan(Span);
@@ -109,13 +108,13 @@ impl ExcludeNewerValue {
 
     /// Parse an [`ExcludeNewerValue`] from persistent configuration.
     ///
-    /// Unlike command-line arguments, persistent configuration should not depend on the system
-    /// time zone, so warn when local dates are used instead of explicit timestamps.
+    /// Unlike command-line arguments, persistent configuration must not depend on the system time
+    /// zone, so local dates are rejected in favor of explicit timestamps.
     fn from_persistent_str(input: &str) -> Result<Self, String> {
         if input.parse::<jiff::civil::Date>().is_ok() {
-            warn_user_once!(
-                "`{input}` is a local date without a timezone. `exclude-newer` values in persistent configuration should use a full timestamp with a timezone (for example, `2024-01-01T00:00:00Z`); local dates will be rejected in a future release"
-            );
+            return Err(format!(
+                "`{input}` is a local date, but a full timestamp with a timezone is required in persistent configuration (for example, `2024-01-01T00:00:00Z`)"
+            ));
         }
 
         Self::from_str(input)
@@ -310,7 +309,7 @@ impl schemars::JsonSchema for ExcludeNewerValue {
     fn json_schema(_generator: &mut schemars::generate::SchemaGenerator) -> schemars::Schema {
         schemars::json_schema!({
             "type": "string",
-            "description": "Exclude distributions uploaded after the given timestamp.\n\nAccepts both RFC 3339 timestamps (e.g., `2006-12-02T02:07:43Z`) and local dates in the same format (e.g., `2006-12-02`), as well as relative durations (e.g., `1 week`, `30 days`, `6 months`). Local dates depend on the system timezone and are accepted for compatibility, but will be rejected in a future release. Relative durations are resolved to a timestamp at lock time.",
+            "description": "Exclude distributions uploaded after the given timestamp.\n\nAccepts RFC 3339 timestamps (e.g., `2006-12-02T02:07:43Z`) and relative durations (e.g., `1 week`, `30 days`, `6 months`). A full timestamp is required for absolute values to ensure consistent behavior across timezones. Relative durations are resolved to a timestamp at lock time.",
         })
     }
 }
@@ -384,7 +383,7 @@ impl<'de> serde::Deserialize<'de> for ExcludeNewerOverride {
 
             fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
                 formatter.write_str(
-                    "a date/timestamp/duration string, false to disable exclude-newer, or a table \
+                    "a timestamp/duration string, false to disable exclude-newer, or a table \
                      with timestamp/span",
                 )
             }
@@ -445,11 +444,39 @@ mod tests {
     }
 
     #[test]
-    fn local_date_is_accepted_from_command_line_and_persistent_configuration() {
+    fn local_date_is_only_accepted_from_command_line() {
         ExcludeNewerValue::from_str("2024-01-01").unwrap();
-        toml::from_str::<Options>(r#"exclude-newer = "2024-01-01""#).unwrap();
-        toml::from_str::<Options>(r#"exclude-newer-package = { anyio = "2024-01-01" }"#).unwrap();
-        toml::from_str::<Value>(r#"_value = "2024-01-01""#).unwrap();
+
+        let error = toml::from_str::<Options>(r#"exclude-newer = "2024-01-01""#)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains(
+                "`2024-01-01` is a local date, but a full timestamp with a timezone is required in persistent configuration"
+            ),
+            "unexpected error: {error}"
+        );
+
+        let error =
+            toml::from_str::<Options>(r#"exclude-newer-package = { anyio = "2024-01-01" }"#)
+                .unwrap_err()
+                .to_string();
+        assert!(
+            error.contains(
+                "`2024-01-01` is a local date, but a full timestamp with a timezone is required in persistent configuration"
+            ),
+            "unexpected error: {error}"
+        );
+
+        let error = toml::from_str::<Value>(r#"_value = "2024-01-01""#)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains(
+                "`2024-01-01` is a local date, but a full timestamp with a timezone is required in persistent configuration"
+            ),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
