@@ -37,6 +37,10 @@ Utilities for parsing and evaluating
 [dependency specifiers](https://packaging.python.org/en/latest/specifications/dependency-specifiers/),
 previously known as [PEP 508](https://peps.python.org/pep-0508/).
 
+## [uv-pyproject-toml](./uv-pyproject-toml)
+
+Types for parsing the standardized fields in `pyproject.toml` files.
+
 ## [uv-platform-tags](./uv-platform-tags)
 
 Functionality for parsing and inferring Python platform tags as per
