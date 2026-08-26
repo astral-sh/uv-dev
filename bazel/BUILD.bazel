@@ -1,0 +1,14 @@
+exports_files(["rust.bzl"])
+
+# Linux build scripts use a declared make instead of relying on the worker image.
+alias(
+    name = "make",
+    actual = "@rules_foreign_cc//toolchains/private:make_tool",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "nm",
+    actual = "@llvm//tools:llvm-nm",
+    visibility = ["//visibility:public"],
+)

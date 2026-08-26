@@ -8,6 +8,10 @@ debug/
 target-alpine/
 target/
 
+# Local Bazel outputs and credentials.
+/bazel-*
+/user.bazelrc
+
 # Bootstrapped Python versions
 /bin/
 

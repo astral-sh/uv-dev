@@ -1,0 +1,110 @@
+module(name = "uv")
+
+bazel_dep(name = "platforms", version = "1.1.0")
+bazel_dep(name = "rules_cc", version = "0.2.20")
+bazel_dep(name = "rules_foreign_cc", version = "0.15.1")
+bazel_dep(name = "apple_support", version = "2.1.0")
+bazel_dep(name = "llvm", version = "0.8.11")
+bazel_dep(name = "rules_rs", version = "0.0.96")
+
+# GNU Make's configure script also runs standalone preprocessor probes.
+single_version_override(
+    module_name = "rules_foreign_cc",
+    patch_strip = 1,
+    patches = ["//bazel/patches:rules-foreign-cc-make-cppflags.patch"],
+    version = "0.15.1",
+)
+
+register_toolchains("@llvm//toolchain:all")
+
+# Use the same hermetic SDK for local and remote macOS compilation.
+osx = use_extension("@llvm//extensions:osx.bzl", "osx")
+osx.from_archive(
+    sha256 = "5f044578cd78a3a9b9c965a42d56bad609ee5d252e1d4e6aa7c42fc3f35fee7b",
+    strip_prefix = "Payload/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk",
+    type = "pkg",
+    urls = [
+        "https://swcdn.apple.com/content/downloads/09/08/047-91568-A_Y1CFZWQCD4/4xekpyz43i26dbp4enxfro8eb1q7wiujh5/CLTools_macOSNMOS_SDK.pkg",
+    ],
+)
+
+# CoreServices and its header dependencies are needed by AWS-LC's CPU-jitter
+# entropy implementation, even though uv does not link each framework directly.
+osx.frameworks(names = [
+    "CFNetwork",
+    "CoreFoundation",
+    "CoreServices",
+    "DiskArbitration",
+    "Foundation",
+    "IOKit",
+    "Security",
+    "SystemConfiguration",
+])
+use_repo(osx, "macos_sdk")
+
+rules_rust = use_extension("@rules_rs//rs:rules_rust.bzl", "rules_rust")
+use_repo(rules_rust, "rules_rust")
+
+toolchains = use_extension("@rules_rs//rs/toolchains:module_extension.bzl", "toolchains")
+toolchains.toolchain(
+    edition = "2024",
+    # Keep this aligned with rust-toolchain.toml.
+    version = "1.98.0",
+)
+use_repo(toolchains, "default_rust_toolchains")
+
+register_toolchains("@default_rust_toolchains//:all")
+
+crate = use_extension("@rules_rs//rs:extensions.bzl", "crate")
+crate.from_cargo(
+    cargo_lock = "//:Cargo.lock",
+    cargo_toml = "//:Cargo.toml",
+    platform_triples = [
+        "aarch64-apple-darwin",
+        "x86_64-apple-darwin",
+        "x86_64-unknown-linux-gnu",
+    ],
+)
+
+# Keep the native implementations pinned by Cargo.lock instead of replacing
+# them with independently versioned Bazel dependencies.
+crate.annotation(
+    crate = "aws-lc-rs",
+    gen_build_script = "on",
+)
+crate.annotation(
+    # Missing SDK inputs must fail instead of silently changing the entropy
+    # implementation selected by a normal Linux/macOS build.
+    build_script_env = {"AWS_LC_SYS_NO_JITTER_ENTROPY": "0"},
+    crate = "aws-lc-sys",
+    gen_build_script = "on",
+)
+crate.annotation(
+    # The generated external crate needs the canonical main-repository name.
+    # buildifier: disable=canonical-repository
+    build_script_env = {
+        "NM": "$(execpath @@//bazel:nm)",
+    },
+    # macOS retains its working system make; the remote Linux image lacks it.
+    # buildifier: disable=canonical-repository
+    build_script_env_select = {
+        "x86_64-unknown-linux-gnu": '{"MAKE": "$(execpath @@//bazel:make)/bin/make"}',
+    },
+    build_script_tools = ["//bazel:nm"],
+    # Explicit empty branches prevent rules_rs from hoisting make to all targets.
+    build_script_tools_select = {
+        "aarch64-apple-darwin": [],
+        "x86_64-apple-darwin": [],
+        "x86_64-unknown-linux-gnu": ["//bazel:make"],
+    },
+    crate = "tikv-jemalloc-sys",
+    gen_build_script = "on",
+    # Retain the hermetic linker flags and use the declared make executable.
+    patch_args = ["-p1"],
+    patches = ["//bazel/patches:tikv-jemalloc-sys-build-tools.patch"],
+)
+crate.annotation(
+    crate = "zstd-sys",
+    gen_build_script = "on",
+)
+use_repo(crate, "crates")

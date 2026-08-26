@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "kind": "historical_measurement",
+  "date": "2026-08-26",
+  "base_revision": "a3343a269d6b5fe3289128d1030235bc5f905c0b",
+  "source_state": "Base revision plus the Bazel prototype, uncommitted when measured",
+  "client": { "os": "Darwin", "architecture": "arm64" },
+  "bazel_version": "9.0.0",
+  "rust_version": "1.98.0",
+  "rules_rs_version": "0.0.96",
+  "conditions": {
+    "target": "//:uv",
+    "test_target": "//:pep440-tests",
+    "configuration": "remote-linux",
+    "target_platform": "linux-x86_64",
+    "compilation_mode": "fastbuild",
+    "jobs": 80,
+    "fresh_output_bases": true,
+    "local_disk_cache": false,
+    "lockfile_mode": "error",
+    "repository_and_toolchain_downloads": "warm",
+    "build_event_uploads": true,
+    "action_counts_source": "buildMetrics.actionSummary.runnerCount",
+    "elapsed_time_source": "BEP finished.finishTime minus started.startTime"
+  },
+  "seed": {
+    "success": true,
+    "remote_executions": 1712,
+    "remote_cache_hits": 0,
+    "internal_actions": 723,
+    "bazel_elapsed_seconds": 191.706,
+    "binary_sha256": "84cc22c5704d21c9545179703ed7eca1d571d8973a33988c88c01b6d247620d7"
+  },
+  "replay": {
+    "success": true,
+    "remote_executions": 0,
+    "remote_cache_hits": 1712,
+    "internal_actions": 723,
+    "bazel_elapsed_seconds": 28.388,
+    "binary_sha256": "84cc22c5704d21c9545179703ed7eca1d571d8973a33988c88c01b6d247620d7"
+  },
+  "tests": {
+    "status": "PASSED",
+    "rust_tests_passed": 67,
+    "strategy": "remote",
+    "cached_locally": false,
+    "cached_remotely": false,
+    "bazel_elapsed_seconds": 11.513
+  },
+  "limitations": [
+    "One seed/replay pair, not a distribution or typical CI estimate",
+    "No Cargo-equivalent performance comparison",
+    "Only the PEP 440 test target, not the full uv integration suite",
+    "Native Linux and Intel macOS clients have not been verified",
+    "The reproduction runner uses a fresh experiment namespace and disables build-event uploads"
+  ]
+}

@@ -1,0 +1,4 @@
+exports_files([
+    "rules-foreign-cc-make-cppflags.patch",
+    "tikv-jemalloc-sys-build-tools.patch",
+])

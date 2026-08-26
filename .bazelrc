@@ -1,0 +1,43 @@
+# Repository defaults are local. Remote services are opt-in below.
+common --repo_env=BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN=1
+common --repo_env=BAZEL_NO_APPLE_CPP_TOOLCHAIN=1
+common --xcode_version_config=//:disable_xcode
+common --enable_platform_specific_config
+common:linux --host_platform=//:local_linux
+common --@rules_cc//cc/toolchains/args/archiver_flags:use_libtool_on_macos=False
+common --@llvm//config:experimental_stub_libgcc_s
+common --incompatible_strict_action_env
+
+common --repository_cache=~/.cache/bazel-repo-cache
+common --repo_contents_cache=~/.cache/bazel-repo-contents-cache
+common --disk_cache=~/.cache/uv-bazel-disk-cache
+common --jobs=12
+test --test_output=errors
+
+# Keep compiler options shared by local and remote builds so their action keys
+# match. The default fastbuild mode has no optimization or debug information.
+common --remote_cache_compression
+common --remote_download_toplevel
+common --remote_timeout=3600
+
+# Credentials belong in a host-scoped credential helper or an ignored user rc.
+# Never commit a key, put one in a command line, or enable public invocation data.
+common:buildbuddy --bes_backend=grpcs://remote.buildbuddy.io
+common:buildbuddy --bes_results_url=https://app.buildbuddy.io/invocation/
+common:buildbuddy --remote_cache=grpcs://remote.buildbuddy.io
+common:buildbuddy --remote_instance_name=uv-dev-experiment
+
+# Optional authentication from BUILDBUDDY_API_KEY, without exposing it in argv.
+common:buildbuddy-env --credential_helper=remote.buildbuddy.io=%workspace%/scripts/bazel/buildbuddy_credentials.py
+
+# Linux is the initial remote execution target. The pinned container supplies
+# shell utilities; native build tools are declared in the Bazel graph.
+common:remote-linux --config=buildbuddy
+common:remote-linux --remote_executor=grpcs://remote.buildbuddy.io
+common:remote-linux --platforms=//:linux_x86_64
+common:remote-linux --host_platform=//:linux_x86_64
+common:remote-linux --extra_execution_platforms=//:linux_x86_64
+common:remote-linux --strategy=remote
+common:remote-linux --jobs=80
+
+try-import %workspace%/user.bazelrc
