@@ -1,4 +1,4 @@
-# Checksum files for uv 0.12.6 are missing from releases.astral.sh
+# uv 0.12.6 release artifacts are missing from releases.astral.sh
 
 Issue: astral-sh/uv#21302
 
@@ -6,7 +6,7 @@ Classification: duplicate
 
 ## Summary
 
-The report is correct: the uv 0.12.6 `.sha256` sidecars are present on the GitHub release, but the corresponding `releases.astral.sh` paths return HTTP 404. The reported x86-64 GNU checksum returns 404 from the Astral mirror while the same 0.12.5 mirror path returns 200.
+The reporter finds that both the uv 0.12.6 release archives and their `.sha256` sidecars return HTTP 404 from `releases.astral.sh` across release variants. The artifacts are present on the GitHub release. A direct check confirmed that the reported x86-64 GNU checksum returns 404 from the Astral mirror while the same 0.12.5 mirror path returns 200.
 
 The canonical open incident is astral-sh/uv-dev#854. It records that the uv 0.12.6 `publish-mirror` job downloaded the release artifacts successfully, but every upload to the R2 release prefix failed with `AccessDenied` on two attempts. The exact authorization cause has not been established. Restoring upload access and backfilling the 0.12.6 mirror prefix are the concrete next steps.
 
@@ -18,7 +18,7 @@ This incident is already tracked in astral-sh/uv-dev#854, so we'll centralize th
 
 ## Classification
 
-This is a `duplicate` of astral-sh/uv-dev#854, which was already open and independently tracks the same uv 0.12.6 mirror-publication failure. The current report describes the checksum-specific symptom; the existing incident is broader and records that all uploads for the 0.12.6 mirror prefix failed.
+This is a `duplicate` of astral-sh/uv-dev#854, which was already open and independently tracks the same uv 0.12.6 mirror-publication failure. The current report describes missing archives and checksums across release variants, while the existing incident records the underlying failure of all uploads for the 0.12.6 mirror prefix.
 
 The underlying behavior is an established correctness problem, not a support question or enhancement: GitHub lists 19 `.sha256` assets for uv 0.12.6, including the reported file; that GitHub asset is available; the 0.12.5 mirror equivalent returns 200; and the 0.12.6 mirror URL returns 404. Because an open issue already tracks this exact regression, `duplicate` takes precedence over `bug`.
 
@@ -31,7 +31,7 @@ The underlying behavior is an established correctness problem, not a support que
 
 ## Search and supporting evidence
 
-The report was decomposed into the exact release (`0.12.6`), artifact type (`.sha256` sidecars), observable response (HTTP 404), scope (all release variants), and subsystem (`releases.astral.sh` release mirroring). Literal and conceptual searches covered the mirror hostname, version, checksum terminology, missing release artifacts, CDN and mirror publication, upload failures, and release-workflow terminology across open and closed issues and open, closed, and merged pull requests. Historical fix-oriented inspection followed references among astral-sh/uv#19282, astral-sh/uv#19297, astral-sh/uv-dev#854, and astral-sh/uv#18159.
+The report was decomposed into the exact release (`0.12.6`), artifact types (release archives and `.sha256` sidecars), observable response (HTTP 404), scope (all release variants), and subsystem (`releases.astral.sh` release mirroring). Literal and conceptual searches covered the mirror hostname, version, checksum terminology, missing release artifacts, CDN and mirror publication, upload failures, and release-workflow terminology across open and closed issues and open, closed, and merged pull requests. Historical fix-oriented inspection followed references among astral-sh/uv#19282, astral-sh/uv#19297, astral-sh/uv-dev#854, and astral-sh/uv#18159.
 
 Direct checks found:
 
