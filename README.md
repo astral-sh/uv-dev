@@ -11,6 +11,7 @@ The report describes a uv workspace in which the native package `bar` depends on
 and rebuild `foo` because it defines matching `tool.uv.cache-keys`, but `bar` is not rebuilt merely
 because its dependency was rebuilt. The reporter confirms that `bar` links against `foo`, so the
 requested invalidation reflects native link-time coupling rather than only a Python dependency.
+The reporter also states that `foo` is already declared as a build dependency of `bar`.
 Copying `foo`'s cache-key globs into `bar` duplicates configuration and evaluates relative paths
 from `bar`'s directory. The reporter proposed a dependency-aware cache-key entry such as
 `{ inherit = "foo" }`; a maintainer subsequently reframed the desired outcome as declaring that
@@ -50,18 +51,29 @@ The tentative configuration suggested for that model is
 patterns by depending on `foo`'s rebuild state instead. The name and semantics are exploratory and
 have not been accepted as a design.
 
+The reporter then confirmed that `foo` is already declared as a build dependency of `bar`. A
+maintainer suggested that uv may be able to derive the correct invalidation from that existing
+relationship instead of requiring another cache-specific declaration and said they would
+investigate. This is not yet a confirmed behavior change or implementation decision.
+
 Invalidation should remain selective and follow dependency direction: a change to `foo` should
 rebuild its dependent `bar`, while a change only to `bar` should not rebuild its dependency `foo` or
 unrelated native packages. The maintainers do not currently expect plain root-level globs to cause
 workspace-wide rebuilding, but those globs also do not appear to solve dependent invalidation.
 
+For a package-scoped operation, the reporter expects `uv sync --package bar` after a `foo` source
+change to rebuild `foo` first and then rebuild `bar` against the updated `foo`. This establishes both
+the desired inclusion of an affected build dependency despite the package filter and the required
+build order.
+
 ## Confirmed coupling and remaining reproduction detail
 
-The reporter confirmed that `bar` links against `foo`. This explains why a rebuilt `foo` can require
-`bar` to be rebuilt and supports treating the motivating case as native build-input invalidation.
-The discussion still does not specify the linked artifact, how scikit-build-core locates it, or a
-minimal workspace reproducer. Those details would help determine whether the design should remain
-specific to explicitly inherited build inputs or generalize to other workspace dependencies.
+The reporter confirmed that `bar` links against `foo` and declares `foo` as a build dependency.
+This explains why a rebuilt `foo` can require `bar` to be rebuilt and supports treating the
+motivating case as native build-input invalidation. The discussion still does not specify the linked
+artifact, the exact build-dependency declaration, how scikit-build-core locates it, or a minimal
+workspace reproducer. Those details would help determine whether uv can infer the relationship from
+existing metadata or needs an explicit cache-specific setting.
 
 ## Draft response
 
@@ -86,7 +98,9 @@ each project directory; there is no dependency-inheritance variant. Related repo
 per-project workaround but do not track this cross-package behavior, so the issue is neither a bug
 nor a duplicate. Maintainer follow-up identifies opt-in workspace cache information as a potentially
 more general enhancement for shared defaults, while a separate `cache-depends`-style declaration is
-being considered for dependency-directed rebuilding. The exact API and semantics remain undecided.
+being considered for dependency-directed rebuilding. A maintainer is also investigating whether the
+existing build-dependency declaration should be sufficient. The exact behavior and any API remain
+undecided.
 
 ## Related
 
