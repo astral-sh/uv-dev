@@ -46,6 +46,15 @@ rebuild its dependent `bar`, while a change only to `bar` should not rebuild its
 unrelated native packages. The maintainers do not currently expect plain root-level globs to cause
 workspace-wide rebuilding, but those globs also do not appear to solve dependent invalidation.
 
+## Open investigation question
+
+A maintainer asked why `bar` must be recompiled when `foo` changes, specifically whether `bar`
+links against a native artifact from `foo`. The report establishes the Python package dependency and
+the desired rebuild direction, but does not yet describe the build-time or link-time coupling that
+makes the installed `bar` artifact stale. That detail is needed to determine whether this is a
+general dependency-invalidation feature or a narrower mechanism for native build inputs, and to
+construct a representative reproduction.
+
 ## Draft response
 
 Thanks. `tool.uv.cache-keys` is currently evaluated independently for each local project, and there
