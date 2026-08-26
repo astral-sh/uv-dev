@@ -33,6 +33,7 @@ use uv_pypi_types::{
     ConflictError, Conflicts, DependencyGroups, SchemaConflicts, SupportedEnvironments,
     VerbatimParsedUrl,
 };
+use uv_pyproject_toml::{Ignored, OptionalDependencies, ProjectWire as PyProjectProjectWire};
 use uv_redacted::DisplaySafeUrl;
 use uv_toml::deserialize_unique_map;
 
@@ -54,19 +55,6 @@ pub enum PyprojectTomlError {
         "`pyproject.toml` is using the `[project]` table, but the required `project.version` field is neither set nor present in the `project.dynamic` list"
     )]
     MissingVersion,
-}
-
-fn deserialize_optional_dependencies<'de, D, V>(
-    deserializer: D,
-) -> Result<Option<BTreeMap<ExtraName, V>>, D::Error>
-where
-    D: Deserializer<'de>,
-    V: Deserialize<'de>,
-{
-    deserialize_unique_map(deserializer, |key: &ExtraName| {
-        format!("duplicate normalized extra name `{key}`")
-    })
-    .map(Some)
 }
 
 /// A `pyproject.toml` as specified in PEP 517.
@@ -195,25 +183,21 @@ pub struct Project {
 
     /// Used to determine whether a `gui-scripts` section is present.
     #[serde(default, skip_serializing)]
-    gui_scripts: Option<serde::de::IgnoredAny>,
+    gui_scripts: Option<Ignored>,
     /// Used to determine whether a `scripts` section is present.
     #[serde(default, skip_serializing)]
-    scripts: Option<serde::de::IgnoredAny>,
+    scripts: Option<Ignored>,
 }
 
-#[derive(Deserialize, Debug)]
-#[serde(rename_all = "kebab-case")]
-struct ProjectWire {
-    name: Option<PackageName>,
-    version: Option<Version>,
-    dynamic: Option<Vec<String>>,
-    requires_python: Option<VersionSpecifiers>,
-    dependencies: Option<Vec<String>>,
-    #[serde(default, deserialize_with = "deserialize_optional_dependencies")]
-    optional_dependencies: Option<BTreeMap<ExtraName, Vec<String>>>,
-    gui_scripts: Option<serde::de::IgnoredAny>,
-    scripts: Option<serde::de::IgnoredAny>,
-}
+type ProjectWire = PyProjectProjectWire<
+    Option<PackageName>,
+    Option<Version>,
+    Option<VersionSpecifiers>,
+    Option<Vec<String>>,
+    Option<OptionalDependencies<String, BTreeMap<ExtraName, Vec<String>>>>,
+    Option<Ignored>,
+    Option<Ignored>,
+>;
 
 impl TryFrom<ProjectWire> for Project {
     type Error = PyprojectTomlError;
@@ -237,7 +221,9 @@ impl TryFrom<ProjectWire> for Project {
             version: value.version,
             requires_python: value.requires_python,
             dependencies: value.dependencies,
-            optional_dependencies: value.optional_dependencies,
+            optional_dependencies: value
+                .optional_dependencies
+                .map(OptionalDependencies::into_inner),
             gui_scripts: value.gui_scripts,
             scripts: value.scripts,
         })

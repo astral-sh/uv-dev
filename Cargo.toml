@@ -69,6 +69,7 @@ uv-platform-tags = { version = "0.0.77", path = "crates/uv-platform-tags" }
 uv-preview = { version = "0.0.77", path = "crates/uv-preview" }
 uv-publish = { version = "0.0.77", path = "crates/uv-publish" }
 uv-pypi-types = { version = "0.0.77", path = "crates/uv-pypi-types" }
+uv-pyproject-toml = { version = "0.0.77", path = "crates/uv-pyproject-toml" }
 uv-python = { version = "0.0.77", path = "crates/uv-python" }
 uv-redacted = { version = "0.0.77", path = "crates/uv-redacted" }
 uv-requirements = { version = "0.0.77", path = "crates/uv-requirements" }
