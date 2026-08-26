@@ -32,6 +32,13 @@ metadata, so applying workspace-root configuration to member builds may cross th
 boundary. Further maintainer input is needed to choose between workspace-level invalidation,
 explicit dependency inheritance, or another mechanism.
 
+The reporter clarified that deduplicating configuration is not sufficient if a workspace-wide key
+causes every native member to rebuild. The desired invalidation is selective and follows dependency
+direction: a change to `foo` should rebuild its dependent `bar`, while a change only to `bar` should
+not rebuild its dependency `foo` or unrelated native packages. Whether the proposed workspace-level
+configuration would necessarily over-invalidate has not yet been confirmed, but avoiding that
+outcome is now an explicit design requirement.
+
 ## Draft response
 
 Thanks. `tool.uv.cache-keys` is currently evaluated independently for each local project, and there
