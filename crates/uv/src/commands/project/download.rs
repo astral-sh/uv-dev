@@ -11,7 +11,9 @@ use uv_warnings::warn_user;
 use uv_workspace::{DiscoveryOptions, MemberDiscovery, VirtualProject, WorkspaceCache};
 
 use crate::commands::ExitStatus;
+use crate::commands::project::install_target::InstallTarget;
 use crate::commands::project::lock_target::LockTarget;
+use crate::commands::project::sync::store_credentials_from_target;
 use crate::printer::Printer;
 use crate::settings::ResolverSettings;
 
@@ -36,7 +38,7 @@ pub(crate) async fn download(
     let project = VirtualProject::discover(
         project_dir,
         &DiscoveryOptions {
-            members: MemberDiscovery::None,
+            members: MemberDiscovery::Existing,
             ..DiscoveryOptions::default()
         },
         cache,
@@ -48,6 +50,13 @@ pub(crate) async fn download(
         .read()
         .await?
         .context("No uv.lock found; run `uv lock` first")?;
+    store_credentials_from_target(
+        InstallTarget::Workspace {
+            workspace: project.workspace(),
+            lock: &lock,
+        },
+        &client_builder,
+    )?;
     let client = RegistryClientBuilder::new(client_builder, cache.clone())
         .index_locations(settings.index_locations)
         .index_strategy(settings.index_strategy)

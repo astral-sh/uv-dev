@@ -8,7 +8,7 @@ use async_zip::{Compression, ZipEntryBuilder};
 use indoc::{formatdoc, indoc};
 use insta::allow_duplicates;
 use sha2::{Digest, Sha256};
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{basic_auth, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use uv_test::archive::write_tar_gz;
@@ -461,6 +461,119 @@ async fn download_refresh_metadata() -> Result<()> {
     WARN Range requests not supported for basic_package-0.1.0-py3-none-any.whl; streaming wheel
     Resolved 1 package in [TIME]
     ");
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn download_credentials_dependency() -> Result<()> {
+    download_credentials(
+        indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        dependencies = ["basic-package @ {url}"]
+        "#},
+        None,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn download_credentials_source() -> Result<()> {
+    download_credentials(
+        indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        dependencies = ["basic-package"]
+
+        [tool.uv.sources]
+        basic-package = { url = "{url}" }
+        "#},
+        None,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn download_credentials_workspace() -> Result<()> {
+    download_credentials(
+        indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        dependencies = ["basic-package"]
+
+        [tool.uv.workspace]
+        members = ["member", "missing-member"]
+        "#},
+        Some(indoc! {r#"
+        [project]
+        name = "member"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        dependencies = ["basic-package @ {url}"]
+        "#}),
+    )
+    .await
+}
+
+/// Credentials are read from project files, since lockfile URLs do not contain credentials.
+async fn download_credentials(pyproject: &str, member: Option<&str>) -> Result<()> {
+    let context = uv_test::test_context!("3.13");
+    let server = MockServer::start().await;
+    let wheel = wheel("original").await?;
+    let hash = digest(&wheel);
+    let url = format!("{}/basic_package-0.1.0-py3-none-any.whl", server.uri());
+    write_project(
+        &context,
+        &formatdoc! {r#"
+        [[package]]
+        name = "basic-package"
+        version = "0.1.0"
+        source = {{ url = "{url}" }}
+        wheels = [{{ url = "{url}", hash = "sha256:{hash}" }}]
+    "#},
+    )?;
+    let authenticated_url = url.replace("http://", "http://username:password@");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&pyproject.replace("{url}", &authenticated_url))?;
+    if let Some(member) = member {
+        context.temp_dir.child("member").create_dir_all()?;
+        context
+            .temp_dir
+            .child("member/pyproject.toml")
+            .write_str(&member.replace("{url}", &authenticated_url))?;
+    }
+    Mock::given(method("GET"))
+        .and(path("/basic_package-0.1.0-py3-none-any.whl"))
+        .respond_with(
+            ResponseTemplate::new(401).insert_header("WWW-Authenticate", "Basic realm=\"test\""),
+        )
+        .with_priority(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/basic_package-0.1.0-py3-none-any.whl"))
+        .and(basic_auth("username", "password"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .with_priority(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+    allow_duplicates! {
+        uv_snapshot!(context.filters(), download(&context), @"
+        exit_code: 0 (success)
+        ----- stderr -----
+        Downloaded 1 distributions (1 total)
+        ");
+    }
     server.verify().await;
     Ok(())
 }
