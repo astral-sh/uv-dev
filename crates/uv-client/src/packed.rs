@@ -178,11 +178,29 @@ impl PackedArchive {
         Ok(Some(Self { file, size }))
     }
 
-    pub(crate) async fn response(cache: &Cache, request: &Request) -> Result<Option<Response>> {
+    pub(crate) async fn response(
+        cache: &Cache,
+        request: &Request,
+        allow_stale: bool,
+    ) -> Result<Option<Response>> {
         if request.method() != Method::GET {
             return Ok(None);
         }
         let url = DisplaySafeUrl::from_url(request.url().clone());
+        if !allow_stale {
+            // A missing derived HTTP entry does not imply that this packed archive is fresh.
+            // Check its own timestamp and package name to honor both refresh policies.
+            let entry = entry(cache, &url);
+            let package =
+                match fs_err::tokio::read_to_string(entry.with_file("package").path()).await {
+                    Ok(package) => Some(package.parse::<PackageName>()?),
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+                    Err(err) => return Err(err.into()),
+                };
+            if cache.freshness(&entry, package.as_ref(), None)? == Freshness::Stale {
+                return Ok(None);
+            }
+        }
         let Some(archive) = Self::read(cache, &url, None, None).await? else {
             return Ok(None);
         };
