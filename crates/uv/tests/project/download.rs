@@ -362,6 +362,109 @@ async fn replaces_prepared_archive(source: bool) -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn download_refresh() -> Result<()> {
+    refresh_packed_archive(&["--refresh"], 2).await
+}
+
+#[tokio::test]
+async fn download_refresh_package() -> Result<()> {
+    refresh_packed_archive(&["--refresh-package", "basic-package"], 2).await
+}
+
+#[tokio::test]
+async fn download_refresh_other_package() -> Result<()> {
+    refresh_packed_archive(&["--refresh-package", "other-package"], 1).await
+}
+
+/// Refresh applies to the packed entry even before a prepared HTTP entry exists.
+async fn refresh_packed_archive(args: &[&str], requests: u64) -> Result<()> {
+    let context = uv_test::test_context!("3.13");
+    let server = MockServer::start().await;
+    let wheel = wheel("original").await?;
+    let hash = digest(&wheel);
+    let url = server.uri();
+    write_project(
+        &context,
+        &formatdoc! {r#"
+        [[package]]
+        name = "basic-package"
+        version = "0.1.0"
+        source = {{ registry = "{url}/simple" }}
+        wheels = [{{ url = "{url}/basic_package-0.1.0-py3-none-any.whl", hash = "sha256:{hash}" }}]
+    "#},
+    )?;
+    Mock::given(method("GET"))
+        .and(path("/basic_package-0.1.0-py3-none-any.whl"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .expect(requests)
+        .mount(&server)
+        .await;
+    download(&context).assert().success();
+    allow_duplicates! {
+        uv_snapshot!(context.filters(), context.sync().arg("--frozen").args(args), @"
+        exit_code: 0 (success)
+        ----- stderr -----
+        Prepared 1 package in [TIME]
+        Installed 1 package in [TIME]
+         + basic-package==0.1.0
+        ");
+    }
+    server.verify().await;
+    Ok(())
+}
+
+/// Metadata fallback must not use a packed response when refresh was explicitly requested.
+#[tokio::test]
+async fn download_refresh_metadata() -> Result<()> {
+    let context = uv_test::test_context!("3.13");
+    let server = MockServer::start().await;
+    let wheel = wheel("original").await?;
+    let hash = digest(&wheel);
+    let url = format!("{}/basic_package-0.1.0-py3-none-any.whl", server.uri());
+    write_project(
+        &context,
+        &formatdoc! {r#"
+        [[package]]
+        name = "basic-package"
+        version = "0.1.0"
+        source = {{ url = "{url}" }}
+        wheels = [{{ url = "{url}", hash = "sha256:{hash}" }}]
+    "#},
+    )?;
+    Mock::given(method("HEAD"))
+        .and(path("/basic_package-0.1.0-py3-none-any.whl"))
+        .respond_with(
+            ResponseTemplate::new(200).insert_header("Content-Length", wheel.len().to_string()),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/basic_package-0.1.0-py3-none-any.whl"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .expect(2)
+        .mount(&server)
+        .await;
+    download(&context).assert().success();
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str(&format!("basic-package @ {url}"))?;
+    uv_snapshot!(context.filters(), context.pip_compile().arg("requirements.in").args(["--refresh", "--no-header"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    basic-package @ http://[LOCALHOST]/basic_package-0.1.0-py3-none-any.whl
+        # via -r requirements.in
+
+    ----- stderr -----
+    WARN Range requests not supported for basic_package-0.1.0-py3-none-any.whl; streaming wheel
+    Resolved 1 package in [TIME]
+    ");
+    server.verify().await;
+    Ok(())
+}
+
 /// A mismatched digest must never become a reusable packed archive.
 #[tokio::test]
 async fn download_rejects_hash_mismatch() -> Result<()> {

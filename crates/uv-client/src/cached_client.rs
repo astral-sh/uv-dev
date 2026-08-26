@@ -231,9 +231,13 @@ impl CachedClient {
         let Some(cache) = &self.1 else {
             return Ok(None);
         };
-        PackedArchive::response(cache, req)
-            .await
-            .map_err(|err| ErrorKind::Io(std::io::Error::other(err)).into())
+        PackedArchive::response(
+            cache,
+            req,
+            matches!(cache_control, CacheControl::AllowStale),
+        )
+        .await
+        .map_err(|err| ErrorKind::Io(std::io::Error::other(err)).into())
     }
 
     /// The underlying [`BaseClient`] without caching.
