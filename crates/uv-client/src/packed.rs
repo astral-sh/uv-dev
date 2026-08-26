@@ -45,6 +45,23 @@ fn entry(cache: &Cache, url: &DisplaySafeUrl) -> CacheEntry {
 }
 
 impl PackedArchive {
+    /// Return whether a fresh, valid archive is already available in the packed cache.
+    pub async fn is_cached(
+        cache: &Cache,
+        name: &PackageName,
+        url: &DisplaySafeUrl,
+        expected_hash: Option<&HashDigest>,
+        expected_size: Option<u64>,
+    ) -> Result<bool> {
+        let entry = entry(cache, url);
+        if cache.freshness(&entry, Some(name), None)? == Freshness::Stale {
+            return Ok(false);
+        }
+        Ok(Self::read(cache, url, expected_hash, expected_size)
+            .await?
+            .is_some())
+    }
+
     /// Fetch an archive, checking the lockfile digest before publishing it to the cache.
     /// Returns whether a new archive was downloaded.
     pub async fn download(
@@ -57,11 +74,7 @@ impl PackedArchive {
     ) -> Result<bool> {
         let entry = entry(cache, url);
         let _lock = entry.with_file(".lock").lock().await?;
-        if cache.freshness(&entry, Some(name), None)? != Freshness::Stale
-            && Self::read(cache, url, expected_hash, expected_size)
-                .await?
-                .is_some()
-        {
+        if Self::is_cached(cache, name, url, expected_hash, expected_size).await? {
             return Ok(false);
         }
 
