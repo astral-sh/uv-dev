@@ -757,7 +757,7 @@ impl PythonInstallationKey {
             && self.platform == other.platform
     }
 
-    pub(crate) fn build_variant(&self) -> Option<&PythonBuildVariant> {
+    pub fn build_variant(&self) -> Option<&PythonBuildVariant> {
         self.build_variant.as_ref()
     }
 
