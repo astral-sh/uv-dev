@@ -22,19 +22,21 @@ in the siblings' common parent. For projects that should remain separate workspa
 astral-sh/uv#18348 and merged astral-sh/uv#18401 added path-valued workspace sources, but that feature
 does not create shared membership or reuse the external workspace's lockfile.
 
-## Draft response
+The first maintainer response asks why the reporter cannot put a `pyproject.toml` in `example`,
+directly pointing to the supported common-parent virtual-root layout. The reporter has not yet
+explained whether that layout is unavailable or what requirement makes `a` need to remain the root.
 
-uv currently expects workspace members to be below the workspace root, and member-side discovery
-walks ancestor directories. That is why `b` cannot discover a workspace rooted at its sibling `a`
-in this layout.
+## Maintainer discussion
 
-For a single shared workspace, the supported layout is a project-less `pyproject.toml` in `example/`
-with `members = ["a", "b"]`, as discussed in astral-sh/uv#13589. If the projects should remain
-separate workspaces, astral-sh/uv#18401 added path-valued workspace sources, so `b` can use
-`a = { workspace = "../a" }`; that resolves from the other workspace but does not make `b` a member
-of `a` or share its lockfile.
+Maintainer @zanieb asked: why not put a `pyproject.toml` in `example`? That would make `example` the
+workspace root and allow `a` and `b` to be ordinary descendant members, matching the virtual-root
+approach already recommended in astral-sh/uv#13589.
 
-We'll treat allowing `../b` as a true member as a separate enhancement.
+The next useful information is the constraint that prevents using this common-parent root, if one
+exists. Without that clarification, the report demonstrates unsupported topology but does not yet
+establish why extending the workspace model is necessary instead of restructuring the root. If the
+projects are intended to remain independently locked, path-valued workspace sources from
+astral-sh/uv#18401 remain a separate alternative rather than a shared-workspace solution.
 
 ## Classification
 
@@ -44,6 +46,10 @@ the confirmed discovery mechanism: when uv processes `b`, workspace discovery wa
 `example/b`, so it cannot encounter the sibling `example/a` root and instead treats `b` as its own
 implicit workspace. Supporting this layout would require new discovery and workspace-ownership
 semantics (or another explicit way to associate an external member with its root).
+
+The classification remains `enhancement`, but the maintainer comment makes its motivation an open
+question rather than an accepted design direction. The reporter still needs to explain why a
+project-less root in `example` does not meet the use case.
 
 This is not a duplicate. astral-sh/uv#13589 covers the same broad flat-sibling topology but answers
 it with a virtual root at the common parent. astral-sh/uv#18348 and astral-sh/uv#18401 cover
