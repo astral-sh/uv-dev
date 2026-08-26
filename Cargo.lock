@@ -6314,7 +6314,6 @@ dependencies = [
  "anyhow",
  "fs-err",
  "globwalk",
- "pathdiff",
  "schemars",
  "serde",
  "tempfile",
@@ -6322,7 +6321,6 @@ dependencies = [
  "toml",
  "tracing",
  "uv-fs",
- "uv-normalize",
  "walkdir",
 ]
 

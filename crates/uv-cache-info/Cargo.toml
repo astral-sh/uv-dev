@@ -17,11 +17,9 @@ workspace = true
 
 [dependencies]
 uv-fs = { workspace = true }
-uv-normalize = { workspace = true }
 
 fs-err = { workspace = true }
 globwalk = { workspace = true }
-pathdiff = { workspace = true }
 schemars = { workspace = true, optional = true }
 serde = { workspace = true, features = ["derive"] }
 thiserror = { workspace = true }

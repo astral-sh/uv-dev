@@ -5,6 +5,7 @@ use same_file::is_same_file;
 use tracing::{debug, trace};
 use url::Url;
 
+use uv_cache_info::CacheInfo;
 use uv_cache_key::{CanonicalUrl, RepositoryUrl};
 use uv_distribution_filename::ExpandedTags;
 use uv_distribution_types::{
@@ -141,7 +142,7 @@ impl RequirementSatisfaction {
                         let Some(cache_info) = cache_info.as_ref() else {
                             return Self::OutOfDate;
                         };
-                        match cache_info.refresh_from_path(&archive) {
+                        match CacheInfo::from_path(&archive) {
                             Ok(read_cache_info) => {
                                 if *cache_info != read_cache_info {
                                     return Self::OutOfDate;
@@ -334,7 +335,7 @@ impl RequirementSatisfaction {
                 let Some(cache_info) = cache_info.as_ref() else {
                     return Self::OutOfDate;
                 };
-                match cache_info.refresh_from_path(requested_path) {
+                match CacheInfo::from_path(requested_path) {
                     Ok(read_cache_info) => {
                         if *cache_info != read_cache_info {
                             return Self::OutOfDate;
@@ -401,7 +402,7 @@ impl RequirementSatisfaction {
                 let Some(cache_info) = cache_info.as_ref() else {
                     return Self::OutOfDate;
                 };
-                match cache_info.refresh_from_path(requested_path) {
+                match CacheInfo::from_path(requested_path) {
                     Ok(read_cache_info) => {
                         if *cache_info != read_cache_info {
                             return Self::OutOfDate;

@@ -659,7 +659,6 @@ pub(crate) async fn check(
                     installer_metadata,
                     &concurrency,
                     cache,
-                    workspace_cache,
                     printer,
                     preview,
                 )
