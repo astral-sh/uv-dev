@@ -266,6 +266,14 @@ impl PythonEnvironment {
         &self.0.interpreter
     }
 
+    /// Cache the interpreter information for this environment.
+    pub fn cache(&self, cache: &Cache) -> Result<(), Error> {
+        self.0
+            .interpreter
+            .cache(virtualenv_python_executable(self.root()), cache)?;
+        Ok(())
+    }
+
     /// Return the [`PyVenvConfiguration`] for this environment, as extracted from the
     /// `pyvenv.cfg` file.
     pub fn cfg(&self) -> Result<PyVenvConfiguration, Error> {
