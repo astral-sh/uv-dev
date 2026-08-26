@@ -2426,6 +2426,7 @@ async fn run_project(
                 &cache,
                 workspace_cache,
                 printer,
+                globals.preview,
             )
             .await
         }
