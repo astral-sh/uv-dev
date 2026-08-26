@@ -213,6 +213,7 @@ pub(crate) async fn run(
             let environment = ScriptEnvironment::get_or_init(
                 (&script).into(),
                 python.as_deref().map(PythonRequest::parse),
+                None,
                 &client_builder,
                 python_preference,
                 python_arch,
@@ -401,6 +402,7 @@ pub(crate) async fn run(
                 let environment = ScriptEnvironment::get_or_init(
                     (&script).into(),
                     python.as_deref().map(PythonRequest::parse),
+                    None,
                     &client_builder,
                     python_preference,
                     python_arch,
