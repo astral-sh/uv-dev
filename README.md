@@ -9,10 +9,11 @@ Classification: enhancement
 The report describes a uv workspace in which the native package `bar` depends on the native package
 `foo`. Both use scikit-build-core. Changes to C++ headers or sources in `foo` correctly invalidate
 and rebuild `foo` because it defines matching `tool.uv.cache-keys`, but `bar` is not rebuilt merely
-because its dependency was rebuilt. Copying `foo`'s cache-key globs into `bar` duplicates
-configuration and evaluates relative paths from `bar`'s directory. The requested capability is a
-dependency-aware cache-key entry such as `{ inherit = "foo" }` that incorporates `foo`'s evaluated
-cache information into `bar`'s cache key.
+because its dependency was rebuilt. The reporter confirms that `bar` links against `foo`, so the
+requested invalidation reflects native link-time coupling rather than only a Python dependency.
+Copying `foo`'s cache-key globs into `bar` duplicates configuration and evaluates relative paths
+from `bar`'s directory. The requested capability is a dependency-aware cache-key entry such as
+`{ inherit = "foo" }` that incorporates `foo`'s evaluated cache information into `bar`'s cache key.
 
 No duplicate was found. Existing work introduced configurable per-project cache keys and
 native-backend defaults, while adjacent workspace discussions cover same-project native rebuilds or
@@ -46,14 +47,13 @@ rebuild its dependent `bar`, while a change only to `bar` should not rebuild its
 unrelated native packages. The maintainers do not currently expect plain root-level globs to cause
 workspace-wide rebuilding, but those globs also do not appear to solve dependent invalidation.
 
-## Open investigation question
+## Confirmed coupling and remaining reproduction detail
 
-A maintainer asked why `bar` must be recompiled when `foo` changes, specifically whether `bar`
-links against a native artifact from `foo`. The report establishes the Python package dependency and
-the desired rebuild direction, but does not yet describe the build-time or link-time coupling that
-makes the installed `bar` artifact stale. That detail is needed to determine whether this is a
-general dependency-invalidation feature or a narrower mechanism for native build inputs, and to
-construct a representative reproduction.
+The reporter confirmed that `bar` links against `foo`. This explains why a rebuilt `foo` can require
+`bar` to be rebuilt and supports treating the motivating case as native build-input invalidation.
+The discussion still does not specify the linked artifact, how scikit-build-core locates it, or a
+minimal workspace reproducer. Those details would help determine whether the design should remain
+specific to explicitly inherited build inputs or generalize to other workspace dependencies.
 
 ## Draft response
 
