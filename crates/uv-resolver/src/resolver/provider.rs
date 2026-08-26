@@ -218,9 +218,14 @@ impl<Context: BuildContext> ResolverProvider for DefaultResolverProvider<'_, Con
                                 self.hasher.clone(),
                                 included_version_cutoff,
                                 available_version_cutoff,
-                                flat_index
-                                    .and_then(|flat_index| flat_index.get(package_name))
-                                    .cloned(),
+                                flat_index.and_then(|flat_index| {
+                                    flat_index.get(
+                                        package_name,
+                                        self.tags.as_ref(),
+                                        &self.hasher,
+                                        self.build_options,
+                                    )
+                                }),
                                 self.build_options,
                             ),
                             MetadataFormat::Flat(metadata) => VersionMap::from_flat_metadata(
@@ -235,20 +240,28 @@ impl<Context: BuildContext> ResolverProvider for DefaultResolverProvider<'_, Con
             )),
             Err(err) => match err.kind() {
                 uv_client::ErrorKind::RemotePackageNotFound(_) => {
-                    if let Some(flat_index) = flat_index
-                        .and_then(|flat_index| flat_index.get(package_name))
-                        .cloned()
-                    {
+                    if let Some(flat_index) = flat_index.and_then(|flat_index| {
+                        flat_index.get(
+                            package_name,
+                            self.tags.as_ref(),
+                            &self.hasher,
+                            self.build_options,
+                        )
+                    }) {
                         Ok(VersionsResponse::Found(vec![VersionMap::from(flat_index)]))
                     } else {
                         Ok(VersionsResponse::NotFound)
                     }
                 }
                 uv_client::ErrorKind::NoIndex(_) => {
-                    if let Some(flat_index) = flat_index
-                        .and_then(|flat_index| flat_index.get(package_name))
-                        .cloned()
-                    {
+                    if let Some(flat_index) = flat_index.and_then(|flat_index| {
+                        flat_index.get(
+                            package_name,
+                            self.tags.as_ref(),
+                            &self.hasher,
+                            self.build_options,
+                        )
+                    }) {
                         Ok(VersionsResponse::Found(vec![VersionMap::from(flat_index)]))
                     } else if flat_index.is_some_and(FlatIndex::offline) {
                         Ok(VersionsResponse::Offline)
@@ -257,10 +270,14 @@ impl<Context: BuildContext> ResolverProvider for DefaultResolverProvider<'_, Con
                     }
                 }
                 uv_client::ErrorKind::Offline(_) => {
-                    if let Some(flat_index) = flat_index
-                        .and_then(|flat_index| flat_index.get(package_name))
-                        .cloned()
-                    {
+                    if let Some(flat_index) = flat_index.and_then(|flat_index| {
+                        flat_index.get(
+                            package_name,
+                            self.tags.as_ref(),
+                            &self.hasher,
+                            self.build_options,
+                        )
+                    }) {
                         Ok(VersionsResponse::Found(vec![VersionMap::from(flat_index)]))
                     } else {
                         Ok(VersionsResponse::Offline)

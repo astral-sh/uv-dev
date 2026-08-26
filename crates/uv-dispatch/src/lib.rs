@@ -105,6 +105,126 @@ impl IsBuildBackendError for BuildDispatchError {
     }
 }
 
+/// Policy-independent configuration for creating [`BuildDispatch`] sessions.
+///
+/// A command can use the same configuration with distinct hash policies and resolver state. This
+/// keeps the trust policy at the session boundary instead of duplicating the stable build
+/// configuration at each call site.
+pub struct BuildDispatchConfig<'a> {
+    client: &'a RegistryClient,
+    cache: &'a Cache,
+    constraints: &'a Constraints,
+    interpreter: &'a Interpreter,
+    index_locations: &'a IndexLocations,
+    index_strategy: IndexStrategy,
+    flat_index: &'a FlatIndex,
+    dependency_metadata: &'a DependencyMetadata,
+    build_isolation: BuildIsolation<'a>,
+    extra_build_requires: &'a ExtraBuildRequires,
+    extra_build_variables: &'a ExtraBuildVariables,
+    link_mode: uv_install_wheel::LinkMode,
+    build_options: &'a BuildOptions,
+    config_settings: &'a ConfigSettings,
+    config_settings_package: &'a PackageConfigSettings,
+    exclude_newer: ExcludeNewer,
+    sources: NoSources,
+    source_tree_editable_policy: SourceTreeEditablePolicy,
+    workspace_cache: WorkspaceCache,
+    concurrency: Concurrency,
+    preview: Preview,
+}
+
+impl<'a> BuildDispatchConfig<'a> {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        client: &'a RegistryClient,
+        cache: &'a Cache,
+        constraints: &'a Constraints,
+        interpreter: &'a Interpreter,
+        index_locations: &'a IndexLocations,
+        flat_index: &'a FlatIndex,
+        dependency_metadata: &'a DependencyMetadata,
+        index_strategy: IndexStrategy,
+        config_settings: &'a ConfigSettings,
+        config_settings_package: &'a PackageConfigSettings,
+        build_isolation: BuildIsolation<'a>,
+        extra_build_requires: &'a ExtraBuildRequires,
+        extra_build_variables: &'a ExtraBuildVariables,
+        link_mode: uv_install_wheel::LinkMode,
+        build_options: &'a BuildOptions,
+        exclude_newer: ExcludeNewer,
+        sources: NoSources,
+        source_tree_editable_policy: SourceTreeEditablePolicy,
+        workspace_cache: WorkspaceCache,
+        concurrency: Concurrency,
+        preview: Preview,
+    ) -> Self {
+        Self {
+            client,
+            cache,
+            constraints,
+            interpreter,
+            index_locations,
+            index_strategy,
+            flat_index,
+            dependency_metadata,
+            build_isolation,
+            extra_build_requires,
+            extra_build_variables,
+            link_mode,
+            build_options,
+            config_settings,
+            config_settings_package,
+            exclude_newer,
+            sources,
+            source_tree_editable_policy,
+            workspace_cache,
+            concurrency,
+            preview,
+        }
+    }
+
+    /// Create a build session with its own resolution state and hash policy.
+    pub fn build<'dispatch>(
+        &'dispatch self,
+        shared_state: SharedState,
+        hasher: &'dispatch HashStrategy,
+    ) -> BuildDispatch<'dispatch>
+    where
+        'a: 'dispatch,
+    {
+        BuildDispatch {
+            client: self.client,
+            cache: self.cache,
+            constraints: self.constraints,
+            interpreter: self.interpreter,
+            index_locations: self.index_locations,
+            index_strategy: self.index_strategy,
+            flat_index: self.flat_index,
+            shared_state,
+            dependency_metadata: self.dependency_metadata,
+            build_isolation: self.build_isolation,
+            extra_build_requires: self.extra_build_requires,
+            extra_build_variables: self.extra_build_variables,
+            link_mode: self.link_mode,
+            build_options: self.build_options,
+            config_settings: self.config_settings,
+            config_settings_package: self.config_settings_package,
+            hasher,
+            exclude_newer: self.exclude_newer.clone(),
+            source_build_context: SourceBuildContext::new(
+                self.concurrency.builds_semaphore.clone(),
+            ),
+            build_extra_env_vars: FxHashMap::default(),
+            sources: self.sources.clone(),
+            source_tree_editable_policy: self.source_tree_editable_policy,
+            workspace_cache: self.workspace_cache.clone(),
+            concurrency: self.concurrency.clone(),
+            preview: self.preview,
+        }
+    }
+}
+
 /// The main implementation of [`BuildContext`], used by the CLI, see [`BuildContext`]
 /// documentation.
 pub struct BuildDispatch<'a> {
@@ -666,15 +786,16 @@ pub struct SharedState {
 }
 
 impl SharedState {
-    /// Fork the [`SharedState`], creating a new in-memory index and in-flight cache.
+    /// Fork the [`SharedState`], creating a new in-memory resolver index.
     ///
-    /// State that is universally applicable (like the Git resolver and index capabilities)
-    /// are retained.
+    /// Policy-independent state is retained. In-flight downloads are keyed by their hash policy,
+    /// so sessions with different verification requirements can safely share coordination.
     #[must_use]
     pub fn fork(&self) -> Self {
         Self {
             git: self.git.clone(),
             capabilities: self.capabilities.clone(),
+            in_flight: self.in_flight.clone(),
             build_arena: self.build_arena.clone(),
             ..Default::default()
         }
