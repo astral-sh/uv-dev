@@ -770,9 +770,16 @@ async fn download_requirements_universal() -> Result<()> {
     ----- stderr -----
     Downloaded 0 distributions (4 total)
     ");
-    // The Simple API response and packed wheel also support later offline resolution.
+    // Preserve the download's hash policy during installation. Otherwise, Linux would prefer
+    // the deliberately excluded platform wheel over the cached universal wheel. Explicitly
+    // target Linux so the same selection is exercised on every host.
+    context.temp_dir.child("install.txt").write_str(&format!(
+        "basic-package==0.1.0 --hash=sha256:{wheel_hash} --hash=sha256:{sdist_hash}\n"
+    ))?;
     uv_snapshot!(context.filters(), context.pip_install()
-        .arg("basic-package==0.1.0").arg("--index-url").arg(format!("{url}/simple")).arg("--offline"), @"
+        .arg("-r").arg("install.txt").arg("--require-hashes")
+        .arg("--index-url").arg(format!("{url}/simple"))
+        .arg("--python-platform").arg("x86_64-unknown-linux-gnu").arg("--offline"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
