@@ -389,6 +389,7 @@ impl BuildContext for BuildDispatch<'_> {
         let Plan {
             cached,
             remote,
+            forced_rebuilds,
             reinstalls,
             extraneous: _,
         } = Planner::new(resolution).build(
@@ -447,7 +448,12 @@ impl BuildContext for BuildDispatch<'_> {
             );
 
             preparer
-                .prepare(remote, &self.shared_state.in_flight, resolution)
+                .prepare(
+                    remote,
+                    &forced_rebuilds,
+                    &self.shared_state.in_flight,
+                    resolution,
+                )
                 .await?
         };
 

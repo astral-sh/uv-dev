@@ -1,4 +1,5 @@
 use std::cmp::Reverse;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use futures::{FutureExt, Stream, TryFutureExt, TryStreamExt, stream::FuturesUnordered};
@@ -65,14 +66,16 @@ impl<'a, Context: BuildContext> Preparer<'a, Context> {
     fn prepare_stream<'stream>(
         &'stream self,
         distributions: Vec<Arc<Dist>>,
+        forced_rebuilds: &'stream BTreeSet<PackageName>,
         in_flight: &'stream InFlight,
         resolution: &'stream Resolution,
     ) -> impl Stream<Item = Result<CachedDist, Error>> + 'stream {
         distributions
             .into_iter()
             .map(async |dist| {
+                let force_rebuild = forced_rebuilds.contains(dist.name());
                 let wheel = self
-                    .get_wheel((*dist).clone(), in_flight, resolution)
+                    .get_wheel((*dist).clone(), force_rebuild, in_flight, resolution)
                     .boxed_local()
                     .await?;
                 if let Some(reporter) = self.reporter.as_ref() {
@@ -88,6 +91,7 @@ impl<'a, Context: BuildContext> Preparer<'a, Context> {
     pub async fn prepare(
         &self,
         mut distributions: Vec<Arc<Dist>>,
+        forced_rebuilds: &BTreeSet<PackageName>,
         in_flight: &InFlight,
         resolution: &Resolution,
     ) -> Result<Vec<CachedDist>, Error> {
@@ -96,7 +100,7 @@ impl<'a, Context: BuildContext> Preparer<'a, Context> {
             .sort_unstable_by_key(|distribution| Reverse(distribution.size().unwrap_or(u64::MAX)));
 
         let wheels = self
-            .prepare_stream(distributions, in_flight, resolution)
+            .prepare_stream(distributions, forced_rebuilds, in_flight, resolution)
             .try_collect()
             .await?;
 
@@ -111,6 +115,7 @@ impl<'a, Context: BuildContext> Preparer<'a, Context> {
     async fn get_wheel(
         &self,
         dist: Dist,
+        force_rebuild: bool,
         in_flight: &InFlight,
         resolution: &Resolution,
     ) -> Result<CachedDist, Error> {
@@ -175,7 +180,7 @@ impl<'a, Context: BuildContext> Preparer<'a, Context> {
 
             let result = self
                 .database
-                .get_or_build_wheel(&dist, self.tags, policy)
+                .get_or_build_wheel(&dist, self.tags, policy, force_rebuild)
                 .boxed_local()
                 .map_err(|err| Error::from_dist(dist.clone(), err, resolution))
                 .await

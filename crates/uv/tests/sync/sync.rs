@@ -6006,6 +6006,115 @@ fn no_install_project_no_build_locked_dynamic_metadata() -> Result<()> {
 }
 
 #[test]
+fn workspace_build_dependency_rebuilds_in_order() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "root"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [tool.uv]
+        package = false
+
+        [tool.uv.workspace]
+        members = ["foo", "bar"]
+
+        [tool.uv.sources]
+        foo = { workspace = true }
+        bar = { workspace = true }
+    "#})?;
+
+    let backend = indoc! {r#"
+        from pathlib import Path
+
+        from hatchling.build import build_wheel as hatchling_build_wheel
+
+        package = Path(__file__).parent.name
+        log = Path(__file__).parent.parent / "build-order.log"
+
+        def build_wheel(*args, **kwargs):
+            if package == "bar":
+                import foo
+                if not log.exists() or log.read_text().splitlines()[-1] != "foo":
+                    raise RuntimeError("bar was built before foo")
+            with log.open("a") as file:
+                file.write(f"{package}\n")
+            return hatchling_build_wheel(*args, **kwargs)
+    "#};
+
+    let foo = context.temp_dir.child("foo");
+    foo.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "foo"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = ["hatchling"]
+        backend-path = ["."]
+        build-backend = "build_backend"
+
+        [tool.uv]
+        cache-keys = [{ file = "pyproject.toml" }, { file = "source.cpp" }]
+    "#})?;
+    foo.child("build_backend.py").write_str(backend)?;
+    foo.child("source.cpp").write_str("// version 1")?;
+    foo.child("src/foo/__init__.py").touch()?;
+
+    let bar = context.temp_dir.child("bar");
+    bar.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "bar"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = ["hatchling", "foo"]
+        backend-path = ["."]
+        build-backend = "build_backend"
+
+        [tool.uv.sources]
+        foo = { workspace = true }
+    "#})?;
+    bar.child("build_backend.py").write_str(backend)?;
+    bar.child("src/bar/__init__.py").touch()?;
+
+    context
+        .sync()
+        .arg("--all-packages")
+        .arg("--no-editable")
+        .assert()
+        .success();
+    let log = context.temp_dir.child("build-order.log");
+    assert_eq!(fs_err::read_to_string(log.path())?, "foo\nbar\n");
+
+    fs_err::remove_file(log.path())?;
+    context
+        .sync()
+        .arg("--all-packages")
+        .arg("--no-editable")
+        .assert()
+        .success();
+    assert!(!log.exists(), "neither package should be rebuilt");
+
+    foo.child("source.cpp").write_str("// version 2")?;
+    context
+        .sync()
+        .arg("--all-packages")
+        .arg("--no-editable")
+        .assert()
+        .success();
+    assert_eq!(fs_err::read_to_string(log.path())?, "foo\nbar\n");
+
+    Ok(())
+}
+
+#[test]
 fn sync_extra_build_dependencies_script() -> Result<()> {
     let context = uv_test::test_context!("3.12").with_filtered_counts();
 
