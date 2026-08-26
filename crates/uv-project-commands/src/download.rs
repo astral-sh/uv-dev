@@ -7,6 +7,8 @@ use uv_cache::Cache;
 use uv_client::{BaseClientBuilder, PackedArchive, RegistryClientBuilder};
 use uv_command_support::{ExitStatus, Printer};
 use uv_configuration::Concurrency;
+use uv_environment_operations::install_target::InstallTarget;
+use uv_environment_operations::store_credentials_from_target;
 use uv_lock_operations::LockTarget;
 use uv_preview::{Preview, PreviewFeature};
 use uv_settings::ResolverSettings;
@@ -34,7 +36,7 @@ pub async fn download(
     let project = VirtualProject::discover(
         project_dir,
         &DiscoveryOptions {
-            members: MemberDiscovery::None,
+            members: MemberDiscovery::Existing,
             ..DiscoveryOptions::default()
         },
         cache,
@@ -46,6 +48,13 @@ pub async fn download(
         .read()
         .await?
         .context("No uv.lock found; run `uv lock` first")?;
+    store_credentials_from_target(
+        InstallTarget::Workspace {
+            workspace: project.workspace(),
+            lock: &lock,
+        },
+        &client_builder,
+    )?;
     let client = RegistryClientBuilder::new(client_builder, cache.clone())
         .index_locations(settings.index_locations)
         .index_strategy(settings.index_strategy)
