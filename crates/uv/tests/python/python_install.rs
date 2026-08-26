@@ -215,6 +215,27 @@ async fn mount_python_build_variant_catalog(
 #[cfg(feature = "test-python-managed")]
 async fn python_install_build_variant() -> anyhow::Result<()> {
     let (context, stock) = python_build_variant_context()?;
+
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        dependencies = []
+        "#,
+    )?;
+    context
+        .sync()
+        .arg("--preview-features")
+        .arg("centralized-project-envs")
+        .arg("--python")
+        .arg("3.13")
+        .assert()
+        .success();
+    #[cfg(unix)]
+    let stock_environment = fs_err::read_link(context.temp_dir.join(".venv"))?;
+
     let managed_dir = context.temp_dir.child("managed");
     let stock_name = stock.key().to_string();
     let platform = platform_key_from_env()?;
@@ -224,6 +245,7 @@ async fn python_install_build_variant() -> anyhow::Result<()> {
     let custom_name = format!("{version}+custom-{platform}");
     let custom_path = managed_dir.join(&custom_name);
     fs_err::rename(stock.path(), &custom_path)?;
+    context.python_install().arg("3.13").assert().success();
     let key = stock.key();
     let arch = key.arch().to_string();
     let arch_family = key.arch().family().to_string();
@@ -280,6 +302,21 @@ async fn python_install_build_variant() -> anyhow::Result<()> {
     ----- stdout -----
     [TEMP_DIR]/managed/cpython-3.13+custom-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
     ");
+
+    context
+        .sync()
+        .arg("--preview-features")
+        .arg("centralized-project-envs")
+        .arg("--python")
+        .arg("3.13+custom")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Creating virtual environment"));
+    #[cfg(unix)]
+    assert_ne!(
+        stock_environment,
+        fs_err::read_link(context.temp_dir.join(".venv"))?
+    );
 
     Ok(())
 }
