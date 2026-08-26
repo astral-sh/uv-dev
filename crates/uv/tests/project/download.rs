@@ -7,7 +7,8 @@ use async_zip::base::write::ZipFileWriter;
 use async_zip::{Compression, ZipEntryBuilder};
 use indoc::{formatdoc, indoc};
 use insta::allow_duplicates;
-use sha2::{Digest, Sha256};
+use serde_json::json;
+use sha2::{Digest, Sha256, Sha512};
 use wiremock::matchers::{basic_auth, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -669,5 +670,411 @@ async fn download_repairs_corrupt_archive() -> Result<()> {
         .args(["--frozen", "--offline"])
         .assert()
         .success();
+    Ok(())
+}
+
+/// Requirements files act as universal manifests, independent of project discovery.
+#[tokio::test]
+async fn download_requirements_universal() -> Result<()> {
+    let context = uv_test::test_context!("3.13");
+    let server = MockServer::start().await;
+    let url = server.uri();
+    let wheel = fs_err::read(
+        context
+            .workspace_root
+            .join("test/links/basic_package-0.1.0-py3-none-any.whl"),
+    )?;
+    let sdist = fs_err::read(
+        context
+            .workspace_root
+            .join("test/links/basic_package-0.1.0.tar.gz"),
+    )?;
+    let wheel_hash = digest(&wheel);
+    let sdist_hash = digest(&sdist);
+    let excluded = b"archive not authorized by the manifest";
+    let files = [
+        ("basic_package-0.1.0-py3-none-any.whl", wheel.as_slice()),
+        (
+            "basic_package-0.1.0-cp313-cp313-win_amd64.whl",
+            wheel.as_slice(),
+        ),
+        ("basic_package-0.1.0.tar.gz", sdist.as_slice()),
+        (
+            "basic_package-0.1.0-cp313-cp313-manylinux_2_17_x86_64.whl",
+            excluded.as_slice(),
+        ),
+    ];
+    let index = json!({
+        "meta": {"api-version": "1.1"},
+        "name": "basic-package",
+        "files": files.iter().map(|(filename, bytes)| json!({
+            "filename": filename,
+            "url": format!("{url}/files/{filename}"),
+            "hashes": {"sha256": digest(bytes)},
+            "size": bytes.len(),
+            "upload-time": "2024-01-01T00:00:00Z",
+            "core-metadata": true
+        })).collect::<Vec<_>>()
+    });
+    Mock::given(method("GET"))
+        .and(path("/simple/basic-package/"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_raw(index.to_string(), "application/vnd.pypi.simple.v1+json"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    for (filename, bytes) in files {
+        Mock::given(method("GET"))
+            .and(path(format!("/files/{filename}")))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(bytes.to_vec()))
+            .expect(u64::from(bytes != excluded))
+            .mount(&server)
+            .await;
+    }
+    context.temp_dir.child("nested").create_dir_all()?;
+    context
+        .temp_dir
+        .child("nested/pins.txt")
+        .write_str(&formatdoc! {r#"
+        basic-package==0.1.0 ; sys_platform == "not-a-platform" --hash=sha256:{wheel_hash} --hash=sha256:{sdist_hash}
+    "#})?;
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str(&formatdoc! {"
+        --index-url {url}/simple
+        --require-hashes
+        -r nested/pins.txt
+    "})?;
+    context.temp_dir.child("direct.txt").write_str(&format!(
+        "basic-package @ {url}/files/basic_package-0.1.0-py3-none-any.whl --hash=sha256:{wheel_hash}\n"
+    ))?;
+    uv_snapshot!(context.filters(), download(&context).args(["-r", "requirements.txt", "-r", "direct.txt"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Downloaded 3 distributions (4 total)
+    ");
+    assert!(!context.temp_dir.join("uv.lock").exists());
+    assert!(!context.cache_dir.join("archive-v0").exists());
+    assert!(!context.cache_dir.join("wheels-v6").exists());
+    assert_eq!(
+        fs_err::read_dir(context.cache_dir.join("packed-v0"))?.count(),
+        3
+    );
+    server.verify().await;
+    drop(server);
+    uv_snapshot!(context.filters(), download(&context).args(["-r", "requirements.txt", "-r", "direct.txt", "--offline"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Downloaded 0 distributions (4 total)
+    ");
+    // Preserve the download's hash policy during installation. Otherwise, Linux would prefer
+    // the deliberately excluded platform wheel over the cached universal wheel. Explicitly
+    // target Linux so the same selection is exercised on every host.
+    context.temp_dir.child("install.txt").write_str(&format!(
+        "basic-package==0.1.0 --hash=sha256:{wheel_hash} --hash=sha256:{sdist_hash}\n"
+    ))?;
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("-r").arg("install.txt").arg("--require-hashes")
+        .arg("--index-url").arg(format!("{url}/simple"))
+        .arg("--python-platform").arg("x86_64-unknown-linux-gnu").arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + basic-package==0.1.0
+    ");
+    Ok(())
+}
+
+#[test]
+fn download_requirements_find_links() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    let links = context.temp_dir.child("links");
+    links.create_dir_all()?;
+    fs_err::copy(
+        context
+            .workspace_root
+            .join("test/links/basic_package-0.1.0-py3-none-any.whl"),
+        links.join("basic_package-0.1.0-py3-none-any.whl"),
+    )?;
+    fs_err::copy(
+        context
+            .workspace_root
+            .join("test/links/basic_package-0.1.0.tar.gz"),
+        links.join("basic_package-0.1.0.tar.gz"),
+    )?;
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str(indoc! {"
+        --no-index
+        --find-links links
+        --only-binary :all:
+        basic-package==0.1.0
+    "})?;
+    uv_snapshot!(context.filters(), download(&context).args(["-r", "requirements.txt", "--offline"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Downloaded 1 distributions (1 total)
+    ");
+    assert!(!context.venv.exists());
+    assert!(!context.temp_dir.join("uv.lock").exists());
+    assert!(!context.cache_dir.join("archive-v0").exists());
+    assert_eq!(
+        fs_err::read_dir(context.cache_dir.join("packed-v0"))?.count(),
+        1
+    );
+    Ok(())
+}
+
+/// Even `unsafe-best-match` takes a pinned version from only its first index.
+#[tokio::test]
+async fn download_requirements_index_priority() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    let server = MockServer::start().await;
+    let url = server.uri();
+    for index in ["first", "second"] {
+        let filename = "basic_package-0.1.0-py3-none-any.whl";
+        let bytes = index.as_bytes();
+        let metadata = json!({
+            "meta": {"api-version": "1.1"},
+            "name": "basic-package",
+            "files": [{
+                "filename": filename,
+                "url": format!("{url}/{index}/{filename}"),
+                "hashes": {"sha256": digest(bytes)},
+                "size": bytes.len(),
+                "upload-time": "2024-01-01T00:00:00Z"
+            }]
+        });
+        Mock::given(method("GET"))
+            .and(path(format!("/{index}/basic-package/")))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_raw(metadata.to_string(), "application/vnd.pypi.simple.v1+json"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("/{index}/{filename}")))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(bytes.to_vec()))
+            .expect(u64::from(index == "first"))
+            .mount(&server)
+            .await;
+    }
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str(&formatdoc! {"
+        --extra-index-url {url}/first
+        --index-url {url}/second
+        basic-package==0.1.0
+    "})?;
+    uv_snapshot!(context.filters(), download(&context).args([
+        "-r", "requirements.txt", "--index-strategy", "unsafe-best-match"
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Downloaded 1 distributions (1 total)
+    ");
+    assert!(!context.venv.exists());
+    assert!(!context.cache_dir.join("archive-v0").exists());
+    Ok(())
+}
+
+/// A concrete archive must satisfy every digest, including its URL-fragment digest.
+#[tokio::test]
+async fn download_requirements_stdin_hashes() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    let server = MockServer::start().await;
+    let wheel = fs_err::read(
+        context
+            .workspace_root
+            .join("test/links/basic_package-0.1.0-py3-none-any.whl"),
+    )?;
+    let sha256 = digest(&wheel);
+    let sha512 = hex::encode(Sha512::digest(&wheel));
+    let wheel_url = format!("{}/basic_package-0.1.0-py3-none-any.whl", server.uri());
+    Mock::given(method("GET"))
+        .and(path("/basic_package-0.1.0-py3-none-any.whl"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel.clone()))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let input = context.temp_dir.child("input.txt");
+    input.write_str(&formatdoc! {"
+        --require-hashes
+        {wheel_url}#sha256={sha256} --hash=sha512:{sha512}
+    "})?;
+    uv_snapshot!(context.filters(), download(&context).args(["-r", "-"])
+        .stdin(fs_err::File::open(input.path())?.into_file()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Downloaded 1 distributions (1 total)
+    ");
+    server.verify().await;
+    drop(server);
+    // A matching SHA-256 must not excuse a mismatched SHA-512 on the same archive.
+    let bad_hash = "0".repeat(128);
+    input.write_str(&formatdoc! {"
+        {wheel_url}#sha256={sha256} --hash=sha512:{bad_hash}
+    "})?;
+    let mut filters = context.filters();
+    filters.push((&sha256, "[SHA256]"));
+    filters.push((&bad_hash, "[BAD_HASH]"));
+    uv_snapshot!(filters, download(&context).args(["-r", "-", "--offline"])
+        .stdin(fs_err::File::open(input.path())?.into_file()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to download `basic-package` from http://[LOCALHOST]/basic_package-0.1.0-py3-none-any.whl#sha256=[SHA256]
+      Caused by: Hash mismatch for http://[LOCALHOST]/basic_package-0.1.0-py3-none-any.whl#sha256=[SHA256]: expected sha256:[SHA256], sha512:[BAD_HASH]
+    ");
+    // Local paths can supply their digests with `--hash`, without any network access.
+    context
+        .temp_dir
+        .child("basic_package-0.1.0-py3-none-any.whl")
+        .write_binary(&wheel)?;
+    input.write_str(&formatdoc! {"
+        --require-hashes
+        ./basic_package-0.1.0-py3-none-any.whl --hash=sha256:{sha256} --hash=sha512:{sha512}
+    "})?;
+    uv_snapshot!(context.filters(), download(&context).args(["-r", "-", "--offline"])
+        .stdin(fs_err::File::open(input.path())?.into_file()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Downloaded 1 distributions (1 total)
+    ");
+    assert!(!context.cache_dir.join("archive-v0").exists());
+    Ok(())
+}
+
+/// When an index has no hashes, authorize the actual archive bytes before caching them.
+#[test]
+fn download_requirements_hash_selection() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    let links = context.temp_dir.child("links");
+    links.create_dir_all()?;
+    let wheel = fs_err::read(
+        context
+            .workspace_root
+            .join("test/links/basic_package-0.1.0-py3-none-any.whl"),
+    )?;
+    links
+        .child("basic_package-0.1.0-py3-none-any.whl")
+        .write_binary(&wheel)?;
+    let sdist = fs_err::read(
+        context
+            .workspace_root
+            .join("test/links/basic_package-0.1.0.tar.gz"),
+    )?;
+    links
+        .child("basic_package-0.1.0.tar.gz")
+        .write_binary(&sdist)?;
+    let wheel_hash = hex::encode(Sha512::digest(&wheel));
+    let sdist_hash = hex::encode(Sha512::digest(&sdist));
+    let requirements = context.temp_dir.child("requirements.txt");
+    requirements.write_str(&formatdoc! {r#"
+        --no-index
+        --find-links links
+        basic-package==0.1.0 ; sys_platform == "win32" --hash=sha512:{wheel_hash}
+    "#})?;
+    uv_snapshot!(context.filters(), download(&context).args(["-r", "requirements.txt", "--offline"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Downloaded 1 distributions (1 total)
+    ");
+    assert_eq!(
+        fs_err::read_dir(context.cache_dir.join("packed-v0"))?
+            .collect::<Result<Vec<_>, _>>()?
+            .iter()
+            .filter(|entry| entry.path().join("metadata.msgpack").exists())
+            .count(),
+        1
+    );
+    // Hashes on mutually exclusive marker alternatives must not be intersected.
+    requirements.write_str(&formatdoc! {r#"
+        --no-index
+        --find-links links
+        basic-package==0.1.0 ; sys_platform == "win32" --hash=sha512:{wheel_hash}
+        basic-package==0.1.0 ; sys_platform != "win32" --hash=sha512:{sdist_hash}
+    "#})?;
+    uv_snapshot!(context.filters(), download(&context).args(["-r", "requirements.txt", "--offline"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Downloaded 1 distributions (2 total)
+    ");
+    requirements.write_str(&formatdoc! {"
+        --no-index
+        --find-links links
+        basic-package==0.1.0 --hash=sha512:{}
+    ", "0".repeat(128)})?;
+    uv_snapshot!(context.filters(), download(&context).args(["-r", "requirements.txt", "--offline"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: No distributions found for `basic-package==0.1.0` matching the requested hashes and archive types
+    ");
+    assert!(!context.venv.exists());
+    assert!(!context.cache_dir.join("archive-v0").exists());
+    Ok(())
+}
+
+#[test]
+fn download_requirements_rejects_unpinned() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    let requirements = context.temp_dir.child("requirements.txt");
+    requirements.write_str("basic-package>=0.1.0\n")?;
+    uv_snapshot!(context.filters(), download(&context).args(["-r", "requirements.txt", "--offline"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: `uv download -r` requires exact `==` pins or archive URLs; found `basic-package>=0.1.0`
+    ");
+    requirements.write_str("basic-package==0.1.*\n")?;
+    uv_snapshot!(context.filters(), download(&context).args(["-r", "requirements.txt", "--offline"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: `uv download -r` requires exact `==` pins or archive URLs; found `basic-package==0.1.*`
+    ");
+    assert!(!context.cache_dir.join("packed-v0").exists());
+    Ok(())
+}
+
+#[test]
+fn download_requirements_rejects_constraints() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    context
+        .temp_dir
+        .child("constraints.txt")
+        .write_str("basic-package==0.1.0\n")?;
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str("-c constraints.txt\nbasic-package==0.1.0\n")?;
+    uv_snapshot!(context.filters(), download(&context).args(["-r", "requirements.txt", "--offline"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Constraints are not supported by `uv download -r`; compile the requirements first
+    ");
+    assert!(!context.cache_dir.join("packed-v0").exists());
+    Ok(())
+}
+
+#[test]
+fn download_requirements_requires_hashes() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str("--require-hashes\nbasic-package==0.1.0\n")?;
+    uv_snapshot!(context.filters(), download(&context).args(["-r", "requirements.txt", "--offline"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: In `--require-hashes` mode, all requirements must have a hash, but none were provided for: basic-package==0.1.0
+    ");
+    assert!(!context.cache_dir.join("packed-v0").exists());
     Ok(())
 }

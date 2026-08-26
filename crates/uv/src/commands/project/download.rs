@@ -1,11 +1,12 @@
 use std::fmt::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use futures::{StreamExt, TryStreamExt, stream};
 use uv_cache::Cache;
 use uv_client::{BaseClientBuilder, PackedArchive, RegistryClientBuilder};
 use uv_configuration::Concurrency;
+use uv_distribution_types::HashPolicy;
 use uv_preview::{Preview, PreviewFeature};
 use uv_warnings::warn_user;
 use uv_workspace::{DiscoveryOptions, MemberDiscovery, VirtualProject, WorkspaceCache};
@@ -17,9 +18,12 @@ use crate::commands::project::sync::store_credentials_from_target;
 use crate::printer::Printer;
 use crate::settings::ResolverSettings;
 
+mod requirements;
+
 /// Populate the packed cache from the existing universal lockfile.
 pub(crate) async fn download(
     project_dir: &Path,
+    requirements: &[PathBuf],
     settings: ResolverSettings,
     client_builder: BaseClientBuilder<'_>,
     concurrency: Concurrency,
@@ -35,6 +39,17 @@ pub(crate) async fn download(
         );
     }
 
+    if !requirements.is_empty() {
+        return requirements::download(
+            requirements,
+            settings,
+            client_builder,
+            concurrency,
+            cache,
+            printer,
+        )
+        .await;
+    }
     let project = VirtualProject::discover(
         project_dir,
         &DiscoveryOptions {
@@ -84,7 +99,9 @@ pub(crate) async fn download(
                     client,
                     &name,
                     &artifact.url,
-                    artifact.hash.as_ref(),
+                    artifact.hash.as_ref().map_or(HashPolicy::None, |hash| {
+                        HashPolicy::All(std::slice::from_ref(hash))
+                    }),
                     artifact.size,
                 )
                 .await

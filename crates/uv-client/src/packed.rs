@@ -12,6 +12,7 @@ use tracing::debug;
 
 use uv_cache::{Cache, CacheBucket, CacheEntry, Freshness};
 use uv_cache_key::cache_digest;
+use uv_distribution_types::HashPolicy;
 use uv_extract::hash::{HashReader, Hasher};
 use uv_fs::write_atomic;
 use uv_normalize::PackageName;
@@ -25,6 +26,30 @@ use crate::RegistryClient;
 pub struct PackedArchive {
     file: fs_err::tokio::File,
     size: u64,
+}
+
+/// The archive does not match the caller's permitted digests.
+///
+/// A pinned registry requirement may authorize only a subset of a release's files.
+#[derive(Debug, thiserror::Error)]
+#[error("Hash mismatch for {url}: expected {expected}")]
+pub struct PackedArchiveHashMismatch {
+    url: DisplaySafeUrl,
+    expected: String,
+}
+
+impl PackedArchiveHashMismatch {
+    fn new(url: &DisplaySafeUrl, hashes: HashPolicy<'_>) -> Self {
+        Self {
+            url: url.clone(),
+            expected: hashes
+                .digests()
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", "),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -45,20 +70,20 @@ fn entry(cache: &Cache, url: &DisplaySafeUrl) -> CacheEntry {
 }
 
 impl PackedArchive {
-    /// Fetch an archive, checking the lockfile digest before publishing it to the cache.
+    /// Fetch an archive, checking the expected digests before publishing it to the cache.
     /// Returns whether a new archive was downloaded.
     pub async fn download(
         cache: &Cache,
         client: &RegistryClient,
         name: &PackageName,
         url: &DisplaySafeUrl,
-        expected_hash: Option<&HashDigest>,
+        expected_hashes: HashPolicy<'_>,
         expected_size: Option<u64>,
     ) -> Result<bool> {
         let entry = entry(cache, url);
         let _lock = entry.with_file(".lock").lock().await?;
         if cache.freshness(&entry, Some(name), None)? != Freshness::Stale
-            && Self::read(cache, url, expected_hash, expected_size)
+            && Self::read(cache, url, expected_hashes, expected_size)
                 .await?
                 .is_some()
         {
@@ -66,7 +91,7 @@ impl PackedArchive {
         }
 
         let mut algorithms = vec![HashAlgorithm::Sha256];
-        algorithms.extend(expected_hash.map(HashDigest::algorithm));
+        algorithms.extend(expected_hashes.algorithms());
         algorithms.sort();
         algorithms.dedup();
         let mut hashers = algorithms.into_iter().map(Hasher::from).collect::<Vec<_>>();
@@ -103,10 +128,8 @@ impl PackedArchive {
             .into_iter()
             .map(HashDigest::from)
             .collect::<Vec<_>>();
-        if let Some(expected) = expected_hash
-            && !hashes.contains(expected)
-        {
-            bail!("Hash mismatch for {url}: expected {expected}");
+        if !expected_hashes.matches(&hashes) {
+            return Err(PackedArchiveHashMismatch::new(url, expected_hashes).into());
         }
         if let Some(expected) = expected_size
             && size != expected
@@ -128,7 +151,7 @@ impl PackedArchive {
     pub(crate) async fn read(
         cache: &Cache,
         url: &DisplaySafeUrl,
-        expected_hash: Option<&HashDigest>,
+        expected_hashes: HashPolicy<'_>,
         expected_size: Option<u64>,
     ) -> Result<Option<Self>> {
         let entry = entry(cache, url);
@@ -156,7 +179,7 @@ impl PackedArchive {
             Err(err) => return Err(err.into()),
         };
         let mut algorithms = vec![HashAlgorithm::Sha256];
-        algorithms.extend(expected_hash.map(HashDigest::algorithm));
+        algorithms.extend(expected_hashes.algorithms());
         algorithms.sort();
         algorithms.dedup();
         let mut hashers = algorithms.into_iter().map(Hasher::from).collect::<Vec<_>>();
@@ -168,10 +191,12 @@ impl PackedArchive {
             .collect::<Vec<_>>();
         if size != metadata.size
             || !hashes.contains(&metadata.hash)
-            || expected_hash.is_some_and(|expected| !hashes.contains(expected))
             || expected_size.is_some_and(|expected| size != expected)
         {
             bail!("Hash or size mismatch for packed archive {url}");
+        }
+        if !expected_hashes.matches(&hashes) {
+            return Err(PackedArchiveHashMismatch::new(url, expected_hashes).into());
         }
         file.seek(SeekFrom::Start(0)).await?;
         debug!("Using packed distribution: {url}");
@@ -201,7 +226,7 @@ impl PackedArchive {
                 return Ok(None);
             }
         }
-        let Some(archive) = Self::read(cache, &url, None, None).await? else {
+        let Some(archive) = Self::read(cache, &url, HashPolicy::None, None).await? else {
             return Ok(None);
         };
         let response = http::Response::builder()

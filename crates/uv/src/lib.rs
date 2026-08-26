@@ -2464,6 +2464,7 @@ async fn run_project(
             let cache = cache.init().await?.with_refresh(args.refresh);
             commands::download(
                 project_dir,
+                &args.requirements,
                 args.settings,
                 client_builder.subcommand(vec!["download".to_owned()]),
                 globals.concurrency,
