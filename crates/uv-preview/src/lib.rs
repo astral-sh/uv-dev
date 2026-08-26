@@ -247,6 +247,8 @@ pub enum PreviewFeature {
     /// Allows using `uv format`.
     #[preview(alias = "format")]
     FormatCommand,
+    /// Allows using `uv download`.
+    DownloadCommand,
     /// Enables storage of credentials in a [system-native location](../concepts/authentication/http.md#the-uv-credentials-store).
     NativeAuth,
     /// Allows signing requests to configured S3-compatible endpoints.
