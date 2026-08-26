@@ -1,7 +1,12 @@
+use std::fmt::Write;
+
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
+use async_zip::base::write::ZipFileWriter;
+use async_zip::{Compression, ZipEntryBuilder};
 use indoc::{formatdoc, indoc};
+use insta::allow_duplicates;
 use sha2::{Digest, Sha256};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -11,6 +16,82 @@ use uv_test::{TestContext, uv_snapshot};
 
 fn digest(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
+}
+
+async fn wheel(revision: &str) -> Result<Vec<u8>> {
+    let mut writer = ZipFileWriter::new(Vec::new());
+    let mut record = String::new();
+    for (name, contents) in [
+        (
+            "basic_package/__init__.py",
+            format!("REVISION = {revision:?}\n"),
+        ),
+        (
+            "basic_package-0.1.0.dist-info/METADATA",
+            "Metadata-Version: 2.2\nName: basic-package\nVersion: 0.1.0\n".to_string(),
+        ),
+        (
+            "basic_package-0.1.0.dist-info/WHEEL",
+            "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n".to_string(),
+        ),
+    ] {
+        writer
+            .write_entry_whole(
+                ZipEntryBuilder::new(name.into(), Compression::Stored),
+                contents.as_bytes(),
+            )
+            .await?;
+        writeln!(record, "{name},,")?;
+    }
+    record.push_str("basic_package-0.1.0.dist-info/RECORD,,\n");
+    writer
+        .write_entry_whole(
+            ZipEntryBuilder::new(
+                "basic_package-0.1.0.dist-info/RECORD".into(),
+                Compression::Stored,
+            ),
+            record.as_bytes(),
+        )
+        .await?;
+    Ok(writer.close().await?)
+}
+
+fn source_archive(wheel: &[u8]) -> Result<Vec<u8>> {
+    let mut sdist = Vec::new();
+    write_tar_gz(
+        &mut sdist,
+        &[
+            (
+                "basic_package-0.1.0/pyproject.toml",
+                indoc! {r#"
+                [build-system]
+                requires = []
+                build-backend = "backend"
+                backend-path = ["."]
+                "#}
+                .as_bytes(),
+            ),
+            (
+                "basic_package-0.1.0/backend.py",
+                indoc! {r#"
+                import os
+                import shutil
+                def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+                    name = "basic_package-0.1.0-py3-none-any.whl"
+                    shutil.copyfile(os.path.join(os.path.dirname(__file__), "prebuilt.whl"),
+                                    os.path.join(wheel_directory, name))
+                    return name
+                "#}
+                .as_bytes(),
+            ),
+            ("basic_package-0.1.0/prebuilt.whl", wheel),
+            (
+                "basic_package-0.1.0/PKG-INFO",
+                b"Metadata-Version: 2.2\nName: basic-package\nVersion: 0.1.0\n",
+            ),
+        ],
+    )?;
+    Ok(sdist)
 }
 
 fn download(context: &TestContext) -> std::process::Command {
@@ -95,40 +176,7 @@ async fn download_packed_offline() -> Result<()> {
             .workspace_root
             .join("test/links/basic_package-0.1.0-py3-none-any.whl.tar.zst"),
     )?;
-    let mut sdist = Vec::new();
-    write_tar_gz(
-        &mut sdist,
-        &[
-            (
-                "basic_package-0.1.0/pyproject.toml",
-                indoc! {r#"
-            [build-system]
-            requires = []
-            build-backend = "backend"
-            backend-path = ["."]
-        "#}
-                .as_bytes(),
-            ),
-            (
-                "basic_package-0.1.0/backend.py",
-                indoc! {r#"
-            import os
-            import shutil
-            def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
-                name = "basic_package-0.1.0-py3-none-any.whl"
-                shutil.copyfile(os.path.join(os.path.dirname(__file__), "prebuilt.whl"),
-                                os.path.join(wheel_directory, name))
-                return name
-        "#}
-                .as_bytes(),
-            ),
-            ("basic_package-0.1.0/prebuilt.whl", wheel.as_slice()),
-            (
-                "basic_package-0.1.0/PKG-INFO",
-                b"Metadata-Version: 2.2\nName: basic-package\nVersion: 0.1.0\n",
-            ),
-        ],
-    )?;
+    let sdist = source_archive(&wheel)?;
     let files = [
         ("basic_package-0.1.0-py3-none-any.whl", wheel.clone()),
         ("basic_package-0.1.0-py3-none-any.whl.tar.zst", zstd.clone()),
@@ -227,6 +275,90 @@ async fn download_packed_offline() -> Result<()> {
         .assert()
         .success();
     assert_eq!(fs_err::read_dir(&packed)?.count(), 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn download_replaces_prepared_wheel() -> Result<()> {
+    replaces_prepared_archive(false).await
+}
+
+#[tokio::test]
+async fn download_replaces_prepared_sdist() -> Result<()> {
+    replaces_prepared_archive(true).await
+}
+
+/// Refreshing a packed archive must make it usable even if an older revision was prepared.
+async fn replaces_prepared_archive(source: bool) -> Result<()> {
+    let context = uv_test::test_context!("3.13");
+    let server = MockServer::start().await;
+    let url = server.uri();
+    let filename = if source {
+        "basic_package-0.1.0.tar.gz"
+    } else {
+        "basic_package-0.1.0-py3-none-any.whl"
+    };
+    for revision in ["old", "replacement"] {
+        let wheel = wheel(revision).await?;
+        let bytes = if source {
+            source_archive(&wheel)?
+        } else {
+            wheel
+        };
+        let hash = digest(&bytes);
+        let size = bytes.len();
+        let artifact = if source {
+            format!(
+                r#"sdist = {{ url = "{url}/{filename}", hash = "sha256:{hash}", size = {size} }}"#
+            )
+        } else {
+            // Exercise the hash-only fallback when the lockfile omits archive sizes.
+            format!(r#"wheels = [{{ url = "{url}/{filename}", hash = "sha256:{hash}" }}]"#)
+        };
+        write_project(
+            &context,
+            &formatdoc! {r#"
+            [[package]]
+            name = "basic-package"
+            version = "0.1.0"
+            source = {{ registry = "{url}/simple" }}
+            {artifact}
+        "#},
+        )?;
+        Mock::given(method("GET"))
+            .and(path(format!("/{filename}")))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(bytes))
+            .expect(1)
+            .mount(&server)
+            .await;
+        download(&context).arg("--refresh").assert().success();
+        server.verify().await;
+        server.reset().await;
+        if revision == "old" {
+            context
+                .sync()
+                .args(["--frozen", "--offline"])
+                .assert()
+                .success();
+        }
+    }
+    drop(server);
+    allow_duplicates! {
+        uv_snapshot!(context.filters(), context.sync().args(["--frozen", "--offline", "--reinstall"]), @"
+        exit_code: 0 (success)
+        ----- stderr -----
+        Prepared 1 package in [TIME]
+        Uninstalled 1 package in [TIME]
+        Installed 1 package in [TIME]
+         ~ basic-package==0.1.0
+        ");
+    }
+    context
+        .python_command()
+        .arg("-c")
+        .arg("from basic_package import REVISION; assert REVISION == 'replacement'")
+        .assert()
+        .success();
     Ok(())
 }
 
