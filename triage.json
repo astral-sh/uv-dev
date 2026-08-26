@@ -1,0 +1,51 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 18551,
+        "title": "\"uv pip install --upgrade\" ignores dependency conflicts",
+        "url": "https://github.com/astral-sh/uv/issues/18551",
+        "state": "closed",
+        "reason": "Same successive-install symptom. Maintainers confirmed that invocations resolve independently and pointed to `--strict` for opt-in diagnostics."
+      },
+      {
+        "kind": "issue",
+        "number": 10398,
+        "title": "Validation differences between `uv pip check` and `uv pip install --strict`",
+        "url": "https://github.com/astral-sh/uv/issues/10398",
+        "state": "closed",
+        "reason": "Establishes that strict install mode warns but returns zero, whereas `uv pip check` returns nonzero for incompatibilities."
+      },
+      {
+        "kind": "issue",
+        "number": 11055,
+        "title": "uv pip tree --strict does report success even if conflicts are found",
+        "url": "https://github.com/astral-sh/uv/issues/11055",
+        "state": "open",
+        "reason": "Adjacent request for strict diagnostics to produce failure status, but it concerns `uv pip tree`, not installation behavior."
+      },
+      {
+        "kind": "pull_request",
+        "number": 20388,
+        "title": "Report strict diagnostics for satisfied installs",
+        "url": "https://github.com/astral-sh/uv/pull/20388",
+        "state": "merged",
+        "reason": "Ensures strict install diagnostics run for already-satisfied requirements, but retains warning-only behavior."
+      },
+      {
+        "kind": "pull_request",
+        "number": 2397,
+        "title": "Add `uv pip check`",
+        "url": "https://github.com/astral-sh/uv/pull/2397",
+        "state": "merged",
+        "reason": "Implemented the separate environment check that returns failure when conflicts are present."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and all pull-request states using literal terms for `uv pip install`, conflicting versions, silent reinstall or upgrade, `--strict`, and exit status. Conceptual searches covered independent invocations, installed-package constraints, environment validation, downgrade warnings, resolver strategy, and `uv pip check`. Fix-oriented searches inspected recent strict-diagnostic and check implementations. astral-sh/uv#18025 was ruled out because it concerns downgrade reporting; astral-sh/uv#4779 concerns upgrade strategy rather than incompatible-environment failure."
+  },
+  "type": "enhancement",
+  "type_reason": "Separate `uv pip install` invocations intentionally resolve independently, so earlier command-line bounds are not retained. Existing `--strict` behavior warns but succeeds, while `uv pip check` provides failure status. Making installation fail, potentially with rollback semantics, would change existing behavior. No existing issue or pull request tracks that exact request.",
+  "summary": "astral-sh/uv#18551 documents the same successive-install conflict and confirms the independent-invocation design. Related evidence establishes that strict installation warns while `uv pip check` supplies nonzero enforcement.",
+  "draft_response": "Each `uv pip install` invocation is currently resolved independently, so a constraint supplied only to an earlier invocation is not carried into the next one. `uv pip install --strict` can report relevant incompatibilities after installation, but it still exits successfully; `uv pip check` returns nonzero when the resulting environment is incompatible. For existing workflows, put the complete constraint set in a `pyproject.toml` or requirements file, or run `uv pip check` separately. Making `uv pip install` itself fail would be a behavior change. Could you provide concrete package names and versions and clarify whether you need only a nonzero status after installation, or require the environment to remain unchanged when a conflict is detected?"
+}
