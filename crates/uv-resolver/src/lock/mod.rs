@@ -3794,6 +3794,7 @@ pub struct Package {
 /// A distribution archive recorded in a lockfile, independent of platform compatibility.
 #[derive(Debug, Clone)]
 pub struct LockedArtifact {
+    pub filename: String,
     pub url: DisplaySafeUrl,
     pub hash: Option<HashDigest>,
     pub size: Option<u64>,
@@ -3830,12 +3831,14 @@ impl Package {
                 let path = format!("{}.tar.zst", url.path());
                 url.set_path(&path);
                 artifacts.push(LockedArtifact {
+                    filename: format!("{}.tar.zst", wheel.filename),
                     url,
                     hash: zstd.hash.as_ref().map(|hash| hash.0.clone()),
                     size: zstd.size,
                 });
             }
             artifacts.push(LockedArtifact {
+                filename: wheel.filename.to_string(),
                 url,
                 hash: wheel.hash.as_ref().map(|hash| hash.0.clone()),
                 size: wheel.size,
@@ -3853,7 +3856,15 @@ impl Package {
                 _ => None,
             };
             if let Some(url) = url {
+                let filename = url
+                    .path_segments()
+                    .and_then(|mut segments| segments.rfind(|segment| !segment.is_empty()))
+                    .ok_or_else(|| LockErrorKind::MissingFilename {
+                        id: self.id.clone(),
+                    })?
+                    .to_owned();
                 artifacts.push(LockedArtifact {
+                    filename,
                     url,
                     hash: sdist.hash().map(|hash| hash.0.clone()),
                     size: sdist.size(),

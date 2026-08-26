@@ -579,6 +579,90 @@ async fn download_credentials(pyproject: &str, member: Option<&str>) -> Result<(
     Ok(())
 }
 
+/// An output directory preserves distribution filenames without populating the packed cache.
+#[tokio::test]
+async fn download_to_flat_directory() -> Result<()> {
+    let context = uv_test::test_context!("3.13");
+    let server = MockServer::start().await;
+    let filename = "basic_package-0.1.0-py3-none-any.whl";
+    let wheel = fs_err::read(context.workspace_root.join("test/links").join(filename))?;
+    let sdist_filename = "basic_package-0.1.0.tar.gz";
+    let sdist = fs_err::read(
+        context
+            .workspace_root
+            .join("test/links")
+            .join(sdist_filename),
+    )?;
+    Mock::given(method("GET"))
+        .and(path(format!("/files/{filename}")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel.clone()))
+        .expect(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/files/{sdist_filename}")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(sdist.clone()))
+        .expect(2)
+        .mount(&server)
+        .await;
+    let url = server.uri();
+    let hash = digest(&wheel);
+    write_project(
+        &context,
+        &formatdoc! {r#"
+        [[package]]
+        name = "basic-package"
+        version = "0.1.0"
+        source = {{ registry = "{url}/simple" }}
+        sdist = {{ url = "{url}/files/{sdist_filename}", hash = "sha256:{sdist_hash}", size = {sdist_size} }}
+        wheels = [{{ url = "{url}/files/{filename}", hash = "sha256:{hash}", size = {size} }}]
+    "#, size=wheel.len(), sdist_hash=digest(&sdist), sdist_size=sdist.len()},
+    )?;
+    let output = context.temp_dir.child("downloads");
+    uv_snapshot!(context.filters(), download(&context)
+        .arg("--output-dir")
+        .arg(output.path()), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Downloaded 2 distributions to [TEMP_DIR]/downloads (2 total)
+    ");
+    assert_eq!(fs_err::read(output.join(filename))?, wheel);
+    assert_eq!(fs_err::read(output.join(sdist_filename))?, sdist);
+    assert!(!context.cache_dir.join("packed-v0").exists());
+
+    uv_snapshot!(context.filters(), download(&context)
+        .arg("--output-dir")
+        .arg(output.path())
+        .arg("--offline"), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Downloaded 0 distributions to [TEMP_DIR]/downloads (2 total)
+    ");
+
+    output.child(filename).write_binary(b"corrupt")?;
+    uv_snapshot!(context.filters(), download(&context)
+        .arg("--output-dir")
+        .arg(output.path())
+        .arg("--offline"), @r"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to download `basic-package` from http://[LOCALHOST]/files/basic_package-0.1.0-py3-none-any.whl
+      Caused by: Hash or size mismatch for existing archive `[TEMP_DIR]/downloads/basic_package-0.1.0-py3-none-any.whl` from http://[LOCALHOST]/files/basic_package-0.1.0-py3-none-any.whl; use `--refresh` to replace it
+    ");
+    uv_snapshot!(context.filters(), download(&context)
+        .arg("--output-dir")
+        .arg(output.path())
+        .arg("--refresh"), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Downloaded 2 distributions to [TEMP_DIR]/downloads (2 total)
+    ");
+    assert_eq!(fs_err::read(output.join(filename))?, wheel);
+    assert_eq!(fs_err::read(output.join(sdist_filename))?, sdist);
+    server.verify().await;
+    Ok(())
+}
+
 /// A mismatched digest must never become a reusable packed archive.
 #[tokio::test]
 async fn download_rejects_hash_mismatch() -> Result<()> {
@@ -828,6 +912,46 @@ fn download_requirements_find_links() -> Result<()> {
         fs_err::read_dir(context.cache_dir.join("packed-v0"))?.count(),
         1
     );
+    Ok(())
+}
+
+#[test]
+fn download_requirements_to_flat_directory() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    let filename = "basic_package-0.1.0-py3-none-any.whl";
+    let wheel = fs_err::read(context.workspace_root.join("test/links").join(filename))?;
+    let links = context.temp_dir.child("links");
+    links.create_dir_all()?;
+    links.child(filename).write_binary(&wheel)?;
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str(&formatdoc! {"
+        --no-index
+        --find-links links
+        --require-hashes
+        basic-package==0.1.0 --hash=sha256:{hash}
+    ", hash=digest(&wheel)})?;
+    let output = context.temp_dir.child("downloads");
+    uv_snapshot!(context.filters(), download(&context)
+        .args(["-r", "requirements.txt", "--output-dir"])
+        .arg(output.path())
+        .arg("--offline"), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Downloaded 1 distributions to [TEMP_DIR]/downloads (1 total)
+    ");
+    assert_eq!(fs_err::read(output.join(filename))?, wheel);
+    assert!(!context.cache_dir.join("packed-v0").exists());
+
+    uv_snapshot!(context.filters(), download(&context)
+        .args(["-r", "requirements.txt", "--output-dir"])
+        .arg(output.path())
+        .arg("--offline"), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Downloaded 0 distributions to [TEMP_DIR]/downloads (1 total)
+    ");
     Ok(())
 }
 

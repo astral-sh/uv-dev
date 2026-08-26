@@ -1201,8 +1201,8 @@ pub enum ProjectCommand {
     Sync(SyncArgs),
     /// Download distributions for offline installation.
     ///
-    /// Archives for all platforms are kept packed in the cache. This does not resolve
-    /// dependencies, build packages, or create an environment.
+    /// Archives for all platforms are kept packed in the cache, or written to a flat output
+    /// directory. This does not resolve dependencies, build packages, or create an environment.
     ///
     /// Git repositories and local source trees are not downloaded. Building a source
     /// distribution offline may require separately cached build dependencies.
@@ -4086,6 +4086,13 @@ pub struct DownloadArgs {
         value_hint = ValueHint::FilePath,
     )]
     pub requirements: Vec<PathBuf>,
+
+    /// Write distribution archives to the given directory instead of the cache.
+    ///
+    /// Archives are written with their original filenames in a flat directory layout.
+    /// The directory is not automatically used by later uv commands.
+    #[arg(long, short, value_parser = parse_file_path, value_hint = ValueHint::DirPath)]
+    pub output_dir: Option<PathBuf>,
 
     #[command(flatten)]
     pub index: IndexArgs,
