@@ -20,7 +20,7 @@ use uv_configuration::IndexStrategy;
 use uv_configuration::KeyringProviderType;
 use uv_distribution_filename::{DistFilename, WheelFilename};
 use uv_distribution_types::{
-    BuiltDist, File, FileLocation, IndexCapabilities, IndexFormat, IndexLocations,
+    BuiltDist, File, FileLocation, HashPolicy, IndexCapabilities, IndexFormat, IndexLocations,
     IndexMetadataRef, IndexStatusCodeDecision, IndexStatusCodeStrategy, IndexUrl, Name,
     RegistryBuiltWheel, Zstd,
 };
@@ -1089,7 +1089,7 @@ impl RegistryClient {
         {
             return Ok(None);
         }
-        let Some(archive) = crate::PackedArchive::read(&self.cache, url, None, None)
+        let Some(archive) = crate::PackedArchive::read(&self.cache, url, HashPolicy::None, None)
             .await
             .map_err(|err| ErrorKind::Io(std::io::Error::other(err)))?
         else {

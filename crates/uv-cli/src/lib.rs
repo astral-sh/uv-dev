@@ -4071,6 +4071,22 @@ pub struct SyncArgs {
 
 #[derive(Args)]
 pub struct DownloadArgs {
+    /// Download the packages listed in requirements files instead of the project's lockfile.
+    ///
+    /// Registry requirements must use exact `==` pins. Archive URLs are also supported.
+    /// All listed marker alternatives and platform artifacts are included; dependencies are
+    /// not resolved and extras are not expanded. Constraints and source trees are not supported.
+    ///
+    /// If `-` is provided, requirements are read from stdin.
+    #[arg(
+        long,
+        short,
+        alias = "requirement",
+        value_parser = parse_file_path,
+        value_hint = ValueHint::FilePath,
+    )]
+    pub requirements: Vec<PathBuf>,
+
     #[command(flatten)]
     pub index: IndexArgs,
     #[command(flatten)]
