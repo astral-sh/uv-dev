@@ -1760,6 +1760,149 @@ async fn lock_sdist_url_locked_build_dependency_hash_mismatch() -> Result<()> {
     Ok(())
 }
 
+/// Existing-lock validation should select a matching `--find-links` artifact when a preferred,
+/// mismatching artifact is added for the same build dependency version.
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn lock_sdist_url_locked_find_links_build_dependency_hash_match() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    let archive_path = "/files/demo_pkg-1.0.0.tar.gz";
+    let archive_url = format!("{}{archive_path}", server.uri());
+    let trusted_path = "/files/review_dep-1.0.0-1-py3-none-any.whl";
+    let replacement_path = "/files/review_dep-1.0.0-2-py3-none-any.whl";
+    let sentinel = context.temp_dir.child("build-dependency-executed");
+    let trusted = locked_build_dependency_wheel("pass\n").await?;
+    let replacement = locked_build_dependency_wheel(indoc! {r#"
+        import os
+        from pathlib import Path
+        Path(os.environ["UV_LOCK_TEST_SENTINEL"]).write_text("executed\n")
+    "#})
+    .await?;
+    let trusted_digest = hex::encode(Sha256::digest(&trusted));
+    let replacement_digest = hex::encode(Sha256::digest(&replacement));
+    let mut source = Vec::new();
+    write_tar_gz(
+        &mut source,
+        &[
+            (
+                "demo_pkg-1.0.0/pyproject.toml",
+                indoc! {r#"
+            [build-system]
+            requires = ["review-dep==1.0.0"]
+            build-backend = "backend"
+            backend-path = ["."]
+        "#},
+            ),
+            (
+                "demo_pkg-1.0.0/backend.py",
+                indoc! {r#"
+            from pathlib import Path
+
+            def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
+                import review_dep
+                dist_info = Path(metadata_directory) / "demo_pkg-1.0.0.dist-info"
+                dist_info.mkdir()
+                (dist_info / "METADATA").write_text(
+                    "Metadata-Version: 2.2\nName: demo-pkg\nVersion: 1.0.0\n"
+                )
+                return dist_info.name
+        "#},
+            ),
+        ],
+    )?;
+
+    Mock::given(method("GET"))
+        .and(path(archive_path))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(source))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(trusted_path))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(trusted))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(replacement_path))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(replacement))
+        .mount(&server)
+        .await;
+
+    let trusted_links = formatdoc! {r#"
+        <!DOCTYPE html>
+        <html>
+          <body>
+            <a href="{}{trusted_path}#sha256={trusted_digest}">
+              review_dep-1.0.0-1-py3-none-any.whl
+            </a>
+          </body>
+        </html>
+    "#, server.uri()};
+    let initial_links = Mock::given(method("GET"))
+        .and(path("/links/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(trusted_links, "text/html"))
+        .mount_as_scoped(&server)
+        .await;
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["demo-pkg @ {archive_url}", "review-dep==1.0.0"]
+
+        [tool.uv]
+        find-links = ["{}/links/"]
+    "#, server.uri()})?;
+    uv_snapshot!(context.filters(), context.lock().arg("--no-cache"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    WARN Range requests not supported for review_dep-1.0.0-1-py3-none-any.whl; streaming wheel
+    Resolved 3 packages in [TIME]
+    ");
+    let locked = context.read("uv.lock");
+    assert!(locked.contains(&trusted_digest));
+    assert!(!locked.contains(&replacement_digest));
+
+    drop(initial_links);
+    let replacement_links = formatdoc! {r#"
+        <!DOCTYPE html>
+        <html>
+          <body>
+            <a href="{}{trusted_path}#sha256={trusted_digest}">
+              review_dep-1.0.0-1-py3-none-any.whl
+            </a>
+            <a href="{}{replacement_path}#sha256={replacement_digest}">
+              review_dep-1.0.0-2-py3-none-any.whl
+            </a>
+          </body>
+        </html>
+    "#, server.uri(), server.uri()};
+    Mock::given(method("GET"))
+        .and(path("/links/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(replacement_links, "text/html"))
+        .mount(&server)
+        .await;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--no-cache")
+        .env("UV_LOCK_TEST_SENTINEL", sentinel.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    WARN Range requests not supported for review_dep-1.0.0-1-py3-none-any.whl; streaming wheel
+    Resolved 3 packages in [TIME]
+    ");
+    assert!(
+        !sentinel.exists(),
+        "the mismatching build dependency was executed"
+    );
+    assert_eq!(context.read("uv.lock"), locked);
+
+    Ok(())
+}
+
 /// Validate a locked source archive before invoking its potentially untrusted build backend.
 #[cfg(feature = "test-universal")]
 #[tokio::test]
