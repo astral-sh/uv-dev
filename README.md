@@ -10,6 +10,10 @@ The reporter finds that both the uv 0.12.6 release archives and their `.sha256` 
 
 The canonical open incident is astral-sh/uv-dev#854. It records that the uv 0.12.6 `publish-mirror` job downloaded the release artifacts successfully, but every upload to the R2 release prefix failed with `AccessDenied` on two attempts. The exact authorization cause has not been established. Restoring upload access and backfilling the 0.12.6 mirror prefix are the concrete next steps.
 
+## Reported impact
+
+A `setup-uv` user reports that the missing mirror assets surface in CI as `Warning: Failed to download from mirror, falling back to GitHub Releases: Unexpected HTTP response: 404`. This shows that the failure is visible to downstream CI users and causes `setup-uv` to attempt its GitHub Releases fallback; the comment does not confirm whether that fallback subsequently completed.
+
 ## Draft response
 
 Confirmed: the 0.12.6 checksum exists on GitHub, but the Astral mirror publication failed. The release workflow's R2 uploads returned `AccessDenied` on two attempts; the exact authorization cause has not yet been established.
