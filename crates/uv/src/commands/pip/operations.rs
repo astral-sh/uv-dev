@@ -590,7 +590,38 @@ impl InstallationPlan {
         tags: &Tags,
     ) -> Result<Self, Error> {
         let start = Instant::now();
+        let builds = if resolution.build_distributions().next().is_none() {
+            BTreeSet::new()
+        } else {
+            let build_resolution = resolution.build_resolution();
+            let build_site_packages = SitePackages::from_environment_for_packages(
+                venv,
+                std::iter::empty::<&PackageName>(),
+            )?;
+            Planner::new(&build_resolution)
+                .build(
+                    build_site_packages,
+                    InstallationStrategy::Permissive,
+                    &Reinstall::default(),
+                    build_options,
+                    hasher,
+                    index_locations,
+                    config_settings,
+                    config_settings_package,
+                    extra_build_requires,
+                    extra_build_variables,
+                    cache,
+                    venv,
+                    tags,
+                )
+                .context("Failed to determine workspace build dependency plan")?
+                .remote
+                .into_iter()
+                .map(|dist| dist.name().clone())
+                .collect()
+        };
         let plan = Planner::new(resolution)
+            .with_builds(builds)
             .build(
                 site_packages,
                 installation,

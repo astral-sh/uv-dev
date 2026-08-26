@@ -14,6 +14,7 @@ use crate::{
 #[derive(Debug, Default, Clone)]
 pub struct Resolution {
     graph: petgraph::graph::DiGraph<Node, Edge>,
+    build_distributions: Vec<ResolvedDist>,
     diagnostics: Vec<ResolutionDiagnostic>,
 }
 
@@ -22,8 +23,20 @@ impl Resolution {
     pub fn new(graph: petgraph::graph::DiGraph<Node, Edge>) -> Self {
         Self {
             graph,
+            build_distributions: Vec::new(),
             diagnostics: Vec::new(),
         }
+    }
+
+    /// Add distributions that are required to build the selected distributions, but should not be
+    /// installed into the target environment.
+    #[must_use]
+    pub fn with_build_distributions(
+        mut self,
+        distributions: impl IntoIterator<Item = ResolvedDist>,
+    ) -> Self {
+        self.build_distributions.extend(distributions);
+        self
     }
 
     /// Return the underlying graph of the resolution.
@@ -64,6 +77,26 @@ impl Resolution {
             })
     }
 
+    /// Iterate over distributions that are build requirements of the selected distributions.
+    pub fn build_distributions(&self) -> impl Iterator<Item = &ResolvedDist> {
+        self.build_distributions.iter()
+    }
+
+    /// Return a resolution containing only build requirements.
+    #[must_use]
+    pub fn build_resolution(&self) -> Self {
+        let mut graph = petgraph::graph::DiGraph::new();
+        graph.add_node(Node::Root);
+        for dist in &self.build_distributions {
+            graph.add_node(Node::Dist {
+                dist: dist.clone(),
+                hashes: HashDigests::empty(),
+                install: true,
+            });
+        }
+        Self::new(graph)
+    }
+
     /// Return the number of distributions in this resolution.
     pub fn len(&self) -> usize {
         self.distributions().count()
@@ -89,6 +122,7 @@ impl Resolution {
                 }
             }
         }
+        self.build_distributions.retain(&predicate);
         self
     }
 
@@ -103,6 +137,11 @@ impl Resolution {
                 if let Some(transformed) = predicate(dist) {
                     *dist = transformed;
                 }
+            }
+        }
+        for dist in &mut self.build_distributions {
+            if let Some(transformed) = predicate(dist) {
+                *dist = transformed;
             }
         }
         self

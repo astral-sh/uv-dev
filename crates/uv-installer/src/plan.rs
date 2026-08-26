@@ -236,12 +236,23 @@ impl uv_errors::Hint for IncompatibleWheelError {
 #[derive(Debug)]
 pub struct Planner<'a> {
     resolution: &'a Resolution,
+    builds: BTreeSet<PackageName>,
 }
 
 impl<'a> Planner<'a> {
     /// Set the requirements use in the [`Plan`].
     pub fn new(resolution: &'a Resolution) -> Self {
-        Self { resolution }
+        Self {
+            resolution,
+            builds: BTreeSet::new(),
+        }
+    }
+
+    /// Seed the plan with workspace members that will be rebuilt as build-only dependencies.
+    #[must_use]
+    pub fn with_builds(mut self, builds: BTreeSet<PackageName>) -> Self {
+        self.builds = builds;
+        self
     }
 
     /// Partition a set of requirements into those that should be linked from the cache, those that
@@ -304,6 +315,7 @@ impl<'a> Planner<'a> {
         let directory_distributions = self
             .resolution
             .distributions()
+            .chain(self.resolution.build_distributions())
             .filter_map(|resolved| {
                 let ResolvedDist::Installable { dist, .. } = resolved else {
                     return None;
@@ -783,17 +795,15 @@ impl<'a> Planner<'a> {
             remote.push(dist.clone());
         }
 
-        let mut builds = remote
-            .iter()
-            .filter_map(|dist| match dist.as_ref() {
-                Dist::Source(SourceDist::Directory(source))
-                    if matches!(source.first_party, FirstParty::Yes) =>
-                {
-                    Some(source.name.clone())
-                }
-                _ => None,
-            })
-            .collect::<BTreeSet<_>>();
+        let mut builds = self.builds;
+        builds.extend(remote.iter().filter_map(|dist| match dist.as_ref() {
+            Dist::Source(SourceDist::Directory(source))
+                if matches!(source.first_party, FirstParty::Yes) =>
+            {
+                Some(source.name.clone())
+            }
+            _ => None,
+        }));
         let mut forced_rebuilds = BTreeSet::new();
 
         loop {

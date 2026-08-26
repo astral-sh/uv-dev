@@ -122,6 +122,7 @@ fn selected_package_ids(
         groups,
         &settings.build_options,
         &InstallOptions::default(),
+        &settings.sources,
     )?;
     if resolution.is_empty() {
         return Ok(None);

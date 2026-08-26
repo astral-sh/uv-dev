@@ -6023,10 +6023,6 @@ fn workspace_build_dependency_rebuilds_in_order() -> Result<()> {
 
         [tool.uv.workspace]
         members = ["foo", "bar"]
-
-        [tool.uv.sources]
-        foo = { workspace = true }
-        bar = { workspace = true }
     "#})?;
 
     let backend = indoc! {r#"
@@ -6079,24 +6075,38 @@ fn workspace_build_dependency_rebuilds_in_order() -> Result<()> {
         build-backend = "build_backend"
 
         [tool.uv.sources]
-        foo = { workspace = true }
+        foo = { workspace = true, editable = false }
     "#})?;
     bar.child("build_backend.py").write_str(backend)?;
     bar.child("src/bar/__init__.py").touch()?;
 
     context
         .sync()
-        .arg("--all-packages")
+        .arg("--package")
+        .arg("bar")
         .arg("--no-editable")
         .assert()
         .success();
     let log = context.temp_dir.child("build-order.log");
     assert_eq!(fs_err::read_to_string(log.path())?, "foo\nbar\n");
+    context
+        .run()
+        .arg("--no-sync")
+        .arg("python")
+        .arg("-c")
+        .arg(indoc! {r#"
+            import importlib.util
+            assert importlib.util.find_spec("bar") is not None
+            assert importlib.util.find_spec("foo") is None
+        "#})
+        .assert()
+        .success();
 
     fs_err::remove_file(log.path())?;
     context
         .sync()
-        .arg("--all-packages")
+        .arg("--package")
+        .arg("bar")
         .arg("--no-editable")
         .assert()
         .success();
@@ -6105,7 +6115,8 @@ fn workspace_build_dependency_rebuilds_in_order() -> Result<()> {
     foo.child("source.cpp").write_str("// version 2")?;
     context
         .sync()
-        .arg("--all-packages")
+        .arg("--package")
+        .arg("bar")
         .arg("--no-editable")
         .assert()
         .success();
