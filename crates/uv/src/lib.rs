@@ -1348,7 +1348,7 @@ async fn run_with_workspace_cache(
                 args.src,
                 args.package,
                 args.all_packages,
-                args.out_dir,
+                args.output_dir,
                 args.sdist,
                 args.wheel,
                 args.list,
