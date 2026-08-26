@@ -22,22 +22,24 @@ cache information.
 ## Maintainer follow-up
 
 A maintainer suggested that workspace-level `cache-keys` may be a more general solution than
-requiring every member to name the members whose keys it inherits. Under that model, a root
-configuration such as globs for `**/pyproject.toml`, `**/*.cpp`, and `**/*.h` could globally
-invalidate native workspace builds. The maintainer explicitly noted that this does not currently
-work and presented it as a design direction, not a decision.
+requiring every member to name the members whose keys it inherits. An initial example placed globs
+such as `**/pyproject.toml`, `**/*.cpp`, and `**/*.h` at the workspace root, but a second maintainer
+clarified that this would likely invalidate only the workspace root rather than every member.
+Consequently, root-level globs alone would not provide member-level propagation.
 
-The main implementation concern raised is architectural: cache keys are currently per-build
-metadata, so applying workspace-root configuration to member builds may cross the existing metadata
-boundary. Further maintainer input is needed to choose between workspace-level invalidation,
-explicit dependency inheritance, or another mechanism.
+The more concrete design suggested in the follow-up is an opt-in form such as
+`cache-keys = { workspace = true }`, allowing a member to incorporate workspace cache information.
+This remains a tentative proposal rather than a maintainer decision. The unresolved semantic issue
+is which directory should be used as the root when resolving paths: the member, the workspace, or
+some combination. Cache keys are currently per-build metadata, so loading workspace information
+also crosses an existing metadata boundary.
 
-The reporter clarified that deduplicating configuration is not sufficient if a workspace-wide key
-causes every native member to rebuild. The desired invalidation is selective and follows dependency
+The reporter clarified that deduplicating configuration is not sufficient if a solution causes
+every native member to rebuild. The desired invalidation is selective and follows dependency
 direction: a change to `foo` should rebuild its dependent `bar`, while a change only to `bar` should
-not rebuild its dependency `foo` or unrelated native packages. Whether the proposed workspace-level
-configuration would necessarily over-invalidate has not yet been confirmed, but avoiding that
-outcome is now an explicit design requirement.
+not rebuild its dependency `foo` or unrelated native packages. The maintainers do not currently
+expect plain root-level globs to cause that over-invalidation, but any eventual workspace or
+inheritance mechanism still needs to preserve this selectivity.
 
 ## Draft response
 
@@ -60,9 +62,9 @@ as expected and requests a new cache-key form. Repository documentation and sour
 `tool.uv.cache-keys` currently supports file, directory, Git, and environment inputs evaluated for
 each project directory; there is no dependency-inheritance variant. Related reports establish the
 per-project workaround but do not track this cross-package behavior, so the issue is neither a bug
-nor a duplicate. A maintainer's follow-up confirms that workspace-level cache keys also do not work
-at present and identifies them as a potentially more general enhancement, with the exact design
-still undecided.
+nor a duplicate. Maintainer follow-up identifies opt-in workspace cache information as a potentially
+more general enhancement, but path-root semantics and the relationship to dependency-directed
+invalidation remain undecided.
 
 ## Related
 
