@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 13589,
+        "title": "using uv workspaces in flat layouts (e.g. monorepos)",
+        "url": "https://github.com/astral-sh/uv/issues/13589",
+        "state": "open",
+        "reason": "Closest layout discussion: a maintainer recommends a project-less virtual workspace root in the siblings' common parent. It does not support one sibling acting as the root for another."
+      },
+      {
+        "kind": "issue",
+        "number": 13298,
+        "title": "Are doubly-nested packages supported in a workspace?",
+        "url": "https://github.com/astral-sh/uv/issues/13298",
+        "state": "open",
+        "reason": "Shows the same root-discovery failure and `workspace = true` not-a-member error, but all members are descendants of the root behind an intervening project, not outside it."
+      },
+      {
+        "kind": "issue",
+        "number": 18348,
+        "title": "Add `workspace_dir` to `tool.uv.sources`",
+        "url": "https://github.com/astral-sh/uv/issues/18348",
+        "state": "closed",
+        "reason": "Requested dependency lookup in another workspace and established an alternative for separate workspace trees; it did not request shared membership."
+      },
+      {
+        "kind": "pull_request",
+        "number": 18401,
+        "title": "Allow `workspace` to take a path in `tool.uv.sources`",
+        "url": "https://github.com/astral-sh/uv/pull/18401",
+        "state": "merged",
+        "reason": "Implemented path-valued workspace sources, explicitly without reusing the external workspace lockfile. It does not implement external members or shared workspace state."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests. Literal searches covered `workspace members outside`, `outside workspace root`, `../` with `workspace = true`, `No workspace root found`, and the exact not-a-workspace-member error. Conceptual searches covered sibling/external members, flat monorepos, parent-directory members, root discovery, root overrides, and cross-workspace dependencies. Fix-oriented searches followed relative-path and workspace-discovery issue chains. astral-sh/uv#16285 and astral-sh/uv#16296 were ruled out because they concern leading `./` paths below the root; astral-sh/uv#16640 and astral-sh/uv#17156 concern nested projects or conflicting nested-workspace sources."
+  },
+  "type": "enhancement",
+  "type_reason": "The implementation explicitly defines workspace members as being below their root and discovers a member's workspace by traversing ancestor directories. Supporting a sibling outside that root requires a new workspace layout and discovery capability, rather than correcting behavior promised by the current model. No existing item tracks that same capability.",
+  "summary": "No existing issue or pull request tracks true workspace members outside their root. The closest discussion recommends a common virtual root for flat siblings, while a merged feature supports dependency lookup into a separate workspace without shared membership or lockfile semantics.",
+  "draft_response": "uv currently expects workspace members to be below the workspace root, and member-side discovery walks ancestor directories. That is why `b` cannot discover a workspace rooted at its sibling `a` in this layout.\n\nFor a single shared workspace, the supported layout is a project-less `pyproject.toml` in `example/` with `members = [\"a\", \"b\"]`, as discussed in astral-sh/uv#13589. If the projects should remain separate workspaces, astral-sh/uv#18401 added path-valued workspace sources, so `b` can use `a = { workspace = \"../a\" }`; that resolves from the other workspace but does not make `b` a member of `a` or share its lockfile.\n\nWe'll treat allowing `../b` as a true member as a separate enhancement."
+}
