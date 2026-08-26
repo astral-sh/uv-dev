@@ -4071,6 +4071,10 @@ pub struct SyncArgs {
 
 #[derive(Args)]
 pub struct DownloadArgs {
+    /// Perform a dry run, without downloading any distributions.
+    #[arg(long)]
+    pub dry_run: bool,
+
     #[command(flatten)]
     pub index: IndexArgs,
     #[command(flatten)]

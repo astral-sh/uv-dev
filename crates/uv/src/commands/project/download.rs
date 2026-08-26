@@ -18,6 +18,7 @@ use crate::settings::ResolverSettings;
 /// Populate the packed cache from the existing universal lockfile.
 pub(crate) async fn download(
     project_dir: &Path,
+    dry_run: bool,
     settings: ResolverSettings,
     client_builder: BaseClientBuilder<'_>,
     concurrency: Concurrency,
@@ -48,11 +49,6 @@ pub(crate) async fn download(
         .read()
         .await?
         .context("No uv.lock found; run `uv lock` first")?;
-    let client = RegistryClientBuilder::new(client_builder, cache.clone())
-        .index_locations(settings.index_locations)
-        .index_strategy(settings.index_strategy)
-        .keyring(settings.keyring_provider)
-        .build()?;
     let mut artifacts = Vec::new();
     for package in lock.packages() {
         if package.git_sha().is_some() {
@@ -66,6 +62,37 @@ pub(crate) async fn download(
         }
     }
     let count = artifacts.len();
+    if dry_run {
+        let cached = stream::iter(artifacts)
+            .map(|(name, artifact)| async move {
+                PackedArchive::is_cached(
+                    cache,
+                    &name,
+                    &artifact.url,
+                    artifact.hash.as_ref(),
+                    artifact.size,
+                )
+                .await
+                .with_context(|| format!("Failed to inspect `{name}` at {}", artifact.url))
+            })
+            .buffer_unordered(concurrency.downloads)
+            .try_fold(
+                0usize,
+                async |count, cached| Ok(count + usize::from(cached)),
+            )
+            .await?;
+        writeln!(
+            printer.stderr(),
+            "Would download {} distributions ({count} total)",
+            count - cached
+        )?;
+        return Ok(ExitStatus::Success);
+    }
+    let client = RegistryClientBuilder::new(client_builder, cache.clone())
+        .index_locations(settings.index_locations)
+        .index_strategy(settings.index_strategy)
+        .keyring(settings.keyring_provider)
+        .build()?;
     let downloaded = stream::iter(artifacts)
         .map(|(name, artifact)| {
             let client = &client;

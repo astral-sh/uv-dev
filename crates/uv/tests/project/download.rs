@@ -165,6 +165,12 @@ async fn download_packed_offline() -> Result<()> {
     "#, sdist_size=sdist.len(), wheel_size=wheel.len(), zstd_size=zstd.len()},
     )?;
     let original_lock = fs_err::read(context.temp_dir.join("uv.lock"))?;
+    uv_snapshot!(context.filters(), download(&context).arg("--dry-run"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Would download 4 distributions (4 total)
+    ");
+    assert!(!context.cache_dir.join("packed-v0").exists());
     uv_snapshot!(context.filters(), download(&context), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -190,6 +196,16 @@ async fn download_packed_offline() -> Result<()> {
         assert!(bytes == wheel || bytes == sdist || bytes == zstd);
     }
     server.verify().await;
+    uv_snapshot!(context.filters(), download(&context).args(["--dry-run", "--offline"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Would download 0 distributions (4 total)
+    ");
+    uv_snapshot!(context.filters(), download(&context).args(["--dry-run", "--refresh"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Would download 4 distributions (4 total)
+    ");
     drop(server);
     uv_snapshot!(context.filters(), download(&context).arg("--offline"), @"
     exit_code: 0 (success)
