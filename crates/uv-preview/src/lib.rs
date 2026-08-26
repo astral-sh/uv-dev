@@ -340,6 +340,9 @@ pub enum PreviewFeature {
     MissingExcludeNewerPackageLock,
     /// Allows using `uv export --batch`.
     BatchExport,
+    /// Rejects local dates without a timezone in persistent `exclude-newer` configuration.
+    /// This feature takes effect before configuration is loaded.
+    LocalDateExcludeNewer,
 }
 
 impl Display for PreviewFeature {

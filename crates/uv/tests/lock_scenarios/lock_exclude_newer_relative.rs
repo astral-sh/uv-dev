@@ -504,7 +504,7 @@ fn lock_exclude_newer_package_local_date_pyproject() -> Result<()> {
         .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r#"
     exit_code: 0 (success)
     ----- stderr -----
-    warning: `2024-06-15` is a local date without a timezone. `exclude-newer` values in persistent configuration should use a full timestamp with a timezone (use `2024-06-16T04:00:00Z` to retain the current cutoff); local dates will be rejected in a future release
+    warning: `2024-06-15` is a local date without a timezone. `exclude-newer` values in persistent configuration should use a full timestamp with a timezone (use `2024-06-16T04:00:00Z` to retain the current cutoff); local dates will be rejected in a future release. Pass `--preview-features local-date-exclude-newer` to reject them now
     Resolved 2 packages in [TIME]
     "#);
 
@@ -525,6 +525,83 @@ fn lock_exclude_newer_package_local_date_pyproject() -> Result<()> {
     Resolved 2 packages in [TIME]
     "#);
     assert_eq!(context.read("uv.lock"), lock);
+
+    Ok(())
+}
+
+/// The preview feature rejects persisted dates, but CLI dates remain accepted.
+#[test]
+fn lock_exclude_newer_local_date_preview() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        "#,
+    )?;
+    let config = context.temp_dir.child("uv.toml");
+    config.write_str("exclude-newer = \"2024-06-15\"\n")?;
+
+    uv_snapshot!(context.filters(), context
+        .lock()
+        .env("TZ", "America/New_York")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .arg("--config-file=uv.toml")
+        .arg("--preview-features=local-date-exclude-newer"), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to parse: `uv.toml`
+      cause: TOML parse error at line 1, column 17
+               |
+             1 | exclude-newer = "2024-06-15"
+               |                 ^^^^^^^^^^^^
+             `2024-06-15` is a local date, but a full timestamp with a timezone is required in persistent configuration (use `2024-06-16T04:00:00Z` for the equivalent cutoff on this system)
+    "#);
+
+    uv_snapshot!(context.filters(), context
+        .lock()
+        .env("TZ", "America/New_York")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .env(EnvVars::UV_PREVIEW_FEATURES, "local-date-exclude-newer")
+        .arg("--config-file=uv.toml")
+        .arg("--no-preview"), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: `2024-06-15` is a local date without a timezone. `exclude-newer` values in persistent configuration should use a full timestamp with a timezone (use `2024-06-16T04:00:00Z` to retain the current cutoff); local dates will be rejected in a future release. Pass `--preview-features local-date-exclude-newer` to reject them now
+    Resolved 1 package in [TIME]
+    "#);
+
+    config.write_str("exclude-newer-package = { iniconfig = \"2024-06-15\" }\n")?;
+    uv_snapshot!(context.filters(), context
+        .lock()
+        .env("TZ", "America/New_York")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .env(EnvVars::UV_PREVIEW_FEATURES, "local-date-exclude-newer")
+        .arg("--config-file=uv.toml"), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to parse: `uv.toml`
+      cause: TOML parse error at line 1, column 39
+               |
+             1 | exclude-newer-package = { iniconfig = "2024-06-15" }
+               |                                       ^^^^^^^^^^^^
+             `2024-06-15` is a local date, but a full timestamp with a timezone is required in persistent configuration (use `2024-06-16T04:00:00Z` for the equivalent cutoff on this system)
+    "#);
+
+    config.write_str("exclude-newer = \"2024-06-16T04:00:00Z\"\n")?;
+    uv_snapshot!(context.filters(), context
+        .lock()
+        .env("TZ", "America/New_York")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .arg("--config-file=uv.toml")
+        .arg("--preview-features=local-date-exclude-newer")
+        .arg("--exclude-newer=2024-06-15"), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    "#);
 
     Ok(())
 }

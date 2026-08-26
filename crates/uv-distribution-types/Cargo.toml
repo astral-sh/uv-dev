@@ -28,6 +28,7 @@ uv-pep440 = { workspace = true }
 uv-pep508 = { workspace = true }
 uv-install-wheel = { workspace = true }
 uv-platform-tags = { workspace = true }
+uv-preview = { workspace = true }
 uv-pypi-types = { workspace = true }
 uv-redacted = { workspace = true }
 uv-small-str = { workspace = true }
@@ -54,6 +55,7 @@ url = { workspace = true }
 version-ranges = { workspace = true }
 
 [dev-dependencies]
+uv-preview = { workspace = true, features = ["testing"] }
 toml = { workspace = true }
 
 [features]
