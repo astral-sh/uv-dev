@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 854,
+        "title": "Release mirror uploads fail with R2 AccessDenied",
+        "url": "https://github.com/astral-sh/uv-dev/issues/854",
+        "state": "open",
+        "reason": "This independently opened report tracks the exact uv 0.12.6 mirror-publication incident. Every R2 upload failed with AccessDenied on two attempts, requiring an authorization fix and backfill."
+      },
+      {
+        "kind": "issue",
+        "number": 19282,
+        "title": "Bug: Primary download URL returns 404 for uv 0.11.9 on x86_64 Linux",
+        "url": "https://github.com/astral-sh/uv/issues/19282",
+        "state": "closed",
+        "reason": "This is the closest historical recurrence: uv 0.11.9 artifacts and their `.sha256` files were missing from the same mirror until maintainers backfilled them."
+      },
+      {
+        "kind": "issue",
+        "number": 19297,
+        "title": "uv version 0.11.10 give a 404 error when runnning the installation script",
+        "url": "https://github.com/astral-sh/uv/issues/19297",
+        "state": "closed",
+        "reason": "The next release also initially returned 404 for all paths under its mirror prefix and was repaired."
+      },
+      {
+        "kind": "pull_request",
+        "number": 18159,
+        "title": "Upload uv releases to a mirror",
+        "url": "https://github.com/astral-sh/uv/pull/18159",
+        "state": "merged",
+        "reason": "This introduced the release-artifact upload workflow used for the Astral mirror; its publish-mirror job is the failing subsystem."
+      }
+    ],
+    "search_scope": "Literal and conceptual searches covered the mirror hostname, uv 0.12.6, `.sha256`, checksum files, HTTP 404s, missing release artifacts, CDN/mirror publication, upload failures, and release-workflow terminology across open and closed issues and open, closed, and merged pull requests. Historical inspection followed references among astral-sh/uv#19282, astral-sh/uv#19297, astral-sh/uv-dev#854, and astral-sh/uv#18159. astral-sh/uv#18798 was ruled out because its missing powerpc64 checksum corresponded to an intentionally removed build target."
+  },
+  "type": "duplicate",
+  "type_reason": "astral-sh/uv-dev#854 was already open and independently tracks the same uv 0.12.6 mirror-publication failure. GitHub has the reported checksum, the 0.12.5 mirror URL returns 200, the 0.12.6 URL returns 404, and the release workflow's R2 uploads failed. Discussion can therefore be centralized in the existing incident.",
+  "summary": "astral-sh/uv-dev#854 is the canonical open incident. astral-sh/uv#19282 and astral-sh/uv#19297 document prior repaired occurrences, while astral-sh/uv#18159 identifies the mirror-upload workflow involved.",
+  "draft_response": "Confirmed: the 0.12.6 checksum exists on GitHub, but the Astral mirror publication failed. The release workflow's R2 uploads returned AccessDenied on two attempts; the exact authorization cause has not yet been established. This incident is already tracked in astral-sh/uv-dev#854, so we'll centralize the investigation there. Once upload access is restored, the 0.12.6 mirror artifacts will need to be backfilled. In the meantime, the checksum is available from the GitHub release URL."
+}
