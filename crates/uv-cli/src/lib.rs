@@ -1206,7 +1206,10 @@ pub enum ProjectCommand {
     ///
     /// Git repositories and local source trees are not downloaded. Building a source
     /// distribution offline may require separately cached build dependencies.
-    #[command(hide = true)]
+    #[command(
+        after_help = "Use `uv help download` for more details.",
+        after_long_help = ""
+    )]
     Download(DownloadArgs),
     /// Update the project's lockfile.
     ///

@@ -13,6 +13,12 @@ fn digest(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 
+fn download(context: &TestContext) -> std::process::Command {
+    let mut command = context.command();
+    command.args(["download", "--preview-features", "download-command"]);
+    command
+}
+
 fn write_project(context: &TestContext, packages: &str) -> Result<()> {
     context
         .temp_dir
@@ -46,6 +52,30 @@ fn write_project(context: &TestContext, packages: &str) -> Result<()> {
         [package.metadata]
         requires-dist = [{{ name = "basic-package" }}]
     "#})?;
+    Ok(())
+}
+
+#[test]
+fn download_preview() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str("[project]\nname = \"project\"\nversion = \"0.1.0\"\n")?;
+
+    uv_snapshot!(context.filters(), context.command().args(["download", "--offline"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    warning: `uv download` is experimental and may change without warning. Pass `--preview-features download-command` to disable this warning.
+    error: No uv.lock found; run `uv lock` first
+    ");
+
+    uv_snapshot!(context.filters(), download(&context).arg("--offline"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: No uv.lock found; run `uv lock` first
+    ");
+
     Ok(())
 }
 
@@ -135,7 +165,7 @@ async fn download_packed_offline() -> Result<()> {
     "#, sdist_size=sdist.len(), wheel_size=wheel.len(), zstd_size=zstd.len()},
     )?;
     let original_lock = fs_err::read(context.temp_dir.join("uv.lock"))?;
-    uv_snapshot!(context.filters(), context.command().arg("download"), @"
+    uv_snapshot!(context.filters(), download(&context), @"
     exit_code: 0 (success)
     ----- stderr -----
     Downloaded 4 distributions (4 total)
@@ -161,7 +191,7 @@ async fn download_packed_offline() -> Result<()> {
     }
     server.verify().await;
     drop(server);
-    uv_snapshot!(context.filters(), context.command().arg("download").arg("--offline"), @"
+    uv_snapshot!(context.filters(), download(&context).arg("--offline"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Downloaded 0 distributions (4 total)
@@ -222,7 +252,7 @@ async fn download_rejects_hash_mismatch() -> Result<()> {
         wheels = [{{ url = "{url}/basic_package-0.1.0-py3-none-any.whl", hash = "sha256:{hash}" }}]
     "#},
     )?;
-    uv_snapshot!(context.filters(), context.command().arg("download"), @"
+    uv_snapshot!(context.filters(), download(&context), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to download `basic-package` from http://[LOCALHOST]/basic_package-0.1.0-py3-none-any.whl
@@ -263,11 +293,11 @@ async fn download_repairs_corrupt_archive() -> Result<()> {
         wheels = [{{ url = "{url}/basic_package-0.1.0-py3-none-any.whl", hash = "sha256:{hash}" }}]
     "#},
     )?;
-    context.command().arg("download").assert().success();
+    download(&context).assert().success();
     for directory in fs_err::read_dir(context.cache_dir.join("packed-v0"))? {
         fs_err::write(directory?.path().join(&hash), b"corrupt")?;
     }
-    uv_snapshot!(context.filters(), context.command().arg("download").arg("--offline"), @"
+    uv_snapshot!(context.filters(), download(&context).arg("--offline"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to download `basic-package` from http://[LOCALHOST]/basic_package-0.1.0-py3-none-any.whl
@@ -279,7 +309,7 @@ async fn download_repairs_corrupt_archive() -> Result<()> {
         .assert()
         .failure();
     assert!(!context.cache_dir.join("archive-v0").exists());
-    uv_snapshot!(context.filters(), context.command().args(["download", "--refresh"]), @"
+    uv_snapshot!(context.filters(), download(&context).arg("--refresh"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Downloaded 1 distributions (1 total)
