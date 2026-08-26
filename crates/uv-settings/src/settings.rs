@@ -4,7 +4,7 @@ use std::{fmt::Debug, num::NonZeroUsize, path::Path, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use uv_cache_info::CacheKey;
+use uv_cache_info::{CacheDependency, CacheKey};
 use uv_configuration::{
     BuildIsolation, ExcludeDependency, IndexStrategy, KeyringProviderType, PackageNameSpecifier,
     ProxyUrl, Reinstall, RequiredVersion, TargetTriple, TrustedHost, TrustedPublishing, Upgrade,
@@ -143,6 +143,23 @@ pub struct Options {
         "#
     )]
     pub cache_keys: Option<Vec<CacheKey>>,
+
+    /// The packages whose builds should invalidate and precede the build for this project.
+    ///
+    /// For example, if the current project links against a workspace package named `foo`, use
+    /// `cache-depends = [{ package = "foo" }]`. Whenever `foo` is rebuilt in the same operation,
+    /// uv will rebuild the current project after the build for `foo` completes.
+    ///
+    /// Cache dependencies do not add packages to the project or its build environment. The named
+    /// package must be present in the resolution independently.
+    #[option(
+        default = "[]",
+        value_type = "list[dict]",
+        example = r#"
+            cache-depends = [{ package = "foo" }]
+        "#
+    )]
+    pub cache_depends: Option<Vec<CacheDependency>>,
 
     // NOTE(charlie): These fields are shared with `ToolUv` in
     // `crates/uv-workspace/src/pyproject.rs`. The documentation lives on that struct.
@@ -2628,6 +2645,7 @@ struct OptionsWire {
     audit: Option<AuditOptions>,
     pip: Option<PipOptions>,
     cache_keys: Option<Vec<CacheKey>>,
+    cache_depends: Option<Vec<CacheDependency>>,
 
     // NOTE(charlie): These fields are shared with `ToolUv` in
     // `crates/uv-workspace/src/pyproject.rs`. The documentation lives on that struct.
@@ -2715,6 +2733,7 @@ impl TryFrom<OptionsWire> for Options {
             audit,
             pip,
             cache_keys,
+            cache_depends,
             override_dependencies,
             exclude_dependencies,
             constraint_dependencies,
@@ -2796,6 +2815,7 @@ impl TryFrom<OptionsWire> for Options {
             },
             pip,
             cache_keys,
+            cache_depends,
             build_backend,
             override_dependencies,
             exclude_dependencies,

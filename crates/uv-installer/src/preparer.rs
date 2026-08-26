@@ -1,4 +1,5 @@
 use std::cmp::Reverse;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use futures::{FutureExt, Stream, TryFutureExt, TryStreamExt, stream::FuturesUnordered};
@@ -65,14 +66,16 @@ impl<'a, Context: BuildContext> Preparer<'a, Context> {
     fn prepare_stream<'stream>(
         &'stream self,
         distributions: Vec<Arc<Dist>>,
+        forced_rebuilds: &'stream BTreeSet<PackageName>,
         in_flight: &'stream InFlight,
         resolution: &'stream Resolution,
     ) -> impl Stream<Item = Result<CachedDist, Error>> + 'stream {
         distributions
             .into_iter()
             .map(async |dist| {
+                let force_rebuild = forced_rebuilds.contains(dist.name());
                 let wheel = self
-                    .get_wheel((*dist).clone(), in_flight, resolution)
+                    .get_wheel((*dist).clone(), force_rebuild, in_flight, resolution)
                     .boxed_local()
                     .await?;
                 if let Some(reporter) = self.reporter.as_ref() {
@@ -87,18 +90,52 @@ impl<'a, Context: BuildContext> Preparer<'a, Context> {
     #[instrument(skip_all, fields(total = distributions.len()))]
     pub async fn prepare(
         &self,
-        mut distributions: Vec<Arc<Dist>>,
+        distributions: Vec<Arc<Dist>>,
+        build_dependencies: &BTreeMap<PackageName, BTreeSet<PackageName>>,
+        forced_rebuilds: &BTreeSet<PackageName>,
         in_flight: &InFlight,
         resolution: &Resolution,
     ) -> Result<Vec<CachedDist>, Error> {
-        // Sort the distributions by size.
-        distributions
-            .sort_unstable_by_key(|distribution| Reverse(distribution.size().unwrap_or(u64::MAX)));
+        let mut remaining = distributions
+            .into_iter()
+            .map(|dist| (dist.name().clone(), dist))
+            .collect::<BTreeMap<_, _>>();
+        let mut wheels = Vec::with_capacity(remaining.len());
 
-        let wheels = self
-            .prepare_stream(distributions, in_flight, resolution)
-            .try_collect()
-            .await?;
+        // Prepare independent distributions concurrently, but wait for each dependency wave to
+        // complete before starting its dependents.
+        while !remaining.is_empty() {
+            let ready = remaining
+                .keys()
+                .filter(|name| {
+                    build_dependencies.get(*name).is_none_or(|dependencies| {
+                        dependencies
+                            .iter()
+                            .all(|dependency| !remaining.contains_key(dependency))
+                    })
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+
+            if ready.is_empty() {
+                return Err(Error::CyclicBuildDependency(
+                    remaining.keys().next().unwrap().clone(),
+                ));
+            }
+
+            let mut distributions = ready
+                .into_iter()
+                .map(|name| remaining.remove(&name).unwrap())
+                .collect::<Vec<_>>();
+            distributions.sort_unstable_by_key(|distribution| {
+                Reverse(distribution.size().unwrap_or(u64::MAX))
+            });
+            wheels.extend(
+                self.prepare_stream(distributions, forced_rebuilds, in_flight, resolution)
+                    .try_collect::<Vec<_>>()
+                    .await?,
+            );
+        }
 
         if let Some(reporter) = self.reporter.as_ref() {
             reporter.on_complete();
@@ -111,6 +148,7 @@ impl<'a, Context: BuildContext> Preparer<'a, Context> {
     async fn get_wheel(
         &self,
         dist: Dist,
+        force_rebuild: bool,
         in_flight: &InFlight,
         resolution: &Resolution,
     ) -> Result<CachedDist, Error> {
@@ -135,7 +173,7 @@ impl<'a, Context: BuildContext> Preparer<'a, Context> {
         }
 
         let id = dist.distribution_id();
-        if let Some(result) = in_flight.downloads.register_or_wait(&id).await {
+        if !force_rebuild && let Some(result) = in_flight.downloads.register_or_wait(&id).await {
             match result.as_ref() {
                 Ok(cached) => {
                     // Validate that the wheel is compatible with the distribution.
@@ -175,7 +213,7 @@ impl<'a, Context: BuildContext> Preparer<'a, Context> {
 
             let result = self
                 .database
-                .get_or_build_wheel(&dist, self.tags, policy)
+                .get_or_build_wheel(&dist, self.tags, policy, force_rebuild)
                 .boxed_local()
                 .map_err(|err| Error::from_dist(dist.clone(), err, resolution))
                 .await

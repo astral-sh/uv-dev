@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -7,7 +8,7 @@ use owo_colors::OwoColorize;
 use tracing::{debug, warn};
 
 use uv_cache::{Cache, CacheBucket, WheelCache};
-use uv_cache_info::Timestamp;
+use uv_cache_info::{CacheInfo, Timestamp};
 use uv_configuration::{BuildOptions, Reinstall};
 use uv_distribution::{
     BuiltWheelIndex, HttpArchivePointer, PathArchivePointer, RegistryWheelIndex,
@@ -296,6 +297,37 @@ impl<'a> Planner<'a> {
         let mut reinstalls = vec![];
         let mut extraneous = vec![];
 
+        // Index local source trees and the build relationships declared by each project. These
+        // relationships are evaluated after the ordinary cache plan so a dependent is rebuilt if,
+        // and only if, one of its declared dependencies is rebuilt in this operation.
+        let directory_distributions = self
+            .resolution
+            .distributions()
+            .filter_map(|resolved| {
+                let ResolvedDist::Installable { dist, .. } = resolved else {
+                    return None;
+                };
+                let Dist::Source(SourceDist::Directory(source)) = dist.as_ref() else {
+                    return None;
+                };
+                Some((source.name.clone(), dist.clone()))
+            })
+            .collect::<BTreeMap<_, _>>();
+        let cache_dependencies = directory_distributions
+            .iter()
+            .filter_map(|(name, dist)| {
+                let Dist::Source(SourceDist::Directory(source)) = dist.as_ref() else {
+                    unreachable!("directory distributions only contain source trees");
+                };
+                let dependencies = CacheInfo::dependencies_from_directory(&source.install_path)
+                    .into_iter()
+                    .map(|dependency| dependency.package)
+                    .collect::<BTreeSet<_>>();
+                (!dependencies.is_empty()).then(|| (name.clone(), dependencies))
+            })
+            .collect::<BTreeMap<_, _>>();
+        let mut satisfied = BTreeMap::new();
+
         // TODO(charlie): There are a few assumptions here that are hard to spot:
         //
         // 1. Apparently, we never return direct URL distributions as [`ResolvedDist::Installed`].
@@ -346,6 +378,9 @@ impl<'a> Planner<'a> {
                             }
                             RequirementSatisfaction::Satisfied => {
                                 debug!("Requirement already installed: {installed}");
+                                if directory_distributions.contains_key(installed.name()) {
+                                    satisfied.insert(installed.name().clone(), installed.clone());
+                                }
                                 continue;
                             }
                             RequirementSatisfaction::OutOfDate => {
@@ -746,6 +781,58 @@ impl<'a> Planner<'a> {
             remote.push(dist.clone());
         }
 
+        // Propagate rebuilds through `cache-depends`. A dependency edge does not incorporate the
+        // dependency's cache keys into the dependent's cache information; it only reacts to the
+        // dependency already being scheduled for a build in this operation.
+        let mut builds = remote
+            .iter()
+            .filter_map(|dist| match dist.as_ref() {
+                Dist::Source(SourceDist::Directory(source)) => Some(source.name.clone()),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        let mut forced_rebuilds = BTreeSet::new();
+
+        loop {
+            let dependents = cache_dependencies
+                .iter()
+                .filter(|(name, dependencies)| {
+                    !builds.contains(*name) && !dependencies.is_disjoint(&builds)
+                })
+                .map(|(name, _)| name.clone())
+                .collect::<Vec<_>>();
+            if dependents.is_empty() {
+                break;
+            }
+
+            for name in dependents {
+                let Some(dist) = directory_distributions.get(&name) else {
+                    continue;
+                };
+                cached.retain(|dist| dist.name() != &name);
+                if let Some(installed) = satisfied.remove(&name) {
+                    reinstalls.push(installed);
+                }
+                remote.push(dist.clone());
+                builds.insert(name.clone());
+                forced_rebuilds.insert(name);
+            }
+        }
+
+        let build_dependencies = cache_dependencies
+            .into_iter()
+            .filter_map(|(name, dependencies)| {
+                if !builds.contains(&name) {
+                    return None;
+                }
+                let dependencies = dependencies
+                    .into_iter()
+                    .filter(|dependency| builds.contains(dependency))
+                    .collect::<BTreeSet<_>>();
+                (!dependencies.is_empty()).then_some((name, dependencies))
+            })
+            .collect();
+
         // Remove any unnecessary packages.
         if site_packages.any() {
             // Retain seed packages unless: (1) the virtual environment was created by uv and
@@ -765,6 +852,8 @@ impl<'a> Planner<'a> {
         Ok(Plan {
             cached,
             remote,
+            build_dependencies,
+            forced_rebuilds,
             reinstalls,
             extraneous,
         })
@@ -824,6 +913,12 @@ pub struct Plan {
     /// not available in the local cache.
     pub remote: Vec<Arc<Dist>>,
 
+    /// Build-order relationships between remote source trees.
+    pub build_dependencies: BTreeMap<PackageName, BTreeSet<PackageName>>,
+
+    /// Remote source trees that must ignore an otherwise-fresh built wheel.
+    pub forced_rebuilds: BTreeSet<PackageName>,
+
     /// Any distributions that are already installed in the current environment, but will be
     /// re-installed (including upgraded) to satisfy the requirements.
     pub reinstalls: Vec<InstalledDist>,
@@ -857,6 +952,8 @@ impl Plan {
         let Self {
             cached,
             remote,
+            build_dependencies,
+            forced_rebuilds,
             reinstalls,
             extraneous,
         } = self;
@@ -865,6 +962,36 @@ impl Plan {
         let (left_remote, right_remote) = remote
             .into_iter()
             .partition::<Vec<_>, _>(|dist| f(dist.name()));
+        let left_names = left_remote
+            .iter()
+            .map(|dist| dist.name().clone())
+            .collect::<BTreeSet<_>>();
+        let right_names = right_remote
+            .iter()
+            .map(|dist| dist.name().clone())
+            .collect::<BTreeSet<_>>();
+
+        let partition_dependencies = |names: &BTreeSet<PackageName>| -> BTreeMap<_, _> {
+            build_dependencies
+                .iter()
+                .filter(|(name, _)| names.contains(*name))
+                .filter_map(|(name, dependencies)| {
+                    let dependencies = dependencies
+                        .iter()
+                        .filter(|dependency| names.contains(*dependency))
+                        .cloned()
+                        .collect::<BTreeSet<_>>();
+                    (!dependencies.is_empty()).then_some((name.clone(), dependencies))
+                })
+                .collect()
+        };
+        let left_build_dependencies = partition_dependencies(&left_names);
+        let right_build_dependencies = partition_dependencies(&right_names);
+        let left_forced_rebuilds = forced_rebuilds.intersection(&left_names).cloned().collect();
+        let right_forced_rebuilds = forced_rebuilds
+            .intersection(&right_names)
+            .cloned()
+            .collect();
 
         // If any remote distributions are not matched, but are already installed, ensure that
         // they're uninstalled as part of the right plan. (Uninstalling them as part of the left
@@ -889,6 +1016,8 @@ impl Plan {
         let left_plan = Self {
             cached: left_cached,
             remote: left_remote,
+            build_dependencies: left_build_dependencies,
+            forced_rebuilds: left_forced_rebuilds,
             reinstalls: left_reinstalls,
             extraneous: left_extraneous,
         };
@@ -898,6 +1027,8 @@ impl Plan {
         let right_plan = Self {
             cached: right_cached,
             remote: right_remote,
+            build_dependencies: right_build_dependencies,
+            forced_rebuilds: right_forced_rebuilds,
             reinstalls: right_reinstalls,
             extraneous: right_extraneous,
         };
