@@ -760,6 +760,44 @@ impl CachedClient {
         Ok(payload)
     }
 
+    /// Retry an unusable derived response using a packed archive, without making another request.
+    ///
+    /// A download may have populated the packed cache after the derived response was cached. Keep
+    /// the original payload when no packed archive is available, so the caller can report the
+    /// original validation error.
+    pub async fn get_serde_with_retry_and_packed_fallback<
+        Payload: Serialize + DeserializeOwned + Send + 'static,
+        CallBackError: std::error::Error + 'static,
+        Callback: AsyncFn(Response) -> Result<Payload, CallBackError>,
+    >(
+        &self,
+        req: Request,
+        cache_entry: &CacheEntry,
+        cache_control: CacheControl,
+        is_valid: impl FnOnce(&Payload) -> bool,
+        response_callback: Callback,
+    ) -> Result<Payload, CachedClientError<CallBackError>> {
+        let packed_req = req.try_clone().expect("HTTP request must be cloneable");
+        let payload = self
+            .get_serde_with_retry(req, cache_entry, cache_control.clone(), &response_callback)
+            .await?;
+        if is_valid(&payload) {
+            return Ok(payload);
+        }
+
+        let start = Instant::now();
+        let Some(response) = self.packed_response(&packed_req, &cache_control).await? else {
+            return Ok(payload);
+        };
+        let policy = CachePolicyBuilder::new(&packed_req).build(&response);
+        let policy = policy.to_archived().is_storable().then(|| Box::new(policy));
+        self.run_response_callback(cache_entry, policy, start, response, async |response| {
+            let payload = response_callback(response).await?;
+            Ok(SerdeCacheable { inner: payload })
+        })
+        .await
+    }
+
     /// Perform a [`CachedClient::get_cacheable`] request with a default retry strategy.
     ///
     /// See: <https://github.com/TrueLayer/reqwest-middleware/blob/8a494c165734e24c62823714843e1c9347027e8a/reqwest-retry/src/middleware.rs#L137>
