@@ -6,23 +6,25 @@ Classification: enhancement
 
 ## Summary
 
-The reporter asks `uv pip install` to fail when a later invocation changes a package version in a way that conflicts with a requirement represented by an already-installed package. The report gives the abstract sequence `uv pip install pkg<2` followed by `uv pip install tool>2`, but no concrete packages, versions, uv version, platform, or command output.
+The reporter asks for an opt-in mode in which `uv pip install` remembers explicit requirements from earlier invocations and treats them as constraints on later invocations. Their proposed `--amend` mode would reject a later requirement that contradicts an earlier one, while leaving the current default behavior unchanged. The motivating workflow is a Zephyr project that first installs packages returned by `west packages pip` and later installs more packages into the same virtual environment; the reporter says the later command can change versions required by the earlier command and that the problem is then discovered at runtime.
 
 Repository evidence establishes that separate `uv pip install` invocations intentionally resolve independently: a constraint passed only to the first command is not automatically a constraint on the second command. This exact successive-install symptom was discussed in astral-sh/uv#18551. Current enforcement is split between `uv pip install --strict`, which reports relevant environment incompatibilities as warnings while returning success, and `uv pip check`, which returns a failure status when it finds incompatibilities.
 
-The requested hard failure is therefore a change to existing install behavior. The report also leaves an important semantic question open: whether failure means returning nonzero after modifying the environment or detecting the conflict before installation and leaving the environment unchanged.
+The requested history-aware failure is therefore new stateful behavior rather than stricter validation of the resulting dependency graph. A maintainer recommends using the top-level project interface with a `pyproject.toml` that records the complete constraints and says it is unlikely this behavior will be added to `uv pip` when that interface is available. The maintainer also asks how the version mismatch causes an actual failure; the issue still provides no concrete packages, application error, uv version, platform, or runnable Zephyr reproduction.
 
-## Draft response
+## Maintainer direction
 
-Each `uv pip install` invocation is currently resolved independently, so a constraint supplied only to an earlier invocation is not carried into the next one. `uv pip install --strict` can report relevant incompatibilities after installation, but it still exits successfully; `uv pip check` returns nonzero when the resulting environment is incompatible.
+A maintainer recommends migrating this workflow from `uv pip` to the top-level uv project interface and recording the relevant constraints in `pyproject.toml`. They offered to help map the workflow to that interface if it does not meet the reporter's needs, but indicated that adding invocation-history semantics to `uv pip` is unlikely because a more suitable interface already exists.
 
-For existing workflows, put the complete constraint set in a `pyproject.toml` or requirements file, or run `uv pip check` as a separate enforcement step. Making `uv pip install` itself fail would be a behavior change. Could you provide concrete package names and versions and clarify whether you need only a nonzero status after installation, or require the environment to remain unchanged when a conflict is detected?
+This narrows the next investigation step: establish why a project file cannot represent the Zephyr workflow, if applicable, and obtain a concrete example showing the runtime breakage caused by the changed version. The latter matters because the abstract example changes the version of the same directly requested package across commands; without persisted requirement history, the installed environment does not itself contain metadata expressing the superseded command-line constraint.
 
 ## Classification
 
 Enhancement. Maintainer comments in astral-sh/uv#18551 confirm that each `uv pip install` is independent by design, matching pip's installation model, so the second invocation does not retain an earlier command-line bound as a resolver constraint. The source and astral-sh/uv#10398 establish that `--strict` performs post-install environment diagnostics but reports them as warnings and returns success. By contrast, the separately implemented `uv pip check` returns failure when incompatibilities exist.
 
-Changing `uv pip install` to return failure, and possibly to make the operation atomic or roll it back, would add stronger behavior than the current interface provides. No existing issue or pull request found in the search tracks that exact install failure request. It is not a duplicate of astral-sh/uv#18551 because that issue was closed after explaining independent resolution, and its maintainers treated conflict notification as a distinct concern. It is not a regression: the recent astral-sh/uv#20388 fixed a strict-diagnostic omission but intentionally retained warning-only semantics.
+Persisting explicit requirements across invocations and resolving later commands against that history would add state and semantics that the current interface does not provide. It is distinct from returning failure for an incompatible installed dependency graph: the proposed example remembers a superseded direct command-line requirement even when no installed distribution metadata records that bound. No existing issue or pull request found in the search tracks that exact history-aware mode. It is not a duplicate of astral-sh/uv#18551 because that issue was closed after explaining independent resolution, and its maintainers treated conflict notification as a distinct concern. It is not a regression: the recent astral-sh/uv#20388 fixed a strict-diagnostic omission but intentionally retained warning-only semantics.
+
+The maintainer's recommendation and expectation lower the likelihood that this will be implemented specifically for `uv pip`, but do not change the classification: the issue still requests a new opt-in capability.
 
 ## Related
 
