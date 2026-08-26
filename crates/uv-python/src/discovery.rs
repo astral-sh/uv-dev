@@ -3631,6 +3631,14 @@ impl FromStr for VersionRequest {
                 return Err(Error::InvalidVersionRequest(s.to_string()));
             }
 
+            // Split explicit `+` variants before looking for the end of the numeric version.
+            // Build tags may themselves end in digits, e.g., `avx2`.
+            if let Some(start) = s.find('+') {
+                let variant = VariantRequest::from_str(&s[start + 1..])
+                    .map_err(|()| Error::InvalidVersionRequest(s.to_string()))?;
+                return Ok((&s[..start], variant));
+            }
+
             let Some(mut start) = s.rfind(|c: char| c.is_ascii_digit()) else {
                 return Ok((s, VariantRequest::default()));
             };
@@ -3646,16 +3654,10 @@ impl FromStr for VersionRequest {
             let variant = &s[start..];
             let prefix = &s[..start];
 
-            let explicit = variant.strip_prefix('+');
-            let variant = explicit.unwrap_or(variant);
-
             // TODO(zanieb): Special-case error for use of `dt` instead of `td`
 
             // If there's not a valid variant, fallback to failure in [`Version::from_str`]
-            let variant = if explicit.is_some() {
-                VariantRequest::from_str(variant)
-                    .map_err(|()| Error::InvalidVersionRequest(s.to_string()))?
-            } else if let Ok(variant) = PythonVariant::from_str(variant) {
+            let variant = if let Ok(variant) = PythonVariant::from_str(variant) {
                 variant.into()
             } else {
                 return Ok((s, VariantRequest::default()));
@@ -5102,6 +5104,26 @@ mod tests {
             PythonRequest::Version(VersionRequest::from_str(">=3.10").unwrap()).as_pep440_version(),
             None
         );
+    }
+
+    #[test]
+    fn python_request_variants() {
+        for (request, build) in [
+            ("3+custom", "custom"),
+            ("cpython@3.12+avx2", "avx2"),
+            (
+                "cpython-3.13.2+custom20260825-linux-x86_64-gnu",
+                "custom20260825",
+            ),
+        ] {
+            assert_eq!(
+                PythonRequest::parse(request)
+                    .variants()
+                    .and_then(|variants| variants.build().cloned()),
+                Some(LenientPythonBuildVariant::from_str(build).unwrap()),
+                "request: {request}"
+            );
+        }
     }
 
     #[test]
