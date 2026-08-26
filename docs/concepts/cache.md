@@ -100,6 +100,18 @@ project's `pyproject.toml` to invalidate the cache whenever the environment vari
 cache-keys = [{ file = "pyproject.toml" }, { env = "MY_ENV_VAR" }]
 ```
 
+If a project depends on build output from another workspace package, use a `package` key to include
+that package's evaluated cache key. For example, if `bindings` links against a library built by the
+`core` workspace package:
+
+```toml title="bindings/pyproject.toml"
+[tool.uv]
+cache-keys = [{ file = "pyproject.toml" }, { package = "core" }]
+```
+
+The `core` package's cache entries are evaluated relative to the `core` project directory. The
+referenced package must be a member of the same workspace.
+
 Finally, to invalidate a project whenever a specific directory (like `src`) is created or removed,
 add the following to the project's `pyproject.toml`:
 

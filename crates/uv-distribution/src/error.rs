@@ -18,6 +18,7 @@ use uv_pypi_types::{HashAlgorithm, HashDigest};
 use uv_python::PythonVariant;
 use uv_redacted::DisplaySafeUrl;
 use uv_types::AnyErrorBuild;
+use uv_workspace::WorkspaceError;
 
 #[derive(Debug, Clone, Copy)]
 pub struct PythonVersion {
@@ -68,6 +69,8 @@ pub enum Error {
     CacheWalk(#[source] walkdir::Error),
     #[error(transparent)]
     CacheInfo(#[from] uv_cache_info::CacheInfoError),
+    #[error(transparent)]
+    Workspace(#[from] WorkspaceError),
 
     // Build error
     #[error(transparent)]

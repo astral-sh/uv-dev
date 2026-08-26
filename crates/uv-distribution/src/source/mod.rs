@@ -45,6 +45,7 @@ use uv_pypi_types::{HashAlgorithm, HashDigest, HashDigests, PyProjectToml, Resol
 use uv_redacted::DisplaySafeUrl;
 use uv_types::{BuildContext, BuildKey, BuildStack, SourceBuildTrait};
 use uv_workspace::pyproject::ToolUvSources;
+use uv_workspace::{DiscoveryOptions, Workspace};
 
 use crate::distribution_database::ManagedClient;
 use crate::error::Error;
@@ -1704,7 +1705,23 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         }
 
         // Determine the last-modified time of the source distribution.
-        let cache_info = CacheInfo::from_directory(resource.install_path)?;
+        let cache_info = if CacheInfo::has_package_cache_key(resource.install_path) {
+            let workspace = Workspace::discover(
+                resource.install_path,
+                &DiscoveryOptions::default(),
+                self.build_context.cache(),
+                self.build_context.workspace_cache(),
+            )
+            .await?;
+            let packages = workspace
+                .packages()
+                .iter()
+                .map(|(name, member)| (name.clone(), member.root().clone()))
+                .collect();
+            CacheInfo::from_directory_with_packages(resource.install_path, &packages)?
+        } else {
+            CacheInfo::from_directory(resource.install_path)?
+        };
 
         // Read the existing metadata from the cache.
         let entry = cache_shard.entry(LOCAL_REVISION);

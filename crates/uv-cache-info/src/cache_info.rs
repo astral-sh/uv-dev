@@ -6,6 +6,7 @@ use serde::Deserialize;
 use tracing::{debug, info_span, warn};
 
 use uv_fs::{Simplified, created_time};
+use uv_normalize::PackageName;
 
 use crate::git_info::{Commit, Tags};
 use crate::glob::cluster_globs;
@@ -17,6 +18,16 @@ pub enum CacheInfoError {
     Glob(#[from] globwalk::GlobError),
     #[error(transparent)]
     Io(#[from] std::io::Error),
+    #[error(
+        "Package `{package}` referenced by `cache-keys` was not found in the workspace containing `{}`",
+        directory.user_display()
+    )]
+    PackageNotFound {
+        package: PackageName,
+        directory: PathBuf,
+    },
+    #[error("Package cache key cycle detected: {0}")]
+    PackageCycle(String),
 }
 
 /// The information used to determine whether a built distribution is up-to-date, based on the
@@ -39,6 +50,18 @@ pub struct CacheInfo {
     /// The timestamp or inode of any directories that should be considered in the cache key.
     #[serde(default)]
     directories: BTreeMap<Cow<'static, str>, Option<DirectoryTimestamp>>,
+    /// The evaluated cache information for referenced workspace packages.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    packages: BTreeMap<PackageName, Option<PackageCacheInfo>>,
+}
+
+/// The location and evaluated cache information for a referenced workspace package.
+#[derive(Debug, Clone, Hash, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+struct PackageCacheInfo {
+    /// The path to the package, relative to the project that references it.
+    root: PathBuf,
+    /// The evaluated cache information for the package.
+    cache_info: Box<CacheInfo>,
 }
 
 impl CacheInfo {
@@ -62,28 +85,123 @@ impl CacheInfo {
 
     /// Compute the cache info for a given directory.
     pub fn from_directory(directory: &Path) -> Result<Self, CacheInfoError> {
+        Self::from_directory_inner(directory, None, &mut Vec::new())
+    }
+
+    /// Compute the cache info for a given directory, resolving package cache keys against the
+    /// provided workspace members.
+    pub fn from_directory_with_packages(
+        directory: &Path,
+        packages: &BTreeMap<PackageName, PathBuf>,
+    ) -> Result<Self, CacheInfoError> {
+        Self::from_directory_inner(directory, Some(packages), &mut Vec::new())
+    }
+
+    /// Recompute the cache info using package locations from the previous evaluation.
+    pub fn refresh_from_path(&self, path: &Path) -> Result<Self, CacheInfoError> {
+        let metadata = fs_err::metadata(path)?;
+        if metadata.is_file() {
+            Ok(Self::from_file(path)?)
+        } else {
+            self.refresh_from_directory(path)
+        }
+    }
+
+    /// Recompute the cache info for a directory using package locations from the previous
+    /// evaluation.
+    pub fn refresh_from_directory(&self, directory: &Path) -> Result<Self, CacheInfoError> {
+        Self::from_directory_with_previous(directory, self, &mut Vec::new())
+    }
+
+    /// Return whether the project declares a package cache key.
+    pub fn has_package_cache_key(directory: &Path) -> bool {
+        Self::read_cache_keys(directory).is_some_and(|cache_keys| {
+            cache_keys
+                .iter()
+                .any(|key| matches!(key, CacheKey::Package { .. }))
+        })
+    }
+
+    fn read_cache_keys(directory: &Path) -> Option<Vec<CacheKey>> {
+        let pyproject_path = directory.join("pyproject.toml");
+        let contents = fs_err::read_to_string(&pyproject_path).ok()?;
+        let result = info_span!("toml::from_str cache keys", path = %pyproject_path.display())
+            .in_scope(|| toml::from_str::<PyProjectToml>(&contents));
+        result
+            .ok()?
+            .tool
+            .and_then(|tool| tool.uv)
+            .and_then(|tool_uv| tool_uv.cache_keys)
+    }
+
+    fn from_directory_inner(
+        directory: &Path,
+        package_roots: Option<&BTreeMap<PackageName, PathBuf>>,
+        stack: &mut Vec<PackageName>,
+    ) -> Result<Self, CacheInfoError> {
+        Self::from_directory_impl(directory, stack, |package, stack| {
+            let Some(package_roots) = package_roots else {
+                return Ok(None);
+            };
+            let Some(root) = package_roots.get(package) else {
+                return Err(CacheInfoError::PackageNotFound {
+                    package: package.clone(),
+                    directory: directory.to_path_buf(),
+                });
+            };
+            let relative_root = pathdiff::diff_paths(root, directory).ok_or_else(|| {
+                CacheInfoError::PackageNotFound {
+                    package: package.clone(),
+                    directory: directory.to_path_buf(),
+                }
+            })?;
+            let cache_info = Self::from_directory_inner(root, Some(package_roots), stack)?;
+            Ok(Some(PackageCacheInfo {
+                root: relative_root,
+                cache_info: Box::new(cache_info),
+            }))
+        })
+    }
+
+    fn from_directory_with_previous(
+        directory: &Path,
+        previous: &Self,
+        stack: &mut Vec<PackageName>,
+    ) -> Result<Self, CacheInfoError> {
+        Self::from_directory_impl(directory, stack, |package, stack| {
+            let Some(Some(previous_package)) = previous.packages.get(package) else {
+                return Ok(None);
+            };
+            let root = directory.join(&previous_package.root);
+            let cache_info =
+                Self::from_directory_with_previous(&root, &previous_package.cache_info, stack)?;
+            Ok(Some(PackageCacheInfo {
+                root: previous_package.root.clone(),
+                cache_info: Box::new(cache_info),
+            }))
+        })
+    }
+
+    fn from_directory_impl<F>(
+        directory: &Path,
+        stack: &mut Vec<PackageName>,
+        mut resolve_package: F,
+    ) -> Result<Self, CacheInfoError>
+    where
+        F: FnMut(
+            &PackageName,
+            &mut Vec<PackageName>,
+        ) -> Result<Option<PackageCacheInfo>, CacheInfoError>,
+    {
         let mut commit = None;
         let mut tags = None;
         let mut last_changed: Option<(PathBuf, Timestamp)> = None;
         let mut directories = BTreeMap::new();
         let mut env = BTreeMap::new();
+        let mut packages = BTreeMap::new();
 
         // Read the cache keys.
-        let pyproject_path = directory.join("pyproject.toml");
-        let cache_keys = if let Ok(contents) = fs_err::read_to_string(&pyproject_path) {
-            let result = info_span!("toml::from_str cache keys", path = %pyproject_path.display())
-                .in_scope(|| toml::from_str::<PyProjectToml>(&contents));
-            if let Ok(pyproject_toml) = result {
-                pyproject_toml
-                    .tool
-                    .and_then(|tool| tool.uv)
-                    .and_then(|tool_uv| tool_uv.cache_keys)
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+        let cache_keys = Self::read_cache_keys(directory);
 
         // If no cache keys were defined, use the defaults.
         let cache_keys = cache_keys.unwrap_or_else(|| {
@@ -220,6 +338,21 @@ impl CacheInfo {
                     let value = std::env::var(&var).ok();
                     env.insert(var, value);
                 }
+                CacheKey::Package { package } => {
+                    if let Some(position) = stack.iter().position(|item| item == &package) {
+                        let cycle = stack[position..]
+                            .iter()
+                            .chain(std::iter::once(&package))
+                            .map(ToString::to_string)
+                            .collect::<Vec<_>>()
+                            .join(" -> ");
+                        return Err(CacheInfoError::PackageCycle(cycle));
+                    }
+                    stack.push(package.clone());
+                    let cache_info = resolve_package(&package, stack)?;
+                    stack.pop();
+                    packages.insert(package, cache_info);
+                }
             }
         }
 
@@ -294,6 +427,7 @@ impl CacheInfo {
             tags,
             env,
             directories,
+            packages,
         })
     }
 
@@ -315,6 +449,7 @@ impl CacheInfo {
             && self.tags.is_none()
             && self.env.is_empty()
             && self.directories.is_empty()
+            && self.packages.is_empty()
     }
 }
 
@@ -351,6 +486,8 @@ pub enum CacheKey {
     Git { git: GitPattern },
     /// Ex) `{ env = "UV_CACHE_INFO" }`
     Environment { env: String },
+    /// Ex) `{ package = "example" }`
+    Package { package: PackageName },
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -375,6 +512,88 @@ pub struct GitSet {
 enum DirectoryTimestamp {
     Timestamp(Timestamp),
     Inode(u64),
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::str::FromStr;
+
+    use anyhow::Result;
+    use tempfile::TempDir;
+    use uv_normalize::PackageName;
+
+    use super::{CacheInfo, CacheInfoError};
+
+    #[test]
+    fn package_cache_key() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let foo = temp_dir.path().join("foo");
+        let bar = temp_dir.path().join("bar");
+        fs_err::create_dir_all(&foo)?;
+        fs_err::create_dir_all(&bar)?;
+        fs_err::write(
+            foo.join("pyproject.toml"),
+            r#"
+            [tool.uv]
+            cache-keys = [{ file = "source.cpp" }]
+            "#,
+        )?;
+        fs_err::write(foo.join("source.cpp"), "first")?;
+        fs_err::write(
+            bar.join("pyproject.toml"),
+            r#"
+            [tool.uv]
+            cache-keys = [{ package = "foo" }]
+            "#,
+        )?;
+
+        let package = PackageName::from_str("foo")?;
+        let package_roots = BTreeMap::from([(package.clone(), foo.clone())]);
+        let initial = CacheInfo::from_directory_with_packages(&bar, &package_roots)?;
+        let package_info = initial.packages[&package].as_ref().unwrap();
+        assert_eq!(package_info.root, std::path::Path::new("../foo"));
+
+        fs_err::write(foo.join("source.cpp"), "second")?;
+        let updated = initial.refresh_from_directory(&bar)?;
+        assert_ne!(initial, updated);
+
+        Ok(())
+    }
+
+    #[test]
+    fn package_cache_key_cycle() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let foo = temp_dir.path().join("foo");
+        let bar = temp_dir.path().join("bar");
+        fs_err::create_dir_all(&foo)?;
+        fs_err::create_dir_all(&bar)?;
+        fs_err::write(
+            foo.join("pyproject.toml"),
+            r#"
+            [tool.uv]
+            cache-keys = [{ package = "bar" }]
+            "#,
+        )?;
+        fs_err::write(
+            bar.join("pyproject.toml"),
+            r#"
+            [tool.uv]
+            cache-keys = [{ package = "foo" }]
+            "#,
+        )?;
+
+        let package_roots = BTreeMap::from([
+            (PackageName::from_str("foo")?, foo),
+            (PackageName::from_str("bar")?, bar.clone()),
+        ]);
+        let err = CacheInfo::from_directory_with_packages(&bar, &package_roots).unwrap_err();
+        assert!(
+            matches!(err, CacheInfoError::PackageCycle(ref cycle) if cycle == "foo -> bar -> foo")
+        );
+
+        Ok(())
+    }
 }
 
 #[cfg(all(test, unix))]

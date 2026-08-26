@@ -23,7 +23,7 @@ use uv_preview::Preview;
 use uv_python::{Interpreter, PythonEnvironment, canonicalize_executable};
 use uv_settings::MalwareCheckSettings;
 use uv_types::{HashStrategy, HashVerification, SourceTreeEditablePolicy};
-use uv_workspace::WorkspaceCache;
+use uv_workspace::{DiscoveryOptions, Workspace, WorkspaceCache};
 
 /// An ephemeral [`PythonEnvironment`] for running an individual command.
 #[derive(Debug)]
@@ -187,6 +187,7 @@ impl CachedEnvironment {
             installer_metadata,
             concurrency,
             cache,
+            workspace_cache,
             printer,
             preview,
         )
@@ -214,6 +215,7 @@ impl CachedEnvironment {
         installer_metadata: bool,
         concurrency: &Concurrency,
         cache: &Cache,
+        workspace_cache: &WorkspaceCache,
         printer: Printer,
         preview: Preview,
     ) -> Result<Self, ProjectError> {
@@ -243,6 +245,7 @@ impl CachedEnvironment {
             installer_metadata,
             concurrency,
             cache,
+            workspace_cache,
             printer,
             preview,
         )
@@ -261,12 +264,14 @@ impl CachedEnvironment {
         installer_metadata: bool,
         concurrency: &Concurrency,
         cache: &Cache,
+        workspace_cache: &WorkspaceCache,
         printer: Printer,
         preview: Preview,
     ) -> Result<Self, ProjectError> {
         // Hash the resolution by hashing the generated lockfile.
         let resolution_hash = {
-            let mut distributions = resolution
+            let mut distributions = Vec::new();
+            for (dist, hashes) in resolution
                 .graph()
                 .node_weights()
                 .filter_map(|node| match node {
@@ -277,14 +282,13 @@ impl CachedEnvironment {
                     } => Some((dist, hashes)),
                     Node::Dist { install: false, .. } | Node::Root => None,
                 })
-                .map(|(dist, hashes)| {
-                    Ok(CachedEnvironmentDist {
-                        dist: dist.clone(),
-                        hashes: hashes.clone(),
-                        cache_info: Self::cache_info(dist).map_err(ProjectError::from)?,
-                    })
-                })
-                .collect::<Result<Vec<_>, ProjectError>>()?;
+            {
+                distributions.push(CachedEnvironmentDist {
+                    dist: dist.clone(),
+                    hashes: hashes.clone(),
+                    cache_info: Self::cache_info(dist, cache, workspace_cache).await?,
+                });
+            }
             distributions.sort_unstable_by(|left, right| {
                 left.dist
                     .distribution_id()
@@ -359,7 +363,11 @@ impl CachedEnvironment {
 
     /// Return any mutable cache info that should invalidate a cached environment for a given
     /// distribution.
-    fn cache_info(dist: &ResolvedDist) -> Result<Option<CacheInfo>, uv_cache_info::CacheInfoError> {
+    async fn cache_info(
+        dist: &ResolvedDist,
+        cache: &Cache,
+        workspace_cache: &WorkspaceCache,
+    ) -> Result<Option<CacheInfo>, ProjectError> {
         let path = match dist {
             ResolvedDist::Installed { .. } => return Ok(None),
             ResolvedDist::Installable { dist, .. } => match dist.as_ref() {
@@ -370,7 +378,21 @@ impl CachedEnvironment {
             },
         };
 
-        Ok(Some(CacheInfo::from_path(path)?))
+        if path.is_dir() && CacheInfo::has_package_cache_key(path) {
+            let workspace =
+                Workspace::discover(path, &DiscoveryOptions::default(), cache, workspace_cache)
+                    .await?;
+            let packages = workspace
+                .packages()
+                .iter()
+                .map(|(name, member)| (name.clone(), member.root().clone()))
+                .collect();
+            Ok(Some(CacheInfo::from_directory_with_packages(
+                path, &packages,
+            )?))
+        } else {
+            Ok(Some(CacheInfo::from_path(path)?))
+        }
     }
 
     /// Return the [`Interpreter`] to use for the cached environment, based on a given

@@ -132,6 +132,12 @@ pub struct Options {
     /// specify `cache-keys = [{ env = "MACOSX_DEPLOYMENT_TARGET" }]` to invalidate the cache
     /// whenever the environment variable changes.
     ///
+    /// Cache keys can also include the evaluated cache key of another workspace package. For
+    /// example, if a project links against a library built by the `core` workspace package, you
+    /// can specify `cache-keys = [{ file = "pyproject.toml" }, { package = "core" }]` to rebuild
+    /// the project whenever `core`'s cache key changes. The package must be a member of the same
+    /// workspace.
+    ///
     /// Cache keys only affect the project defined by the `pyproject.toml` in which they're
     /// specified (as opposed to, e.g., affecting all members in a workspace), and all paths and
     /// globs are interpreted as relative to the project directory.
