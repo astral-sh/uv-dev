@@ -34,12 +34,17 @@ is which directory should be used as the root when resolving paths: the member, 
 some combination. Cache keys are currently per-build metadata, so loading workspace information
 also crosses an existing metadata boundary.
 
-The reporter clarified that deduplicating configuration is not sufficient if a solution causes
-every native member to rebuild. The desired invalidation is selective and follows dependency
-direction: a change to `foo` should rebuild its dependent `bar`, while a change only to `bar` should
-not rebuild its dependency `foo` or unrelated native packages. The maintainers do not currently
-expect plain root-level globs to cause that over-invalidation, but any eventual workspace or
-inheritance mechanism still needs to preserve this selectivity.
+The reporter clarified that there are two distinct capabilities. Workspace-level defaults could
+deduplicate common key declarations, but they would not by themselves make a change to `foo`
+invalidate its dependent `bar`. Dependency propagation requires `bar` to incorporate `foo`'s
+evaluated cache information. For the proposed `{ inherit = "foo" }` form, the reporter's intended
+path semantics are unambiguous: evaluate `foo`'s patterns relative to `foo`, then include that
+evaluated result in `bar`'s cache key.
+
+Invalidation should remain selective and follow dependency direction: a change to `foo` should
+rebuild its dependent `bar`, while a change only to `bar` should not rebuild its dependency `foo` or
+unrelated native packages. The maintainers do not currently expect plain root-level globs to cause
+workspace-wide rebuilding, but those globs also do not appear to solve dependent invalidation.
 
 ## Draft response
 
