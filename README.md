@@ -21,6 +21,12 @@ A repository member has since said the request is reasonable. This is a positive
 for the enhancement, but the discussion does not yet decide the accepted spellings, default
 manylinux compatibility floor, exact variant set, or implementation plan.
 
+A later contributor reports the same CLI parsing failure for
+`loongarch64-unknown-linux-gnu`. This broadens the potential scope beyond the two architectures in
+the issue title. Current source also recognizes `Arch::LoongArch64` in the lower-level platform-tag
+layer but does not expose a corresponding `TargetTriple` value. The comment does not include a uv
+version or host environment, so only the rejected command and source-layer gap are established.
+
 ## Draft response
 
 Thanks. The accepted `--python-platform` values come from uv's explicit `TargetTriple`
@@ -43,9 +49,10 @@ Adding them would extend supported functionality rather than correct a regressio
 
 The reporter's observation about the lower-level layer is supported by the source:
 `crates/uv-platform-tags/src/platform.rs` recognizes `Arch::S390X` and
-`Arch::Powerpc64Le`, and `platform_tag.rs` contains architecture-specific compatibility helpers.
-That makes the requested wiring plausible, but it does not establish that the higher-level target
-selection, marker-environment mapping, naming, and manylinux baseline are already implemented.
+`Arch::Powerpc64Le`; it also recognizes `Arch::LoongArch64`, as relevant to the follow-up comment.
+`platform_tag.rs` contains architecture-specific compatibility helpers for all three. That makes
+the requested wiring plausible, but it does not establish that the higher-level target selection,
+marker-environment mapping, naming, and manylinux baseline are already implemented.
 
 No same-request tracker was found, so the issue is not a duplicate. The repository's earlier
 manylinux target-list request, astral-sh/uv#4966, was also classified as an enhancement.
@@ -55,7 +62,24 @@ manylinux target-list request, astral-sh/uv#4966, was also classified as an enha
 Charlie Marsh responded that the request is reasonable. Treat this as initial acceptance of the
 feature direction, not a completed design decision: no target names or compatibility baselines were
 confirmed, and the comment did not explicitly invite an implementation pull request. The remaining
-next step is to agree on that scope before implementation.
+next step is to agree on that scope before implementation. Because the LoongArch64 report came
+later, this response does not expressly confirm whether LoongArch64 should be included with the
+original S390x and ppc64le work.
+
+## Additional reported target
+
+A contributor supplied this additional failing invocation:
+
+```console
+$ echo "torch==2.11.0" | uv pip compile - --python-platform loongarch64-unknown-linux-gnu
+error: invalid value 'loongarch64-unknown-linux-gnu' for '--python-platform <PYTHON_PLATFORM>'
+```
+
+This fails at accepted-value parsing just like the original two reports, before package resolution.
+The repository source contains LoongArch64 platform-tag parsing, architecture naming, a minimum
+manylinux tag (`manylinux_2_36`), and compatibility helpers, but no LoongArch64 configuration
+target. This is therefore a credible adjacent addition to the requested target set. Maintainers
+still need to decide whether it belongs in astral-sh/uv#21299 or should be tracked separately.
 
 ## Related
 
@@ -88,3 +112,7 @@ astral-sh/uv#10217 was also inspected; it only added manylinux2014 aliases for x
 The especially plausible open astral-sh/uv#7957 was ruled out because it asks for runnable
 cross-platform virtual environments and cross-build metadata, which is substantially broader than
 adding two wheel-resolution targets to the existing flag.
+
+Follow-up searches for `loongarch64` and `LoongArch` found no separate issue or pull request for a
+LoongArch64 `--python-platform` target; the only direct result is the new comment on
+astral-sh/uv#21299.
