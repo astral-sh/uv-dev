@@ -6,6 +6,7 @@ use futures::{StreamExt, TryStreamExt, stream};
 use uv_cache::Cache;
 use uv_client::{BaseClientBuilder, PackedArchive, RegistryClientBuilder};
 use uv_configuration::Concurrency;
+use uv_preview::{Preview, PreviewFeature};
 use uv_warnings::warn_user;
 use uv_workspace::{DiscoveryOptions, MemberDiscovery, VirtualProject, WorkspaceCache};
 
@@ -23,7 +24,15 @@ pub(crate) async fn download(
     cache: &Cache,
     workspace_cache: &WorkspaceCache,
     printer: Printer,
+    preview: Preview,
 ) -> Result<ExitStatus> {
+    if !preview.is_enabled(PreviewFeature::DownloadCommand) {
+        warn_user!(
+            "`uv download` is experimental and may change without warning. Pass `--preview-features {}` to disable this warning.",
+            PreviewFeature::DownloadCommand
+        );
+    }
+
     let project = VirtualProject::discover(
         project_dir,
         &DiscoveryOptions {
