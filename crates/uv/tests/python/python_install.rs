@@ -129,7 +129,7 @@ fn python_install() {
 
 #[tokio::test]
 #[cfg(feature = "test-python-managed")]
-async fn python_install_build_variant() {
+async fn python_install_build_variant() -> anyhow::Result<()> {
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
         .with_filtered_python_sources()
@@ -139,6 +139,26 @@ async fn python_install_build_variant() {
         .with_managed_python_dirs();
 
     context.python_install().arg("3.13").assert().success();
+
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        dependencies = []
+        "#,
+    )?;
+    context
+        .sync()
+        .arg("--preview-features")
+        .arg("centralized-project-envs")
+        .arg("--python")
+        .arg("3.13")
+        .assert()
+        .success();
+    #[cfg(unix)]
+    let stock_environment = fs_err::read_link(context.temp_dir.join(".venv"))?;
 
     let managed_dir = context.temp_dir.child("managed");
     let default_path = fs_err::read_dir(managed_dir.path())
@@ -161,6 +181,7 @@ async fn python_install_build_variant() {
     let custom_name = format!("{version}+custom-{platform}");
     let custom_path = managed_dir.join(&custom_name);
     fs_err::rename(&default_path, &custom_path).unwrap();
+    context.python_install().arg("3.13").assert().success();
 
     let arch = key.arch().to_string();
     let (arch_family, arch_variant) = arch
@@ -239,6 +260,26 @@ async fn python_install_build_variant() {
     ----- stdout -----
     [TEMP_DIR]/managed/cpython-3.13.[LATEST]+custom+pgo+lto-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
     ");
+
+    // Restore the custom build before checking project environment reuse.
+    fs_err::rename(&optimized_path, &custom_path)?;
+
+    context
+        .sync()
+        .arg("--preview-features")
+        .arg("centralized-project-envs")
+        .arg("--python")
+        .arg("3.13+custom")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Creating virtual environment"));
+    #[cfg(unix)]
+    assert_ne!(
+        stock_environment,
+        fs_err::read_link(context.temp_dir.join(".venv"))?
+    );
+
+    Ok(())
 }
 
 #[tokio::test]
