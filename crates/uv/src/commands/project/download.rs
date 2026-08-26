@@ -1,7 +1,7 @@
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use futures::{StreamExt, TryStreamExt, stream};
 use uv_cache::Cache;
 use uv_client::{BaseClientBuilder, PackedArchive, RegistryClientBuilder};
@@ -20,10 +20,24 @@ use crate::settings::ResolverSettings;
 
 mod requirements;
 
+fn output_path(directory: &Path, filename: &str) -> Result<PathBuf> {
+    if !matches!(
+        Path::new(filename)
+            .components()
+            .collect::<Vec<_>>()
+            .as_slice(),
+        [std::path::Component::Normal(_)]
+    ) {
+        bail!("Distribution has an invalid filename: `{filename}`");
+    }
+    Ok(directory.join(filename))
+}
+
 /// Populate the packed cache from the existing universal lockfile.
 pub(crate) async fn download(
     project_dir: &Path,
     requirements: &[PathBuf],
+    output_dir: Option<&Path>,
     settings: ResolverSettings,
     client_builder: BaseClientBuilder<'_>,
     concurrency: Concurrency,
@@ -39,9 +53,16 @@ pub(crate) async fn download(
         );
     }
 
+    if let Some(output_dir) = output_dir {
+        fs_err::tokio::create_dir_all(output_dir)
+            .await
+            .with_context(|| format!("Failed to create `{}`", output_dir.display()))?;
+    }
+
     if !requirements.is_empty() {
         return requirements::download(
             requirements,
+            output_dir,
             settings,
             client_builder,
             concurrency,
@@ -86,26 +107,75 @@ pub(crate) async fn download(
             );
         }
         for artifact in package.artifacts(target.install_path())? {
-            artifacts.push((package.name().clone(), artifact));
+            let filename = output_dir
+                .map(|output_dir| output_path(output_dir, &artifact.filename))
+                .transpose()?;
+            artifacts.push((package.name().clone(), artifact, filename));
         }
+    }
+    if output_dir.is_some() {
+        artifacts.sort_unstable_by(|(_, _, left), (_, _, right)| left.cmp(right));
+        for pair in artifacts.windows(2) {
+            let [
+                (_, previous, Some(previous_filename)),
+                (_, current, Some(current_filename)),
+            ] = pair
+            else {
+                continue;
+            };
+            if previous_filename == current_filename {
+                let same_artifact = previous.url == current.url
+                    && previous.hash == current.hash
+                    && previous.size == current.size;
+                let same_content = previous.hash.is_some()
+                    && previous.hash == current.hash
+                    && (previous.size.is_none()
+                        || current.size.is_none()
+                        || previous.size == current.size);
+                if same_artifact || same_content {
+                    continue;
+                }
+                bail!(
+                    "Multiple distributions would be written to `{}`: {} and {}",
+                    current_filename.display(),
+                    previous.url,
+                    current.url
+                );
+            }
+        }
+        artifacts.dedup_by(|left, right| left.2 == right.2);
     }
     let count = artifacts.len();
     let downloaded = stream::iter(artifacts)
-        .map(|(name, artifact)| {
+        .map(|(name, artifact, filename)| {
             let client = &client;
             async move {
-                PackedArchive::download(
-                    cache,
-                    client,
-                    &name,
-                    &artifact.url,
-                    artifact.hash.as_ref().map_or(HashPolicy::None, |hash| {
-                        HashPolicy::All(std::slice::from_ref(hash))
-                    }),
-                    artifact.size,
-                )
-                .await
-                .with_context(|| format!("Failed to download `{name}` from {}", artifact.url))
+                let hashes = artifact.hash.as_ref().map_or(HashPolicy::None, |hash| {
+                    HashPolicy::All(std::slice::from_ref(hash))
+                });
+                let downloaded = if let Some(destination) = filename {
+                    PackedArchive::download_to(
+                        client,
+                        &artifact.url,
+                        hashes,
+                        artifact.size,
+                        &destination,
+                        cache.must_revalidate_package(&name),
+                    )
+                    .await
+                } else {
+                    PackedArchive::download(
+                        cache,
+                        client,
+                        &name,
+                        &artifact.url,
+                        hashes,
+                        artifact.size,
+                    )
+                    .await
+                };
+                downloaded
+                    .with_context(|| format!("Failed to download `{name}` from {}", artifact.url))
             }
         })
         .buffer_unordered(concurrency.downloads)
@@ -113,9 +183,17 @@ pub(crate) async fn download(
             Ok(count + usize::from(downloaded))
         })
         .await?;
-    writeln!(
-        printer.stderr(),
-        "Downloaded {downloaded} distributions ({count} total)"
-    )?;
+    if let Some(output_dir) = output_dir {
+        writeln!(
+            printer.stderr(),
+            "Downloaded {downloaded} distributions to {} ({count} total)",
+            output_dir.display()
+        )?;
+    } else {
+        writeln!(
+            printer.stderr(),
+            "Downloaded {downloaded} distributions ({count} total)"
+        )?;
+    }
     Ok(ExitStatus::Success)
 }

@@ -1,5 +1,5 @@
 use std::io::SeekFrom;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use futures::TryStreamExt;
@@ -58,6 +58,12 @@ struct Metadata {
     size: u64,
 }
 
+struct DownloadedArchive {
+    temporary: tempfile::NamedTempFile,
+    hash: HashDigest,
+    size: u64,
+}
+
 fn entry(cache: &Cache, url: &DisplaySafeUrl) -> CacheEntry {
     let mut url = url.clone();
     url.remove_credentials();
@@ -70,32 +76,19 @@ fn entry(cache: &Cache, url: &DisplaySafeUrl) -> CacheEntry {
 }
 
 impl PackedArchive {
-    /// Fetch an archive, checking the expected digests before publishing it to the cache.
-    /// Returns whether a new archive was downloaded.
-    pub async fn download(
-        cache: &Cache,
+    async fn fetch(
         client: &RegistryClient,
-        name: &PackageName,
         url: &DisplaySafeUrl,
         expected_hashes: HashPolicy<'_>,
         expected_size: Option<u64>,
-    ) -> Result<bool> {
-        let entry = entry(cache, url);
-        let _lock = entry.with_file(".lock").lock().await?;
-        if cache.freshness(&entry, Some(name), None)? != Freshness::Stale
-            && Self::read(cache, url, expected_hashes, expected_size)
-                .await?
-                .is_some()
-        {
-            return Ok(false);
-        }
-
+        directory: &Path,
+    ) -> Result<DownloadedArchive> {
         let mut algorithms = vec![HashAlgorithm::Sha256];
         algorithms.extend(expected_hashes.algorithms());
         algorithms.sort();
         algorithms.dedup();
         let mut hashers = algorithms.into_iter().map(Hasher::from).collect::<Vec<_>>();
-        let temporary = tempfile::NamedTempFile::new_in(entry.dir())?;
+        let temporary = uv_fs::tempfile_in(directory)?;
         let mut output = fs_err::tokio::File::from_std(fs_err::File::from_parts(
             temporary.reopen()?,
             temporary.path(),
@@ -140,10 +133,120 @@ impl PackedArchive {
             .into_iter()
             .find(|hash| hash.algorithm == HashAlgorithm::Sha256)
             .context("Missing SHA-256 digest")?;
+        Ok(DownloadedArchive {
+            temporary,
+            hash,
+            size,
+        })
+    }
+
+    /// Fetch an archive, checking the expected digests before publishing it to the cache.
+    /// Returns whether a new archive was downloaded.
+    pub async fn download(
+        cache: &Cache,
+        client: &RegistryClient,
+        name: &PackageName,
+        url: &DisplaySafeUrl,
+        expected_hashes: HashPolicy<'_>,
+        expected_size: Option<u64>,
+    ) -> Result<bool> {
+        let entry = entry(cache, url);
+        let _lock = entry.with_file(".lock").lock().await?;
+        if cache.freshness(&entry, Some(name), None)? != Freshness::Stale
+            && Self::read(cache, url, expected_hashes, expected_size)
+                .await?
+                .is_some()
+        {
+            return Ok(false);
+        }
+
+        let DownloadedArchive {
+            temporary,
+            hash,
+            size,
+        } = Self::fetch(client, url, expected_hashes, expected_size, entry.dir()).await?;
         let destination = entry.with_file(&*hash.digest);
         temporary.persist(destination.path())?;
         write_atomic(entry.with_file("package").path(), name.as_ref()).await?;
         write_atomic(entry.path(), rmp_serde::to_vec(&Metadata { hash, size })?).await?;
+        Ok(true)
+    }
+
+    /// Fetch an archive to a user-provided path without publishing it to the cache.
+    /// Returns whether a new archive was downloaded.
+    pub async fn download_to(
+        client: &RegistryClient,
+        url: &DisplaySafeUrl,
+        expected_hashes: HashPolicy<'_>,
+        expected_size: Option<u64>,
+        destination: &Path,
+        refresh: bool,
+    ) -> Result<bool> {
+        if !refresh && Self::verify_output(destination, url, expected_hashes, expected_size).await?
+        {
+            return Ok(false);
+        }
+        let directory = destination
+            .parent()
+            .context("Download destination does not have a parent directory")?;
+        let DownloadedArchive { temporary, .. } =
+            Self::fetch(client, url, expected_hashes, expected_size, directory).await?;
+        if refresh {
+            match fs_err::tokio::remove_file(destination).await {
+                Ok(()) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => return Err(err.into()),
+            }
+        }
+        match temporary.persist_noclobber(destination) {
+            Ok(_) => Ok(true),
+            Err(err) if err.error.kind() == std::io::ErrorKind::AlreadyExists => {
+                if Self::verify_output(destination, url, expected_hashes, expected_size).await? {
+                    Ok(false)
+                } else {
+                    bail!(
+                        "A distribution already exists at `{}` and cannot be verified; use `--refresh` to replace it",
+                        destination.display()
+                    )
+                }
+            }
+            Err(err) => Err(err.error.into()),
+        }
+    }
+
+    async fn verify_output(
+        path: &Path,
+        url: &DisplaySafeUrl,
+        expected_hashes: HashPolicy<'_>,
+        expected_size: Option<u64>,
+    ) -> Result<bool> {
+        let mut file = match fs_err::tokio::File::open(path).await {
+            Ok(file) => file,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(err) => return Err(err.into()),
+        };
+        if expected_hashes.is_none() && expected_size.is_none() {
+            return Ok(false);
+        }
+        let mut hashers = expected_hashes
+            .algorithms()
+            .into_iter()
+            .map(Hasher::from)
+            .collect::<Vec<_>>();
+        let mut reader = HashReader::new(&mut file, &mut hashers);
+        let size = tokio::io::copy(&mut reader, &mut tokio::io::sink()).await?;
+        let hashes = hashers
+            .into_iter()
+            .map(HashDigest::from)
+            .collect::<Vec<_>>();
+        if !expected_hashes.matches(&hashes)
+            || expected_size.is_some_and(|expected| size != expected)
+        {
+            bail!(
+                "Hash or size mismatch for existing archive `{}` from {url}; use `--refresh` to replace it",
+                path.display()
+            );
+        }
         Ok(true)
     }
 

@@ -1,5 +1,5 @@
 use std::fmt::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use futures::{StreamExt, TryStreamExt, stream};
@@ -27,6 +27,7 @@ use crate::printer::Printer;
 use crate::settings::ResolverSettings;
 
 struct Artifact {
+    filename: String,
     url: DisplaySafeUrl,
     hashes: HashDigests,
     size: Option<u64>,
@@ -35,6 +36,7 @@ struct Artifact {
 /// Download a pre-resolved requirements manifest without reading distribution metadata.
 pub(super) async fn download(
     requirements: &[PathBuf],
+    output_dir: Option<&Path>,
     settings: ResolverSettings,
     client_builder: BaseClientBuilder<'_>,
     concurrency: Concurrency,
@@ -132,7 +134,7 @@ pub(super) async fn download(
                 .await?;
                 let mut artifacts = Vec::new();
                 for (filename, file) in files {
-                    match filename {
+                    match &filename {
                         DistFilename::WheelFilename(_)
                             if build_options.no_binary_package(&requirement.name) =>
                         {
@@ -145,18 +147,21 @@ pub(super) async fn download(
                         }
                         _ => {}
                     }
+                    let filename = filename.to_string();
                     let url = file.url.to_url()?;
                     if let Some(zstd) = file.zstd {
                         let mut url = url.clone();
                         let path = format!("{}.tar.zst", url.path());
                         url.set_path(&path);
                         artifacts.push(Artifact {
+                            filename: format!("{filename}.tar.zst"),
                             url,
                             hashes: zstd.hashes,
                             size: zstd.size,
                         });
                     }
                     artifacts.push(Artifact {
+                        filename,
                         url,
                         hashes: file.hashes,
                         size: file.size,
@@ -186,16 +191,30 @@ pub(super) async fn download(
                             } else {
                                 hashes
                             };
-                            match PackedArchive::download(
-                                cache,
-                                client,
-                                name,
-                                &artifact.url,
-                                policy,
-                                artifact.size,
-                            )
-                            .await
-                            {
+                            let downloaded = if let Some(output_dir) = output_dir {
+                                let destination =
+                                    super::output_path(output_dir, &artifact.filename)?;
+                                PackedArchive::download_to(
+                                    client,
+                                    &artifact.url,
+                                    policy,
+                                    artifact.size,
+                                    &destination,
+                                    cache.must_revalidate_package(name),
+                                )
+                                .await
+                            } else {
+                                PackedArchive::download(
+                                    cache,
+                                    client,
+                                    name,
+                                    &artifact.url,
+                                    policy,
+                                    artifact.size,
+                                )
+                                .await
+                            };
+                            match downloaded {
                                 Ok(downloaded) => Ok(Some(downloaded)),
                                 Err(err)
                                     if hashes.requires_validation()
@@ -227,6 +246,7 @@ pub(super) async fn download(
                 total += matches;
             }
             RequirementSource::Url { url, .. } | RequirementSource::Path { url, .. } => {
+                let filename = url.filename()?.into_owned();
                 let name = match &entry.requirement {
                     UnresolvedRequirement::Named(requirement) => requirement.name.clone(),
                     UnresolvedRequirement::Unnamed(_) => {
@@ -242,15 +262,28 @@ pub(super) async fn download(
                 };
                 let url = url.to_url();
                 downloaded += usize::from(
-                    PackedArchive::download(
-                        cache,
-                        &client,
-                        &name,
-                        &url,
-                        hasher.get_url(&url),
-                        None,
-                    )
-                    .await
+                    if let Some(output_dir) = output_dir {
+                        let destination = super::output_path(output_dir, &filename)?;
+                        PackedArchive::download_to(
+                            &client,
+                            &url,
+                            hasher.get_url(&url),
+                            None,
+                            &destination,
+                            cache.must_revalidate_package(&name),
+                        )
+                        .await
+                    } else {
+                        PackedArchive::download(
+                            cache,
+                            &client,
+                            &name,
+                            &url,
+                            hasher.get_url(&url),
+                            None,
+                        )
+                        .await
+                    }
                     .with_context(|| format!("Failed to download `{name}` from {url}"))?,
                 );
                 total += 1;
@@ -258,10 +291,18 @@ pub(super) async fn download(
             _ => bail!("Unsupported requirement: `{}`", entry.requirement),
         }
     }
-    writeln!(
-        printer.stderr(),
-        "Downloaded {downloaded} distributions ({total} total)"
-    )?;
+    if let Some(output_dir) = output_dir {
+        writeln!(
+            printer.stderr(),
+            "Downloaded {downloaded} distributions to {} ({total} total)",
+            output_dir.display()
+        )?;
+    } else {
+        writeln!(
+            printer.stderr(),
+            "Downloaded {downloaded} distributions ({total} total)"
+        )?;
+    }
     Ok(ExitStatus::Success)
 }
 

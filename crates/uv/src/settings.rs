@@ -4372,6 +4372,7 @@ pub(crate) struct InstallerSettingsRef<'a> {
 #[derive(Debug)]
 pub(crate) struct DownloadSettings {
     pub(crate) requirements: Vec<PathBuf>,
+    pub(crate) output_dir: Option<PathBuf>,
     pub(crate) refresh: Refresh,
     pub(crate) settings: ResolverSettings,
 }
@@ -4387,6 +4388,7 @@ impl DownloadSettings {
             .resolve(configured_indexes(filesystem.as_ref()))?;
         Ok(Self {
             requirements: args.requirements,
+            output_dir: args.output_dir,
             refresh: Refresh::try_from(args.refresh)?,
             settings: ResolverSettings::combine(
                 ResolverOptions {
