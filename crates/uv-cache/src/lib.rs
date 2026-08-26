@@ -981,8 +981,9 @@ pub trait CleanReporter: Send + Sync {
 pub enum CacheBucket {
     /// Original, packed distributions explicitly fetched by `uv download`.
     ///
-    /// Each URL has a shard containing a package name, an atomic metadata pointer, and
-    /// the original archive named by its SHA-256 digest.
+    /// Source and package shards contain `.http` or `.rev` pointers and the original archives,
+    /// named by their SHA-256 digests. Wheel pointers distinguish the packed representation;
+    /// source archive pointers are keyed by version and format (or format alone for direct URLs).
     Packed,
     /// Wheels (excluding built wheels), alongside their metadata and cache policy.
     ///
@@ -1236,7 +1237,7 @@ pub enum CacheBucket {
 impl CacheBucket {
     fn to_str(self) -> &'static str {
         match self {
-            Self::Packed => "packed-v0",
+            Self::Packed => "packed-v1",
             // Note that when bumping this, you'll also need to bump it
             // in `crates/uv/tests/build/cache_prune.rs`.
             Self::SourceDistributions => "sdists-v9",
@@ -1279,16 +1280,7 @@ impl CacheBucket {
 
         let mut summary = cache.removal();
         match self {
-            Self::Packed => {
-                for directory in directories(cache.bucket(self))? {
-                    if fs_err::read_to_string(directory.join("package"))
-                        .is_ok_and(|package| package == name.as_ref())
-                    {
-                        summary += cache.remove_path(directory)?;
-                    }
-                }
-            }
-            Self::Wheels => {
+            Self::Packed | Self::Wheels => {
                 // For `pypi` wheels, we expect a directory per package (indexed by name).
                 let root = cache.bucket(self).join(WheelCacheKind::Pypi);
                 summary += cache.remove_path(root.join(name.to_string()))?;
@@ -1305,6 +1297,13 @@ impl CacheBucket {
                 let root = cache.bucket(self).join(WheelCacheKind::Url);
                 for directory in directories(root)? {
                     summary += cache.remove_path(directory.join(name.to_string()))?;
+                }
+                // Packed local archives use the same package nesting as remote archives.
+                if self == Self::Packed {
+                    let root = cache.bucket(self).join(WheelCacheKind::Path);
+                    for directory in directories(root)? {
+                        summary += cache.remove_path(directory.join(name.to_string()))?;
+                    }
                 }
             }
             Self::SourceDistributions => {

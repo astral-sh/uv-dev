@@ -8,11 +8,35 @@ use async_zip::{Compression, ZipEntryBuilder};
 use indoc::{formatdoc, indoc};
 use insta::allow_duplicates;
 use sha2::{Digest, Sha256};
-use wiremock::matchers::{basic_auth, method, path};
+use wiremock::matchers::{basic_auth, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+use uv_cache::{Cache, CacheBucket, WheelCache};
+use uv_distribution_types::IndexUrl;
+use uv_redacted::DisplaySafeUrl;
 use uv_test::archive::write_tar_gz;
 use uv_test::{TestContext, uv_snapshot};
+
+fn packed_url_shard(context: &TestContext, url: &str) -> Result<std::path::PathBuf> {
+    let url = DisplaySafeUrl::parse(url)?;
+    Ok(context
+        .cache_dir
+        .join("packed-v1")
+        .join(WheelCache::Url(&url).wheel_dir("basic-package")))
+}
+
+fn write_locked_wheel(context: &TestContext, source: &str, url: &str, hash: &str) -> Result<()> {
+    write_project(
+        context,
+        &formatdoc! {r#"
+        [[package]]
+        name = "basic-package"
+        version = "0.1.0"
+        source = {{ {source} }}
+        wheels = [{{ url = "{url}", hash = "sha256:{hash}" }}]
+    "#},
+    )
+}
 
 fn digest(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
@@ -189,7 +213,11 @@ async fn download_packed_offline() -> Result<()> {
     for (filename, bytes) in &files {
         Mock::given(method("GET"))
             .and(path(format!("/files/{filename}")))
-            .respond_with(ResponseTemplate::new(200).set_body_bytes(bytes.clone()))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("cache-control", "public, max-age=3600")
+                    .set_body_bytes(bytes.clone()),
+            )
             .expect(1)
             .mount(&server)
             .await;
@@ -224,19 +252,28 @@ async fn download_packed_offline() -> Result<()> {
     );
     assert!(!context.cache_dir.join("wheels-v6").exists());
     assert!(!context.cache_dir.join("archive-v0").exists());
-    let packed = context.cache_dir.join("packed-v0");
-    assert_eq!(fs_err::read_dir(&packed)?.count(), 4);
-    for directory in fs_err::read_dir(&packed)? {
-        let directory = directory?.path();
-        let bytes = if directory.join(&wheel_hash).exists() {
-            fs_err::read(directory.join(&wheel_hash))?
-        } else if directory.join(&zstd_hash).exists() {
-            fs_err::read(directory.join(&zstd_hash))?
-        } else {
-            fs_err::read(directory.join(&sdist_hash))?
-        };
-        assert!(bytes == wheel || bytes == sdist || bytes == zstd);
+    let cache = Cache::from_path(context.cache_dir.path());
+    let index = IndexUrl::from(uv_pep508::VerbatimUrl::parse_url(format!("{url}/simple"))?);
+    let packed = cache
+        .bucket(CacheBucket::Packed)
+        .join(WheelCache::Index(&index).wheel_dir("basic-package"));
+    for (hash, bytes) in [
+        (&wheel_hash, &wheel),
+        (&zstd_hash, &zstd),
+        (&sdist_hash, &sdist),
+    ] {
+        assert_eq!(fs_err::read(packed.join(hash))?, *bytes);
     }
+    for key in [
+        "0.1.0-py3-none-any.whl",
+        "0.1.0-py3-none-any.whl.tar.zst",
+        "0.1.0-cp313-cp313-win_amd64.whl",
+        "0.1.0.tar.gz",
+    ] {
+        assert!(packed.join(format!("{key}.http")).is_file());
+    }
+    assert!(!packed.join("package").exists());
+    assert!(!packed.join("metadata.msgpack").exists());
     server.verify().await;
     drop(server);
     uv_snapshot!(context.filters(), download(&context).arg("--offline"), @"
@@ -261,20 +298,20 @@ async fn download_packed_offline() -> Result<()> {
     Installed 1 package in [TIME]
      ~ basic-package==0.1.0
     ");
-    // Direct-URL resolution must also read METADATA from the packed wheel.
+    // A registry cache entry must not silently become a direct-URL dependency.
     context
         .pip_install()
         .arg("--offline")
         .arg("--reinstall")
         .arg(format!("{url}/files/basic_package-0.1.0-py3-none-any.whl"))
         .assert()
-        .success();
+        .failure();
     context
         .command()
         .args(["cache", "clean", "basic-package"])
         .assert()
         .success();
-    assert_eq!(fs_err::read_dir(&packed)?.count(), 0);
+    assert!(!packed.exists());
     Ok(())
 }
 
@@ -327,7 +364,11 @@ async fn replaces_prepared_archive(source: bool) -> Result<()> {
         )?;
         Mock::given(method("GET"))
             .and(path(format!("/{filename}")))
-            .respond_with(ResponseTemplate::new(200).set_body_bytes(bytes))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("cache-control", "public, max-age=3600")
+                    .set_body_bytes(bytes),
+            )
             .expect(1)
             .mount(&server)
             .await;
@@ -396,7 +437,11 @@ async fn refresh_packed_archive(args: &[&str], requests: u64) -> Result<()> {
     )?;
     Mock::given(method("GET"))
         .and(path("/basic_package-0.1.0-py3-none-any.whl"))
-        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("cache-control", "public, max-age=3600")
+                .set_body_bytes(wheel),
+        )
         .expect(requests)
         .mount(&server)
         .await;
@@ -442,7 +487,11 @@ async fn download_refresh_metadata() -> Result<()> {
         .await;
     Mock::given(method("GET"))
         .and(path("/basic_package-0.1.0-py3-none-any.whl"))
-        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("cache-control", "public, max-age=3600")
+                .set_body_bytes(wheel),
+        )
         .expect(2)
         .mount(&server)
         .await;
@@ -562,7 +611,11 @@ async fn download_credentials(pyproject: &str, member: Option<&str>) -> Result<(
     Mock::given(method("GET"))
         .and(path("/basic_package-0.1.0-py3-none-any.whl"))
         .and(basic_auth("username", "password"))
-        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("cache-control", "public, max-age=3600")
+                .set_body_bytes(wheel),
+        )
         .with_priority(1)
         .expect(1)
         .mount(&server)
@@ -585,7 +638,11 @@ async fn download_rejects_hash_mismatch() -> Result<()> {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/basic_package-0.1.0-py3-none-any.whl"))
-        .respond_with(ResponseTemplate::new(200).set_body_bytes(b"not a wheel"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("cache-control", "public, max-age=3600")
+                .set_body_bytes(b"not a wheel"),
+        )
         .mount(&server)
         .await;
     let url = server.uri();
@@ -606,9 +663,14 @@ async fn download_rejects_hash_mismatch() -> Result<()> {
     error: Failed to download `basic-package` from http://[LOCALHOST]/basic_package-0.1.0-py3-none-any.whl
       Caused by: Hash mismatch for http://[LOCALHOST]/basic_package-0.1.0-py3-none-any.whl: expected sha256:0000000000000000000000000000000000000000000000000000000000000000
     ");
-    for directory in fs_err::read_dir(context.cache_dir.join("packed-v0"))? {
-        assert!(!directory?.path().join("metadata.msgpack").exists());
-    }
+    assert!(
+        !packed_url_shard(
+            &context,
+            &format!("{url}/basic_package-0.1.0-py3-none-any.whl")
+        )?
+        .join("0.1.0-py3-none-any.whl.http")
+        .exists()
+    );
     assert!(!context.cache_dir.join("archive-v0").exists());
     Ok(())
 }
@@ -625,7 +687,11 @@ async fn download_repairs_corrupt_archive() -> Result<()> {
     )?;
     Mock::given(method("GET"))
         .and(path("/basic_package-0.1.0-py3-none-any.whl"))
-        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel.clone()))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("cache-control", "public, max-age=3600")
+                .set_body_bytes(wheel.clone()),
+        )
         .expect(2)
         .mount(&server)
         .await;
@@ -642,9 +708,14 @@ async fn download_repairs_corrupt_archive() -> Result<()> {
     "#},
     )?;
     download(&context).assert().success();
-    for directory in fs_err::read_dir(context.cache_dir.join("packed-v0"))? {
-        fs_err::write(directory?.path().join(&hash), b"corrupt")?;
-    }
+    fs_err::write(
+        packed_url_shard(
+            &context,
+            &format!("{url}/basic_package-0.1.0-py3-none-any.whl"),
+        )?
+        .join(&hash),
+        b"corrupt",
+    )?;
     uv_snapshot!(context.filters(), download(&context).arg("--offline"), @"
     exit_code: 2 (failure)
     ----- stderr -----
@@ -669,5 +740,377 @@ async fn download_repairs_corrupt_archive() -> Result<()> {
         .args(["--frozen", "--offline"])
         .assert()
         .success();
+    Ok(())
+}
+
+/// Index identity is part of the lookup, even when two indexes advertise the same artifact URL.
+#[tokio::test]
+async fn download_source_shards() -> Result<()> {
+    let context = uv_test::test_context!("3.13");
+    let server = MockServer::start().await;
+    let bytes = wheel("original").await?;
+    let hash = digest(&bytes);
+    let url = format!("{}/basic_package-0.1.0-py3-none-any.whl", server.uri());
+    Mock::given(method("GET"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("cache-control", "public, max-age=3600")
+                .set_body_bytes(bytes.clone()),
+        )
+        .expect(3)
+        .mount(&server)
+        .await;
+
+    let cache = Cache::from_path(context.cache_dir.path());
+    let index = IndexUrl::from(uv_pep508::VerbatimUrl::parse_url(format!(
+        "{}/simple",
+        server.uri()
+    ))?);
+    let shards = [
+        (
+            "registry = \"https://pypi.org/simple\"".to_string(),
+            cache.bucket(CacheBucket::Packed).join("pypi/basic-package"),
+        ),
+        (
+            format!("registry = \"{}/simple\"", server.uri()),
+            cache
+                .bucket(CacheBucket::Packed)
+                .join(WheelCache::Index(&index).wheel_dir("basic-package")),
+        ),
+        (
+            format!("url = \"{url}\""),
+            packed_url_shard(&context, &url)?,
+        ),
+    ];
+    for (source, shard) in &shards {
+        write_locked_wheel(&context, source, &url, &hash)?;
+        download(&context).arg("--offline").assert().failure();
+        download(&context).assert().success();
+        assert_eq!(fs_err::read(shard.join(&hash))?, bytes);
+        assert!(shard.join("0.1.0-py3-none-any.whl.http").is_file());
+        assert!(!shard.join("package").exists());
+        download(&context).arg("--offline").assert().success();
+    }
+    server.verify().await;
+    drop(server);
+    // The explicitly prefetched direct URL supplies wheel metadata and installation bytes.
+    context
+        .pip_install()
+        .arg("--offline")
+        .arg(&url)
+        .assert()
+        .success();
+    // Pruning drops the incompatible prototype bucket without removing packed-v1 artifacts.
+    context.cache_dir.child("packed-v0/old").create_dir_all()?;
+    context
+        .command()
+        .args(["cache", "prune"])
+        .assert()
+        .success();
+    assert!(!context.cache_dir.join("packed-v0").exists());
+    download(&context).arg("--offline").assert().success();
+    context
+        .command()
+        .args(["cache", "clean", "basic-package"])
+        .assert()
+        .success();
+    for (_, shard) in shards {
+        assert!(!shard.exists());
+    }
+    Ok(())
+}
+
+/// Revalidation uses the saved `ETag`, including after packed bytes produce a prepared wheel.
+#[tokio::test]
+async fn download_preserves_http_policy() -> Result<()> {
+    let context = uv_test::test_context!("3.13");
+    let server = MockServer::start().await;
+    let bytes = wheel("original").await?;
+    let hash = digest(&bytes);
+    let url = format!("{}/basic_package-0.1.0-py3-none-any.whl", server.uri());
+    write_locked_wheel(
+        &context,
+        &format!("registry = \"{}/simple\"", server.uri()),
+        &url,
+        &hash,
+    )?;
+    Mock::given(method("GET"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("cache-control", "public, max-age=0")
+                .insert_header("etag", "\"original\"")
+                .set_body_bytes(bytes),
+        )
+        .with_priority(2)
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(header("if-none-match", "\"original\""))
+        .respond_with(
+            ResponseTemplate::new(304)
+                .insert_header("cache-control", "public, max-age=0")
+                .insert_header("etag", "\"original\""),
+        )
+        .with_priority(1)
+        .expect(2)
+        .mount(&server)
+        .await;
+    download(&context).assert().success();
+    uv_snapshot!(context.filters(), download(&context), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Downloaded 0 distributions (1 total)
+    ");
+    context
+        .sync()
+        .args(["--frozen", "--offline"])
+        .assert()
+        .success();
+    context
+        .sync()
+        .args(["--frozen", "--reinstall"])
+        .assert()
+        .success();
+    server.verify().await;
+    Ok(())
+}
+
+/// A stale packed archive is not made fresh just because no prepared HTTP pointer exists yet.
+#[tokio::test]
+async fn download_expired_packed_archive() -> Result<()> {
+    let context = uv_test::test_context!("3.13");
+    let server = MockServer::start().await;
+    let bytes = wheel("original").await?;
+    let hash = digest(&bytes);
+    let url = format!("{}/basic_package-0.1.0-py3-none-any.whl", server.uri());
+    write_locked_wheel(
+        &context,
+        &format!("registry = \"{}/simple\"", server.uri()),
+        &url,
+        &hash,
+    )?;
+    Mock::given(method("GET"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("cache-control", "public, max-age=0")
+                .set_body_bytes(bytes),
+        )
+        .expect(2)
+        .mount(&server)
+        .await;
+    download(&context).assert().success();
+    context.sync().arg("--frozen").assert().success();
+    server.verify().await;
+    Ok(())
+}
+
+/// Prefetch cannot promise offline reuse when the server prohibits caching.
+#[tokio::test]
+async fn download_no_store() -> Result<()> {
+    let context = uv_test::test_context!("3.13");
+    let server = MockServer::start().await;
+    let bytes = wheel("original").await?;
+    let hash = digest(&bytes);
+    let url = format!("{}/basic_package-0.1.0-py3-none-any.whl", server.uri());
+    write_locked_wheel(&context, &format!("url = \"{url}\""), &url, &hash)?;
+    Mock::given(method("GET"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("cache-control", "no-store")
+                .set_body_bytes(bytes),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    uv_snapshot!(context.filters(), download(&context), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to download `basic-package` from http://[LOCALHOST]/basic_package-0.1.0-py3-none-any.whl
+      Caused by: Response for http://[LOCALHOST]/basic_package-0.1.0-py3-none-any.whl does not permit caching
+    ");
+    let shard = packed_url_shard(&context, &url)?;
+    assert!(!shard.join("0.1.0-py3-none-any.whl.http").exists());
+    assert!(!shard.join(hash).exists());
+    download(&context).arg("--offline").assert().failure();
+    server.verify().await;
+    Ok(())
+}
+
+/// Local archives use timestamped revision pointers, not HTTP policies.
+#[tokio::test]
+async fn download_local_revision() -> Result<()> {
+    let context = uv_test::test_context!("3.13");
+    let filename = "basic_package-0.1.0-py3-none-any.whl";
+    let path = context.temp_dir.join(filename);
+    let url = DisplaySafeUrl::from_file_path(&path).expect("absolute file path");
+    let shard = context
+        .cache_dir
+        .join("packed-v1")
+        .join(WheelCache::Path(&url).wheel_dir("basic-package"));
+    for revision in ["original", "replacement"] {
+        let bytes = wheel(revision).await?;
+        let hash = digest(&bytes);
+        write_project(
+            &context,
+            &formatdoc! {r#"
+            [[package]]
+            name = "basic-package"
+            version = "0.1.0"
+            source = {{ path = "{filename}" }}
+            wheels = [{{ filename = "{filename}", hash = "sha256:{hash}" }}]
+        "#},
+        )?;
+        fs_err::write(&path, &bytes)?;
+        allow_duplicates! {
+            uv_snapshot!(context.filters(), download(&context).arg("--offline"), @"
+            exit_code: 0 (success)
+            ----- stderr -----
+            Downloaded 1 distributions (1 total)
+            ");
+        }
+        assert_eq!(fs_err::read(shard.join(digest(&bytes)))?, bytes);
+        assert!(shard.join("0.1.0-py3-none-any.whl.rev").is_file());
+        assert!(!shard.join("0.1.0-py3-none-any.whl.http").exists());
+        allow_duplicates! {
+            uv_snapshot!(context.filters(), download(&context).arg("--offline"), @"
+            exit_code: 0 (success)
+            ----- stderr -----
+            Downloaded 0 distributions (1 total)
+            ");
+        }
+    }
+    context
+        .command()
+        .args(["cache", "clean", "basic-package"])
+        .assert()
+        .success();
+    assert!(!shard.exists());
+    Ok(())
+}
+
+/// A prepared pointer may survive removal of its extracted payload.
+#[tokio::test]
+async fn download_repairs_missing_prepared_wheel() -> Result<()> {
+    let context = uv_test::test_context!("3.13");
+    let server = MockServer::start().await;
+    let bytes = wheel("original").await?;
+    let hash = digest(&bytes);
+    let url = format!("{}/basic_package-0.1.0-py3-none-any.whl", server.uri());
+    write_locked_wheel(
+        &context,
+        &format!("registry = \"{}/simple\"", server.uri()),
+        &url,
+        &hash,
+    )?;
+    Mock::given(method("GET"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("cache-control", "public, max-age=3600")
+                .set_body_bytes(bytes),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    download(&context).assert().success();
+    context
+        .sync()
+        .args(["--frozen", "--offline"])
+        .assert()
+        .success();
+    fs_err::remove_dir_all(context.cache_dir.join("archive-v0"))?;
+    context
+        .sync()
+        .args(["--frozen", "--offline", "--reinstall"])
+        .assert()
+        .success();
+    server.verify().await;
+    Ok(())
+}
+
+/// A cached source revision can recover its extracted source and built wheel from packed bytes.
+#[tokio::test]
+async fn download_repairs_missing_prepared_sdist() -> Result<()> {
+    let context = uv_test::test_context!("3.13");
+    let server = MockServer::start().await;
+    let bytes = source_archive(&wheel("original").await?)?;
+    let hash = digest(&bytes);
+    let url = server.uri();
+    write_project(
+        &context,
+        &formatdoc! {r#"
+        [[package]]
+        name = "basic-package"
+        version = "0.1.0"
+        source = {{ registry = "{url}/simple" }}
+        sdist = {{ url = "{url}/basic_package-0.1.0.tar.gz", hash = "sha256:{hash}" }}
+    "#},
+    )?;
+    Mock::given(method("GET"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("cache-control", "public, max-age=3600")
+                .set_body_bytes(bytes),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    download(&context).assert().success();
+    context
+        .sync()
+        .args(["--frozen", "--offline"])
+        .assert()
+        .success();
+    let index = IndexUrl::from(uv_pep508::VerbatimUrl::parse_url(format!("{url}/simple"))?);
+    let shard = context
+        .cache_dir
+        .join("sdists-v9")
+        .join(WheelCache::Index(&index).wheel_dir("basic-package"))
+        .join("0.1.0");
+    // Keep the revision HTTP pointer, but remove the extracted revision and its built wheels.
+    for entry in fs_err::read_dir(shard)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            fs_err::remove_dir_all(entry.path())?;
+        }
+    }
+    context
+        .sync()
+        .args(["--frozen", "--offline", "--reinstall"])
+        .assert()
+        .success();
+    server.verify().await;
+    Ok(())
+}
+
+/// HTTP metadata alone is not a cache hit if its packed payload has been removed.
+#[tokio::test]
+async fn download_repairs_missing_packed_archive() -> Result<()> {
+    let context = uv_test::test_context!("3.13");
+    let server = MockServer::start().await;
+    let bytes = wheel("original").await?;
+    let hash = digest(&bytes);
+    let url = format!("{}/basic_package-0.1.0-py3-none-any.whl", server.uri());
+    write_locked_wheel(&context, &format!("url = \"{url}\""), &url, &hash)?;
+    Mock::given(method("GET"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("cache-control", "public, max-age=3600")
+                .set_body_bytes(bytes.clone()),
+        )
+        .expect(2)
+        .mount(&server)
+        .await;
+    download(&context).assert().success();
+    let archive = packed_url_shard(&context, &url)?.join(hash);
+    fs_err::remove_file(&archive)?;
+    download(&context).arg("--offline").assert().failure();
+    uv_snapshot!(context.filters(), download(&context), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Downloaded 1 distributions (1 total)
+    ");
+    assert_eq!(fs_err::read(archive)?, bytes);
+    server.verify().await;
     Ok(())
 }
