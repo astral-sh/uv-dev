@@ -2465,6 +2465,7 @@ async fn run_project(
             commands::download(
                 project_dir,
                 args.dry_run,
+                args.output_format,
                 args.settings,
                 client_builder.subcommand(vec!["download".to_owned()]),
                 globals.concurrency,

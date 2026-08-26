@@ -339,3 +339,124 @@ async fn download_repairs_corrupt_archive() -> Result<()> {
         .success();
     Ok(())
 }
+
+/// JSON output reports the planned, completed, and cached state of each archive.
+#[tokio::test]
+async fn download_json() -> Result<()> {
+    let context = uv_test::test_context!("3.13");
+    let server = MockServer::start().await;
+    let archive = b"packed archive";
+    Mock::given(method("GET"))
+        .and(path("/basic_package-0.1.0-py3-none-any.whl"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(archive))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let url = server.uri();
+    let hash = digest(archive);
+    write_project(
+        &context,
+        &formatdoc! {r#"
+        [[package]]
+        name = "basic-package"
+        version = "0.1.0"
+        source = {{ url = "{url}/basic_package-0.1.0-py3-none-any.whl" }}
+        wheels = [{{ url = "{url}/basic_package-0.1.0-py3-none-any.whl", hash = "sha256:{hash}", size = {size} }}]
+    "#, size=archive.len()},
+    )?;
+    let mut filters = context.filters();
+    filters.push((r"sha256:[0-9a-f]{64}", "sha256:[HASH]"));
+
+    uv_snapshot!(filters.clone(), download(&context).args([
+        "--dry-run",
+        "--output-format",
+        "json",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "dry_run": true,
+      "distributions": [
+        {
+          "name": "basic-package",
+          "url": "http://[LOCALHOST]/basic_package-0.1.0-py3-none-any.whl",
+          "hash": "sha256:[HASH]",
+          "size": 14,
+          "status": "would_download"
+        }
+      ],
+      "summary": {
+        "downloaded": 0,
+        "cached": 0,
+        "would_download": 1,
+        "total": 1
+      }
+    }
+    "#);
+    assert!(!context.cache_dir.join("packed-v0").exists());
+
+    uv_snapshot!(filters.clone(), download(&context).args([
+        "--output-format",
+        "json",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "dry_run": false,
+      "distributions": [
+        {
+          "name": "basic-package",
+          "url": "http://[LOCALHOST]/basic_package-0.1.0-py3-none-any.whl",
+          "hash": "sha256:[HASH]",
+          "size": 14,
+          "status": "downloaded"
+        }
+      ],
+      "summary": {
+        "downloaded": 1,
+        "cached": 0,
+        "would_download": 0,
+        "total": 1
+      }
+    }
+    "#);
+    server.verify().await;
+    drop(server);
+
+    uv_snapshot!(filters, download(&context).args([
+        "--offline",
+        "--output-format",
+        "json",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "dry_run": false,
+      "distributions": [
+        {
+          "name": "basic-package",
+          "url": "http://[LOCALHOST]/basic_package-0.1.0-py3-none-any.whl",
+          "hash": "sha256:[HASH]",
+          "size": 14,
+          "status": "cached"
+        }
+      ],
+      "summary": {
+        "downloaded": 0,
+        "cached": 1,
+        "would_download": 0,
+        "total": 1
+      }
+    }
+    "#);
+    Ok(())
+}
