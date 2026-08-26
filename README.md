@@ -12,8 +12,9 @@ and rebuild `foo` because it defines matching `tool.uv.cache-keys`, but `bar` is
 because its dependency was rebuilt. The reporter confirms that `bar` links against `foo`, so the
 requested invalidation reflects native link-time coupling rather than only a Python dependency.
 Copying `foo`'s cache-key globs into `bar` duplicates configuration and evaluates relative paths
-from `bar`'s directory. The requested capability is a dependency-aware cache-key entry such as
-`{ inherit = "foo" }` that incorporates `foo`'s evaluated cache information into `bar`'s cache key.
+from `bar`'s directory. The reporter proposed a dependency-aware cache-key entry such as
+`{ inherit = "foo" }`; a maintainer subsequently reframed the desired outcome as declaring that
+`bar` should rebuild whenever `foo` rebuilds, without necessarily inheriting `foo`'s raw key inputs.
 
 No duplicate was found. Existing work introduced configurable per-project cache keys and
 native-backend defaults, while adjacent workspace discussions cover same-project native rebuilds or
@@ -41,6 +42,13 @@ invalidate its dependent `bar`. Dependency propagation requires `bar` to incorpo
 evaluated cache information. For the proposed `{ inherit = "foo" }` form, the reporter's intended
 path semantics are unambiguous: evaluate `foo`'s patterns relative to `foo`, then include that
 evaluated result in `bar`'s cache key.
+
+After confirming the native link, a maintainer distinguished that proposed implementation from the
+actual invalidation requirement: `bar` may only need to declare that it rebuilds when `foo` does.
+The tentative configuration suggested for that model is
+`cache-depends = [{ package = "foo" }]`. This would avoid copying or re-rooting `foo`'s path
+patterns by depending on `foo`'s rebuild state instead. The name and semantics are exploratory and
+have not been accepted as a design.
 
 Invalidation should remain selective and follow dependency direction: a change to `foo` should
 rebuild its dependent `bar`, while a change only to `bar` should not rebuild its dependency `foo` or
@@ -77,8 +85,8 @@ as expected and requests a new cache-key form. Repository documentation and sour
 each project directory; there is no dependency-inheritance variant. Related reports establish the
 per-project workaround but do not track this cross-package behavior, so the issue is neither a bug
 nor a duplicate. Maintainer follow-up identifies opt-in workspace cache information as a potentially
-more general enhancement, but path-root semantics and the relationship to dependency-directed
-invalidation remain undecided.
+more general enhancement for shared defaults, while a separate `cache-depends`-style declaration is
+being considered for dependency-directed rebuilding. The exact API and semantics remain undecided.
 
 ## Related
 
