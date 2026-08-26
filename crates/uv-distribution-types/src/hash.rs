@@ -15,6 +15,37 @@ pub enum HashPolicy<'a> {
     All(&'a [HashDigest]),
 }
 
+/// An owned [`HashPolicy`] suitable for use in cache keys.
+///
+/// Hash policies are part of the identity of operations that can fail before returning an
+/// artifact. For example, a download rejected under one verification policy must not poison a
+/// later request for the same distribution under a different policy.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum OwnedHashPolicy {
+    None,
+    Generate(HashGeneration),
+    Any(Vec<HashDigest>),
+    All(Vec<HashDigest>),
+}
+
+impl From<HashPolicy<'_>> for OwnedHashPolicy {
+    fn from(policy: HashPolicy<'_>) -> Self {
+        match policy {
+            HashPolicy::None => Self::None,
+            HashPolicy::Generate(generation) => Self::Generate(generation),
+            HashPolicy::Any(hashes) => Self::Any(normalize_hashes(hashes)),
+            HashPolicy::All(hashes) => Self::All(normalize_hashes(hashes)),
+        }
+    }
+}
+
+fn normalize_hashes(hashes: &[HashDigest]) -> Vec<HashDigest> {
+    let mut hashes = hashes.to_vec();
+    hashes.sort();
+    hashes.dedup();
+    hashes
+}
+
 impl HashPolicy<'_> {
     /// Returns `true` if the hash policy is `None`.
     pub fn is_none(&self) -> bool {
@@ -104,7 +135,7 @@ impl HashPolicy<'_> {
 }
 
 /// The context in which hashes should be generated.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum HashGeneration {
     /// Generate hashes for direct URL distributions.
     Url,
@@ -146,7 +177,28 @@ mod tests {
 
     use uv_pypi_types::HashDigest;
 
-    use super::HashPolicy;
+    use super::{HashPolicy, OwnedHashPolicy};
+
+    #[test]
+    fn owned_hash_policy_normalizes_digests() {
+        let sha256 = HashDigest::from_str(
+            "sha256:cfdb2b588b9fc25ede96d8db56ed50848b0b649dca3dd1df0b11f683bb9e0b5f",
+        )
+        .unwrap();
+        let sha512 = HashDigest::from_str(
+            "sha512:f30761c1e8725b49c498273b90dba4b05c0fd157811994c806183062cb6647e773364ce45f0e1ff0b10e32fe6d0232ea5ad39476ccf37109d6b49603a09c11c2",
+        )
+        .unwrap();
+
+        let left = OwnedHashPolicy::from(HashPolicy::Any(&[
+            sha512.clone(),
+            sha256.clone(),
+            sha512.clone(),
+        ]));
+        let right = OwnedHashPolicy::from(HashPolicy::Any(&[sha256, sha512]));
+
+        assert_eq!(left, right);
+    }
 
     #[test]
     fn validate_all_requires_every_digest() {

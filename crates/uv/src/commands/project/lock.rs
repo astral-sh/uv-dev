@@ -15,7 +15,7 @@ use uv_configuration::{
     Concurrency, Constraints, DependencyGroupsWithDefaults, DryRun, ExcludeDependency,
     ExtrasSpecification, Override, PackageOverride, Reinstall, Upgrade,
 };
-use uv_dispatch::BuildDispatch;
+use uv_dispatch::BuildDispatchConfig;
 use uv_distribution::{DistributionDatabase, LoweredExtraBuildDependencies};
 use uv_distribution_types::{
     DependencyMetadata, HashGeneration, Index, IndexLocations, NameRequirementSpecification,
@@ -849,7 +849,7 @@ async fn do_lock(
         let entries = client
             .fetch_all(index_locations.flat_indexes().map(Index::url))
             .await?;
-        FlatIndex::from_entries(entries, None, &hasher, build_options)
+        FlatIndex::from_entries(entries)
     };
 
     // Lower the extra build dependencies.
@@ -883,8 +883,8 @@ async fn do_lock(
     // Convert to the `Constraints` format.
     let dispatch_constraints = Constraints::from_requirements(build_constraints.iter().cloned());
 
-    // Create a build dispatch.
-    let build_dispatch = BuildDispatch::new(
+    // Collect the policy-independent build configuration.
+    let build_dispatch_config = BuildDispatchConfig::new(
         &client,
         cache,
         &dispatch_constraints,
@@ -892,7 +892,6 @@ async fn do_lock(
         index_locations,
         &flat_index,
         dependency_metadata,
-        state.fork().into_inner(),
         *index_strategy,
         config_setting,
         config_settings_package,
@@ -901,7 +900,6 @@ async fn do_lock(
         extra_build_variables,
         *link_mode,
         build_options,
-        &build_hasher,
         exclude_newer.clone(),
         sources.clone(),
         SourceTreeEditablePolicy::Project,
@@ -909,6 +907,7 @@ async fn do_lock(
         concurrency.clone(),
         preview,
     );
+    let build_dispatch = build_dispatch_config.build(state.fork().into_inner(), &build_hasher);
 
     let database = DistributionDatabase::new(
         &client,

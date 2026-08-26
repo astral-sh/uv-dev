@@ -202,6 +202,21 @@ impl Hashed for CachedRegistryDist {
     }
 }
 
+impl Hashed for CachedDirectUrlDist {
+    fn hashes(&self) -> &[HashDigest] {
+        self.hashes.as_slice()
+    }
+}
+
+impl Hashed for CachedDist {
+    fn hashes(&self) -> &[HashDigest] {
+        match self {
+            Self::Registry(dist) => dist.hashes(),
+            Self::Url(dist) => dist.hashes(),
+        }
+    }
+}
+
 impl Name for CachedRegistryDist {
     fn name(&self) -> &PackageName {
         &self.filename.name

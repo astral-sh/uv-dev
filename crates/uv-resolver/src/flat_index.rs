@@ -18,11 +18,11 @@ use uv_pypi_types::HashDigest;
 use uv_types::HashStrategy;
 
 /// A set of [`PrioritizedDist`] from a `--find-links` entry, indexed by [`PackageName`]
-/// and [`Version`].
+/// and evaluated against the active resolution policy on access.
 #[derive(Debug, Clone, Default)]
 pub struct FlatIndex {
-    /// The list of [`FlatDistributions`] from the `--find-links` entries, indexed by package name.
-    index: FxHashMap<PackageName, FlatDistributions>,
+    /// The unevaluated `--find-links` entries, indexed by package name.
+    index: FxHashMap<PackageName, Vec<FlatIndexEntry>>,
     /// Whether any `--find-links` entries could not be resolved due to a lack of network
     /// connectivity.
     offline: bool,
@@ -31,28 +31,31 @@ pub struct FlatIndex {
 impl FlatIndex {
     /// Collect all files from a `--find-links` target into a [`FlatIndex`].
     #[instrument(skip_all)]
-    pub fn from_entries(
-        entries: FlatIndexEntries,
-        tags: Option<&Tags>,
-        hasher: &HashStrategy,
-        build_options: &BuildOptions,
-    ) -> Self {
-        // Collect compatible distributions.
-        let mut index = FxHashMap::<PackageName, FlatDistributions>::default();
+    pub fn from_entries(entries: FlatIndexEntries) -> Self {
+        let mut index = FxHashMap::<PackageName, Vec<FlatIndexEntry>>::default();
         let (entries, offline) = entries.into_parts();
 
         for entry in entries {
-            let (filename, file, index_url) = entry.into_parts();
-            let distributions = index.entry(filename.name().clone()).or_default();
-            distributions.add_file(file, filename, tags, hasher, build_options, index_url);
+            index
+                .entry(entry.filename().name().clone())
+                .or_default()
+                .push(entry);
         }
 
         Self { index, offline }
     }
 
     /// Get the [`FlatDistributions`] for the given package name.
-    pub(crate) fn get(&self, package_name: &PackageName) -> Option<&FlatDistributions> {
-        self.index.get(package_name)
+    pub(crate) fn get(
+        &self,
+        package_name: &PackageName,
+        tags: Option<&Tags>,
+        hasher: &HashStrategy,
+        build_options: &BuildOptions,
+    ) -> Option<FlatDistributions> {
+        self.index.get(package_name).map(|entries| {
+            FlatDistributions::from_entries(entries.clone(), tags, hasher, build_options)
+        })
     }
 
     /// Whether any `--find-links` entries could not be resolved due to a lack of network

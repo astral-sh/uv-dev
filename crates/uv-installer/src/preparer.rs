@@ -14,7 +14,7 @@ use uv_distribution_types::{
 use uv_normalize::PackageName;
 use uv_platform_tags::Tags;
 use uv_redacted::DisplaySafeUrl;
-use uv_types::{BuildContext, HashStrategy, InFlight};
+use uv_types::{BuildContext, HashStrategy, InFlight, InFlightDownload};
 
 /// Prepare distributions for installation.
 ///
@@ -132,7 +132,8 @@ impl<'a, Context: BuildContext> Preparer<'a, Context> {
             }
         }
 
-        let id = dist.distribution_id();
+        let policy = self.hashes.get(&dist);
+        let id = InFlightDownload::new(dist.distribution_id(), policy);
         if let Some(result) = in_flight.downloads.register_or_wait(&id).await {
             match result.as_ref() {
                 Ok(cached) => {
@@ -164,13 +165,19 @@ impl<'a, Context: BuildContext> Preparer<'a, Context> {
                             return Err(Error::from_dist(dist, err, resolution));
                         }
                     }
+                    if !cached.satisfies(policy) {
+                        let err = uv_distribution::Error::hash_mismatch(
+                            dist.to_string(),
+                            policy.digests(),
+                            cached.hashes(),
+                        );
+                        return Err(Error::from_dist(dist, err, resolution));
+                    }
                     Ok(cached.clone())
                 }
                 Err(err) => Err(Error::Thread(err.to_owned())),
             }
         } else {
-            let policy = self.hashes.get(&dist);
-
             let result = self
                 .database
                 .get_or_build_wheel(&dist, self.tags, policy)
