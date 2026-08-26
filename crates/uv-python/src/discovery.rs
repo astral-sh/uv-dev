@@ -2463,6 +2463,20 @@ impl PythonRequest {
         }
     }
 
+    /// Return the runtime and build variants carried by this request, if any.
+    pub fn variants(&self) -> Option<VariantRequest> {
+        match self {
+            Self::Version(version) | Self::ImplementationVersion(_, version) => version.variants(),
+            Self::Key(request) => request.version().and_then(VersionRequest::variants),
+            Self::Default
+            | Self::Any
+            | Self::Directory(_)
+            | Self::File(_)
+            | Self::ExecutableName(_)
+            | Self::Implementation(_) => None,
+        }
+    }
+
     /// Convert an interpreter request into [`VersionSpecifiers`] representing the range of
     /// compatible versions.
     ///

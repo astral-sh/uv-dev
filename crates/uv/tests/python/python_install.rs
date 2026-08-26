@@ -194,7 +194,7 @@ async fn python_install_build_variant() -> anyhow::Result<()> {
 
     let server = MockServer::start().await;
     let metadata = serde_json::json!({
-        (custom_name): {
+        (custom_name.clone()): {
             "name": "cpython",
             "arch": {
                 "family": arch_family,
@@ -243,6 +243,25 @@ async fn python_install_build_variant() -> anyhow::Result<()> {
     ----- stdout -----
     [TEMP_DIR]/managed/cpython-3.13+custom-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
     ");
+
+    for (directory, request) in [
+        ("init-major", "3+custom"),
+        ("init-implementation", "cpython@3.13+custom"),
+        ("init-key", custom_name.as_str()),
+    ] {
+        context
+            .init()
+            .arg(directory)
+            .arg("--no-workspace")
+            .arg("--python")
+            .arg(request)
+            .assert()
+            .success();
+        assert_eq!(
+            context.read(format!("{directory}/.python-version")),
+            "3.13+custom\n"
+        );
+    }
 
     context
         .sync()
