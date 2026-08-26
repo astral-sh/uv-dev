@@ -838,12 +838,20 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         let archive = self
             .client
             .managed(|client| {
-                client.cached_client().get_serde_with_retry(
-                    req,
-                    &http_entry,
-                    cache_control.clone(),
-                    download,
-                )
+                client
+                    .cached_client()
+                    .get_serde_with_retry_and_packed_fallback(
+                        req,
+                        &http_entry,
+                        cache_control.clone(),
+                        |archive: &Archive| {
+                            archive.satisfies(hashes)
+                                && expected_size
+                                    .zip(archive.size)
+                                    .is_none_or(|(expected, actual)| expected == actual)
+                        },
+                        download,
+                    )
             })
             .await
             .map_err(|err| match err {
@@ -966,12 +974,20 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         let archive = self
             .client
             .managed(|client| {
-                client.cached_client().get_serde_with_retry(
-                    req,
-                    &http_entry,
-                    cache_control.clone(),
-                    download,
-                )
+                client
+                    .cached_client()
+                    .get_serde_with_retry_and_packed_fallback(
+                        req,
+                        &http_entry,
+                        cache_control.clone(),
+                        |archive: &Archive| {
+                            archive.satisfies(hashes)
+                                && expected_size
+                                    .zip(archive.size)
+                                    .is_none_or(|(expected, actual)| expected == actual)
+                        },
+                        download,
+                    )
             })
             .await
             .map_err(|err| match err {
