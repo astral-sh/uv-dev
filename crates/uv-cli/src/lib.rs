@@ -1199,7 +1199,7 @@ pub enum ProjectCommand {
         after_long_help = ""
     )]
     Sync(SyncArgs),
-    /// Download all distribution archives recorded in the project's existing lockfile.
+    /// Download distributions for offline installation.
     ///
     /// Archives for all platforms are kept packed in the cache. This does not resolve
     /// dependencies, build packages, or create an environment.
