@@ -4372,6 +4372,7 @@ pub(crate) struct InstallerSettingsRef<'a> {
 #[derive(Debug)]
 pub(crate) struct DownloadSettings {
     pub(crate) dry_run: bool,
+    pub(crate) output_format: uv_cli::DownloadFormat,
     pub(crate) refresh: Refresh,
     pub(crate) settings: ResolverSettings,
 }
@@ -4387,6 +4388,7 @@ impl DownloadSettings {
             .resolve(configured_indexes(filesystem.as_ref()))?;
         Ok(Self {
             dry_run: args.dry_run,
+            output_format: args.output_format,
             refresh: Refresh::try_from(args.refresh)?,
             settings: ResolverSettings::combine(
                 ResolverOptions {

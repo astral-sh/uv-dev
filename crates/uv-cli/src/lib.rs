@@ -70,6 +70,15 @@ pub enum SyncFormat {
 }
 
 #[derive(Debug, Default, Clone, Copy, clap::ValueEnum)]
+pub enum DownloadFormat {
+    /// Display the result in a human-readable format.
+    #[default]
+    Text,
+    /// Display the result in JSON format.
+    Json,
+}
+
+#[derive(Debug, Default, Clone, Copy, clap::ValueEnum)]
 pub enum AuditOutputFormat {
     /// Display the result in a human-readable format.
     #[default]
@@ -4074,6 +4083,10 @@ pub struct DownloadArgs {
     /// Perform a dry run, without downloading any distributions.
     #[arg(long)]
     pub dry_run: bool,
+
+    /// Select the output format.
+    #[arg(long, value_enum, default_value_t = DownloadFormat::default())]
+    pub output_format: DownloadFormat,
 
     #[command(flatten)]
     pub index: IndexArgs,
