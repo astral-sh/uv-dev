@@ -675,13 +675,11 @@ fn python_upgrade_build_version() {
      ~ cpython-3.12.[LATEST]-[PLATFORM]
     ");
 
-    // This is undesirable: the upgrade reports a reinstall but leaves the previous build's
-    // interpreter contents in place.
     uv_snapshot!(context.filters(), Command::new(bin_python.as_os_str())
         .arg("-c").arg("import sys; print(sys.version.split()[0])"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    3.12.0
+    3.12.[LATEST]
     ");
 
     // Should be a no-op again after upgrade
