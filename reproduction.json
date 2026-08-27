@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "On Linux x86_64 with Rust 1.98.0, a temporary Cargo fixture using uv-pep508 from the 0.12.6 Git tag parsed `\"3.11\" in python_version`; `cargo run --quiet` returned true for Python 3.9, 3.10, and 3.11. Current main at 0697445cfef3839748907ae52e3fba14de31e3da behaved identically. Independently, installed uv 0.12.6 attempted to resolve `does-not-exist ; \"3.11\" in python_version` for all three targets with `uv pip compile --no-index --python-version <version> -`, while packaging 24.0 returned false, false, and true. No existing test covers this reversed containment form; the closest, `crates/uv-pep508/src/marker/tree.rs::test_version_in_evaluation`, tests only `python_version in \"...\"`. The issue-context README was updated with the commands and results."
+}

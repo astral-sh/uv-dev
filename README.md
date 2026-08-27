@@ -23,9 +23,57 @@ whitespace-separated right-hand value as a list of exact versions for marker alg
 cover the reversed, quoted-value-left containment form reported here. No open issue or pull request
 was found that already tracks this case.
 
+## Reproduction
+
+Outcome: **reproducible**.
+
+The report's direct API example was reconstructed in `/tmp` with `uv-pep508` loaded from the
+`0.12.6` Git tag. On Linux x86_64 with Rust 1.98.0, this command (with Cargo's home and target
+directory also isolated under `/tmp`) reproduced the reported result:
+
+```console
+$ CARGO_HOME=/tmp/uv-21309/cargo-home \
+  CARGO_TARGET_DIR=/tmp/uv-21309/target \
+  cargo run --quiet
+python_version=3.9  -> true
+python_version=3.10 -> true
+python_version=3.11 -> true
+```
+
+The fixture parsed `"3.11" in python_version` with `MarkerTree::from_str`, constructed a
+`MarkerEnvironment` for each displayed Python version, and called `MarkerTree::evaluate`. Changing
+only the dependency to the current checkout's `crates/uv-pep508` at commit `0697445cfef3839748907ae52e3fba14de31e3da`
+produced the same three `true` results.
+
+The behavior is also visible through the installed `uv 0.12.6 (x86_64-unknown-linux-gnu)` executable
+without relying solely on the direct API fixture:
+
+```console
+$ printf '%s\n' 'does-not-exist ; "3.11" in python_version' \
+  | UV_CACHE_DIR=/tmp/uv-21309/cache uv pip compile --no-index --python-version 3.9 -
+  × No solution found when resolving dependencies:
+  ╰─▶ Because does-not-exist was not found in the provided package locations
+      and you require does-not-exist, we can conclude that your requirements
+      are unsatisfiable.
+```
+
+The same command failed by trying to resolve `does-not-exist` for targets 3.9, 3.10, and 3.11. As a
+control, `does-not-exist ; python_version in "3.11"` was omitted for 3.9 and 3.10 (exit status 0)
+and resolved for 3.11 (the expected no-index failure). Python 3.12.3 with `packaging` 24.0 evaluated
+the reported reversed expression as false, false, and true for marker environments 3.9, 3.10, and
+3.11 respectively.
+
+There is no exact existing test for a quoted value on the left of `in` with a version marker.
+`crates/uv-pep508/src/marker/tree.rs::test_version_in_evaluation` covers `python_version in
+"..."` and `not in` with the version key on the left. The same file's
+`test_marker_version_inverted` covers an ordered reversed comparison (`'3.6' > python_version`),
+but not reversed containment. Those assertions were read and do not cover the behavior in
+astral-sh/uv#21309.
+
 ## Draft response
 
-Thanks for the clear reproduction. This is a bug in `uv-pep508`.
+Thanks for the clear reproduction. This is reproducible as a bug in `uv-pep508` 0.12.6 and the
+current main checkout.
 
 The specialized version-membership handling added for astral-sh/uv#3683 by astral-sh/uv#6172 only
 applies when `python_version` is on the left, as in `python_version in "..."`. With the operands
