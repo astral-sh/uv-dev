@@ -8,14 +8,14 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tracing::{Instrument, debug, info_span, instrument, trace, warn};
 
-use uv_cache::{Cache, CacheEntry, Freshness};
+use uv_cache::{CacheEntry, Freshness};
 use uv_fs::write_atomic;
 use uv_redacted::DisplaySafeUrl;
 
 use crate::base_client::CertificateSource;
 use crate::httpcache::{AfterResponse, BeforeRequest, CachePolicy, CachePolicyBuilder};
 use crate::{
-    BaseClient, Error, ErrorKind, OwnedArchive, PackedArchive, ProblemDetails, RetryState,
+    BaseClient, Error, ErrorKind, OwnedArchive, PackedArchiveEntry, ProblemDetails, RetryState,
 };
 
 /// A trait the generalizes (de)serialization at a high level.
@@ -208,36 +208,34 @@ impl From<Freshness> for CacheControl {
 /// Again unlike `http-cache`, the caller gets full control over the cache key with the assumption
 /// that it's a file.
 #[derive(Debug, Clone)]
-pub struct CachedClient(BaseClient, Option<Cache>);
+pub struct CachedClient(BaseClient, Option<PackedArchiveEntry>);
 
 impl CachedClient {
     pub fn new(client: BaseClient) -> Self {
         Self(client, None)
     }
 
-    pub(crate) fn with_packed_cache(mut self, cache: Cache) -> Self {
-        self.1 = Some(cache);
-        self
+    /// Limit packed fallback to an explicitly identified distribution.
+    #[must_use]
+    pub fn with_packed_entry(&self, entry: Option<&PackedArchiveEntry>) -> Self {
+        Self(self.0.clone(), entry.cloned())
     }
 
     async fn packed_response(
         &self,
         req: &Request,
         cache_control: &CacheControl,
-    ) -> Result<Option<Response>, Error> {
+    ) -> Result<Option<(Response, Box<CachePolicy>)>, Error> {
         if matches!(cache_control, CacheControl::MustRevalidate) {
             return Ok(None);
         }
-        let Some(cache) = &self.1 else {
+        let Some(entry) = &self.1 else {
             return Ok(None);
         };
-        PackedArchive::response(
-            cache,
-            req,
-            matches!(cache_control, CacheControl::AllowStale),
-        )
-        .await
-        .map_err(|err| ErrorKind::Io(std::io::Error::other(err)).into())
+        entry
+            .response(req, cache_control)
+            .await
+            .map_err(|err| ErrorKind::Io(std::io::Error::other(err)).into())
     }
 
     /// The underlying [`BaseClient`] without caching.
@@ -622,23 +620,20 @@ impl CachedClient {
         let url = DisplaySafeUrl::from_url(req.url().clone());
         debug!("Sending revalidation request for: {url}");
         let start = Instant::now();
-        let mut response =
-            if let Some(response) = self.packed_response(&req, &cache_control).await? {
-                response
-            } else {
-                self.0
-                    .execute(req)
-                    .instrument(info_span!("revalidation_request", url = %url))
-                    .await
-                    .map_err(|err| {
-                        Error::from_reqwest_middleware(
-                            url.clone(),
-                            err,
-                            start,
-                            self.certificate_source(),
-                        )
-                    })?
-            };
+        if let Some((response, cache_policy)) = self.packed_response(&req, &cache_control).await? {
+            return Ok(CachedResponse::ModifiedOrNew {
+                response,
+                cache_policy: Some(cache_policy),
+            });
+        }
+        let mut response = self
+            .0
+            .execute(req)
+            .instrument(info_span!("revalidation_request", url = %url))
+            .await
+            .map_err(|err| {
+                Error::from_reqwest_middleware(url.clone(), err, start, self.certificate_source())
+            })?;
         trace!(
             "Received response for revalidation request with status {} for: {}",
             response.status(),
@@ -697,15 +692,12 @@ impl CachedClient {
         debug!("Sending fresh {} request for: {}", req.method(), url);
         let cache_policy_builder = CachePolicyBuilder::new(&req);
         let start = Instant::now();
-        let mut response = if let Some(response) =
-            self.packed_response(&req, &cache_control).await?
-        {
-            response
-        } else {
-            self.0.execute(req).await.map_err(|err| {
-                Error::from_reqwest_middleware(url.clone(), err, start, self.certificate_source())
-            })?
-        };
+        if let Some((response, cache_policy)) = self.packed_response(&req, &cache_control).await? {
+            return Ok((response, Some(cache_policy)));
+        }
+        let mut response = self.0.execute(req).await.map_err(|err| {
+            Error::from_reqwest_middleware(url.clone(), err, start, self.certificate_source())
+        })?;
         trace!(
             "Received response for fresh request with status {} for: {}",
             response.status(),
@@ -778,11 +770,14 @@ impl CachedClient {
         req: Request,
         cache_entry: &CacheEntry,
         cache_control: CacheControl,
+        packed_entry: Option<&PackedArchiveEntry>,
         is_valid: impl FnOnce(&Payload) -> bool,
         response_callback: Callback,
     ) -> Result<Payload, CachedClientError<CallBackError>> {
+        // Scope packed lookup to this distribution request, not every request made by the client.
+        let client = self.with_packed_entry(packed_entry);
         let packed_req = req.try_clone().expect("HTTP request must be cloneable");
-        let payload = self
+        let payload = client
             .get_serde_with_retry(req, cache_entry, cache_control.clone(), &response_callback)
             .await?;
         if is_valid(&payload) {
@@ -790,15 +785,20 @@ impl CachedClient {
         }
 
         let start = Instant::now();
-        let Some(response) = self.packed_response(&packed_req, &cache_control).await? else {
+        let Some((response, policy)) = client.packed_response(&packed_req, &cache_control).await?
+        else {
             return Ok(payload);
         };
-        let policy = CachePolicyBuilder::new(&packed_req).build(&response);
-        let policy = policy.to_archived().is_storable().then(|| Box::new(policy));
-        self.run_response_callback(cache_entry, policy, start, response, async |response| {
-            let payload = response_callback(response).await?;
-            Ok(SerdeCacheable { inner: payload })
-        })
+        self.run_response_callback(
+            cache_entry,
+            Some(policy),
+            start,
+            response,
+            async |response| {
+                let payload = response_callback(response).await?;
+                Ok(SerdeCacheable { inner: payload })
+            },
+        )
         .await
     }
 
@@ -956,7 +956,7 @@ enum CachedResponse {
 #[derive(Debug)]
 pub struct DataWithCachePolicy {
     pub data: AlignedVec,
-    cache_policy: OwnedArchive<CachePolicy>,
+    pub(crate) cache_policy: OwnedArchive<CachePolicy>,
 }
 
 impl DataWithCachePolicy {

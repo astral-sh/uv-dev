@@ -26,7 +26,7 @@ use uv_cache::{Cache, CacheBucket, CacheEntry, CacheShard, Removal, WheelCache};
 use uv_cache_info::CacheInfo;
 use uv_client::{
     BaseClientBuilder, CacheControl, CachedClientError, Connectivity, DataWithCachePolicy,
-    RegistryClient,
+    PackedArchiveEntry, RegistryClient,
 };
 use uv_configuration::{BuildKind, BuildOutput, NoSources};
 use uv_distribution_filename::{SourceDistExtension, WheelFilename};
@@ -1001,6 +1001,15 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             _ => None,
         };
         let req = Self::request(url.clone(), client.unmanaged)?;
+        let packed_entry = source.name().map(|name| {
+            PackedArchiveEntry::new(
+                self.build_context.cache(),
+                index,
+                name,
+                url,
+                &PackedArchiveEntry::source_key(index.and(source.version()), ext),
+            )
+        });
         let revision = client
             .managed(|client| {
                 client
@@ -1009,6 +1018,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                         req,
                         &cache_entry,
                         cache_control.clone(),
+                        packed_entry.as_ref(),
                         |revision: &Revision| {
                             revision.satisfies(hashes)
                                 && expected_size
@@ -1017,6 +1027,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                         },
                         download,
                     )
+                    .boxed_local()
             })
             .await
             .map_err(|err| match err {
@@ -1042,6 +1053,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 .managed(async |client| {
                     client
                         .cached_client()
+                        .with_packed_entry(packed_entry.as_ref())
                         .skip_cache_with_retry(
                             Self::request(url.clone(), client)?,
                             &cache_entry,
@@ -2795,10 +2807,20 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .boxed_local()
             .instrument(info_span!("download", source_dist = %source))
         };
+        let packed_entry = source.name().map(|name| {
+            PackedArchiveEntry::new(
+                self.build_context.cache(),
+                index,
+                name,
+                url,
+                &PackedArchiveEntry::source_key(index.and(source.version()), ext),
+            )
+        });
         client
             .managed(async |client| {
                 client
                     .cached_client()
+                    .with_packed_entry(packed_entry.as_ref())
                     .skip_cache_with_retry(
                         Self::request(url.clone(), client)?,
                         &cache_entry,

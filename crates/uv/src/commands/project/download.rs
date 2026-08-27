@@ -4,7 +4,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use futures::{StreamExt, TryStreamExt, stream};
 use uv_cache::Cache;
-use uv_client::{BaseClientBuilder, PackedArchive, RegistryClientBuilder};
+use uv_client::{BaseClientBuilder, PackedArchiveEntry, RegistryClientBuilder};
 use uv_configuration::Concurrency;
 use uv_preview::{Preview, PreviewFeature};
 use uv_warnings::warn_user;
@@ -79,14 +79,14 @@ pub(crate) async fn download(
         .map(|(name, artifact)| {
             let client = &client;
             async move {
-                PackedArchive::download(
+                PackedArchiveEntry::new(
                     cache,
-                    client,
+                    artifact.index.as_ref(),
                     &name,
                     &artifact.url,
-                    artifact.hash.as_ref(),
-                    artifact.size,
+                    &artifact.cache_key,
                 )
+                .download(client, artifact.hash.as_ref(), artifact.size)
                 .await
                 .with_context(|| format!("Failed to download `{name}` from {}", artifact.url))
             }

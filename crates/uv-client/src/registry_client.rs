@@ -43,7 +43,8 @@ use crate::html::SimpleDetailHTML;
 use crate::remote_metadata::wheel_metadata_from_remote_zip;
 use crate::rkyvutil::OwnedArchive;
 use crate::{
-    BaseClient, CachedClient, Error, ErrorKind, FlatIndexClient, RedirectClientWithMiddleware,
+    BaseClient, CachedClient, Error, ErrorKind, FlatIndexClient, PackedArchiveEntry,
+    RedirectClientWithMiddleware,
 };
 
 /// A builder for an [`RegistryClient`].
@@ -191,7 +192,7 @@ impl<'a> RegistryClientBuilder<'a> {
         let connectivity = client.connectivity();
 
         // Wrap in the cache middleware.
-        let client = CachedClient::new(client).with_packed_cache(self.cache.clone());
+        let client = CachedClient::new(client);
 
         Ok(RegistryClient {
             indexes: self.index_locations,
@@ -237,6 +238,11 @@ pub enum MetadataFormat {
 }
 
 impl RegistryClient {
+    /// Return an index's configured artifact cache policy override.
+    pub(crate) fn artifact_cache_control(&self, index: &IndexUrl) -> Option<http::HeaderValue> {
+        self.indexes.artifact_cache_control_for(index)
+    }
+
     /// Return the [`CachedClient`] used by this client.
     pub fn cached_client(&self) -> &CachedClient {
         &self.client
@@ -989,13 +995,28 @@ impl RegistryClient {
         &self,
         filename: &WheelFilename,
         url: &DisplaySafeUrl,
+        index: Option<&IndexUrl>,
     ) -> Result<Option<ResolutionMetadata>, Error> {
-        if self.connectivity != Connectivity::Offline
-            && self.cache.must_revalidate_package(&filename.name)
-        {
-            return Ok(None);
-        }
-        let Some(archive) = crate::PackedArchive::read(&self.cache, url, None, None)
+        let entry = PackedArchiveEntry::new(
+            &self.cache,
+            index,
+            &filename.name,
+            url,
+            &PackedArchiveEntry::wheel_key(filename),
+        );
+        let request = self
+            .uncached_client(url)
+            .get(url.as_str())
+            .header(reqwest::header::ACCEPT_ENCODING, "identity")
+            .build()
+            .map_err(|err| {
+                ErrorKind::from_reqwest(url.clone(), err, self.client.certificate_source())
+            })?;
+        let control = entry
+            .cache_control(self)
+            .map_err(|err| ErrorKind::Io(std::io::Error::other(err)))?;
+        let Some((archive, _)) = entry
+            .read_http(&request, &control)
             .await
             .map_err(|err| ErrorKind::Io(std::io::Error::other(err)))?
         else {
@@ -1027,7 +1048,10 @@ impl RegistryClient {
             ..
         } = wheel;
 
-        if let Some(metadata) = self.packed_wheel_metadata(filename, url).await? {
+        if let Some(metadata) = self
+            .packed_wheel_metadata(filename, url, Some(index))
+            .await?
+        {
             return Ok(metadata);
         }
 
@@ -1113,7 +1137,7 @@ impl RegistryClient {
         cache_shard: WheelCache<'data>,
         capabilities: &'data IndexCapabilities,
     ) -> Result<ResolutionMetadata, Error> {
-        if let Some(metadata) = self.packed_wheel_metadata(filename, url).await? {
+        if let Some(metadata) = self.packed_wheel_metadata(filename, url, index).await? {
             return Ok(metadata);
         }
         let cache_entry = self.cache.entry(
