@@ -577,6 +577,7 @@ async fn determine_requires_python(
                 (requires_python, python_pin)
             }
             python_request => {
+                let variants = python_request.variants().unwrap_or_default();
                 let interpreter = PythonInstallation::find_or_download(
                     Some(python_request),
                     EnvironmentPreference::OnlySystem,
@@ -599,7 +600,7 @@ async fn determine_requires_python(
                     Some(PythonRequest::Version(VersionRequest::MajorMinor(
                         interpreter.python_major(),
                         interpreter.python_minor(),
-                        PythonVariant::Default.into(),
+                        variants,
                     )))
                 } else {
                     None
