@@ -15,14 +15,6 @@ pub enum BuildPolicy {
     #[default]
     Allow,
 
-    /// Keep source distributions only when the selected version lacks sufficient wheel coverage.
-    /// Package versions are selected normally. uv does not select an older version just because
-    /// that version has a wheel. For platform-specific resolutions, the selected version must have
-    /// a compatible wheel. For universal resolutions, the wheels must cover all applicable
-    /// environment markers.
-    /// uv may still build source distributions to obtain metadata.
-    IfNecessary,
-
     /// Require wheels, even when doing so changes the selected version.
     /// As with `--no-build`, uv may reuse cached wheels built from source. Editable requirements
     /// may still be built, and their build backends may run arbitrary Python code.
@@ -38,7 +30,6 @@ impl Display for BuildPolicy {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::Allow => "allow",
-            Self::IfNecessary => "if-necessary",
             Self::Disallow => "disallow",
             Self::Force => "force",
         })
@@ -51,7 +42,6 @@ impl FromStr for BuildPolicy {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
             "allow" => Ok(Self::Allow),
-            "if-necessary" => Ok(Self::IfNecessary),
             "disallow" => Ok(Self::Disallow),
             "force" => Ok(Self::Force),
             _ => Err(BuildPolicyError::Policy(value.to_owned())),
@@ -61,7 +51,7 @@ impl FromStr for BuildPolicy {
 
 #[derive(Debug, thiserror::Error)]
 pub enum BuildPolicyError {
-    #[error("unknown build policy `{0}`; expected `allow`, `if-necessary`, `disallow`, or `force`")]
+    #[error("unknown build policy `{0}`; expected `allow`, `disallow`, or `force`")]
     Policy(String),
     #[error("invalid `build-policy-package` value `{0}`: expected `PACKAGE=POLICY`")]
     Format(String),
@@ -138,10 +128,7 @@ mod tests {
 
     #[test]
     fn parse_policy() -> Result<(), BuildPolicyError> {
-        assert_eq!(
-            "if-necessary".parse::<BuildPolicy>()?,
-            BuildPolicy::IfNecessary
-        );
+        assert_eq!("allow".parse::<BuildPolicy>()?, BuildPolicy::Allow);
         assert_eq!(
             "Num_Py=disallow".parse::<BuildPolicyPackageEntry>()?,
             BuildPolicyPackageEntry {
