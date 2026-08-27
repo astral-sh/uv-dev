@@ -1,0 +1,14 @@
+{
+  "outcome": "fixed",
+  "summary": "Quoted-left version membership markers now use a dedicated containment representation instead of being discarded during PEP 440 inversion. Evaluation uses the original version string, lock generation preserves the marker, and updated regressions cover compile behavior, direct evaluation, negation, substring semantics, and serialization.",
+  "validation": [
+    "cargo test --package uv-pep508 test_marker_version_inverted",
+    "cargo test --package uv --test pip_compile compile_reversed_python_version_in_marker",
+    "cargo test --package uv --test lock --features test-universal lock_multiple_markers",
+    "cargo check --package uv",
+    "cargo +stable clippy --package uv-pep508 --package uv-resolver --all-targets -- -D warnings",
+    "cargo +stable fmt --all -- --check",
+    "git diff --check"
+  ],
+  "pull_request": "https://github.com/astral-sh/uv-dev/pull/890"
+}

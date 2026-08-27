@@ -11,11 +11,11 @@ python_version` as true for Python 3.9, 3.10, and 3.11, while `packaging.markers
 substring containment test and returns false, false, and true respectively. The reporter also notes
 that the opposite operand order, `python_version in "3.11"`, varies with the marker environment.
 
-The current parser explains the result. A version key on the left has specialized `in`/`not in`
-handling, but a quoted value on the left and version key on the right is sent through inverted PEP
+The pre-fix parser explains the result. A version key on the left had specialized `in`/`not in`
+handling, but a quoted value on the left and version key on the right was sent through inverted PEP
 440 comparison handling. `in` and `not in` are not PEP 440 comparison operators, so that path
-reports the expression as ignored and returns no expression. An ignored standalone expression
-becomes the true marker tree, producing the reported universal result.
+reported the expression as ignored and returned no expression. An ignored standalone expression
+became the true marker tree, producing the reported universal result.
 
 The closest historical work is astral-sh/uv#3683 and its implementation in astral-sh/uv#6172,
 which added version-aware handling for `python_version in "..."`. That work deliberately treated a
@@ -70,28 +70,56 @@ There is no exact existing test for a quoted value on the left of `in` with a ve
 but not reversed containment. Those assertions were read and do not cover the behavior in
 astral-sh/uv#21309.
 
+## Fix
+
+Outcome: **fixed**.
+
+The parser now recognizes quoted-left `in` and `not in` expressions with version markers before
+falling back to inverted PEP 440 comparisons. A dedicated version-containment marker node retains
+the original version string for specification-level substring evaluation, preserves the expression
+when converting marker trees back to text, and keeps the existing version-list and ordered PEP 440
+paths unchanged. Resolver traversal treats this boolean expression conservatively for
+`Requires-Python` bounds and includes its version parameter when generating universal lock markers.
+
+The parent `compile_reversed_python_version_in_marker` integration test was first changed to expect
+the Python 3.9 requirement to be omitted and failed with the reported unsatisfiable resolution. It
+now passes. Existing direct marker coverage was extended for matching and non-matching `in`, `not
+in`, substring behavior, and marker text round trips. The existing `lock_multiple_markers` test now
+also confirms that the reversed marker is retained in dependency edges and `package.metadata`
+rather than being erased from `uv.lock`.
+
+Successful focused validation:
+
+- `cargo test --package uv-pep508 test_marker_version_inverted`
+- `cargo test --package uv --test pip_compile compile_reversed_python_version_in_marker`
+- `cargo test --package uv --test lock --features test-universal lock_multiple_markers`
+- `cargo check --package uv`
+- `cargo +stable clippy --package uv-pep508 --package uv-resolver --all-targets -- -D warnings`
+- `cargo +stable fmt --all -- --check`
+- `git diff --check`
+
 ## Draft response
 
-Thanks for the clear reproduction. This is reproducible as a bug in `uv-pep508` 0.12.6 and the
-current main checkout.
+Thanks for the clear reproduction. This was reproducible as a bug in `uv-pep508` 0.12.6 and the
+parent main checkout.
 
 The specialized version-membership handling added for astral-sh/uv#3683 by astral-sh/uv#6172 only
 applies when `python_version` is on the left, as in `python_version in "..."`. With the operands
-reversed, the parser routes the expression through inverted PEP 440 comparison handling. Since `in`
-is not a PEP 440 comparison operator, the expression is discarded, and a discarded standalone
-marker currently evaluates as true.
+reversed, the old parser routed the expression through inverted PEP 440 comparison handling. Since
+`in` is not a PEP 440 comparison operator, the expression was discarded, and a discarded standalone
+marker evaluated as true.
 
-The reversed form is valid PEP 508 containment and should not be dropped. The next step is to add
-regression coverage for quoted-value-left `in` and `not in` expressions and preserve their
-containment semantics during parsing and evaluation. The reproduction here is sufficient for that
-work.
+The reversed form is valid PEP 508 containment and should not be dropped. The fix gives reversed
+version containment its own marker representation, evaluates it against the original environment
+string, and preserves it through marker and lockfile serialization. Regression coverage now checks
+both command behavior and the direct marker API.
 
 ## Classification
 
-This is a `bug`: a valid marker is accepted but evaluates incorrectly, and the current source
-confirms why. It is not a duplicate of astral-sh/uv#3683 because that closed issue and its merged fix
-only handle the opposite operand order. There is also no evidence that this is a regression of that
-fix; the reversed form was outside its implemented scope.
+This is a `bug`: the pre-fix implementation accepted a valid marker but evaluated it incorrectly.
+It is not a duplicate of astral-sh/uv#3683 because that closed issue and its merged fix only handle
+the opposite operand order. There is also no evidence that this is a regression of that fix; the
+reversed form was outside its implemented scope.
 
 ## Related
 
@@ -118,3 +146,5 @@ containment. astral-sh/uv#6168 is another reproduction of the same variable-left
 back to astral-sh/uv#3683. astral-sh/uv#3917 was also inspected because it compares uv and
 `packaging` environment-marker evaluation, but it concerns ordered comparison of
 `platform_release`, not membership or operand order, so it is not included as related.
+
+Pull request: https://github.com/astral-sh/uv-dev/pull/890
