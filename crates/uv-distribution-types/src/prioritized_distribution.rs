@@ -553,7 +553,6 @@ impl PrioritizedDist {
             .0
             .wheels
             .iter()
-            .filter(|(_, compatibility)| !compatibility.is_excluded())
             .map(|(wheel, _)| wheel.clone())
             .collect();
         Some(sdist)

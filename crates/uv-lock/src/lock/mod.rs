@@ -22,8 +22,8 @@ use url::Url;
 
 use uv_cache_key::RepositoryUrl;
 use uv_configuration::{
-    BuildOptions, BuildPolicy, BuildPolicyPackage, Constraints,
-    DependencyGroupsWithDefaults, ExcludeDependency, ExcludeNewer, ExcludeNewerPackage, Excludes,
+    BuildOptions, BuildPolicy, BuildPolicyPackage, Constraints, DependencyGroupsWithDefaults,
+    ExcludeDependency, ExcludeNewer, ExcludeNewerPackage, Excludes,
     ExtrasSpecificationWithDefaults, ForkStrategy, InstallTarget, NoBinary, NoBuild, Override,
     Overrides, PackageOverride, Prerelease, PrereleaseMode, PrereleasePackage, ResolutionMode,
     ScopedOverrideSourceError,
@@ -2509,12 +2509,7 @@ impl Lock {
 
             if build_options.has_build_policy() && matches!(package.id.source, Source::Registry(_))
             {
-                if resolution.no_build_distribution(
-                    dist,
-                    build_options,
-                    None,
-                    &resolution.options.artifact_environments,
-                ) {
+                if build_options.no_build_package(&package.id.name) {
                     package.sdist = None;
                 }
                 if build_options.no_binary_package(&package.id.name) {
