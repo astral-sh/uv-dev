@@ -35,7 +35,9 @@ pub struct PackedArchive {
 /// An archive supplied either by an HTTP response or a packed cache entry.
 #[derive(Debug)]
 pub enum ArchiveInput {
+    /// An archive received from the network.
     Response(Response),
+    /// A verified archive opened from the packed cache.
     File(PackedArchive),
 }
 
@@ -397,6 +399,7 @@ impl PackedArchiveEntry {
 }
 
 impl PackedArchive {
+    /// Consume the archive and return its verified file, positioned at the start.
     pub fn into_file(self) -> fs_err::tokio::File {
         self.file
     }

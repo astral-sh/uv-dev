@@ -470,6 +470,7 @@ impl CachedClient {
         .await
     }
 
+    /// Transform an input and persist the derived payload with its cache policy.
     async fn run_callback<
         Input,
         Payload: Cacheable,
@@ -751,6 +752,7 @@ impl CachedClient {
         Ok(payload)
     }
 
+    /// Read a usable derived payload without making a network request.
     async fn read_usable_serde_cache<Payload: Serialize + DeserializeOwned + Send + 'static>(
         &self,
         mut req: Request,
@@ -792,6 +794,7 @@ impl CachedClient {
         }
     }
 
+    /// Return a verified packed file when its saved cache policy permits reuse.
     async fn packed_input(
         &self,
         entry: Option<&PackedArchiveEntry>,

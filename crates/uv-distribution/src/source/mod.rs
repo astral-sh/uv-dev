@@ -2867,6 +2867,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         }
     }
 
+    /// Hash and unpack a source archive reader into the prepared cache entry.
     async fn extract_archive<Reader: tokio::io::AsyncRead + Unpin>(
         &self,
         reader: Reader,
