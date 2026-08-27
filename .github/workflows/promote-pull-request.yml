@@ -191,9 +191,11 @@ jobs:
                 fi
 
                 parent_number=$(jq --raw-output '.[0].number' <<< "$source_parent_pull_requests")
+                queue_marker="<!-- promote-pull-request: queued parent=$parent_number head=$EXPECTED_HEAD_SHA approval=$approval_id -->"
+                queue_comment=$(printf 'Waiting for promotion of parent #%s\n\n%s' "$parent_number" "$queue_marker")
                 gh pr comment "$PULL_REQUEST_NUMBER" \
                   --repo "$GITHUB_REPOSITORY" \
-                  --body "Waiting for promotion of parent #$parent_number"
+                  --body "$queue_comment"
                 echo "queued=true" >> "$GITHUB_OUTPUT"
                 exit 0
               fi

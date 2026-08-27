@@ -7,6 +7,10 @@ on:
 
 permissions: {}
 
+env:
+  AUTOMATIONS_BOT_ID: "305554984"
+  UV_DEV_REPOSITORY_ID: "1302176231"
+
 concurrency:
   group: sync-uv-dev-main
   cancel-in-progress: false
@@ -40,3 +44,130 @@ jobs:
             --method POST \
             repos/astral-sh/uv-dev/merge-upstream \
             --field branch=main
+
+  replay-queued-promotions:
+    name: Replay queued promotions
+    needs: sync
+    runs-on: ubuntu-slim
+    environment: automations
+    timeout-minutes: 10
+    permissions:
+      id-token: write
+      pull-requests: read
+    steps:
+      - name: Get promotion replay token
+        id: token
+        uses: open-security-tools/ost-simple-sts@974a63a2daaaa40f7c6dec40d334f3da4421469e
+        with:
+          exchange-url: ${{ secrets.STS_API_URL }}/exchange
+          audience: ${{ secrets.STS_API_URL }}
+          repository: astral-sh/uv-dev
+          permissions: |
+            actions: write
+            contents: read
+            pull_requests: read
+
+      - name: Replay queued promotions
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          UPSTREAM_TOKEN: ${{ github.token }}
+        run: |
+          children=$(
+            gh pr list \
+              --repo astral-sh/uv-dev \
+              --state open \
+              --search "draft:false" \
+              --limit 100 \
+              --json number,isDraft,baseRefName,headRefOid
+          )
+          while read -r child; do
+            child_number=$(jq --raw-output '.number' <<< "$child")
+            child_base=$(jq --raw-output '.baseRefName' <<< "$child")
+            child_head=$(jq --raw-output '.headRefOid' <<< "$child")
+            queue=$(
+              gh api \
+                --method GET \
+                "repos/astral-sh/uv-dev/issues/$child_number/comments" \
+                --paginate \
+                --slurp |
+                jq --compact-output \
+                  --argjson bot_id "$AUTOMATIONS_BOT_ID" \
+                  '[.[][]
+                    | select(.user.id == $bot_id and .performed_via_github_app.slug == "astral-automations-bot")
+                    | .body
+                    | try capture("<!-- promote-pull-request: queued parent=(?<parent>[0-9]+) head=(?<head>[0-9a-f]{40}) approval=(?<approval>[0-9]+) -->")
+                  ] | last // null'
+            )
+            if [ "$queue" = null ]; then
+              continue
+            fi
+
+            queued_parent=$(jq --raw-output '.parent' <<< "$queue")
+            queued_head=$(jq --raw-output '.head' <<< "$queue")
+            queued_approval=$(jq --raw-output '.approval' <<< "$queue")
+            current_approval=$(
+              gh api \
+                --method GET \
+                "repos/astral-sh/uv-dev/issues/$child_number/events" \
+                --paginate \
+                --slurp |
+                jq --raw-output '[.[][] | select(.event == "ready_for_review" and .actor.type == "User") | .id] | last // empty'
+            )
+            if [ "$child_head" != "$queued_head" ] || [ "$current_approval" != "$queued_approval" ]; then
+              echo "Skipping stale queued promotion for astral-sh/uv-dev#$child_number."
+              continue
+            fi
+
+            parent=$(gh api --method GET "repos/astral-sh/uv-dev/pulls/$queued_parent")
+            if ! jq --exit-status \
+              --arg child_base "$child_base" \
+              --argjson repository_id "$UV_DEV_REPOSITORY_ID" \
+              '.state == "closed" and .head.ref == $child_base and .base.repo.id == $repository_id and .head.repo.id == $repository_id' \
+              <<< "$parent" > /dev/null; then
+              continue
+            fi
+            promotion=$(
+              gh api \
+                --method GET \
+                "repos/astral-sh/uv-dev/issues/$queued_parent/comments" \
+                --paginate \
+                --slurp |
+                jq --compact-output \
+                  --argjson bot_id "$AUTOMATIONS_BOT_ID" \
+                  '[.[][]
+                    | select(.user.id == $bot_id and .performed_via_github_app.slug == "astral-automations-bot")
+                    | .body
+                    | try capture("^Promoted to \\[#(?<number>[0-9]+)\\]\\(https://github\\.com/astral-sh/uv/pull/(?<url_number>[0-9]+)\\)\\.$")
+                    | select(.number == .url_number)
+                  ] | last // null'
+            )
+            if [ "$promotion" = null ]; then
+              continue
+            fi
+
+            upstream_number=$(jq --raw-output '.number' <<< "$promotion")
+            upstream=$(
+              GH_TOKEN="$UPSTREAM_TOKEN" gh pr view "$upstream_number" \
+                --repo astral-sh/uv \
+                --json state,mergedAt,mergeCommit,headRefName
+            )
+            if ! jq --exit-status \
+              --arg child_base "$child_base" \
+              '.state == "MERGED" and .mergedAt != null and .headRefName == $child_base and .mergeCommit.oid != null' \
+              <<< "$upstream" > /dev/null; then
+              continue
+            fi
+
+            parent_merge=$(jq --raw-output '.mergeCommit.oid' <<< "$upstream")
+            comparison=$(gh api --method GET "repos/astral-sh/uv-dev/compare/$parent_merge...main")
+            if ! jq --exit-status '.status | IN("ahead", "identical")' <<< "$comparison" > /dev/null; then
+              continue
+            fi
+
+            gh workflow run promote-pull-request.yml \
+              --repo astral-sh/uv-dev \
+              --ref main \
+              --field pull_request="$child_number" \
+              --field head_sha="$queued_head"
+            echo "Replayed queued promotion for astral-sh/uv-dev#$child_number." >> "$GITHUB_STEP_SUMMARY"
+          done < <(jq --compact-output '.[] | select(.isDraft | not)' <<< "$children")
