@@ -1,4 +1,4 @@
-# uv_pep508 parses value in python_version as universally true
+# uv-pep508 parses value in python_version as universally true
 
 Issue: astral-sh/uv#21309
 
@@ -22,6 +22,14 @@ which added version-aware handling for `python_version in "..."`. That work deli
 whitespace-separated right-hand value as a list of exact versions for marker algebra. It did not
 cover the reversed, quoted-value-left containment form reported here. No open issue or pull request
 was found that already tracks this case.
+
+## Ecosystem impact
+
+The reporter later corrected their corpus query and reported finding only one published wheel that
+uses this operand order: `syringe-0.3.0-py2.py3-none-any.whl`, whose metadata contains
+`mock; "2" in python_version and extra == "mock"`. This suggests that direct impact on currently
+published package metadata is narrow. The corpus scope and count have not been independently
+verified, and the direct `uv-pep508` API correctness issue remains regardless of prevalence.
 
 ## Reproduction
 
@@ -147,4 +155,4 @@ back to astral-sh/uv#3683. astral-sh/uv#3917 was also inspected because it compa
 `packaging` environment-marker evaluation, but it concerns ordered comparison of
 `platform_release`, not membership or operand order, so it is not included as related.
 
-Pull request: https://github.com/astral-sh/uv-dev/pull/890
+Pull request: astral-sh/uv-dev#890
