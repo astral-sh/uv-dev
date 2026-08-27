@@ -31,6 +31,16 @@ uses this operand order: `syringe-0.3.0-py2.py3-none-any.whl`, whose metadata co
 published package metadata is narrow. The corpus scope and count have not been independently
 verified, and the direct `uv-pep508` API correctness issue remains regardless of prevalence.
 
+## Maintainer position
+
+Charlie Marsh stated that uv treats this operand order as an unsupported or invalid marker and
+resolves such markers to true, so he tentatively believes the observed result is intentional within
+uv's current semantics. This explains the existing behavior but does not dispute the reporter's
+evidence that the syntax is valid under PEP 508 or that `packaging` evaluates it as containment.
+The wording was explicitly tentative ("I believe" and "I think"), and the issue discussion does not
+yet contain a final disposition. Review of astral-sh/uv-dev#890 therefore needs an explicit decision
+between retaining uv's narrower marker semantics and matching the specification for this rare form.
+
 ## Reproduction
 
 Outcome: **reproducible**.
@@ -81,6 +91,10 @@ astral-sh/uv#21309.
 ## Fix
 
 Outcome: **fixed**.
+
+The implementation exists in astral-sh/uv-dev#890, but the maintainer comment above raises a policy
+question about whether specification-compatible handling should be accepted instead of preserving
+uv's current unsupported-marker semantics.
 
 The parser now recognizes quoted-left `in` and `not in` expressions with version markers before
 falling back to inverted PEP 440 comparisons. A dedicated version-containment marker node retains
