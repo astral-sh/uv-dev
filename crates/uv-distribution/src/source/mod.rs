@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use fs_err::tokio as fs;
 use futures::{FutureExt, TryStreamExt};
-use reqwest::{Response, StatusCode};
+use reqwest::StatusCode;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tracing::{Instrument, debug, info_span, instrument, warn};
 use url::Url;
@@ -25,8 +25,8 @@ use uv_auth::CredentialsCache;
 use uv_cache::{Cache, CacheBucket, CacheEntry, CacheShard, Removal, WheelCache};
 use uv_cache_info::CacheInfo;
 use uv_client::{
-    BaseClientBuilder, CacheControl, CachedClientError, Connectivity, DataWithCachePolicy,
-    PackedArchiveEntry, RegistryClient,
+    ArchiveInput, BaseClientBuilder, CacheControl, CachedClientError, Connectivity,
+    DataWithCachePolicy, PackedArchiveEntry, RegistryClient,
 };
 use uv_configuration::{BuildKind, BuildOutput, NoSources};
 use uv_distribution_filename::{SourceDistExtension, WheelFilename};
@@ -1053,11 +1053,11 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 .managed(async |client| {
                     client
                         .cached_client()
-                        .with_packed_entry(packed_entry.as_ref())
-                        .skip_cache_with_retry(
+                        .skip_cache_with_retry_and_packed(
                             Self::request(url.clone(), client)?,
                             &cache_entry,
                             cache_control,
+                            packed_entry.as_ref(),
                             download,
                         )
                         .await
@@ -2826,11 +2826,11 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .managed(async |client| {
                 client
                     .cached_client()
-                    .with_packed_entry(packed_entry.as_ref())
-                    .skip_cache_with_retry(
+                    .skip_cache_with_retry_and_packed(
                         Self::request(url.clone(), client)?,
                         &cache_entry,
                         cache_control.clone(),
+                        packed_entry.as_ref(),
                         download,
                     )
                     .await
@@ -2842,10 +2842,35 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .await
     }
 
-    /// Download and unzip a source distribution into the cache from an HTTP response.
+    /// Unpack a source distribution from an HTTP response or packed cache file.
     async fn download_archive(
         &self,
-        response: Response,
+        input: ArchiveInput,
+        source: &BuildableSource<'_>,
+        ext: SourceDistExtension,
+        target: &Path,
+        algorithms: &[HashAlgorithm],
+    ) -> Result<(Vec<HashDigest>, u64), Error> {
+        match input {
+            ArchiveInput::Response(response) => {
+                let reader = response
+                    .bytes_stream()
+                    .map_err(std::io::Error::other)
+                    .into_async_read();
+                self.extract_archive(reader.compat(), source, ext, target, algorithms)
+                    .await
+            }
+            ArchiveInput::File(archive) => {
+                self.extract_archive(archive.into_file(), source, ext, target, algorithms)
+                    .await
+            }
+        }
+    }
+
+    /// Hash and unpack a source archive reader into the prepared cache entry.
+    async fn extract_archive<Reader: tokio::io::AsyncRead + Unpin>(
+        &self,
+        reader: Reader,
         source: &BuildableSource<'_>,
         ext: SourceDistExtension,
         target: &Path,
@@ -2858,18 +2883,13 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         )
         .map_err(Error::CacheWrite)?;
 
-        let reader = response
-            .bytes_stream()
-            .map_err(std::io::Error::other)
-            .into_async_read();
-
         // Create a hasher for each hash algorithm.
         let mut hashers = algorithms
             .iter()
             .copied()
             .map(Hasher::from)
             .collect::<Vec<_>>();
-        let mut hasher = uv_extract::hash::HashReader::new(reader.compat(), &mut hashers);
+        let mut hasher = uv_extract::hash::HashReader::new(reader, &mut hashers);
 
         // Download and unzip the source distribution into a temporary directory.
         let span = info_span!("download_source_dist", source_dist = %source);
