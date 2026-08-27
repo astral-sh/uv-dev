@@ -6,12 +6,13 @@ Classification: bug
 
 ## Summary
 
-The report demonstrates that uv-pep508 parses a valid PEP 508 marker such as
-`python_version in "3.8,3.9,3.13"` into an unconditional `true` tree. Evaluation therefore returns
-true for Python versions that are not substrings of the right-hand value. The crate-level
-reproduction covers both comma-separated and comma-plus-space forms on uv-pep508 0.12.6; the
-reporter has not yet identified a specific wheel containing this metadata or demonstrated the
-downstream uv resolver behavior.
+The reported behavior is reproducible with the installed uv 0.12.6 on Linux, using CPython 3.12.3.
+A project restricted to Python 3.12 incorrectly attempts to resolve a dependency guarded by
+`python_version in "3.8,3.9"`. Under PEP 508 substring semantics, that dependency should be inactive
+because `3.12` is not a substring of `3.8,3.9`. The same result occurs with `"3.8, 3.9"`, while the
+whitespace-separated control `"3.8 3.9"` is correctly inactive. This also demonstrates downstream
+uv resolver impact, although the reporter has not identified the PyPI wheel that motivated the
+report.
 
 Current source confirms the behavior. `parse_version_in_expr` implements a deliberately limited,
 version-aware interpretation by splitting the right-hand string on whitespace and parsing every
@@ -25,6 +26,52 @@ The limitation originated in astral-sh/uv#6172. Its discussion explicitly consid
 edge cases arose. This report supplies such a case. No newer issue or pull request was found that
 already tracks comma-delimited version membership.
 
+## Reproduction
+
+Outcome: **reproducible**.
+
+Environment:
+
+- uv 0.12.6 (`x86_64-unknown-linux-gnu`), installed at `/opt/hostedtoolcache/uv/0.12.6/x86_64/uv`
+- CPython 3.12.3 at `/usr/bin/python3.12`
+- All fixture files and the uv cache were placed under `$RUNNER_TEMP`; the repository checkout and
+  existing user state were not modified.
+
+Minimal `pyproject.toml`:
+
+```toml
+[project]
+name = "marker-repro"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "definitely-not-a-real-package-uv-21310; python_version in '3.8,3.9'",
+]
+```
+
+Command:
+
+```console
+$ UV_CACHE_DIR="$RUNNER_TEMP/uv-21310-cache" uv --no-config lock --offline --python 3.12
+Using CPython 3.12.3 interpreter at: /usr/bin/python3.12
+  × No solution found when resolving dependencies:
+  ╰─▶ Because definitely-not-a-real-package-uv-21310 was not found in the cache and your project
+      depends on definitely-not-a-real-package-uv-21310, we can conclude that your project's
+      requirements are unsatisfiable.
+```
+
+The failure shows that uv treated the marked dependency as active even though the project's entire
+supported Python range is 3.12. Changing the marker to the comma-plus-space variant
+`python_version in '3.8, 3.9'` produced the same failure. Changing only the marker value to the
+whitespace-separated control `python_version in '3.8 3.9'` succeeded with `Resolved 1 package`,
+confirming that the fixture distinguishes the reported separator behavior.
+
+Existing unit coverage in `crates/uv-pep508/src/marker/tree.rs` records the current limitation:
+`test_marker_simplification` asserts that both `python_version in '3.9, 3.10'` and
+`python_version in '3.9,3.10'` simplify to true, while `test_version_in_evaluation` verifies the
+supported whitespace-delimited form. There is no matching integration test under `crates/uv/tests/`
+or `crates/uv-client/tests/it/` for the comma-delimited resolver behavior reproduced above.
+
 ## Draft response
 
 Thanks for the focused reproduction. The current uv-pep508 implementation only supports a
@@ -37,7 +84,8 @@ preserve PEP 508 substring semantics.
 This should remain open as a bug for the comma-delimited case. It is related to astral-sh/uv#21309,
 but that report uses reversed operands and takes a different parser path. If possible, please add
 the exact package name and version—or wheel URL—whose `Requires-Dist` contains this form; the crate
-reproduction establishes the behavior, while that metadata would document the resolver impact.
+and CLI reproductions establish the parser and resolver behavior, while that metadata would
+document a concrete occurrence in the package ecosystem.
 
 ## Classification
 

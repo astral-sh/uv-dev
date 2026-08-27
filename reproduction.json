@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "With uv 0.12.6 on Linux and CPython 3.12.3, a project restricted to `requires-python = \">=3.12,<3.13\"` and depending on a nonexistent package guarded by `python_version in '3.8,3.9'` failed under `UV_CACHE_DIR=$RUNNER_TEMP/uv-21310-cache uv --no-config lock --offline --python 3.12`; uv attempted to resolve the guarded package, although the marker should be false for Python 3.12. The comma-plus-space variant also failed, while the whitespace-separated control `'3.8 3.9'` succeeded with `Resolved 1 package`. Existing `crates/uv-pep508/src/marker/tree.rs::test_marker_simplification` assertions record both comma-delimited forms simplifying to true. The issue-context README was updated with the fixture, commands, output, and coverage."
+}
