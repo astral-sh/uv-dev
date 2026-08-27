@@ -11,7 +11,8 @@ A project restricted to Python 3.12 incorrectly attempted to resolve a dependenc
 `python_version in "3.8,3.9"`. Under PEP 508 substring semantics, that dependency should be inactive
 because `3.12` is not a substring of `3.8,3.9`. The same result occurred with `"3.8, 3.9"`, while the
 whitespace-separated control `"3.8 3.9"` was correctly inactive. This demonstrated downstream uv
-resolver impact, although the reporter has not identified the PyPI wheel that motivated the report.
+resolver impact. The reporter subsequently identified the construct in a corpus of PyPI wheels,
+although exact package versions and wheel URLs were not provided.
 
 The root cause was `parse_version_in_expr` splitting the right-hand string only on whitespace and
 parsing every token as a PEP 440 version. A token such as `3.8,3.9,3.13` failed that parse, so the
@@ -23,6 +24,34 @@ The limitation originated in astral-sh/uv#6172. Its discussion explicitly consid
 `python_full_version in "3.11,3.12,3.13"`, then chose strict whitespace-only support until more
 edge cases arose. This report supplies such a case. No newer issue or pull request was found that
 already tracks comma-delimited version membership.
+
+## Reported ecosystem impact
+
+The reporter searched their PyPI corpus and reported at least 164 wheels across 14 projects using
+comma-delimited version membership markers. This corpus result has not been independently verified,
+and it may not include affected source distributions, but it establishes that the syntax is not
+limited to a hypothetical or single-package case.
+
+Reported wheel counts by project:
+
+- `flight-profiler`: 98
+- `fortls`: 16
+- `responses`: 14
+- `vcrpy`: 9
+- `awslogs`: 5
+- `colander`: 4
+- `django-fluent-comments`: 4
+- `analytics-python`: 3
+- `paste_it`: 3
+- `aws2fa`: 2
+- `awslogs-oguzzi`: 2
+- `honcho`: 2
+- `sked`: 1
+- `ssawslogs`: 1
+
+This evidence directly answers the edge-case question raised during astral-sh/uv#6172 and increases
+the practical priority of supporting comma separators. Exact affected versions or wheel URLs would
+still be useful for independently checking the corpus result against published metadata.
 
 ## Reproduction
 
