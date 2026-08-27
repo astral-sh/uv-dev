@@ -1,0 +1,27 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 3683,
+        "title": "Support `in` operators with `python_version` marker",
+        "url": "https://github.com/astral-sh/uv/issues/3683",
+        "state": "closed",
+        "reason": "Canonical historical issue for version-membership markers, but it covers the opposite operand order: `python_version in \"...\"`."
+      },
+      {
+        "kind": "pull_request",
+        "number": 6172,
+        "title": "Add support for `python_version in ...` markers",
+        "url": "https://github.com/astral-sh/uv/pull/6172",
+        "state": "merged",
+        "reason": "Implemented specialized variable-left membership handling, but not quoted-value-left containment."
+      }
+    ],
+    "search_scope": "Searched exact expressions, operand ordering, universal-true evaluation, uv-pep508 identifiers, containment, substring matching, ignored markers, PEP 508 compatibility, and historical fixes. Inspected the astral-sh/uv#3675, astral-sh/uv#3681, astral-sh/uv#3683, and astral-sh/uv#6172 chain. astral-sh/uv#6168 covers the already-fixed variable-left case. astral-sh/uv#3917 was ruled out because it concerns ordered platform_release comparisons."
+  },
+  "type": "bug",
+  "type_reason": "Source confirms that the valid reversed membership expression is routed through inverted PEP 440 handling, where `in` is unsupported and discarded; the resulting standalone marker evaluates as true. The historical fix only covered the opposite operand order, so this is not a duplicate or regression.",
+  "summary": "Historical work supports `python_version in \"...\"`, but no existing issue or pull request tracks the reversed `\"...\" in python_version` form.",
+  "draft_response": "Thanks for the clear reproduction. This is a bug in `uv-pep508`. The specialized version-membership handling added for astral-sh/uv#3683 by astral-sh/uv#6172 only applies when `python_version` is on the left. With the operands reversed, `in` is routed through PEP 440 comparison handling, discarded as unsupported, and the standalone marker evaluates as true. The reversed form is valid PEP 508 containment and should not be dropped. The next step is regression coverage for quoted-value-left `in` and `not in` expressions and preserving their containment semantics; the supplied reproduction is sufficient."
+}
