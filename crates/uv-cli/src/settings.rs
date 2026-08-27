@@ -56,10 +56,10 @@ use uv_workspace::pyproject::{DependencyType, ExtraBuildDependencies, OverrideDe
 use crate::comma::CommaSeparatedRequirements;
 use crate::{
     AddArgs, AuditArgs, AuditCommonArgs, AuditOutputFormat, AuthLoginArgs, AuthLogoutArgs,
-    AuthTokenArgs, ColorChoice, DependencyConstraintsArgs, ExternalCommand, GlobalArgs, InitArgs,
-    ListFormat, LockArgs, Maybe, MetadataArgs, PipCheckArgs, PipCompileArgs, PipFreezeArgs,
-    PipInstallArgs, PipInstallFormat, PipListArgs, PipShowArgs, PipSyncArgs, PipTreeArgs,
-    PipUninstallArgs, ProjectDependencyGroupsArgs, PythonFindArgs, PythonInstallArgs,
+    AuthTokenArgs, ColorChoice, DependencyConstraintsArgs, DownloadArgs, ExternalCommand,
+    GlobalArgs, InitArgs, ListFormat, LockArgs, Maybe, MetadataArgs, PipCheckArgs, PipCompileArgs,
+    PipFreezeArgs, PipInstallArgs, PipInstallFormat, PipListArgs, PipShowArgs, PipSyncArgs,
+    PipTreeArgs, PipUninstallArgs, ProjectDependencyGroupsArgs, PythonFindArgs, PythonInstallArgs,
     PythonListArgs, PythonListFormat, PythonPinArgs, PythonUninstallArgs, PythonUpgradeArgs,
     RemoveArgs, RunArgs, SyncArgs, SyncFormat, ToolAuditArgs, ToolDirArgs, ToolInstallArgs,
     ToolListArgs, ToolRunArgs, ToolUninstallArgs, TreeArgs, TreeFormat, UpgradeArgs, VenvArgs,
@@ -4437,14 +4437,14 @@ fn resolve_pip_build_hash_checking(
 }
 
 #[derive(Debug)]
-pub(crate) struct DownloadSettings {
-    pub(crate) refresh: Refresh,
-    pub(crate) settings: ResolverSettings,
+pub struct DownloadSettings {
+    pub refresh: Refresh,
+    pub settings: ResolverSettings,
 }
 
 impl DownloadSettings {
-    pub(crate) fn resolve(
-        args: uv_cli::DownloadArgs,
+    pub fn resolve(
+        args: DownloadArgs,
         filesystem: Option<FilesystemOptions>,
         environment: &EnvironmentOptions,
     ) -> Result<Self> {
