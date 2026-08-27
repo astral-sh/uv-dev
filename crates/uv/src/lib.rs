@@ -2421,7 +2421,7 @@ async fn run_project(
                 .network_settings
                 .check_refresh_conflict(&args.refresh)?;
             let cache = cache.init().await?.with_refresh(args.refresh);
-            commands::download(
+            Box::pin(commands::download(
                 project_dir,
                 args.settings,
                 client_builder.subcommand(vec!["download".to_owned()]),
@@ -2430,7 +2430,7 @@ async fn run_project(
                 workspace_cache,
                 printer,
                 globals.preview,
-            )
+            ))
             .await
         }
         ProjectCommand::Lock(args) => {
