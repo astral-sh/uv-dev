@@ -694,7 +694,7 @@ impl ResolverOutput {
     ) -> Result<MarkerTree, Box<ParsedUrlError>> {
         use uv_pep508::{
             CanonicalMarkerValueString, CanonicalMarkerValueVersion, MarkerExpression,
-            MarkerOperator, MarkerTree,
+            MarkerOperator, MarkerTree, MarkerValueVersion,
         };
 
         /// A subset of the possible marker values.
@@ -705,6 +705,7 @@ impl ResolverOutput {
         #[derive(Debug, Eq, Hash, PartialEq)]
         enum MarkerParam {
             Version(CanonicalMarkerValueVersion),
+            VersionString(MarkerValueVersion),
             String(CanonicalMarkerValueString),
         }
 
@@ -733,6 +734,12 @@ impl ResolverOutput {
                 }
                 MarkerTreeKind::Contains(marker) => {
                     set.insert(MarkerParam::String(marker.key()));
+                    for (_, tree) in marker.children() {
+                        add_marker_params_from_tree(tree, set);
+                    }
+                }
+                MarkerTreeKind::VersionContains(marker) => {
+                    set.insert(MarkerParam::VersionString(marker.key()));
                     for (_, tree) in marker.children() {
                         add_marker_params_from_tree(tree, set);
                     }
@@ -794,6 +801,21 @@ impl ResolverOutput {
                     let from_env = marker_env.get_version(value_version);
                     MarkerExpression::Version {
                         key: value_version.into(),
+                        specifier: VersionSpecifier::equals_version(from_env.clone()),
+                    }
+                }
+                MarkerParam::VersionString(value_version) => {
+                    let from_env = match value_version {
+                        MarkerValueVersion::ImplementationVersion => {
+                            &marker_env.implementation_version().version
+                        }
+                        MarkerValueVersion::PythonFullVersion => {
+                            &marker_env.python_full_version().version
+                        }
+                        MarkerValueVersion::PythonVersion => &marker_env.python_version().version,
+                    };
+                    MarkerExpression::Version {
+                        key: value_version,
                         specifier: VersionSpecifier::equals_version(from_env.clone()),
                     }
                 }
