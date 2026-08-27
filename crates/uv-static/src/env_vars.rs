@@ -546,6 +546,13 @@ impl EnvVars {
     #[attr_added_in("0.8.14")]
     pub const UV_PYTHON_CPYTHON_BUILD: &'static str = "UV_PYTHON_CPYTHON_BUILD";
 
+    /// Pin an explicitly requested managed Python build variant to a specific build version.
+    ///
+    /// This variable only applies to requests with a provider-defined build variant, such as
+    /// `3.13+custom`.
+    #[attr_added_in("0.12.6")]
+    pub const UV_PYTHON_BUILD: &'static str = "UV_PYTHON_BUILD";
+
     /// Pin managed PyPy versions to a specific build version.
     ///
     /// For PyPy, this should be the PyPy version (e.g., "7.3.20").
