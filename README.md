@@ -8,22 +8,23 @@ Classification: bug
 
 The reported behavior was reproduced with the installed uv 0.12.6 on Linux, using CPython 3.12.3.
 A project restricted to Python 3.12 incorrectly attempted to resolve a dependency guarded by
-`python_version in "3.8,3.9"`. Under PEP 508 substring semantics, that dependency should be inactive
-because `3.12` is not a substring of `3.8,3.9`. The same result occurred with `"3.8, 3.9"`, while the
-whitespace-separated control `"3.8 3.9"` was correctly inactive. This demonstrated downstream uv
+`python_version in "3.8,3.9"`. Under the historical PEP 508 substring semantics, that dependency
+should be inactive because `3.12` is not a substring of `3.8,3.9`. The same result occurred with
+`"3.8, 3.9"`, while the whitespace-separated control `"3.8 3.9"` was correctly inactive. This demonstrated downstream uv
 resolver impact. The reporter subsequently identified the construct in a corpus of PyPI wheels,
-although exact package versions and wheel URLs were not provided.
+including example package versions and wheel filenames.
 
-The root cause was `parse_version_in_expr` splitting the right-hand string only on whitespace and
-parsing every token as a PEP 440 version. A token such as `3.8,3.9,3.13` failed that parse, so the
-expression was ignored and the resulting marker tree was `true`. The fix extends that existing
-version-aware parser to recognize commas as separators and updates the marker-simplification
-expectations accordingly.
+The implementation cause is `parse_version_in_expr` splitting the right-hand string only on
+whitespace and parsing every token as a PEP 440 version. A token such as `3.8,3.9,3.13` failed that
+parse, so the expression was ignored and the resulting marker tree was `true`. A proposed fix
+extends that existing version-aware parser to recognize commas as separators and updates the
+marker-simplification expectations accordingly, but it has not been accepted upstream.
 
 The limitation originated in astral-sh/uv#6172. Its discussion explicitly considered
 `python_full_version in "3.11,3.12,3.13"`, then chose strict whitespace-only support until more
-edge cases arose. This report supplies such a case. No newer issue or pull request was found that
-already tracks comma-delimited version membership.
+edge cases arose. This report supplies such a case. No newer issue or pull request was found at
+initial triage; astral-sh/uv#21311 and astral-sh/uv-dev#889 have since been opened with
+implementations for comma-delimited version membership.
 
 ## Reported ecosystem impact
 
@@ -49,9 +50,12 @@ Reported wheel counts by project:
 - `sked`: 1
 - `ssawslogs`: 1
 
-This evidence directly answers the edge-case question raised during astral-sh/uv#6172 and increases
-the practical priority of supporting comma separators. Exact affected versions or wheel URLs would
-still be useful for independently checking the corpus result against published metadata.
+The reporter later supplied example wheel filenames, including `analytics_python` 1.2.2–1.2.4,
+`aws2fa` 0.0.2–0.0.3, `awslogs` 0.6.0–0.11.0, `awslogs_oguzzi` 0.12.1–0.12.2, and `colander`
+1.5–1.6.0. The maintainer observed that all provided markers target EOL Python versions that uv no
+longer supports and cited that as a reason not to broaden compatibility. The local reproduction
+nevertheless shows that discarding such a marker as true can activate its guarded dependency while
+resolving for a currently supported Python version.
 
 ## Reproduction
 
@@ -99,18 +103,18 @@ Before the fix, unit coverage in `crates/uv-pep508/src/marker/tree.rs` encoded t
 supported whitespace-delimited form. The parent regression added the missing resolver coverage in
 `crates/uv/tests/lock/lock.rs`.
 
-## Fix
+## Proposed fix and validation
 
-Outcome: **fixed**.
+Outcome: **implemented and validated, but not accepted upstream**.
 
 The parent regression `lock::lock_python_version_in_comma` in `crates/uv/tests/lock/lock.rs` was
 first confirmed to pass while snapshotting the undesirable offline resolution failure. Its snapshot
 was then changed to require a successful one-package lock; before the production change, that
 desired assertion failed because uv still tried to resolve `iniconfig`.
 
-`crates/uv-pep508/src/marker/parse.rs` now treats commas, as well as whitespace, as separators in
-the existing version-aware `in` and `not in` parser. This preserves the established marker algebra
-while allowing comma-delimited PEP 440 versions to produce a real `VersionIn` expression rather
+The proposed change to `crates/uv-pep508/src/marker/parse.rs` treats commas, as well as whitespace,
+as separators in the existing version-aware `in` and `not in` parser. This preserves the
+established marker algebra while allowing comma-delimited PEP 440 versions to produce a real `VersionIn` expression rather
 than being discarded. The directly related assertions in
 `crates/uv-pep508/src/marker/tree.rs::test_marker_simplification` now verify that comma-separated
 forms with and without following spaces simplify to the expected Python full-version range. Other
@@ -129,29 +133,30 @@ Successful focused validation:
   `rustfmt` was used because the pinned toolchain's component directory is read-only and lacks
   `rustfmt`.
 
-## Draft response
+## Maintainer decision
 
-Thanks for the focused reproduction. The uv-pep508 implementation only supported a
-whitespace-delimited, version-aware subset of `in` for version markers. That behavior was
-introduced in astral-sh/uv#6172; its discussion explicitly considered comma-delimited values but
-deferred them pending concrete ecosystem cases. The parser now recognizes commas as separators, so
-these values produce the same version-aware marker representation as whitespace-delimited values
-instead of being discarded as `true`.
+In astral-sh/uv#21311, a maintainer declined to extend comma-separated compatibility. The current
+dependency-specifier guidance says `in` and `not in` are not valid for version fields; publishing
+tools should reject them, while locking and installation tools may reject them or treat them as
+false. The maintainer also noted that the concrete wheels supplied in astral-sh/uv#21310 use the
+syntax only for EOL Python versions outside uv's supported range. Their stated preference is to
+leave uv's existing compatibility behavior unchanged rather than support additional forms of the
+deprecated syntax.
 
-This remains related to astral-sh/uv#21309, but that report uses reversed operands and takes a
-different parser path. If possible, please still add the exact package name and version—or wheel
-URL—whose `Requires-Dist` contains this form; the crate and CLI reproductions establish the parser
-and resolver behavior, while that metadata would document a concrete occurrence in the package
-ecosystem.
+This decision supersedes the handoff's earlier expectation that comma support should be merged.
+Both astral-sh/uv#21311 and astral-sh/uv-dev#889 remain open at the time of this update, but their
+comma-separator approach conflicts with the recorded maintainer direction.
 
 ## Classification
 
-Classify astral-sh/uv#21310 as a bug. PEP 508 defines `in` for this expression as substring
-matching, but uv-pep508's specialized version-list parser previously accepted only
-whitespace-separated PEP 440 versions. When commas made that parser fail, ignoring the condition
-and returning true for every environment was incorrect behavior. The reproduction and prior test
-expectations established that this was a known limitation, not that the result was correct; the
-parser now supports the reported comma-delimited form.
+Classify astral-sh/uv#21310 as a bug based on the reproduced unconditional-true evaluation. The
+historical PEP 508 interpretation used substring matching, while current dependency-specifier
+guidance disallows `in` and `not in` for version fields and permits installers to reject the marker
+or treat it as false. uv-pep508's specialized whitespace-only parser instead discards the
+comma-delimited expression as true, which can activate the guarded dependency on unrelated Python
+versions. The reproduction and prior test expectations establish that behavior. A fix was
+implemented and validated, but the maintainer decision is not to extend support for the deprecated
+syntax because the concrete marker values concern unsupported EOL Python versions.
 
 This is not a regression: astral-sh/uv#6172 never supported comma-separated strings. It is also not
 a duplicate of astral-sh/uv#21309. That open issue has the same unconditional-true result and is
@@ -173,21 +178,27 @@ Supporting comma-delimited right-hand strings is a distinct case with separate p
 - astral-sh/uv#21309 — **uv-pep508 parses value in python_version as universally true** (open
   issue). This adjacent report also shows a valid version-membership expression becoming
   unconditionally true, but it uses reversed operands and exercises a different parser path.
+- astral-sh/uv#21311 — **fix: Allow commas as python_version string separators** (open pull
+  request). This directly implements the requested comma parsing. A maintainer stated that modern
+  guidance disallows containment operators on version fields and declined to extend support,
+  noting that the supplied wheel examples target unsupported EOL Python versions.
+- astral-sh/uv-dev#889 — **Support comma-delimited Python version membership markers** (open pull
+  request). This independently contains the validated parser and lock-test changes described above,
+  but its approach is now contrary to the maintainer decision recorded on astral-sh/uv#21311.
 
 ## Search and supporting evidence
 
 Searches covered open and closed issues and open, closed, and merged pull requests. Literal queries
 included `python_version in`, `python_full_version in`, comma-delimited version examples,
 `always true`, uv-pep508, and relevant parser identifiers. Conceptual queries covered version
-membership and list markers, PEP 508 substring behavior, invalid markers becoming true,
+membership and list markers, historical PEP 508 substring behavior, invalid markers becoming true,
 version-aware normalization, and marker algebra. Fix-oriented inspection followed the historical
 chain from astral-sh/uv#3675 through astral-sh/uv#3683 to astral-sh/uv#6172 and checked for newer
-work mentioning astral-sh/uv#21310.
+work mentioning astral-sh/uv#21310. The follow-up review also inspected astral-sh/uv#21311 and
+astral-sh/uv-dev#889 and incorporated the maintainer's modern-spec compatibility decision.
 
 astral-sh/uv#3675 was inspected but omitted from the related list because it is a downstream
 resolver symptom involving the whitespace-delimited `pathlib2` marker already fixed by
 astral-sh/uv#6172. astral-sh/uv#20816 was also inspected after a literal comma-version search, but
 it concerns conjunction semantics for comma-separated `project.requires-python` specifiers, not
-PEP 508 marker membership. No current fixing or tracking pull request was found.
-
-Pull request: https://github.com/astral-sh/uv-dev/pull/889
+PEP 508 marker membership.
