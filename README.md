@@ -143,6 +143,15 @@ syntax only for EOL Python versions outside uv's supported range. Their stated p
 leave uv's existing compatibility behavior unchanged rather than support additional forms of the
 deprecated syntax.
 
+The reporter disputes treating comma-separated and whitespace-separated forms differently. Under
+the historical substring semantics, commas, whitespace, and no separator are all ordinary string
+content, so neither delimiter is privileged. The modern guidance cited by the maintainer does not
+recommend whitespace-delimited containment instead; it disallows `in` and `not in` for version
+fields generally. Consequently, uv's support for the whitespace form but not the comma form is best
+understood as retained legacy compatibility, not as a distinction prescribed by current packaging
+guidance. The disagreement is whether that compatibility should be extended, not what the modern
+guidance says.
+
 This decision supersedes the handoff's earlier expectation that comma support should be merged.
 Both astral-sh/uv#21311 and astral-sh/uv-dev#889 remain open at the time of this update, but their
 comma-separator approach conflicts with the recorded maintainer direction.
