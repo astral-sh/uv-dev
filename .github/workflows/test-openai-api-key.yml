@@ -1,0 +1,90 @@
+# Test the replacement API key without changing the key used by other automations.
+name: "Test OpenAI API key"
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "Model to test with NEW_OPENAI_API_KEY"
+        required: true
+        default: gpt-5.6-sol
+        type: string
+
+permissions: {}
+
+jobs:
+  test-api-key:
+    if: github.repository == 'astral-sh/uv-dev'
+    runs-on: ubuntu-latest
+    environment: automations
+    timeout-minutes: 5
+    steps:
+      - name: "Test NEW_OPENAI_API_KEY"
+        env:
+          OPENAI_API_KEY: ${{ secrets.NEW_OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ inputs.model }}
+        run: |
+          if [ -z "$OPENAI_API_KEY" ]; then
+            echo "::error::NEW_OPENAI_API_KEY is missing from the automations environment."
+            exit 1
+          fi
+
+          response_file="$(mktemp)"
+          trap 'rm -f "$response_file"' EXIT
+
+          # Do not print response bodies: authentication errors can include part of the key.
+          if ! http_status="$(
+            jq --null-input --arg model "$OPENAI_MODEL" '{
+              model: $model,
+              input: "Reply with exactly OK.",
+              reasoning: {effort: "low"},
+              max_output_tokens: 512,
+              store: false
+            }' | curl --silent --show-error \
+              --connect-timeout 15 \
+              --max-time 120 \
+              --request POST \
+              --header "Authorization: Bearer $OPENAI_API_KEY" \
+              --header "Content-Type: application/json" \
+              --data-binary @- \
+              --output "$response_file" \
+              --write-out '%{http_code}' \
+              https://api.openai.com/v1/responses
+          )"; then
+            echo "::error::The OpenAI request failed before receiving a complete response."
+            exit 1
+          fi
+
+          case "$http_status" in
+            200) ;;
+            401)
+              echo "::error::OpenAI rejected NEW_OPENAI_API_KEY (HTTP 401)."
+              exit 1
+              ;;
+            403|404)
+              echo "::error::Check API permissions and access to the selected model (HTTP $http_status)."
+              exit 1
+              ;;
+            429)
+              echo "::error::Check the key's quota, billing, and rate limits (HTTP 429)."
+              exit 1
+              ;;
+            *)
+              echo "::error::The OpenAI request failed (HTTP $http_status)."
+              exit 1
+              ;;
+          esac
+
+          if ! jq --exit-status '
+            .status == "completed"
+            and .error == null
+            and any(.output[]?; .type == "message" and any(.content[]?;
+              .type == "output_text" and (.text | type == "string" and length > 0)
+            ))
+          ' "$response_file" > /dev/null 2>&1; then
+            echo "::error::OpenAI did not return a completed text response."
+            exit 1
+          fi
+
+          echo "NEW_OPENAI_API_KEY successfully generated a model response."
+          echo "NEW_OPENAI_API_KEY successfully generated a model response." >> "$GITHUB_STEP_SUMMARY"
