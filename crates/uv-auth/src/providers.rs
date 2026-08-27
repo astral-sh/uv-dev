@@ -1,10 +1,14 @@
 use std::borrow::Cow;
-use std::sync::LazyLock;
+use std::str::FromStr;
+use std::sync::{Arc, LazyLock};
 
 use anyhow::{Context, Result};
+use http::Uri;
 use reqsign::aws::DefaultSigner as AwsDefaultSigner;
 use reqsign::azure::DefaultSigner as AzureDefaultSigner;
 use reqsign::google::DefaultSigner as GcsDefaultSigner;
+use reqwest::Request;
+use tokio::sync::Mutex;
 use tracing::debug;
 use url::{ParseError, Url};
 
@@ -13,9 +17,106 @@ use uv_static::EnvVars;
 use uv_warnings::warn_user_once;
 
 use crate::Credentials;
-use crate::credentials::Token;
+use crate::credentials::{AuthenticationError, Token};
 use crate::index::is_path_prefix;
 use crate::realm::{Realm, RealmRef};
+
+/// A built-in provider that owns provider-specific request authentication behavior.
+#[derive(Clone, Debug)]
+pub(crate) enum RequestAuthProvider {
+    HuggingFace(HuggingFaceProvider),
+    S3(S3EndpointProvider),
+    Gcs(GcsEndpointProvider),
+    Azure(AzureEndpointProvider),
+}
+
+impl RequestAuthProvider {
+    /// Return the provider name for diagnostics.
+    pub(crate) fn name(&self) -> &'static str {
+        match self {
+            Self::HuggingFace(_) => "Hugging Face",
+            Self::S3(_) => "S3",
+            Self::Gcs(_) => "GCS",
+            Self::Azure(_) => "Azure",
+        }
+    }
+
+    /// Return whether this provider can authenticate the request.
+    pub(crate) fn has_credentials_for(&self, url: &Url) -> bool {
+        match self {
+            Self::HuggingFace(_) => HuggingFaceProvider::credentials_for(url).is_some(),
+            Self::S3(_) | Self::Gcs(_) | Self::Azure(_) => true,
+        }
+    }
+
+    /// Apply this provider's authentication to the request.
+    pub(crate) async fn authenticate(
+        &self,
+        request: Request,
+    ) -> std::result::Result<Request, AuthenticationError> {
+        match self {
+            Self::HuggingFace(_) => {
+                let Some(credentials) = HuggingFaceProvider::credentials_for(request.url()) else {
+                    return Err(AuthenticationError::Provider {
+                        provider: self.name(),
+                    });
+                };
+                Ok(credentials.authenticate(request)?)
+            }
+            Self::S3(provider) => provider.authenticate(request).await,
+            Self::Gcs(provider) => provider.authenticate(request).await,
+            Self::Azure(provider) => provider.authenticate(request).await,
+        }
+    }
+}
+
+impl From<AwsDefaultSigner> for RequestAuthProvider {
+    fn from(signer: AwsDefaultSigner) -> Self {
+        Self::S3(S3EndpointProvider::with_signer(signer))
+    }
+}
+
+impl From<GcsDefaultSigner> for RequestAuthProvider {
+    fn from(signer: GcsDefaultSigner) -> Self {
+        Self::Gcs(GcsEndpointProvider::with_signer(signer))
+    }
+}
+
+impl From<AzureDefaultSigner> for RequestAuthProvider {
+    fn from(signer: AzureDefaultSigner) -> Self {
+        Self::Azure(AzureEndpointProvider::with_signer(signer))
+    }
+}
+
+/// Routes requests to built-in authentication providers.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct RequestAuthRouter {
+    hugging_face: HuggingFaceProvider,
+    s3: S3EndpointProvider,
+    gcs: GcsEndpointProvider,
+    azure: AzureEndpointProvider,
+}
+
+impl RequestAuthRouter {
+    /// Route a URL to a built-in authentication provider.
+    pub(crate) fn provider_for(
+        &self,
+        url: &Url,
+        preview: Preview,
+    ) -> Result<Option<RequestAuthProvider>> {
+        if HuggingFaceProvider::credentials_for(url).is_some() {
+            Ok(Some(RequestAuthProvider::HuggingFace(self.hugging_face)))
+        } else if S3EndpointProvider::is_s3_endpoint(url, preview)? {
+            Ok(Some(RequestAuthProvider::S3(self.s3.clone())))
+        } else if GcsEndpointProvider::is_gcs_endpoint(url, preview)? {
+            Ok(Some(RequestAuthProvider::Gcs(self.gcs.clone())))
+        } else if AzureEndpointProvider::is_azure_endpoint(url, preview)? {
+            Ok(Some(RequestAuthProvider::Azure(self.azure.clone())))
+        } else {
+            Ok(None)
+        }
+    }
+}
 
 /// The [`Realm`] for the Hugging Face platform.
 static HUGGING_FACE_REALM: LazyLock<Realm> = LazyLock::new(|| {
@@ -41,7 +142,7 @@ static HUGGING_FACE_TOKEN: LazyLock<Option<Vec<u8>>> = LazyLock::new(|| {
 });
 
 /// A provider for authentication credentials for the Hugging Face platform.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct HuggingFaceProvider;
 
 impl HuggingFaceProvider {
@@ -63,8 +164,18 @@ static S3_ENDPOINT_URL: LazyLock<Result<Option<Url>, ParseError>> =
     LazyLock::new(|| endpoint_url(EnvVars::UV_S3_ENDPOINT_URL));
 
 /// A provider for authentication credentials for S3 endpoints.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct S3EndpointProvider;
+#[derive(Debug, Clone)]
+pub(crate) struct S3EndpointProvider {
+    signer: Arc<Mutex<Option<AwsDefaultSigner>>>,
+}
+
+impl Default for S3EndpointProvider {
+    fn default() -> Self {
+        Self {
+            signer: Arc::new(Mutex::new(None)),
+        }
+    }
+}
 
 impl S3EndpointProvider {
     /// Returns `true` if the URL matches the configured S3 endpoint.
@@ -106,6 +217,48 @@ impl S3EndpointProvider {
             });
         reqsign::aws::default_signer("s3", &region)
     }
+
+    fn with_signer(signer: AwsDefaultSigner) -> Self {
+        Self {
+            signer: Arc::new(Mutex::new(Some(signer))),
+        }
+    }
+
+    async fn authenticate(
+        &self,
+        mut request: Request,
+    ) -> std::result::Result<Request, AuthenticationError> {
+        let signer = {
+            let mut signer = self.signer.lock().await;
+            signer.get_or_insert_with(Self::create_signer).clone()
+        };
+        let uri = Uri::from_str(request.url().as_str())?;
+        let mut http_request = http::Request::builder()
+            .method(request.method().clone())
+            .uri(uri)
+            .body(())
+            .map_err(|source| AuthenticationError::BuildRequest {
+                provider: "AWS",
+                source,
+            })?;
+        *http_request.headers_mut() = request.headers().clone();
+
+        let (mut parts, ()) = http_request.into_parts();
+        signer
+            .sign(&mut parts, None)
+            .await
+            .map_err(|source| AuthenticationError::Sign {
+                provider: "AWS",
+                source,
+            })?;
+
+        request.headers_mut().extend(parts.headers);
+        if let Some(path_and_query) = parts.uri.path_and_query() {
+            request.url_mut().set_path(path_and_query.path());
+            request.url_mut().set_query(path_and_query.query());
+        }
+        Ok(request)
+    }
 }
 
 /// The [`Url`] for the GCS endpoint, if set.
@@ -113,8 +266,18 @@ static GCS_ENDPOINT_URL: LazyLock<Result<Option<Url>, ParseError>> =
     LazyLock::new(|| endpoint_url(EnvVars::UV_GCS_ENDPOINT_URL));
 
 /// A provider for authentication credentials for GCS endpoints.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct GcsEndpointProvider;
+#[derive(Debug, Clone)]
+pub(crate) struct GcsEndpointProvider {
+    signer: Arc<Mutex<Option<GcsDefaultSigner>>>,
+}
+
+impl Default for GcsEndpointProvider {
+    fn default() -> Self {
+        Self {
+            signer: Arc::new(Mutex::new(None)),
+        }
+    }
+}
 
 impl GcsEndpointProvider {
     /// Returns `true` if the URL matches the configured GCS endpoint.
@@ -147,6 +310,48 @@ impl GcsEndpointProvider {
     pub(crate) fn create_signer() -> GcsDefaultSigner {
         reqsign::google::default_signer("storage.googleapis.com")
     }
+
+    fn with_signer(signer: GcsDefaultSigner) -> Self {
+        Self {
+            signer: Arc::new(Mutex::new(Some(signer))),
+        }
+    }
+
+    async fn authenticate(
+        &self,
+        mut request: Request,
+    ) -> std::result::Result<Request, AuthenticationError> {
+        let signer = {
+            let mut signer = self.signer.lock().await;
+            signer.get_or_insert_with(Self::create_signer).clone()
+        };
+        let uri = Uri::from_str(request.url().as_str())?;
+        let mut http_request = http::Request::builder()
+            .method(request.method().clone())
+            .uri(uri)
+            .body(())
+            .map_err(|source| AuthenticationError::BuildRequest {
+                provider: "GCS",
+                source,
+            })?;
+        *http_request.headers_mut() = request.headers().clone();
+
+        let (mut parts, ()) = http_request.into_parts();
+        signer
+            .sign(&mut parts, None)
+            .await
+            .map_err(|source| AuthenticationError::Sign {
+                provider: "GCS",
+                source,
+            })?;
+
+        request.headers_mut().extend(parts.headers);
+        if let Some(path_and_query) = parts.uri.path_and_query() {
+            request.url_mut().set_path(path_and_query.path());
+            request.url_mut().set_query(path_and_query.query());
+        }
+        Ok(request)
+    }
 }
 
 /// The [`Url`] for the Azure endpoint, if set.
@@ -154,8 +359,18 @@ static AZURE_ENDPOINT_URL: LazyLock<Result<Option<Url>, ParseError>> =
     LazyLock::new(|| endpoint_url(EnvVars::UV_AZURE_ENDPOINT_URL));
 
 /// A provider for authentication credentials for Azure endpoints.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AzureEndpointProvider;
+#[derive(Debug, Clone)]
+pub struct AzureEndpointProvider {
+    signer: Arc<Mutex<Option<AzureDefaultSigner>>>,
+}
+
+impl Default for AzureEndpointProvider {
+    fn default() -> Self {
+        Self {
+            signer: Arc::new(Mutex::new(None)),
+        }
+    }
+}
 
 impl AzureEndpointProvider {
     /// Returns `true` if the URL matches the configured Azure endpoint.
@@ -187,6 +402,47 @@ impl AzureEndpointProvider {
     /// should be cached.
     pub(crate) fn create_signer() -> AzureDefaultSigner {
         reqsign::azure::default_signer()
+    }
+
+    fn with_signer(signer: AzureDefaultSigner) -> Self {
+        Self {
+            signer: Arc::new(Mutex::new(Some(signer))),
+        }
+    }
+
+    async fn authenticate(
+        &self,
+        mut request: Request,
+    ) -> std::result::Result<Request, AuthenticationError> {
+        let signer = {
+            let mut signer = self.signer.lock().await;
+            signer.get_or_insert_with(Self::create_signer).clone()
+        };
+        let uri = Uri::from_str(request.url().as_str())?;
+        let mut http_request = http::Request::builder()
+            .method(request.method().clone())
+            .uri(uri)
+            .body(())
+            .map_err(|source| AuthenticationError::BuildRequest {
+                provider: "Azure",
+                source,
+            })?;
+        *http_request.headers_mut() = request.headers().clone();
+        let (mut parts, ()) = http_request.into_parts();
+        signer
+            .sign(&mut parts, None)
+            .await
+            .map_err(|source| AuthenticationError::Sign {
+                provider: "Azure",
+                source,
+            })?;
+
+        request.headers_mut().extend(parts.headers);
+        if let Some(path_and_query) = parts.uri.path_and_query() {
+            request.url_mut().set_path(path_and_query.path());
+            request.url_mut().set_query(path_and_query.query());
+        }
+        Ok(request)
     }
 }
 
