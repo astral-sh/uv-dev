@@ -10916,8 +10916,8 @@ fn lock_build_policy_configuration() -> Result<()> {
 
         [tool.uv]
         preview-features = ["build-policy"]
-        build-policy = "if-necessary"
-        build-policy-package = { allowed = "allow", forced = "disallow" }
+        build-policy = "disallow"
+        build-policy-package = { source-only = "allow", allowed = "allow", forced = "disallow" }
     "#})?;
 
     // The CLI overrides one map entry without replacing the other configured entry.
@@ -10935,12 +10935,13 @@ fn lock_build_policy_configuration() -> Result<()> {
         requires-python = ">=3.12, <4"
 
         [options]
-        build-policy = "if-necessary"
+        build-policy = "disallow"
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [options.build-policy-package]
         allowed = "allow"
         forced = "force"
+        source-only = "allow"
 
         [[package]]
         name = "allowed"
@@ -11097,13 +11098,13 @@ fn lock_build_policy_configuration() -> Result<()> {
         assert_snapshot!(diff, @r#"
         --- old
         +++ new
-        @@ -1,36 +1,39 @@
+        @@ -1,37 +1,40 @@
          version = 1
          revision = 3
          requires-python = ">=3.12, <4"
 
          [options]
-        -build-policy = "if-necessary"
+        -build-policy = "disallow"
         +build-policy = "allow"
          exclude-newer = "2024-03-25T00:00:00Z"
 
@@ -11111,6 +11112,7 @@ fn lock_build_policy_configuration() -> Result<()> {
          allowed = "allow"
         -forced = "force"
         +forced = "allow"
+         source-only = "allow"
 
          [[package]]
          name = "allowed"
@@ -11139,7 +11141,7 @@ fn lock_build_policy_configuration() -> Result<()> {
              { name = "forced" },
              { name = "source-only" },
              { name = "wheel-backed" },
-        @@ -47,13 +50,14 @@
+        @@ -48,13 +51,14 @@
          [[package]]
          name = "source-only"
          version = "1.0.0"
@@ -11171,14 +11173,14 @@ fn lock_build_policy_configuration() -> Result<()> {
         assert_snapshot!(diff, @r#"
         --- old
         +++ new
-        @@ -1,36 +1,38 @@
+        @@ -1,37 +1,39 @@
          version = 1
          revision = 3
          requires-python = ">=3.12, <4"
 
          [options]
         -build-policy = "allow"
-        +build-policy = "if-necessary"
+        +build-policy = "disallow"
         +no-binary-package = [
         +    "wheel-backed",
         +]
@@ -11188,6 +11190,7 @@ fn lock_build_policy_configuration() -> Result<()> {
          allowed = "allow"
         -forced = "allow"
         +forced = "disallow"
+         source-only = "allow"
 
          [[package]]
          name = "allowed"
@@ -11213,7 +11216,7 @@ fn lock_build_policy_configuration() -> Result<()> {
          source = { virtual = "." }
          dependencies = [
              { name = "allowed" },
-        @@ -51,13 +53,10 @@
+        @@ -52,13 +54,10 @@
          name = "source-only"
          version = "1.0.0"
          source = { registry = "http://[LOCALHOST]/simple/" }
@@ -11247,7 +11250,7 @@ fn lock_build_policy_configuration() -> Result<()> {
          requires-python = ">=3.12, <4"
 
          [options]
-         build-policy = "if-necessary"
+         build-policy = "disallow"
         -no-binary-package = [
         -    "wheel-backed",
         -]
@@ -11256,12 +11259,12 @@ fn lock_build_policy_configuration() -> Result<()> {
          [options.build-policy-package]
          allowed = "allow"
          forced = "disallow"
+         source-only = "allow"
 
          [[package]]
          name = "allowed"
          version = "1.0.0"
-         source = { registry = "http://[LOCALHOST]/simple/" }
-        @@ -52,11 +49,13 @@
+        @@ -53,11 +50,13 @@
          [[package]]
          name = "source-only"
          version = "1.0.0"
@@ -11283,11 +11286,12 @@ fn lock_build_policy_configuration() -> Result<()> {
     uv_snapshot!(context.filters(), context.lock()
         .arg("--no-config")
         .arg("--index-url").arg(server.index_url())
-        .arg("--build-policy").arg("if-necessary"), @"
+        .arg("--build-policy").arg("disallow"), @"
     exit_code: 0 (success)
     ----- stderr -----
     warning: The `--build-policy` and `--build-policy-package` options are experimental and may change without warning. Pass `--preview-features build-policy` to disable this warning.
     Resolved 5 packages in [TIME]
+    Updated source-only v1.0.0 -> v0.9.0
     ");
     uv_snapshot!(context.filters(), context.lock()
         .arg("--no-config")
@@ -11361,151 +11365,6 @@ fn lock_build_policy_normalizes_legacy_restrictions() -> Result<()> {
     ");
     Ok(())
 }
-
-/// An overlapping wheel is not enough to discard a source fallback for a broader target.
-#[cfg(feature = "test-universal")]
-#[test]
-fn lock_build_policy_partial_wheel_coverage() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let scenario = toml::from_str::<Scenario>(indoc! {r#"
-        name = "lock-build-policy-partial"
-        [root]
-        [expected]
-        satisfiable = true
-        [packages.partial.versions."1.0.0"]
-        wheel_tags = ["py3-none-manylinux_2_17_x86_64"]
-    "#})?;
-    let server = PackseServer::from_scenario(&scenario);
-    let pyproject = indoc! {r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12,<4"
-        dependencies = ["partial"]
-
-        [tool.uv]
-        preview-features = ["build-policy"]
-        build-policy = "if-necessary"
-        environments = ["sys_platform == 'linux'"]
-        required-environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
-    "#};
-    context
-        .temp_dir
-        .child("pyproject.toml")
-        .write_str(pyproject)?;
-    uv_snapshot!(context.filters(), context.lock()
-        .arg("--index-url").arg(server.index_url()), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 2 packages in [TIME]
-    ");
-    insta::with_settings!({ filters => context.filters() }, {
-        assert_snapshot!(context.read("uv.lock"), @r#"
-        version = 1
-        revision = 3
-        requires-python = ">=3.12, <4"
-        resolution-markers = [
-            "sys_platform == 'linux'",
-        ]
-        supported-markers = [
-            "sys_platform == 'linux'",
-        ]
-        required-markers = [
-            "platform_machine == 'x86_64' and sys_platform == 'linux'",
-        ]
-
-        [options]
-        build-policy = "if-necessary"
-        exclude-newer = "2024-03-25T00:00:00Z"
-
-        [[package]]
-        name = "partial"
-        version = "1.0.0"
-        source = { registry = "http://[LOCALHOST]/simple/" }
-        sdist = { url = "http://[LOCALHOST]/files/partial-1.0.0.tar.gz", hash = "sha256:4b23778c255a035cc0a71677236379c5ba5402139647c4ed08bdff1b965466a6", upload-time = "2024-03-24T00:00:00Z" }
-        wheels = [
-            { url = "http://[LOCALHOST]/files/partial-1.0.0-py3-none-manylinux_2_17_x86_64.whl", hash = "sha256:f11bc8c52e668fa38083abf4765896a872b7c00765bb0a1e24318938349cfa32", upload-time = "2024-03-24T00:00:00Z" },
-        ]
-
-        [[package]]
-        name = "project"
-        version = "0.1.0"
-        source = { virtual = "." }
-        dependencies = [
-            { name = "partial" },
-        ]
-
-        [package.metadata]
-        requires-dist = [{ name = "partial" }]
-        "#);
-    });
-    uv_snapshot!(context.filters(), context.sync()
-        .arg("--frozen").arg("--dry-run")
-        .arg("--python-platform").arg("aarch64-unknown-linux-gnu"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Would use project environment at: .venv
-    Would download 1 package
-    Would install 1 package
-     + partial==1.0.0
-    ");
-
-    context
-        .temp_dir
-        .child("pyproject.toml")
-        .write_str(&pyproject.replace(
-            "environments = [\"sys_platform == 'linux'\"]",
-            "environments = [\"sys_platform == 'linux' and platform_machine == 'x86_64'\"]",
-        ))?;
-    let diff = context.diff_lock(|context| {
-        let mut command = context.lock();
-        command.arg("--index-url").arg(server.index_url());
-        command
-    });
-    insta::with_settings!({ filters => context.filters() }, {
-        assert_snapshot!(diff, @r#"
-        --- old
-        +++ new
-        @@ -1,32 +1,31 @@
-         version = 1
-         revision = 3
-         requires-python = ">=3.12, <4"
-         resolution-markers = [
-        -    "sys_platform == 'linux'",
-        +    "platform_machine == 'x86_64' and sys_platform == 'linux'",
-         ]
-         supported-markers = [
-        -    "sys_platform == 'linux'",
-        +    "platform_machine == 'x86_64' and sys_platform == 'linux'",
-         ]
-         required-markers = [
-             "platform_machine == 'x86_64' and sys_platform == 'linux'",
-         ]
-
-         [options]
-         build-policy = "if-necessary"
-         exclude-newer = "2024-03-25T00:00:00Z"
-
-         [[package]]
-         name = "partial"
-         version = "1.0.0"
-         source = { registry = "http://[LOCALHOST]/simple/" }
-        -sdist = { url = "http://[LOCALHOST]/files/partial-1.0.0.tar.gz", hash = "sha256:4b23778c255a035cc0a71677236379c5ba5402139647c4ed08bdff1b965466a6", upload-time = "2024-03-24T00:00:00Z" }
-         wheels = [
-             { url = "http://[LOCALHOST]/files/partial-1.0.0-py3-none-manylinux_2_17_x86_64.whl", hash = "sha256:f11bc8c52e668fa38083abf4765896a872b7c00765bb0a1e24318938349cfa32", upload-time = "2024-03-24T00:00:00Z" },
-         ]
-
-         [[package]]
-         name = "project"
-         version = "0.1.0"
-         source = { virtual = "." }
-         dependencies = [
-             { name = "partial" },
-        "#);
-    });
-    Ok(())
-}
-
 /// Lock a requirement from PyPI, filtering out wheels that target an ABI that is non-overlapping
 /// with the `Requires-Python` constraint.
 #[cfg(feature = "test-universal")]

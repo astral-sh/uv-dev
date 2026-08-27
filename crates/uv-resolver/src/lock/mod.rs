@@ -1052,12 +1052,7 @@ impl Lock {
 
             if build_options.has_build_policy() && matches!(package.id.source, Source::Registry(_))
             {
-                if resolution.no_build_distribution(
-                    dist,
-                    build_options,
-                    None,
-                    &resolution.options.artifact_environments,
-                ) {
+                if build_options.no_build_package(&package.id.name) {
                     package.sdist = None;
                 }
                 if build_options.no_binary_package(&package.id.name) {

@@ -500,12 +500,7 @@ impl<'lock> PylockToml {
                     )?;
 
                     // Filter sdist based on build options (--only-binary).
-                    let no_build = resolution.no_build_distribution(
-                        node,
-                        build_options,
-                        tags,
-                        &resolution.options.artifact_environments,
-                    );
+                    let no_build = build_options.no_build_package(dist.name());
 
                     if !no_build {
                         if let Some(sdist) = dist.sdist.as_ref() {
@@ -604,12 +599,7 @@ impl<'lock> PylockToml {
                     )?;
 
                     // Filter sdist based on build options (--only-binary).
-                    let no_build = resolution.no_build_distribution(
-                        node,
-                        build_options,
-                        tags,
-                        &resolution.options.artifact_environments,
-                    );
+                    let no_build = build_options.no_build_package(&dist.name);
 
                     if !no_build {
                         let url = dist.file.url.to_url().map_err(PylockTomlErrorKind::ToUrl)?;
