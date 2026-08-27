@@ -1,0 +1,12 @@
+{
+  "outcome": "fixed",
+  "summary": "Comma-delimited Python version markers were discarded as unconditional true because the parser only split version lists on whitespace. The parser now accepts commas as separators, marker-algebra expectations cover both comma styles, and the parent lock regression verifies that an inapplicable dependency is excluded.",
+  "validation": [
+    "cargo test --package uv-pep508",
+    "cargo test --package uv --test lock --features test-universal lock::lock_python_version_in_comma -- --exact",
+    "cargo +stable clippy --package uv-pep508 --all-targets -- -D warnings",
+    "cargo +stable fmt --all -- --check",
+    "git diff --check"
+  ],
+  "pull_request": "https://github.com/astral-sh/uv-dev/pull/889"
+}
