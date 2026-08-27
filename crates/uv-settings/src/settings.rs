@@ -1018,7 +1018,7 @@ pub struct ResolverInstallerSchema {
         default = "\"allow\"",
         value_type = "str",
         example = r#"
-            build-policy = "if-necessary"
+            build-policy = "disallow"
         "#,
         possible_values = true
     )]
@@ -1444,7 +1444,7 @@ pub struct PipOptions {
         default = "\"allow\"",
         value_type = "str",
         example = r#"
-            build-policy = "if-necessary"
+            build-policy = "disallow"
         "#,
         possible_values = true
     )]

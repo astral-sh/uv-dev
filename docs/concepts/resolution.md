@@ -216,9 +216,6 @@ required-environments = [
 ]
 ```
 
-The [`if-necessary` build policy](#source-build-policies) also uses these environments to determine
-whether a source distribution must be retained in the lockfile.
-
 ## Source build policies
 
 !!! note
@@ -231,19 +228,16 @@ The `build-policy` setting controls whether dependencies may be built from sourc
 artifacts are retained in `uv.lock` and `pylock.toml`:
 
 - `allow` allows both wheels and source distributions. This is the default.
-- `if-necessary` selects package versions normally, then omits source distributions when the
-  selected versions have sufficient wheel coverage. It does not select an older version just because
-  that version has a wheel.
 - `disallow` requires wheels, even if that means selecting a different package version.
 - `force` requires source distributions instead of pre-built wheels.
 
-For example, to keep source distributions only when needed, while requiring wheels for NumPy:
+For example, to require wheels by default while allowing source builds for NumPy:
 
 ```toml title="pyproject.toml"
 [tool.uv]
 preview-features = ["build-policy"]
-build-policy = "if-necessary"
-build-policy-package = { numpy = "disallow" }
+build-policy = "disallow"
+build-policy-package = { numpy = "allow" }
 ```
 
 Package-specific policies override the global policy when the package identity is known before a
@@ -258,22 +252,12 @@ The same settings can be placed under `[tool.uv.pip]` to apply only to the pip i
 repeat `--build-policy-package PACKAGE=POLICY` for individual packages:
 
 ```console
-$ uv pip compile requirements.in --preview-features build-policy --build-policy if-necessary --build-policy-package numpy=disallow --emit-build-options
+$ uv pip compile requirements.in --preview-features build-policy --build-policy disallow --build-policy-package numpy=allow --emit-build-options
 ```
 
 For `requirements.txt` output, `--emit-build-options` writes the corresponding pip-compatible build
 restrictions for the selected packages. These package-specific restrictions do not reproduce a
 global policy for build dependencies discovered later during installation.
-
-During [platform-specific resolution](#platform-specific-resolution), `if-necessary` retains the
-source distribution unless the selected version has a wheel compatible with the target Python
-version and platform. During [universal resolution](#universal-resolution), uv infers environment
-markers from the wheel filenames. Those markers must cover every applicable
-[`environments`](#limited-resolution-environments) and
-[`required-environments`](#required-environments) entry, taking the package's markers and the
-project's `requires-python` into account. If neither setting is configured, the wheels must cover
-the package's entire marker range. This is a marker-based check; environment markers cannot express
-every wheel compatibility constraint, such as the minimum glibc version.
 
 Invoking a build backend to generate source metadata counts as a source build. Consequently,
 `disallow` rejects unnamed sources before metadata generation; provide a trustworthy package name or
