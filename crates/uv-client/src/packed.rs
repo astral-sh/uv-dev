@@ -3,11 +3,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Context, Result, bail};
 use futures::TryStreamExt;
-use reqwest::{Body, Method, Request, Response, ResponseBuilderExt};
+use reqwest::{Method, Request, Response};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 use tokio_util::compat::FuturesAsyncReadCompatExt;
-use tokio_util::io::ReaderStream;
 use tracing::debug;
 
 use uv_cache::{Cache, CacheBucket, CacheEntry, Freshness, WheelCache};
@@ -29,9 +28,15 @@ use crate::{
 
 /// An original distribution archive, retained without extracting or building it.
 #[derive(Debug)]
-pub(crate) struct PackedArchive {
+pub struct PackedArchive {
     file: fs_err::tokio::File,
-    size: u64,
+}
+
+/// An archive supplied either by an HTTP response or a packed cache entry.
+#[derive(Debug)]
+pub enum ArchiveInput {
+    Response(Response),
+    File(PackedArchive),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -341,7 +346,7 @@ impl PackedArchiveEntry {
         }
         file.seek(SeekFrom::Start(0)).await?;
         debug!("Using packed distribution: {url}");
-        Ok(Some(PackedArchive { file, size }))
+        Ok(Some(PackedArchive { file }))
     }
 
     pub(crate) async fn read_http(
@@ -389,25 +394,10 @@ impl PackedArchiveEntry {
             Box::new(OwnedArchive::deserialize(&cached.cache_policy)),
         )))
     }
-
-    pub(crate) async fn response(
-        &self,
-        request: &Request,
-        cache_control: &CacheControl,
-    ) -> Result<Option<(Response, Box<CachePolicy>)>> {
-        let Some((archive, policy)) = self.read_http(request, cache_control).await? else {
-            return Ok(None);
-        };
-        let response = http::Response::builder()
-            .url(request.url().clone())
-            .header(http::header::CONTENT_LENGTH, archive.size)
-            .body(Body::wrap_stream(ReaderStream::new(archive.file)))?;
-        Ok(Some((Response::from(response), policy)))
-    }
 }
 
 impl PackedArchive {
-    pub(crate) fn into_file(self) -> fs_err::tokio::File {
+    pub fn into_file(self) -> fs_err::tokio::File {
         self.file
     }
 }

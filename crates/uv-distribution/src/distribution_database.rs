@@ -15,8 +15,8 @@ use url::Url;
 use uv_cache::{ArchiveId, CacheBucket, CacheEntry, WheelCache};
 use uv_cache_info::{CacheInfo, Timestamp};
 use uv_client::{
-    CacheControl, CachedClientError, Connectivity, DataWithCachePolicy, PackedArchiveEntry,
-    RegistryClient,
+    ArchiveInput, CacheControl, CachedClientError, Connectivity, DataWithCachePolicy,
+    PackedArchive, PackedArchiveEntry, RegistryClient,
 };
 use uv_distribution_filename::WheelFilename;
 use uv_distribution_types::{
@@ -692,8 +692,24 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         // Create an entry for the HTTP cache.
         let http_entry = wheel_entry.with_file(format!("{}.http", filename.cache_key()));
 
-        let download = |response: reqwest::Response| {
+        let download = |input: ArchiveInput| {
             async {
+                let response = match input {
+                    ArchiveInput::Response(response) => response,
+                    ArchiveInput::File(archive) => {
+                        return self
+                            .prepare_packed_wheel(
+                                archive,
+                                filename,
+                                extension,
+                                expected_size,
+                                wheel_entry,
+                                dist,
+                                hashes,
+                            )
+                            .await;
+                    }
+                };
                 let progress_size = size.or_else(|| content_length(&response));
 
                 let progress = self.reporter.as_ref().map(|reporter| {
@@ -864,11 +880,11 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
                 .managed(async |client| {
                     client
                         .cached_client()
-                        .with_packed_entry(Some(&packed_entry))
-                        .skip_cache_with_retry(
+                        .skip_cache_with_retry_and_packed(
                             self.request(url)?,
                             &http_entry,
                             cache_control,
+                            Some(&packed_entry),
                             download,
                         )
                         .await
@@ -911,8 +927,24 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         // Create an entry for the HTTP cache.
         let http_entry = wheel_entry.with_file(format!("{}.http", filename.cache_key()));
 
-        let download = |response: reqwest::Response| {
+        let download = |input: ArchiveInput| {
             async {
+                let response = match input {
+                    ArchiveInput::Response(response) => response,
+                    ArchiveInput::File(archive) => {
+                        return self
+                            .prepare_packed_wheel(
+                                archive,
+                                filename,
+                                extension,
+                                expected_size,
+                                wheel_entry,
+                                dist,
+                                hashes,
+                            )
+                            .await;
+                    }
+                };
                 let progress_size = size.or_else(|| content_length(&response));
 
                 let progress = self.reporter.as_ref().map(|reporter| {
@@ -1092,11 +1124,11 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
                 .managed(async |client| {
                     client
                         .cached_client()
-                        .with_packed_entry(Some(&packed_entry))
-                        .skip_cache_with_retry(
+                        .skip_cache_with_retry_and_packed(
                             self.request(url)?,
                             &http_entry,
                             cache_control,
+                            Some(&packed_entry),
                             download,
                         )
                         .await
@@ -1109,6 +1141,66 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         };
 
         Ok(archive)
+    }
+
+    /// Prepare a wheel directly from a verified packed cache file.
+    async fn prepare_packed_wheel(
+        &self,
+        archive: PackedArchive,
+        filename: &WheelFilename,
+        extension: WheelExtension,
+        expected_size: Option<u64>,
+        wheel_entry: &CacheEntry,
+        dist: &BuiltDist,
+        hashes: HashPolicy<'_>,
+    ) -> Result<Archive, Error> {
+        let mut file = archive.into_file();
+        let algorithms = http_hash_algorithms(hashes);
+        let mut hashers = algorithms.into_iter().map(Hasher::from).collect::<Vec<_>>();
+        let actual_size = {
+            let mut hasher = uv_extract::hash::HashReader::new(&mut file, &mut hashers);
+            hasher.finish().await.map_err(Error::HashExhaustion)?;
+            hasher.bytes_read()
+        };
+        if let Some(expected) = expected_size
+            && actual_size != expected
+        {
+            return Err(Error::MismatchedSize {
+                distribution: dist.to_string(),
+                expected,
+                actual: actual_size,
+            });
+        }
+        file.seek(io::SeekFrom::Start(0))
+            .await
+            .map_err(Error::CacheRead)?;
+
+        let temp_dir =
+            tempfile::tempdir_in(self.build_context.cache().root()).map_err(Error::CacheWrite)?;
+        let target = temp_dir.path().to_owned();
+        let files = match extension {
+            WheelExtension::Whl => {
+                let file = file.into_std().await;
+                tokio::task::spawn_blocking(move || uv_extract::unzip(file, &target)).await?
+            }
+            WheelExtension::WhlZst => uv_extract::stream::untar_zst(file, &target).await,
+        }
+        .map_err(|err| Error::Extract(filename.to_string(), err))?;
+
+        validate_and_heal_record(temp_dir.path(), files.iter(), dist)
+            .map_err(Error::InstallWheelError)?;
+        let id = self
+            .build_context
+            .cache()
+            .persist(temp_dir.keep(), wheel_entry.path())
+            .await
+            .map_err(Error::CacheRead)?;
+        Ok(Archive::new(
+            id,
+            hashers.into_iter().map(HashDigest::from).collect(),
+            filename.clone(),
+            Some(actual_size),
+        ))
     }
 
     /// Load a wheel from a local path.
