@@ -10,17 +10,20 @@ use petgraph::{
 };
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 
-use uv_configuration::{BuildOptions, Constraints, NoBinary, NoBuild, Overrides};
+use uv_configuration::{BuildOptions, BuildPolicy, Constraints, NoBinary, NoBuild, Overrides};
 use uv_distribution::Metadata;
 use uv_distribution_types::{
     BuiltDist, Dist, DistributionId, Edge, Identifier, IndexUrl, Name, Node, Requirement,
-    RequiresPython, ResolutionDiagnostic, ResolvedDist, SourceDist,
+    RequiresPython, ResolutionDiagnostic, ResolvedDist, SourceDist, implied_markers,
 };
 use uv_git::GitResolver;
 use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep440::{Version, VersionSpecifier};
 use uv_pep508::{MarkerEnvironment, MarkerTree, MarkerTreeKind};
-use uv_pypi_types::{Conflicts, HashDigests, ParsedUrlError, VerbatimParsedUrl, Yanked};
+use uv_platform_tags::Tags;
+use uv_pypi_types::{
+    Conflicts, HashDigests, ParsedUrlError, SupportedEnvironments, VerbatimParsedUrl, Yanked,
+};
 
 use crate::graph_ops::{marker_reachability, simplify_conflict_markers};
 use crate::pins::FilePins;
@@ -613,45 +616,152 @@ impl ResolverOutput {
         self.base_dists().next().is_none()
     }
 
+    /// Return whether the selected distribution has sufficient wheel coverage.
+    ///
+    /// Concrete resolutions inspect compatible wheel tags. Universal resolutions require the
+    /// wheel markers to cover every applicable target marker, rather than merely overlap it.
+    fn has_sufficient_wheel_coverage(
+        &self,
+        distribution: &AnnotatedDist,
+        tags: Option<&Tags>,
+        environments: &SupportedEnvironments,
+    ) -> bool {
+        let ResolvedDist::Installable { dist, .. } = &distribution.dist else {
+            return false;
+        };
+        let wheels = match dist.as_ref() {
+            Dist::Built(BuiltDist::Registry(dist)) => dist.wheels.as_slice(),
+            Dist::Source(SourceDist::Registry(dist)) => dist.wheels.as_slice(),
+            _ => return false,
+        };
+        // Yanked wheels are retained for metadata discovery, but cannot establish that the
+        // selected distribution can be installed without its source artifact.
+        let mut wheels = wheels.iter().filter(|wheel| {
+            wheel
+                .file
+                .yanked
+                .as_deref()
+                .is_none_or(|yanked| !yanked.is_yanked())
+        });
+
+        if let Some(tags) = tags {
+            return wheels.any(|wheel| wheel.filename.is_compatible(tags));
+        }
+
+        let wheel_coverage = wheels.fold(MarkerTree::FALSE, |marker, wheel| {
+            marker.or(implied_markers(&wheel.filename))
+        });
+        let package_marker = distribution
+            .marker
+            .pep508()
+            .and(self.requires_python.to_marker_tree());
+
+        if environments.is_empty() {
+            package_marker.and(wheel_coverage.negate()).is_false()
+        } else {
+            environments
+                .iter()
+                .copied()
+                .map(|environment| environment.and(package_marker))
+                .filter(|environment| !environment.is_false())
+                .all(|environment| environment.and(wheel_coverage.negate()).is_false())
+        }
+    }
+
+    /// Return whether source artifacts should be omitted for a selected distribution.
+    pub(crate) fn no_build_distribution(
+        &self,
+        distribution: &AnnotatedDist,
+        build_options: &BuildOptions,
+        tags: Option<&Tags>,
+        environments: &SupportedEnvironments,
+    ) -> bool {
+        let has_compatible_wheel = build_options.configured_build_policy(&distribution.name)
+            == Some(BuildPolicy::IfNecessary)
+            && !build_options.no_binary_package(&distribution.name)
+            && self.has_sufficient_wheel_coverage(distribution, tags, environments);
+        build_options
+            .no_build_package_with_compatible_wheel(&distribution.name, has_compatible_wheel)
+    }
+
     /// Express the selected package versions' artifact restrictions as pip-compatible options.
-    pub fn materialize_build_options(&self, build_options: &BuildOptions) -> BuildOptions {
+    ///
+    /// Since pip's options are package-wide, a source restriction is emitted only when every
+    /// selected version of a package has sufficient wheel coverage.
+    pub fn materialize_build_options(
+        &self,
+        build_options: &BuildOptions,
+        tags: Option<&Tags>,
+        environments: &SupportedEnvironments,
+    ) -> BuildOptions {
         let mut no_binary = BTreeSet::new();
-        let mut no_build = BTreeSet::new();
+        let mut no_build = BTreeMap::new();
         for (_, distribution) in self.base_dists() {
             if build_options.no_binary_package(&distribution.name) {
                 no_binary.insert(distribution.name.clone());
             }
-            if build_options.no_build_package(&distribution.name) {
-                no_build.insert(distribution.name.clone());
-            }
+            let no_build_distribution =
+                self.no_build_distribution(distribution, build_options, tags, environments);
+            no_build
+                .entry(distribution.name.clone())
+                .and_modify(|no_build| *no_build &= no_build_distribution)
+                .or_insert(no_build_distribution);
         }
         BuildOptions::new(
             NoBinary::from_args(None, no_binary.into_iter().collect()),
-            NoBuild::from_args(None, no_build.into_iter().collect()),
+            NoBuild::from_args(
+                None,
+                no_build
+                    .into_iter()
+                    .filter_map(|(name, no_build)| no_build.then_some(name))
+                    .collect(),
+            ),
         )
     }
 
-    /// Retain registry hashes only for artifacts permitted by package-specific build options.
+    /// Retain registry hashes only for artifacts permitted by build options.
     ///
     /// All available wheel hashes remain eligible when source builds are disabled so the
     /// resulting requirements can still be installed on other supported platforms.
-    pub fn retain_allowed_distribution_hashes(&mut self, build_options: &BuildOptions) {
-        for node in self.graph.node_weights_mut() {
-            let ResolutionGraphNode::Dist(distribution) = node else {
+    pub fn retain_allowed_distribution_hashes(
+        &mut self,
+        build_options: &BuildOptions,
+        tags: Option<&Tags>,
+        environments: &SupportedEnvironments,
+    ) {
+        let distributions = self
+            .graph
+            .node_indices()
+            .filter_map(|index| {
+                let ResolutionGraphNode::Dist(distribution) = &self.graph[index] else {
+                    return None;
+                };
+                Some((
+                    index,
+                    self.no_build_distribution(distribution, build_options, tags, environments),
+                ))
+            })
+            .collect::<Vec<_>>();
+
+        for (index, no_build_distribution) in distributions {
+            let Some(ResolutionGraphNode::Dist(distribution)) = self.graph.node_weight_mut(index)
+            else {
                 continue;
             };
             let ResolvedDist::Installable { dist, .. } = &distribution.dist else {
                 continue;
             };
             let allowed_hashes = match dist.as_ref() {
-                Dist::Built(BuiltDist::Registry(dist))
-                    if build_options.no_build_package(&distribution.name) =>
-                {
-                    dist.wheels
-                        .iter()
-                        .flat_map(|wheel| wheel.file.hashes.iter())
-                        .collect::<FxHashSet<_>>()
-                }
+                Dist::Built(BuiltDist::Registry(dist)) if no_build_distribution => dist
+                    .wheels
+                    .iter()
+                    .flat_map(|wheel| wheel.file.hashes.iter())
+                    .collect::<FxHashSet<_>>(),
+                Dist::Source(SourceDist::Registry(source)) if no_build_distribution => source
+                    .wheels
+                    .iter()
+                    .flat_map(|wheel| wheel.file.hashes.iter())
+                    .collect::<FxHashSet<_>>(),
                 Dist::Source(SourceDist::Registry(source))
                     if build_options.no_binary_package(&distribution.name) =>
                 {

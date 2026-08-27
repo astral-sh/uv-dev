@@ -80,7 +80,7 @@ fn build_policy_unused_by_venv_and_freeze() -> Result<()> {
 
         [pip]
         build-policy = "force"
-        build-policy-package = { example = "allow" }
+        build-policy-package = { example = "if-necessary" }
     "#})?;
 
     uv_snapshot!(context.filters(), context.venv()
