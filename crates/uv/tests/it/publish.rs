@@ -186,6 +186,30 @@ fn artifact_registry_no_credentials() {
     );
 }
 
+/// Azure Artifacts does not support PyPI-style trusted publishing, so a missing Azure CLI login
+/// should not be obscured by an unrelated GitHub Actions OIDC permissions error.
+#[test]
+fn azure_artifacts_no_credentials() {
+    let context = uv_test::test_context!("3.12");
+
+    uv_snapshot!(context.filters(), context.publish()
+        .arg("--publish-url")
+        .arg("https://pkgs.dev.azure.com/organization/project/_packaging/feed/pypi/upload/")
+        .arg(dummy_wheel())
+        .env(EnvVars::GITHUB_ACTIONS, "true")
+        .env("AZURE_CONFIG_DIR", context.temp_dir.join("azure-config")), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Publishing 1 file to https://pkgs.dev.azure.com/organization/project/_packaging/feed/pypi/upload/
+    Hashing ok-1.0.0-py3-none-any.whl ([SIZE])
+    Uploading ok-1.0.0-py3-none-any.whl ([SIZE])
+    error: Failed to publish `[WORKSPACE]/test/links/ok-1.0.0-py3-none-any.whl` to https://pkgs.dev.azure.com/organization/project/_packaging/feed/pypi/upload/
+      Caused by: Failed to send POST request
+      Caused by: Missing credentials for https://pkgs.dev.azure.com/organization/project/_packaging/feed/pypi/upload/
+    "
+    );
+}
+
 /// Hint people that it's not `--skip-existing` but `--check-url`.
 #[test]
 fn skip_existing_redirect() {
