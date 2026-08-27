@@ -89,7 +89,7 @@ impl BuildOptions {
     }
 
     pub fn no_binary_package(&self, package_name: &PackageName) -> bool {
-        self.package_restrictions(package_name).0
+        self.package_restrictions(package_name, false).0
     }
 
     fn legacy_no_binary_package(&self, package_name: &PackageName) -> bool {
@@ -105,7 +105,20 @@ impl BuildOptions {
     }
 
     pub fn no_build_package(&self, package_name: &PackageName) -> bool {
-        self.package_restrictions(package_name).1
+        self.package_restrictions(package_name, false).1
+    }
+
+    /// Return whether source distributions are disabled for a package after resolution.
+    ///
+    /// `has_compatible_wheel` resolves an `if-necessary` policy for the selected version. It does
+    /// not affect concrete policies or legacy restrictions.
+    pub fn no_build_package_with_compatible_wheel(
+        &self,
+        package_name: &PackageName,
+        has_compatible_wheel: bool,
+    ) -> bool {
+        self.package_restrictions(package_name, has_compatible_wheel)
+            .1
     }
 
     fn legacy_no_build_package(&self, package_name: &PackageName) -> bool {
@@ -121,7 +134,11 @@ impl BuildOptions {
     }
 
     /// Return the effective wheel and source restrictions for a package.
-    fn package_restrictions(&self, package_name: &PackageName) -> (bool, bool) {
+    fn package_restrictions(
+        &self,
+        package_name: &PackageName,
+        has_compatible_wheel: bool,
+    ) -> (bool, bool) {
         let no_binary = self.legacy_no_binary_package(package_name);
         let no_build = self.legacy_no_build_package(package_name);
 
@@ -135,6 +152,7 @@ impl BuildOptions {
             .unwrap_or_default()
         {
             BuildPolicy::Allow => (false, false),
+            BuildPolicy::IfNecessary => (false, has_compatible_wheel),
             BuildPolicy::Disallow => (false, true),
             BuildPolicy::Force => (true, false),
         }
@@ -480,6 +498,18 @@ mod tests {
         assert!(options.no_build_package(&package));
         assert!(!options.no_binary_package(&package));
 
+        let options = BuildOptions::default().with_build_policy(
+            Some(BuildPolicy::IfNecessary),
+            BuildPolicyPackage::default(),
+        );
+        assert!(!options.no_build_package(&package));
+        assert!(!options.no_build_package_with_compatible_wheel(&package, false));
+        assert!(options.no_build_package_with_compatible_wheel(&package, true));
+
+        // Legacy restrictions still take precedence when the conditional policy is resolved.
+        let options = options.combine(NoBinary::Packages(vec![package.clone()]), NoBuild::None);
+        assert!(options.no_binary_package(&package));
+        assert!(!options.no_build_package_with_compatible_wheel(&package, true));
         Ok(())
     }
 
@@ -550,7 +580,7 @@ mod tests {
             NoBinary::Packages(vec![beta.clone(), alpha.clone(), beta.clone()]),
             NoBuild::Packages(vec![beta.clone(), beta.clone(), alpha.clone()]),
         )
-        .with_build_policy(Some(BuildPolicy::Disallow), packages.clone())
+        .with_build_policy(Some(BuildPolicy::IfNecessary), packages.clone())
         .normalized();
         assert_eq!(
             options,
@@ -558,7 +588,7 @@ mod tests {
                 NoBinary::Packages(vec![alpha.clone(), beta.clone()]),
                 NoBuild::Packages(vec![alpha, beta]),
             )
-            .with_build_policy(Some(BuildPolicy::Disallow), packages)
+            .with_build_policy(Some(BuildPolicy::IfNecessary), packages)
         );
         assert_eq!(options.clone().normalized(), options);
         assert_eq!(

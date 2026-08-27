@@ -624,6 +624,10 @@ pub struct ToolUv {
     /// macOS (and ignoring Linux and Windows). On the other hand, `required-environments = ["sys_platform == 'darwin'"]`
     /// would _require_ that any package without a source distribution include a wheel for macOS in
     /// order to be installable.
+    ///
+    /// The preview [`if-necessary` build policy](../concepts/resolution.md#source-build-policies)
+    /// also uses these environments to determine whether a source distribution must be retained in
+    /// the lockfile.
     #[cfg_attr(
         feature = "schemars",
         schemars(
