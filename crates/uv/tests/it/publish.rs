@@ -166,7 +166,7 @@ fn no_credentials() {
 /// be obscured by an unrelated GitHub Actions OIDC permissions error.
 #[test]
 fn artifact_registry_no_credentials() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_filtered_sizes();
 
     uv_snapshot!(context.filters(), context.publish()
         .arg("--publish-url")
@@ -177,8 +177,8 @@ fn artifact_registry_no_credentials() {
     exit_code: 2 (failure)
     ----- stderr -----
     Publishing 1 file to https://us-central1-python.pkg.dev/project/repository/
-    Hashing ok-1.0.0-py3-none-any.whl ([SIZE])
-    Uploading ok-1.0.0-py3-none-any.whl ([SIZE])
+    Hashing ok-1.0.0-py3-none-any.whl ([SIZE]B)
+    Uploading ok-1.0.0-py3-none-any.whl ([SIZE]B)
     error: Failed to publish `[WORKSPACE]/test/links/ok-1.0.0-py3-none-any.whl` to https://us-central1-python.pkg.dev/project/repository/
       Caused by: Failed to send POST request
       Caused by: Missing credentials for https://us-central1-python.pkg.dev/project/repository/
