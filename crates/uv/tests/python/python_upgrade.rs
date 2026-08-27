@@ -1,3 +1,5 @@
+use std::process::Command;
+
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::fixture::{FileTouch, FileWriteStr};
@@ -644,6 +646,26 @@ fn python_upgrade_build_version() {
     ));
     let build_file = installation_dir.join("BUILD");
     fs_err::write(&build_file, "19000101").unwrap();
+    let sitecustomize = if cfg!(windows) {
+        installation_dir.join("Lib/sitecustomize.py")
+    } else {
+        installation_dir.join("lib/python3.12/sitecustomize.py")
+    };
+    fs_err::write(
+        sitecustomize,
+        "import sys\nsys.version = '3.12.0 (stale build)'\n",
+    )
+    .unwrap();
+
+    let bin_python = context
+        .bin_dir
+        .child(format!("python3.12{}", std::env::consts::EXE_SUFFIX));
+    uv_snapshot!(context.filters(), Command::new(bin_python.as_os_str())
+        .arg("-c").arg("import sys; print(sys.version.split()[0])"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    3.12.0
+    ");
 
     // Now upgrade should detect the outdated build version and reinstall
     uv_snapshot!(context.filters(), context.python_upgrade().arg("3.12"), @"
@@ -651,6 +673,15 @@ fn python_upgrade_build_version() {
     ----- stderr -----
     Installed Python 3.12.[LATEST] in [TIME]
      ~ cpython-3.12.[LATEST]-[PLATFORM]
+    ");
+
+    // This is undesirable: the upgrade reports a reinstall but leaves the previous build's
+    // interpreter contents in place.
+    uv_snapshot!(context.filters(), Command::new(bin_python.as_os_str())
+        .arg("-c").arg("import sys; print(sys.version.split()[0])"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    3.12.0
     ");
 
     // Should be a no-op again after upgrade
