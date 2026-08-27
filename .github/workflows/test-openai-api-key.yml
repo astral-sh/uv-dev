@@ -2,13 +2,16 @@
 name: "Test OpenAI API key"
 
 on:
-  workflow_dispatch:
+  pull_request:
 
 permissions: {}
 
 jobs:
   test-api-key:
-    if: github.repository == 'astral-sh/uv-dev'
+    if: >-
+      github.repository == 'astral-sh/uv-dev' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.head_ref == 'api-key-test-balloon'
     runs-on: ubuntu-latest
     environment: automations
     timeout-minutes: 10
@@ -17,6 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
       - name: "Test NEW_OPENAI_API_KEY with Codex"
