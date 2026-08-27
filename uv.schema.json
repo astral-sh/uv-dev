@@ -805,11 +805,6 @@
           "const": "allow"
         },
         {
-          "description": "Keep source distributions only when the selected version lacks sufficient wheel coverage.\nPackage versions are selected normally. uv does not select an older version just because\nthat version has a wheel. For platform-specific resolutions, the selected version must have\na compatible wheel. For universal resolutions, the wheels must cover all applicable\nenvironment markers.\nuv may still build source distributions to obtain metadata.",
-          "type": "string",
-          "const": "if-necessary"
-        },
-        {
           "description": "Require wheels, even when doing so changes the selected version.\nAs with `--no-build`, uv may reuse cached wheels built from source. Editable requirements\nmay still be built, and their build backends may run arbitrary Python code.",
           "type": "string",
           "const": "disallow"

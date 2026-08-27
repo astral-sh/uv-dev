@@ -627,10 +627,8 @@ required-environments = [
 ]
 ```
 
-By default, the `required-environments` setting is only relevant for packages that do not publish a
-source distribution (like PyTorch), as such packages can _only_ be installed on environments covered
-by the set of pre-built binary distributions (wheels) published by that package. The preview
-[`if-necessary` build policy](../resolution.md#source-build-policies) also uses these environments
-to determine whether a source distribution must be retained in the lockfile.
+The `required-environments` setting is only relevant for packages that do not publish a source
+distribution (like PyTorch), as such packages can _only_ be installed on environments covered by the
+set of pre-built binary distributions (wheels) published by that package.
 
 See the [resolution documentation](../resolution.md#required-environments) for more.
