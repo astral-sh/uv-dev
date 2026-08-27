@@ -279,7 +279,15 @@ pub(crate) fn parse_marker_key_op_value<T: Pep508Url>(
             match r_value {
                 // The only sound choice for this is `<quoted PEP 440 version> <version op>` <version key>
                 MarkerValue::MarkerEnvVersion(key) => {
-                    parse_inverted_version_expr(&l_string, operator, key, reporter)
+                    if let Some(operator) = ContainerOperator::from_marker_operator(operator) {
+                        Some(MarkerExpression::VersionContains {
+                            key,
+                            value: l_string,
+                            operator,
+                        })
+                    } else {
+                        parse_inverted_version_expr(&l_string, operator, key, reporter)
+                    }
                 }
                 // '...' == <env key>
                 MarkerValue::MarkerEnvString(key) => {

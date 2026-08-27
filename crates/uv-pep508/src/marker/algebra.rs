@@ -209,6 +209,14 @@ impl InternerGuard<'_> {
                     }
                 }
             },
+            MarkerExpression::VersionContains {
+                key,
+                value,
+                operator,
+            } => (
+                Variable::VersionContains { key, value },
+                Edges::from_bool(operator == ContainerOperator::In),
+            ),
             // The `in` and `contains` operators are a bit different than other operators.
             // In particular, they do not represent a particular value for the corresponding
             // variable, and can overlap. For example, `'nux' in os_name` and `os_name == 'Linux'`
@@ -1181,6 +1189,11 @@ pub(crate) enum Variable {
     /// string marker and value.
     Contains {
         key: CanonicalMarkerValueString,
+        value: ArcStr,
+    },
+    /// A variable representing a quoted string contained in a version marker.
+    VersionContains {
+        key: MarkerValueVersion,
         value: ArcStr,
     },
     /// A variable representing the existence or absence of a given extra.

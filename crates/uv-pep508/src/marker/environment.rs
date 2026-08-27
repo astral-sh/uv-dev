@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use uv_pep440::{Version, VersionParseError};
 
-use crate::{CanonicalMarkerValueString, CanonicalMarkerValueVersion, StringVersion};
+use crate::{
+    CanonicalMarkerValueString, CanonicalMarkerValueVersion, MarkerValueVersion, StringVersion,
+};
 
 /// The marker values for a python interpreter, normally the current one
 ///
@@ -37,6 +39,15 @@ impl MarkerEnvironment {
                 &self.implementation_version().version
             }
             CanonicalMarkerValueVersion::PythonFullVersion => &self.python_full_version().version,
+        }
+    }
+
+    /// Returns the original string value of a version marker.
+    pub(crate) fn get_version_string(&self, key: MarkerValueVersion) -> &str {
+        match key {
+            MarkerValueVersion::ImplementationVersion => &self.implementation_version().string,
+            MarkerValueVersion::PythonFullVersion => &self.python_full_version().string,
+            MarkerValueVersion::PythonVersion => &self.python_version().string,
         }
     }
 

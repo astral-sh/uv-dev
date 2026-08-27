@@ -8149,7 +8149,11 @@ fn lock_multiple_markers() -> Result<()> {
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["iniconfig ; implementation_name == 'cpython'", "iniconfig ; python_version < '3.12'"]
+        dependencies = [
+            "iniconfig ; implementation_name == 'cpython'",
+            "iniconfig ; python_version < '3.12'",
+            "iniconfig ; '3.12' in python_version",
+        ]
         "#,
     )?;
 
@@ -8169,6 +8173,12 @@ fn lock_multiple_markers() -> Result<()> {
         version = 1
         revision = 3
         requires-python = ">=3.12"
+        resolution-markers = [
+            "'3.12' in python_version and implementation_name == 'cpython'",
+            "'3.12' not in python_version and implementation_name == 'cpython'",
+            "'3.12' in python_version and implementation_name != 'cpython'",
+            "'3.12' not in python_version and implementation_name != 'cpython'",
+        ]
 
         [options]
         exclude-newer = "2024-03-25T00:00:00Z"
@@ -8187,13 +8197,14 @@ fn lock_multiple_markers() -> Result<()> {
         version = "0.1.0"
         source = { virtual = "." }
         dependencies = [
-            { name = "iniconfig", marker = "implementation_name == 'cpython'" },
+            { name = "iniconfig", marker = "'3.12' in python_version or implementation_name == 'cpython'" },
         ]
 
         [package.metadata]
         requires-dist = [
             { name = "iniconfig", marker = "python_full_version < '3.12'" },
             { name = "iniconfig", marker = "implementation_name == 'cpython'" },
+            { name = "iniconfig", marker = "'3.12' in python_version" },
         ]
         "#
         );

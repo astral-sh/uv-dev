@@ -162,6 +162,23 @@ fn collect_dnf(
                 path.pop();
             }
         }
+        MarkerTreeKind::VersionContains(marker) => {
+            for (value, tree) in marker.children() {
+                let expr = MarkerExpression::VersionContains {
+                    key: marker.key(),
+                    value: ArcStr::from(marker.value()),
+                    operator: if value {
+                        ContainerOperator::In
+                    } else {
+                        ContainerOperator::NotIn
+                    },
+                };
+
+                path.push(expr);
+                collect_dnf(tree, dnf, path);
+                path.pop();
+            }
+        }
         MarkerTreeKind::List(marker) => {
             for (is_high, tree) in marker.children() {
                 let expr = MarkerExpression::List {
@@ -425,6 +442,22 @@ fn is_negation(left: &MarkerExpression, right: &MarkerExpression) -> bool {
             };
 
             key == key2 && versions == versions2 && operator != operator2
+        }
+        MarkerExpression::VersionContains {
+            key,
+            value,
+            operator,
+        } => {
+            let MarkerExpression::VersionContains {
+                key: key2,
+                value: value2,
+                operator: operator2,
+            } = right
+            else {
+                return false;
+            };
+
+            key == key2 && value == value2 && operator != operator2
         }
         MarkerExpression::String {
             key,

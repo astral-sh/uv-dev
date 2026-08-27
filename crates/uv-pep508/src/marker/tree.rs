@@ -522,6 +522,12 @@ pub enum MarkerExpression {
         versions: Vec<Version>,
         operator: ContainerOperator,
     },
+    /// A quoted string contained in a version marker, e.g. `'3.11' in python_version`.
+    VersionContains {
+        key: MarkerValueVersion,
+        value: ArcStr,
+        operator: ContainerOperator,
+    },
     /// An string marker comparison, e.g. `sys_platform == '...'`.
     ///
     /// Inverted string expressions, e.g `'...' == sys_platform`, are also normalized to this form.
@@ -549,6 +555,8 @@ pub(crate) enum MarkerExpressionKind {
     Version(MarkerValueVersion),
     /// A version `in` expression, e.g. `<version key> in <quoted list of PEP 440 versions>`.
     VersionIn(MarkerValueVersion),
+    /// A quoted string contained in a version marker.
+    VersionContains(MarkerValueVersion),
     /// A string marker comparison, e.g. `sys_platform == '...'`.
     String(MarkerValueString),
     /// A list `in` or `not in` expression, e.g. `'...' in dependency_groups`.
@@ -663,6 +671,7 @@ impl MarkerExpression {
         match self {
             Self::Version { key, .. } => MarkerExpressionKind::Version(*key),
             Self::VersionIn { key, .. } => MarkerExpressionKind::VersionIn(*key),
+            Self::VersionContains { key, .. } => MarkerExpressionKind::VersionContains(*key),
             Self::String { key, .. } => MarkerExpressionKind::String(*key),
             Self::List { pair, .. } => MarkerExpressionKind::List(pair.key()),
             Self::Extra { .. } => MarkerExpressionKind::Extra,
@@ -686,6 +695,11 @@ impl Display for MarkerExpression {
                 versions,
                 operator,
             } => write!(f, "{key} {operator} '{}'", versions.iter().format(" ")),
+            Self::VersionContains {
+                key,
+                value,
+                operator,
+            } => write!(f, "'{value}' {operator} {key}"),
             Self::String {
                 key,
                 operator,
@@ -950,6 +964,17 @@ impl MarkerTree {
                     low: low.negate(self.0),
                 })
             }
+            Variable::VersionContains { key, value } => {
+                let Edges::Boolean { low, high } = node.children else {
+                    unreachable!()
+                };
+                MarkerTreeKind::VersionContains(VersionContainsMarkerTree {
+                    key: *key,
+                    value,
+                    high: high.negate(self.0),
+                    low: low.negate(self.0),
+                })
+            }
             Variable::List(key) => {
                 let Edges::Boolean { low, high } = node.children else {
                     unreachable!()
@@ -1082,6 +1107,14 @@ impl MarkerTree {
                     .edge(env.get_string(marker.key()).contains(marker.value()))
                     .evaluate_reporter_impl(env, extras, reporter);
             }
+            MarkerTreeKind::VersionContains(marker) => {
+                return marker
+                    .edge(
+                        env.get_version_string(marker.key())
+                            .contains(marker.value()),
+                    )
+                    .evaluate_reporter_impl(env, extras, reporter);
+            }
             MarkerTreeKind::Extra(marker) => {
                 return marker
                     .edge(extras.extra().contains(marker.name().extra()))
@@ -1125,6 +1158,9 @@ impl MarkerTree {
             MarkerTreeKind::Contains(marker) => marker
                 .children()
                 .any(|(_, tree)| tree.evaluate_extras(extras)),
+            MarkerTreeKind::VersionContains(marker) => marker
+                .children()
+                .any(|(_, tree)| tree.evaluate_extras(extras)),
             MarkerTreeKind::List(marker) => marker
                 .children()
                 .any(|(_, tree)| tree.evaluate_extras(extras)),
@@ -1149,6 +1185,9 @@ impl MarkerTree {
                 .children()
                 .all(|(_, tree)| tree.evaluate_only_extras(extras)),
             MarkerTreeKind::Contains(marker) => marker
+                .children()
+                .all(|(_, tree)| tree.evaluate_only_extras(extras)),
+            MarkerTreeKind::VersionContains(marker) => marker
                 .children()
                 .all(|(_, tree)| tree.evaluate_only_extras(extras)),
             MarkerTreeKind::List(marker) => marker
@@ -1395,6 +1434,11 @@ impl MarkerTree {
                         imp(tree, f);
                     }
                 }
+                MarkerTreeKind::VersionContains(kind) => {
+                    for (_, tree) in kind.children() {
+                        imp(tree, f);
+                    }
+                }
                 MarkerTreeKind::List(kind) => {
                     for (_, tree) in kind.children() {
                         imp(tree, f);
@@ -1473,6 +1517,8 @@ pub enum MarkerTreeKind<'a> {
     In(InMarkerTree<'a>),
     /// A string expression with the `contains` operator.
     Contains(ContainsMarkerTree<'a>),
+    /// A version expression with the quoted value on the left of `in`.
+    VersionContains(VersionContainsMarkerTree<'a>),
     /// A `in` or `not in` expression.
     List(ListMarkerTree<'a>),
     /// An extra expression (e.g., `extra == 'dev'`).
@@ -1643,6 +1689,56 @@ impl PartialOrd for ContainsMarkerTree<'_> {
 }
 
 impl Ord for ContainsMarkerTree<'_> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.key()
+            .cmp(&other.key())
+            .then_with(|| self.value().cmp(other.value()))
+            .then_with(|| self.children().cmp(other.children()))
+    }
+}
+
+/// A version marker node with a quoted value on the left of `in`.
+#[derive(PartialEq, Eq, Clone, Debug)]
+pub struct VersionContainsMarkerTree<'a> {
+    key: MarkerValueVersion,
+    value: &'a str,
+    high: NodeId,
+    low: NodeId,
+}
+
+impl VersionContainsMarkerTree<'_> {
+    /// The version marker on the right-hand side of the expression.
+    pub fn key(&self) -> MarkerValueVersion {
+        self.key
+    }
+
+    /// The quoted value on the left-hand side of the expression.
+    pub(crate) fn value(&self) -> &str {
+        self.value
+    }
+
+    /// The edges of this node, corresponding to the boolean evaluation of the expression.
+    pub fn children(&self) -> impl Iterator<Item = (bool, MarkerTree)> {
+        [(true, MarkerTree(self.high)), (false, MarkerTree(self.low))].into_iter()
+    }
+
+    /// Returns the subtree associated with the given edge value.
+    fn edge(&self, value: bool) -> MarkerTree {
+        if value {
+            MarkerTree(self.high)
+        } else {
+            MarkerTree(self.low)
+        }
+    }
+}
+
+impl PartialOrd for VersionContainsMarkerTree<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for VersionContainsMarkerTree<'_> {
     fn cmp(&self, other: &Self) -> Ordering {
         self.key()
             .cmp(&other.key())
@@ -2262,6 +2358,22 @@ mod test {
             .unwrap()
             .evaluate(&env37, &[]);
         assert!(result);
+
+        let marker = MarkerTree::from_str("'3.11' in python_version").unwrap();
+        assert!(!marker.evaluate(&env37, &[]));
+        assert_eq!(
+            marker.try_to_string().as_deref(),
+            Some("'3.11' in python_version")
+        );
+
+        let marker = MarkerTree::from_str("'3.11' not in python_version").unwrap();
+        assert!(marker.evaluate(&env37, &[]));
+
+        let marker = MarkerTree::from_str("'3.7' in python_version").unwrap();
+        assert!(marker.evaluate(&env37, &[]));
+
+        let marker = MarkerTree::from_str("'.' in python_version").unwrap();
+        assert!(marker.evaluate(&env37, &[]));
     }
 
     #[test]
