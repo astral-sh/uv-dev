@@ -655,7 +655,7 @@ impl Authentication {
                 let Some(credentials) = provider.credentials_for(request.url()).await else {
                     return Err(AuthenticationError::ArtifactRegistry);
                 };
-                Ok(credentials.authenticate(request))
+                Ok(credentials.authenticate(request)?)
             }
         }
     }
