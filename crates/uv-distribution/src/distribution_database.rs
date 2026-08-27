@@ -20,8 +20,8 @@ use url::Url;
 use uv_cache::{ArchiveFileId, ArchiveId, Cache, CacheBucket, CacheEntry, WheelCache};
 use uv_cache_info::{CacheInfo, Timestamp};
 use uv_client::{
-    CacheControl, CachedClientError, Connectivity, DataWithCachePolicy, RegistryClient,
-    RequestBuilder, RetryState,
+    CacheControl, CachedClientError, Connectivity, DataWithCachePolicy, PackedArchiveEntry,
+    RegistryClient, RequestBuilder, RetryState,
 };
 use uv_distribution_filename::WheelFilename;
 use uv_distribution_types::{
@@ -897,6 +897,13 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
             Connectivity::Offline => CacheControl::AllowStale,
         };
 
+        let packed_entry = PackedArchiveEntry::new(
+            self.build_context.cache(),
+            index,
+            &filename.name,
+            &url,
+            &PackedArchiveEntry::wheel_key(filename),
+        );
         let archive = self
             .client
             .managed(|client| {
@@ -906,6 +913,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
                         req,
                         &http_entry,
                         cache_control.clone(),
+                        Some(&packed_entry),
                         |archive: &Archive| {
                             archive.satisfies(hashes)
                                 && expected_size
@@ -914,6 +922,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
                         },
                         download,
                     )
+                    .boxed_local()
             })
             .await
             .map_err(|err| match err {
@@ -944,6 +953,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
                 .managed(async |client| {
                     client
                         .cached_client()
+                        .with_packed_entry(Some(&packed_entry))
                         .skip_cache_with_retry(
                             self.request(url)?,
                             &http_entry,
@@ -1033,6 +1043,13 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
             Connectivity::Offline => CacheControl::AllowStale,
         };
 
+        let packed_entry = PackedArchiveEntry::new(
+            self.build_context.cache(),
+            index,
+            &filename.name,
+            &url,
+            &PackedArchiveEntry::wheel_key(filename),
+        );
         let archive = self
             .client
             .managed(|client| {
@@ -1042,6 +1059,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
                         req,
                         &http_entry,
                         cache_control.clone(),
+                        Some(&packed_entry),
                         |archive: &Archive| {
                             archive.satisfies(hashes)
                                 && expected_size
@@ -1050,6 +1068,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
                         },
                         download,
                     )
+                    .boxed_local()
             })
             .await
             .map_err(|err| match err {
@@ -1080,6 +1099,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
                 .managed(async |client| {
                     client
                         .cached_client()
+                        .with_packed_entry(Some(&packed_entry))
                         .skip_cache_with_retry(
                             self.request(url)?,
                             &http_entry,
