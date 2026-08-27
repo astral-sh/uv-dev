@@ -675,7 +675,7 @@ impl PythonInstallationKey {
         &self.variant
     }
 
-    pub(crate) fn build_variant(&self) -> Option<&LenientPythonBuildVariant> {
+    pub fn build_variant(&self) -> Option<&LenientPythonBuildVariant> {
         self.build_variant.as_ref()
     }
 

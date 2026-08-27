@@ -391,12 +391,15 @@ async fn perform_install(
                 // TODO(zanieb): We should consider differentiating between a global Python version
                 // file here, allowing a request from there to enable `is_default_install`.
                 is_default_install = true;
-                vec![if reinstall {
+                if reinstall {
                     // On bare `--reinstall`, reinstall all Python versions
-                    PythonRequest::Any
+                    existing_installations
+                        .iter()
+                        .map(|installation| PythonRequest::Key(installation.into()))
+                        .collect()
                 } else {
-                    PythonRequest::Default
-                }]
+                    vec![PythonRequest::Default]
+                }
             })
             .into_iter()
             .map(|request| InstallRequest::new(request, &download_list))
