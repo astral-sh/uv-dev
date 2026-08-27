@@ -382,10 +382,11 @@ pub(crate) fn parse_marker_key_op_value<T: Pep508Url>(
 /// The following limited expression is supported:
 ///
 /// ```text
-/// [not] in '<version> [additional versions]'
+/// [not] in '<version>[,] [additional versions]'
 /// ```
 ///
-/// where the version is PEP 440 compliant. Arbitrary whitespace is allowed between versions.
+/// where the version is PEP 440 compliant. Arbitrary whitespace and commas are allowed between
+/// versions.
 ///
 /// Returns `None` if the [`MarkerOperator`] is not relevant.
 /// Reports a warning if an invalid version is encountered, and returns `None`.
@@ -402,10 +403,10 @@ fn parse_version_in_expr(
 
     // Parse all of the values in the list as versions
     loop {
-        // Allow arbitrary whitespace between versions
-        cursor.eat_whitespace();
+        // Allow arbitrary whitespace and commas between versions
+        cursor.take_while(|c| c.is_whitespace() || c == ',');
 
-        let (start, len) = cursor.take_while(|c| !c.is_whitespace());
+        let (start, len) = cursor.take_while(|c| !c.is_whitespace() && c != ',');
         if len == 0 {
             break;
         }
