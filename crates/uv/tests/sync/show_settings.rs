@@ -3785,6 +3785,7 @@ fn preview_features() {
     +            IndexByName,
     +            ArtifactHashFiltering,
     +            ContentAddressedCache,
+    +            BuildDependencyHashes,
     +        ],
          },
          python_preference: Managed,
