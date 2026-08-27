@@ -2515,9 +2515,16 @@ mod test {
         assert_true("python_version in 'foo'");
         // e.g., including `*` versions, which would require tracking a version specifier
         assert_true("python_version in '3.9.*'");
-        // e.g., when non-whitespace separators are present
-        assert_true("python_version in '3.9, 3.10'");
-        assert_true("python_version in '3.9,3.10'");
+        // e.g., when comma separators are present
+        assert_simplifies(
+            "python_version in '3.9, 3.10'",
+            "python_full_version >= '3.9' and python_full_version < '3.11'",
+        );
+        assert_simplifies(
+            "python_version in '3.9,3.10'",
+            "python_full_version >= '3.9' and python_full_version < '3.11'",
+        );
+        // e.g., when unsupported non-whitespace separators are present
         assert_true("python_version in '3.9 or 3.10'");
 
         // This is an edge case that happens to be supported, but is not critical to support.

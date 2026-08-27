@@ -7953,9 +7953,8 @@ fn lock_python_version_marker_complement() -> Result<()> {
     Ok(())
 }
 
-/// Comma-separated versions are currently treated as an invalid version list, which makes the
-/// marker unconditionally true. This is undesirable because dependencies for other Python
-/// versions are resolved for the current environment; see astral-sh/uv#21310.
+/// Comma-separated versions in a version membership marker should not cause dependencies for
+/// other Python versions to be resolved; see astral-sh/uv#21310.
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_python_version_in_comma() -> Result<()> {
@@ -7972,12 +7971,9 @@ fn lock_python_version_in_comma() -> Result<()> {
     )?;
 
     uv_snapshot!(context.filters(), context.lock().arg("--offline").arg("--no-cache"), @"
-    exit_code: 1 (failure)
+    exit_code: 0 (success)
     ----- stderr -----
-      × No solution found when resolving dependencies:
-      ╰─▶ Because iniconfig was not found in the cache and your project depends on iniconfig, we can conclude that your project's requirements are unsatisfiable.
-
-    hint: Packages were unavailable because the network was disabled. When the network is disabled, registry packages may only be read from the cache.
+    Resolved 1 package in [TIME]
     ");
 
     Ok(())
