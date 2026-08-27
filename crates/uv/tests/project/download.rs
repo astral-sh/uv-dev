@@ -459,7 +459,7 @@ async fn refresh_packed_archive(args: &[&str], requests: u64) -> Result<()> {
     Ok(())
 }
 
-/// Metadata fallback must not use a packed response when refresh was explicitly requested.
+/// Metadata refresh must not use a stale packed response.
 #[tokio::test]
 async fn download_refresh_metadata() -> Result<()> {
     let context = uv_test::test_context!("3.13");
@@ -500,14 +500,17 @@ async fn download_refresh_metadata() -> Result<()> {
         .temp_dir
         .child("requirements.in")
         .write_str(&format!("basic-package @ {url}"))?;
-    uv_snapshot!(context.filters(), context.pip_compile().arg("requirements.in").args(["--refresh", "--no-header"]), @"
+    // Metadata resolution races with the refreshed archive download. If the archive arrives first,
+    // the range-request fallback is unnecessary and its warning is omitted.
+    let mut filters = context.filters();
+    filters.push((r"(?m)^WARN Range requests not supported[^\n]*\n", ""));
+    uv_snapshot!(filters, context.pip_compile().arg("requirements.in").args(["--refresh", "--no-header"]), @"
     exit_code: 0 (success)
     ----- stdout -----
     basic-package @ http://[LOCALHOST]/basic_package-0.1.0-py3-none-any.whl
         # via -r requirements.in
 
     ----- stderr -----
-    WARN Range requests not supported for basic_package-0.1.0-py3-none-any.whl; streaming wheel
     Resolved 1 package in [TIME]
     ");
     server.verify().await;
