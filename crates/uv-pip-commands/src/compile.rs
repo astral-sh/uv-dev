@@ -563,7 +563,7 @@ pub async fn pip_compile(
         .index_strategy(index_strategy)
         .torch_backend(torch_backend)
         .build_options(build_options.clone())
-        .artifact_environments(artifact_environments.clone())
+        .artifact_environments(artifact_environments)
         .minimum_libc_version(if universal {
             minimum_libc_version
         } else {
@@ -611,21 +611,13 @@ pub async fn pip_compile(
         }
     };
 
-    let output_build_options = build_options.has_build_policy().then(|| {
-        resolution.materialize_build_options(
-            &build_options,
-            tags.as_deref(),
-            &artifact_environments,
-        )
-    });
+    let output_build_options = build_options
+        .has_build_policy()
+        .then(|| resolution.materialize_build_options(&build_options));
     let output_build_options = output_build_options.as_ref().unwrap_or(&build_options);
 
     if generate_hashes && preview.is_enabled(PreviewFeature::ArtifactHashFiltering) {
-        resolution.retain_allowed_distribution_hashes(
-            &build_options,
-            tags.as_deref(),
-            &artifact_environments,
-        );
+        resolution.retain_allowed_distribution_hashes(&build_options);
     }
 
     // Write the resolved dependencies to the output channel.
