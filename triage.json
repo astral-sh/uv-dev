@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 6172,
+        "title": "Add support for `python_version in ...` markers",
+        "url": "https://github.com/astral-sh/uv/pull/6172",
+        "state": "merged",
+        "reason": "The historical implementation added whitespace-delimited, version-aware membership. Its discussion explicitly considered comma-delimited version strings and deferred them pending real edge cases."
+      },
+      {
+        "kind": "issue",
+        "number": 3683,
+        "title": "Support `in` operators with `python_version` marker",
+        "url": "https://github.com/astral-sh/uv/issues/3683",
+        "state": "closed",
+        "reason": "The original bug tracked version membership being treated as arbitrary/true, but its whitespace-delimited example was fixed by astral-sh/uv#6172 and does not cover commas."
+      },
+      {
+        "kind": "issue",
+        "number": 21309,
+        "title": "uv-pep508 parses value in python_version as universally true",
+        "url": "https://github.com/astral-sh/uv/issues/21309",
+        "state": "open",
+        "reason": "This adjacent bug has the same unconditional-true outcome, but it is triggered by reversed operands and follows a different parser path."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and pull requests for literal forms of `python_version in`, `python_full_version in`, comma-delimited versions, `always true`, uv-pep508, and parser identifiers; conceptual terms for membership markers, substring semantics, invalid markers, version-aware normalization, and marker algebra; and historical fixes. Inspected the chain from astral-sh/uv#3675 through astral-sh/uv#3683 to astral-sh/uv#6172. astral-sh/uv#3675 was a downstream whitespace-delimited symptom already fixed, while astral-sh/uv#20816 concerns comma conjunction in `project.requires-python`, not marker membership. No newer fix or tracking pull request was found."
+  },
+  "type": "bug",
+  "type_reason": "PEP 508 defines `in` here as substring matching, but uv-pep508 parses version membership as a whitespace-delimited PEP 440 list. A comma makes that specialized parse fail, the expression is ignored, and the resulting marker tree is unconditionally `true`. This is incorrect despite being a documented limitation. It is not a regression because astral-sh/uv#6172 never supported commas, and it is not a duplicate of astral-sh/uv#21309 because that issue concerns reversed operands and a different parser path.",
+  "summary": "The closest history is astral-sh/uv#6172, whose discussion explicitly considered comma-delimited membership but implemented only whitespace-delimited values. astral-sh/uv#3683 is the closed original membership bug, and astral-sh/uv#21309 is an adjacent open bug with reversed operands; none already tracks this trigger.",
+  "draft_response": "Thanks for the focused reproduction. The current uv-pep508 implementation only supports a whitespace-delimited, version-aware subset of `in` for version markers. That behavior was introduced in astral-sh/uv#6172; its discussion explicitly considered comma-delimited values but deferred them pending concrete ecosystem cases. For a comma-delimited value today, parsing the specialized version list fails and the condition is discarded, producing `true`, which does not preserve PEP 508 substring semantics.\n\nThis should remain open as a bug for the comma-delimited case. It is related to astral-sh/uv#21309, but that report uses reversed operands and takes a different parser path. If possible, please add the exact package name and version—or wheel URL—whose `Requires-Dist` contains this form; the crate reproduction establishes the behavior, while that metadata would document the resolver impact."
+}
