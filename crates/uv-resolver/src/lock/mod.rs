@@ -19,6 +19,7 @@ use tracing::{debug, instrument, trace};
 use url::Url;
 
 use uv_cache_key::RepositoryUrl;
+use uv_client::PackedArchiveEntry;
 use uv_configuration::{
     BuildOptions, Constraints, DependencyGroupsWithDefaults, ExcludeDependency, Excludes,
     ExtrasSpecificationWithDefaults, InstallTarget, Override, Overrides, PackageOverride,
@@ -3794,6 +3795,8 @@ pub struct Package {
 /// A distribution archive recorded in a lockfile, independent of platform compatibility.
 #[derive(Debug, Clone)]
 pub struct LockedArtifact {
+    pub index: Option<IndexUrl>,
+    pub cache_key: String,
     pub url: DisplaySafeUrl,
     pub hash: Option<HashDigest>,
     pub size: Option<u64>,
@@ -3804,13 +3807,13 @@ impl Package {
     pub fn artifacts(&self, root: &Path) -> Result<Vec<LockedArtifact>, LockError> {
         let mut artifacts = Vec::new();
         for wheel in &self.wheels {
+            let mut index = None;
             let url = match (&self.id.source, &wheel.url) {
-                (Source::Registry(source), _) => wheel
-                    .to_registry_wheel(source, root)?
-                    .file
-                    .url
-                    .to_url()
-                    .map_err(LockErrorKind::InvalidUrl)?,
+                (Source::Registry(source), _) => {
+                    let wheel = wheel.to_registry_wheel(source, root)?;
+                    index = Some(wheel.index);
+                    wheel.file.url.to_url().map_err(LockErrorKind::InvalidUrl)?
+                }
                 (_, WheelWireSource::Url { url }) => {
                     url.to_url().map_err(LockErrorKind::InvalidUrl)?
                 }
@@ -3830,12 +3833,16 @@ impl Package {
                 let path = format!("{}.tar.zst", url.path());
                 url.set_path(&path);
                 artifacts.push(LockedArtifact {
+                    index: index.clone(),
+                    cache_key: PackedArchiveEntry::wheel_key(&wheel.filename, true),
                     url,
                     hash: zstd.hash.as_ref().map(|hash| hash.0.clone()),
                     size: zstd.size,
                 });
             }
             artifacts.push(LockedArtifact {
+                index,
+                cache_key: PackedArchiveEntry::wheel_key(&wheel.filename, false),
                 url,
                 hash: wheel.hash.as_ref().map(|hash| hash.0.clone()),
                 size: wheel.size,
@@ -3844,17 +3851,29 @@ impl Package {
         if let Some(sdist) = &self.sdist
             && let Some(dist) = self.to_source_dist(root)?
         {
-            let url = match dist {
-                uv_distribution_types::SourceDist::Registry(dist) => {
-                    Some(dist.file.url.to_url().map_err(LockErrorKind::InvalidUrl)?)
-                }
-                uv_distribution_types::SourceDist::DirectUrl(dist) => Some(*dist.location),
-                uv_distribution_types::SourceDist::Path(dist) => Some(dist.url.to_url()),
+            let artifact = match dist {
+                uv_distribution_types::SourceDist::Registry(dist) => Some((
+                    dist.file.url.to_url().map_err(LockErrorKind::InvalidUrl)?,
+                    Some(dist.index),
+                    PackedArchiveEntry::source_key(Some(&dist.version), dist.ext),
+                )),
+                uv_distribution_types::SourceDist::DirectUrl(dist) => Some((
+                    *dist.location,
+                    None,
+                    PackedArchiveEntry::source_key(None, dist.ext),
+                )),
+                uv_distribution_types::SourceDist::Path(dist) => Some((
+                    dist.url.to_url(),
+                    None,
+                    PackedArchiveEntry::source_key(None, dist.ext),
+                )),
                 _ => None,
             };
-            if let Some(url) = url {
+            if let Some((url, index, cache_key)) = artifact {
                 artifacts.push(LockedArtifact {
                     url,
+                    index,
+                    cache_key,
                     hash: sdist.hash().map(|hash| hash.0.clone()),
                     size: sdist.size(),
                 });
