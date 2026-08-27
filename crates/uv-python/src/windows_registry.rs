@@ -205,7 +205,7 @@ fn registry_python_tag(key: &PythonInstallationKey) -> String {
     // get distinct registry entries. This suffix can be empty.
     //
     // See: https://github.com/astral-sh/uv/issues/18795
-    let variant_suffix = key.variant().executable_suffix();
+    let variant_suffix = key.display_variant_suffix();
     format!(
         "{}{}{}",
         key.implementation().pretty(),
