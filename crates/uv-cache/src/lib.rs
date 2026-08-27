@@ -984,6 +984,32 @@ pub enum CacheBucket {
     /// Source and package shards contain `.http` or `.rev` pointers and the original archives,
     /// named by their SHA-256 digests. Wheel pointers distinguish the packed representation;
     /// source archive pointers are keyed by version and format (or format alone for direct URLs).
+    ///
+    /// Cache structure:
+    ///
+    /// ```text
+    /// packed-v1
+    /// ├── pypi
+    /// │   └── foo
+    /// │       ├── <sha256>
+    /// │       ├── 1.0.0-py3-none-any.whl.http
+    /// │       └── 1.0.0.tar.gz.http
+    /// ├── index
+    /// │   └── <digest(index-url)>
+    /// │       └── foo
+    /// │           ├── <sha256>
+    /// │           └── 1.0.0-py3-none-any.whl.http
+    /// ├── url
+    /// │   └── <digest(url)>
+    /// │       └── foo
+    /// │           ├── <sha256>
+    /// │           └── archive.tar.gz.http
+    /// └── path
+    ///     └── <digest(path-url)>
+    ///         └── foo
+    ///             ├── <sha256>
+    ///             └── 1.0.0-py3-none-any.whl.rev
+    /// ```
     Packed,
     /// Wheels (excluding built wheels), alongside their metadata and cache policy.
     ///
