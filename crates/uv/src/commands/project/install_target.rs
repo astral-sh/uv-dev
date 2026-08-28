@@ -405,6 +405,32 @@ impl<'lock> InstallTarget<'lock> {
         self.lock().build_constraints(self.install_path())
     }
 
+    pub(crate) fn build_constraint_specifications(
+        &self,
+    ) -> Vec<uv_distribution_types::NameRequirementSpecification> {
+        self.lock()
+            .build_constraint_specifications(self.install_path())
+    }
+
+    pub(crate) fn require_build_hashes(&self, override_value: Option<bool>) -> bool {
+        if let Some(require_build_hashes) = override_value {
+            return require_build_hashes;
+        }
+
+        let workspace = match self {
+            Self::Project { workspace, .. }
+            | Self::Projects { workspace, .. }
+            | Self::Workspace { workspace, .. }
+            | Self::NonProjectWorkspace { workspace, .. } => Some(*workspace),
+            Self::Script { .. } => None,
+        };
+        workspace
+            .and_then(|workspace| workspace.pyproject_toml().tool.as_ref())
+            .and_then(|tool| tool.uv.as_ref())
+            .and_then(|uv| uv.require_build_hashes)
+            .unwrap_or(false)
+    }
+
     /// Validate the extras requested by the [`ExtrasSpecification`].
     pub(crate) fn validate_extras(self, extras: &ExtrasSpecification) -> Result<(), ProjectError> {
         if extras.is_empty() {

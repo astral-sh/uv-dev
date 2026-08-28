@@ -38,8 +38,8 @@ use uv_resolver::{
     PythonRequirement, Resolver, ResolverEnvironment,
 };
 use uv_types::{
-    AnyErrorBuild, BuildArena, BuildContext, BuildIsolation, BuildStack, EmptyInstalledPackages,
-    HashStrategy, InFlight, ResolvedRequirements, SourceTreeEditablePolicy,
+    AnyErrorBuild, BuildArena, BuildContext, BuildIsolation, BuildRequirementSource, BuildStack,
+    EmptyInstalledPackages, HashStrategy, InFlight, ResolvedRequirements, SourceTreeEditablePolicy,
 };
 use uv_workspace::WorkspaceCache;
 
@@ -241,6 +241,10 @@ impl BuildContext for BuildDispatch<'_> {
         self.build_isolation
     }
 
+    fn requires_build_hashes(&self) -> bool {
+        self.hasher.requires_hashes()
+    }
+
     fn config_settings(&self) -> &ConfigSettings {
         self.config_settings
     }
@@ -277,6 +281,7 @@ impl BuildContext for BuildDispatch<'_> {
         &'data self,
         requirements: &'data [Requirement],
         build_stack: &'data BuildStack,
+        source: BuildRequirementSource,
     ) -> Result<ResolvedRequirements, BuildDispatchError> {
         let python_requirement = PythonRequirement::from_interpreter(self.interpreter);
         let marker_env = self.interpreter.to_resolver_marker_environment();
@@ -288,14 +293,20 @@ impl BuildContext for BuildDispatch<'_> {
         // its URL allow-list check. This mirrors what the project resolver does in
         // `uv_requirements::LookaheadResolver` and prevents a `DisallowedUrl` error when one
         // `build-system.requires` entry pulls in another URL dependency.
-        let hasher = self
-            .hasher
-            .clone()
-            .augment_with_requirements(requirements.iter())
-            .map_err(uv_requirements::Error::from)?;
+        let preserve_hash_authority = source == BuildRequirementSource::Dynamic;
+        let hasher = if preserve_hash_authority {
+            self.hasher
+                .clone()
+                .constrain_with_requirements(requirements.iter())
+        } else {
+            self.hasher
+                .clone()
+                .augment_with_requirements(requirements.iter())
+        }
+        .map_err(uv_requirements::Error::from)?;
         let overrides = Overrides::default();
         let excludes = Excludes::default();
-        let (lookaheads, hasher) = LookaheadResolver::new(
+        let mut lookahead = LookaheadResolver::new(
             requirements,
             self.constraints,
             &overrides,
@@ -308,9 +319,11 @@ impl BuildContext for BuildDispatch<'_> {
                 self.concurrency.downloads_semaphore.clone(),
             )
             .with_build_stack(build_stack),
-        )
-        .resolve(&resolver_env)
-        .await?;
+        );
+        if preserve_hash_authority {
+            lookahead = lookahead.preserve_hash_authority();
+        }
+        let (lookaheads, hasher) = lookahead.resolve(&resolver_env).await?;
 
         let manifest = Manifest::simple(requirements.to_vec())
             .with_constraints(self.constraints.clone())

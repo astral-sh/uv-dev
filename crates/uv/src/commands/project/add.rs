@@ -1248,6 +1248,7 @@ async fn lock_and_sync(
 
     project::sync::do_sync(
         target,
+        None,
         venv,
         extras,
         groups,

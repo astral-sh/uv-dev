@@ -1,12 +1,18 @@
+use std::fmt::Write;
+#[cfg(feature = "test-git")]
+use std::process::Command;
+
 use anyhow::{Result, anyhow};
 use assert_cmd::prelude::*;
 use assert_fs::{fixture::ChildPath, prelude::*};
+use async_zip::base::write::ZipFileWriter;
+use async_zip::{Compression, ZipEntryBuilder};
+use futures::executor::block_on;
 use indoc::{formatdoc, indoc};
 use insta::assert_snapshot;
 use predicates::prelude::predicate;
 use serde_json::json;
-#[cfg(feature = "test-git")]
-use std::process::Command;
+use sha2::{Digest, Sha256};
 use tempfile::tempdir_in;
 use url::Url;
 use wiremock::matchers::{basic_auth, body_string_contains, method, path};
@@ -17,6 +23,213 @@ use uv_static::EnvVars;
 use uv_test::packse::PackseServer;
 
 use uv_test::{TestContext, download_to_disk, uv_snapshot, venv_bin_path};
+
+/// Create a minimal wheel containing a single Python module.
+fn build_system_hash_test_wheel(name: &str, module: &str) -> Result<Vec<u8>> {
+    let normalized = name.replace('-', "_");
+    let dist_info = format!("{normalized}-1.0.0.dist-info");
+    let entries = [
+        (format!("{normalized}.py"), module.to_string()),
+        (
+            format!("{dist_info}/METADATA"),
+            formatdoc! {"
+                Metadata-Version: 2.3
+                Name: {name}
+                Version: 1.0.0
+            "},
+        ),
+        (
+            format!("{dist_info}/WHEEL"),
+            indoc! {"
+                Wheel-Version: 1.0
+                Generator: uv-test
+                Root-Is-Purelib: true
+                Tag: py3-none-any
+            "}
+            .to_string(),
+        ),
+    ];
+    let mut writer = ZipFileWriter::new(Vec::new());
+    let mut record = String::new();
+    for (path, contents) in entries {
+        let entry = ZipEntryBuilder::new(path.clone().into(), Compression::Stored);
+        block_on(writer.write_entry_whole(entry, contents.as_bytes()))?;
+        writeln!(record, "{path},,")?;
+    }
+    let record_path = format!("{dist_info}/RECORD");
+    writeln!(record, "{record_path},,")?;
+    let entry = ZipEntryBuilder::new(record_path.into(), Compression::Stored);
+    block_on(writer.write_entry_whole(entry, record.as_bytes()))?;
+    Ok(block_on(writer.close())?)
+}
+
+/// Create a harmless build backend that can request an additional build dependency.
+fn build_system_hash_test_backend(dynamic_requirement: Option<&str>) -> Result<Vec<u8>> {
+    let project_wheel = hex::encode(build_system_hash_test_wheel(
+        "hash-project",
+        "__version__ = '1.0.0'\n",
+    )?);
+    let dynamic_requirements =
+        serde_json::to_string(&dynamic_requirement.into_iter().collect::<Vec<_>>())?;
+    let backend = formatdoc! {r#"
+        from pathlib import Path
+
+        def get_requires_for_build_wheel(config_settings=None):
+            return {dynamic_requirements}
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            filename = "hash_project-1.0.0-py3-none-any.whl"
+            (Path(wheel_directory) / filename).write_bytes(bytes.fromhex("{project_wheel}"))
+            return filename
+    "#};
+    build_system_hash_test_wheel("hash-backend", &backend)
+}
+
+/// Hash-bearing workspace build constraints must reach every existing config consumer.
+#[test]
+fn workspace_build_constraint_hashes() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheel = build_system_hash_test_wheel("hash-backend", "__version__ = '1.0.0'\n")?;
+    let digest = hex::encode(Sha256::digest(&wheel));
+    let mut filters = context.filters();
+    filters.push((digest.as_str(), "[HASH]"));
+    context
+        .temp_dir
+        .child("wheels/hash_backend-1.0.0-py3-none-any.whl")
+        .write_binary(&wheel)?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "hash-project"
+        dynamic = ["version"]
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = ["hash-backend==1.0.0"]
+        build-backend = "hash_backend"
+
+        [tool.uv]
+        build-constraint-dependencies = [
+            {{ requirement = "hash-backend==1.0.0", hashes = ["sha256:{wrong}"] }},
+        ]
+    "#, wrong = "0".repeat(64)})?;
+    context.temp_dir.child("requirements.in").write_str(".\n")?;
+
+    uv_snapshot!(filters, context.build()
+        .arg("--wheel")
+        .arg("--no-index")
+        .arg("--find-links").arg("wheels"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Building wheel...
+    error: Failed to build `[TEMP_DIR]/`
+      Caused by: Failed to install requirements from `build-system.requires`
+      Caused by: Failed to download `hash-backend==1.0.0`
+      Caused by: Hash mismatch for `hash-backend==1.0.0`
+
+        Expected:
+          sha256:0000000000000000000000000000000000000000000000000000000000000000
+
+        Computed:
+          sha256:[HASH]
+    ");
+    uv_snapshot!(filters, context.pip_install()
+        .arg(".")
+        .arg("--no-index")
+        .arg("--find-links").arg("wheels"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+      × Failed to build `hash-project @ file://[TEMP_DIR]/`
+      ├─▶ Failed to install requirements from `build-system.requires`
+      ├─▶ Failed to download `hash-backend==1.0.0`
+      ╰─▶ Hash mismatch for `hash-backend==1.0.0`
+
+          Expected:
+            sha256:0000000000000000000000000000000000000000000000000000000000000000
+
+          Computed:
+            sha256:[HASH]
+    ");
+    uv_snapshot!(filters, context.pip_compile()
+        .arg("requirements.in")
+        .arg("--no-index")
+        .arg("--find-links").arg("wheels"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+      × Failed to build `hash-project @ file://[TEMP_DIR]/`
+      ├─▶ Failed to install requirements from `build-system.requires`
+      ├─▶ Failed to download `hash-backend==1.0.0`
+      ╰─▶ Hash mismatch for `hash-backend==1.0.0`
+
+          Expected:
+            sha256:0000000000000000000000000000000000000000000000000000000000000000
+
+          Computed:
+            sha256:[HASH]
+    ");
+    Ok(())
+}
+
+/// Hashes reported by a build backend must not authorize a new dependency in strict mode.
+#[test]
+fn build_requirement_hashes_do_not_expand_strict_authority() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheels = context.temp_dir.child("wheels");
+    let dynamic_wheel =
+        build_system_hash_test_wheel("dynamic-dependency", "__version__ = '1.0.0'\n")?;
+    let dynamic_digest = hex::encode(Sha256::digest(&dynamic_wheel));
+    let mut filters = context.filters();
+    filters.push((&dynamic_digest, "[HASH]"));
+    let dynamic_path = wheels.child("dynamic_dependency-1.0.0-py3-none-any.whl");
+    dynamic_path.write_binary(&dynamic_wheel)?;
+    let dynamic_url = Url::from_file_path(dynamic_path.path()).map_err(|()| {
+        anyhow!(
+            "Failed to convert {} to a file URL",
+            dynamic_path.path().display()
+        )
+    })?;
+    let dynamic_requirement = format!("dynamic-dependency @ {dynamic_url}#sha256={dynamic_digest}");
+    let backend_wheel = build_system_hash_test_backend(Some(&dynamic_requirement))?;
+    let backend_digest = hex::encode(Sha256::digest(&backend_wheel));
+    wheels
+        .child("hash_backend-1.0.0-py3-none-any.whl")
+        .write_binary(&backend_wheel)?;
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+            [project]
+            name = "hash-project"
+            version = "1.0.0"
+
+            [build-system]
+            requires = ["hash-backend==1.0.0"]
+            build-backend = "hash_backend"
+
+            [tool.uv]
+            build-constraint-dependencies = [
+                {{ requirement = "hash-backend==1.0.0", hashes = ["sha256:{backend_digest}"] }},
+            ]
+        "#})?;
+
+    uv_snapshot!(filters, context.build()
+        .arg("--wheel")
+        .arg("--no-index")
+        .arg("--find-links").arg("wheels")
+        .arg("--require-hashes"), @r"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Building wheel...
+    error: Failed to build `[TEMP_DIR]/`
+      Caused by: Failed to resolve requirements from `build-system.requires`
+      Caused by: Hashes for `dynamic-dependency @ file://[TEMP_DIR]/wheels/dynamic_dependency-1.0.0-py3-none-any.whl#sha256=[HASH]` were discovered from package metadata and cannot authorize a new distribution in `--require-hashes` mode
+    ");
+
+    Ok(())
+}
 
 #[test]
 fn sync() -> Result<()> {
@@ -1764,6 +1977,20 @@ fn sync_build_isolation() -> Result<()> {
      + setuptools==69.2.0
      + trove-classifiers==2024.3.3
      + wheel==0.43.0
+    ");
+
+    // Strict build hashes cannot use an existing environment as evidence of archive provenance.
+    uv_snapshot!(context.filters(), context
+        .sync()
+        .arg("--no-build-isolation")
+        .arg("--require-build-hashes"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+      × Failed to download and build `source-distribution @ https://files.pythonhosted.org/packages/10/1f/57aa4cce1b1abf6b433106676e15f9fa2c92ed2bd4cf77c3b50a9e9ac773/source_distribution-0.0.1.tar.gz`
+      ╰─▶ Hash verification for build dependencies requires build isolation, but build isolation is disabled
+
+    hint: `source-distribution` was included because `project` (v0.1.0) depends on `source-distribution`
     ");
 
     // Running `uv sync` should succeed.
@@ -12627,6 +12854,40 @@ fn sync_build_constraints() -> Result<()> {
     Resolved 2 packages in [TIME]
     Checked 1 package in [TIME]
     ");
+
+    Ok(())
+}
+
+/// `uv sync` should require hashes for build dependencies when configured or requested.
+#[test]
+fn sync_require_build_hashes() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-03-24T19:00:00Z");
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["json-merge-patch"]
+
+        [tool.uv]
+        require-build-hashes = true
+        build-constraint-dependencies = [
+            { requirement = "setuptools<78" },
+        ]
+        "#,
+    )?;
+
+    uv_snapshot!(context.filters(), context
+        .sync()
+        .arg("--no-binary-package")
+        .arg("json-merge-patch")
+        .arg("--require-build-hashes"), @r"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: In `--require-hashes` mode, all requirements must have their versions pinned with `==`, but found: setuptools<78
+    "
+    );
 
     Ok(())
 }

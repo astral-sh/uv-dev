@@ -283,6 +283,7 @@ pub(crate) async fn run(
 
             match project::sync::do_sync(
                 target,
+                None,
                 &environment,
                 &extras.with_defaults(DefaultExtras::default()),
                 &groups.with_defaults(DefaultGroups::default()),
@@ -839,6 +840,7 @@ pub(crate) async fn run(
 
                 match project::sync::do_sync(
                     target,
+                    None,
                     &venv,
                     &extras,
                     &groups,

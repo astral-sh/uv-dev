@@ -38,6 +38,10 @@ pub enum Error {
     RequirementsResolve(&'static str, #[source] AnyErrorBuild),
     #[error("Failed to install requirements from {0}")]
     RequirementsInstall(&'static str, #[source] AnyErrorBuild),
+    #[error(
+        "Hash verification for build dependencies requires build isolation, but build isolation is disabled"
+    )]
+    StrictHashesWithoutBuildIsolation,
     #[error("Failed to create temporary virtualenv")]
     Virtualenv(#[from] uv_virtualenv::Error),
     // Build backend errors
@@ -74,6 +78,7 @@ impl IsBuildBackendError for Error {
             | Self::BackendPathOutsideSourceTree(_)
             | Self::RequirementsResolve(_, _)
             | Self::RequirementsInstall(_, _)
+            | Self::StrictHashesWithoutBuildIsolation
             | Self::Virtualenv(_)
             | Self::NoSourceDistBuild(_)
             | Self::NoSourceDistBuilds

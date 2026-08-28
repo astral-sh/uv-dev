@@ -686,6 +686,7 @@ async fn lock_and_sync(
 
     match project::sync::do_sync(
         target,
+        None,
         venv,
         &extras,
         &groups,

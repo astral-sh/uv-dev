@@ -43,7 +43,8 @@ use uv_pypi_types::VerbatimParsedUrl;
 use uv_python::{Interpreter, PythonEnvironment};
 use uv_static::EnvVars;
 use uv_types::{
-    AnyErrorBuild, BuildContext, BuildIsolation, BuildStack, ResolvedRequirements, SourceBuildTrait,
+    AnyErrorBuild, BuildContext, BuildIsolation, BuildRequirementSource, BuildStack,
+    ResolvedRequirements, SourceBuildTrait,
 };
 use uv_warnings::warn_user_once;
 use uv_workspace::WorkspaceCache;
@@ -365,6 +366,12 @@ impl SourceBuild {
             .map_ok(Requirement::from)
             .collect::<Result<Vec<_>, _>>()?;
 
+        if build_context.requires_build_hashes()
+            && !build_isolation.is_isolated(package_name.as_ref())
+        {
+            return Err(Error::StrictHashesWithoutBuildIsolation);
+        }
+
         // Create a virtual environment, or install into the shared environment if requested.
         let venv = if let Some(venv) = build_isolation.shared_environment(package_name.as_ref()) {
             venv.clone()
@@ -538,7 +545,11 @@ impl SourceBuild {
                     resolved_requirements.clone()
                 } else {
                     let resolved_requirements = build_context
-                        .resolve(&DEFAULT_BACKEND.requirements, build_stack)
+                        .resolve(
+                            &DEFAULT_BACKEND.requirements,
+                            build_stack,
+                            BuildRequirementSource::Static,
+                        )
                         .await
                         .map_err(|err| {
                             Error::RequirementsResolve("`setup.py` build", err.into())
@@ -563,7 +574,7 @@ impl SourceBuild {
                     )
                 };
                 build_context
-                    .resolve(&requirements, build_stack)
+                    .resolve(&requirements, build_stack, BuildRequirementSource::Static)
                     .await
                     .map_err(|err| Error::RequirementsResolve(dependency_sources, err.into()))?
             },
@@ -1158,7 +1169,7 @@ async fn create_pep517_build_environment(
             .chain(extra_requires)
             .collect();
         let resolution = build_context
-            .resolve(&requirements, build_stack)
+            .resolve(&requirements, build_stack, BuildRequirementSource::Dynamic)
             .await
             .map_err(|err| {
                 Error::RequirementsResolve("`build-system.requires`", AnyErrorBuild::from(err))

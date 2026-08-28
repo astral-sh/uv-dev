@@ -85,7 +85,7 @@ pub(crate) async fn pip_install(
     constraints_from_workspace: Vec<Requirement>,
     overrides_from_workspace: Vec<Override<Requirement>>,
     excludes_from_workspace: Vec<ExcludeDependency>,
-    build_constraints_from_workspace: Vec<Requirement>,
+    build_constraints_from_workspace: Vec<NameRequirementSpecification>,
     editable: Option<EditableMode>,
     extras: &ExtrasSpecification,
     groups: &GroupsSpecification,
@@ -201,12 +201,7 @@ pub(crate) async fn pip_install(
         operations::read_constraints(build_constraints, &client_builder)
             .await?
             .into_iter()
-            .chain(
-                build_constraints_from_workspace
-                    .iter()
-                    .cloned()
-                    .map(NameRequirementSpecification::from),
-            )
+            .chain(build_constraints_from_workspace)
             .collect();
 
     // Detect the current Python interpreter.

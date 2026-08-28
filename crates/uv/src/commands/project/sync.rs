@@ -66,6 +66,7 @@ use crate::settings::{
 /// Sync the project environment.
 pub(crate) async fn sync(
     project_dir: &Path,
+    require_build_hashes: Option<bool>,
     lock_check: LockCheck,
     frozen: Option<FrozenSource>,
     dry_run: DryRun,
@@ -369,6 +370,7 @@ pub(crate) async fn sync(
             printer,
             preview,
         )
+        .with_require_build_hashes(require_build_hashes)
         .execute(lock_target),
     )
     .await
@@ -424,6 +426,7 @@ pub(crate) async fn sync(
     // Perform the sync operation.
     let changelog = match do_sync(
         sync_target,
+        require_build_hashes,
         &environment,
         &extras,
         &groups,
@@ -638,6 +641,7 @@ impl Deref for SyncEnvironment {
 /// Sync a lockfile with an environment.
 pub(crate) async fn do_sync<'a>(
     target: InstallTarget<'_>,
+    require_build_hashes: Option<bool>,
     venv: &PythonEnvironment,
     extras: &ExtrasSpecificationWithDefaults,
     groups: &DependencyGroupsWithDefaults,
@@ -873,10 +877,20 @@ pub(crate) async fn do_sync<'a>(
 
     // Read the build constraints from the lockfile.
     let build_constraints = target.build_constraints();
+    let build_constraint_specifications = target.build_constraint_specifications();
 
-    // TODO(charlie): These are all default values. We should consider whether we want to make them
-    // optional on the downstream APIs.
-    let build_hasher = HashStrategy::default();
+    let build_hasher = HashStrategy::from_requirements(
+        std::iter::empty(),
+        build_constraint_specifications
+            .iter()
+            .map(|constraint| (&constraint.requirement, constraint.hashes.as_slice())),
+        Some(&venv.interpreter().to_resolver_marker_environment()),
+        if target.require_build_hashes(require_build_hashes) {
+            HashCheckingMode::Require
+        } else {
+            HashCheckingMode::Verify
+        },
+    )?;
 
     // Resolve the flat indexes from `--find-links`.
     let flat_index = {

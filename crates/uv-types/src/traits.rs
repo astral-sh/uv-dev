@@ -51,6 +51,15 @@ impl SourceTreeEditablePolicy {
     }
 }
 
+/// Identifies where a build requirement was introduced.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum BuildRequirementSource {
+    /// A statically declared or explicitly configured build requirement.
+    Static,
+    /// A requirement returned by a PEP 517 `get_requires_for_build_*` hook.
+    Dynamic,
+}
+
 ///  Avoids cyclic crate dependencies between resolver, installer and builder.
 ///
 /// To resolve the dependencies of a packages, we may need to build one or more source
@@ -120,6 +129,9 @@ pub trait BuildContext {
     /// The isolation mode used for building source distributions.
     fn build_isolation(&self) -> BuildIsolation<'_>;
 
+    /// Whether every build dependency must have a matching trusted hash.
+    fn requires_build_hashes(&self) -> bool;
+
     /// The [`ConfigSettings`] used to build distributions.
     fn config_settings(&self) -> &ConfigSettings;
 
@@ -151,6 +163,7 @@ pub trait BuildContext {
         &'a self,
         requirements: &'a [Requirement],
         build_stack: &'a BuildStack,
+        source: BuildRequirementSource,
     ) -> impl Future<Output = Result<ResolvedRequirements, impl IsBuildBackendError>> + 'a;
 
     /// Install the given set of package versions into the virtual environment. The environment must

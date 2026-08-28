@@ -3786,6 +3786,19 @@ pub struct RunArgs {
 
 #[derive(Args)]
 pub struct SyncArgs {
+    /// Require hashes for all dependencies installed into isolated build environments.
+    #[arg(
+        long,
+        env = EnvVars::UV_REQUIRE_BUILD_HASHES,
+        overrides_with = "no_require_build_hashes",
+        value_parser = clap::builder::BoolishValueParser::new()
+    )]
+    pub require_build_hashes: bool,
+
+    /// Allow build dependencies without hashes.
+    #[arg(long, overrides_with = "require_build_hashes", hide = true)]
+    pub no_require_build_hashes: bool,
+
     /// Include optional dependencies from the specified extra name.
     ///
     /// May be provided more than once.
@@ -4067,6 +4080,19 @@ pub struct SyncArgs {
 
 #[derive(Args)]
 pub struct LockArgs {
+    /// Require hashes for all dependencies installed into isolated build environments.
+    #[arg(
+        long,
+        env = EnvVars::UV_REQUIRE_BUILD_HASHES,
+        overrides_with = "no_require_build_hashes",
+        value_parser = clap::builder::BoolishValueParser::new()
+    )]
+    pub require_build_hashes: bool,
+
+    /// Allow build dependencies without hashes.
+    #[arg(long, overrides_with = "require_build_hashes", hide = true)]
+    pub no_require_build_hashes: bool,
+
     /// Check if the lockfile is up-to-date.
     ///
     /// Asserts that the `uv.lock` would remain unchanged after a resolution. If the lockfile is
