@@ -1,0 +1,59 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 11379,
+        "title": "Slow resolution from Azure DevOps feed",
+        "url": "https://github.com/astral-sh/uv/issues/11379",
+        "state": "open",
+        "reason": "Canonical match: astral-sh/uv#11379 covers Azure Artifacts without PEP 658, ranged GETs that work after redirects, uv's unsupported-range warning, and fallback to streamed wheel metadata."
+      },
+      {
+        "kind": "pull_request",
+        "number": 21347,
+        "title": "Fix wheel metadata reads after redirects",
+        "url": "https://github.com/astral-sh/uv/pull/21347",
+        "state": "open",
+        "reason": "astral-sh/uv#21347 provides a focused integration test reproducing the redirect failure, although its proposed use of the HEAD response URL remains under review."
+      },
+      {
+        "kind": "issue",
+        "number": 18998,
+        "title": "uv's HEAD-based range detection for wheel metadata is inconsistent with RFC 9110 and misclassifies GAR wheel URLs",
+        "url": "https://github.com/astral-sh/uv/issues/18998",
+        "state": "open",
+        "reason": "Adjacent report with the same fallback when PEP 658 is unavailable, but its HEAD response lacks a usable range signal; the present reproduction has a successful redirected HEAD followed by failed range GET redirect handling."
+      },
+      {
+        "kind": "pull_request",
+        "number": 14126,
+        "title": "Support netrc and same-origin credential propagation on index redirects",
+        "url": "https://github.com/astral-sh/uv/pull/14126",
+        "state": "merged",
+        "reason": "Introduced uv's manual redirect wrapper; maintainer analysis on astral-sh/uv#21347 identifies the range reader's loss of that wrapper as the apparent regression path."
+      },
+      {
+        "kind": "pull_request",
+        "number": 3460,
+        "title": "Upgrade `async_http_range_reader` to v0.8.0",
+        "url": "https://github.com/astral-sh/uv/pull/3460",
+        "state": "merged",
+        "reason": "Historical fix preserving the original URL for range GETs because some indexes produce different method-specific signed URLs for HEAD and GET, constraining the proposed fix."
+      },
+      {
+        "kind": "pull_request",
+        "number": 1792,
+        "title": "Stream zip archive when fetching non-range-request metadata",
+        "url": "https://github.com/astral-sh/uv/pull/1792",
+        "state": "merged",
+        "reason": "Establishes that range failure streams until METADATA rather than necessarily saving the complete wheel, although it may still transfer most of the archive."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests. Literal searches covered “range requests,” “range request,” “PEP 658,” “full wheel,” “whole wheels,” “Accept-Ranges,” “Content-Range,” “Azure Artifacts,” and warning/fallback terminology. Conceptual and fix-oriented searches covered lazy wheels, remote wheel metadata, streamed fallback, redirects, authentication middleware, index capability caching, and method-specific signed URLs. Inspected the comment and reference chains around astral-sh/uv#11379, astral-sh/uv#21347, astral-sh/uv#18998, astral-sh/uv#14126, astral-sh/uv#7226, astral-sh/uv#3460, astral-sh/uv#2843, and astral-sh/uv#1792. astral-sh/uv#18998 was ruled out as the canonical duplicate because its failure is HEAD-based capability detection. astral-sh/uv#5073 was ruled out because it concerns generic streamed-fallback performance rather than redirect handling on a range-capable feed."
+  },
+  "type": "duplicate",
+  "type_reason": "astral-sh/uv#11379 remains open and tracks the same Azure Artifacts metadata-resolution fallback: no PEP 658 metadata, working ranged GETs after redirects, and uv treating ranges as unsupported. The new issue adds uv 0.12.7 confirmation and a focused reproduction, but discussion can be centralized in the existing tracker. The underlying behavior is a bug and may be a redirect-handling regression, but an open issue already tracks that regression shape.",
+  "summary": "astral-sh/uv#11379 is the same open Azure redirect/range-metadata problem. astral-sh/uv#21347 adds a direct reproduction and proposed fix, while related history explains why redirect and signed-URL handling require care.",
+  "draft_response": "Thanks for the report. This is already tracked in astral-sh/uv#11379, including the Azure Artifacts redirect path where PEP 658 is unavailable, ranged GETs work, and uv falls back to streaming wheel metadata. The focused reproduction in astral-sh/uv#21347 is useful additional evidence.\n\nLet's centralize the investigation in astral-sh/uv#11379. If you have sanitized uv 0.12.7 trace logs, please add them there with credentials and signed URL parameters removed."
+}
