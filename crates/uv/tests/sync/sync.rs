@@ -142,8 +142,7 @@ fn workspace_build_constraint_hashes() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
       × Failed to build `hash-project @ file://[TEMP_DIR]/`
-      ├─▶ Failed to resolve requirements from `build-system.requires`
-      ├─▶ No solution found when resolving: `hash-backend==1.0.0`
+      ├─▶ Failed to install requirements from `build-system.requires`
       ├─▶ Failed to download `hash-backend==1.0.0`
       ╰─▶ Hash mismatch for `hash-backend==1.0.0`
 
@@ -160,8 +159,7 @@ fn workspace_build_constraint_hashes() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
       × Failed to build `hash-project @ file://[TEMP_DIR]/`
-      ├─▶ Failed to resolve requirements from `build-system.requires`
-      ├─▶ No solution found when resolving: `hash-backend==1.0.0`
+      ├─▶ Failed to install requirements from `build-system.requires`
       ├─▶ Failed to download `hash-backend==1.0.0`
       ╰─▶ Hash mismatch for `hash-backend==1.0.0`
 
