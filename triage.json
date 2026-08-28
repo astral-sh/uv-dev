@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 20792,
+        "title": "Windows antivirus/EDR issues",
+        "url": "https://github.com/astral-sh/uv/issues/20792",
+        "state": "open",
+        "reason": "Canonical match: explicitly names Netskope on Windows and covers uv being quarantined or deleted by AV/EDR software."
+      },
+      {
+        "kind": "issue",
+        "number": 10428,
+        "title": "Doc and install: avoid security issue on Windows",
+        "url": "https://github.com/astral-sh/uv/issues/10428",
+        "state": "open",
+        "reason": "Contains a prior report of Netskope blocking uv as malware on every release, especially x64; its main focus is PowerShell installer blocking."
+      },
+      {
+        "kind": "issue",
+        "number": 10336,
+        "title": "Sign published executables for Windows",
+        "url": "https://github.com/astral-sh/uv/issues/10336",
+        "state": "open",
+        "reason": "Tracks signing Windows releases specifically to reduce antivirus reports."
+      },
+      {
+        "kind": "pull_request",
+        "number": 18280,
+        "title": "Add code signing of release binaries via `cargo-code-sign`",
+        "url": "https://github.com/astral-sh/uv/pull/18280",
+        "state": "open",
+        "reason": "Implements Windows and macOS release signing, but remains open and does not configure production release credentials."
+      }
+    ],
+    "search_scope": "Searched Netskope, versions 0.12.6 and 0.12.7, virus detection/removal, and installation blocking. Conceptual searches covered antivirus/AV, EDR, quarantine, malware, false positives, unsigned executables, SmartScreen, and Windows code signing. Open and closed issues and open, closed, and merged pull requests were searched, followed by candidate comments and referenced chains. astral-sh/uv#20567 was inspected but ruled out because it concerns transient runtime PE-resource locking rather than removal of a release executable."
+  },
+  "type": "duplicate",
+  "type_reason": "astral-sh/uv#20792 already centralizes this Windows AV/EDR problem and explicitly covers Netskope and uv being quarantined or deleted. The reported versions add detail but no distinct regression or failure mode. The evidence does not confirm malware in uv or the detector’s root cause.",
+  "summary": "astral-sh/uv#20792 is the canonical same-problem tracker. astral-sh/uv#10428 contains a prior exact Netskope report, while astral-sh/uv#10336 and astral-sh/uv#18280 track release signing as a related mitigation.",
+  "draft_response": "Thanks for the report. This is covered by astral-sh/uv#20792, which specifically tracks Netskope and cases where Windows AV/EDR software quarantines or deletes uv. Please contact Netskope or your organization’s security administrator first and obtain a vendor support ticket; then add the ticket ID, exact Netskope detection name/event, affected artifact and architecture, and installation method to astral-sh/uv#20792. Windows release signing is tracked separately in astral-sh/uv#10336 and astral-sh/uv#18280, but it is not yet enabled for published releases."
+}
