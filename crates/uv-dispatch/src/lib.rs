@@ -373,7 +373,9 @@ impl BuildContext for BuildDispatch<'_> {
                     .join(", ")
             )
         })?);
-        if let Some(build_requirements) = &self.build_requirements {
+        if build_stack.is_root()
+            && let Some(build_requirements) = &self.build_requirements
+        {
             let mut build_requirements = build_requirements.lock().await;
             build_requirements.extend(requirements.iter().cloned());
             build_requirements.extend(

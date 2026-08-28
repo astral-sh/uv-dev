@@ -8,14 +8,36 @@ use uv_pypi_types::{ResolutionMetadata, VerbatimParsedUrl};
 
 /// Pre-defined [`StaticMetadata`] entries, indexed by [`PackageName`] and [`Version`].
 #[derive(Debug, Clone, Default)]
-pub struct DependencyMetadata(FxHashMap<PackageName, Vec<StaticMetadata>>);
+pub struct DependencyMetadata {
+    entries: FxHashMap<PackageName, Vec<StaticMetadata>>,
+    fallback: FxHashMap<PackageName, Vec<StaticMetadata>>,
+}
 
 impl DependencyMetadata {
     /// Index a set of [`StaticMetadata`] entries by [`PackageName`] and [`Version`].
     pub fn from_entries(entries: impl IntoIterator<Item = StaticMetadata>) -> Self {
         let mut map = Self::default();
         for entry in entries {
-            map.0.entry(entry.name.clone()).or_default().push(entry);
+            map.entries
+                .entry(entry.name.clone())
+                .or_default()
+                .push(entry);
+        }
+        map
+    }
+
+    /// Index a set of [`StaticMetadata`] entries, falling back to an existing set when no entry
+    /// matches the requested package and version.
+    pub fn from_entries_with_fallback(
+        entries: impl IntoIterator<Item = StaticMetadata>,
+        fallback: &Self,
+    ) -> Self {
+        let mut map = Self::from_entries(entries);
+        for entry in fallback.values().cloned() {
+            map.fallback
+                .entry(entry.name.clone())
+                .or_default()
+                .push(entry);
         }
         map
     }
@@ -26,7 +48,17 @@ impl DependencyMetadata {
         package: &PackageName,
         version: Option<&Version>,
     ) -> Option<ResolutionMetadata> {
-        let versions = self.0.get(package)?;
+        Self::get_from(&self.entries, package, version, false)
+            .or_else(|| Self::get_from(&self.fallback, package, version, true))
+    }
+
+    fn get_from(
+        entries: &FxHashMap<PackageName, Vec<StaticMetadata>>,
+        package: &PackageName,
+        version: Option<&Version>,
+        warn_missing: bool,
+    ) -> Option<ResolutionMetadata> {
+        let versions = entries.get(package)?;
 
         if let Some(version) = version {
             // If a specific version was requested, search for an exact match, then a global match.
@@ -40,7 +72,9 @@ impl DependencyMetadata {
                 debug!("Found global metadata entry for `{package}`");
                 metadata
             } else {
-                warn!("No dependency metadata entry found for `{package}=={version}`");
+                if warn_missing {
+                    warn!("No dependency metadata entry found for `{package}=={version}`");
+                }
                 return None;
             };
 
@@ -56,11 +90,15 @@ impl DependencyMetadata {
             // If no version was requested (i.e., it's a direct URL dependency), allow a single
             // versioned match.
             let [metadata] = versions.as_slice() else {
-                warn!("Multiple dependency metadata entries found for `{package}`");
+                if warn_missing {
+                    warn!("Multiple dependency metadata entries found for `{package}`");
+                }
                 return None;
             };
             let Some(version) = metadata.version.clone() else {
-                warn!("No version found in dependency metadata entry for `{package}`");
+                if warn_missing {
+                    warn!("No version found in dependency metadata entry for `{package}`");
+                }
                 return None;
             };
             debug!("Found dependency metadata entry for `{package}` (assuming: `{version}`)");
@@ -78,7 +116,10 @@ impl DependencyMetadata {
 
     /// Retrieve all [`StaticMetadata`] entries.
     pub fn values(&self) -> impl Iterator<Item = &StaticMetadata> {
-        self.0.values().flatten()
+        self.entries
+            .values()
+            .flatten()
+            .chain(self.fallback.values().flatten())
     }
 }
 

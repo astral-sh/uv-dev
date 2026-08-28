@@ -100,6 +100,7 @@ pub fn generate_sdist(
     requires: &[Requirement],
     extras: &BTreeMap<ExtraName, Vec<Requirement>>,
     requires_python: Option<&VersionSpecifiers>,
+    extra_build_requires: &[Requirement],
 ) -> (String, Vec<u8>) {
     let normalized = name.as_dist_info_name();
     let prefix = format!("{normalized}-{version}");
@@ -107,7 +108,14 @@ pub fn generate_sdist(
     let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
     let mut tar = TarEncoder::new(AllowStdIo::new(&mut encoder).compat_write()).builder();
 
-    let pyproject = build_pyproject_toml(name, version, requires, extras, requires_python);
+    let pyproject = build_pyproject_toml(
+        name,
+        version,
+        requires,
+        extras,
+        requires_python,
+        extra_build_requires,
+    );
     add_tar_file(
         &mut tar,
         &format!("{prefix}/pyproject.toml"),
@@ -178,6 +186,7 @@ fn build_pyproject_toml(
     requires: &[Requirement],
     extras: &BTreeMap<ExtraName, Vec<Requirement>>,
     requires_python: Option<&VersionSpecifiers>,
+    extra_build_requires: &[Requirement],
 ) -> String {
     let normalized = name.as_dist_info_name();
     let dependencies = if requires.is_empty() {
@@ -209,11 +218,16 @@ fn build_pyproject_toml(
         }
         optional_dependencies
     };
+    let mut build_requires = String::from("\"hatchling\"");
+    for requirement in extra_build_requires {
+        write!(&mut build_requires, ", \"{requirement}\"")
+            .expect("writing build requirements into a string should succeed");
+    }
 
     formatdoc! {
         r#"
         [build-system]
-        requires = ["hatchling"]
+        requires = [{build_requires}]
         build-backend = "hatchling.build"
 
         [tool.hatch.build.targets.wheel]
@@ -330,6 +344,7 @@ mod tests {
             &requires,
             &BTreeMap::new(),
             Some(&requires_python),
+            &[],
         );
         assert_eq!(filename, "my_package-1.0.0.tar.gz");
 

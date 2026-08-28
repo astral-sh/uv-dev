@@ -102,6 +102,10 @@ pub struct PackageMetadata {
     #[serde(default)]
     pub requires: Vec<Requirement>,
 
+    /// Additional requirements for building a source distribution.
+    #[serde(default)]
+    pub extra_build_requires: Vec<Requirement>,
+
     /// Extra names mapped to their optional dependency requirements.
     #[serde(default)]
     pub extras: BTreeMap<ExtraName, Vec<Requirement>>,
