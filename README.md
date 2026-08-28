@@ -27,6 +27,13 @@ proposed fix is correct for the reporter's live feed. Redirect handling must
 also preserve the method-specific signed-URL behavior fixed by
 astral-sh/uv#3460.
 
+A uv maintainer has now independently reproduced the range-request issue
+against the authenticated Azure feed exercised by the repository's package
+registry CI. This confirms that the failure is present in uv's Azure
+integration and is not limited to the reporter's environment. The maintainer
+did not report additional protocol traces or confirm the proposed root cause,
+so the precise redirect/authentication mechanism and fix remain under review.
+
 ## Public reproduction target
 
 A commenter provided `https://packagefeedproxy.microsoft.io/pypi/simple` as a
