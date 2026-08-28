@@ -1,8 +1,13 @@
+#[cfg(all(feature = "test-universal", feature = "test-git"))]
+use std::process::Command;
+
 use anyhow::Result;
 #[cfg(feature = "test-universal")]
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use indoc::{formatdoc, indoc};
+#[cfg(all(feature = "test-universal", feature = "test-git"))]
+use insta::allow_duplicates;
 use insta::assert_snapshot;
 #[cfg(feature = "test-universal")]
 use serde_json::json;
@@ -574,6 +579,156 @@ fn lock_sdist_git() -> Result<()> {
         "#
         );
     });
+
+    Ok(())
+}
+
+/// Lock an exact commit from a server that rejects requests for unadvertised objects.
+#[cfg(all(feature = "test-universal", feature = "test-git"))]
+#[test]
+fn lock_sdist_git_full_commit_legacy_protocol() -> Result<()> {
+    allow_duplicates! {
+        for protocol in ["0", "1"] {
+            let context = uv_test::test_context!("3.12")
+                .with_filter(("`.*/git(.exe)? rev-parse .*`", "`git rev-parse [...]`"))
+                .with_filter(("exit status", "exit code"));
+
+            let repository = context.temp_dir.child("repository");
+            repository.child("pyproject.toml").write_str(indoc! {r#"
+                [project]
+                name = "example"
+                version = "0.1.0"
+                requires-python = ">=3.12"
+            "#})?;
+
+            Command::new("git")
+                .arg("init")
+                .arg(repository.path())
+                .assert()
+                .success();
+            Command::new("git")
+                .arg("-C")
+                .arg(repository.path())
+                .args(["add", "."])
+                .assert()
+                .success();
+            Command::new("git")
+                .arg("-C")
+                .arg(repository.path())
+                .args([
+                    "-c",
+                    "user.name=ferris",
+                    "-c",
+                    "user.email=ferris@example.com",
+                    "commit",
+                    "-m",
+                    "Initial commit",
+                ])
+                .env("GIT_AUTHOR_DATE", "2000-01-01T00:00:00Z")
+                .env("GIT_COMMITTER_DATE", "2000-01-01T00:00:00Z")
+                .assert()
+                .success();
+
+            let commit = Command::new("git")
+                .arg("-C")
+                .arg(repository.path())
+                .args(["rev-parse", "HEAD"])
+                .output()?;
+            assert!(commit.status.success());
+            let commit = String::from_utf8(commit.stdout)?;
+            let commit = commit.trim();
+
+            Command::new("git")
+                .arg("-C")
+                .arg(repository.path())
+                .args([
+                    "-c",
+                    "user.name=ferris",
+                    "-c",
+                    "user.email=ferris@example.com",
+                    "commit",
+                    "--allow-empty",
+                    "-m",
+                    "Later commit",
+                ])
+                .env("GIT_AUTHOR_DATE", "2000-01-02T00:00:00Z")
+                .env("GIT_COMMITTER_DATE", "2000-01-02T00:00:00Z")
+                .assert()
+                .success();
+            Command::new("git")
+                .arg("-C")
+                .arg(repository.path())
+                .arg("update-ref")
+                .arg(format!("refs/heads/{commit}"))
+                .arg("HEAD")
+                .assert()
+                .success();
+
+            let repository_url = Url::from_directory_path(repository.path())
+                .map_err(|()| anyhow::anyhow!("failed to convert repository path to file URL"))?;
+            let repository_url = repository_url.as_str().trim_end_matches('/');
+
+            let pyproject_toml = context.temp_dir.child("pyproject.toml");
+            pyproject_toml.write_str(&formatdoc! {r#"
+                [project]
+                name = "project"
+                version = "0.1.0"
+                requires-python = ">=3.12"
+                dependencies = ["example"]
+
+                [tool.uv.sources]
+                example = {{ git = "{repository_url}", rev = "{commit}" }}
+            "#})?;
+
+            uv_snapshot!(context.filters(), context
+                .lock()
+                .arg("--offline")
+                .env("GIT_CONFIG_COUNT", "1")
+                .env("GIT_CONFIG_KEY_0", "protocol.version")
+                .env("GIT_CONFIG_VALUE_0", protocol), @"
+            exit_code: 0 (success)
+            ----- stderr -----
+            Resolved 2 packages in [TIME]
+            ");
+
+            let lock = context.read("uv.lock");
+            assert!(lock.contains(&format!("?rev={commit}#{commit}")));
+
+            let missing = "79a935a7a1a0ad6d0bdf72dce0e16cb0a24a1b3b";
+            pyproject_toml.write_str(&formatdoc! {r#"
+                [project]
+                name = "project"
+                version = "0.1.0"
+                requires-python = ">=3.12"
+                dependencies = ["example"]
+
+                [tool.uv.sources]
+                example = {{ git = "{repository_url}", rev = "{missing}" }}
+            "#})?;
+
+            uv_snapshot!(context.filters(), context
+                .lock()
+                .arg("--offline")
+                .env("GIT_CONFIG_COUNT", "1")
+                .env("GIT_CONFIG_KEY_0", "protocol.version")
+                .env("GIT_CONFIG_VALUE_0", protocol), @"
+            exit_code: 1 (failure)
+            ----- stderr -----
+              × Failed to download and build `example @ git+file://[TEMP_DIR]/repository@79a935a7a1a0ad6d0bdf72dce0e16cb0a24a1b3b`
+              ├─▶ Git operation failed
+              ├─▶ failed to find commit `79a935a7a1a0ad6d0bdf72dce0e16cb0a24a1b3b`
+              ╰─▶ process didn't exit successfully: `git rev-parse [...]` (exit code: 128)
+                  --- stdout
+                  79a935a7a1a0ad6d0bdf72dce0e16cb0a24a1b3b^0
+
+                  --- stderr
+                  fatal: ambiguous argument '79a935a7a1a0ad6d0bdf72dce0e16cb0a24a1b3b^0': unknown revision or path not in the working tree.
+                  Use '--' to separate paths from revisions, like this:
+                  'git <command> [<revision>...] -- [<file>...]'
+            ");
+        }
+        Ok::<(), anyhow::Error>(())
+    }?;
 
     Ok(())
 }

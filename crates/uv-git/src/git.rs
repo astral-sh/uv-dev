@@ -810,6 +810,19 @@ fn fetch(
             }
         }
     };
+    let result = match (reference, result) {
+        (ReferenceOrOid::Oid(rev), Err(error)) if is_unadvertised_object_error(&error) => {
+            debug!(
+                "Server rejected a fetch for unadvertised commit `{rev}`; fetching advertised refs"
+            );
+            let refspecs = [
+                String::from("+refs/heads/*:refs/remotes/origin/*"),
+                String::from("+HEAD:refs/remotes/origin/HEAD"),
+            ];
+            fetch_with_cli(repo, remote_url, &refspecs, true, disable_ssl, offline)
+        }
+        (_, result) => result,
+    };
     match reference {
         // With the default branch, adding context is confusing
         ReferenceOrOid::Reference(GitReference::DefaultBranch) => result,
@@ -868,6 +881,17 @@ fn fetch_with_cli(
     })?;
 
     Ok(())
+}
+
+/// Returns `true` if Git rejected an exact object fetch because the object was not advertised.
+fn is_unadvertised_object_error(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<ProcessError>()
+        .and_then(|error| error.stderr.as_deref())
+        .and_then(|stderr| str::from_utf8(stderr).ok())
+        .is_some_and(|stderr| {
+            stderr.contains("Server does not allow request for unadvertised object")
+        })
 }
 
 /// A global cache of the `git lfs` command.
