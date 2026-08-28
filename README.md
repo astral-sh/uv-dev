@@ -6,7 +6,7 @@ Classification: duplicate
 
 ## Summary
 
-The reporter cannot install uv 0.12.6 or 0.12.7 on Windows 11 because Netskope detects and removes it as a virus. They report that the 0.12.5 installer works, providing a potentially useful version boundary. The report does not identify the installation method, downloaded artifact, architecture, Netskope detection name, or vendor support case.
+The reporter cannot install uv 0.12.6 or 0.12.7 on Windows 11 because Netskope detects and removes it as a virus. A uv maintainer confirms that the detection is a false positive. The reporter states that the 0.12.5 installer works, providing a potentially useful version boundary. The report does not identify the installation method, downloaded artifact, architecture, Netskope detection name, or vendor support case.
 
 astral-sh/uv#20792 is the canonical same-problem tracker: it explicitly names Netskope, applies to Windows AV/EDR interference, and includes uv being quarantined or deleted. astral-sh/uv#10428 contains an earlier Netskope report affecting recurring uv releases. Windows release signing, a relevant repository-side mitigation, is tracked in astral-sh/uv#10336 and the open implementation astral-sh/uv#18280.
 
@@ -18,7 +18,7 @@ Thanks for the report. This is covered by astral-sh/uv#20792, which specifically
 
 This is a duplicate of astral-sh/uv#20792. That open tracking issue already covers the same underlying behavior, the same Windows environment category, the same AV/EDR vendor, and the same quarantine/deletion outcome. The reported transition from a working 0.12.5 installer to blocked 0.12.6 and 0.12.7 installers is useful for investigation, but it does not establish a different failure mode that needs a separate discussion.
 
-The repository evidence establishes that Netskope is interfering with installation by removing or blocking uv. A commenter attributes this to the executables being unsigned and the publisher therefore being unavailable for exclusion, but provides no supporting diagnostic or vendor evidence. The discussion does not establish that the uv artifacts contain malware, that unsigned binaries caused this particular detection, or that signing will resolve it. Those points remain unconfirmed without the exact detection details and vendor analysis.
+The repository evidence establishes that Netskope is interfering with installation by removing or blocking uv, and a uv maintainer confirms that this is a false positive rather than malware in the uv artifacts. A commenter attributes the detection to the executables being unsigned and the publisher therefore being unavailable for exclusion, but provides no supporting diagnostic or vendor evidence. The discussion does not establish that unsigned binaries caused this particular detection or that signing will resolve it. Those points remain unconfirmed without the exact detection details and vendor analysis.
 
 ## Related
 
