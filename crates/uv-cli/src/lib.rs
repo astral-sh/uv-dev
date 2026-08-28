@@ -1765,6 +1765,15 @@ pub struct PipCompileArgs {
     #[arg(long, overrides_with("generate_hashes"), hide = true)]
     pub no_generate_hashes: bool,
 
+    /// Include the build dependencies of any source distributions in the output.
+    ///
+    /// This option is experimental and may change without warning.
+    #[arg(long, overrides_with("no_include_build_dependencies"))]
+    pub include_build_dependencies: bool,
+
+    #[arg(long, overrides_with("include_build_dependencies"), hide = true)]
+    pub no_include_build_dependencies: bool,
+
     /// Don't build source distributions.
     ///
     /// When enabled, uv will reuse cached wheels from previously built source distributions, but
