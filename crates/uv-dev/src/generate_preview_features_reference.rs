@@ -123,7 +123,6 @@ mod tests {
         - `extra-build-dependencies`: Allows specifying additional dependencies for package builds.
         - `format-command`: Allows using `uv format`.
         - `gcs-endpoint`: Allows signing requests to configured Google Cloud Storage endpoints.
-        - `pip-build-dependencies`: Allows including build dependencies in `uv pip compile` output.
         - `index-by-name`: Allows selecting configured package indexes by name with `--index` and `--default-index`.
         - `index-exclude-newer`: Allows setting `exclude-newer` on configured package indexes.
         - `index-hash-algorithm`: Allows requiring a hash algorithm for configured package indexes.
@@ -140,6 +139,7 @@ mod tests {
         - `package-conflicts`: Allows defining workspace conflicts at the package level.
         - `packaged-init`: Makes `uv init` create a packaged application with a `src/` layout, build system, and script
           entry point by default.
+        - `pip-build-dependencies`: Allows including build dependencies in `uv pip compile` output.
         - `project-directory-must-exist`: Rejects an invalid `--project` path instead of warning and continuing. Except for `uv init`,
           the path must already exist as a directory or point to a `pyproject.toml` file. This feature
           takes effect before configuration is loaded.
