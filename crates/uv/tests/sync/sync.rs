@@ -125,8 +125,7 @@ fn workspace_build_constraint_hashes() -> Result<()> {
     ----- stderr -----
     Building wheel...
     error: Failed to build `[TEMP_DIR]/`
-      Caused by: Failed to resolve requirements from `build-system.requires`
-      Caused by: No solution found when resolving: `hash-backend==1.0.0`
+      Caused by: Failed to install requirements from `build-system.requires`
       Caused by: Failed to download `hash-backend==1.0.0`
       Caused by: Hash mismatch for `hash-backend==1.0.0`
 
