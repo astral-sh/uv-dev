@@ -3989,7 +3989,7 @@ fn preview_features() {
     +            AddBounds,
     +            PackageConflicts,
     +            ExtraBuildDependencies,
-    +            IncludeBuildDependencies,
+    +            PipBuildDependencies,
     +            DetectModuleConflicts,
     +            FormatCommand,
     +            NativeAuth,
