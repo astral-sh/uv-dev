@@ -72,6 +72,7 @@ jobs:
     if: ${{ needs.plan.outputs.test-code == 'true' }}
     uses: $/.github/workflows/check-generated-files.yml
     with:
+      base-sha: ${{ github.event.pull_request.base.sha || github.event.before }}
       schema-changed: ${{ needs.plan.outputs.check-schema }}
       save-rust-cache: ${{ needs.plan.outputs.save-rust-cache }}
 
