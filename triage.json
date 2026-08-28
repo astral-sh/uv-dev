@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 8758,
+        "title": "Pinning package to index without fallback",
+        "url": "https://github.com/astral-sh/uv/issues/8758",
+        "state": "open",
+        "reason": "Canonical match: astral-sh/uv#8758 requests package-to-index pinning without public fallback, and maintainer comments explicitly identify tool installs as the unresolved context."
+      },
+      {
+        "kind": "issue",
+        "number": 6772,
+        "title": "`[tool.uv.sources]` can't be used as `[sources]` in `uv.toml`",
+        "url": "https://github.com/astral-sh/uv/issues/6772",
+        "state": "open",
+        "reason": "Directly tracks the proposed sources-in-uv.toml solution, though its discussion is broader and largely project/lockfile-focused."
+      },
+      {
+        "kind": "issue",
+        "number": 15529,
+        "title": "`uv tool install /path/to/dir` should read `pyproject.toml` configuration in `/path/to/dir`",
+        "url": "https://github.com/astral-sh/uv/issues/15529",
+        "state": "open",
+        "reason": "Directly tracks the proposed local-path behavior, but not registry-installed tools or CLI source mappings."
+      },
+      {
+        "kind": "pull_request",
+        "number": 17455,
+        "title": "Support referencing indexes by name via `--index` and `--default-index`",
+        "url": "https://github.com/astral-sh/uv/pull/17455",
+        "state": "merged",
+        "reason": "Adds CLI selection of configured indexes by name, but does not bind individual packages to different indexes."
+      }
+    ],
+    "search_scope": "Searched literal terms for sources in uv.toml, uvx/tool private and multiple indexes, and pinning without fallback; conceptual terms for first-index behavior, dependency confusion, proxy forwarding, explicit indexes, name collisions, and transitive private dependencies; and open, closed, and merged pull requests for relevant fixes. Inspected candidate discussions and reference chains. astral-sh/uv#9440 was plausible but less tool-specific than astral-sh/uv#8758. astral-sh/uv#8253 concerns project-level transitive sources, while astral-sh/uv#18053 concerns splitting project sources and index declarations; neither tracks global tool routing."
+  },
+  "type": "duplicate",
+  "type_reason": "astral-sh/uv#8758 already tracks the same unresolved tool package-to-index pinning capability and dependency-confusion risk. The GitLab forwarding topology is a more specific trigger and adds design alternatives, but the discussion can be centralized there.",
+  "summary": "astral-sh/uv#8758 is the canonical tracker. astral-sh/uv#6772 and astral-sh/uv#15529 cover proposed interfaces, while astral-sh/uv#17455 is only a partial improvement.",
+  "draft_response": "Thanks for the detailed GitLab forwarding example. The missing ability to pin package names to specific indexes for tool installs is already tracked in astral-sh/uv#8758, including preventing fallback to a same-named public package. Sources in uv.toml are tracked in astral-sh/uv#6772, and reading a local tool target’s project configuration is tracked in astral-sh/uv#15529. astral-sh/uv#17455 allows selecting a configured index by name, but it does not create per-package mappings and therefore does not address dependencies spread across forwarding indexes. Let’s centralize the tool-pinning discussion in astral-sh/uv#8758; this multi-index GitLab reproduction is useful additional context there."
+}
