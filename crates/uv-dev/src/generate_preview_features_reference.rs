@@ -225,6 +225,11 @@ mod tests {
         identify the endpoint; authentication uses `GOOGLE_APPLICATION_CREDENTIALS` or Application
         Default Credentials.
 
+        ### `include-build-dependencies` {#include-build-dependencies}
+
+        The `--include-build-dependencies` option includes the build dependencies of source
+        distributions in `uv pip compile` requirements output.
+
         ### `index-by-name` {#index-by-name}
 
         The `--index` and `--default-index` options accept the names of configured package indexes

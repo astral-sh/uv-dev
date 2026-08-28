@@ -20,11 +20,12 @@ use uv_configuration::{
 };
 use uv_configuration::{KeyringProviderType, TargetTriple};
 use uv_dispatch::{BuildDispatch, SharedState};
-use uv_distribution::LoweredExtraBuildDependencies;
+use uv_distribution::{DistributionDatabase, LoweredExtraBuildDependencies};
 use uv_distribution_types::{
-    ConfigSettings, DependencyMetadata, ExtraBuildVariables, HashCollection, Index, IndexLocations,
-    MinimumLibcVersion, NameRequirementSpecification, Origin, PackageConfigSettings, Requirement,
-    RequiresPython, Verbatim,
+    ConfigSettings, DependencyMetadata, Dist, ExtraBuildVariables, HashCollection, Identifier,
+    Index, IndexLocations, MinimumLibcVersion, NameRequirementSpecification, Origin,
+    PackageConfigSettings, Requirement, RequiresPython, ResolvedDist,
+    UnresolvedRequirementSpecification, Verbatim,
 };
 use uv_fs::{CWD, Simplified};
 use uv_git::ResolvedRepositoryReference;
@@ -91,6 +92,7 @@ pub async fn pip_compile(
     upgrade: Upgrade,
     generate_hashes: bool,
     build_hash_checking: HashCheckingMode,
+    include_build_dependencies: bool,
     no_emit_packages: Vec<PackageName>,
     include_extras: bool,
     include_markers: bool,
@@ -159,6 +161,23 @@ pub async fn pip_compile(
             PipCompileFormat::RequirementsTxt
         }
     });
+
+    if include_build_dependencies && universal {
+        return Err(anyhow!(
+            "`--include-build-dependencies` is not supported with `--universal`"
+        ));
+    }
+    if include_build_dependencies && matches!(format, PipCompileFormat::PylockToml) {
+        return Err(anyhow!(
+            "`--include-build-dependencies` is only supported for `requirements.txt` output"
+        ));
+    }
+    if include_build_dependencies && !preview.is_enabled(PreviewFeature::IncludeBuildDependencies) {
+        warn_user!(
+            "The `--include-build-dependencies` option is experimental and may change without warning. Pass `--preview-features {}` to disable this warning.",
+            PreviewFeature::IncludeBuildDependencies
+        );
+    }
 
     // If the user is exporting to PEP 751, ensure the filename matches the specification.
     if matches!(format, PipCompileFormat::PylockToml) {
@@ -246,7 +265,7 @@ pub async fn pip_compile(
         ));
     }
 
-    let constraints = constraints
+    let constraints: Vec<NameRequirementSpecification> = constraints
         .iter()
         .cloned()
         .chain(
@@ -542,7 +561,8 @@ pub async fn pip_compile(
         workspace_cache,
         concurrency.clone(),
         preview,
-    );
+    )
+    .with_build_requirement_capture(include_build_dependencies);
 
     if universal
         && minimum_libc_version.is_some()
@@ -570,6 +590,23 @@ pub async fn pip_compile(
             None
         })
         .build();
+
+    // Save the original inputs so discovered build requirements can be resolved together with the
+    // runtime requirements without changing the default compile path.
+    let build_resolution_inputs = include_build_dependencies.then(|| {
+        (
+            requirements.clone(),
+            constraints.clone(),
+            overrides.clone(),
+            override_dependencies.clone(),
+            excludes.clone(),
+            source_trees.clone(),
+            project.clone(),
+            preferences.clone(),
+            python_requirement.clone(),
+            options.clone(),
+        )
+    });
 
     // Resolve the requirements.
     let mut resolution = match uv_resolve_operations::resolve(
@@ -610,6 +647,107 @@ pub async fn pip_compile(
             return Err(UvError::from(err).into());
         }
     };
+
+    if let Some((
+        mut requirements,
+        constraints,
+        overrides,
+        override_dependencies,
+        excludes,
+        source_trees,
+        project,
+        preferences,
+        python_requirement,
+        options,
+    )) = build_resolution_inputs
+    {
+        // The initial resolver may build candidates that are not selected. Only include build
+        // requirements rediscovered while probing distributions in the final resolution.
+        build_dispatch.take_build_requirements().await;
+
+        let database = DistributionDatabase::new(
+            &client,
+            &build_dispatch,
+            concurrency.downloads_semaphore.clone(),
+        );
+        let mut seen_distributions = FxHashSet::default();
+        let mut seen_requirements = FxHashSet::default();
+
+        loop {
+            for distribution in resolution.distributions() {
+                let ResolvedDist::Installable { dist, .. } = distribution else {
+                    continue;
+                };
+                let Dist::Source(source) = dist.as_ref() else {
+                    continue;
+                };
+                if !seen_distributions.insert(source.distribution_id()) {
+                    continue;
+                }
+
+                database
+                    .resolve_build_requirements(source, hasher.archive_policy(source))
+                    .await?;
+            }
+
+            let previous_len = requirements.len();
+            requirements.extend(
+                build_dispatch
+                    .take_build_requirements()
+                    .await
+                    .into_iter()
+                    .filter(|requirement| seen_requirements.insert(requirement.clone()))
+                    .map(UnresolvedRequirementSpecification::from),
+            );
+
+            if requirements.len() == previous_len {
+                break;
+            }
+
+            resolution = match uv_resolve_operations::resolve(
+                requirements.clone(),
+                constraints.clone(),
+                overrides.clone(),
+                override_dependencies.clone(),
+                excludes.clone(),
+                source_trees.clone(),
+                project.clone(),
+                BTreeMap::default(),
+                &extras,
+                &groups,
+                preferences.clone(),
+                None,
+                &hasher,
+                &Reinstall::None,
+                &upgrade,
+                tags.as_deref(),
+                resolver_env.clone(),
+                python_requirement.clone(),
+                interpreter.markers(),
+                Conflicts::empty(),
+                &client,
+                &flat_index,
+                &top_level_index,
+                &build_dispatch,
+                &concurrency,
+                options.clone(),
+                None,
+                Box::new(DefaultResolveLogger),
+                printer,
+            )
+            .await
+            {
+                Ok((resolution, _)) => resolution,
+                Err(err) => {
+                    return Err(UvError::from(err).into());
+                }
+            };
+
+            // As above, builds performed while considering rejected candidates must not become
+            // direct requirements in the next pass.
+            build_dispatch.take_build_requirements().await;
+        }
+    }
 
     if generate_hashes && preview.is_enabled(PreviewFeature::ArtifactHashFiltering) {
         resolution.retain_allowed_distribution_hashes(&build_options);
