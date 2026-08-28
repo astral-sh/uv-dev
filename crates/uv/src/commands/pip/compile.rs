@@ -8,7 +8,7 @@ use std::str::FromStr;
 use anyhow::{Result, anyhow};
 use itertools::Itertools;
 use owo_colors::OwoColorize;
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::debug;
 
 use uv_cache::Cache;
@@ -21,9 +21,9 @@ use uv_configuration::{KeyringProviderType, TargetTriple};
 use uv_dispatch::{BuildDispatch, SharedState};
 use uv_distribution::{DistributionDatabase, LoweredExtraBuildDependencies};
 use uv_distribution_types::{
-    ConfigSettings, DependencyMetadata, Dist, ExtraBuildVariables, HashGeneration, Identifier,
-    Index, IndexLocations, NameRequirementSpecification, Origin, PackageConfigSettings,
-    Requirement, RequiresPython, ResolvedDist, UnresolvedRequirementSpecification, Verbatim,
+    ConfigSettings, DependencyMetadata, Dist, DistributionId, ExtraBuildVariables, HashGeneration,
+    Identifier, Index, IndexLocations, NameRequirementSpecification, Origin, PackageConfigSettings,
+    Requirement, RequiresPython, ResolvedDist, StaticMetadata, Verbatim,
 };
 use uv_fs::{CWD, Simplified};
 use uv_git::ResolvedRepositoryReference;
@@ -155,6 +155,11 @@ pub(crate) async fn pip_compile(
     if include_build_dependencies && universal {
         return Err(anyhow!(
             "`--include-build-dependencies` is not supported with `--universal`"
+        ));
+    }
+    if include_build_dependencies && matches!(dependency_mode, DependencyMode::Direct) {
+        return Err(anyhow!(
+            "`--include-build-dependencies` is not supported with `--no-deps`"
         ));
     }
     if include_build_dependencies && matches!(format, PipCompileFormat::PylockToml) {
@@ -376,7 +381,7 @@ pub(crate) async fn pip_compile(
     // If we're resolving against a different Python version, use a separate index. Source
     // distributions will be built against the installed version, and so the index may contain
     // different package priorities than in the top-level resolution.
-    let top_level_index = if python_version.is_some() {
+    let mut top_level_index = if python_version.is_some() {
         InMemoryIndex::default()
     } else {
         state.index().clone()
@@ -547,7 +552,7 @@ pub(crate) async fn pip_compile(
         &index_locations,
         &flat_index,
         &dependency_metadata,
-        state,
+        state.clone(),
         index_strategy,
         &config_settings,
         &config_settings_package,
@@ -558,9 +563,9 @@ pub(crate) async fn pip_compile(
         &build_options,
         &build_hashes,
         exclude_newer.clone(),
-        sources,
+        sources.clone(),
         SourceTreeEditablePolicy::Project,
-        workspace_cache,
+        workspace_cache.clone(),
         concurrency.clone(),
         preview,
     )
@@ -637,7 +642,7 @@ pub(crate) async fn pip_compile(
     };
 
     if let Some((
-        mut requirements,
+        requirements,
         constraints,
         overrides,
         override_dependencies,
@@ -658,39 +663,94 @@ pub(crate) async fn pip_compile(
             &build_dispatch,
             concurrency.downloads_semaphore.clone(),
         );
-        let mut seen_distributions = FxHashSet::default();
-        let mut seen_requirements = FxHashSet::default();
+        let base_dependency_metadata = dependency_metadata.clone();
+        let mut build_dependency_metadata: FxHashMap<DistributionId, StaticMetadata> =
+            FxHashMap::default();
 
         loop {
-            for distribution in resolution.distributions() {
-                let ResolvedDist::Installable { dist, .. } = distribution else {
-                    continue;
-                };
-                let Dist::Source(source) = dist.as_ref() else {
-                    continue;
-                };
-                if !seen_distributions.insert(source.distribution_id()) {
+            let selected_sources = resolution
+                .distributions()
+                .filter_map(|distribution| {
+                    let ResolvedDist::Installable { dist, .. } = distribution else {
+                        return None;
+                    };
+                    let Dist::Source(source) = dist.as_ref() else {
+                        return None;
+                    };
+                    Some(source)
+                })
+                .collect::<Vec<_>>();
+            let mut changed = false;
+
+            for source in selected_sources {
+                let distribution = source.distribution_id();
+                if build_dependency_metadata.contains_key(&distribution) {
                     continue;
                 }
 
-                database
+                let archive = database
                     .resolve_build_requirements(source, hasher.get(source))
                     .await?;
+                let build_requirements = build_dispatch.take_build_requirements().await;
+                let metadata = archive.metadata;
+                build_dependency_metadata.insert(
+                    distribution,
+                    StaticMetadata {
+                        name: metadata.name,
+                        version: Some(metadata.version),
+                        requires_dist: metadata
+                            .requires_dist
+                            .into_vec()
+                            .into_iter()
+                            .chain(build_requirements)
+                            .map(Into::into)
+                            .collect(),
+                        requires_python: metadata.requires_python,
+                        provides_extra: metadata.provides_extra,
+                    },
+                );
+                changed = true;
             }
 
-            let previous_len = requirements.len();
-            requirements.extend(
-                build_dispatch
-                    .take_build_requirements()
-                    .await
-                    .into_iter()
-                    .filter(|requirement| seen_requirements.insert(requirement.clone()))
-                    .map(UnresolvedRequirementSpecification::from),
-            );
-
-            if requirements.len() == previous_len {
+            if !changed {
                 break;
             }
+
+            let dependency_metadata = DependencyMetadata::from_entries_with_fallback(
+                build_dependency_metadata.values().cloned(),
+                &base_dependency_metadata,
+            );
+            let resolution_state = state.fork();
+            top_level_index = if python_version.is_some() {
+                InMemoryIndex::default()
+            } else {
+                resolution_state.index().clone()
+            };
+            let resolution_dispatch = BuildDispatch::new(
+                &client,
+                &cache,
+                &build_constraints,
+                &interpreter,
+                &index_locations,
+                &flat_index,
+                &dependency_metadata,
+                resolution_state,
+                index_strategy,
+                &config_settings,
+                &config_settings_package,
+                types_build_isolation,
+                &extra_build_requires,
+                extra_build_variables,
+                link_mode,
+                &build_options,
+                &build_hashes,
+                exclude_newer.clone(),
+                sources.clone(),
+                SourceTreeEditablePolicy::Project,
+                workspace_cache.clone(),
+                concurrency.clone(),
+                preview,
+            );
 
             resolution = match operations::resolve(
                 requirements.clone(),
@@ -716,7 +776,7 @@ pub(crate) async fn pip_compile(
                 &client,
                 &flat_index,
                 &top_level_index,
-                &build_dispatch,
+                &resolution_dispatch,
                 &concurrency,
                 options.clone(),
                 Box::new(DefaultResolveLogger),
@@ -731,10 +791,6 @@ pub(crate) async fn pip_compile(
                         .map_or(Ok(ExitStatus::Failure), |err| Err(err.into()));
                 }
             };
-
-            // As above, builds performed while considering rejected candidates must not become
-            // direct requirements in the next pass.
-            build_dispatch.take_build_requirements().await;
         }
     }
 

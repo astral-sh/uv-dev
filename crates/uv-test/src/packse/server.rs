@@ -154,6 +154,7 @@ fn build_server_index(scenario: &Scenario) -> ServerIndex {
                     &meta.requires,
                     &meta.extras,
                     meta.requires_python.as_ref(),
+                    &meta.extra_build_requires,
                 );
                 let sha256 = sha256_hex(&bytes);
                 files.insert(filename.clone(), FileData::Bytes(bytes.into()));

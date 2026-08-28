@@ -191,13 +191,12 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         &self,
         source: &SourceDist,
         hashes: HashPolicy<'_>,
-    ) -> Result<(), Error> {
+    ) -> Result<ArchiveMetadata, Error> {
         SourceDistributionBuilder::new(self.build_context)
             .with_build_requirements()
             .download_and_build_metadata(&BuildableSource::Dist(source), hashes, &self.client)
             .boxed_local()
-            .await?;
-        Ok(())
+            .await
     }
 
     /// Fetch a wheel from the cache or download it from the index.

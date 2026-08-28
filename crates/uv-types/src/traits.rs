@@ -332,6 +332,11 @@ impl BuildStack {
         self.0.contains(id)
     }
 
+    /// Return `true` if the stack contains only the distribution currently being built.
+    pub fn is_root(&self) -> bool {
+        self.0.len() == 1
+    }
+
     /// Push a package onto the stack.
     pub fn insert(&mut self, id: DistributionId) -> bool {
         self.0.insert(id)
