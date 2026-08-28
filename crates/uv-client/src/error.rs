@@ -364,6 +364,28 @@ impl Error {
         false
     }
 
+    /// Returns `true` if a range read failed while requesting or receiving bytes.
+    ///
+    /// Such failures can be specific to an artifact or its signed URL and do not establish that
+    /// the entire index lacks range support.
+    pub(crate) fn is_http_range_request_failure(&self) -> bool {
+        let range_error = match &*self.kind {
+            ErrorKind::AsyncHttpRangeReader(_, err) => Some(err),
+            ErrorKind::Zip(_, ZipError::UpstreamReadError(err)) => err
+                .get_ref()
+                .and_then(|err| err.downcast_ref::<AsyncHttpRangeReaderError>()),
+            _ => None,
+        };
+        matches!(
+            range_error,
+            Some(
+                AsyncHttpRangeReaderError::HttpError(_)
+                    | AsyncHttpRangeReaderError::TransportError(_)
+                    | AsyncHttpRangeReaderError::IoError(_)
+            )
+        )
+    }
+
     /// Returns `true` if the error is due to the server not supporting HTTP streaming. Most
     /// commonly, this is due to serving ZIP files with features that are incompatible with
     /// streaming, like data descriptors.
