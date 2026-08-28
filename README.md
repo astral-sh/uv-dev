@@ -27,6 +27,21 @@ proposed fix is correct for the reporter's live feed. Redirect handling must
 also preserve the method-specific signed-URL behavior fixed by
 astral-sh/uv#3460.
 
+## Public reproduction target
+
+A commenter provided `https://packagefeedproxy.microsoft.io/pypi/simple` as a
+public feed that maintainers can use to investigate without private Azure
+Artifacts credentials. The commenter reports that this feed does not publish
+PEP 658 metadata and should support range requests. Those capabilities have
+not yet been independently verified in the issue, so the feed is a candidate
+reproduction target rather than a confirmed reproduction.
+
+Testing should establish the redirect chain and HEAD/ranged-GET responses,
+then check whether a cache-disabled resolution on uv 0.12.7 emits the
+unsupported-range warning or streams wheel metadata. Any trace retained in
+the handoff should remove signed URL parameters even though the starting feed
+is public.
+
 ## Draft response
 
 Thanks for the report. This is already tracked in astral-sh/uv#11379,
