@@ -123,7 +123,7 @@ mod tests {
         - `extra-build-dependencies`: Allows specifying additional dependencies for package builds.
         - `format-command`: Allows using `uv format`.
         - `gcs-endpoint`: Allows signing requests to configured Google Cloud Storage endpoints.
-        - `include-build-dependencies`: Allows including build dependencies in `uv pip compile` output.
+        - `pip-build-dependencies`: Allows including build dependencies in `uv pip compile` output.
         - `index-by-name`: Allows selecting configured package indexes by name with `--index` and `--default-index`.
         - `index-exclude-newer`: Allows setting `exclude-newer` on configured package indexes.
         - `index-hash-algorithm`: Allows requiring a hash algorithm for configured package indexes.
