@@ -613,6 +613,12 @@ impl ResolverOutput {
         self.base_dists().next().is_none()
     }
 
+    /// Return the selected distribution for each package in the resolution.
+    pub fn distributions(&self) -> impl Iterator<Item = &ResolvedDist> {
+        self.base_dists()
+            .map(|(_, distribution)| &distribution.dist)
+    }
+
     /// Retain registry hashes only for artifacts permitted by package-specific build options.
     ///
     /// All available wheel hashes remain eligible when source builds are disabled so the
