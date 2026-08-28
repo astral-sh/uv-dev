@@ -324,6 +324,7 @@ fn pip_compile_baseline() {
             no_header: false,
             custom_compile_command: None,
             generate_hashes: false,
+            include_build_dependencies: false,
             config_setting: ConfigSettings(
                 {},
             ),
@@ -721,6 +722,7 @@ fn pip_install_baseline() {
             no_header: false,
             custom_compile_command: None,
             generate_hashes: false,
+            include_build_dependencies: false,
             config_setting: ConfigSettings(
                 {},
             ),
@@ -1314,9 +1316,9 @@ fn resolve_uv_toml() -> anyhow::Result<()> {
              custom_compile_command: None,
     -        generate_hashes: false,
     +        generate_hashes: true,
+             include_build_dependencies: false,
              config_setting: ConfigSettings(
                  {},
-             ),
     ...
     "#
     );
@@ -1353,9 +1355,9 @@ fn resolve_uv_toml() -> anyhow::Result<()> {
              custom_compile_command: None,
     -        generate_hashes: true,
     +        generate_hashes: false,
+             include_build_dependencies: false,
              config_setting: ConfigSettings(
                  {},
-             ),
     ...
     "
     );
@@ -1469,9 +1471,9 @@ fn resolve_pyproject_toml() -> anyhow::Result<()> {
              custom_compile_command: None,
     -        generate_hashes: false,
     +        generate_hashes: true,
+             include_build_dependencies: false,
              config_setting: ConfigSettings(
                  {},
-             ),
     ...
     "#
     );
@@ -2047,9 +2049,9 @@ fn resolve_user_configuration() -> anyhow::Result<()> {
              custom_compile_command: None,
     -        generate_hashes: false,
     +        generate_hashes: true,
+             include_build_dependencies: false,
              config_setting: ConfigSettings(
                  {},
-             ),
     ...
     "
     );
@@ -2385,9 +2387,9 @@ fn resolve_both() -> anyhow::Result<()> {
              custom_compile_command: None,
     -        generate_hashes: false,
     +        generate_hashes: true,
+             include_build_dependencies: false,
              config_setting: ConfigSettings(
                  {},
-             ),
     ...
              reinstall: None,
          },
@@ -2520,9 +2522,9 @@ fn resolve_both_special_fields() -> anyhow::Result<()> {
              custom_compile_command: None,
     -        generate_hashes: false,
     +        generate_hashes: true,
+             include_build_dependencies: false,
              config_setting: ConfigSettings(
                  {},
-             ),
     ...
              reinstall: None,
          },
@@ -2865,9 +2867,9 @@ fn resolve_config_file() -> anyhow::Result<()> {
              custom_compile_command: None,
     -        generate_hashes: false,
     +        generate_hashes: true,
+             include_build_dependencies: false,
              config_setting: ConfigSettings(
                  {},
-             ),
     ...
     "#
     );
@@ -3986,6 +3988,7 @@ fn preview_features() {
     +            AddBounds,
     +            PackageConflicts,
     +            ExtraBuildDependencies,
+    +            IncludeBuildDependencies,
     +            DetectModuleConflicts,
     +            FormatCommand,
     +            NativeAuth,
