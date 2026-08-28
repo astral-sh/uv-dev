@@ -1,6 +1,9 @@
 on:
   workflow_call:
     inputs:
+      base-sha:
+        required: false
+        type: string
       schema-changed:
         required: true
         type: string
@@ -27,6 +30,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0
           persist-credentials: false
       - name: "Install uv"
         uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
@@ -39,6 +43,11 @@ jobs:
           save-if: ${{ inputs.save-rust-cache == 'true' }}
       - name: "Generate all"
         run: cargo dev generate-all --mode dry-run
+      - name: "Check environment variable annotations"
+        if: ${{ inputs.base-sha != '' }}
+        run: cargo dev check-env-var-annotations --base "$BASE_SHA"
+        env:
+          BASE_SHA: ${{ inputs.base-sha }}
       - name: "Check sysconfig mappings"
         run: cargo dev generate-sysconfig-metadata --mode check
       - name: "Install Rustfmt"

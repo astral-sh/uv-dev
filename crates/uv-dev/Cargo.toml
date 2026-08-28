@@ -57,6 +57,7 @@ schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { version = "0.9.34", default-features = false }
+syn = { workspace = true, features = ["full"] }
 tagu = { version = "0.1.6", default-features = false, optional = true }
 tempfile = { workspace = true }
 textwrap = { workspace = true }
