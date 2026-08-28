@@ -261,7 +261,7 @@ pub enum PreviewFeature {
     ExtraBuildDependencies,
     /// The `--include-build-dependencies` option includes the build dependencies of source
     /// distributions in `uv pip compile` requirements output.
-    IncludeBuildDependencies,
+    PipBuildDependencies,
     /// uv warns when multiple packages install conflicting Python modules into the same
     /// environment. These conflicts can cause imports to depend on installation order, even when
     /// the packages have different distribution names.

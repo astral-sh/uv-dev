@@ -225,11 +225,6 @@ mod tests {
         identify the endpoint; authentication uses `GOOGLE_APPLICATION_CREDENTIALS` or Application
         Default Credentials.
 
-        ### `include-build-dependencies` {#include-build-dependencies}
-
-        The `--include-build-dependencies` option includes the build dependencies of source
-        distributions in `uv pip compile` requirements output.
-
         ### `index-by-name` {#index-by-name}
 
         The `--index` and `--default-index` options accept the names of configured package indexes
@@ -323,6 +318,11 @@ mod tests {
         The `uv init` command creates a packaged application by default, with a `src/` layout, a
         build system, and a script entry point. This gives new applications an installable package
         structure without requiring `--package`.
+
+        ### `pip-build-dependencies` {#pip-build-dependencies}
+
+        The `--include-build-dependencies` option includes the build dependencies of source
+        distributions in `uv pip compile` requirements output.
 
         ### `project-directory-must-exist` {#project-directory-must-exist}
 
