@@ -128,7 +128,6 @@ mod tests {
         - <a id="extra-build-dependencies" href="#extra-build-dependencies"><code>extra-build-dependencies</code></a>: Allows specifying additional dependencies for package builds.
         - <a id="format-command" href="#format-command"><code>format-command</code></a>: Allows using `uv format`.
         - <a id="gcs-endpoint" href="#gcs-endpoint"><code>gcs-endpoint</code></a>: Allows signing requests to configured Google Cloud Storage endpoints.
-        - <a id="pip-build-dependencies" href="#pip-build-dependencies"><code>pip-build-dependencies</code></a>: Allows including build dependencies in `uv pip compile` output.
         - <a id="index-by-name" href="#index-by-name"><code>index-by-name</code></a>: Allows selecting configured package indexes by name with `--index` and `--default-index`.
         - <a id="index-exclude-newer" href="#index-exclude-newer"><code>index-exclude-newer</code></a>: Allows setting `exclude-newer` on configured package indexes.
         - <a id="index-hash-algorithm" href="#index-hash-algorithm"><code>index-hash-algorithm</code></a>: Allows requiring a hash algorithm for configured package indexes.
@@ -148,6 +147,7 @@ mod tests {
         - <a id="package-conflicts" href="#package-conflicts"><code>package-conflicts</code></a>: Allows defining workspace conflicts at the package level.
         - <a id="packaged-init" href="#packaged-init"><code>packaged-init</code></a>: Makes `uv init` create a packaged application with a `src/` layout, build system, and script
           entry point by default.
+        - <a id="pip-build-dependencies" href="#pip-build-dependencies"><code>pip-build-dependencies</code></a>: Allows including build dependencies in `uv pip compile` output.
         - <a id="project-directory-must-exist" href="#project-directory-must-exist"><code>project-directory-must-exist</code></a>: Rejects an invalid `--project` path instead of warning and continuing. Except for `uv init`,
           the path must already exist as a directory or point to a `pyproject.toml` file. This feature
           takes effect before configuration is loaded.
