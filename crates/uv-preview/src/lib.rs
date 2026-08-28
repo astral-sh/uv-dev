@@ -242,7 +242,7 @@ pub enum PreviewFeature {
     /// Allows specifying additional dependencies for package builds.
     ExtraBuildDependencies,
     /// Allows including build dependencies in `uv pip compile` output.
-    IncludeBuildDependencies,
+    PipBuildDependencies,
     /// Warns when multiple packages would install conflicting Python modules into the same
     /// environment.
     DetectModuleConflicts,

@@ -1847,7 +1847,7 @@
             "add-bounds",
             "package-conflicts",
             "extra-build-dependencies",
-            "include-build-dependencies",
+            "pip-build-dependencies",
             "detect-module-conflicts",
             "format-command",
             "native-auth",
