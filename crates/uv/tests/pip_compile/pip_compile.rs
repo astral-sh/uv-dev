@@ -5886,6 +5886,25 @@ fn include_build_dependencies_universal() -> Result<()> {
     Ok(())
 }
 
+/// Build dependency closures cannot be included when transitive dependencies are disabled.
+#[test]
+fn include_build_dependencies_no_deps() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let requirements_in = context.temp_dir.child("requirements.in");
+    requirements_in.write_str("anyio==4.0.0")?;
+
+    uv_snapshot!(context.pip_compile()
+        .arg("requirements.in")
+        .arg("--include-build-dependencies")
+        .arg("--no-deps"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: `--include-build-dependencies` is not supported with `--no-deps`
+    ");
+
+    Ok(())
+}
+
 /// Include hashes from the URL in the generated output.
 #[test]
 fn generate_hashes_source_distribution_url() -> Result<()> {

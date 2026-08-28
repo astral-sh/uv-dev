@@ -157,6 +157,11 @@ pub(crate) async fn pip_compile(
             "`--include-build-dependencies` is not supported with `--universal`"
         ));
     }
+    if include_build_dependencies && matches!(dependency_mode, DependencyMode::Direct) {
+        return Err(anyhow!(
+            "`--include-build-dependencies` is not supported with `--no-deps`"
+        ));
+    }
     if include_build_dependencies && matches!(format, PipCompileFormat::PylockToml) {
         return Err(anyhow!(
             "`--include-build-dependencies` is only supported for `requirements.txt` output"
