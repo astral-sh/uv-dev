@@ -1,0 +1,4 @@
+{
+  "reproduction": "needs_more_information",
+  "reason": "On Linux x86_64 with uvx 0.12.7, `uvx --from <local-package> uv-stdio-probe` successfully exchanged JSON through piped stdin/stdout and exited 0, both normally and with `UV_NO_PROGRESS=1`; inheriting stderr also succeeded. This does not test the reported macOS ARM64 path or opencode restrictions. Existing tests in `crates/uv/tests/tool/tool_run.rs` capture output but do not cover connected piped stdin. Reproduction requires the exact standalone spawn script and environment from the affected Mac, full stderr with `RUST_BACKTRACE=full`, observed exit signal, and sandbox details."
+}
