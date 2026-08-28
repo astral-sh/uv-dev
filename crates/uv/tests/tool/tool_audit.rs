@@ -1,5 +1,6 @@
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
+use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::*;
 use indoc::indoc;
 use insta::assert_json_snapshot;
@@ -10,23 +11,50 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 use uv_static::EnvVars;
 use uv_test::{TestContext, uv_snapshot};
 
-fn install_tool(context: &TestContext, name: &str, locked: bool) {
-    let tool_dir = context.temp_dir.child("tools");
-    let bin_dir = context.temp_dir.child("bin");
-    let links = context.workspace_root.join("test/links");
+/// A test context for auditing tools installed into isolated directories.
+struct AuditTestContext {
+    /// The shared filesystem, cache, environment, and virtual environment for the `uv` invocation.
+    inner: TestContext,
+    /// The root directory for installed tools.
+    tool_dir: ChildPath,
+}
 
-    let mut command = context.tool_install();
-    command
-        .arg(name)
-        .arg("--no-index")
-        .arg("--find-links")
-        .arg(links)
-        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
-        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str());
-    if locked {
-        command.env(EnvVars::UV_PREVIEW_FEATURES, "tool-install-locks");
+impl AuditTestContext {
+    /// Create an audit test context with the required preview features enabled.
+    fn new(python_version: &str) -> Self {
+        let inner = uv_test::test_context!(python_version)
+            .with_tool_dirs()
+            .with_env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks");
+        let tool_dir = inner.temp_dir.child("tools");
+
+        Self { inner, tool_dir }
     }
-    command.assert().success();
+
+    /// Add a custom snapshot filter.
+    fn with_filter(mut self, filter: (impl Into<String>, impl Into<String>)) -> Self {
+        self.inner = self.inner.with_filter(filter);
+        self
+    }
+
+    fn filters(&self) -> Vec<(&str, &str)> {
+        self.inner.filters()
+    }
+
+    /// Install a tool from the test links, optionally with a lockfile.
+    fn install_tool(&self, name: &str, locked: bool) {
+        let links = self.inner.workspace_root.join("test/links");
+
+        let mut command = self.inner.tool_install();
+        command
+            .arg(name)
+            .arg("--no-index")
+            .arg("--find-links")
+            .arg(links);
+        if !locked {
+            command.env_remove(EnvVars::UV_PREVIEW_FEATURES);
+        }
+        command.assert().success();
+    }
 }
 
 async fn mount_clean_service(server: &MockServer) {
@@ -78,9 +106,9 @@ async fn mount_vulnerable_service(server: &MockServer) {
 
 #[test]
 fn tool_audit_requires_selection() {
-    let context = uv_test::test_context!("3.12");
+    let context = AuditTestContext::new("3.12");
 
-    uv_snapshot!(context.filters(), context.tool_audit(), @"
+    uv_snapshot!(context.filters(), context.inner.tool_audit(), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: the following required arguments were not provided:
@@ -91,7 +119,7 @@ fn tool_audit_requires_selection() {
     For more information, try '--help'.
     ");
 
-    uv_snapshot!(context.filters(), context.tool_audit()
+    uv_snapshot!(context.filters(), context.inner.tool_audit()
         .arg("--all")
         .arg("simple-launcher"), @"
     exit_code: 2 (failure)
@@ -106,42 +134,38 @@ fn tool_audit_requires_selection() {
 
 #[test]
 fn tool_audit_preview_features() {
-    let context = uv_test::test_context!("3.12");
-    let tool_dir = context.temp_dir.child("tools");
+    let context = AuditTestContext::new("3.12");
 
-    uv_snapshot!(context.filters(), context.tool_audit()
+    uv_snapshot!(context.filters(), context.inner.tool_audit()
         .arg("--all")
-        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str()), @"
+        .env_remove(EnvVars::UV_PREVIEW_FEATURES), @"
     exit_code: 0 (success)
     ----- stderr -----
     warning: `uv tool audit` is experimental and may change without warning. Pass `--preview-features audit,tool-install-locks` to disable this warning.
     No tools installed
     ");
 
-    uv_snapshot!(context.filters(), context.tool_audit()
+    uv_snapshot!(context.filters(), context.inner.tool_audit()
         .arg("--all")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "audit")
-        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str()), @"
+        .env(EnvVars::UV_PREVIEW_FEATURES, "audit"), @"
     exit_code: 0 (success)
     ----- stderr -----
     warning: `uv tool audit` is experimental and may change without warning. Pass `--preview-features tool-install-locks` to disable this warning.
     No tools installed
     ");
 
-    uv_snapshot!(context.filters(), context.tool_audit()
+    uv_snapshot!(context.filters(), context.inner.tool_audit()
         .arg("--all")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "tool-install-locks")
-        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str()), @"
+        .env(EnvVars::UV_PREVIEW_FEATURES, "tool-install-locks"), @"
     exit_code: 0 (success)
     ----- stderr -----
     warning: `uv tool audit` is experimental and may change without warning. Pass `--preview-features audit` to disable this warning.
     No tools installed
     ");
 
-    uv_snapshot!(context.filters(), context.tool_audit()
+    uv_snapshot!(context.filters(), context.inner.tool_audit()
         .arg("--all")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks")
-        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str()), @"
+        .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks"), @"
     exit_code: 0 (success)
     ----- stderr -----
     No tools installed
@@ -150,13 +174,10 @@ fn tool_audit_preview_features() {
 
 #[test]
 fn tool_audit_unknown_tool() {
-    let context = uv_test::test_context!("3.12");
-    let tool_dir = context.temp_dir.child("tools");
+    let context = AuditTestContext::new("3.12");
 
-    uv_snapshot!(context.filters(), context.tool_audit()
-        .arg("simple-launcher")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks")
-        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str()), @"
+    uv_snapshot!(context.filters(), context.inner.tool_audit()
+        .arg("simple-launcher"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: `simple-launcher` is not installed; run `uv tool install simple-launcher` to install
@@ -165,24 +186,19 @@ fn tool_audit_unknown_tool() {
 
 #[test]
 fn tool_audit_missing_lockfile() {
-    let context = uv_test::test_context!("3.12");
-    let tool_dir = context.temp_dir.child("tools");
-    install_tool(&context, "simple-launcher", false);
+    let context = AuditTestContext::new("3.12");
+    context.install_tool("simple-launcher", false);
 
-    uv_snapshot!(context.filters(), context.tool_audit()
-        .arg("--all")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks")
-        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str()), @"
+    uv_snapshot!(context.filters(), context.inner.tool_audit()
+        .arg("--all"), @"
     exit_code: 0 (success)
     ----- stderr -----
     warning: Skipping tool `simple-launcher` because it does not have a lockfile; reinstall it with `--preview-features tool-install-locks` to audit it
     No auditable tools installed
     ");
 
-    uv_snapshot!(context.filters(), context.tool_audit()
-        .arg("simple-launcher")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks")
-        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str()), @"
+    uv_snapshot!(context.filters(), context.inner.tool_audit()
+        .arg("simple-launcher"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Tool `simple-launcher` does not have a lockfile; reinstall it with `--preview-features tool-install-locks` to audit it
@@ -191,28 +207,26 @@ fn tool_audit_missing_lockfile() {
 
 #[test]
 fn tool_audit_invalid_receipt() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let tool_dir = context.temp_dir.child("tools");
-    install_tool(&context, "simple-launcher", true);
+    let context = AuditTestContext::new("3.12");
+    context.install_tool("simple-launcher", true);
     fs_err::write(
-        tool_dir.join("simple-launcher").join("uv-receipt.toml"),
+        context
+            .tool_dir
+            .join("simple-launcher")
+            .join("uv-receipt.toml"),
         "not valid toml",
     )?;
 
-    uv_snapshot!(context.filters(), context.tool_audit()
-        .arg("--all")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks")
-        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str()), @"
+    uv_snapshot!(context.filters(), context.inner.tool_audit()
+        .arg("--all"), @"
     exit_code: 0 (success)
     ----- stderr -----
     warning: Ignoring malformed tool `simple-launcher` (run `uv tool uninstall simple-launcher` to remove)
     No auditable tools installed
     ");
 
-    uv_snapshot!(context.filters(), context.tool_audit()
-        .arg("simple-launcher")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks")
-        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str()), @"
+    uv_snapshot!(context.filters(), context.inner.tool_audit()
+        .arg("simple-launcher"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Tool `simple-launcher` has an invalid receipt: Failed to read `uv-receipt.toml` at [TEMP_DIR]/tools/simple-launcher/uv-receipt.toml
@@ -223,18 +237,15 @@ fn tool_audit_invalid_receipt() -> Result<()> {
 
 #[test]
 fn tool_audit_invalid_lockfile() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let tool_dir = context.temp_dir.child("tools");
-    install_tool(&context, "simple-launcher", true);
+    let context = AuditTestContext::new("3.12");
+    context.install_tool("simple-launcher", true);
     fs_err::write(
-        tool_dir.join("simple-launcher").join("uv.lock"),
+        context.tool_dir.join("simple-launcher").join("uv.lock"),
         "not valid toml",
     )?;
 
-    uv_snapshot!(context.filters(), context.tool_audit()
-        .arg("--all")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks")
-        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str()), @"
+    uv_snapshot!(context.filters(), context.inner.tool_audit()
+        .arg("--all"), @"
     exit_code: 0 (success)
     ----- stderr -----
     warning: Skipping tool `simple-launcher` because its lockfile at `tools/simple-launcher/uv.lock` is invalid: TOML parse error at line 1, column 5
@@ -246,10 +257,8 @@ fn tool_audit_invalid_lockfile() -> Result<()> {
     No auditable tools installed
     ");
 
-    uv_snapshot!(context.filters(), context.tool_audit()
-        .arg("simple-launcher")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks")
-        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str()), @"
+    uv_snapshot!(context.filters(), context.inner.tool_audit()
+        .arg("simple-launcher"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to parse the lockfile for tool `simple-launcher` at `tools/simple-launcher/uv.lock`: TOML parse error at line 1, column 5
@@ -264,31 +273,26 @@ fn tool_audit_invalid_lockfile() -> Result<()> {
 
 #[test]
 fn tool_audit_unsupported_lockfile_version() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let tool_dir = context.temp_dir.child("tools");
-    install_tool(&context, "simple-launcher", true);
+    let context = AuditTestContext::new("3.12");
+    context.install_tool("simple-launcher", true);
 
-    let lock_path = tool_dir.join("simple-launcher").join("uv.lock");
+    let lock_path = context.tool_dir.join("simple-launcher").join("uv.lock");
     let contents = fs_err::read_to_string(&lock_path)?;
     fs_err::write(
         &lock_path,
         contents.replacen("version = 1\n", "version = 2\n", 1),
     )?;
 
-    uv_snapshot!(context.filters(), context.tool_audit()
-        .arg("--all")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks")
-        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str()), @"
+    uv_snapshot!(context.filters(), context.inner.tool_audit()
+        .arg("--all"), @"
     exit_code: 0 (success)
     ----- stderr -----
     warning: Skipping tool `simple-launcher` because its lockfile at `tools/simple-launcher/uv.lock` uses an unsupported schema version (v2, but only v1 is supported)
     No auditable tools installed
     ");
 
-    uv_snapshot!(context.filters(), context.tool_audit()
-        .arg("simple-launcher")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks")
-        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str()), @"
+    uv_snapshot!(context.filters(), context.inner.tool_audit()
+        .arg("simple-launcher"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: The lockfile for tool `simple-launcher` at `tools/simple-launcher/uv.lock` uses an unsupported schema version (v2, but only v1 is supported)
@@ -299,20 +303,17 @@ fn tool_audit_unsupported_lockfile_version() -> Result<()> {
 
 #[test]
 fn tool_audit_unparsable_unsupported_lockfile_version() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let tool_dir = context.temp_dir.child("tools");
-    install_tool(&context, "simple-launcher", true);
+    let context = AuditTestContext::new("3.12");
+    context.install_tool("simple-launcher", true);
 
-    let lock_path = tool_dir.join("simple-launcher").join("uv.lock");
+    let lock_path = context.tool_dir.join("simple-launcher").join("uv.lock");
     let contents = fs_err::read_to_string(&lock_path)?
         .replacen("version = 1\n", "version = 2\n", 1)
         .replacen("version = \"0.1.0\"\n", "version = false\n", 1);
     fs_err::write(&lock_path, contents)?;
 
-    uv_snapshot!(context.filters(), context.tool_audit()
-        .arg("simple-launcher")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks")
-        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str()), @"
+    uv_snapshot!(context.filters(), context.inner.tool_audit()
+        .arg("simple-launcher"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: The lockfile for tool `simple-launcher` at `tools/simple-launcher/uv.lock` uses an unsupported schema version (v2, but only v1 is supported)
@@ -323,19 +324,16 @@ fn tool_audit_unparsable_unsupported_lockfile_version() -> Result<()> {
 
 #[tokio::test]
 async fn tool_audit_one_tool() {
-    let context = uv_test::test_context!("3.12");
-    let tool_dir = context.temp_dir.child("tools");
-    install_tool(&context, "simple-launcher", true);
+    let context = AuditTestContext::new("3.12");
+    context.install_tool("simple-launcher", true);
 
     let server = MockServer::start().await;
     mount_clean_service(&server).await;
 
-    uv_snapshot!(context.filters(), context.tool_audit()
+    uv_snapshot!(context.filters(), context.inner.tool_audit()
         .arg("simple-launcher")
         .arg("--service-url")
-        .arg(server.uri())
-        .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks")
-        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str()), @"
+        .arg(server.uri()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Auditing `simple-launcher`
@@ -345,20 +343,17 @@ async fn tool_audit_one_tool() {
 
 #[tokio::test]
 async fn tool_audit_all_tools() {
-    let context = uv_test::test_context!("3.13");
-    let tool_dir = context.temp_dir.child("tools");
-    install_tool(&context, "simple-launcher", true);
-    install_tool(&context, "basic-app", true);
+    let context = AuditTestContext::new("3.13");
+    context.install_tool("simple-launcher", true);
+    context.install_tool("basic-app", true);
 
     let server = MockServer::start().await;
     mount_clean_service(&server).await;
 
-    uv_snapshot!(context.filters(), context.tool_audit()
+    uv_snapshot!(context.filters(), context.inner.tool_audit()
         .arg("--all")
         .arg("--service-url")
-        .arg(server.uri())
-        .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks")
-        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str()), @"
+        .arg(server.uri()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Auditing `basic-app`
@@ -370,21 +365,18 @@ async fn tool_audit_all_tools() {
 
 #[tokio::test]
 async fn tool_audit_multiple_tools() {
-    let context = uv_test::test_context!("3.13");
-    let tool_dir = context.temp_dir.child("tools");
-    install_tool(&context, "simple-launcher", true);
-    install_tool(&context, "basic-app", true);
+    let context = AuditTestContext::new("3.13");
+    context.install_tool("simple-launcher", true);
+    context.install_tool("basic-app", true);
 
     let server = MockServer::start().await;
     mount_clean_service(&server).await;
 
-    uv_snapshot!(context.filters(), context.tool_audit()
+    uv_snapshot!(context.filters(), context.inner.tool_audit()
         .arg("simple-launcher")
         .arg("basic-app")
         .arg("--service-url")
-        .arg(server.uri())
-        .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks")
-        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str()), @"
+        .arg(server.uri()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Auditing `basic-app`
@@ -396,20 +388,17 @@ async fn tool_audit_multiple_tools() {
 
 #[tokio::test]
 async fn tool_audit_mixed_lockfiles() {
-    let context = uv_test::test_context!("3.13");
-    let tool_dir = context.temp_dir.child("tools");
-    install_tool(&context, "simple-launcher", true);
-    install_tool(&context, "basic-app", false);
+    let context = AuditTestContext::new("3.13");
+    context.install_tool("simple-launcher", true);
+    context.install_tool("basic-app", false);
 
     let server = MockServer::start().await;
     mount_clean_service(&server).await;
 
-    uv_snapshot!(context.filters(), context.tool_audit()
+    uv_snapshot!(context.filters(), context.inner.tool_audit()
         .arg("--all")
         .arg("--service-url")
-        .arg(server.uri())
-        .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks")
-        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str()), @"
+        .arg(server.uri()), @"
     exit_code: 0 (success)
     ----- stderr -----
     warning: Skipping tool `basic-app` because it does not have a lockfile; reinstall it with `--preview-features tool-install-locks` to audit it
@@ -420,12 +409,11 @@ async fn tool_audit_mixed_lockfiles() {
 
 #[tokio::test]
 async fn tool_audit_shared_dependencies() {
-    let context = uv_test::test_context!("3.13");
-    let tool_dir = context.temp_dir.child("tools");
-    let bin_dir = context.temp_dir.child("bin");
-    let links = context.workspace_root.join("test/links");
+    let context = AuditTestContext::new("3.13");
+    let links = context.inner.workspace_root.join("test/links");
 
     context
+        .inner
         .tool_install()
         .arg("simple-launcher")
         .arg("--with")
@@ -434,11 +422,9 @@ async fn tool_audit_shared_dependencies() {
         .arg("--find-links")
         .arg(links)
         .env(EnvVars::UV_PREVIEW_FEATURES, "tool-install-locks")
-        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
-        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
         .assert()
         .success();
-    install_tool(&context, "basic-app", true);
+    context.install_tool("basic-app", true);
 
     let server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -449,12 +435,10 @@ async fn tool_audit_shared_dependencies() {
         .mount(&server)
         .await;
 
-    uv_snapshot!(context.filters(), context.tool_audit()
+    uv_snapshot!(context.filters(), context.inner.tool_audit()
         .arg("--all")
         .arg("--service-url")
-        .arg(server.uri())
-        .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks")
-        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str()), @"
+        .arg(server.uri()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Auditing `basic-app`
@@ -466,19 +450,16 @@ async fn tool_audit_shared_dependencies() {
 
 #[tokio::test]
 async fn tool_audit_vulnerability() {
-    let context = uv_test::test_context!("3.12");
-    let tool_dir = context.temp_dir.child("tools");
-    install_tool(&context, "simple-launcher", true);
+    let context = AuditTestContext::new("3.12");
+    context.install_tool("simple-launcher", true);
 
     let server = MockServer::start().await;
     mount_vulnerable_service(&server).await;
 
-    uv_snapshot!(context.filters(), context.tool_audit()
+    uv_snapshot!(context.filters(), context.inner.tool_audit()
         .arg("simple-launcher")
         .arg("--service-url")
-        .arg(server.uri())
-        .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks")
-        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str()), @"
+        .arg(server.uri()), @"
     exit_code: 1 (failure)
     ----- stdout -----
     Tool `simple-launcher`:
@@ -502,23 +483,20 @@ async fn tool_audit_vulnerability() {
 
 #[tokio::test]
 async fn tool_audit_ignore() {
-    let context = uv_test::test_context!("3.12");
-    let tool_dir = context.temp_dir.child("tools");
-    install_tool(&context, "simple-launcher", true);
+    let context = AuditTestContext::new("3.12");
+    context.install_tool("simple-launcher", true);
 
     let server = MockServer::start().await;
     mount_vulnerable_service(&server).await;
 
-    uv_snapshot!(context.filters(), context.tool_audit()
+    uv_snapshot!(context.filters(), context.inner.tool_audit()
         .arg("--all")
         .arg("--ignore")
         .arg("PYSEC-2026-0001")
         .arg("--ignore")
         .arg("CVE-DOES-NOT-EXIST")
         .arg("--service-url")
-        .arg(server.uri())
-        .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks")
-        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str()), @"
+        .arg(server.uri()), @"
     exit_code: 0 (success)
     ----- stderr -----
     warning: Ignored vulnerability `CVE-DOES-NOT-EXIST` does not match any vulnerability in the selected tools
@@ -529,10 +507,9 @@ async fn tool_audit_ignore() {
 
 #[tokio::test]
 async fn tool_audit_configured_ignore() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let tool_dir = context.temp_dir.child("tools");
-    let config = context.temp_dir.child("uv.toml");
-    install_tool(&context, "simple-launcher", true);
+    let context = AuditTestContext::new("3.12");
+    let config = context.inner.temp_dir.child("uv.toml");
+    context.install_tool("simple-launcher", true);
     config.write_str(indoc! {r#"
         [audit]
         ignore = ["PYSEC-2026-0001"]
@@ -541,14 +518,12 @@ async fn tool_audit_configured_ignore() -> Result<()> {
     let server = MockServer::start().await;
     mount_vulnerable_service(&server).await;
 
-    uv_snapshot!(context.filters(), context.tool_audit()
+    uv_snapshot!(context.filters(), context.inner.tool_audit()
         .arg("--all")
         .arg("--config-file")
         .arg(config.path())
         .arg("--service-url")
-        .arg(server.uri())
-        .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks")
-        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str()), @"
+        .arg(server.uri()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Auditing `simple-launcher`
@@ -560,21 +535,19 @@ async fn tool_audit_configured_ignore() -> Result<()> {
 
 #[tokio::test]
 async fn tool_audit_json() {
-    let context = uv_test::test_context!("3.12");
-    let tool_dir = context.temp_dir.child("tools");
-    install_tool(&context, "simple-launcher", true);
+    let context = AuditTestContext::new("3.12");
+    context.install_tool("simple-launcher", true);
 
     let server = MockServer::start().await;
     mount_clean_service(&server).await;
 
-    uv_snapshot!(context.filters(), context.tool_audit()
+    uv_snapshot!(context.filters(), context.inner.tool_audit()
         .arg("--all")
         .arg("--output-format")
         .arg("json")
         .arg("--service-url")
         .arg(server.uri())
-        .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks,json-output")
-        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str()), @r#"
+        .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks,json-output"), @r#"
     exit_code: 0 (success)
     ----- stdout -----
     {
@@ -599,21 +572,18 @@ async fn tool_audit_json() {
 
 #[tokio::test]
 async fn tool_audit_json_preview_warning() {
-    let context = uv_test::test_context!("3.12");
-    let tool_dir = context.temp_dir.child("tools");
-    install_tool(&context, "simple-launcher", true);
+    let context = AuditTestContext::new("3.12");
+    context.install_tool("simple-launcher", true);
 
     let server = MockServer::start().await;
     mount_clean_service(&server).await;
 
-    uv_snapshot!(context.filters(), context.tool_audit()
+    uv_snapshot!(context.filters(), context.inner.tool_audit()
         .arg("--all")
         .arg("--output-format")
         .arg("json")
         .arg("--service-url")
-        .arg(server.uri())
-        .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks")
-        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str()), @r#"
+        .arg(server.uri()), @r#"
     exit_code: 0 (success)
     ----- stdout -----
     {
@@ -641,22 +611,20 @@ async fn tool_audit_json_preview_warning() {
 
 #[tokio::test]
 async fn tool_audit_json_all_tools() {
-    let context = uv_test::test_context!("3.13");
-    let tool_dir = context.temp_dir.child("tools");
-    install_tool(&context, "simple-launcher", true);
-    install_tool(&context, "basic-app", true);
+    let context = AuditTestContext::new("3.13");
+    context.install_tool("simple-launcher", true);
+    context.install_tool("basic-app", true);
 
     let server = MockServer::start().await;
     mount_clean_service(&server).await;
 
-    uv_snapshot!(context.filters(), context.tool_audit()
+    uv_snapshot!(context.filters(), context.inner.tool_audit()
         .arg("--all")
         .arg("--output-format")
         .arg("json")
         .arg("--service-url")
         .arg(server.uri())
-        .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks,json-output")
-        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str()), @r#"
+        .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks,json-output"), @r#"
     exit_code: 0 (success)
     ----- stdout -----
     {
@@ -691,21 +659,18 @@ async fn tool_audit_json_all_tools() {
 
 #[tokio::test]
 async fn tool_audit_sarif() {
-    let context = uv_test::test_context!("3.12").with_filter((uv_version::version(), "[VERSION]"));
-    let tool_dir = context.temp_dir.child("tools");
-    install_tool(&context, "simple-launcher", true);
+    let context = AuditTestContext::new("3.12").with_filter((uv_version::version(), "[VERSION]"));
+    context.install_tool("simple-launcher", true);
 
     let server = MockServer::start().await;
     mount_clean_service(&server).await;
 
-    uv_snapshot!(context.filters(), context.tool_audit()
+    uv_snapshot!(context.filters(), context.inner.tool_audit()
         .arg("--all")
         .arg("--output-format")
         .arg("sarif")
         .arg("--service-url")
-        .arg(server.uri())
-        .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks")
-        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str()), @r#"
+        .arg(server.uri()), @r#"
     exit_code: 0 (success)
     ----- stdout -----
     {
@@ -739,15 +704,12 @@ async fn tool_audit_sarif() {
 
 #[test]
 fn tool_audit_sarif_no_auditable_tools() {
-    let context = uv_test::test_context!("3.12");
-    let tool_dir = context.temp_dir.child("tools");
+    let context = AuditTestContext::new("3.12");
 
-    uv_snapshot!(context.filters(), context.tool_audit()
+    uv_snapshot!(context.filters(), context.inner.tool_audit()
         .arg("--all")
         .arg("--output-format")
-        .arg("sarif")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks")
-        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str()), @r#"
+        .arg("sarif"), @r#"
     exit_code: 0 (success)
     ----- stdout -----
     {
@@ -757,14 +719,12 @@ fn tool_audit_sarif_no_auditable_tools() {
     }
     "#);
 
-    install_tool(&context, "simple-launcher", false);
+    context.install_tool("simple-launcher", false);
 
-    uv_snapshot!(context.filters(), context.tool_audit()
+    uv_snapshot!(context.filters(), context.inner.tool_audit()
         .arg("--all")
         .arg("--output-format")
-        .arg("sarif")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks")
-        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str()), @r#"
+        .arg("sarif"), @r#"
     exit_code: 0 (success)
     ----- stdout -----
     {
@@ -780,23 +740,21 @@ fn tool_audit_sarif_no_auditable_tools() {
 
 #[tokio::test]
 async fn tool_audit_sarif_all_tools() -> Result<()> {
-    let context = uv_test::test_context!("3.13");
-    let tool_dir = context.temp_dir.child("tools");
-    install_tool(&context, "simple-launcher", true);
-    install_tool(&context, "basic-app", true);
+    let context = AuditTestContext::new("3.13");
+    context.install_tool("simple-launcher", true);
+    context.install_tool("basic-app", true);
 
     let server = MockServer::start().await;
     mount_clean_service(&server).await;
 
     let output = context
+        .inner
         .tool_audit()
         .arg("--all")
         .arg("--output-format")
         .arg("sarif")
         .arg("--service-url")
         .arg(server.uri())
-        .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks")
-        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
         .output()?;
     assert_eq!(output.status.code(), Some(0));
 
@@ -829,22 +787,20 @@ async fn tool_audit_sarif_all_tools() -> Result<()> {
 
 #[tokio::test]
 async fn tool_audit_sarif_vulnerability_location() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let tool_dir = context.temp_dir.child("tools");
-    install_tool(&context, "simple-launcher", true);
+    let context = AuditTestContext::new("3.12");
+    context.install_tool("simple-launcher", true);
 
     let server = MockServer::start().await;
     mount_vulnerable_service(&server).await;
 
     let output = context
+        .inner
         .tool_audit()
         .arg("simple-launcher")
         .arg("--output-format")
         .arg("sarif")
         .arg("--service-url")
         .arg(server.uri())
-        .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks")
-        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
         .output()?;
     assert_eq!(output.status.code(), Some(1));
 
@@ -869,13 +825,12 @@ async fn tool_audit_sarif_vulnerability_location() -> Result<()> {
 
 #[tokio::test]
 async fn tool_audit_persisted_index_and_project_status() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let tool_dir = context.temp_dir.child("tools");
-    let bin_dir = context.temp_dir.child("bin");
+    let context = AuditTestContext::new("3.12");
     let server = MockServer::start().await;
     let wheel_filename = "simple_launcher-0.1.0-py3-none-any.whl";
     let wheel = fs_err::read(
         context
+            .inner
             .workspace_root
             .join("test/links")
             .join(wheel_filename),
@@ -924,22 +879,19 @@ async fn tool_audit_persisted_index_and_project_status() -> Result<()> {
     mount_clean_service(&server).await;
 
     context
+        .inner
         .tool_install()
         .arg("simple-launcher")
         .arg("--index-url")
         .arg(format!("{}/simple", server.uri()))
         .env(EnvVars::UV_PREVIEW_FEATURES, "tool-install-locks")
-        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
-        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
         .assert()
         .success();
 
-    uv_snapshot!(context.filters(), context.tool_audit()
+    uv_snapshot!(context.filters(), context.inner.tool_audit()
         .arg("simple-launcher")
         .arg("--service-url")
-        .arg(server.uri())
-        .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks")
-        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str()), @"
+        .arg(server.uri()), @"
     exit_code: 0 (success)
     ----- stdout -----
     Tool `simple-launcher`:
