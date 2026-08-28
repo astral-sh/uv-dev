@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 11121,
+        "title": "[feat]: Request for more output in stdout/stderr for non-interactive process",
+        "url": "https://github.com/astral-sh/uv/issues/11121",
+        "state": "open",
+        "reason": "Same Node/Python subprocess and non-TTY piped-output context, but it reports intentionally hidden progress rather than a crash."
+      },
+      {
+        "kind": "issue",
+        "number": 12244,
+        "title": "uv panics when resizing terminal window",
+        "url": "https://github.com/astral-sh/uv/issues/12244",
+        "state": "open",
+        "reason": "Same macOS main2/Tokio panic shape and pipe involvement, but its confirmed trigger is shell-completion output encountering BrokenPipe after the reader exits; astral-sh/uv#21337 describes a connected IPC pipe during tool execution."
+      },
+      {
+        "kind": "issue",
+        "number": 16916,
+        "title": "uv init fails when called from Claude Code's sandbox on macOS",
+        "url": "https://github.com/astral-sh/uv/issues/16916",
+        "state": "closed",
+        "reason": "Same macOS external-host panic before the target starts, but it has a confirmed SystemConfiguration sandbox-denial signature and was fixed through newer upstream dependencies; the new report lacks that signature."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests using literal terms for SIGABRT, Abort trap, uvx, piped stdin/stdout, subprocess spawning, MCP, PTY, posix_spawn, and Tokio/main2 panics, plus conceptual terms for noninteractive execution, terminal detection, progress rendering, broken pipes, signal forwarding, macOS ARM64 crashes, and sandboxed hosts. Fix-oriented review covered closed macOS panics and current dependency versions. No item matched the complete symptom set. The especially plausible astral-sh/uv#18584 was inspected but ruled out because it only fixes BrokenPipe while generating shell completions; astral-sh/uv#11817 and astral-sh/uv#12692 concern process termination rather than launch-time aborts."
+  },
+  "type": "bug",
+  "type_reason": "Aborting instead of launching a tool is incorrect behavior in an intended subprocess configuration. No existing issue tracks the same command, trigger, failure, and version closely enough for duplicate classification, and the missing panic frame prevents confirming a regression of the historical macOS sandbox bug.",
+  "summary": "No direct predecessor was found. The closest issues cover noninteractive progress suppression, a distinct shell-completion BrokenPipe panic, and a previously fixed macOS sandbox panic.",
+  "draft_response": "Thanks for the report. Launching a tool with piped standard streams and no PTY should not abort, so this is a bug if the abort is coming from uv.\n\nThe crash excerpt only shows the final abort frames and does not identify the failing component. Could you provide a minimal Node or Python script that spawns uvx directly without opencode, the complete stderr with RUST_BACKTRACE=full and the exit status, the result with UV_NO_PROGRESS=1, and whether opencode applies a macOS sandbox or other restrictions?\n\nThis does not currently have the signature of the previously fixed sandbox panic in astral-sh/uv#16916. astral-sh/uv#12244 is also different: its pipe reader has already closed while uv generates shell completions. The requested details will distinguish an uv panic from a failure in the launched tool without assuming that the missing PTY is the cause."
+}
