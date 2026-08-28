@@ -27,7 +27,7 @@ use uv_distribution_filename::DistFilename;
 use uv_distribution_types::{
     CachedDist, ConfigSettings, DependencyMetadata, ExtraBuildRequires, ExtraBuildVariables,
     Identifier, IndexCapabilities, IndexLocations, IsBuildBackendError, Name,
-    PackageConfigSettings, Requirement, Resolution, SourceDist, VersionOrUrlRef,
+    PackageConfigSettings, Requirement, RequirementSource, Resolution, SourceDist, VersionOrUrlRef,
 };
 use uv_git::GitResolver;
 use uv_installer::{InstallationStrategy, Installer, Plan, Planner, Preparer, SitePackages};
@@ -377,7 +377,15 @@ impl BuildContext for BuildDispatch<'_> {
             && let Some(build_requirements) = &self.build_requirements
         {
             let mut build_requirements = build_requirements.lock().await;
-            build_requirements.extend(requirements.iter().cloned());
+            build_requirements.extend(requirements.iter().cloned().map(|mut requirement| {
+                if let Some(distribution) = resolution
+                    .distributions()
+                    .find(|distribution| distribution.name() == &requirement.name)
+                {
+                    requirement.source = RequirementSource::from(distribution);
+                }
+                requirement
+            }));
             build_requirements.extend(
                 resolution
                     .distributions()
