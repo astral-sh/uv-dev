@@ -64,23 +64,14 @@ fn build_system_hash_test_wheel(name: &str, module: &str) -> Result<Vec<u8>> {
 }
 
 /// Create a harmless build backend that can request an additional build dependency.
-fn build_system_hash_test_backend(dynamic_requirement: Option<&str>) -> Result<Vec<u8>> {
-    let project_wheel = hex::encode(build_system_hash_test_wheel(
-        "hash-project",
-        "__version__ = '1.0.0'\n",
-    )?);
-    let dynamic_requirements =
-        serde_json::to_string(&dynamic_requirement.into_iter().collect::<Vec<_>>())?;
+fn build_system_hash_test_backend(dynamic_requirement: &str) -> Result<Vec<u8>> {
+    let dynamic_requirements = serde_json::to_string(&[dynamic_requirement])?;
     let backend = formatdoc! {r#"
-        from pathlib import Path
-
         def get_requires_for_build_wheel(config_settings=None):
             return {dynamic_requirements}
 
         def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
-            filename = "hash_project-1.0.0-py3-none-any.whl"
-            (Path(wheel_directory) / filename).write_bytes(bytes.fromhex("{project_wheel}"))
-            return filename
+            raise AssertionError("build_wheel should not be called")
     "#};
     build_system_hash_test_wheel("hash-backend", &backend)
 }
@@ -191,7 +182,7 @@ fn build_requirement_hashes_do_not_expand_strict_authority() -> Result<()> {
         )
     })?;
     let dynamic_requirement = format!("dynamic-dependency @ {dynamic_url}#sha256={dynamic_digest}");
-    let backend_wheel = build_system_hash_test_backend(Some(&dynamic_requirement))?;
+    let backend_wheel = build_system_hash_test_backend(&dynamic_requirement)?;
     let backend_digest = hex::encode(Sha256::digest(&backend_wheel));
     wheels
         .child("hash_backend-1.0.0-py3-none-any.whl")
@@ -2072,6 +2063,17 @@ fn sync_build_isolation_package() -> Result<()> {
      + pathspec==0.12.1
      + pluggy==1.4.0
      + trove-classifiers==2024.3.3
+    ");
+
+    // Strict build hashes also require isolation when it is disabled for an individual package.
+    uv_snapshot!(context.filters(), context.sync().arg("--require-build-hashes"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+      × Failed to download and build `source-distribution @ https://files.pythonhosted.org/packages/10/1f/57aa4cce1b1abf6b433106676e15f9fa2c92ed2bd4cf77c3b50a9e9ac773/source_distribution-0.0.1.tar.gz`
+      ╰─▶ Hash verification for build dependencies requires build isolation, but build isolation is disabled
+
+    hint: `source-distribution` was included because `project` (v0.1.0) depends on `source-distribution`
     ");
 
     // Running `uv sync` should succeed.

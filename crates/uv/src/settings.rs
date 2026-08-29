@@ -3346,6 +3346,26 @@ fn workspace_overrides(filesystem: Option<&FilesystemOptions>) -> Vec<Override<R
     overrides
 }
 
+fn workspace_build_constraints(
+    filesystem: Option<&FilesystemOptions>,
+) -> Vec<NameRequirementSpecification> {
+    filesystem
+        .and_then(|configuration| configuration.build_constraint_dependencies.as_ref())
+        .into_iter()
+        .flatten()
+        .cloned()
+        .map(|requirement| {
+            let (requirement, hashes) = requirement.into_parts();
+            NameRequirementSpecification {
+                requirement: Requirement::from(
+                    requirement.with_origin(RequirementOrigin::Workspace),
+                ),
+                hashes,
+            }
+        })
+        .collect()
+}
+
 /// The resolved settings to use for a `pip compile` invocation.
 #[derive(Debug, Clone)]
 pub(crate) struct PipCompileSettings {
@@ -3451,25 +3471,7 @@ impl PipCompileSettings {
             Vec::new()
         };
 
-        let build_constraints_from_workspace = if let Some(configuration) = &filesystem {
-            configuration
-                .build_constraint_dependencies
-                .clone()
-                .unwrap_or_default()
-                .into_iter()
-                .map(|requirement| {
-                    let (requirement, hashes) = requirement.into_parts();
-                    NameRequirementSpecification {
-                        requirement: Requirement::from(
-                            requirement.with_origin(RequirementOrigin::Workspace),
-                        ),
-                        hashes,
-                    }
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
+        let build_constraints_from_workspace = workspace_build_constraints(filesystem.as_ref());
 
         let environments = if let Some(configuration) = &filesystem {
             configuration.environments.clone().unwrap_or_default()
@@ -3780,25 +3782,7 @@ impl PipInstallSettings {
             Vec::new()
         };
 
-        let build_constraints_from_workspace = if let Some(configuration) = &filesystem {
-            configuration
-                .build_constraint_dependencies
-                .clone()
-                .unwrap_or_default()
-                .into_iter()
-                .map(|requirement| {
-                    let (requirement, hashes) = requirement.into_parts();
-                    NameRequirementSpecification {
-                        requirement: Requirement::from(
-                            requirement.with_origin(RequirementOrigin::Workspace),
-                        ),
-                        hashes,
-                    }
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
+        let build_constraints_from_workspace = workspace_build_constraints(filesystem.as_ref());
 
         Ok(Self {
             package,
@@ -4239,25 +4223,7 @@ impl BuildSettings {
             Some(fs) => fs.install_mirrors.clone(),
             None => PythonInstallMirrors::default(),
         };
-        let build_constraints_from_workspace = if let Some(configuration) = &filesystem {
-            configuration
-                .build_constraint_dependencies
-                .clone()
-                .unwrap_or_default()
-                .into_iter()
-                .map(|requirement| {
-                    let (requirement, hashes) = requirement.into_parts();
-                    NameRequirementSpecification {
-                        requirement: Requirement::from(
-                            requirement.with_origin(RequirementOrigin::Workspace),
-                        ),
-                        hashes,
-                    }
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
+        let build_constraints_from_workspace = workspace_build_constraints(filesystem.as_ref());
 
         Ok(Self {
             src,

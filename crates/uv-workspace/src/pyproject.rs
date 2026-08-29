@@ -607,6 +607,8 @@ pub struct ToolUv {
     /// Require hashes for every dependency installed into an isolated build environment during
     /// project resolution and installation.
     ///
+    /// Build isolation must be enabled for packages built with this option.
+    ///
     /// Only the `pyproject.toml` at the workspace root is read. Declarations in workspace members
     /// and `uv.toml` files are ignored. Use `--require-build-hashes` to override this setting for
     /// `uv lock` or `uv sync`.

@@ -282,29 +282,32 @@ impl BuildContext for BuildDispatch<'_> {
         &'data self,
         requirements: &'data [Requirement],
         build_stack: &'data BuildStack,
-        source: BuildRequirementSource,
+        source: BuildRequirementSource<'data>,
     ) -> Result<ResolvedRequirements, BuildDispatchError> {
         let python_requirement = PythonRequirement::from_interpreter(self.interpreter);
         let marker_env = self.interpreter.to_resolver_marker_environment();
         let resolver_env = ResolverEnvironment::specific(marker_env);
         let tags = self.interpreter.tags()?;
 
+        let active_requirements = requirements.iter().filter(|requirement| {
+            requirement.evaluate_markers(resolver_env.marker_environment(), &[])
+        });
+        let hasher = match source {
+            BuildRequirementSource::Static => self
+                .hasher
+                .clone()
+                .augment_with_requirements(active_requirements),
+            BuildRequirementSource::Dynamic(hasher) => hasher
+                .clone()
+                .constrain_with_requirements(active_requirements),
+        }
+        .map_err(uv_requirements::Error::from)?;
+
         // Walk any URL requirements transitively so their sub-URLs (for example, a workspace
         // member that depends on another workspace member) are known before the resolver runs
         // its URL allow-list check. This mirrors what the project resolver does in
         // `uv_requirements::LookaheadResolver` and prevents a `DisallowedUrl` error when one
         // `build-system.requires` entry pulls in another URL dependency.
-        let preserve_hash_authority = source == BuildRequirementSource::Dynamic;
-        let hasher = if preserve_hash_authority {
-            self.hasher
-                .clone()
-                .constrain_with_requirements(requirements.iter())
-        } else {
-            self.hasher
-                .clone()
-                .augment_with_requirements(requirements.iter())
-        }
-        .map_err(uv_requirements::Error::from)?;
         let overrides = Overrides::default();
         let excludes = Excludes::default();
         let (lookaheads, hasher) = LookaheadResolver::new(

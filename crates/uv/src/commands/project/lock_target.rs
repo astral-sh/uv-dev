@@ -20,7 +20,7 @@ use uv_scripts::Pep723Script;
 use uv_workspace::dependency_groups::{
     DependencyGroupError, FlatDependencyGroup, FlatDependencyGroups,
 };
-use uv_workspace::pyproject::OverrideDependency;
+use uv_workspace::pyproject::{BuildConstraintDependency, OverrideDependency};
 use uv_workspace::{Editability, Workspace, WorkspaceCache, WorkspaceMember};
 
 use crate::commands::project::{ProjectError, find_requires_python};
@@ -106,9 +106,7 @@ impl<'lock> LockTarget<'lock> {
     }
 
     /// Returns the set of build constraints for the [`LockTarget`].
-    pub(crate) fn build_constraints(
-        self,
-    ) -> Vec<uv_workspace::pyproject::BuildConstraintDependency> {
+    pub(crate) fn build_constraints(self) -> Vec<BuildConstraintDependency> {
         match self {
             Self::Workspace(workspace) => workspace.build_constraints(),
             Self::Script(script) => script
@@ -120,7 +118,7 @@ impl<'lock> LockTarget<'lock> {
                 .into_iter()
                 .flatten()
                 .cloned()
-                .map(uv_workspace::pyproject::BuildConstraintDependency::Requirement)
+                .map(BuildConstraintDependency::Requirement)
                 .collect(),
         }
     }

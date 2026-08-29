@@ -515,7 +515,7 @@
       }
     },
     "require-build-hashes": {
-      "description": "Require hashes for every dependency installed into an isolated build environment during\nproject resolution and installation.\n\nOnly the `pyproject.toml` at the workspace root is read. Declarations in workspace members\nand `uv.toml` files are ignored. Use `--require-build-hashes` to override this setting for\n`uv lock` or `uv sync`.",
+      "description": "Require hashes for every dependency installed into an isolated build environment during\nproject resolution and installation.\n\nBuild isolation must be enabled for packages built with this option.\n\nOnly the `pyproject.toml` at the workspace root is read. Declarations in workspace members\nand `uv.toml` files are ignored. Use `--require-build-hashes` to override this setting for\n`uv lock` or `uv sync`.",
       "type": ["boolean", "null"]
     },
     "required-environments": {

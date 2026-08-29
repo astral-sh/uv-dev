@@ -19,7 +19,7 @@ use uv_normalize::PackageName;
 use uv_python::{Interpreter, PythonEnvironment};
 use uv_workspace::WorkspaceCache;
 
-use crate::{BuildArena, BuildIsolation, ResolvedRequirements};
+use crate::{BuildArena, BuildIsolation, HashStrategy, ResolvedRequirements};
 
 /// Controls how source tree requirements influence workspace-member editability during lowering.
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
@@ -52,12 +52,13 @@ impl SourceTreeEditablePolicy {
 }
 
 /// Identifies where a build requirement was introduced.
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub enum BuildRequirementSource {
+#[derive(Debug, Clone, Copy)]
+pub enum BuildRequirementSource<'a> {
     /// A statically declared or explicitly configured build requirement.
     Static,
-    /// A requirement returned by a PEP 517 `get_requires_for_build_*` hook.
-    Dynamic,
+    /// Requirements returned by a PEP 517 `get_requires_for_build_*` hook, with the hash policy
+    /// established when resolving the static build requirements.
+    Dynamic(&'a HashStrategy),
 }
 
 ///  Avoids cyclic crate dependencies between resolver, installer and builder.
@@ -162,7 +163,7 @@ pub trait BuildContext {
         &'a self,
         requirements: &'a [Requirement],
         build_stack: &'a BuildStack,
-        source: BuildRequirementSource,
+        source: BuildRequirementSource<'a>,
     ) -> impl Future<Output = Result<ResolvedRequirements, impl IsBuildBackendError>> + 'a;
 
     /// Install the given set of package versions into the virtual environment. The environment must

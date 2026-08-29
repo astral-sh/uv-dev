@@ -10,7 +10,7 @@ use uv_configuration::{
     BuildOptions, Constraints, DependencyGroupsWithDefaults, ExtrasSpecification,
     ExtrasSpecificationWithDefaults, InstallOptions,
 };
-use uv_distribution_types::{Index, Resolution};
+use uv_distribution_types::{Index, NameRequirementSpecification, Resolution};
 use uv_normalize::{DEV_DEPENDENCIES, ExtraName, GroupName, PackageName};
 use uv_platform_tags::Tags;
 use uv_preview::PreviewFeature;
@@ -405,9 +405,7 @@ impl<'lock> InstallTarget<'lock> {
         self.lock().build_constraints(self.install_path())
     }
 
-    pub(crate) fn build_constraint_specifications(
-        &self,
-    ) -> Vec<uv_distribution_types::NameRequirementSpecification> {
+    pub(crate) fn build_constraint_specifications(&self) -> Vec<NameRequirementSpecification> {
         self.lock()
             .build_constraint_specifications(self.install_path())
     }

@@ -2735,7 +2735,6 @@ fn lock_project_with_hashed_build_constraints() -> Result<()> {
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["anyio==3.7.0"]
 
         [tool.uv]
         build-constraint-dependencies = [
@@ -2747,16 +2746,35 @@ fn lock_project_with_hashed_build_constraints() -> Result<()> {
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 4 packages in [TIME]
+    Resolved 1 package in [TIME]
     ");
-    assert!(context.read("uv.lock").contains(
-        "hashes = [\"sha256:0000000000000000000000000000000000000000000000000000000000000000\"]"
-    ));
+
+    let lock = context.read("uv.lock");
+    insta::with_settings!({
+        filters => context.filters(),
+    }, {
+        assert_snapshot!(lock, @r#"
+        version = 1
+        revision = 3
+        requires-python = ">=3.12"
+
+        [options]
+        exclude-newer = "2024-03-25T00:00:00Z"
+
+        [manifest]
+        build-constraints = [{ name = "setuptools", specifier = "==1", hashes = ["sha256:0000000000000000000000000000000000000000000000000000000000000000"] }]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        "#);
+    });
 
     uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 4 packages in [TIME]
+    Resolved 1 package in [TIME]
     ");
 
     Ok(())

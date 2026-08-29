@@ -43,7 +43,7 @@ use uv_pypi_types::VerbatimParsedUrl;
 use uv_python::{Interpreter, PythonEnvironment};
 use uv_static::EnvVars;
 use uv_types::{
-    AnyErrorBuild, BuildContext, BuildIsolation, BuildRequirementSource, BuildStack,
+    AnyErrorBuild, BuildContext, BuildIsolation, BuildRequirementSource, BuildStack, HashStrategy,
     ResolvedRequirements, SourceBuildTrait,
 };
 use uv_warnings::warn_user_once;
@@ -392,7 +392,7 @@ impl SourceBuild {
 
         // Set up the build environment. If build isolation is disabled, we assume the build
         // environment is already set up.
-        if build_isolation.is_isolated(package_name.as_ref()) {
+        let build_hasher = if build_isolation.is_isolated(package_name.as_ref()) {
             debug!("Resolving build requirements");
 
             let dependency_sources = if extra_build_dependencies.is_empty() {
@@ -414,9 +414,11 @@ impl SourceBuild {
                 .install(&resolved_requirements, &venv, build_stack)
                 .await
                 .map_err(|err| Error::RequirementsInstall(dependency_sources, err.into()))?;
+            Some(resolved_requirements.hasher().clone())
         } else {
             debug!("Proceeding without build isolation");
-        }
+            None
+        };
 
         // Figure out what the modified path should be, and remove the PATH variable from the
         // environment variables if it's there.
@@ -452,7 +454,7 @@ impl SourceBuild {
         // Create the PEP 517 build environment. If build isolation is disabled, we assume the build
         // environment is already set up.
         let runner = PythonRunner::new(source_build_context.concurrent_build_slots.clone(), level);
-        if build_isolation.is_isolated(package_name.as_ref()) {
+        if let Some(build_hasher) = build_hasher {
             debug!("Creating PEP 517 build environment");
 
             create_pep517_build_environment(
@@ -462,6 +464,7 @@ impl SourceBuild {
                 &venv,
                 &pep517_backend,
                 build_context,
+                &build_hasher,
                 package_name.as_ref(),
                 package_version.as_ref(),
                 version_id,
@@ -1031,6 +1034,7 @@ async fn create_pep517_build_environment(
     venv: &PythonEnvironment,
     pep517_backend: &Pep517Backend,
     build_context: &impl BuildContext,
+    build_hasher: &HashStrategy,
     package_name: Option<&PackageName>,
     package_version: Option<&Version>,
     version_id: Option<&str>,
@@ -1169,7 +1173,11 @@ async fn create_pep517_build_environment(
             .chain(extra_requires)
             .collect();
         let resolution = build_context
-            .resolve(&requirements, build_stack, BuildRequirementSource::Dynamic)
+            .resolve(
+                &requirements,
+                build_stack,
+                BuildRequirementSource::Dynamic(build_hasher),
+            )
             .await
             .map_err(|err| {
                 Error::RequirementsResolve("`build-system.requires`", AnyErrorBuild::from(err))

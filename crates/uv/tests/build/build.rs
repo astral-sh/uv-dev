@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use async_zip::base::read::mem::ZipFileReader;
@@ -6,10 +6,13 @@ use futures::executor::block_on;
 use indoc::{formatdoc, indoc};
 use insta::assert_snapshot;
 use predicates::prelude::predicate;
+use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::env::current_dir;
 use std::path::Path;
 use url::Url;
 use uv_static::EnvVars;
+use uv_test::packse::generate_wheel;
 use uv_test::{DEFAULT_PYTHON_VERSION, apply_filters, get_bin, uv_snapshot};
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
@@ -1598,6 +1601,155 @@ async fn build_transitive_url_build_requirement_hashes() -> Result<()> {
         .child("dist")
         .child("project-0.1.0-py3-none-any.whl")
         .assert(predicate::path::is_file());
+
+    Ok(())
+}
+
+/// Hashes from `build-system.requires` remain trusted when the backend adds requirements.
+#[test]
+fn build_dynamic_requirements_preserve_static_hashes() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_filter((r"\\\.", ""));
+    let links = context.temp_dir.child("links");
+    let (ok_filename, ok_wheel) = generate_wheel(
+        &"ok".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+    );
+    let ok_hash = hex::encode(Sha256::digest(&ok_wheel));
+    let ok_path = links.child(&ok_filename);
+    ok_path.write_binary(&ok_wheel)?;
+    let ok_wheel_url = Url::from_file_path(ok_path.path())
+        .map_err(|()| anyhow!("failed to convert wheel path to file URL"))?;
+    let (validation_filename, validation_wheel) = generate_wheel(
+        &"validation".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+    );
+    let validation_hash = hex::encode(Sha256::digest(&validation_wheel));
+    links
+        .child(validation_filename)
+        .write_binary(&validation_wheel)?;
+
+    let project = context.temp_dir.child("project");
+    project.child("pyproject.toml").write_str(&formatdoc! {r#"
+        [build-system]
+        requires = ["ok @ {ok_wheel_url}#sha256={ok_hash}"]
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    project.child("constraints.txt").write_str(&formatdoc! {r"
+        validation==1.0.0 --hash=sha256:{validation_hash}
+    "})?;
+    project.child("backend.py").write_str(indoc! {r#"
+        from importlib.metadata import version
+        from pathlib import Path
+        from shutil import copyfile
+
+        def get_requires_for_build_wheel(config_settings=None):
+            return ["validation==1.0.0"]
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            assert version("ok") == "1.0.0"
+            assert version("validation") == "1.0.0"
+            filename = "ok-1.0.0-py3-none-any.whl"
+            copyfile(Path(__file__).with_name(filename), Path(wheel_directory, filename))
+            return filename
+    "#})?;
+    project.child(ok_filename).write_binary(&ok_wheel)?;
+
+    uv_snapshot!(
+        context.filters(),
+        context
+            .build()
+            .arg("--wheel")
+            .arg("--require-hashes")
+            .arg("--build-constraint")
+            .arg("constraints.txt")
+            .arg("--no-index")
+            .arg("--find-links")
+            .arg(links.path())
+            .current_dir(&project),
+        @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Building wheel...
+    Successfully built dist/ok-1.0.0-py3-none-any.whl
+    "
+    );
+
+    Ok(())
+}
+
+/// An inactive dynamic requirement needs no authorization, even when its URL includes a hash.
+#[test]
+fn build_dynamic_requirement_hashes_with_inactive_marker() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_filter((r"\\\.", ""));
+    let (validation_filename, validation_wheel) = generate_wheel(
+        &"validation".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+    );
+    let validation_hash = hex::encode(Sha256::digest(&validation_wheel));
+    let validation_path = context.temp_dir.child(validation_filename);
+    validation_path.write_binary(&validation_wheel)?;
+    let validation_wheel_url = Url::from_file_path(validation_path.path())
+        .map_err(|()| anyhow!("failed to convert wheel path to file URL"))?;
+
+    let project = context.temp_dir.child("project");
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    project.child("backend.py").write_str(&formatdoc! {r#"
+        from importlib.util import find_spec
+        from pathlib import Path
+        from shutil import copyfile
+
+        def get_requires_for_build_wheel(config_settings=None):
+            return ["validation @ {validation_wheel_url}#sha256={validation_hash} ; python_version < '0'"]
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            assert find_spec("validation") is None
+            filename = "ok-1.0.0-py3-none-any.whl"
+            copyfile(Path(__file__).with_name(filename), Path(wheel_directory, filename))
+            return filename
+    "#})?;
+    let (ok_filename, ok_wheel) = generate_wheel(
+        &"ok".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+    );
+    project.child(ok_filename).write_binary(&ok_wheel)?;
+
+    uv_snapshot!(
+        context.filters(),
+        context
+            .build()
+            .arg("--wheel")
+            .arg("--require-hashes")
+            .arg("--no-index")
+            .current_dir(&project),
+        @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Building wheel...
+    Successfully built dist/ok-1.0.0-py3-none-any.whl
+    "
+    );
 
     Ok(())
 }

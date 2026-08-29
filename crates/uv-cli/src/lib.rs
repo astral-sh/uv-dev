@@ -2010,6 +2010,8 @@ pub struct PipSyncArgs {
     pub hash_checking: HashCheckingArgs,
 
     /// Require hashes for all dependencies installed into isolated build environments.
+    ///
+    /// Build isolation must be enabled for packages built with this option.
     #[arg(
         long,
         env = EnvVars::UV_PIP_REQUIRE_BUILD_HASHES,
@@ -2369,6 +2371,8 @@ pub struct PipInstallArgs {
     pub hash_checking: HashCheckingArgs,
 
     /// Require hashes for all dependencies installed into isolated build environments.
+    ///
+    /// Build isolation must be enabled for packages built with this option.
     #[arg(
         long,
         env = EnvVars::UV_PIP_REQUIRE_BUILD_HASHES,
@@ -3803,6 +3807,8 @@ pub struct RunArgs {
 #[derive(Args)]
 pub struct SyncArgs {
     /// Require hashes for all dependencies installed into isolated build environments.
+    ///
+    /// Build isolation must be enabled for packages built with this option.
     #[arg(
         long,
         env = EnvVars::UV_REQUIRE_BUILD_HASHES,
@@ -4097,6 +4103,8 @@ pub struct SyncArgs {
 #[derive(Args)]
 pub struct LockArgs {
     /// Require hashes for all dependencies installed into isolated build environments.
+    ///
+    /// Build isolation must be enabled for packages built with this option.
     #[arg(
         long,
         env = EnvVars::UV_REQUIRE_BUILD_HASHES,
