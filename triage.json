@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 19395,
+        "title": "Dangerous --clear",
+        "url": "https://github.com/astral-sh/uv/issues/19395",
+        "state": "closed",
+        "reason": "Same destructive outcome for a non-venv directory, but through explicit `uv venv --clear` rather than implicit script-environment replacement."
+      },
+      {
+        "kind": "pull_request",
+        "number": 19595,
+        "title": "Do not allow `uv venv --clear` to remove non-virtual environments",
+        "url": "https://github.com/astral-sh/uv/pull/19595",
+        "state": "merged",
+        "reason": "Established refusal/force safety behavior for user-requested venv clearing; its scoped guard does not cover `ScriptEnvironment` removal."
+      },
+      {
+        "kind": "issue",
+        "number": 11315,
+        "title": "Add `conda` environment support for `--active` flag",
+        "url": "https://github.com/astral-sh/uv/issues/11315",
+        "state": "open",
+        "reason": "Documents the `VIRTUAL_ENV=$CONDA_PREFIX` workaround and conda risk, but tracks native conda discovery rather than deletion safety."
+      },
+      {
+        "kind": "pull_request",
+        "number": 15007,
+        "title": "replace manual venv removal with remove_virtualenv",
+        "url": "https://github.com/astral-sh/uv/pull/15007",
+        "state": "merged",
+        "reason": "Changed the exact script removal site from `remove_dir_all` to `remove_virtualenv` while retaining unconditional replacement, explaining the helper lineage without fixing this safety gap."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests using literal terms for `--active --script`, `VIRTUAL_ENV`, `Removed virtual environment`, script environments, `pyvenv.cfg`, `remove_virtualenv`, non-virtual environments, and the reported invalid-environment fragments; conceptual terms for arbitrary-directory deletion, data loss, unsafe clearing, active-environment recreation, and conda prefixes; and fix-oriented searches around historical safe-clear work. Inspected discussions and linked fixes for astral-sh/uv#11315, astral-sh/uv#14985, astral-sh/uv#15474, astral-sh/uv#16631, and astral-sh/uv#19395. astral-sh/uv#16631 was ruled out because it recreated a valid venv after a relative `UV_PYTHON_INSTALL_DIR` broke managed-interpreter detection and was fixed by astral-sh/uv#18398. astral-sh/uv#14985 and astral-sh/uv#16203 concerned standardizing helper use, not validating arbitrary script roots."
+  },
+  "type": "bug",
+  "type_reason": "The destructive behavior is incorrect and source-confirmed. `ScriptEnvironment::get_or_init` passes the root selected from `VIRTUAL_ENV` under `--active` directly to `remove_virtualenv` when replacement is needed, while that helper recursively removes directories without validating `pyvenv.cfg`. The project path and user-requested venv clearing have explicit non-venv guards. No open issue or pull request already tracks this script-specific safety gap, and the earlier safe-clear fix covered a different command path, so this is a bug rather than a duplicate or regression.",
+  "summary": "No existing item tracks the same script-specific deletion bug. The closest precedent is astral-sh/uv#19395 and its fix astral-sh/uv#19595; astral-sh/uv#11315 supplies the conda-trigger context, and astral-sh/uv#15007 explains the current removal-helper call without adding validation.",
+  "draft_response": "Thanks for the detailed report. This is a bug. The current script-environment path can select `VIRTUAL_ENV` with `--active` and, when it needs a different interpreter, remove that path without first verifying that it is a virtual environment. That differs from project environment replacement and from the non-virtual-directory protection added for `uv venv` in astral-sh/uv#19595. astral-sh/uv#11315 makes the conda case particularly relevant, but it tracks `CONDA_PREFIX` discovery rather than this deletion behavior.\n\nThe fix should make both `uv run --active --script` and `uv sync --script --active` refuse to replace a non-empty path that cannot be identified as a virtual environment, with integration coverage confirming the existing contents are preserved. I would keep the validation scoped to externally selected script environments unless an audit shows every `remove_virtualenv` caller can safely adopt the same rule, since that low-level helper is also used for uv-owned environments."
+}
