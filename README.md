@@ -89,6 +89,13 @@ The neighboring `crates/uv/tests/sync/sync.rs` test `sync_active_script_environm
 it covers missing-path creation, valid-environment reuse, and valid-environment replacement through
 the same initializer, so it required no fixture or snapshot change and continues to pass.
 
+A maintainer follow-up explicitly expressed interest in the reporter's broader alternative: moving
+the virtual-environment validation into `remove_virtualenv` itself. This is useful implementation
+direction, but not yet a final design decision. The current fix in astral-sh/uv-dev#924 instead
+guards only externally selected script roots. Review should therefore determine whether the helper
+can enforce the check for every caller without preventing intended removal of uv-owned environments,
+or whether its API needs an explicit policy for validated external paths versus known managed paths.
+
 Successful focused validation:
 
 - `cargo test --package uv --test project run::run_active_script_environment -- --exact`
@@ -156,4 +163,4 @@ detection to fail; astral-sh/uv#18398 fixed that path-normalization bug. astral-
 closing astral-sh/uv#16203 concerned consistently using the removal helper, not validating arbitrary
 script roots.
 
-Pull request: https://github.com/astral-sh/uv-dev/pull/924
+Pull request: astral-sh/uv-dev#924
