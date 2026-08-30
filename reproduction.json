@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "Using uv 0.12.7 on Linux x86_64 with Python 3.12.3, a populated ordinary directory was set as VIRTUAL_ENV and `uv run --active --script script.py` was run with isolated cache/state paths. It exited 0, deleted both sentinel files and a subdirectory, and replaced them with a virtual environment; normal output gave no deletion notice. `uv sync --script script.py --active` reproduced the same deletion. This independently confirms the report from uv 0.12.7 on macOS arm64 with Python 3.13.13. The issue-context README was updated."
+}

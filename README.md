@@ -7,10 +7,12 @@ Classification: bug
 ## Summary
 
 With `VIRTUAL_ENV` pointing to a non-empty directory that is not a virtual environment,
-`uv run --active --script` and `uv sync --script --active` can delete the directory contents and
-create a script virtual environment in its place. The reporter demonstrated this with an ordinary
-directory and identified conda prefixes as a consequential real-world trigger. The replacement is
-not reported at normal verbosity.
+`uv run --active --script` and `uv sync --script --active` delete the directory contents and create
+a script virtual environment in its place. This was reproduced with the installed uv 0.12.7 on
+Linux, independently confirming the reporter's uv 0.12.7 result on macOS. The reporter identified
+conda prefixes as a consequential real-world trigger. `uv run` gives no replacement or deletion
+notice at normal verbosity; `uv sync` says that it is updating the script environment but does not
+say that the existing directory contents were deleted.
 
 The current source supports the report. When script interpreter discovery decides that the selected
 environment needs replacement, `ScriptEnvironment::get_or_init` passes its root directly to
@@ -23,6 +25,49 @@ active script environment, but do not cover a pre-existing non-venv directory.
 No existing issue or pull request was found that tracks this script-specific safety gap. The closest
 precedent is the safe-clear work for `uv venv`, while the open conda-support issue explains how users
 are led to put a conda prefix in `VIRTUAL_ENV`.
+
+## Reproduction
+
+Outcome: **reproducible**.
+
+The report used uv 0.12.7 on Darwin 25.5.0 arm64 with Python 3.13.13. A targeted reproduction used
+the installed `uv 0.12.7 (x86_64-unknown-linux-gnu)` on Linux 6.17.0 x86_64 with system Python
+3.12.3. All fixture, cache, and Python-install paths were isolated below `$RUNNER_TEMP`; Python
+downloads were disabled.
+
+The minimal fixture was a PEP 723 script with `requires-python = ">=3.11"`, no dependencies, and an
+ordinary `target` directory containing `important.txt` and `subdir/nested.txt`. The essential
+invocation was:
+
+```console
+VIRTUAL_ENV="$PWD/target" \
+UV_CACHE_DIR="$PWD/cache" \
+UV_PYTHON_INSTALL_DIR="$PWD/python" \
+UV_PYTHON_DOWNLOADS=never \
+uv run --active --script script.py
+```
+
+The command exited 0 and printed only `script completed`. Both sentinel files and `subdir` were
+gone afterward, while `target` contained a new virtual environment including `bin`, `lib`, and
+`pyvenv.cfg`. Repeating the fixture with a separate populated `sync-target` and
+`uv sync --script script.py --active` also exited 0, deleted both sentinels, and replaced the
+directory. Its normal output began `Updating script environment at: sync-target`, without stating
+that the pre-existing contents had been deleted.
+
+The expected safe behavior is to refuse to replace a non-empty directory that is not recognizable
+as a virtual environment and preserve its contents, matching the project-environment protection
+described in the report.
+
+Nearby integration coverage does not exercise this unsafe input:
+
+- `crates/uv/tests/project/run.rs`, `run_active_script_environment`, verifies that
+  `uv run --active --script` creates a missing active environment and later replaces that valid
+  environment for a different Python request.
+- `crates/uv/tests/sync/sync.rs`, `sync_active_script_environment`, verifies the analogous create,
+  reuse, and valid-environment replacement behavior for `uv sync --script --active`.
+
+Neither test pre-populates `VIRTUAL_ENV` as an ordinary non-virtual-environment directory or asserts
+that unrelated contents are preserved.
 
 ## Draft response
 
@@ -41,11 +86,11 @@ the same rule, since that low-level helper is also used for uv-owned environment
 
 ## Classification
 
-This is a correctness and data-loss bug, not an enhancement or support question. The mechanism is
-confirmed by the checked-out source: the script path performs unconditional removal after discovery
-rejects the existing environment, the removal helper does not validate the virtual-environment
-marker, and the corresponding project path has an explicit guard. GitHub currently also labels
-astral-sh/uv#21364 as `bug`.
+This is a reproducible correctness and data-loss bug, not an enhancement or support question. The
+observed commands delete unrelated files, and the checked-out source is consistent with that result:
+the script path performs unconditional removal after discovery rejects the existing environment,
+the removal helper does not validate the virtual-environment marker, and the corresponding project
+path has an explicit guard. GitHub currently also labels astral-sh/uv#21364 as `bug`.
 
 This is not a duplicate. astral-sh/uv#19395 and astral-sh/uv#19595 cover explicit `uv venv --clear`
 behavior and apply their validation only to user-requested clearing in virtual-environment creation.
