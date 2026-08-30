@@ -268,6 +268,9 @@ pub(crate) enum ProjectError {
     #[error("Project virtual environment directory `{0}` cannot be used because {1}")]
     InvalidProjectEnvironmentDir(PathBuf, String),
 
+    #[error("Script environment directory `{0}` cannot be used because {1}")]
+    InvalidScriptEnvironmentDir(PathBuf, String),
+
     #[error("Failed to parse `uv.lock`")]
     UvLockParse(#[source] toml::de::Error),
 
@@ -730,9 +733,10 @@ impl ScriptInterpreter {
     /// Return the expected virtual environment path for the [`Pep723Script`].
     ///
     /// If `--active` is set, the active virtual environment will be preferred.
+    /// The boolean indicates whether the returned path is managed by uv.
     ///
     /// See: [`Workspace::environment_selection`].
-    fn root(script: Pep723ItemRef<'_>, active: Option<bool>, cache: &Cache) -> PathBuf {
+    fn root(script: Pep723ItemRef<'_>, active: Option<bool>, cache: &Cache) -> (PathBuf, bool) {
         /// Resolve the `VIRTUAL_ENV` variable, if any.
         fn from_virtual_env_variable() -> Option<PathBuf> {
             let value = std::env::var_os(EnvVars::VIRTUAL_ENV)?;
@@ -788,7 +792,7 @@ impl ScriptInterpreter {
                             from_virtual_env.user_display(),
                             cache_env.user_display()
                         );
-                        return from_virtual_env;
+                        return (from_virtual_env, false);
                     }
                     Some(false) => {}
                     None => {
@@ -809,7 +813,7 @@ impl ScriptInterpreter {
         }
 
         // Otherwise, use the cache root.
-        cache_env
+        (cache_env, true)
     }
 
     /// Discover an existing script environment without selecting or downloading an interpreter.
@@ -818,7 +822,7 @@ impl ScriptInterpreter {
         active: Option<bool>,
         cache: &Cache,
     ) -> Option<PythonEnvironment> {
-        let root = Self::root(script, active, cache);
+        let (root, _) = Self::root(script, active, cache);
         match PythonEnvironment::from_root(&root, cache) {
             Ok(environment) => Some(environment),
             Err(uv_python::Error::MissingEnvironment(_)) => None,
@@ -2190,7 +2194,37 @@ impl ScriptEnvironment {
 
             // Otherwise, create a virtual environment with the discovered interpreter.
             ScriptInterpreter::Interpreter(interpreter) => {
-                let root = ScriptInterpreter::root(script, active, cache);
+                let (root, is_managed) = ScriptInterpreter::root(script, active, cache);
+
+                // Avoid removing things that are not virtual environments and are outside the
+                // environment cache.
+                if !is_managed {
+                    match (root.try_exists(), root.join("pyvenv.cfg").try_exists()) {
+                        // It's a virtual environment, so we can remove it.
+                        (_, Ok(true)) => {}
+                        // It doesn't exist at all, so we can create it.
+                        (Ok(false), Ok(false)) => {}
+                        // An empty directory can be used without losing any contents.
+                        (Ok(true), Ok(false))
+                            if root.read_dir().is_ok_and(|mut dir| dir.next().is_none()) => {}
+                        // If it's not a virtual environment, bail.
+                        (Ok(true), Ok(false)) => {
+                            return Err(ProjectError::InvalidScriptEnvironmentDir(
+                                root,
+                                "it is not a virtual environment".to_string(),
+                            ));
+                        }
+                        // Similarly, if we can't tell if it exists, bail.
+                        (_, Err(err)) | (Err(err), _) => {
+                            return Err(ProjectError::InvalidScriptEnvironmentDir(
+                                root,
+                                format!(
+                                    "uv cannot determine if it is a virtual environment: {err}"
+                                ),
+                            ));
+                        }
+                    }
+                }
 
                 // Determine a prompt for the environment, in order of preference:
                 //

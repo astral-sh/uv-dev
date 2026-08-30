@@ -4633,45 +4633,37 @@ fn run_active_script_environment() -> Result<()> {
         .child("important.txt")
         .write_str("important data")?;
 
-    // Using `--active` should create the environment
+    // Using `--active` should refuse to overwrite a non-virtual environment
     uv_snapshot!(context.filters(), context.run()
         .arg("--active")
         .arg("--script")
         .arg("main.py")
         .env(EnvVars::VIRTUAL_ENV, "foo"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    Hello, world!
-
+    exit_code: 2 (failure)
     ----- stderr -----
-    Resolved 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + iniconfig==2.0.0
+    error: Script environment directory `[TEMP_DIR]/foo` cannot be used because it is not a virtual environment
     ");
 
     active_environment.assert(predicate::path::is_dir());
-    // Silently deleting user data outside a virtual environment is undesirable.
-    // See astral-sh/uv#21364.
     active_environment
         .child("important.txt")
-        .assert(predicate::path::missing());
+        .assert(predicate::path::is_file());
 
-    // Requesting a different Python version should invalidate the environment
+    // Requesting a different Python version should still refuse to overwrite it
     uv_snapshot!(context.filters(), context.run()
         .arg("--active")
         .arg("-p").arg("3.12")
         .arg("--script")
         .arg("main.py")
         .env(EnvVars::VIRTUAL_ENV, "foo"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    Hello, world!
-
+    exit_code: 2 (failure)
     ----- stderr -----
-    Resolved 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + iniconfig==2.0.0
+    error: Script environment directory `[TEMP_DIR]/foo` cannot be used because it is not a virtual environment
     ");
+
+    active_environment
+        .child("important.txt")
+        .assert(predicate::path::is_file());
 
     Ok(())
 }
