@@ -1,0 +1,12 @@
+{
+  "outcome": "fixed",
+  "summary": "Prevent active script execution from replacing populated non-virtual-environment directories while retaining replacement behavior for uv-managed and valid virtual environments. The regression test now verifies refusal and preservation of existing files.",
+  "validation": [
+    "cargo test --package uv --test project run::run_active_script_environment -- --exact",
+    "cargo test --package uv --test sync sync::sync_active_script_environment -- --exact",
+    "cargo clippy --package uv --lib -- -D warnings",
+    "cargo fmt --all -- --check",
+    "git diff --check"
+  ],
+  "pull_request": "https://github.com/astral-sh/uv-dev/pull/924"
+}

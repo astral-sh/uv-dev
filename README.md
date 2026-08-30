@@ -14,13 +14,13 @@ conda prefixes as a consequential real-world trigger. `uv run` gives no replacem
 notice at normal verbosity; `uv sync` says that it is updating the script environment but does not
 say that the existing directory contents were deleted.
 
-The current source supports the report. When script interpreter discovery decides that the selected
-environment needs replacement, `ScriptEnvironment::get_or_init` passes its root directly to
+The pre-fix source supports the report. When script interpreter discovery decided that the selected
+environment needed replacement, `ScriptEnvironment::get_or_init` passed its root directly to
 `uv_fs::remove_virtualenv`. That helper handles links and removal ordering safely, but it does not
 verify that a directory contains `pyvenv.cfg` before recursively removing it. In contrast,
 `ProjectEnvironment::get_or_init` rejects a non-empty, non-virtual-environment directory before
-replacement. Existing integration tests cover creating and reusing a missing `VIRTUAL_ENV` for an
-active script environment, but do not cover a pre-existing non-venv directory.
+replacement. The fix now applies equivalent protection specifically to externally selected script
+environments while retaining replacement for uv-owned cache environments.
 
 No existing issue or pull request was found that tracks this script-specific safety gap. The closest
 precedent is the safe-clear work for `uv venv`, while the open conda-support issue explains how users
@@ -58,7 +58,7 @@ The expected safe behavior is to refuse to replace a non-empty directory that is
 as a virtual environment and preserve its contents, matching the project-environment protection
 described in the report.
 
-Nearby integration coverage does not exercise this unsafe input:
+At reproduction time, nearby integration coverage did not exercise this unsafe input:
 
 - `crates/uv/tests/project/run.rs`, `run_active_script_environment`, verifies that
   `uv run --active --script` creates a missing active environment and later replaces that valid
@@ -66,8 +66,36 @@ Nearby integration coverage does not exercise this unsafe input:
 - `crates/uv/tests/sync/sync.rs`, `sync_active_script_environment`, verifies the analogous create,
   reuse, and valid-environment replacement behavior for `uv sync --script --active`.
 
-Neither test pre-populates `VIRTUAL_ENV` as an ordinary non-virtual-environment directory or asserts
-that unrelated contents are preserved.
+Neither test then pre-populated `VIRTUAL_ENV` as an ordinary non-virtual-environment directory or
+asserted that unrelated contents were preserved. The parent regression subsequently added that
+fixture and was updated as part of the fix described below.
+
+## Fix
+
+Outcome: **fixed**.
+
+`ScriptInterpreter::root` now reports whether the selected root is uv-managed. Before removing an
+incompatible script environment, `ScriptEnvironment::get_or_init` checks externally selected roots:
+missing paths and empty directories remain usable, and paths containing `pyvenv.cfg` remain
+replaceable, but a non-empty path that is not a virtual environment is rejected with a dedicated
+script-environment error. Roots in uv's script-environment cache retain their existing managed
+replacement behavior.
+
+The parent regression in `crates/uv/tests/project/run.rs`, `run_active_script_environment`, was
+updated from asserting deletion to snapshotting the refusal and asserting that `important.txt`
+remains present. Its later explicit Python-version request was also corrected to expect the same
+refusal and preservation, since the fixture remains an ordinary directory after the first command.
+The neighboring `crates/uv/tests/sync/sync.rs` test `sync_active_script_environment` was inspected;
+it covers missing-path creation, valid-environment reuse, and valid-environment replacement through
+the same initializer, so it required no fixture or snapshot change and continues to pass.
+
+Successful focused validation:
+
+- `cargo test --package uv --test project run::run_active_script_environment -- --exact`
+- `cargo test --package uv --test sync sync::sync_active_script_environment -- --exact`
+- `cargo clippy --package uv --lib -- -D warnings`
+- `cargo fmt --all -- --check`
+- `git diff --check`
 
 ## Draft response
 
@@ -78,19 +106,18 @@ and from the non-virtual-directory protection added for `uv venv` in astral-sh/u
 astral-sh/uv#11315 makes the conda case particularly relevant, but it tracks `CONDA_PREFIX`
 discovery rather than this deletion behavior.
 
-The fix should make both `uv run --active --script` and `uv sync --script --active` refuse to replace
-a non-empty path that cannot be identified as a virtual environment, with integration coverage
-confirming the existing contents are preserved. I would keep the validation scoped to externally
-selected script environments unless an audit shows every `remove_virtualenv` caller can safely adopt
-the same rule, since that low-level helper is also used for uv-owned environments.
+The implemented fix makes both `uv run --active --script` and `uv sync --script --active` refuse to
+replace a non-empty path that cannot be identified as a virtual environment. The validation is
+scoped to externally selected script environments because the low-level removal helper is also used
+for uv-owned environments that must remain replaceable.
 
 ## Classification
 
 This is a reproducible correctness and data-loss bug, not an enhancement or support question. The
-observed commands delete unrelated files, and the checked-out source is consistent with that result:
-the script path performs unconditional removal after discovery rejects the existing environment,
-the removal helper does not validate the virtual-environment marker, and the corresponding project
-path has an explicit guard. GitHub currently also labels astral-sh/uv#21364 as `bug`.
+observed pre-fix commands deleted unrelated files. The confirmed cause was unconditional removal by
+the script path after discovery rejected the existing environment, despite the removal helper not
+validating the virtual-environment marker. The checkout now guards externally selected script roots
+before that removal. GitHub currently also labels astral-sh/uv#21364 as `bug`.
 
 This is not a duplicate. astral-sh/uv#19395 and astral-sh/uv#19595 cover explicit `uv venv --clear`
 behavior and apply their validation only to user-requested clearing in virtual-environment creation.
@@ -128,3 +155,5 @@ recreated a valid active venv after a relative `UV_PYTHON_INSTALL_DIR` caused ma
 detection to fail; astral-sh/uv#18398 fixed that path-normalization bug. astral-sh/uv#14985 and its
 closing astral-sh/uv#16203 concerned consistently using the removal helper, not validating arbitrary
 script roots.
+
+Pull request: https://github.com/astral-sh/uv-dev/pull/924
