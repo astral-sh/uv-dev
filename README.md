@@ -18,27 +18,36 @@ open signing issue astral-sh/uv#10336. The draft implementation in astral-sh/uv#
 binaries but does not add the Installed Apps description, publisher, icon, or executable version
 resources requested here.
 
-The screenshot is consistent with the registry entry created for a WinGet portable installation,
-but the reporter did not identify the installation method. The current WinGet 0.12.5 locale
-manifest already contains publisher, description, project, support, documentation, and license
-metadata, while its installer manifest registers uv as a portable application. That makes the
-installation method and the exact desired fields necessary to determine whether a change belongs in
-the downstream WinGet registration or in uv's Windows executable resources.
+The reporter has now clarified that uv was installed automatically by Unsloth's setup. Inspection
+of `unslothai/unsloth`'s `install.ps1` at commit
+`8059be6bca04cf3fcab2f8d3bdc54155a8560635`, the latest revision before this issue was filed, shows
+that the setup first runs WinGet upgrade/install for package `astral-sh.uv` when WinGet is
+available. If WinGet is unavailable or does not yield a usable uv, it falls back to downloading a
+pinned uv release archive, copying the executables into a user bin directory, and adding that
+directory to `PATH`.
 
-## Draft response
+The direct-download fallback does not create an Add or Remove Programs registration, whereas the
+screenshot shows such a registered entry. Together, the reporter's clarification and the Unsloth
+installer source make the WinGet portable-package path the strongest explanation for the observed
+UI, although an Unsloth installation log or `winget list --id=astral-sh.uv -e` result would confirm
+which branch actually ran. The current WinGet 0.12.5 locale manifest already contains publisher,
+description, project, support, documentation, and license metadata, while its installer manifest
+registers uv as a portable application. The remaining investigation is therefore whether WinGet
+can propagate richer manifest fields into the Windows entry and, separately, whether uv should add
+an application icon or version resources to its executables.
 
-Thanks. The screenshot shows a Windows Installed Apps entry with only uv's name and version, plus a
-generic icon. The current WinGet manifest for 0.12.5 already contains publisher, description,
-project, support, documentation, and license metadata. astral-sh/uv#18967 previously requested
-metadata on `uv.exe` and was redirected to the code-signing discussion in astral-sh/uv#10336, but
-those issues do not establish which layer is responsible for the entry shown here.
+## Reproduction and remaining information
 
-Could you confirm how uv was installed, especially whether you used
-`winget install --id=astral-sh.uv -e`, and which fields you want Windows to show—for example the
-publisher, a description or support link, or an application icon? Also, the screenshot appears to
-show 0.12.5 while the report says 0.12.15; please confirm the installed version. With those details
-we can determine whether this belongs in WinGet's portable-package registration or uv's executable
-resources.
+A representative path is a Windows 10 system with WinGet available and no acceptable uv already on
+`PATH`, followed by running Unsloth's Windows setup. At the revision inspected, the setup attempts
+`winget upgrade --id=astral-sh.uv -e --source winget` and then
+`winget install --id=astral-sh.uv -e --source winget` if needed. The resulting uv entry should then
+be inspected under Settings > Apps.
+
+The reporter still needs to identify the specific desired fields, such as publisher, description,
+support URL, or application icon. An Unsloth installation log or the result of
+`winget list --id=astral-sh.uv -e` would remove the remaining uncertainty about whether WinGet
+completed the installation rather than the direct-download fallback.
 
 ## Classification
 
@@ -83,5 +92,8 @@ astral-sh/uv#18280. astral-sh/uv#20815 was also inspected but ruled out as a rel
 a WinGet release being blocked by a missing manifest property and was treated as a downstream
 packaging problem, not the presentation of an installed entry. The current WinGet 0.12.5 manifests
 were checked and already contain rich locale metadata, so they do not establish that the same
-metadata is expected to appear in Windows Installed Apps. No merged pull request was found that had
-previously added and then regressed this behavior.
+metadata is expected to appear in Windows Installed Apps. The reporter's later identification of
+Unsloth as the installing application was checked against Unsloth's installer source as it existed
+when the issue was filed. That source confirms WinGet as the preferred uv installation path and a
+direct archive installation as the fallback. No merged pull request was found that had previously
+added and then regressed this behavior.
