@@ -71,6 +71,7 @@ pub use crate::lock::export::{
 pub use crate::lock::installable::{Installable, InstallableRootKind};
 pub use crate::lock::map::PackageMap;
 pub use crate::lock::tree::{TreeDisplay, TreeJsonTarget};
+use crate::lock::walk::LockWalker;
 use crate::resolution::{AnnotatedDist, ResolutionGraphNode};
 use crate::universal_marker::{ConflictMarker, UniversalMarker};
 use crate::{
@@ -85,6 +86,7 @@ mod installable;
 mod map;
 mod serialize;
 mod tree;
+mod walk;
 
 /// The current version of the lockfile format.
 const VERSION: u32 = 1;
@@ -1734,19 +1736,6 @@ impl Lock {
     ) where
         F: FnMut(&'lock Package, &'lock Version),
     {
-        // Enqueue a dependency for auditability checks: base package (no extra) first, then each activated extra.
-        fn enqueue_dep<'lock>(
-            seen: &mut FxHashSet<(PackageIndex, Option<&'lock ExtraName>)>,
-            queue: &mut VecDeque<(PackageIndex, Option<&'lock ExtraName>)>,
-            dep: &'lock Dependency,
-        ) {
-            for maybe_extra in std::iter::once(None).chain(dep.extra.iter().map(Some)) {
-                if seen.insert((dep.index, maybe_extra)) {
-                    queue.push_back((dep.index, maybe_extra));
-                }
-            }
-        }
-
         // Identify workspace members (the implicit root counts for single-member workspaces).
         let workspace_members: FxHashSet<PackageIndex> = if self.members().is_empty() {
             self.root()
@@ -1763,8 +1752,7 @@ impl Lock {
         };
 
         // Lockfile traversal state: (package, optional extra to activate on that package).
-        let mut queue: VecDeque<(PackageIndex, Option<&ExtraName>)> = VecDeque::new();
-        let mut seen: FxHashSet<(PackageIndex, Option<&ExtraName>)> = FxHashSet::default();
+        let mut walker = LockWalker::new(self);
 
         // Seed from workspace members. Always queue with `None` so that we can traverse
         // their dependency groups; only queue extras when prod mode is active.
@@ -1775,14 +1763,10 @@ impl Lock {
             .filter(|(index, _)| workspace_members.contains(&PackageIndex(*index)))
         {
             let index = PackageIndex(index);
-            if seen.insert((index, None)) {
-                queue.push_back((index, None));
-            }
+            walker.push(index, None);
             if groups.prod() {
                 for extra in extras.extra_names(package.optional_dependencies.keys()) {
-                    if seen.insert((index, Some(extra))) {
-                        queue.push_back((index, Some(extra)));
-                    }
+                    walker.push(index, Some(extra));
                 }
             }
         }
@@ -1796,14 +1780,7 @@ impl Lock {
                 .filter(|(_, package)| package.id.name == requirement.name)
             {
                 let index = PackageIndex(index);
-                if seen.insert((index, None)) {
-                    queue.push_back((index, None));
-                }
-                for extra in &*requirement.extras {
-                    if seen.insert((index, Some(extra))) {
-                        queue.push_back((index, Some(extra)));
-                    }
-                }
+                walker.push_package(index, &requirement.extras);
             }
         }
 
@@ -1821,20 +1798,15 @@ impl Lock {
                     .filter(|(_, package)| package.id.name == requirement.name)
                 {
                     let index = PackageIndex(index);
-                    if seen.insert((index, None)) {
-                        queue.push_back((index, None));
-                    }
-                    for extra in &*requirement.extras {
-                        if seen.insert((index, Some(extra))) {
-                            queue.push_back((index, Some(extra)));
-                        }
-                    }
+                    walker.push_package(index, &requirement.extras);
                 }
             }
         }
 
-        while let Some((index, extra)) = queue.pop_front() {
-            let package = self.package(index);
+        while let Some(state) = walker.pop() {
+            let index = state.index;
+            let extra = state.extra;
+            let package = state.package;
             let is_member = workspace_members.contains(&index);
 
             // Collect non-workspace packages that have version information
@@ -1858,24 +1830,20 @@ impl Lock {
                     .filter(|(group, _)| groups.contains(group))
                     .flat_map(|(_, deps)| deps)
                 {
-                    enqueue_dep(&mut seen, &mut queue, dep);
+                    walker.push_dependency(dep);
                 }
             }
 
             // Follow the regular/extra dependencies for this (package, extra) pair.
             // For workspace members in only-group mode, skip regular dependencies.
-            let dependencies: &[Dependency] = match extra {
-                Some(extra) => package
-                    .optional_dependencies
-                    .get(extra)
-                    .map(Vec::as_slice)
-                    .unwrap_or_default(),
-                None if is_member && !groups.prod() => &[],
-                None => &package.dependencies,
+            let dependencies = if is_member && extra.is_none() && !groups.prod() {
+                &[]
+            } else {
+                state.dependencies
             };
 
             for dep in dependencies {
-                enqueue_dep(&mut seen, &mut queue, dep);
+                walker.push_dependency(dep);
             }
         }
     }
@@ -4531,6 +4499,18 @@ impl Package {
     /// Returns the dependencies of the package.
     pub fn dependencies(&self) -> &[Dependency] {
         &self.dependencies
+    }
+
+    /// Returns the dependencies contributed by the package or one activated extra.
+    fn dependencies_for_extra(&self, extra: Option<&ExtraName>) -> &[Dependency] {
+        match extra {
+            Some(extra) => self
+                .optional_dependencies
+                .get(extra)
+                .map(Vec::as_slice)
+                .unwrap_or_default(),
+            None => &self.dependencies,
+        }
     }
 
     /// Returns all production, optional, and development dependencies of the [`Package`].

@@ -24,6 +24,7 @@ use crate::lock::export::{
     MetadataNode, MetadataNodeId, MetadataNodeKind, MetadataScript, MetadataWorkspace,
     MetadataWorkspaceMember,
 };
+use crate::lock::walk::LockWalker;
 use crate::lock::{Package, PackageId, PackageIndex};
 use crate::{ConflictMarker, Lock, PackageMap, UniversalMarker};
 
@@ -116,8 +117,7 @@ impl<'env> TreeDisplay<'env> {
         let mut graph =
             Graph::<Node, Edge, petgraph::Directed>::with_capacity(size_guess, size_guess);
         let mut inverse = vec![None; size_guess];
-        let mut queue: VecDeque<(PackageIndex, Option<&ExtraName>)> = VecDeque::new();
-        let mut seen = FxHashSet::default();
+        let mut walker = LockWalker::new(lock);
 
         let root = graph.add_node(Node::Root);
 
@@ -141,15 +141,11 @@ impl<'env> TreeDisplay<'env> {
 
             if groups.prod() {
                 // Push its dependencies on the queue.
-                if seen.insert((package_index, None)) {
-                    queue.push_back((package_index, None));
-                }
+                walker.push(package_index, None);
 
                 // Push any extras on the queue.
                 for extra in dist.optional_dependencies.keys() {
-                    if seen.insert((package_index, Some(extra))) {
-                        queue.push_back((package_index, Some(extra)));
-                    }
+                    walker.push(package_index, Some(extra));
                 }
             }
 
@@ -192,14 +188,7 @@ impl<'env> TreeDisplay<'env> {
                 );
 
                 // Push its dependencies on the queue.
-                if seen.insert((dep.index, None)) {
-                    queue.push_back((dep.index, None));
-                }
-                for extra in &dep.extra {
-                    if seen.insert((dep.index, Some(extra))) {
-                        queue.push_back((dep.index, Some(extra)));
-                    }
-                }
+                walker.push_dependency(dep);
             }
         }
 
@@ -262,14 +251,7 @@ impl<'env> TreeDisplay<'env> {
                     );
 
                     // Push its dependencies on the queue.
-                    if seen.insert((package_index, None)) {
-                        queue.push_back((package_index, None));
-                    }
-                    for extra in &*requirement.extras {
-                        if seen.insert((package_index, Some(extra))) {
-                            queue.push_back((package_index, Some(extra)));
-                        }
-                    }
+                    walker.push_package(package_index, &requirement.extras);
                 }
             }
 
@@ -315,37 +297,19 @@ impl<'env> TreeDisplay<'env> {
                         );
 
                         // Push its dependencies on the queue.
-                        if seen.insert((package_index, None)) {
-                            queue.push_back((package_index, None));
-                        }
-                        for extra in &*requirement.extras {
-                            if seen.insert((package_index, Some(extra))) {
-                                queue.push_back((package_index, Some(extra)));
-                            }
-                        }
+                        walker.push_package(package_index, &requirement.extras);
                     }
                 }
             }
         }
 
         // Create all the relevant nodes.
-        while let Some((package_index, extra)) = queue.pop_front() {
+        while let Some(visit) = walker.pop() {
+            let package_index = visit.index;
+            let extra = visit.extra;
             let index = inverse[package_index.0].expect("queued package has a graph node");
-            let package = lock.package(package_index);
 
-            let deps = if let Some(extra) = extra {
-                Either::Left(
-                    package
-                        .optional_dependencies
-                        .get(extra)
-                        .into_iter()
-                        .flatten(),
-                )
-            } else {
-                Either::Right(package.dependencies.iter())
-            };
-
-            for dep in deps {
+            for dep in visit.dependencies {
                 if prune.contains(&dep.package_id.name) {
                     continue;
                 }
@@ -379,14 +343,7 @@ impl<'env> TreeDisplay<'env> {
                 );
 
                 // Push its dependencies on the queue.
-                if seen.insert((dep.index, None)) {
-                    queue.push_back((dep.index, None));
-                }
-                for extra in &dep.extra {
-                    if seen.insert((dep.index, Some(extra))) {
-                        queue.push_back((dep.index, Some(extra)));
-                    }
-                }
+                walker.push_dependency(dep);
             }
         }
 
