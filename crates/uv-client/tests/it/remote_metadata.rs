@@ -129,7 +129,8 @@ async fn remote_metadata_redirect_same_origin() -> Result<()> {
         .named("ranged GET request to the redirecting wheel URL")
         .mount(&server)
         .await;
-    // No streaming fallback should be sent to the source.
+    // The target supports ranges, so metadata should be read without starting a streaming
+    // download. A fallback here would hide a failure to follow the range request's redirect.
     Mock::given(method("GET"))
         .and(path("/artifact"))
         .and(basic_auth("source-user", "source-password"))
@@ -156,7 +157,8 @@ async fn remote_metadata_redirect_same_origin() -> Result<()> {
         .mount(&server)
         .await;
     let ranged_wheel = wheel.clone();
-    // The range request should follow the redirect to the target.
+    // Range requests must follow redirects just like the initial `HEAD` probe; otherwise,
+    // redirected wheels cannot benefit from fetching only the bytes needed for metadata.
     Mock::given(method("GET"))
         .and(path("/head-wheel"))
         .and(basic_auth("source-user", "source-password"))
@@ -166,7 +168,8 @@ async fn remote_metadata_redirect_same_origin() -> Result<()> {
         .named("ranged GET request to the same-origin redirect target")
         .mount(&server)
         .await;
-    // No streaming fallback should be sent to the redirect target.
+    // The range response already provides the metadata. Streaming the wheel as well would
+    // transfer unnecessary data and could mask a failure in the range-reading path.
     Mock::given(method("GET"))
         .and(path("/head-wheel"))
         .and(basic_auth("source-user", "source-password"))
@@ -212,7 +215,8 @@ async fn remote_metadata_redirect_cross_origin() -> Result<()> {
         .named("ranged GET request to the redirecting wheel URL")
         .mount(&source_server)
         .await;
-    // No streaming fallback should be sent to the source.
+    // Moving the wheel to another origin should not force a streaming download when that
+    // origin supports ranges. Metadata should still be read from a partial response.
     Mock::given(method("GET"))
         .and(path("/artifact"))
         .and(basic_auth("source-user", "source-password"))
@@ -236,7 +240,8 @@ async fn remote_metadata_redirect_cross_origin() -> Result<()> {
         .mount(&target_server)
         .await;
     let ranged_wheel = wheel.clone();
-    // The range request should follow the redirect without forwarding source credentials.
+    // The range request must reach the artifact host, but that host may be controlled by a
+    // different party. Strip the source credentials so following the redirect cannot leak them.
     Mock::given(method("GET"))
         .and(path("/head-wheel"))
         .and(header_missing(AUTHORIZATION))
@@ -246,7 +251,8 @@ async fn remote_metadata_redirect_cross_origin() -> Result<()> {
         .named("unauthenticated ranged GET request to the cross-origin redirect target")
         .mount(&target_server)
         .await;
-    // No streaming fallback should be sent to the redirect target.
+    // The artifact host can serve the required range without source credentials. A streaming
+    // fallback would hide a failure to complete that range request.
     Mock::given(method("GET"))
         .and(path("/head-wheel"))
         .and(header_missing(AUTHORIZATION))
@@ -307,7 +313,8 @@ async fn remote_metadata_redirect_method_specific_target() -> Result<()> {
         .named("HEAD request to the redirecting wheel URL")
         .mount(&source_server)
         .await;
-    // The authenticated range request should receive the distinct signed `GET` target.
+    // Both ranges must start at the source to obtain a URL valid for `GET`. Reusing the `HEAD`
+    // destination would fail on servers that include the HTTP method in the URL signature.
     Mock::given(method("GET"))
         .and(path("/artifact"))
         .and(basic_auth("source-user", "source-password"))
@@ -317,7 +324,8 @@ async fn remote_metadata_redirect_method_specific_target() -> Result<()> {
         .named("ranged GET request to the redirecting wheel URL")
         .mount(&source_server)
         .await;
-    // No streaming fallback should be sent to the source.
+    // Both required ranges are available through the `GET` redirect. Falling back to streaming
+    // would let this test pass even if ranged requests still could not follow that redirect.
     Mock::given(method("GET"))
         .and(path("/artifact"))
         .and(basic_auth("source-user", "source-password"))
@@ -341,7 +349,8 @@ async fn remote_metadata_redirect_method_specific_target() -> Result<()> {
         .mount(&target_server)
         .await;
     let ranged_wheel = wheel.clone();
-    // Each range request should follow the redirect to the signed `GET` target.
+    // The central directory and metadata are in separate ranges. Both must use the `GET`
+    // destination and its credentials so neither depends on a URL signed only for `HEAD`.
     Mock::given(method("GET"))
         .and(path("/get-wheel"))
         .and(basic_auth("get-user", "get-password"))
@@ -351,7 +360,8 @@ async fn remote_metadata_redirect_method_specific_target() -> Result<()> {
         .named("ranged GET request to the method-specific GET redirect target")
         .mount(&target_server)
         .await;
-    // No streaming fallback should be sent to the signed `GET` target.
+    // The two partial responses should suffice to read the metadata. A full `GET` would bypass
+    // the range-reading behavior that this test is intended to protect.
     Mock::given(method("GET"))
         .and(path("/get-wheel"))
         .and(basic_auth("get-user", "get-password"))
@@ -433,8 +443,11 @@ async fn remote_metadata_bounded_ranges() -> Result<()> {
     assert_wheel_metadata_readable(&server).await
 }
 
-/// A range request should follow the redirect and surface an error from the target.
-/// This synthetic target advertises range support but rejects the ranged `GET` with `403`.
+/// Documents a compatibility limitation exposed by following range redirects.
+/// This synthetic target advertises ranges and permits streaming, but rejects ranged `GET` with
+/// `403`. Previously, the unfollowed redirect triggered streaming before uv ever reached that
+/// rejection. The range reader's `403` does not currently trigger a streaming fallback; restoring
+/// that fallback is proposed separately in astral-sh/uv-dev#917.
 #[tokio::test]
 async fn remote_metadata_redirect_range_forbidden() -> Result<()> {
     let source_server = MockServer::start().await;
@@ -459,7 +472,8 @@ async fn remote_metadata_redirect_range_forbidden() -> Result<()> {
         .named("ranged GET request to the redirecting wheel URL")
         .mount(&source_server)
         .await;
-    // No streaming fallback should be sent to the source.
+    // The current fallback policy does not classify the range reader's `403` as unsupported
+    // ranges, so it returns the error without retrying the source with a full `GET`.
     Mock::given(method("GET"))
         .and(path("/artifact"))
         .and(basic_auth("source-user", "source-password"))
@@ -482,7 +496,8 @@ async fn remote_metadata_redirect_range_forbidden() -> Result<()> {
         .expect(1)
         .mount(&target_server)
         .await;
-    // The range request should follow the redirect to the target.
+    // We must reach this response to exercise the target's rejection. Previously, the
+    // unfollowed redirect caused a fallback before this response was ever returned.
     Mock::given(method("GET"))
         .and(path("/wheel"))
         .and(header_missing(AUTHORIZATION))
@@ -492,7 +507,8 @@ async fn remote_metadata_redirect_range_forbidden() -> Result<()> {
         .named("forbidden range request to the redirect target")
         .mount(&target_server)
         .await;
-    // No streaming fallback should be sent to the redirect target.
+    // This endpoint would allow metadata extraction by streaming, but the unhandled range
+    // error currently prevents that fallback. Keep it here to make the compatibility gap clear.
     Mock::given(method("GET"))
         .and(path("/wheel"))
         .and(header_missing(AUTHORIZATION))

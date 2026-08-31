@@ -33,6 +33,8 @@ impl Middleware for RecordRequests {
 }
 
 /// The standard client must retain caller extensions and run appended middleware on each hop.
+/// Redirects are still part of the caller's request, so they must preserve its context and custom
+/// request handling.
 #[tokio::test]
 async fn redirect_preserves_middleware_and_extensions() -> Result<()> {
     let server = MockServer::start().await;
@@ -83,6 +85,8 @@ async fn redirect_preserves_middleware_and_extensions() -> Result<()> {
 }
 
 /// Each redirect hop has its own retry budget, without resending successful earlier hops.
+/// Retrying the whole chain would repeat successful requests and could exhaust the retry budget
+/// before the destination recovers.
 #[tokio::test]
 async fn redirect_retries_each_hop() -> Result<()> {
     let server = MockServer::start().await;
