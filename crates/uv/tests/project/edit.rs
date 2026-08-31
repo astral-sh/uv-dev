@@ -8,9 +8,10 @@ mod conditional_imports {
 #[cfg(feature = "test-git")]
 use conditional_imports::*;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
+use http::header::AUTHORIZATION;
 use indoc::{formatdoc, indoc};
 use insta::assert_snapshot;
 use serde_json::json;
@@ -13958,7 +13959,7 @@ async fn add_redirect_with_keyring_cross_origin() -> Result<()> {
 }
 
 /// If uv receives a cross-origin 302 redirect, it should use credentials from netrc
-/// for the new location.
+/// for the new location, even when the source has no credentials (astral-sh/uv#5595).
 #[tokio::test]
 async fn pip_install_redirect_with_netrc_cross_origin() -> Result<()> {
     let context = uv_test::test_context!("3.12").with_filter((r"127\.0\.0\.1:\d*", "[LOCALHOST]"));
@@ -13982,7 +13983,8 @@ async fn pip_install_redirect_with_netrc_cross_origin() -> Result<()> {
         .await;
 
     let mut redirect_url = Url::parse(&redirect_server.uri())?;
-    let _ = redirect_url.set_username("public");
+    // Netrc matches hostnames, so only the destination should match its credentials.
+    redirect_url.set_host(Some("localhost"))?;
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("anyio")
@@ -14002,6 +14004,17 @@ async fn pip_install_redirect_with_netrc_cross_origin() -> Result<()> {
     );
 
     context.assert_command("import anyio").success();
+
+    let requests = redirect_server
+        .received_requests()
+        .await
+        .context("redirect server should record requests")?;
+    assert!(!requests.is_empty());
+    assert!(
+        requests
+            .iter()
+            .all(|request| !request.headers.contains_key(AUTHORIZATION))
+    );
 
     Ok(())
 }
