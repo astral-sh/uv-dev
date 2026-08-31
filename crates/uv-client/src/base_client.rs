@@ -644,7 +644,8 @@ impl<'a> BaseClientBuilder<'a> {
             Connectivity::Online => {
                 let mut client = reqwest_middleware::ClientBuilder::new(client);
 
-                // Run redirects before the other middleware so each hop can retry and authenticate.
+                // Redirect handling must come first so each hop reruns retries, extra middleware,
+                // and authentication. Middleware before it would not be rerun for each redirect.
                 match self.redirect_policy {
                     RedirectPolicy::RetriggerMiddleware => {
                         client = client.with(RedirectMiddleware {
@@ -840,7 +841,8 @@ impl Middleware for RedirectMiddleware {
     /// redirects).
     ///
     /// Unlike the built-in reqwest redirect policies, this sends the redirect request through the
-    /// remaining middleware pipeline again.
+    /// remaining middleware pipeline again. This middleware must be installed first so each
+    /// redirect reruns all other middleware, including retries and authentication.
     ///
     /// See RFC 7231 7.1.2 <https://www.rfc-editor.org/rfc/rfc7231#section-7.1.2> for details on
     /// redirect semantics.
