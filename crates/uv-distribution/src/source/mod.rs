@@ -1881,6 +1881,9 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             WheelCache::Git(resource.url, git_sha.as_short_str()).root(),
         );
 
+        // Hold the lock across revision lookup and building so concurrent processes reuse the result.
+        let _lock = cache_shard.lock().await.map_err(Error::CacheLock)?;
+
         // Fetch the revision for the source distribution.
         let revision = self
             .git_archive_revision(source, resource, &fetch, &cache_shard, hashes)
@@ -1990,6 +1993,9 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             CacheBucket::SourceDistributions,
             WheelCache::Git(resource.url, git_sha.as_short_str()).root(),
         );
+
+        // Coordinate with wheel builds, which share the extracted source and metadata cache.
+        let _lock = cache_shard.lock().await.map_err(Error::CacheLock)?;
 
         // Fetch the revision for the source distribution.
         let revision = self
