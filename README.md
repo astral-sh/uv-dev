@@ -92,9 +92,30 @@ the same initializer, so it required no fixture or snapshot change and continues
 A maintainer follow-up explicitly expressed interest in the reporter's broader alternative: moving
 the virtual-environment validation into `remove_virtualenv` itself. This is useful implementation
 direction, but not yet a final design decision. The current fix in astral-sh/uv-dev#924 instead
-guards only externally selected script roots. Review should therefore determine whether the helper
-can enforce the check for every caller without preventing intended removal of uv-owned environments,
-or whether its API needs an explicit policy for validated external paths versus known managed paths.
+guards only externally selected script roots.
+
+The reporter subsequently proposed making both `uv_fs::remove_virtualenv` and
+`uv_fs::clear_virtualenv` accept an explicit policy for non-virtual-environment directories. Under
+that proposal, the default/refusing policy would reject a non-empty directory without
+`pyvenv.cfg`, while an allowing policy would retain intentional removal. The suggested caller
+mapping is:
+
+- refuse for active script environments and the project path;
+- refuse by default in `create_venv`, but allow when `ClearNonVirtualenv::Allow` preserves the
+  explicit `uv venv --force` behavior;
+- allow for `uv-tool` cleanup, where an invalid tool environment may legitimately lack
+  `pyvenv.cfg`.
+
+The proposal keeps the existing direct handling of files and links, so centralized-environment
+references would not be subjected to directory validation. It suggests `io::ErrorKind::InvalidInput`
+for refusal, although the appropriate error representation remains a review question. This design
+has not been source-validated or accepted; review should compare it with the scoped fix and audit all
+helper callers before changing the helper contract.
+
+The reporter also noted that the script path passes `RemovalReason::ManagedEnvironment` to
+`create_venv` even when `--active` selected an externally managed `VIRTUAL_ENV`. This naming or
+policy mismatch is worth auditing separately, but it is not the cause of this deletion: the unsafe
+removal occurs before `create_venv` is called.
 
 Successful focused validation:
 
