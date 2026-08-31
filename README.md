@@ -4,6 +4,9 @@ Issue: astral-sh/uv#21238
 
 Classification: question
 
+Status: closed pending a clear minimal reproducible example; maintainers said it can be reopened
+when one is provided.
+
 ## Summary
 
 The reporter said that “UV run logger” in a uv workspace executed `/usr/bin/logger` rather than
@@ -11,6 +14,10 @@ their workspace's Python package named `logger`. A maintainer asked them to conf
 invocation was `uv run logger` and stated that, in general, the workspace should take precedence
 over commands on `PATH`. This strongly points to `uv run` command resolution as the relevant
 subsystem, but the exact command has not yet been explicitly confirmed.
+
+After no further reproduction details were provided, a maintainer closed the issue and explicitly
+invited reopening if a clear minimal reproducible example becomes available. No bug was confirmed
+before closure.
 
 `uv run` runs a command with the project environment on `PATH`; it does not interpret an arbitrary
 command argument as a request to run or import the same-named Python package. A Python distribution
@@ -33,7 +40,8 @@ Partial reproduction inferred from the issue author's clarification:
 
 The report still lacks confirmation of the literal command, the uv and macOS versions, a minimal
 workspace, command output, and the package metadata needed to determine whether it provides a
-`logger` executable.
+`logger` executable. The issue is closed for now; this information is required to justify reopening
+and further investigation.
 
 ## Information needed
 
@@ -51,11 +59,13 @@ workspace, command output, and the package metadata needed to determine whether 
 
 ## Classification
 
-`question` remains the best classification pending the requested details. The maintainer has now
-established that workspace commands should generally take precedence over `PATH`, so a verified
-workspace-provided `logger` executable losing to `/usr/bin/logger` would be incorrect behavior.
-However, the report still does not confirm the literal invocation or establish that the Python
-package installs a `logger` executable; a package name alone is not a command entry point.
+`question` remains the best classification. Maintainers closed the issue without confirming a bug
+because the requested minimal reproducible example was not provided, while leaving open the option
+to reopen it when one is available. A maintainer established that workspace commands should
+generally take precedence over `PATH`, so a verified workspace-provided `logger` executable losing
+to `/usr/bin/logger` would be incorrect behavior. However, the report does not confirm the literal
+invocation or establish that the Python package installs a `logger` executable; a package name alone
+is not a command entry point.
 
 If the package does not provide that executable, astral-sh/uv#3097 already tracks the enhancement
 that would prevent commands outside the current environment from being run. If a minimal
