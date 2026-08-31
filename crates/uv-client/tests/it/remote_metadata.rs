@@ -129,7 +129,7 @@ async fn remote_metadata_redirect_same_origin() -> Result<()> {
         .named("ranged GET request to the redirecting wheel URL")
         .mount(&server)
         .await;
-    // A streaming retry should be sent to the source when the range request cannot be used.
+    // No streaming fallback should be sent to the source.
     Mock::given(method("GET"))
         .and(path("/artifact"))
         .and(basic_auth("source-user", "source-password"))
@@ -138,7 +138,7 @@ async fn remote_metadata_redirect_same_origin() -> Result<()> {
             ResponseTemplate::new(303)
                 .insert_header(LOCATION, format!("{}/head-wheel", server.uri())),
         )
-        .expect(1)
+        .expect(0)
         .named("streaming fallback GET request to the redirecting wheel URL")
         .mount(&server)
         .await;
@@ -156,23 +156,23 @@ async fn remote_metadata_redirect_same_origin() -> Result<()> {
         .mount(&server)
         .await;
     let ranged_wheel = wheel.clone();
-    // The range request should not be sent to the redirect target.
+    // The range request should follow the redirect to the target.
     Mock::given(method("GET"))
         .and(path("/head-wheel"))
         .and(basic_auth("source-user", "source-password"))
         .and(header_exists(RANGE.as_str()))
         .respond_with(move |request: &Request| wheel_range_response(request, &ranged_wheel))
-        .expect(0)
+        .expect(1)
         .named("ranged GET request to the same-origin redirect target")
         .mount(&server)
         .await;
-    // The streaming retry should follow the redirect with the source credentials intact.
+    // No streaming fallback should be sent to the redirect target.
     Mock::given(method("GET"))
         .and(path("/head-wheel"))
         .and(basic_auth("source-user", "source-password"))
         .and(header_missing(RANGE))
         .respond_with(ResponseTemplate::new(200).set_body_raw(wheel, "application/octet-stream"))
-        .expect(1)
+        .expect(0)
         .named("streaming GET request to the same-origin redirect target")
         .mount(&server)
         .await;
@@ -212,13 +212,13 @@ async fn remote_metadata_redirect_cross_origin() -> Result<()> {
         .named("ranged GET request to the redirecting wheel URL")
         .mount(&source_server)
         .await;
-    // A streaming retry should be sent to the source when the range request cannot be used.
+    // No streaming fallback should be sent to the source.
     Mock::given(method("GET"))
         .and(path("/artifact"))
         .and(basic_auth("source-user", "source-password"))
         .and(header_missing(RANGE))
         .respond_with(ResponseTemplate::new(303).insert_header(LOCATION, target))
-        .expect(1)
+        .expect(0)
         .named("streaming fallback GET request to the redirecting wheel URL")
         .mount(&source_server)
         .await;
@@ -236,23 +236,23 @@ async fn remote_metadata_redirect_cross_origin() -> Result<()> {
         .mount(&target_server)
         .await;
     let ranged_wheel = wheel.clone();
-    // The range request should not be sent to the cross-origin redirect target.
+    // The range request should follow the redirect without forwarding source credentials.
     Mock::given(method("GET"))
         .and(path("/head-wheel"))
         .and(header_missing(AUTHORIZATION))
         .and(header_exists(RANGE.as_str()))
         .respond_with(move |request: &Request| wheel_range_response(request, &ranged_wheel))
-        .expect(0)
+        .expect(1)
         .named("unauthenticated ranged GET request to the cross-origin redirect target")
         .mount(&target_server)
         .await;
-    // The streaming retry should follow the redirect without forwarding source credentials.
+    // No streaming fallback should be sent to the redirect target.
     Mock::given(method("GET"))
         .and(path("/head-wheel"))
         .and(header_missing(AUTHORIZATION))
         .and(header_missing(RANGE))
         .respond_with(ResponseTemplate::new(200).set_body_raw(wheel, "application/octet-stream"))
-        .expect(1)
+        .expect(0)
         .named("unauthenticated streaming GET request to the cross-origin redirect target")
         .mount(&target_server)
         .await;
@@ -313,17 +313,17 @@ async fn remote_metadata_redirect_method_specific_target() -> Result<()> {
         .and(basic_auth("source-user", "source-password"))
         .and(header_exists(RANGE.as_str()))
         .respond_with(ResponseTemplate::new(303).insert_header(LOCATION, get_target.clone()))
-        .expect(1)
+        .expect(2)
         .named("ranged GET request to the redirecting wheel URL")
         .mount(&source_server)
         .await;
-    // The streaming retry should receive the same signed `GET` target.
+    // No streaming fallback should be sent to the source.
     Mock::given(method("GET"))
         .and(path("/artifact"))
         .and(basic_auth("source-user", "source-password"))
         .and(header_missing(RANGE))
         .respond_with(ResponseTemplate::new(303).insert_header(LOCATION, get_target))
-        .expect(1)
+        .expect(0)
         .named("streaming fallback GET request to the redirecting wheel URL")
         .mount(&source_server)
         .await;
@@ -341,23 +341,23 @@ async fn remote_metadata_redirect_method_specific_target() -> Result<()> {
         .mount(&target_server)
         .await;
     let ranged_wheel = wheel.clone();
-    // The range request should not be sent to the signed `GET` target.
+    // Each range request should follow the redirect to the signed `GET` target.
     Mock::given(method("GET"))
         .and(path("/get-wheel"))
         .and(basic_auth("get-user", "get-password"))
         .and(header_exists(RANGE.as_str()))
         .respond_with(move |request: &Request| wheel_range_response(request, &ranged_wheel))
-        .expect(0)
+        .expect(2)
         .named("ranged GET request to the method-specific GET redirect target")
         .mount(&target_server)
         .await;
-    // The streaming retry should use the credentials embedded in the signed `GET` target.
+    // No streaming fallback should be sent to the signed `GET` target.
     Mock::given(method("GET"))
         .and(path("/get-wheel"))
         .and(basic_auth("get-user", "get-password"))
         .and(header_missing(RANGE))
         .respond_with(ResponseTemplate::new(200).set_body_raw(wheel, "application/octet-stream"))
-        .expect(1)
+        .expect(0)
         .named("streaming GET request to the method-specific GET redirect target")
         .mount(&target_server)
         .await;
@@ -433,9 +433,8 @@ async fn remote_metadata_bounded_ranges() -> Result<()> {
     assert_wheel_metadata_readable(&server).await
 }
 
-/// A redirect target may reject range requests while allowing a full download. The range request
-/// should not reach the target; metadata should be read after retrying the source without a `Range`
-/// header.
+/// A range request should follow the redirect and surface an error from the target.
+/// This synthetic target advertises range support but rejects the ranged `GET` with `403`.
 #[tokio::test]
 async fn remote_metadata_redirect_range_forbidden() -> Result<()> {
     let source_server = MockServer::start().await;
@@ -460,13 +459,13 @@ async fn remote_metadata_redirect_range_forbidden() -> Result<()> {
         .named("ranged GET request to the redirecting wheel URL")
         .mount(&source_server)
         .await;
-    // A streaming retry should be sent to the source when the range request cannot be used.
+    // No streaming fallback should be sent to the source.
     Mock::given(method("GET"))
         .and(path("/artifact"))
         .and(basic_auth("source-user", "source-password"))
         .and(header_missing(RANGE))
         .respond_with(ResponseTemplate::new(303).insert_header(LOCATION, target))
-        .expect(1)
+        .expect(0)
         .named("streaming fallback GET request to the redirecting wheel URL")
         .mount(&source_server)
         .await;
@@ -483,28 +482,35 @@ async fn remote_metadata_redirect_range_forbidden() -> Result<()> {
         .expect(1)
         .mount(&target_server)
         .await;
-    // The range request should not be sent to the redirect target.
+    // The range request should follow the redirect to the target.
     Mock::given(method("GET"))
         .and(path("/wheel"))
         .and(header_missing(AUTHORIZATION))
         .and(header_exists(RANGE.as_str()))
         .respond_with(ResponseTemplate::new(403))
-        .expect(0)
+        .expect(1)
         .named("forbidden range request to the redirect target")
         .mount(&target_server)
         .await;
-    // The streaming retry should follow the redirect without forwarding source credentials.
+    // No streaming fallback should be sent to the redirect target.
     Mock::given(method("GET"))
         .and(path("/wheel"))
         .and(header_missing(AUTHORIZATION))
         .and(header_missing(RANGE))
         .respond_with(ResponseTemplate::new(200).set_body_raw(wheel, "application/octet-stream"))
-        .expect(1)
+        .expect(0)
         .named("streaming GET request to the redirect target")
         .mount(&target_server)
         .await;
 
-    assert_wheel_metadata_readable(&source_server).await
+    let error = assert_wheel_metadata_readable(&source_server)
+        .await
+        .expect_err("the redirect target should reject the range request");
+    insta::assert_snapshot!(
+        error.root_cause().to_string().replace(&target_server.uri(), "[TARGET]"),
+        @"HTTP status client error (403 Forbidden) for url ([TARGET]/wheel)"
+    );
+    Ok(())
 }
 
 #[derive(Debug)]
