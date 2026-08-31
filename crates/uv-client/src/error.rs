@@ -374,16 +374,57 @@ impl Error {
             ErrorKind::Zip(_, ZipError::UpstreamReadError(err)) => err
                 .get_ref()
                 .and_then(|err| err.downcast_ref::<AsyncHttpRangeReaderError>()),
-            _ => None,
+            ErrorKind::InvalidUrl(_)
+            | ErrorKind::Flat(_)
+            | ErrorKind::Git(_)
+            | ErrorKind::MissingWheelGitLfsArtifacts(..)
+            | ErrorKind::NonFileUrl(_)
+            | ErrorKind::CannotBeABase(_)
+            | ErrorKind::Metadata(..)
+            | ErrorKind::NoIndex(_)
+            | ErrorKind::RemotePackageNotFound(_)
+            | ErrorKind::LocalPackageNotFound(_)
+            | ErrorKind::LocalIndexNotFound(_)
+            | ErrorKind::MetadataParseError(..)
+            | ErrorKind::WrappedReqwestError(..)
+            | ErrorKind::BadJson { .. }
+            | ErrorKind::BadHtml { .. }
+            | ErrorKind::MetadataRangeRequestsRequired(..)
+            | ErrorKind::WheelFilename(_)
+            | ErrorKind::NameMismatch { .. }
+            | ErrorKind::Zip(..)
+            | ErrorKind::CacheWrite(_)
+            | ErrorKind::CacheLock(_)
+            | ErrorKind::Io(_)
+            | ErrorKind::Decode(_)
+            | ErrorKind::Encode(_)
+            | ErrorKind::MissingContentType(_)
+            | ErrorKind::InvalidContentTypeHeader(..)
+            | ErrorKind::UnsupportedMediaType(..)
+            | ErrorKind::ArchiveRead(_)
+            | ErrorKind::ArchiveWrite(_)
+            | ErrorKind::Offline(_) => None,
         };
-        matches!(
-            range_error,
+        match range_error {
             Some(
                 AsyncHttpRangeReaderError::HttpError(_)
-                    | AsyncHttpRangeReaderError::TransportError(_)
-                    | AsyncHttpRangeReaderError::IoError(_)
+                | AsyncHttpRangeReaderError::TransportError(_)
+                | AsyncHttpRangeReaderError::IoError(_),
+            ) => true,
+            Some(
+                AsyncHttpRangeReaderError::HttpRangeRequestUnsupported
+                | AsyncHttpRangeReaderError::ContentRangeMissing
+                | AsyncHttpRangeReaderError::ContentLengthMissing
+                | AsyncHttpRangeReaderError::MemoryMapError(_)
+                | AsyncHttpRangeReaderError::ContentRangeParser(_)
+                | AsyncHttpRangeReaderError::RangeMismatch { .. }
+                | AsyncHttpRangeReaderError::ResponseTooLong { .. }
+                | AsyncHttpRangeReaderError::ResponseTooShort { .. },
             )
-        )
+            | None => false,
+            // The dependency marks `AsyncHttpRangeReaderError` as non-exhaustive.
+            Some(_) => false,
+        }
     }
 
     /// Returns `true` if the error is due to the server not supporting HTTP streaming. Most
