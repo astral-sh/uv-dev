@@ -401,6 +401,16 @@ jobs:
       plan: ${{ needs.plan.outputs.val }}
     secrets: inherit
 
+  publish-setup-uv-checksums:
+    needs:
+      - publish-versions
+    if: ${{ always() && needs.publish-versions.result == 'success' }}
+    uses: $/.github/workflows/publish-setup-uv-checksums.yml
+    secrets: inherit
+    permissions:
+      "contents": "read"
+      "id-token": "write"
+
   publish-mirror:
     needs:
       - plan
