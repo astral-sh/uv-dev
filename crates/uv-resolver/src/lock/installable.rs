@@ -1,26 +1,24 @@
 use std::collections::BTreeSet;
-use std::collections::VecDeque;
-use std::collections::hash_map::Entry;
 use std::path::Path;
 use std::sync::Arc;
 
-use either::Either;
 use itertools::Itertools;
 use petgraph::Graph;
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashSet;
 
 use uv_configuration::{
     BuildOptions, DependencyGroupsWithDefaults, ExtrasSpecification,
     ExtrasSpecificationWithDefaults, InstallOptions,
 };
-use uv_distribution_types::{Edge, FirstParty, Node, Resolution, ResolvedDist};
+use uv_distribution_types::{Edge, FirstParty, Node, Requirement, Resolution, ResolvedDist};
 use uv_normalize::{DefaultExtras, ExtraName, GroupName, PackageName};
 use uv_platform_tags::Tags;
 use uv_pypi_types::{ConflictKind, ConflictSet, ResolverMarkerEnvironment};
 
+use crate::lock::walk::{LockWalker, MarkerReachabilityWalker};
 use crate::lock::{
-    Dependency, DependencySelectionContext, HashedDist, LockErrorKind, Package, PackageIndex,
-    SelectedDependency, TagPolicy,
+    Dependency, DependencySelectionContext, HashedDist, LockErrorKind, Package, SelectedDependency,
+    TagPolicy,
 };
 use crate::universal_marker::ActivatedConflictItems;
 use crate::{Lock, LockError, UniversalMarker};
@@ -36,50 +34,6 @@ fn newly_activated_extras<'lock>(
             (!activated_extras.contains(&key)).then_some(key)
         })
         .collect()
-}
-
-/// Record another condition under which a locked package and optional extra are reachable.
-///
-/// Returns `true` when the combined reachability changed.
-fn add_reachability<'lock>(
-    reachability: &mut FxHashMap<(PackageIndex, Option<&'lock ExtraName>), UniversalMarker>,
-    key: (PackageIndex, Option<&'lock ExtraName>),
-    marker: UniversalMarker,
-) -> bool {
-    match reachability.entry(key) {
-        Entry::Occupied(mut entry) => {
-            let mut combined = *entry.get();
-            combined.or(marker);
-            if combined == *entry.get() {
-                false
-            } else {
-                entry.insert(combined);
-                true
-            }
-        }
-        Entry::Vacant(entry) => {
-            entry.insert(marker);
-            true
-        }
-    }
-}
-
-/// Returns the dependencies a queued package contributes, either its own or those of one extra.
-fn package_dependencies<'a>(
-    package: &'a Package,
-    extra: Option<&ExtraName>,
-) -> impl Iterator<Item = &'a Dependency> {
-    if let Some(extra) = extra {
-        Either::Left(
-            package
-                .optional_dependencies
-                .get(extra)
-                .into_iter()
-                .flatten(),
-        )
-    } else {
-        Either::Right(package.dependencies.iter())
-    }
 }
 
 /// Determines which dependencies are included from an install target root.
@@ -118,6 +72,45 @@ pub trait Installable<'lock> {
         groups.contains(group)
     }
 
+    /// Return the package roots and the dependencies to include from each root.
+    fn roots_with_kind<'target>(
+        &'target self,
+        groups: &'target DependencyGroupsWithDefaults,
+    ) -> impl Iterator<Item = (&'target PackageName, InstallableRootKind)> + 'target
+    where
+        'lock: 'target,
+    {
+        self.roots()
+            .map(|root| (root, InstallableRootKind::Production))
+            .chain(
+                self.group_root(groups)
+                    .map(|root| (root, InstallableRootKind::DependencyGroups)),
+            )
+    }
+
+    /// Return requirements declared directly on the lock target.
+    ///
+    /// This includes requirements from dependency groups selected for a non-project workspace
+    /// root.
+    fn root_requirements<'target>(
+        &'target self,
+        groups: &'target DependencyGroupsWithDefaults,
+    ) -> impl Iterator<Item = &'lock Requirement> + 'target
+    where
+        'lock: 'target,
+    {
+        self.lock().requirements().iter().chain(
+            self.lock()
+                .dependency_groups()
+                .iter()
+                .filter_map(|(group, dependencies)| {
+                    self.includes_group(None, group, groups)
+                        .then_some(dependencies)
+                })
+                .flatten(),
+        )
+    }
+
     /// Return the [`PackageName`] of the target, if available.
     fn project_name(&self) -> Option<&PackageName>;
 
@@ -143,11 +136,15 @@ pub trait Installable<'lock> {
                     })
                 })
         };
-        let roots = self
-            .roots()
-            .map(&resolve_root)
-            .collect::<Result<Vec<_>, LockError>>()?;
-        let group_root = self.group_root(groups).map(resolve_root).transpose()?;
+        let mut roots = Vec::new();
+        let mut group_root = None;
+        for (root, kind) in self.roots_with_kind(groups) {
+            let root = resolve_root(root)?;
+            match kind {
+                InstallableRootKind::Production => roots.push(root),
+                InstallableRootKind::DependencyGroups => group_root = Some(root),
+            }
+        }
 
         InstallableExt::to_resolution_from_packages(
             self,
@@ -267,9 +264,8 @@ trait InstallableExt<'lock>: Installable<'lock> {
         let mut petgraph = Graph::with_capacity(size_guess, size_guess);
         let mut inverse = vec![None; size_guess];
 
-        let mut queue: VecDeque<(PackageIndex, Option<&ExtraName>)> = VecDeque::new();
-        let mut seen = FxHashSet::default();
-        let mut conflict_reachability = FxHashMap::default();
+        let mut walker = LockWalker::new(self.lock());
+        let mut reachability_walker = MarkerReachabilityWalker::new(self.lock());
         let mut activated_projects: Vec<&PackageName> = vec![];
         let mut activated_extras: Vec<(&PackageName, &ExtraName)> = vec![];
         let mut activated_groups: Vec<(&PackageName, &GroupName)> = vec![];
@@ -363,19 +359,11 @@ trait InstallableExt<'lock>: Installable<'lock> {
         for (dist, package_index, index, root_kind) in initialized_roots {
             if root_kind == InstallableRootKind::Production && groups.prod() {
                 // Push its dependencies onto the queue.
-                queue.push_back((package_index, None));
-                add_reachability(
-                    &mut conflict_reachability,
-                    (package_index, None),
-                    UniversalMarker::TRUE,
-                );
+                walker.push(package_index, None);
+                reachability_walker.push(package_index, None, UniversalMarker::TRUE);
                 for extra in extras.extra_names(dist.optional_dependencies.keys()) {
-                    queue.push_back((package_index, Some(extra)));
-                    add_reachability(
-                        &mut conflict_reachability,
-                        (package_index, Some(extra)),
-                        UniversalMarker::TRUE,
-                    );
+                    walker.push(package_index, Some(extra));
+                    reachability_walker.push(package_index, Some(extra), UniversalMarker::TRUE);
                 }
             }
 
@@ -460,24 +448,8 @@ trait InstallableExt<'lock>: Installable<'lock> {
                 }
 
                 // Push its dependencies on the queue.
-                add_reachability(
-                    &mut conflict_reachability,
-                    (dep.index, None),
-                    dep.complexified_marker,
-                );
-                if seen.insert((dep.index, None)) {
-                    queue.push_back((dep.index, None));
-                }
-                for extra in &dep.extra {
-                    add_reachability(
-                        &mut conflict_reachability,
-                        (dep.index, Some(extra)),
-                        dep.complexified_marker,
-                    );
-                    if seen.insert((dep.index, Some(extra))) {
-                        queue.push_back((dep.index, Some(extra)));
-                    }
-                }
+                reachability_walker.push_dependency(dep, dep.complexified_marker);
+                walker.push_dependency(dep);
             }
         }
 
@@ -513,24 +485,12 @@ trait InstallableExt<'lock>: Installable<'lock> {
                 petgraph.add_edge(root, index, Edge::Prod);
 
                 // Push its dependencies on the queue.
-                add_reachability(
-                    &mut conflict_reachability,
-                    (package_index, None),
+                reachability_walker.push_package(
+                    package_index,
+                    &dependency.extras,
                     UniversalMarker::TRUE,
                 );
-                if seen.insert((package_index, None)) {
-                    queue.push_back((package_index, None));
-                }
-                for extra in &dependency.extras {
-                    add_reachability(
-                        &mut conflict_reachability,
-                        (package_index, Some(extra)),
-                        UniversalMarker::TRUE,
-                    );
-                    if seen.insert((package_index, Some(extra))) {
-                        queue.push_back((package_index, Some(extra)));
-                    }
-                }
+                walker.push_package(package_index, &dependency.extras);
             }
 
             // Add any dependency groups that are exclusive to the workspace root (e.g., dev
@@ -610,24 +570,12 @@ trait InstallableExt<'lock>: Installable<'lock> {
                 }
 
                 // Push its dependencies on the queue.
-                add_reachability(
-                    &mut conflict_reachability,
-                    (package_index, None),
+                reachability_walker.push_package(
+                    package_index,
+                    &dependency.extras,
                     UniversalMarker::TRUE,
                 );
-                if seen.insert((package_index, None)) {
-                    queue.push_back((package_index, None));
-                }
-                for extra in &dependency.extras {
-                    add_reachability(
-                        &mut conflict_reachability,
-                        (package_index, Some(extra)),
-                        UniversalMarker::TRUE,
-                    );
-                    if seen.insert((package_index, Some(extra))) {
-                        queue.push_back((package_index, Some(extra)));
-                    }
-                }
+                walker.push_package(package_index, &dependency.extras);
             }
         }
 
@@ -662,15 +610,8 @@ trait InstallableExt<'lock>: Installable<'lock> {
         if has_conflicts {
             let mut activated_extras_set: BTreeSet<(&PackageName, &ExtraName)> =
                 activated_extras.iter().copied().collect();
-            let mut queue = queue.clone();
-            let mut reachability = conflict_reachability;
-            while let Some((package_index, extra)) = queue.pop_front() {
-                let package = self.lock().package(package_index);
-                let Some(parent_reachability) = reachability.get(&(package_index, extra)).copied()
-                else {
-                    continue;
-                };
-                for dep in package_dependencies(package, extra) {
+            while let Some((visit, parent_reachability)) = reachability_walker.pop() {
+                for dep in visit.dependencies {
                     let mut dep_reachability = dep.complexified_marker;
                     dep_reachability.and(parent_reachability);
                     let additional_activated_extras =
@@ -699,18 +640,7 @@ trait InstallableExt<'lock>: Installable<'lock> {
                         activated_extras.push(key);
                     }
                     // Push its dependencies on the queue.
-                    if add_reachability(&mut reachability, (dep.index, None), dep_reachability) {
-                        queue.push_back((dep.index, None));
-                    }
-                    for extra in &dep.extra {
-                        if add_reachability(
-                            &mut reachability,
-                            (dep.index, Some(extra)),
-                            dep_reachability,
-                        ) {
-                            queue.push_back((dep.index, Some(extra)));
-                        }
-                    }
+                    reachability_walker.push_dependency(dep, dep_reachability);
                 }
             }
             // At time of writing, it's somewhat expected that the set of
@@ -749,9 +679,11 @@ trait InstallableExt<'lock>: Installable<'lock> {
             activated_groups.iter().copied(),
         );
 
-        while let Some((package_index, extra)) = queue.pop_front() {
-            let package = self.lock().package(package_index);
-            for dep in package_dependencies(package, extra) {
+        while let Some(visit) = walker.pop() {
+            let package_index = visit.index;
+            let extra = visit.extra;
+            let package = visit.package;
+            for dep in visit.dependencies {
                 if validate_conflicts && dep.complexified_marker.has_conflict_marker() {
                     dependencies_for_conflict_validation.push((package, dep));
                 }
@@ -804,14 +736,7 @@ trait InstallableExt<'lock>: Installable<'lock> {
                 );
 
                 // Push its dependencies on the queue.
-                if seen.insert((dep.index, None)) {
-                    queue.push_back((dep.index, None));
-                }
-                for extra in &dep.extra {
-                    if seen.insert((dep.index, Some(extra))) {
-                        queue.push_back((dep.index, Some(extra)));
-                    }
-                }
+                walker.push_dependency(dep);
             }
         }
 
