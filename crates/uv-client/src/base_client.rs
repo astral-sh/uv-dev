@@ -645,10 +645,13 @@ impl<'a> BaseClientBuilder<'a> {
                 let mut client = reqwest_middleware::ClientBuilder::new(client);
 
                 // Run redirects before the other middleware so each hop can retry and authenticate.
-                if matches!(self.redirect_policy, RedirectPolicy::RetriggerMiddleware) {
-                    client = client.with(RedirectMiddleware {
-                        cross_origin_credentials_policy: self.cross_origin_credential_policy,
-                    });
+                match self.redirect_policy {
+                    RedirectPolicy::RetriggerMiddleware => {
+                        client = client.with(RedirectMiddleware {
+                            cross_origin_credentials_policy: self.cross_origin_credential_policy,
+                        });
+                    }
+                    RedirectPolicy::BypassMiddleware | RedirectPolicy::NoRedirect => {}
                 }
 
                 // Avoid uncloneable errors with a streaming body during publish.
