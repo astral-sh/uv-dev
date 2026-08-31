@@ -22,6 +22,13 @@ Repository evidence shows that the field did not trigger TOML-version detection.
 astral-sh/uv#20225 deliberately removed the TOML 1.1 detector and made the rewrite-and-preserve
 path unconditional when stabilizing the feature for uv 0.12.
 
+A maintainer has further clarified the reason for making the rewrite unconditional: if
+`pyproject.toml.orig` appeared only after a later, potentially unnoticed TOML 1.1 syntax change,
+the source distribution's file set would change as a side effect of an otherwise unrelated edit.
+Introducing the file consistently with the uv 0.12 migration was intended to make that compatibility
+change predictable. The rewrite supports newer TOML syntax while retaining compatibility with older
+tools such as pip versions shipped with Python.
+
 The shown value is valid TOML 1.0 syntax. Separately, PEP 621 defines the standardized project
 metadata key as `project.authors` (plural), not `project.author`; that semantic naming issue does
 not explain the `.orig` file.
@@ -52,10 +59,12 @@ This is an enhancement rather than a bug or duplicate. The reported extra file i
 documented uv 0.12 behavior: astral-sh/uv#20225 explicitly removed syntax detection, always
 normalizes the sdist's root `pyproject.toml`, and always retains `pyproject.toml.orig`. The review of
 astral-sh/uv#18741 considered writing `.orig` only when necessary, but the maintainer chose
-consistent normalization and an always-available original. Therefore omitting the backup for TOML
-1.0-compatible inputs would change established behavior rather than correct a parser defect. No
-open or closed issue or pull request was found that tracks that requested change closely enough to
-centralize discussion there.
+consistent normalization and an always-available original. A later maintainer clarification on
+astral-sh/uv#21065 confirms that this was also a migration decision: shipping the file consistently
+with uv 0.12 avoids having it appear unexpectedly after a future unrelated TOML 1.1 edit. Therefore
+omitting the backup for TOML 1.0-compatible inputs would change established behavior rather than
+correct a parser defect. No open or closed issue or pull request was found that tracks that
+requested change closely enough to centralize discussion there.
 
 ## Related
 
