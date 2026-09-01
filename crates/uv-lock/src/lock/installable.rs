@@ -15,14 +15,14 @@ use uv_normalize::{DefaultExtras, ExtraName, GroupName, PackageName};
 use uv_platform_tags::Tags;
 use uv_pypi_types::{ConflictKind, ConflictSet, ResolverMarkerEnvironment};
 
-use uv_resolver_types::UniversalMarker;
-use uv_resolver_types::universal_marker::ActivatedConflictItems;
 use crate::lock::walk::{LockWalker, MarkerReachabilityWalker};
 use crate::lock::{
     Dependency, DependencySelectionContext, HashedDist, LockErrorKind, Package, SelectedDependency,
     TagPolicy,
 };
 use crate::{Lock, LockError};
+use uv_resolver_types::UniversalMarker;
+use uv_resolver_types::universal_marker::ActivatedConflictItems;
 
 fn newly_activated_extras<'lock>(
     dep: &'lock Dependency,

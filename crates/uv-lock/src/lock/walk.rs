@@ -11,11 +11,11 @@
 
 use rustc_hash::FxHashMap;
 use uv_normalize::ExtraName;
+use uv_resolver_types::UniversalMarker;
+use uv_resolver_types::graph_ops::{Boolean, MarkerReachability};
 use uv_types::OnceQueue;
 
 use super::{Dependency, Lock, Package, PackageIndex};
-use crate::UniversalMarker;
-use crate::graph_ops::{Boolean, MarkerReachability};
 
 /// A package and optional activated extra in a lock traversal.
 pub(super) type LockTraversalState<'lock> = (PackageIndex, Option<&'lock ExtraName>);
