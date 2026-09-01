@@ -294,9 +294,6 @@ jobs:
         env:
           CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
         run: printf "cache-hit=%s\n" "$CACHE_HIT"
-      - name: Record Cargo cache freshness
-        if: ${{ false }}
-        run: New-Item -ItemType File -Path "$env:RUNNER_TEMP/uv-cargo-cache-marker"
       - name: Create NTFS test directory (low hardlink limit)
         run: New-Item -Path "C:\uv" -ItemType Directory -Force
       - name: Create SMB test share (alternative filesystem)
@@ -326,10 +323,6 @@ jobs:
           "cargo nextest run \\\n  --cargo-profile fast-build-nightly \\\n  -Z panic-abort-tests \\\n  -Z checksum-freshness\
           \ \\\n  --no-default-features \\\n  --features test-python,test-pypi,test-python-managed,test-windows-registry,native-auth,windows-native\
           \ \\\n  --workspace \\\n  --profile ci-windows \\\n  --partition hash:${{ matrix.partition }}/3\n"
-      - name: Prune superseded workspace artifacts
-        if: ${{ false }}
-        working-directory: ${{ env.UV_WORKSPACE }}
-        run: python scripts/prune_cargo_workspace_cache.py target/fast-build-nightly "$env:RUNNER_TEMP/uv-cargo-cache-marker"
       - name: Upload pending snapshots
         if: ${{ failure() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -662,9 +655,6 @@ jobs:
         env:
           CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
         run: printf "cache-hit=%s\n" "$CACHE_HIT"
-      - name: Record Cargo cache freshness
-        if: ${{ false }}
-        run: New-Item -ItemType File -Path "$env:RUNNER_TEMP/uv-cargo-cache-marker"
       - name: Create NTFS test directory (low hardlink limit)
         run: New-Item -Path "C:\uv" -ItemType Directory -Force
       - name: Create SMB test share (alternative filesystem)
@@ -694,10 +684,6 @@ jobs:
           "cargo nextest run \\\n  --cargo-profile fast-build-nightly \\\n  -Z panic-abort-tests \\\n  -Z checksum-freshness\
           \ \\\n  --no-default-features \\\n  --features test-python,test-pypi,test-python-managed,test-windows-registry,native-auth,windows-native\
           \ \\\n  --workspace \\\n  --profile ci-windows \\\n  --partition hash:${{ matrix.partition }}/3\n"
-      - name: Prune superseded workspace artifacts
-        if: ${{ false }}
-        working-directory: ${{ env.UV_WORKSPACE }}
-        run: python scripts/prune_cargo_workspace_cache.py target/fast-build-nightly "$env:RUNNER_TEMP/uv-cargo-cache-marker"
       - name: Upload pending snapshots
         if: ${{ failure() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
