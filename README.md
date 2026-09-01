@@ -1,4 +1,4 @@
-# Having a git credetials helper configured per-project (not globally) for `uv` to use
+# Having a git credentials helper configured per-project (not globally) for `uv` to use
 
 Issue: astral-sh/uv#21287
 
@@ -13,8 +13,9 @@ is not selected for uv's fetch because uv runs Git from its own cache repository
 
 astral-sh/uv#8441 is the closest and canonical existing report. It describes the same loss of the
 invoking repository's Git configuration context, including a credential helper selected by
-location, and remains open with `bug` and `needs-design` labels. astral-sh/uv#20964 is adjacent: it
-adds coverage for credential-helper authentication configured under a temporary home directory,
+location, and remains open with `bug` and `needs-design` labels. A repository member has confirmed
+that astral-sh/uv#21287 shares the root cause of astral-sh/uv#8441. astral-sh/uv#20964 is adjacent:
+it adds coverage for credential-helper authentication configured under a temporary home directory,
 but does not cover or implement caller-project-local Git configuration.
 
 ## Draft response
@@ -36,7 +37,8 @@ uses a repository-local `.git/config` rather than an `includeIf`-selected file, 
 to retain the invoking project's Git configuration context when fetching a private dependency.
 The implementation runs `git fetch` with uv's cache repository as Git's working directory, which
 explains why the caller repository's local configuration is not selected. The narrower reproduction
-does not require a separate discussion while astral-sh/uv#8441 remains open.
+does not require a separate discussion while astral-sh/uv#8441 remains open. This relationship is
+now confirmed by a repository member in the discussion on astral-sh/uv#21287.
 
 This is not a duplicate of the broader astral-sh/uv#8529 request for first-class Git authentication
 configuration in `[tool.uv.sources]`, nor of astral-sh/uv#2048 and astral-sh/uv#20964, which concern
