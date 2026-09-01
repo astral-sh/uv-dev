@@ -5813,7 +5813,6 @@ dependencies = [
  "owo-colors",
  "predicates",
  "regex",
- "reqwest",
  "self-replace",
  "serde",
  "serde_json",
