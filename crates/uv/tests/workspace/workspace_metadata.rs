@@ -549,6 +549,259 @@ fn workspace_metadata_script_stdin_filename() -> Result<()> {
 }
 
 #[test]
+fn workspace_metadata_script_stdin_filename_missing_file_ignores_lockfile() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let directory = context.temp_dir.child("scripts");
+    directory.create_dir_all()?;
+    let saved_script = directory.child("missing.py");
+
+    let stdin_script = context.temp_dir.child("stdin.py");
+    stdin_script.write_str(
+        r#"# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
+"#,
+    )?;
+
+    let lockfile = directory.child("missing.py.lock");
+    lockfile.write_str("invalid lockfile")?;
+
+    let assert = context
+        .workspace_metadata()
+        .arg("--script")
+        .arg("-")
+        .arg("--stdin-filename")
+        .arg(saved_script.path())
+        .stdin(File::open(stdin_script.path())?.into_file())
+        .assert()
+        .success();
+    let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
+
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_json_snapshot!(metadata["script"], @r#"
+        {
+          "id": "script+[TEMP_DIR]/scripts/missing.py",
+          "path": "[TEMP_DIR]/scripts/missing.py"
+        }
+        "#);
+    });
+
+    assert_eq!(fs_err::read_to_string(lockfile.path())?, "invalid lockfile");
+    assert!(!saved_script.exists());
+
+    Ok(())
+}
+
+#[test]
+fn workspace_metadata_script_stdin_filename_different_contents_preserves_lockfile() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let saved_script = context.temp_dir.child("example.py");
+    saved_script.write_str(
+        r#"# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
+
+print("saved")
+"#,
+    )?;
+    context
+        .lock()
+        .arg("--script")
+        .arg(saved_script.path())
+        .assert()
+        .success();
+
+    let lockfile = context.temp_dir.child("example.py.lock");
+    let original = fs_err::read_to_string(lockfile.path())?;
+
+    let stdin_script = context.temp_dir.child("stdin.py");
+    stdin_script.write_str(
+        r#"# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
+
+print("unsaved")
+"#,
+    )?;
+
+    let assert = context
+        .workspace_metadata()
+        .arg("--script")
+        .arg("-")
+        .arg("--stdin-filename")
+        .arg(saved_script.path())
+        .stdin(File::open(stdin_script.path())?.into_file())
+        .assert()
+        .success();
+    let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
+
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_json_snapshot!(serde_json::json!({
+            "requires_python": metadata["requires_python"],
+            "script": metadata["script"],
+        }), @r#"
+        {
+          "requires_python": ">=3.11",
+          "script": {
+            "id": "script+[TEMP_DIR]/example.py",
+            "path": "[TEMP_DIR]/example.py"
+          }
+        }
+        "#);
+    });
+
+    assert_eq!(fs_err::read_to_string(lockfile.path())?, original);
+
+    Ok(())
+}
+
+#[test]
+fn workspace_metadata_script_stdin_filename_discovers_relative_lockfile() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let directory = context.temp_dir.child("scripts");
+    directory.create_dir_all()?;
+    let script = directory.child("example.py");
+    script.write_str(
+        r#"# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
+"#,
+    )?;
+
+    context
+        .lock()
+        .arg("--script")
+        .arg(script.path())
+        .assert()
+        .success();
+
+    let unrelated_lockfile = context.temp_dir.child("example.py.lock");
+    unrelated_lockfile.write_str("invalid lockfile")?;
+
+    let assert = context
+        .workspace_metadata()
+        .arg("--script")
+        .arg("-")
+        .arg("--stdin-filename")
+        .arg("scripts/example.py")
+        .arg("--locked")
+        .stdin(File::open(script.path())?.into_file())
+        .assert()
+        .success();
+    let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
+
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_json_snapshot!(metadata["script"], @r#"
+        {
+          "id": "script+[TEMP_DIR]/scripts/example.py",
+          "path": "[TEMP_DIR]/scripts/example.py"
+        }
+        "#);
+    });
+
+    assert_eq!(
+        fs_err::read_to_string(unrelated_lockfile.path())?,
+        "invalid lockfile"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn workspace_metadata_script_stdin_filename_matching_contents_updates_lockfile() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let script = context.temp_dir.child("example.py");
+    script.write_str(
+        r#"# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
+"#,
+    )?;
+    context
+        .lock()
+        .arg("--script")
+        .arg(script.path())
+        .assert()
+        .success();
+
+    let lockfile = context.temp_dir.child("example.py.lock");
+    let original = fs_err::read_to_string(lockfile.path())?;
+
+    let wheel = context
+        .temp_dir
+        .child("metadata_stdin_lock-0.1.0-py3-none-any.whl");
+    write_wheel(
+        wheel.path(),
+        "metadata-stdin-lock",
+        "metadata_stdin_lock-0.1.0",
+        &[],
+    )?;
+    let wheel_url = Url::from_file_path(wheel.path())
+        .map_err(|()| anyhow::anyhow!("failed to convert wheel path to file URL"))?;
+    script.write_str(&format!(
+        r#"# /// script
+# requires-python = ">=3.12"
+# dependencies = ["metadata-stdin-lock @ {wheel_url}"]
+# ///
+"#
+    ))?;
+
+    let assert = context
+        .workspace_metadata()
+        .arg("--script")
+        .arg("-")
+        .arg("--stdin-filename")
+        .arg(script.path())
+        .stdin(File::open(script.path())?.into_file())
+        .assert()
+        .success();
+    let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
+
+    let updated = fs_err::read_to_string(lockfile.path())?;
+    assert_ne!(updated, original);
+
+    let lock: toml::Value = toml::from_str(&updated)?;
+    let packages = lock["package"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|package| {
+            serde_json::json!({
+                "name": package["name"],
+                "version": package["version"],
+            })
+        })
+        .collect::<Vec<_>>();
+
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_json_snapshot!(serde_json::json!({
+            "packages": packages,
+            "script": metadata["script"],
+        }), @r#"
+        {
+          "packages": [
+            {
+              "name": "metadata-stdin-lock",
+              "version": "0.1.0"
+            }
+          ],
+          "script": {
+            "id": "script+[TEMP_DIR]/example.py",
+            "path": "[TEMP_DIR]/example.py"
+          }
+        }
+        "#);
+    });
+
+    Ok(())
+}
+
+#[test]
 fn workspace_metadata_script_stdin_filename_includes_existing_environment() -> Result<()> {
     let context = uv_test::test_context!("3.12")
         .with_filtered_python_names()

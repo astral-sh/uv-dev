@@ -45,6 +45,7 @@ pub(crate) async fn metadata(
     client_builder: BaseClientBuilder<'_>,
     script: Option<Pep723Item>,
     stdin_filename: Option<PathBuf>,
+    stdin_contents: Option<Vec<u8>>,
     python_preference: PythonPreference,
     python_downloads: PythonDownloads,
     concurrency: Concurrency,
@@ -55,7 +56,21 @@ pub(crate) async fn metadata(
     preview: Preview,
 ) -> Result<ExitStatus> {
     let stdin = matches!(script.as_ref(), Some(Pep723Item::Stdin(_)));
-    let (lock_check, frozen) = if stdin {
+    let saved_stdin = if stdin
+        && let Some(filename) = stdin_filename.as_ref()
+        && let Some(contents) = stdin_contents.as_ref()
+    {
+        match fs_err::tokio::read(filename).await {
+            Ok(saved) => saved == *contents,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => false,
+            Err(err) => return Err(err.into()),
+        }
+    } else {
+        false
+    };
+    let use_existing_lockfile = !stdin || saved_stdin;
+
+    let (lock_check, frozen) = if stdin && !saved_stdin {
         handle_missing_script_lockfile(lock_check, frozen)?;
         (LockCheck::Disabled, None)
     } else {
@@ -163,7 +178,7 @@ pub(crate) async fn metadata(
 
         if let LockCheck::Enabled(lock_check) = lock_check {
             LockMode::Locked(&interpreter, lock_check)
-        } else if stdin
+        } else if (stdin && !saved_stdin)
             || dry_run.enabled()
             || (matches!(target, LockTarget::Script(_)) && !target.lock_path().is_file())
         {
@@ -191,7 +206,7 @@ pub(crate) async fn metadata(
             preview,
         )
         .with_refresh(&refresh)
-        .with_existing_lockfile(!stdin)
+        .with_existing_lockfile(use_existing_lockfile)
         .execute(target),
     )
     .await
