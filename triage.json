@@ -1,0 +1,27 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 19122,
+        "title": "Add module owners to workspace metadata",
+        "url": "https://github.com/astral-sh/uv/pull/19122",
+        "state": "merged",
+        "reason": "It introduced `module_owners` and deliberately limited ownership to packages in the selected resolution. Its review anticipated representing the installed environment separately, matching the design requested here."
+      },
+      {
+        "kind": "issue",
+        "number": 10962,
+        "title": "Retrieving metadata for installed packages",
+        "url": "https://github.com/astral-sh/uv/issues/10962",
+        "state": "open",
+        "reason": "It is the closest open request for machine-readable metadata about every installed distribution, but it targets general distribution metadata rather than module ownership or the workspace metadata schema."
+      }
+    ],
+    "search_scope": "Literal searches covered `workspace metadata`, `module_owners`, `module owners`, `installed distributions`, `installed packages`, `outside the lockfile`, `missing-direct-dependency`, `remove --no-sync`, and `site-packages`; conceptual searches covered extraneous or stale packages, environment inventory, installed state, import ownership, and locked versus installed resolution. Searches included open and closed issues and open, closed, and merged pull requests. Fix and reference-chain inspection covered astral-sh/uv#19122, astral-sh/uv#10962, astral-sh/uv#10886, astral-sh/uv#2526, and astral-sh/uv#7532. astral-sh/uv#12541 was inspected but ruled out because it requested the general cargo-like metadata command, was closed once that command existed, and explicitly directed specific additions into new issues."
+  },
+  "type": "enhancement",
+  "type_reason": "Source and the existing integration test confirm that excluding installed distributions outside the selected resolution is intentional current behavior: ownership IDs are created only for resolution packages and filtered against resolution nodes. The issue requests additional installed-environment information in the experimental metadata schema, so it is new functionality rather than a regression. No existing issue or pull request tracks this specific capability closely enough to classify it as a duplicate.",
+  "summary": "astral-sh/uv#19122 is the direct implementation and design precedent, while astral-sh/uv#10962 is the closest broader open installed-metadata request. Neither tracks the specific request to represent installed-only distributions and their module ownership separately from the lockfile resolution.",
+  "draft_response": "The source confirms the behavior you described: the current implementation intentionally omits these distributions. Module-owner collection assigns package IDs only to distributions in the selected resolution, and the metadata export filters owners against resolution nodes. That behavior came from astral-sh/uv#19122; its review also anticipated a separate environment section identifying installed package IDs. astral-sh/uv#10962 is related, but it requests broader installed-distribution metadata and does not cover module ownership or the workspace metadata schema.\n\nThis looks like a distinct enhancement to the preview workspace metadata schema. The next step is to agree on a representation for installed-only distributions and stable ownership IDs that remains separate from `resolution`, including how inherited environments and distributions with incomplete module records should be handled."
+}
