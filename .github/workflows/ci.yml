@@ -1,306 +1,1090 @@
-name: CI
-
-on:
-  push:
-    branches: [main]
-  pull_request:
+---
+name: Bundled LLD comparison
+run-name: Bundled LLD comparison / ${{ inputs.sample }}
+"on":
   workflow_dispatch:
-
+    inputs:
+      sample:
+        description: warmup or numbered measured sample
+        required: true
+        type: string
+        default: warmup
+      save-rust-cache:
+        description: Save isolated benchmark caches
+        type: string
+        default: "true"
 permissions:
   contents: read
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref_name }}-${{ github.event.pull_request.number || github.sha }}
-  cancel-in-progress: true
-
 jobs:
-  plan:
-    uses: $/.github/workflows/plan.yml
-
-  check-fmt:
-    uses: $/.github/workflows/check-fmt.yml
-
-  review:
-    needs: plan
-    if: ${{ github.event_name == 'pull_request' && github.repository == 'astral-sh/uv' && github.event.pull_request.head.repo.full_name == github.repository && needs.plan.outputs.review-security == 'true' }}
-    uses: $/.github/workflows/pull-request-security-review.yml
-    secrets: inherit
-    permissions:
-      contents: read
-      id-token: write
-      issues: read
-      pull-requests: read
-
-  check-lint:
-    needs: plan
-    uses: $/.github/workflows/check-lint.yml
-    with:
-      code-changed: ${{ needs.plan.outputs.test-code }}
-      save-rust-cache: ${{ needs.plan.outputs.save-rust-cache }}
-
-  check-docs:
-    needs: plan
-    if: ${{ needs.plan.outputs.run-checks == 'true' }}
-    uses: $/.github/workflows/check-docs.yml
-    secrets: inherit
-
-  check-zizmor:
-    needs: plan
-    if: ${{ needs.plan.outputs.run-checks == 'true' }}
-    uses: $/.github/workflows/check-zizmor.yml
-    permissions:
-      contents: read
-      security-events: write
-
-  check-publish:
-    needs: plan
-    if: ${{ needs.plan.outputs.test-code == 'true' }}
-    uses: $/.github/workflows/check-publish.yml
-
-  check-release:
-    needs: plan
-    if: ${{ needs.plan.outputs.run-checks == 'true' }}
-    uses: $/.github/workflows/check-release.yml
-
-  check-lock:
-    needs: plan
-    if: ${{ needs.plan.outputs.run-checks == 'true' }}
-    uses: $/.github/workflows/check-lock.yml
-
-  check-generated-files:
-    needs: plan
-    if: ${{ needs.plan.outputs.test-code == 'true' }}
-    uses: $/.github/workflows/check-generated-files.yml
-    with:
-      schema-changed: ${{ needs.plan.outputs.check-schema }}
-      save-rust-cache: ${{ needs.plan.outputs.save-rust-cache }}
-
-  test:
-    needs: plan
-    if: ${{ needs.plan.outputs.test-code == 'true' }}
-    uses: $/.github/workflows/test.yml
-    with:
-      save-rust-cache: ${{ needs.plan.outputs.save-rust-cache }}
-      test-macos: ${{ needs.plan.outputs.test-macos }}
-
-  test-windows-trampolines:
-    needs: plan
-    if: ${{ needs.plan.outputs.test-windows-trampoline == 'true' }}
-    uses: $/.github/workflows/test-windows-trampolines.yml
-    with:
-      trampoline-build: ${{ needs.plan.outputs.test-windows-trampoline-check-binary }}
-
-  build-dev-binaries:
-    needs: plan
-    if: ${{ needs.plan.outputs.test-code == 'true' }}
-    uses: $/.github/workflows/build-dev-binaries.yml
-    with:
-      save-rust-cache: ${{ needs.plan.outputs.save-rust-cache }}
-
-  test-smoke:
-    needs:
-      - plan
-      - build-dev-binaries
-    if: ${{ needs.plan.outputs.test-smoke == 'true' }}
-    uses: $/.github/workflows/test-smoke.yml
-    with:
-      sha: ${{ github.sha }}
-
-  test-integration:
-    needs:
-      - plan
-      - build-dev-binaries
-    if: ${{ needs.plan.outputs.test-integration == 'true' }}
-    uses: $/.github/workflows/test-integration.yml
-    secrets: inherit
-    permissions:
-      contents: read
-      id-token: write
-    with:
-      sha: ${{ github.sha }}
-
-  test-system:
-    needs:
-      - plan
-      - build-dev-binaries
-    if: ${{ needs.plan.outputs.test-system == 'true' }}
-    uses: $/.github/workflows/test-system.yml
-    with:
-      sha: ${{ github.sha }}
-
-  test-ecosystem:
-    needs:
-      - plan
-      - build-dev-binaries
-    if: ${{ needs.plan.outputs.test-ecosystem == 'true' }}
-    uses: $/.github/workflows/test-ecosystem.yml
-    with:
-      sha: ${{ github.sha }}
-
-  build-release-binaries:
-    needs: plan
-    if: ${{ needs.plan.outputs.build-release-binaries == 'true' }}
-    uses: $/.github/workflows/build-release-binaries.yml
-    secrets: inherit
-
-  build-docker:
-    needs: plan
-    if: ${{ needs.plan.outputs.build-docker == 'true' }}
-    uses: $/.github/workflows/build-docker.yml
-    with:
-      push-dev: ${{ needs.plan.outputs.push-docker == 'true' }}
-    secrets: inherit
-    permissions:
-      contents: read
-      id-token: write
-      packages: write
-      attestations: write
-
-  bench:
-    needs: plan
-    if: ${{ needs.plan.outputs.run-bench == 'true' }}
-    uses: $/.github/workflows/bench.yml
-    secrets: inherit
-    with:
-      save-rust-cache: ${{ needs.plan.outputs.save-rust-cache }}
-    permissions:
-      id-token: write
-
-  # This job cannot be moved into a reusable workflow because it includes coverage for uploading
-  # attestations and PyPI does not support attestations in reusable workflows.
-  test-publish:
-    name: "test uv publish"
-    timeout-minutes: 20
-    needs:
-      - plan
-      - build-dev-binaries
-    runs-on: ubuntu-latest
-    # Only the main repository is a trusted publisher
-    if: ${{ github.repository == 'astral-sh/uv' && github.event.pull_request.head.repo.fork != true && needs.plan.outputs.test-publish == 'true' }}
-    environment:
-      name: uv-test-publish
-      deployment: false
+  baseline-build-binary-linux-libc:
+    name: baseline / linux libc
+    timeout-minutes: 30
+    runs-on: github-ubuntu-24.04-x86_64-8
     env:
-      # No dbus in GitHub Actions
-      PYTHON_KEYRING_BACKEND: keyrings.alt.file.PlaintextKeyring
-      PYTHON_VERSION: 3.12
-    permissions:
-      # For trusted publishing
-      id-token: write
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      RUSTUP_MAX_RETRIES: 10
+      RUSTC_BOOTSTRAP: 1
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          fetch-depth: 0
           persist-credentials: false
-
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+          repository: astral-sh/uv
+          ref: bf041f9245952ba7c9e3c29aebe0a8acc2bc983d
+      - name: Install mold
+        run: "./scripts/install-mold.sh"
+      - name: Install Rust toolchain
+        run: rustup toolchain install --profile minimal
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
         with:
-          python-version: "${{ env.PYTHON_VERSION }}"
-
-      - name: "Download binary"
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+          prefix-key: v1-pr19648-20260901
+          cache-workspace-crates: "true"
+          save-if: "${{ inputs.save-rust-cache == 'true' }}"
+          shared-key: baseline-build-binary-linux-libc
+        id: rust-cache
+      - name: Build
+        run: cargo build --profile no-debug-nightly -Z checksum-freshness
+      - name: Upload binary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: uv-linux-libc-${{ github.sha }}
-
-      - name: "Prepare binary"
-        run: chmod +x ./uv
-
-      - name: "Build astral-test-pypa-gh-action"
-        shell: bash -eo pipefail {0}
-        run: |
-          # Build a yet unused version of `astral-test-pypa-gh-action`
-          mkdir astral-test-pypa-gh-action
-          cd astral-test-pypa-gh-action
-          ../uv init --package --no-workspace
-          # Get the latest patch version
-          patch_version=$(curl https://test.pypi.org/simple/astral-test-pypa-gh-action/?format=application/vnd.pypi.simple.v1+json | jq --raw-output '[.files[].filename | select(endswith(".tar.gz"))] | last' | grep -oP '(?<=astral_test_pypa_gh_action-0\.1\.)\d+(?=\.tar\.gz)')
-          # Set the current version to one higher (which should be unused)
-          sed -i "s/0.1.0/0.1.$((patch_version + 1))/g" pyproject.toml
-          ../uv build
-
-      - name: "Publish astral-test-pypa-gh-action"
-        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
-        with:
-          # With this GitHub action, we can't do as rigid checks as with our custom Python script, so we publish more
-          # leniently
-          skip-existing: "true"
-          verbose: "true"
-          repository-url: "https://test.pypi.org/legacy/"
-          packages-dir: "astral-test-pypa-gh-action/dist"
-
-      - name: "Request GitLab OIDC tokens for impersonation"
-        uses: digital-blueprint/gitlab-pipeline-trigger-action@c59b56e9d2688ab42c1304322ac8831a4ef6f7d2 # v1.4.0
-        with:
-          host: gitlab.com
-          id: astral-test-publish/astral-test-gitlab-pypi-tp
-          ref: main
-          trigger_token: ${{ secrets.GITLAB_TEST_PUBLISH_TRIGGER_TOKEN }}
-          access_token: ${{ secrets.GITLAB_TEST_PUBLISH_ACCESS_TOKEN }}
-          download_artifacts: true
-          fail_if_no_artifacts: true
-          download_path: ./gitlab-artifacts
-
-      - name: "Load GitLab OIDC tokens from GitLab job artifacts"
-        id: load-gitlab-oidc-token
-        run: |
-          # we expect ./gitlab-artifacts/*/artifacts/pypi-id-token to exist
-          pypi_id_token_file=$(find ./gitlab-artifacts -type f -name pypi-id-token | head -n 1)
-          if [ -z "${pypi_id_token_file}" ]; then
-            echo "No pypi-id-token file found in GitLab artifacts"
-            exit 1
-          fi
-          GITLAB_PYPI_OIDC_TOKEN=$(cat "${pypi_id_token_file}")
-
-          # Add secret masks for the tokens.
-          echo "::add-mask::$GITLAB_PYPI_OIDC_TOKEN"
-
-          echo "GITLAB_PYPI_OIDC_TOKEN=${GITLAB_PYPI_OIDC_TOKEN}" >> "${GITHUB_OUTPUT}"
-
-      - name: "Add password to keyring"
-        run: |
-          # `keyrings.alt` contains the plaintext keyring
-          ./uv tool install --with keyrings.alt keyring
-          echo $UV_TEST_PUBLISH_KEYRING | keyring set https://test.pypi.org/legacy/?astral-test-keyring __token__
+          name: baseline-uv-linux-libc-${{ github.sha }}
+          path: |
+            ./target/no-debug-nightly/uv
+            ./target/no-debug-nightly/uvx
+          retention-days: 1
+      - name: Record benchmark evidence
+        if: "${{ always() }}"
         env:
-          UV_TEST_PUBLISH_KEYRING: ${{ secrets.UV_TEST_PUBLISH_KEYRING }}
-
-      - name: "Add password to uv text store"
+          BENCH_CACHE_HIT: "${{ steps.rust-cache.outputs.cache-hit }}"
+          BENCH_SAMPLE: "${{ inputs.sample }}"
         run: |
-          ./uv auth login https://test.pypi.org/legacy/?astral-test-text-store --token ${UV_TEST_PUBLISH_TEXT_STORE}
-        env:
-          UV_TEST_PUBLISH_TEXT_STORE: ${{ secrets.UV_TEST_PUBLISH_TEXT_STORE }}
-
-      - name: "Publish test packages"
-        # `-p 3.12` prefers the python we just installed over the one locked in `.python_version`.
-        run: ./uv run --no-project -p "${PYTHON_VERSION}" scripts/publish/test_publish.py --uv ./uv all
-        env:
-          RUST_LOG: uv=debug,uv_publish=trace
-          UV_TEST_PUBLISH_TOKEN: ${{ secrets.UV_TEST_PUBLISH_TOKEN }}
-          UV_TEST_PUBLISH_PASSWORD: ${{ secrets.UV_TEST_PUBLISH_PASSWORD }}
-          UV_TEST_PUBLISH_GITLAB_PAT: ${{ secrets.UV_TEST_PUBLISH_GITLAB_PAT }}
-          UV_TEST_PUBLISH_CODEBERG_TOKEN: ${{ secrets.UV_TEST_PUBLISH_CODEBERG_TOKEN }}
-          UV_TEST_PUBLISH_CLOUDSMITH_TOKEN: ${{ secrets.UV_TEST_PUBLISH_CLOUDSMITH_TOKEN }}
-          UV_TEST_PUBLISH_PYTHON_VERSION: ${{ env.PYTHON_VERSION }}
-          UV_TEST_PUBLISH_GITLAB_PYPI_OIDC_TOKEN: ${{ steps.load-gitlab-oidc-token.outputs.GITLAB_PYPI_OIDC_TOKEN }}
-
-  required-checks-passed:
-    name: "all required jobs passed"
-    if: always()
-    needs:
-      - check-fmt
-      - check-lint
-      - check-docs
-      - check-generated-files
-      - test
-      - build-dev-binaries
-    runs-on: ubuntu-slim
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, subprocess
+          def capture(args):
+              return subprocess.run(args, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT).stdout.strip()
+          metadata = {'variant': 'baseline', 'job': 'build-binary-linux-libc', 'expected_source': 'bf041f9245952ba7c9e3c29aebe0a8acc2bc983d', 'runner_label': 'github-ubuntu-24.04-x86_64-8'}
+          metadata.update(sample=os.environ['BENCH_SAMPLE'], source=capture(['git', 'rev-parse', 'HEAD']), cache_hit=os.environ['BENCH_CACHE_HIT'], rustflags=os.environ.get('RUSTFLAGS', ''), rustc_bootstrap=os.environ.get('RUSTC_BOOTSTRAP', ''), rustc=capture(['rustc', '+1.98.0', '-vV']), runner_name=os.environ.get('RUNNER_NAME', ''), cpu=capture(['lscpu']), uname=capture(['uname', '-a']), files=[])
+          assert metadata['source'] == metadata['expected_source'], metadata
+          for name in ['./target/no-debug-nightly/uv', './target/no-debug-nightly/uvx']:
+              path = pathlib.Path(name)
+              if path.exists():
+                  metadata['files'].append(dict(path=name, bytes=path.stat().st_size, sha256=hashlib.sha256(path.read_bytes()).hexdigest(), elf_comment=capture(['readelf', '-p', '.comment', name])))
+          output = pathlib.Path('benchmark-evidence')
+          output.mkdir(exist_ok=True)
+          (output / 'environment.json').write_text(json.dumps(metadata, indent=2))
+          print(json.dumps(metadata, indent=2))
+          PY
+      - name: Upload benchmark evidence
+        if: "${{ always() }}"
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: benchmark-baseline-build-binary-linux-libc
+          path: benchmark-evidence/
+          if-no-files-found: error
+          retention-days: 14
+  baseline-build-binary-linux-aarch64:
+    name: baseline / linux aarch64
+    timeout-minutes: 30
+    runs-on: github-ubuntu-24.04-aarch64-4
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      RUSTUP_MAX_RETRIES: 10
+      RUSTC_BOOTSTRAP: 1
     steps:
-      - name: "Check required jobs passed"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          repository: astral-sh/uv
+          ref: bf041f9245952ba7c9e3c29aebe0a8acc2bc983d
+      - name: Install mold
+        run: "./scripts/install-mold.sh"
+      - name: Install Rust toolchain
+        run: rustup toolchain install --profile minimal
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+        with:
+          prefix-key: v1-pr19648-20260901
+          cache-workspace-crates: "true"
+          save-if: "${{ inputs.save-rust-cache == 'true' }}"
+          shared-key: baseline-build-binary-linux-aarch64
+        id: rust-cache
+      - name: Build
+        run: cargo build --profile no-debug-nightly -Z checksum-freshness
+      - name: Upload binary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: baseline-uv-linux-aarch64-${{ github.sha }}
+          path: |
+            ./target/no-debug-nightly/uv
+            ./target/no-debug-nightly/uvx
+          retention-days: 1
+      - name: Measure three warm uv rebuilds
+        if: "${{ inputs.sample == 'warmup' }}"
         run: |
-          failing=$(echo "$NEEDS_JSON" | jq -r 'to_entries[] | select(.value.result != "success" and .value.result != "skipped") | "\(.key): \(.value.result)"')
-          if [ -n "$failing" ]; then
-            echo "$failing"
-            exit 1
-          fi
+          python3 - <<'PY'
+          import json, pathlib, subprocess, time
+          output = pathlib.Path('benchmark-evidence')
+          output.mkdir(exist_ok=True)
+          samples = []
+          for iteration in range(1, 4):
+              subprocess.run(['cargo', 'clean', '--package', 'uv', '--profile', 'no-debug-nightly'], check=True)
+              started = time.perf_counter()
+              subprocess.run(['cargo', 'build', '--profile', 'no-debug-nightly', '-Z', 'checksum-freshness'], check=True)
+              seconds = time.perf_counter() - started
+              samples.append(dict(iteration=iteration, seconds=seconds))
+              print('BENCH_REBUILD_SECONDS', iteration, seconds, flush=True)
+          (output / 'warm-rebuilds.json').write_text(json.dumps(samples, indent=2))
+          PY
+      - name: Record benchmark evidence
+        if: "${{ always() }}"
         env:
-          NEEDS_JSON: ${{ toJSON(needs) }}
+          BENCH_CACHE_HIT: "${{ steps.rust-cache.outputs.cache-hit }}"
+          BENCH_SAMPLE: "${{ inputs.sample }}"
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, subprocess
+          def capture(args):
+              return subprocess.run(args, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT).stdout.strip()
+          metadata = {'variant': 'baseline', 'job': 'build-binary-linux-aarch64', 'expected_source': 'bf041f9245952ba7c9e3c29aebe0a8acc2bc983d', 'runner_label': 'github-ubuntu-24.04-aarch64-4'}
+          metadata.update(sample=os.environ['BENCH_SAMPLE'], source=capture(['git', 'rev-parse', 'HEAD']), cache_hit=os.environ['BENCH_CACHE_HIT'], rustflags=os.environ.get('RUSTFLAGS', ''), rustc_bootstrap=os.environ.get('RUSTC_BOOTSTRAP', ''), rustc=capture(['rustc', '+1.98.0', '-vV']), runner_name=os.environ.get('RUNNER_NAME', ''), cpu=capture(['lscpu']), uname=capture(['uname', '-a']), files=[])
+          assert metadata['source'] == metadata['expected_source'], metadata
+          for name in ['./target/no-debug-nightly/uv', './target/no-debug-nightly/uvx']:
+              path = pathlib.Path(name)
+              if path.exists():
+                  metadata['files'].append(dict(path=name, bytes=path.stat().st_size, sha256=hashlib.sha256(path.read_bytes()).hexdigest(), elf_comment=capture(['readelf', '-p', '.comment', name])))
+          output = pathlib.Path('benchmark-evidence')
+          output.mkdir(exist_ok=True)
+          (output / 'environment.json').write_text(json.dumps(metadata, indent=2))
+          print(json.dumps(metadata, indent=2))
+          PY
+      - name: Upload benchmark evidence
+        if: "${{ always() }}"
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: benchmark-baseline-build-binary-linux-aarch64
+          path: benchmark-evidence/
+          if-no-files-found: error
+          retention-days: 14
+  baseline-build-binary-linux-armv7-gnueabihf:
+    name: baseline / linux armv7 gnueabihf
+    timeout-minutes: 30
+    runs-on: github-ubuntu-24.04-x86_64-8
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      RUSTUP_MAX_RETRIES: 10
+      RUSTC_BOOTSTRAP: 1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          repository: astral-sh/uv
+          ref: bf041f9245952ba7c9e3c29aebe0a8acc2bc983d
+      - name: Install mold
+        run: "./scripts/install-mold.sh"
+      - name: Setup armv7
+        run: |
+          # Try the next configured mirror after the first failed download.
+          cat /etc/apt/apt-mirrors.txt
+          printf '%s\n' \
+            'Acquire::Retries "0";' \
+            'Acquire::http::Timeout "10";' \
+            'Acquire::https::Timeout "10";' \
+            | sudo tee /etc/apt/apt.conf.d/80-retries > /dev/null
+          sudo apt-get update
+          sudo apt-get install gcc-arm-linux-gnueabihf
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install --profile minimal
+          rustup target add armv7-unknown-linux-gnueabihf
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+        with:
+          prefix-key: v1-pr19648-20260901
+          cache-workspace-crates: "true"
+          save-if: "${{ inputs.save-rust-cache == 'true' }}"
+          shared-key: baseline-build-binary-linux-armv7-gnueabihf
+        id: rust-cache
+      - name: Build
+        env:
+          CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER: arm-linux-gnueabihf-gcc
+        run:
+          cargo build --profile no-debug-nightly -Z checksum-freshness --target armv7-unknown-linux-gnueabihf
+          --bin uv --bin uvx
+      - name: Upload binary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: baseline-uv-linux-armv7-gnueabihf-${{ github.sha }}
+          path: |
+            ./target/armv7-unknown-linux-gnueabihf/no-debug-nightly/uv
+            ./target/armv7-unknown-linux-gnueabihf/no-debug-nightly/uvx
+          retention-days: 1
+      - name: Record benchmark evidence
+        if: "${{ always() }}"
+        env:
+          BENCH_CACHE_HIT: "${{ steps.rust-cache.outputs.cache-hit }}"
+          BENCH_SAMPLE: "${{ inputs.sample }}"
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, subprocess
+          def capture(args):
+              return subprocess.run(args, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT).stdout.strip()
+          metadata = {'variant': 'baseline', 'job': 'build-binary-linux-armv7-gnueabihf', 'expected_source': 'bf041f9245952ba7c9e3c29aebe0a8acc2bc983d', 'runner_label': 'github-ubuntu-24.04-x86_64-8'}
+          metadata.update(sample=os.environ['BENCH_SAMPLE'], source=capture(['git', 'rev-parse', 'HEAD']), cache_hit=os.environ['BENCH_CACHE_HIT'], rustflags=os.environ.get('RUSTFLAGS', ''), rustc_bootstrap=os.environ.get('RUSTC_BOOTSTRAP', ''), rustc=capture(['rustc', '+1.98.0', '-vV']), runner_name=os.environ.get('RUNNER_NAME', ''), cpu=capture(['lscpu']), uname=capture(['uname', '-a']), files=[])
+          assert metadata['source'] == metadata['expected_source'], metadata
+          for name in ['./target/armv7-unknown-linux-gnueabihf/no-debug-nightly/uv', './target/armv7-unknown-linux-gnueabihf/no-debug-nightly/uvx']:
+              path = pathlib.Path(name)
+              if path.exists():
+                  metadata['files'].append(dict(path=name, bytes=path.stat().st_size, sha256=hashlib.sha256(path.read_bytes()).hexdigest(), elf_comment=capture(['readelf', '-p', '.comment', name])))
+          output = pathlib.Path('benchmark-evidence')
+          output.mkdir(exist_ok=True)
+          (output / 'environment.json').write_text(json.dumps(metadata, indent=2))
+          print(json.dumps(metadata, indent=2))
+          PY
+      - name: Upload benchmark evidence
+        if: "${{ always() }}"
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: benchmark-baseline-build-binary-linux-armv7-gnueabihf
+          path: benchmark-evidence/
+          if-no-files-found: error
+          retention-days: 14
+  baseline-build-binary-linux-musl:
+    name: baseline / linux musl
+    timeout-minutes: 30
+    runs-on: github-ubuntu-24.04-x86_64-8
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      RUSTUP_MAX_RETRIES: 10
+      RUSTC_BOOTSTRAP: 1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          repository: astral-sh/uv
+          ref: bf041f9245952ba7c9e3c29aebe0a8acc2bc983d
+      - name: Install mold
+        run: "./scripts/install-mold.sh"
+      - name: Setup musl
+        run: sudo apt-get install musl-tools
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install --profile minimal
+          rustup target add x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+        with:
+          prefix-key: v1-pr19648-20260901
+          cache-workspace-crates: "true"
+          save-if: "${{ inputs.save-rust-cache == 'true' }}"
+          shared-key: baseline-build-binary-linux-musl
+        id: rust-cache
+      - name: Build
+        run:
+          cargo build --profile no-debug-nightly -Z checksum-freshness --target x86_64-unknown-linux-musl
+          --bin uv --bin uvx
+      - name: Upload binary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: baseline-uv-linux-musl-${{ github.sha }}
+          path: |
+            ./target/x86_64-unknown-linux-musl/no-debug-nightly/uv
+            ./target/x86_64-unknown-linux-musl/no-debug-nightly/uvx
+          retention-days: 1
+      - name: Measure three warm uv rebuilds
+        if: "${{ inputs.sample == 'warmup' }}"
+        run: |
+          python3 - <<'PY'
+          import json, pathlib, subprocess, time
+          output = pathlib.Path('benchmark-evidence')
+          output.mkdir(exist_ok=True)
+          samples = []
+          for iteration in range(1, 4):
+              subprocess.run(['cargo', 'clean', '--package', 'uv', '--profile', 'no-debug-nightly', '--target', 'x86_64-unknown-linux-musl'], check=True)
+              started = time.perf_counter()
+              subprocess.run(['cargo', 'build', '--profile', 'no-debug-nightly', '-Z', 'checksum-freshness', '--target', 'x86_64-unknown-linux-musl', '--bin', 'uv', '--bin', 'uvx'], check=True)
+              seconds = time.perf_counter() - started
+              samples.append(dict(iteration=iteration, seconds=seconds))
+              print('BENCH_REBUILD_SECONDS', iteration, seconds, flush=True)
+          (output / 'warm-rebuilds.json').write_text(json.dumps(samples, indent=2))
+          PY
+      - name: Record benchmark evidence
+        if: "${{ always() }}"
+        env:
+          BENCH_CACHE_HIT: "${{ steps.rust-cache.outputs.cache-hit }}"
+          BENCH_SAMPLE: "${{ inputs.sample }}"
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, subprocess
+          def capture(args):
+              return subprocess.run(args, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT).stdout.strip()
+          metadata = {'variant': 'baseline', 'job': 'build-binary-linux-musl', 'expected_source': 'bf041f9245952ba7c9e3c29aebe0a8acc2bc983d', 'runner_label': 'github-ubuntu-24.04-x86_64-8'}
+          metadata.update(sample=os.environ['BENCH_SAMPLE'], source=capture(['git', 'rev-parse', 'HEAD']), cache_hit=os.environ['BENCH_CACHE_HIT'], rustflags=os.environ.get('RUSTFLAGS', ''), rustc_bootstrap=os.environ.get('RUSTC_BOOTSTRAP', ''), rustc=capture(['rustc', '+1.98.0', '-vV']), runner_name=os.environ.get('RUNNER_NAME', ''), cpu=capture(['lscpu']), uname=capture(['uname', '-a']), files=[])
+          assert metadata['source'] == metadata['expected_source'], metadata
+          for name in ['./target/x86_64-unknown-linux-musl/no-debug-nightly/uv', './target/x86_64-unknown-linux-musl/no-debug-nightly/uvx']:
+              path = pathlib.Path(name)
+              if path.exists():
+                  metadata['files'].append(dict(path=name, bytes=path.stat().st_size, sha256=hashlib.sha256(path.read_bytes()).hexdigest(), elf_comment=capture(['readelf', '-p', '.comment', name])))
+          output = pathlib.Path('benchmark-evidence')
+          output.mkdir(exist_ok=True)
+          (output / 'environment.json').write_text(json.dumps(metadata, indent=2))
+          print(json.dumps(metadata, indent=2))
+          PY
+      - name: Upload benchmark evidence
+        if: "${{ always() }}"
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: benchmark-baseline-build-binary-linux-musl
+          path: benchmark-evidence/
+          if-no-files-found: error
+          retention-days: 14
+  baseline-build-binary-msrv:
+    name: baseline / msrv
+    runs-on: github-ubuntu-24.04-x86_64-8
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          repository: astral-sh/uv
+          ref: bf041f9245952ba7c9e3c29aebe0a8acc2bc983d
+      - name: Read MSRV from Cargo.toml
+        id: msrv
+        run: |
+          MSRV=$(grep -m1 'rust-version' Cargo.toml | sed 's/.*"\([^"]*\)".*/\1/')
+          echo "value=$MSRV" >> "$GITHUB_OUTPUT"
+      - name: Install Rust toolchain
+        run: rustup default ${MSRV}
+        env:
+          MSRV: "${{ steps.msrv.outputs.value }}"
+      - name: Install mold
+        run: "./scripts/install-mold.sh"
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+        with:
+          save-if: "${{ inputs.save-rust-cache == 'true' }}"
+          prefix-key: v1-pr19648-20260901
+          shared-key: baseline-build-binary-msrv
+        id: rust-cache
+      - run: cargo +${MSRV} build --profile no-debug
+        env:
+          MSRV: "${{ steps.msrv.outputs.value }}"
+      - run: "./target/no-debug/uv --version"
+      - name: Record benchmark evidence
+        if: "${{ always() }}"
+        env:
+          BENCH_CACHE_HIT: "${{ steps.rust-cache.outputs.cache-hit }}"
+          BENCH_SAMPLE: "${{ inputs.sample }}"
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, subprocess
+          def capture(args):
+              return subprocess.run(args, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT).stdout.strip()
+          metadata = {'variant': 'baseline', 'job': 'build-binary-msrv', 'expected_source': 'bf041f9245952ba7c9e3c29aebe0a8acc2bc983d', 'runner_label': 'github-ubuntu-24.04-x86_64-8'}
+          metadata.update(sample=os.environ['BENCH_SAMPLE'], source=capture(['git', 'rev-parse', 'HEAD']), cache_hit=os.environ['BENCH_CACHE_HIT'], rustflags=os.environ.get('RUSTFLAGS', ''), rustc_bootstrap=os.environ.get('RUSTC_BOOTSTRAP', ''), rustc=capture(['rustc', '+1.96.0', '-vV']), runner_name=os.environ.get('RUNNER_NAME', ''), cpu=capture(['lscpu']), uname=capture(['uname', '-a']), files=[])
+          assert metadata['source'] == metadata['expected_source'], metadata
+          for name in ['./target/no-debug/uv', './target/no-debug/uvx']:
+              path = pathlib.Path(name)
+              if path.exists():
+                  metadata['files'].append(dict(path=name, bytes=path.stat().st_size, sha256=hashlib.sha256(path.read_bytes()).hexdigest(), elf_comment=capture(['readelf', '-p', '.comment', name])))
+          output = pathlib.Path('benchmark-evidence')
+          output.mkdir(exist_ok=True)
+          (output / 'environment.json').write_text(json.dumps(metadata, indent=2))
+          print(json.dumps(metadata, indent=2))
+          PY
+      - name: Upload benchmark evidence
+        if: "${{ always() }}"
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: benchmark-baseline-build-binary-msrv
+          path: benchmark-evidence/
+          if-no-files-found: error
+          retention-days: 14
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      RUSTUP_MAX_RETRIES: 10
+  baseline-cargo-test-linux:
+    timeout-minutes: 30
+    runs-on: depot-ubuntu-24.04-16
+    name: baseline / cargo test on linux
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          repository: astral-sh/uv
+          ref: bf041f9245952ba7c9e3c29aebe0a8acc2bc983d
+      - name: Install mold
+        run: "./scripts/install-mold.sh"
+      - name: Install Rust toolchain
+        run: rustup toolchain install --profile minimal
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+        id: rust-cache
+        with:
+          prefix-key: v1-pr19648-20260901
+          key: "${{ hashFiles('Cargo.toml') }}"
+          cache-workspace-crates: "true"
+          save-if: "${{ inputs.save-rust-cache == 'true' }}"
+          shared-key: baseline-cargo-test-linux
+      - name: Record Cargo cache freshness
+        if:
+          "${{ inputs.save-rust-cache == 'true' && steps.rust-cache.outputs.cache-hit
+          != 'true' }}"
+        run: touch "$RUNNER_TEMP/uv-cargo-cache-marker"
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
+        with:
+          version: 0.12.7
+      - name: Install required Python versions
+        run: uv python install
+      - name: Install secret service
+        run: |
+          # Try the next configured mirror after the first failed download.
+          cat /etc/apt/apt-mirrors.txt
+          printf '%s\n' \
+            'Acquire::Retries "0";' \
+            'Acquire::http::Timeout "10";' \
+            'Acquire::https::Timeout "10";' \
+            | sudo tee /etc/apt/apt.conf.d/80-retries > /dev/null
+          sudo apt install -y --no-install-recommends gnome-keyring
+      - name: Start gnome-keyring
+        run: gnome-keyring-daemon --components=secrets --daemonize --unlock <<< 'foobar'
+      - name: Create btrfs filesystem
+        run: |
+          sudo apt install -y btrfs-progs
+          truncate -s 1G /tmp/btrfs.img
+          mkfs.btrfs /tmp/btrfs.img
+          sudo mkdir /btrfs
+          sudo mount -o loop /tmp/btrfs.img /btrfs
+          sudo chown "$(id -u):$(id -g)" /btrfs
+      - name: Create tmpfs filesystem
+        run: |
+          sudo mkdir /tmpfs
+          sudo mount -t tmpfs -o size=256m tmpfs /tmpfs
+          sudo chown "$(id -u):$(id -g)" /tmpfs
+      - name: Create minix filesystem (low hardlink limit)
+        run: |
+          truncate -s 16M /tmp/minix.img
+          mkfs.minix /tmp/minix.img
+          sudo mkdir /minix
+          sudo mount -o loop /tmp/minix.img /minix
+          sudo chown "$(id -u):$(id -g)" /minix
+      - name: Install cargo nextest
+        uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad
+        with:
+          tool: cargo-nextest
+      - name: Cargo test
+        env:
+          UV_HTTP_RETRIES: 5
+          RUST_BACKTRACE: 1
+          CARGO_UNSTABLE_MTIME_ON_USE:
+            "${{ inputs.save-rust-cache == 'true' && steps.rust-cache.outputs.cache-hit
+            != 'true' }}"
+          UV_INTERNAL__TEST_COW_FS: "/btrfs"
+          UV_INTERNAL__TEST_NOCOW_FS: "/tmpfs"
+          UV_INTERNAL__TEST_ALT_FS: "/tmpfs"
+          UV_INTERNAL__TEST_LOWLINKS_FS: "/minix"
+          INSTA_UPDATE: new
+          INSTA_PENDING_DIR: "${{ github.workspace }}/pending-snapshots"
+        run: |
+          cargo nextest run \
+            --cargo-profile fast-build-nightly \
+            -Z panic-abort-tests \
+            -Z checksum-freshness \
+            --features test-python-patch,test-universal,native-auth,secret-service \
+            --workspace \
+            --profile ci-linux
+      - name: Prune superseded workspace artifacts
+        if:
+          "${{ inputs.save-rust-cache == 'true' && steps.rust-cache.outputs.cache-hit
+          != 'true' }}"
+        run:
+          python3 scripts/prune_cargo_workspace_cache.py target/fast-build-nightly
+          "$RUNNER_TEMP/uv-cargo-cache-marker"
+      - name: Upload pending snapshots
+        if: "${{ failure() }}"
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: baseline-pending-snapshots-linux
+          path: pending-snapshots/
+          if-no-files-found: ignore
+          include-hidden-files: true
+          retention-days: 14
+      - name: Upload JUnit results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: baseline-junit-results-linux
+          path: target/nextest/ci*/junit.xml
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Record benchmark evidence
+        if: "${{ always() }}"
+        env:
+          BENCH_CACHE_HIT: "${{ steps.rust-cache.outputs.cache-hit }}"
+          BENCH_SAMPLE: "${{ inputs.sample }}"
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, subprocess
+          def capture(args):
+              return subprocess.run(args, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT).stdout.strip()
+          metadata = {'variant': 'baseline', 'job': 'cargo-test-linux', 'expected_source': 'bf041f9245952ba7c9e3c29aebe0a8acc2bc983d', 'runner_label': 'depot-ubuntu-24.04-16'}
+          metadata.update(sample=os.environ['BENCH_SAMPLE'], source=capture(['git', 'rev-parse', 'HEAD']), cache_hit=os.environ['BENCH_CACHE_HIT'], rustflags=os.environ.get('RUSTFLAGS', ''), rustc_bootstrap=os.environ.get('RUSTC_BOOTSTRAP', ''), rustc=capture(['rustc', '+1.98.0', '-vV']), runner_name=os.environ.get('RUNNER_NAME', ''), cpu=capture(['lscpu']), uname=capture(['uname', '-a']), files=[])
+          assert metadata['source'] == metadata['expected_source'], metadata
+          for name in []:
+              path = pathlib.Path(name)
+              if path.exists():
+                  metadata['files'].append(dict(path=name, bytes=path.stat().st_size, sha256=hashlib.sha256(path.read_bytes()).hexdigest(), elf_comment=capture(['readelf', '-p', '.comment', name])))
+          output = pathlib.Path('benchmark-evidence')
+          output.mkdir(exist_ok=True)
+          (output / 'environment.json').write_text(json.dumps(metadata, indent=2))
+          print(json.dumps(metadata, indent=2))
+          PY
+      - name: Upload benchmark evidence
+        if: "${{ always() }}"
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: benchmark-baseline-cargo-test-linux
+          path: benchmark-evidence/
+          if-no-files-found: error
+          retention-days: 14
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      PYTHON_VERSION: "3.12"
+      RUSTC_BOOTSTRAP: 1
+      RUSTUP_MAX_RETRIES: 10
+  lld-build-binary-linux-libc:
+    name: lld / linux libc
+    timeout-minutes: 30
+    runs-on: github-ubuntu-24.04-x86_64-8
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      RUSTUP_MAX_RETRIES: 10
+      RUSTC_BOOTSTRAP: 1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          repository: astral-sh/uv
+          ref: eb663fd38875597eba428208a7082285bfdb9ddd
+      - name: Install Rust toolchain
+        run: rustup toolchain install --profile minimal
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+        with:
+          prefix-key: v1-pr19648-20260901
+          cache-workspace-crates: "true"
+          save-if: "${{ inputs.save-rust-cache == 'true' }}"
+          shared-key: lld-build-binary-linux-libc
+        id: rust-cache
+      - name: Build
+        run: cargo build --profile no-debug-nightly -Z checksum-freshness
+      - name: Upload binary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: lld-uv-linux-libc-${{ github.sha }}
+          path: |
+            ./target/no-debug-nightly/uv
+            ./target/no-debug-nightly/uvx
+          retention-days: 1
+      - name: Record benchmark evidence
+        if: "${{ always() }}"
+        env:
+          BENCH_CACHE_HIT: "${{ steps.rust-cache.outputs.cache-hit }}"
+          BENCH_SAMPLE: "${{ inputs.sample }}"
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, subprocess
+          def capture(args):
+              return subprocess.run(args, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT).stdout.strip()
+          metadata = {'variant': 'lld', 'job': 'build-binary-linux-libc', 'expected_source': 'eb663fd38875597eba428208a7082285bfdb9ddd', 'runner_label': 'github-ubuntu-24.04-x86_64-8'}
+          metadata.update(sample=os.environ['BENCH_SAMPLE'], source=capture(['git', 'rev-parse', 'HEAD']), cache_hit=os.environ['BENCH_CACHE_HIT'], rustflags=os.environ.get('RUSTFLAGS', ''), rustc_bootstrap=os.environ.get('RUSTC_BOOTSTRAP', ''), rustc=capture(['rustc', '+1.98.0', '-vV']), runner_name=os.environ.get('RUNNER_NAME', ''), cpu=capture(['lscpu']), uname=capture(['uname', '-a']), files=[])
+          assert metadata['source'] == metadata['expected_source'], metadata
+          for name in ['./target/no-debug-nightly/uv', './target/no-debug-nightly/uvx']:
+              path = pathlib.Path(name)
+              if path.exists():
+                  metadata['files'].append(dict(path=name, bytes=path.stat().st_size, sha256=hashlib.sha256(path.read_bytes()).hexdigest(), elf_comment=capture(['readelf', '-p', '.comment', name])))
+          output = pathlib.Path('benchmark-evidence')
+          output.mkdir(exist_ok=True)
+          (output / 'environment.json').write_text(json.dumps(metadata, indent=2))
+          print(json.dumps(metadata, indent=2))
+          PY
+      - name: Upload benchmark evidence
+        if: "${{ always() }}"
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: benchmark-lld-build-binary-linux-libc
+          path: benchmark-evidence/
+          if-no-files-found: error
+          retention-days: 14
+  lld-build-binary-linux-aarch64:
+    name: lld / linux aarch64
+    timeout-minutes: 30
+    runs-on: github-ubuntu-24.04-aarch64-4
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      RUSTUP_MAX_RETRIES: 10
+      RUSTC_BOOTSTRAP: 1
+      RUSTFLAGS: "-Z unstable-options -C linker-features=+lld -C link-self-contained=+linker"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          repository: astral-sh/uv
+          ref: eb663fd38875597eba428208a7082285bfdb9ddd
+      - name: Install Rust toolchain
+        run: rustup toolchain install --profile minimal
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+        with:
+          prefix-key: v1-pr19648-20260901
+          cache-workspace-crates: "true"
+          save-if: "${{ inputs.save-rust-cache == 'true' }}"
+          shared-key: lld-build-binary-linux-aarch64
+        id: rust-cache
+      - name: Build
+        run: cargo build --profile no-debug-nightly -Z checksum-freshness
+      - name: Upload binary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: lld-uv-linux-aarch64-${{ github.sha }}
+          path: |
+            ./target/no-debug-nightly/uv
+            ./target/no-debug-nightly/uvx
+          retention-days: 1
+      - name: Measure three warm uv rebuilds
+        if: "${{ inputs.sample == 'warmup' }}"
+        run: |
+          python3 - <<'PY'
+          import json, pathlib, subprocess, time
+          output = pathlib.Path('benchmark-evidence')
+          output.mkdir(exist_ok=True)
+          samples = []
+          for iteration in range(1, 4):
+              subprocess.run(['cargo', 'clean', '--package', 'uv', '--profile', 'no-debug-nightly'], check=True)
+              started = time.perf_counter()
+              subprocess.run(['cargo', 'build', '--profile', 'no-debug-nightly', '-Z', 'checksum-freshness'], check=True)
+              seconds = time.perf_counter() - started
+              samples.append(dict(iteration=iteration, seconds=seconds))
+              print('BENCH_REBUILD_SECONDS', iteration, seconds, flush=True)
+          (output / 'warm-rebuilds.json').write_text(json.dumps(samples, indent=2))
+          PY
+      - name: Record benchmark evidence
+        if: "${{ always() }}"
+        env:
+          BENCH_CACHE_HIT: "${{ steps.rust-cache.outputs.cache-hit }}"
+          BENCH_SAMPLE: "${{ inputs.sample }}"
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, subprocess
+          def capture(args):
+              return subprocess.run(args, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT).stdout.strip()
+          metadata = {'variant': 'lld', 'job': 'build-binary-linux-aarch64', 'expected_source': 'eb663fd38875597eba428208a7082285bfdb9ddd', 'runner_label': 'github-ubuntu-24.04-aarch64-4'}
+          metadata.update(sample=os.environ['BENCH_SAMPLE'], source=capture(['git', 'rev-parse', 'HEAD']), cache_hit=os.environ['BENCH_CACHE_HIT'], rustflags=os.environ.get('RUSTFLAGS', ''), rustc_bootstrap=os.environ.get('RUSTC_BOOTSTRAP', ''), rustc=capture(['rustc', '+1.98.0', '-vV']), runner_name=os.environ.get('RUNNER_NAME', ''), cpu=capture(['lscpu']), uname=capture(['uname', '-a']), files=[])
+          assert metadata['source'] == metadata['expected_source'], metadata
+          for name in ['./target/no-debug-nightly/uv', './target/no-debug-nightly/uvx']:
+              path = pathlib.Path(name)
+              if path.exists():
+                  metadata['files'].append(dict(path=name, bytes=path.stat().st_size, sha256=hashlib.sha256(path.read_bytes()).hexdigest(), elf_comment=capture(['readelf', '-p', '.comment', name])))
+          output = pathlib.Path('benchmark-evidence')
+          output.mkdir(exist_ok=True)
+          (output / 'environment.json').write_text(json.dumps(metadata, indent=2))
+          print(json.dumps(metadata, indent=2))
+          PY
+      - name: Upload benchmark evidence
+        if: "${{ always() }}"
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: benchmark-lld-build-binary-linux-aarch64
+          path: benchmark-evidence/
+          if-no-files-found: error
+          retention-days: 14
+  lld-build-binary-linux-armv7-gnueabihf:
+    name: lld / linux armv7 gnueabihf
+    timeout-minutes: 30
+    runs-on: github-ubuntu-24.04-x86_64-8
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      RUSTUP_MAX_RETRIES: 10
+      RUSTC_BOOTSTRAP: 1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          repository: astral-sh/uv
+          ref: eb663fd38875597eba428208a7082285bfdb9ddd
+      - name: Setup armv7
+        run: |
+          # Try the next configured mirror after the first failed download.
+          cat /etc/apt/apt-mirrors.txt
+          printf '%s\n' \
+            'Acquire::Retries "0";' \
+            'Acquire::http::Timeout "10";' \
+            'Acquire::https::Timeout "10";' \
+            | sudo tee /etc/apt/apt.conf.d/80-retries > /dev/null
+          sudo apt-get update
+          sudo apt-get install gcc-arm-linux-gnueabihf
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install --profile minimal
+          rustup target add armv7-unknown-linux-gnueabihf
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+        with:
+          prefix-key: v1-pr19648-20260901
+          cache-workspace-crates: "true"
+          save-if: "${{ inputs.save-rust-cache == 'true' }}"
+          shared-key: lld-build-binary-linux-armv7-gnueabihf
+        id: rust-cache
+      - name: Build
+        env:
+          CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER: arm-linux-gnueabihf-gcc
+        run:
+          cargo build --profile no-debug-nightly -Z checksum-freshness --target armv7-unknown-linux-gnueabihf
+          --bin uv --bin uvx
+      - name: Upload binary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: lld-uv-linux-armv7-gnueabihf-${{ github.sha }}
+          path: |
+            ./target/armv7-unknown-linux-gnueabihf/no-debug-nightly/uv
+            ./target/armv7-unknown-linux-gnueabihf/no-debug-nightly/uvx
+          retention-days: 1
+      - name: Record benchmark evidence
+        if: "${{ always() }}"
+        env:
+          BENCH_CACHE_HIT: "${{ steps.rust-cache.outputs.cache-hit }}"
+          BENCH_SAMPLE: "${{ inputs.sample }}"
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, subprocess
+          def capture(args):
+              return subprocess.run(args, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT).stdout.strip()
+          metadata = {'variant': 'lld', 'job': 'build-binary-linux-armv7-gnueabihf', 'expected_source': 'eb663fd38875597eba428208a7082285bfdb9ddd', 'runner_label': 'github-ubuntu-24.04-x86_64-8'}
+          metadata.update(sample=os.environ['BENCH_SAMPLE'], source=capture(['git', 'rev-parse', 'HEAD']), cache_hit=os.environ['BENCH_CACHE_HIT'], rustflags=os.environ.get('RUSTFLAGS', ''), rustc_bootstrap=os.environ.get('RUSTC_BOOTSTRAP', ''), rustc=capture(['rustc', '+1.98.0', '-vV']), runner_name=os.environ.get('RUNNER_NAME', ''), cpu=capture(['lscpu']), uname=capture(['uname', '-a']), files=[])
+          assert metadata['source'] == metadata['expected_source'], metadata
+          for name in ['./target/armv7-unknown-linux-gnueabihf/no-debug-nightly/uv', './target/armv7-unknown-linux-gnueabihf/no-debug-nightly/uvx']:
+              path = pathlib.Path(name)
+              if path.exists():
+                  metadata['files'].append(dict(path=name, bytes=path.stat().st_size, sha256=hashlib.sha256(path.read_bytes()).hexdigest(), elf_comment=capture(['readelf', '-p', '.comment', name])))
+          output = pathlib.Path('benchmark-evidence')
+          output.mkdir(exist_ok=True)
+          (output / 'environment.json').write_text(json.dumps(metadata, indent=2))
+          print(json.dumps(metadata, indent=2))
+          PY
+      - name: Upload benchmark evidence
+        if: "${{ always() }}"
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: benchmark-lld-build-binary-linux-armv7-gnueabihf
+          path: benchmark-evidence/
+          if-no-files-found: error
+          retention-days: 14
+  lld-build-binary-linux-musl:
+    name: lld / linux musl
+    timeout-minutes: 30
+    runs-on: github-ubuntu-24.04-x86_64-8
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      RUSTUP_MAX_RETRIES: 10
+      RUSTC_BOOTSTRAP: 1
+      RUSTFLAGS: "-Z unstable-options -C linker-features=+lld -C link-self-contained=+linker"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          repository: astral-sh/uv
+          ref: eb663fd38875597eba428208a7082285bfdb9ddd
+      - name: Setup musl
+        run: sudo apt-get install musl-tools
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install --profile minimal
+          rustup target add x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+        with:
+          prefix-key: v1-pr19648-20260901
+          cache-workspace-crates: "true"
+          save-if: "${{ inputs.save-rust-cache == 'true' }}"
+          shared-key: lld-build-binary-linux-musl
+        id: rust-cache
+      - name: Build
+        run:
+          cargo build --profile no-debug-nightly -Z checksum-freshness --target x86_64-unknown-linux-musl
+          --bin uv --bin uvx
+      - name: Upload binary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: lld-uv-linux-musl-${{ github.sha }}
+          path: |
+            ./target/x86_64-unknown-linux-musl/no-debug-nightly/uv
+            ./target/x86_64-unknown-linux-musl/no-debug-nightly/uvx
+          retention-days: 1
+      - name: Measure three warm uv rebuilds
+        if: "${{ inputs.sample == 'warmup' }}"
+        run: |
+          python3 - <<'PY'
+          import json, pathlib, subprocess, time
+          output = pathlib.Path('benchmark-evidence')
+          output.mkdir(exist_ok=True)
+          samples = []
+          for iteration in range(1, 4):
+              subprocess.run(['cargo', 'clean', '--package', 'uv', '--profile', 'no-debug-nightly', '--target', 'x86_64-unknown-linux-musl'], check=True)
+              started = time.perf_counter()
+              subprocess.run(['cargo', 'build', '--profile', 'no-debug-nightly', '-Z', 'checksum-freshness', '--target', 'x86_64-unknown-linux-musl', '--bin', 'uv', '--bin', 'uvx'], check=True)
+              seconds = time.perf_counter() - started
+              samples.append(dict(iteration=iteration, seconds=seconds))
+              print('BENCH_REBUILD_SECONDS', iteration, seconds, flush=True)
+          (output / 'warm-rebuilds.json').write_text(json.dumps(samples, indent=2))
+          PY
+      - name: Record benchmark evidence
+        if: "${{ always() }}"
+        env:
+          BENCH_CACHE_HIT: "${{ steps.rust-cache.outputs.cache-hit }}"
+          BENCH_SAMPLE: "${{ inputs.sample }}"
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, subprocess
+          def capture(args):
+              return subprocess.run(args, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT).stdout.strip()
+          metadata = {'variant': 'lld', 'job': 'build-binary-linux-musl', 'expected_source': 'eb663fd38875597eba428208a7082285bfdb9ddd', 'runner_label': 'github-ubuntu-24.04-x86_64-8'}
+          metadata.update(sample=os.environ['BENCH_SAMPLE'], source=capture(['git', 'rev-parse', 'HEAD']), cache_hit=os.environ['BENCH_CACHE_HIT'], rustflags=os.environ.get('RUSTFLAGS', ''), rustc_bootstrap=os.environ.get('RUSTC_BOOTSTRAP', ''), rustc=capture(['rustc', '+1.98.0', '-vV']), runner_name=os.environ.get('RUNNER_NAME', ''), cpu=capture(['lscpu']), uname=capture(['uname', '-a']), files=[])
+          assert metadata['source'] == metadata['expected_source'], metadata
+          for name in ['./target/x86_64-unknown-linux-musl/no-debug-nightly/uv', './target/x86_64-unknown-linux-musl/no-debug-nightly/uvx']:
+              path = pathlib.Path(name)
+              if path.exists():
+                  metadata['files'].append(dict(path=name, bytes=path.stat().st_size, sha256=hashlib.sha256(path.read_bytes()).hexdigest(), elf_comment=capture(['readelf', '-p', '.comment', name])))
+          output = pathlib.Path('benchmark-evidence')
+          output.mkdir(exist_ok=True)
+          (output / 'environment.json').write_text(json.dumps(metadata, indent=2))
+          print(json.dumps(metadata, indent=2))
+          PY
+      - name: Upload benchmark evidence
+        if: "${{ always() }}"
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: benchmark-lld-build-binary-linux-musl
+          path: benchmark-evidence/
+          if-no-files-found: error
+          retention-days: 14
+  lld-build-binary-msrv:
+    name: lld / msrv
+    runs-on: github-ubuntu-24.04-x86_64-8
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          repository: astral-sh/uv
+          ref: eb663fd38875597eba428208a7082285bfdb9ddd
+      - name: Read MSRV from Cargo.toml
+        id: msrv
+        run: |
+          MSRV=$(grep -m1 'rust-version' Cargo.toml | sed 's/.*"\([^"]*\)".*/\1/')
+          echo "value=$MSRV" >> "$GITHUB_OUTPUT"
+      - name: Install Rust toolchain
+        run: rustup default ${MSRV}
+        env:
+          MSRV: "${{ steps.msrv.outputs.value }}"
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+        with:
+          save-if: "${{ inputs.save-rust-cache == 'true' }}"
+          prefix-key: v1-pr19648-20260901
+          shared-key: lld-build-binary-msrv
+        id: rust-cache
+      - run: cargo +${MSRV} build --profile no-debug
+        env:
+          MSRV: "${{ steps.msrv.outputs.value }}"
+      - run: "./target/no-debug/uv --version"
+      - name: Record benchmark evidence
+        if: "${{ always() }}"
+        env:
+          BENCH_CACHE_HIT: "${{ steps.rust-cache.outputs.cache-hit }}"
+          BENCH_SAMPLE: "${{ inputs.sample }}"
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, subprocess
+          def capture(args):
+              return subprocess.run(args, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT).stdout.strip()
+          metadata = {'variant': 'lld', 'job': 'build-binary-msrv', 'expected_source': 'eb663fd38875597eba428208a7082285bfdb9ddd', 'runner_label': 'github-ubuntu-24.04-x86_64-8'}
+          metadata.update(sample=os.environ['BENCH_SAMPLE'], source=capture(['git', 'rev-parse', 'HEAD']), cache_hit=os.environ['BENCH_CACHE_HIT'], rustflags=os.environ.get('RUSTFLAGS', ''), rustc_bootstrap=os.environ.get('RUSTC_BOOTSTRAP', ''), rustc=capture(['rustc', '+1.96.0', '-vV']), runner_name=os.environ.get('RUNNER_NAME', ''), cpu=capture(['lscpu']), uname=capture(['uname', '-a']), files=[])
+          assert metadata['source'] == metadata['expected_source'], metadata
+          for name in ['./target/no-debug/uv', './target/no-debug/uvx']:
+              path = pathlib.Path(name)
+              if path.exists():
+                  metadata['files'].append(dict(path=name, bytes=path.stat().st_size, sha256=hashlib.sha256(path.read_bytes()).hexdigest(), elf_comment=capture(['readelf', '-p', '.comment', name])))
+          output = pathlib.Path('benchmark-evidence')
+          output.mkdir(exist_ok=True)
+          (output / 'environment.json').write_text(json.dumps(metadata, indent=2))
+          print(json.dumps(metadata, indent=2))
+          PY
+      - name: Upload benchmark evidence
+        if: "${{ always() }}"
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: benchmark-lld-build-binary-msrv
+          path: benchmark-evidence/
+          if-no-files-found: error
+          retention-days: 14
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      RUSTUP_MAX_RETRIES: 10
+  lld-cargo-test-linux:
+    timeout-minutes: 30
+    runs-on: depot-ubuntu-24.04-16
+    name: lld / cargo test on linux
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          repository: astral-sh/uv
+          ref: eb663fd38875597eba428208a7082285bfdb9ddd
+      - name: Install Rust toolchain
+        run: rustup toolchain install --profile minimal
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+        id: rust-cache
+        with:
+          prefix-key: v1-pr19648-20260901
+          key: "${{ hashFiles('Cargo.toml') }}"
+          cache-workspace-crates: "true"
+          save-if: "${{ inputs.save-rust-cache == 'true' }}"
+          shared-key: lld-cargo-test-linux
+      - name: Record Cargo cache freshness
+        if:
+          "${{ inputs.save-rust-cache == 'true' && steps.rust-cache.outputs.cache-hit
+          != 'true' }}"
+        run: touch "$RUNNER_TEMP/uv-cargo-cache-marker"
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
+        with:
+          version: 0.12.7
+      - name: Install required Python versions
+        run: uv python install
+      - name: Install secret service
+        run: |
+          # Try the next configured mirror after the first failed download.
+          cat /etc/apt/apt-mirrors.txt
+          printf '%s\n' \
+            'Acquire::Retries "0";' \
+            'Acquire::http::Timeout "10";' \
+            'Acquire::https::Timeout "10";' \
+            | sudo tee /etc/apt/apt.conf.d/80-retries > /dev/null
+          sudo apt install -y --no-install-recommends gnome-keyring
+      - name: Start gnome-keyring
+        run: gnome-keyring-daemon --components=secrets --daemonize --unlock <<< 'foobar'
+      - name: Create btrfs filesystem
+        run: |
+          sudo apt install -y btrfs-progs
+          truncate -s 1G /tmp/btrfs.img
+          mkfs.btrfs /tmp/btrfs.img
+          sudo mkdir /btrfs
+          sudo mount -o loop /tmp/btrfs.img /btrfs
+          sudo chown "$(id -u):$(id -g)" /btrfs
+      - name: Create tmpfs filesystem
+        run: |
+          sudo mkdir /tmpfs
+          sudo mount -t tmpfs -o size=256m tmpfs /tmpfs
+          sudo chown "$(id -u):$(id -g)" /tmpfs
+      - name: Create minix filesystem (low hardlink limit)
+        run: |
+          truncate -s 16M /tmp/minix.img
+          mkfs.minix /tmp/minix.img
+          sudo mkdir /minix
+          sudo mount -o loop /tmp/minix.img /minix
+          sudo chown "$(id -u):$(id -g)" /minix
+      - name: Install cargo nextest
+        uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad
+        with:
+          tool: cargo-nextest
+      - name: Cargo test
+        env:
+          UV_HTTP_RETRIES: 5
+          RUST_BACKTRACE: 1
+          CARGO_UNSTABLE_MTIME_ON_USE:
+            "${{ inputs.save-rust-cache == 'true' && steps.rust-cache.outputs.cache-hit
+            != 'true' }}"
+          UV_INTERNAL__TEST_COW_FS: "/btrfs"
+          UV_INTERNAL__TEST_NOCOW_FS: "/tmpfs"
+          UV_INTERNAL__TEST_ALT_FS: "/tmpfs"
+          UV_INTERNAL__TEST_LOWLINKS_FS: "/minix"
+          INSTA_UPDATE: new
+          INSTA_PENDING_DIR: "${{ github.workspace }}/pending-snapshots"
+        run: |
+          cargo nextest run \
+            --cargo-profile fast-build-nightly \
+            -Z panic-abort-tests \
+            -Z checksum-freshness \
+            --features test-python-patch,test-universal,native-auth,secret-service \
+            --workspace \
+            --profile ci-linux
+      - name: Prune superseded workspace artifacts
+        if:
+          "${{ inputs.save-rust-cache == 'true' && steps.rust-cache.outputs.cache-hit
+          != 'true' }}"
+        run:
+          python3 scripts/prune_cargo_workspace_cache.py target/fast-build-nightly
+          "$RUNNER_TEMP/uv-cargo-cache-marker"
+      - name: Upload pending snapshots
+        if: "${{ failure() }}"
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: lld-pending-snapshots-linux
+          path: pending-snapshots/
+          if-no-files-found: ignore
+          include-hidden-files: true
+          retention-days: 14
+      - name: Upload JUnit results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: lld-junit-results-linux
+          path: target/nextest/ci*/junit.xml
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Record benchmark evidence
+        if: "${{ always() }}"
+        env:
+          BENCH_CACHE_HIT: "${{ steps.rust-cache.outputs.cache-hit }}"
+          BENCH_SAMPLE: "${{ inputs.sample }}"
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, subprocess
+          def capture(args):
+              return subprocess.run(args, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT).stdout.strip()
+          metadata = {'variant': 'lld', 'job': 'cargo-test-linux', 'expected_source': 'eb663fd38875597eba428208a7082285bfdb9ddd', 'runner_label': 'depot-ubuntu-24.04-16'}
+          metadata.update(sample=os.environ['BENCH_SAMPLE'], source=capture(['git', 'rev-parse', 'HEAD']), cache_hit=os.environ['BENCH_CACHE_HIT'], rustflags=os.environ.get('RUSTFLAGS', ''), rustc_bootstrap=os.environ.get('RUSTC_BOOTSTRAP', ''), rustc=capture(['rustc', '+1.98.0', '-vV']), runner_name=os.environ.get('RUNNER_NAME', ''), cpu=capture(['lscpu']), uname=capture(['uname', '-a']), files=[])
+          assert metadata['source'] == metadata['expected_source'], metadata
+          for name in []:
+              path = pathlib.Path(name)
+              if path.exists():
+                  metadata['files'].append(dict(path=name, bytes=path.stat().st_size, sha256=hashlib.sha256(path.read_bytes()).hexdigest(), elf_comment=capture(['readelf', '-p', '.comment', name])))
+          output = pathlib.Path('benchmark-evidence')
+          output.mkdir(exist_ok=True)
+          (output / 'environment.json').write_text(json.dumps(metadata, indent=2))
+          print(json.dumps(metadata, indent=2))
+          PY
+      - name: Upload benchmark evidence
+        if: "${{ always() }}"
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: benchmark-lld-cargo-test-linux
+          path: benchmark-evidence/
+          if-no-files-found: error
+          retention-days: 14
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      PYTHON_VERSION: "3.12"
+      RUSTC_BOOTSTRAP: 1
+      RUSTUP_MAX_RETRIES: 10
