@@ -22,6 +22,14 @@ run-name:
           - candidate
         default: both
         required: true
+      bench-kind:
+        type: choice
+        options:
+          - both
+          - walltime
+          - simulated
+        default: both
+        required: true
       round:
         type: string
         default: warmup
@@ -46,7 +54,7 @@ jobs:
     runs-on: depot-ubuntu-22.04-arm-4
     if:
       ${{ (inputs.workload == 'all' || inputs.workload == 'bench') && (inputs.variant == 'both' || inputs.variant == 'baseline')
-      }}
+      && (inputs.bench-kind == 'both' || inputs.bench-kind == 'walltime') }}
     timeout-minutes: 45
     steps:
       - name: Checkout Branch
@@ -118,7 +126,7 @@ jobs:
     runs-on: depot-ubuntu-24.04-4
     if:
       ${{ (inputs.workload == 'all' || inputs.workload == 'bench') && (inputs.variant == 'both' || inputs.variant == 'baseline')
-      }}
+      && (inputs.bench-kind == 'both' || inputs.bench-kind == 'simulated') }}
     timeout-minutes: 45
     steps:
       - name: Checkout Branch
@@ -378,7 +386,7 @@ jobs:
     runs-on: depot-ubuntu-22.04-arm-4
     if:
       ${{ (inputs.workload == 'all' || inputs.workload == 'bench') && (inputs.variant == 'both' || inputs.variant == 'candidate')
-      }}
+      && (inputs.bench-kind == 'both' || inputs.bench-kind == 'walltime') }}
     timeout-minutes: 45
     env:
       CARGO_INCREMENTAL: 0
@@ -470,7 +478,7 @@ jobs:
     runs-on: depot-ubuntu-24.04-4
     if:
       ${{ (inputs.workload == 'all' || inputs.workload == 'bench') && (inputs.variant == 'both' || inputs.variant == 'candidate')
-      }}
+      && (inputs.bench-kind == 'both' || inputs.bench-kind == 'simulated') }}
     timeout-minutes: 45
     env:
       CARGO_INCREMENTAL: 0
