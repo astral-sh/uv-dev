@@ -1,0 +1,4 @@
+{
+  "reproduction": "not_reproducible",
+  "reason": "With uv 0.12.8 on Linux, running `uv init --python 3.13` inside a fresh `Python` directory exited 0 and generated a project named `python`; it did not install the project or emit the reported error. A subsequent `uv sync --python 3.13` using CPython 3.13.15 reproduced the exact reserved-script failure because the generated `pyproject.toml` contains `[project.scripts] python = \"python:main\"`. Using `uv init --name python-project --python 3.13` allowed both initialization and sync to succeed. Component coverage exists in `crates/uv/tests/project/init.rs` test `init` and `crates/uv/tests/pip_install/pip_install.rs` test `reserved_script_name`, but no end-to-end test covers this directory name. Reproducing failure specifically during `uv init` on Windows 11 requires the reporter’s exact uv version, complete verbose output, and confirmation that no wrapper, IDE, or shell integration automatically invoked sync."
+}
