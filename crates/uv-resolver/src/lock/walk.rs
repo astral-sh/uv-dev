@@ -35,6 +35,11 @@ impl<'lock> LockWalker<'lock> {
         }
     }
 
+    /// Return the lock being traversed.
+    pub(super) fn lock(&self) -> &'lock Lock {
+        self.lock
+    }
+
     /// Queue a package state if it has not already been visited or queued.
     pub(super) fn push(&mut self, index: PackageIndex, extra: Option<&'lock ExtraName>) -> bool {
         self.queue.push((index, extra))
