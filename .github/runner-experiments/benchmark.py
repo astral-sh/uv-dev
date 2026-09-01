@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 
 SOURCE_REVISION = "e9837f6e09e481bf5d1c2c2f13b641c14a366518"
+AUTH_FIX = "51bcea71165dc26c1fd9ea6e6686ba413ae1f679"
 CARGO = [
     "cargo",
     "nextest",
@@ -117,15 +118,24 @@ def measure(command, name, environment, results):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("cpu", "filesystem"))
+    parser.add_argument("mode", choices=("cpu", "filesystem", "cache-volume"))
     parser.add_argument("--results", type=Path, required=True)
     parser.add_argument("--dry-run", action="store_true")
     arguments = parser.parse_args()
-    variants = {"cpu": [8, 20, 40], "filesystem": ["native", "ext4", "tmpfs"]}[
-        arguments.mode
-    ]
+    variants = {
+        "cpu": [8, 20, 40],
+        "filesystem": ["native", "ext4", "tmpfs"],
+        "cache-volume": ["native", "cache-volume"],
+    }[arguments.mode]
     # Rotate each variant through every position to balance order effects.
     schedules = [variants[index:] + variants[:index] for index in range(len(variants))]
+    if arguments.mode == "cache-volume":
+        replica = int(os.environ["RCA_REPLICA"])
+        if replica not in (1, 2):
+            raise RuntimeError(f"Unexpected replica: {replica}")
+        if replica == 2:
+            variants = variants[::-1]
+        schedules = [variants, variants[::-1], variants]
     if arguments.dry_run:
         print(
             json.dumps(
@@ -140,18 +150,43 @@ def main():
 
     if capture(["git", "rev-parse", "HEAD"]) != SOURCE_REVISION:
         raise RuntimeError("Unexpected uv source revision")
-    changed = capture(["git", "diff", "--name-only"])
+    changed = capture(["git", "status", "--porcelain"])
     if changed:
         raise RuntimeError(f"Unexpected source changes: {changed}")
+    if arguments.mode == "cache-volume":
+        # Both storage variants get the same native-auth isolation repair.
+        patch = Path(__file__).with_name("native-auth-isolation.patch")
+        subprocess.run(["git", "apply", "--check", str(patch)], check=True)
+        subprocess.run(["git", "apply", str(patch)], check=True)
 
     results = arguments.results.resolve()
     results.mkdir(parents=True, exist_ok=True)
     scratch = Path.home() / "code" / "tmp" / "uv-runner-rca"
     native = scratch / "native"
     native.mkdir(parents=True, exist_ok=True)
+    storage_paths = {
+        variant: scratch / ("volume" if variant == "cache-volume" else str(variant))
+        for variant in variants
+    }
     seed = scratch / "python-seed"
     seed.mkdir(exist_ok=True)
     environment = dict(os.environ, TMPDIR=str(native), UV_PYTHON_CACHE_DIR=str(seed))
+    if arguments.mode == "cache-volume":
+        cache_directory = storage_paths["cache-volume"]
+        # Different path lengths can trigger uv's long-shebang wrapper and alter
+        # snapshots independently of the underlying storage.
+        if len(os.fsencode(cache_directory)) != len(os.fsencode(native)):
+            raise RuntimeError("Storage paths must have equal byte lengths")
+        if not cache_directory.is_mount():
+            raise RuntimeError(
+                "Namespace cache-volume scratch directory is not mounted"
+            )
+        if cache_directory.stat().st_dev != Path("/cache").stat().st_dev:
+            raise RuntimeError("Scratch directory is not on the Namespace cache volume")
+        if cache_directory.stat().st_dev == native.stat().st_dev:
+            raise RuntimeError(
+                "Cache volume and native scratch are on the same filesystem"
+            )
     metadata = {
         "source": SOURCE_REVISION,
         "mode": arguments.mode,
@@ -162,6 +197,30 @@ def main():
         "kernel": capture(["uname", "-sr"]),
         "source_diff": capture(["git", "diff"]),
     }
+    if arguments.mode == "cache-volume":
+        metadata.update(
+            common_auth_fix=AUTH_FIX,
+            replica=replica,
+            storage={
+                variant: {
+                    "device": storage_paths[variant].stat().st_dev,
+                    "mount": json.loads(
+                        capture(
+                            [
+                                "findmnt",
+                                "--json",
+                                "--output",
+                                "TARGET,SOURCE,FSTYPE,OPTIONS",
+                                "--target",
+                                str(storage_paths[variant]),
+                            ]
+                        )
+                    ),
+                }
+                for variant in variants
+            },
+            scope="Test temporary files and identical warmed Python download caches; no cross-job cache reuse or Rust cache changes",
+        )
     for filename in ("cpu.max", "cpuset.cpus.effective", "memory.max"):
         path = Path("/sys/fs/cgroup") / filename
         if path.exists():
@@ -182,10 +241,38 @@ def main():
     print("PYTHON_CACHE_SEED " + capture(["du", "-sh", str(seed)]), flush=True)
 
     failures = []
+    if arguments.mode == "cache-volume":
+        # Populate each storage path once before the paired measurements.
+        for variant in variants:
+            with tempfile.TemporaryDirectory(
+                prefix="warmup-", dir=storage_paths[variant]
+            ) as temporary:
+                python_cache = Path(temporary) / "python-downloads"
+                subprocess.run(
+                    ["cp", "-a", "--reflink=auto", str(seed), str(python_cache)],
+                    check=True,
+                )
+                sample_environment = dict(
+                    environment, TMPDIR=temporary, UV_PYTHON_CACHE_DIR=str(python_cache)
+                )
+                row = measure(
+                    [*command, "--test-threads", "20"],
+                    f"warmup-{variant}",
+                    sample_environment,
+                    results,
+                )
+                if (
+                    row["returncode"]
+                    or row["tests_run"] != expected_count
+                    or row["tests_passed"] != expected_count
+                ):
+                    raise RuntimeError(f"Incomplete warmup: {variant}")
     for round_index, schedule in enumerate(schedules, start=1):
         for variant in schedule:
             parent = (
-                scratch / str(variant) if arguments.mode == "filesystem" else native
+                storage_paths[variant]
+                if arguments.mode in ("filesystem", "cache-volume")
+                else native
             )
             with tempfile.TemporaryDirectory(prefix="sample-", dir=parent) as temporary:
                 # Copy the same warmed Python archive cache before every measurement.
