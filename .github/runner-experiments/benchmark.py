@@ -164,11 +164,19 @@ def main():
     scratch = Path.home() / "code" / "tmp" / "uv-runner-rca"
     native = scratch / "native"
     native.mkdir(parents=True, exist_ok=True)
+    storage_paths = {
+        variant: scratch / ("volume" if variant == "cache-volume" else str(variant))
+        for variant in variants
+    }
     seed = scratch / "python-seed"
     seed.mkdir(exist_ok=True)
     environment = dict(os.environ, TMPDIR=str(native), UV_PYTHON_CACHE_DIR=str(seed))
     if arguments.mode == "cache-volume":
-        cache_directory = scratch / "cache-volume"
+        cache_directory = storage_paths["cache-volume"]
+        # Different path lengths can trigger uv's long-shebang wrapper and alter
+        # snapshots independently of the underlying storage.
+        if len(os.fsencode(cache_directory)) != len(os.fsencode(native)):
+            raise RuntimeError("Storage paths must have equal byte lengths")
         if not cache_directory.is_mount():
             raise RuntimeError(
                 "Namespace cache-volume scratch directory is not mounted"
@@ -195,7 +203,7 @@ def main():
             replica=replica,
             storage={
                 variant: {
-                    "device": (scratch / variant).stat().st_dev,
+                    "device": storage_paths[variant].stat().st_dev,
                     "mount": json.loads(
                         capture(
                             [
@@ -204,7 +212,7 @@ def main():
                                 "--output",
                                 "TARGET,SOURCE,FSTYPE,OPTIONS",
                                 "--target",
-                                str(scratch / variant),
+                                str(storage_paths[variant]),
                             ]
                         )
                     ),
@@ -237,7 +245,7 @@ def main():
         # Populate each storage path once before the paired measurements.
         for variant in variants:
             with tempfile.TemporaryDirectory(
-                prefix="warmup-", dir=scratch / variant
+                prefix="warmup-", dir=storage_paths[variant]
             ) as temporary:
                 python_cache = Path(temporary) / "python-downloads"
                 subprocess.run(
@@ -262,7 +270,7 @@ def main():
     for round_index, schedule in enumerate(schedules, start=1):
         for variant in schedule:
             parent = (
-                scratch / str(variant)
+                storage_paths[variant]
                 if arguments.mode in ("filesystem", "cache-volume")
                 else native
             )

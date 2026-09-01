@@ -56,10 +56,10 @@ jobs:
           mountpoint -q /cache
           sudo mkdir /cache/uv-linux-runner-rca
           sudo chown "$(id -u):$(id -g)" /cache/uv-linux-runner-rca
-          mkdir "$scratch/cache-volume"
-          sudo mount --bind /cache/uv-linux-runner-rca "$scratch/cache-volume"
+          mkdir "$scratch/volume"
+          sudo mount --bind /cache/uv-linux-runner-rca "$scratch/volume"
           findmnt -n -o FSTYPE,SOURCE,TARGET -T "$scratch/native"
-          findmnt -n -o FSTYPE,SOURCE,TARGET -T "$scratch/cache-volume"
+          findmnt -n -o FSTYPE,SOURCE,TARGET -T "$scratch/volume"
       - name: Install mold
         run: ./scripts/install-mold.sh
       - name: Install Rust toolchain
