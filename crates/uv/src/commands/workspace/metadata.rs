@@ -1,14 +1,14 @@
 use std::io::{BufWriter, Write};
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use uv_cache::{Cache, Refresh};
 use uv_client::BaseClientBuilder;
 use uv_configuration::{Concurrency, DependencyGroupsWithDefaults, DryRun};
 use uv_preview::{Preview, PreviewFeature};
 use uv_python::{ConfigDiscovery, PythonDownloads, PythonPreference, PythonRequest};
 use uv_resolver::Metadata;
-use uv_scripts::Pep723Script;
+use uv_scripts::{Pep723Item, Pep723ItemRef, Pep723Script};
 use uv_settings::{MalwareCheckSettings, PythonInstallMirrors};
 use uv_warnings::warn_user;
 use uv_workspace::{DiscoveryOptions, VirtualProject, WorkspaceCache};
@@ -21,6 +21,7 @@ use crate::commands::project::lock_target::LockTarget;
 use crate::commands::project::{
     LinkErrorReporting, ProjectEnvironment, ProjectEnvironmentPolicy, ProjectError,
     ProjectInterpreter, ScriptEnvironment, ScriptInterpreter, UniversalState, WorkspacePython,
+    handle_missing_script_lockfile,
 };
 use crate::commands::{ExitStatus, UvError, diagnostics};
 use crate::printer::{Printer, Stdout};
@@ -42,7 +43,7 @@ pub(crate) async fn metadata(
     malware_settings: MalwareCheckSettings,
     settings: ResolverSettings,
     client_builder: BaseClientBuilder<'_>,
-    script: Option<Pep723Script>,
+    script: Option<Pep723Item>,
     python_preference: PythonPreference,
     python_downloads: PythonDownloads,
     concurrency: Concurrency,
@@ -52,6 +53,14 @@ pub(crate) async fn metadata(
     printer: Printer,
     preview: Preview,
 ) -> Result<ExitStatus> {
+    let stdin = matches!(script.as_ref(), Some(Pep723Item::Stdin(_)));
+    let (lock_check, frozen) = if stdin {
+        handle_missing_script_lockfile(lock_check, frozen)?;
+        (LockCheck::Disabled, None)
+    } else {
+        (lock_check, frozen)
+    };
+
     if !preview.is_enabled(PreviewFeature::WorkspaceMetadata) {
         warn_user!(
             "The `uv workspace metadata` command is experimental and may change without warning. Pass `--preview-features {}` to disable this warning.",
@@ -60,18 +69,33 @@ pub(crate) async fn metadata(
     }
 
     let virtual_project;
-    let target = if let Some(script) = script.as_ref() {
-        LockTarget::Script(script)
-    } else {
-        virtual_project = VirtualProject::discover(
-            project_dir,
-            &DiscoveryOptions::default(),
-            cache,
-            workspace_cache,
-        )
-        .await?;
-        LockTarget::Workspace(virtual_project.workspace())
+    let stdin_script;
+    let target = match script.as_ref() {
+        Some(Pep723Item::Script(script)) => LockTarget::Script(script),
+        Some(Pep723Item::Stdin(metadata)) => {
+            stdin_script = Pep723Script {
+                path: project_dir.join("-"),
+                metadata: metadata.clone(),
+                prelude: String::new(),
+                postlude: String::new(),
+            };
+            LockTarget::Script(&stdin_script)
+        }
+        Some(Pep723Item::Remote(..)) => {
+            bail!("Remote scripts are not supported by `uv workspace metadata`")
+        }
+        None => {
+            virtual_project = VirtualProject::discover(
+                project_dir,
+                &DiscoveryOptions::default(),
+                cache,
+                workspace_cache,
+            )
+            .await?;
+            LockTarget::Workspace(virtual_project.workspace())
+        }
     };
+    let script_item = script.as_ref().map(Pep723ItemRef::from);
 
     // Don't enable any groups' requires-python for interpreter discovery.
     let groups = DependencyGroupsWithDefaults::none();
@@ -83,7 +107,7 @@ pub(crate) async fn metadata(
     } else {
         interpreter = match target {
             LockTarget::Script(script) => ScriptInterpreter::discover(
-                script.into(),
+                script_item.unwrap_or_else(|| script.into()),
                 python.as_deref().map(PythonRequest::parse),
                 &client_builder,
                 python_preference,
@@ -130,7 +154,8 @@ pub(crate) async fn metadata(
 
         if let LockCheck::Enabled(lock_check) = lock_check {
             LockMode::Locked(&interpreter, lock_check)
-        } else if dry_run.enabled()
+        } else if stdin
+            || dry_run.enabled()
             || (matches!(target, LockTarget::Script(_)) && !target.lock_path().is_file())
         {
             LockMode::DryRun(&interpreter)
@@ -157,6 +182,7 @@ pub(crate) async fn metadata(
             preview,
         )
         .with_refresh(&refresh)
+        .with_existing_lockfile(!stdin)
         .execute(target),
     )
     .await
@@ -195,7 +221,7 @@ pub(crate) async fn metadata(
                     .await?
                     .into_environment()?,
                     LockTarget::Script(script) => ScriptEnvironment::get_or_init(
-                        script.into(),
+                        script_item.unwrap_or_else(|| script.into()),
                         python.as_deref().map(PythonRequest::parse),
                         &client_builder,
                         python_preference,
@@ -216,9 +242,11 @@ pub(crate) async fn metadata(
                     LockTarget::Workspace(workspace) => {
                         ProjectInterpreter::discover_existing(workspace, Some(active), cache)?
                     }
-                    LockTarget::Script(script) => {
-                        ScriptInterpreter::discover_existing(script.into(), Some(active), cache)
-                    }
+                    LockTarget::Script(script) => ScriptInterpreter::discover_existing(
+                        script_item.unwrap_or_else(|| script.into()),
+                        Some(active),
+                        cache,
+                    ),
                 }
             };
 
