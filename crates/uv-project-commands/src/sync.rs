@@ -530,6 +530,7 @@ pub async fn sync(
         editable,
         install_options,
         modifications,
+        None,
         python_platform.as_ref(),
         (&settings).into(),
         &client_builder,
