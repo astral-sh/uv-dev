@@ -9,7 +9,9 @@ pub use anstream;
 #[doc(hidden)]
 pub use owo_colors;
 use rustc_hash::FxHashSet;
-use uv_errors::{ErrorOptions, Hints, write_error_chain_with_options};
+#[doc(hidden)]
+pub use uv_errors::Hints;
+use uv_errors::{ErrorOptions, write_error_chain_with_options};
 
 /// Whether user-facing warnings are enabled.
 pub static ENABLED: AtomicBool = AtomicBool::new(false);
@@ -58,6 +60,23 @@ macro_rules! warn_user {
     }};
 }
 
+/// Warn a user with an error and its cause chain, if warnings are enabled.
+///
+/// The error must be passed as a reference to a type implementing [`Error`], or as a
+/// `&dyn Error`. Optional [`Hints`] are rendered after the cause chain. Arguments are
+/// only evaluated when warnings are enabled.
+#[macro_export]
+macro_rules! warn_user_with_chain {
+    ($err:expr $(,)?) => {
+        $crate::warn_user_with_chain!($err, $crate::Hints::none())
+    };
+    ($err:expr, $hints:expr $(,)?) => {{
+        if $crate::ENABLED.load(std::sync::atomic::Ordering::Relaxed) {
+            $crate::write_warning_chain($err, $hints).expect("writing to stderr should not fail");
+        }
+    }};
+}
+
 pub static WARNINGS: LazyLock<Mutex<FxHashSet<String>>> = LazyLock::new(Mutex::default);
 
 /// Warn a user once, if warnings are enabled, with uniqueness determined by the content of the
@@ -85,7 +104,7 @@ mod tests {
     use insta::assert_snapshot;
     use uv_errors::{ErrorOptions, Hints};
 
-    use super::write_warning_chain_with_options;
+    use super::{disable, write_warning_chain_with_options};
 
     #[test]
     fn format_warning_chain() {
@@ -102,5 +121,55 @@ mod tests {
 
         assert_snapshot!(output, @"warning: Failed to create registry entry
 ");
+    }
+
+    #[test]
+    fn format_warning_chain_with_causes_and_hints() -> std::fmt::Result {
+        let error = anyhow!("unclosed array, expected `]`")
+            .context("TOML parse error at line 1, column 17\n  |\n1 | dependencies = [\n  |                 ^")
+            .context("Skipping invalid PEP 723 script `script.py`");
+        let mut output = String::new();
+        write_warning_chain_with_options(
+            error.as_ref(),
+            Hints::from("Fix the script metadata to include it."),
+            ErrorOptions::default().with_stream(&mut output),
+        )?;
+        let output = anstream::adapter::strip_str(&output);
+
+        assert_snapshot!(output, @r"
+        warning: Skipping invalid PEP 723 script `script.py`
+          Caused by: TOML parse error at line 1, column 17
+              |
+            1 | dependencies = [
+              |                 ^
+          Caused by: unclosed array, expected `]`
+
+        hint: Fix the script metadata to include it.
+        ");
+        Ok(())
+    }
+
+    #[test]
+    fn warn_user_with_chain_skips_disabled_arguments() {
+        disable();
+        let error = anyhow!("should not be displayed");
+        let mut evaluations = 0;
+
+        warn_user_with_chain!({
+            evaluations += 1;
+            error.as_ref()
+        });
+        warn_user_with_chain!(
+            {
+                evaluations += 1;
+                error.as_ref()
+            },
+            {
+                evaluations += 1;
+                Hints::none()
+            },
+        );
+
+        assert_eq!(evaluations, 0);
     }
 }
