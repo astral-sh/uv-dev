@@ -91,11 +91,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           auth_header="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64)"
+          shallow_args=()
+          if [[ "$(git rev-parse --is-shallow-repository)" == "true" ]]; then
+            shallow_args+=(--unshallow)
+          fi
           echo "::add-mask::$auth_header"
           git \
             -c "http.${GITHUB_SERVER_URL}/.extraheader=AUTHORIZATION: basic $auth_header" \
             fetch \
-            --unshallow \
+            "${shallow_args[@]}" \
             --filter=blob:none \
             --no-tags \
             --no-recurse-submodules \
