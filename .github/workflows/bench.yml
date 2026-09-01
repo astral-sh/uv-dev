@@ -21,6 +21,10 @@ jobs:
     runs-on: depot-ubuntu-22.04-arm-4
     if: ${{ github.repository == 'astral-sh/uv' }}
     timeout-minutes: 30
+    env:
+      RUSTC_BOOTSTRAP: 1
+      # cargo-codspeed invokes Cargo internally without forwarding arbitrary -Z flags.
+      CARGO_UNSTABLE_CHECKSUM_FRESHNESS: true
     steps:
       - name: "Checkout Branch"
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -28,8 +32,16 @@ jobs:
           persist-credentials: false
 
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        id: rust-cache
         with:
+          prefix-key: v1-rust-workspace-bench
+          key: ${{ hashFiles('Cargo.toml') }}
+          cache-workspace-crates: "true"
           save-if: ${{ inputs.save-rust-cache == 'true' }}
+
+      - name: "Record Cargo cache freshness"
+        if: ${{ inputs.save-rust-cache == 'true' && steps.rust-cache.outputs.cache-hit != 'true' }}
+        run: touch "$RUNNER_TEMP/uv-cargo-cache-marker"
 
       - name: "Install Rust toolchain"
         run: rustup show
@@ -40,6 +52,8 @@ jobs:
           tool: cargo-codspeed
 
       - name: "Install requirements and prime cache"
+        env:
+          CARGO_UNSTABLE_MTIME_ON_USE: ${{ inputs.save-rust-cache == 'true' && steps.rust-cache.outputs.cache-hit != 'true' }}
         run: |
           sudo apt-get update
           sudo apt-get install -y libsasl2-dev libldap2-dev libkrb5-dev
@@ -49,7 +63,15 @@ jobs:
           cargo run --bin uv -- --config-file test/uv.toml pip compile test/requirements/airflow.in --universal --exclude-newer 2024-08-08 --cache-dir .cache
 
       - name: "Build benchmarks"
+        env:
+          CARGO_UNSTABLE_MTIME_ON_USE: ${{ inputs.save-rust-cache == 'true' && steps.rust-cache.outputs.cache-hit != 'true' }}
         run: cargo codspeed build -m walltime --profile profiling -p uv-bench --bench uv --bench workspace_discovery
+
+      - name: "Prune superseded workspace artifacts"
+        if: ${{ inputs.save-rust-cache == 'true' && steps.rust-cache.outputs.cache-hit != 'true' }}
+        run: |
+          python3 scripts/prune_cargo_workspace_cache.py target/debug "$RUNNER_TEMP/uv-cargo-cache-marker"
+          python3 scripts/prune_cargo_workspace_cache.py target/profiling "$RUNNER_TEMP/uv-cargo-cache-marker"
 
       - name: "Create artifact archive"
         run: tar -cvf benchmarks-walltime.tar target/codspeed target/debug/uv .cache
@@ -101,6 +123,10 @@ jobs:
     runs-on: depot-ubuntu-24.04-4
     if: ${{ github.repository == 'astral-sh/uv' }}
     timeout-minutes: 30
+    env:
+      RUSTC_BOOTSTRAP: 1
+      # cargo-codspeed invokes Cargo internally without forwarding arbitrary -Z flags.
+      CARGO_UNSTABLE_CHECKSUM_FRESHNESS: true
     permissions:
       id-token: write # for codspeed authentication
     steps:
@@ -110,8 +136,16 @@ jobs:
           persist-credentials: false
 
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        id: rust-cache
         with:
+          prefix-key: v1-rust-workspace-bench
+          key: ${{ hashFiles('Cargo.toml') }}
+          cache-workspace-crates: "true"
           save-if: ${{ inputs.save-rust-cache == 'true' }}
+
+      - name: "Record Cargo cache freshness"
+        if: ${{ inputs.save-rust-cache == 'true' && steps.rust-cache.outputs.cache-hit != 'true' }}
+        run: touch "$RUNNER_TEMP/uv-cargo-cache-marker"
 
       - name: "Install Rust toolchain"
         run: rustup show
@@ -122,6 +156,8 @@ jobs:
           tool: cargo-codspeed
 
       - name: "Install requirements and prime cache"
+        env:
+          CARGO_UNSTABLE_MTIME_ON_USE: ${{ inputs.save-rust-cache == 'true' && steps.rust-cache.outputs.cache-hit != 'true' }}
         run: |
           sudo apt-get update
           sudo apt-get install -y libsasl2-dev libldap2-dev libkrb5-dev
@@ -131,7 +167,15 @@ jobs:
           cargo run --bin uv -- --config-file test/uv.toml pip compile test/requirements/airflow.in --universal --exclude-newer 2024-08-08 --cache-dir .cache
 
       - name: "Build benchmarks"
+        env:
+          CARGO_UNSTABLE_MTIME_ON_USE: ${{ inputs.save-rust-cache == 'true' && steps.rust-cache.outputs.cache-hit != 'true' }}
         run: cargo codspeed build --profile profiling -p uv-bench
+
+      - name: "Prune superseded workspace artifacts"
+        if: ${{ inputs.save-rust-cache == 'true' && steps.rust-cache.outputs.cache-hit != 'true' }}
+        run: |
+          python3 scripts/prune_cargo_workspace_cache.py target/debug "$RUNNER_TEMP/uv-cargo-cache-marker"
+          python3 scripts/prune_cargo_workspace_cache.py target/profiling "$RUNNER_TEMP/uv-cargo-cache-marker"
 
       - name: "Run benchmarks"
         uses: CodSpeedHQ/action@0ca9cbbf4623b599a6c3ed4fc8a922942705d9f1 # v5.0.2
