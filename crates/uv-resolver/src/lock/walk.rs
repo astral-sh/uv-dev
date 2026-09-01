@@ -1,12 +1,21 @@
-use std::collections::VecDeque;
-use std::collections::hash_map::Entry;
+//! Shared mechanics for traversing an immutable lock.
+//!
+//! [`LockWalker`] visits each package/extra pair once. [`MarkerReachabilityWalker`] uses the same
+//! states and dependency expansion, but revisits a state when its reachability marker grows.
+//! Roots, dependency groups, marker evaluation, pruning, and output remain caller policy.
+//!
+//! Not every operation on a lock is a package/extra walk. Validation can revisit a package after
+//! discovering additional metadata obligations. Tree rendering tracks path/depth and inversion
+//! context, and export's conflict inference tracks per-node conflict maps as well as reachability.
+//! Those algorithms retain their richer state instead of reducing it to a package/extra pair.
 
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 use uv_normalize::ExtraName;
 use uv_types::OnceQueue;
 
 use super::{Dependency, Lock, Package, PackageIndex};
 use crate::UniversalMarker;
+use crate::graph_ops::{Boolean, MarkerReachability};
 
 /// A package and optional activated extra in a lock traversal.
 pub(super) type LockTraversalState<'lock> = (PackageIndex, Option<&'lock ExtraName>);
@@ -56,21 +65,17 @@ impl<'lock> LockWalker<'lock> {
 }
 
 /// A fixed-point lock traversal that revisits states when their marker reachability changes.
-pub(super) struct MarkerReachabilityWalker<'lock> {
+pub(super) struct MarkerReachabilityWalker<'lock, Marker = UniversalMarker> {
     lock: &'lock Lock,
-    queue: VecDeque<LockTraversalState<'lock>>,
-    queued: FxHashSet<LockTraversalState<'lock>>,
-    reachability: FxHashMap<LockTraversalState<'lock>, UniversalMarker>,
+    reachability: MarkerReachability<LockTraversalState<'lock>, Marker>,
 }
 
-impl<'lock> MarkerReachabilityWalker<'lock> {
+impl<'lock, Marker: Boolean + Copy + PartialEq> MarkerReachabilityWalker<'lock, Marker> {
     /// Create an empty traversal over `lock`.
     pub(super) fn new(lock: &'lock Lock) -> Self {
         Self {
             lock,
-            queue: VecDeque::new(),
-            queued: FxHashSet::default(),
-            reachability: FxHashMap::default(),
+            reachability: MarkerReachability::with_capacity(lock.len()),
         }
     }
 
@@ -79,28 +84,9 @@ impl<'lock> MarkerReachabilityWalker<'lock> {
         &mut self,
         index: PackageIndex,
         extra: Option<&'lock ExtraName>,
-        marker: UniversalMarker,
+        marker: Marker,
     ) {
-        let state = (index, extra);
-        let changed = match self.reachability.entry(state) {
-            Entry::Occupied(mut entry) => {
-                let mut combined = *entry.get();
-                combined.or(marker);
-                if combined == *entry.get() {
-                    false
-                } else {
-                    entry.insert(combined);
-                    true
-                }
-            }
-            Entry::Vacant(entry) => {
-                entry.insert(marker);
-                true
-            }
-        };
-        if changed && self.queued.insert(state) {
-            self.queue.push_back(state);
-        }
+        self.reachability.push((index, extra), marker);
     }
 
     /// Propagate `marker` to a package's base dependencies and activated extras.
@@ -108,7 +94,7 @@ impl<'lock> MarkerReachabilityWalker<'lock> {
         &mut self,
         index: PackageIndex,
         extras: impl IntoIterator<Item = &'lock ExtraName>,
-        marker: UniversalMarker,
+        marker: Marker,
     ) {
         self.push(index, None, marker);
         for extra in extras {
@@ -117,24 +103,23 @@ impl<'lock> MarkerReachabilityWalker<'lock> {
     }
 
     /// Propagate `marker` to the package and extras selected by a dependency edge.
-    pub(super) fn push_dependency(
-        &mut self,
-        dependency: &'lock Dependency,
-        marker: UniversalMarker,
-    ) {
+    pub(super) fn push_dependency(&mut self, dependency: &'lock Dependency, marker: Marker) {
         self.push_package(dependency.index, &dependency.extra, marker);
     }
 
     /// Pop the next expanded package-extra state and its accumulated reachability.
-    pub(super) fn pop(&mut self) -> Option<(LockVisit<'lock>, UniversalMarker)> {
-        let (index, extra) = self.queue.pop_front()?;
-        self.queued.remove(&(index, extra));
-        let marker = *self.reachability.get(&(index, extra))?;
+    pub(super) fn pop(&mut self) -> Option<(LockVisit<'lock>, Marker)> {
+        let ((index, extra), marker) = self.reachability.pop()?;
         Some((LockVisit::new(self.lock, index, extra), marker))
+    }
+
+    /// Return the accumulated reachability of every discovered package-extra state.
+    pub(super) fn into_markers(self) -> FxHashMap<LockTraversalState<'lock>, Marker> {
+        self.reachability.into_markers()
     }
 }
 
-/// A package-extra state yielded by [`LockWalker`].
+/// A package-extra state yielded by either lock walker.
 pub(super) struct LockVisit<'lock> {
     pub(super) index: PackageIndex,
     pub(super) extra: Option<&'lock ExtraName>,
