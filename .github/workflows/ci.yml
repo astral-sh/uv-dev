@@ -659,12 +659,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-          ref: ce983e64f3363d36d5f424effcb51e6fad4ab39a
+          ref: 99d65b6e30fef3affe3c68d402310217749af39e
       - name: Record source revision
         shell: bash
         run: 'git rev-parse HEAD
 
-          test "$(git rev-parse HEAD)" = "ce983e64f3363d36d5f424effcb51e6fad4ab39a"'
+          test "$(git rev-parse HEAD)" = "99d65b6e30fef3affe3c68d402310217749af39e"'
       - name: Setup Dev Drive
         run: ${{ github.workspace }}/.github/workflows/setup-dev-drive.ps1
       - name: Copy Git Repo to Dev Drive
