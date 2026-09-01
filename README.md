@@ -10,17 +10,17 @@ Classification: enhancement
 
 The strict behavior is established rather than accidental. astral-sh/uv#20784 changed the shared discovery path so `uv check` ignores malformed discovered metadata, but explicitly kept `uv workspace list --scripts` strict and added an integration test for the distinction. No existing issue or pull request was found that tracks changing the listing command to warn and skip invalid candidates or adding a `--skip-invalid` mode. The closest history explains the current behavior and the exact duplicate-block error, but does not duplicate this request.
 
-## Draft response
+After reviewing the report, repository member Zsol Dollenstein selected the intended behavior: `uv workspace list --scripts` should warn about malformed candidates and skip them. This resolves the policy question in favor of tolerant default discovery rather than a new `--skip-invalid` option.
 
-`uv workspace list --scripts` currently treats malformed candidate metadata as an error. This distinction is explicit in astral-sh/uv#20784: `uv check` skips malformed discovered metadata, while explicit script checks and `uv workspace list --scripts` remain strict.
+## Maintainer decision
 
-Since `--scripts` is still a preview feature, changing discovery to warn and skip malformed candidates is reasonable to consider. An opt-in `--skip-invalid` flag would preserve strict behavior but add interface surface. The next step is to decide the default semantics here before implementation.
+Change `uv workspace list --scripts` so a malformed PEP 723 candidate emits a warning and is skipped, allowing discovery to continue. This direction was stated by repository member Zsol Dollenstein in the issue discussion. No separate `--skip-invalid` mode was requested in that decision.
 
 ## Classification
 
-This is an enhancement. The report asks to make an existing preview command more resilient or to add an opt-in mode. Current source collects every discovery result and returns an error on the first malformed candidate, and the `workspace_list_scripts_invalid_metadata` integration test snapshots that failure. astral-sh/uv#20784 deliberately introduced per-candidate errors so consumers can choose a policy; it made `uv check` tolerant while retaining strict behavior for `uv workspace list --scripts`. That evidence establishes intentional current behavior, not a regression or an already-tracked correctness bug.
+This is an enhancement. The report asks to make an existing preview command more resilient. Current source collects every discovery result and returns an error on the first malformed candidate, and the `workspace_list_scripts_invalid_metadata` integration test snapshots that failure. astral-sh/uv#20784 deliberately introduced per-candidate errors so consumers can choose a policy; it made `uv check` tolerant while retaining strict behavior for `uv workspace list --scripts`. That evidence establishes intentional current behavior, not a regression or an already-tracked correctness bug. The subsequent maintainer decision changes the desired policy to warn and skip by default.
 
-The parser's rejection of two complete PEP 723 blocks is itself correct: astral-sh/uv#18617 identified prior acceptance as incompatible with PEP 723, and astral-sh/uv#19544 implemented the exact error seen here. The open design question is how a workspace-wide listing operation should handle that valid parse failure.
+The parser's rejection of two complete PEP 723 blocks is itself correct: astral-sh/uv#18617 identified prior acceptance as incompatible with PEP 723, and astral-sh/uv#19544 implemented the exact error seen here. The required change is limited to how workspace-wide listing handles that valid parse failure: report it as a warning, skip the malformed candidate, and continue listing valid scripts.
 
 ## Related
 
