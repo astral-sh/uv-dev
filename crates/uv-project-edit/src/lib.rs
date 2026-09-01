@@ -15,7 +15,7 @@ use uv_configuration::AddBoundsKind;
 use uv_distribution_types::{Index, IndexFormat, IndexUrl};
 use uv_fs::{PortablePath, is_same_file_allow_missing, try_relative_to_if};
 use uv_normalize::{DEV_DEPENDENCIES, ExtraName, GroupName, PackageName};
-use uv_pep440::{Version, VersionParseError, VersionSpecifier, VersionSpecifiers};
+use uv_pep440::{Version, VersionParseError};
 use uv_pep508::{MarkerTree, Requirement, VersionOrUrl};
 use uv_workspace::pyproject::{DependencyType, Source};
 
