@@ -449,15 +449,12 @@ impl Middleware for AuthMiddleware {
             .map(|credentials| credentials.to_username())
             .unwrap_or(Username::none());
         let credentials = if let Some(index) = index {
-            self.cache().get_url(&index.url, &username).or_else(|| {
-                self.cache()
-                    .get_realm(Realm::from(&**retry_request_url), username)
-            })
+            self.cache().get_url(&index.url, &username)
         } else {
             // Since there is no known index for this URL, check if there are credentials in
             // the realm-level cache.
             self.cache()
-                .get_realm(Realm::from(&**retry_request_url), username)
+                .get_realm(Realm::from(&**retry_request_url), username.clone())
         }
         .or(credentials);
 
@@ -492,6 +489,20 @@ impl Middleware for AuthMiddleware {
                     next,
                     auth_policy,
                 )
+                .await;
+        }
+
+        // For a known index, only reuse realm credentials after looking up its own credentials.
+        // Another index on the same server may require a different username or password.
+        if index.is_some()
+            && let Some(credentials) = self
+                .cache()
+                .get_realm(Realm::from(&**retry_request_url), username)
+        {
+            trace!("Retrying request for {url} with realm credentials {credentials:?}");
+            retry_request = credentials.authenticate(retry_request).await?;
+            return self
+                .complete_request(None, retry_request, extensions, next, auth_policy)
                 .await;
         }
 
@@ -2166,7 +2177,7 @@ mod tests {
             .and(path_regex("^/prefix_2/"))
             .and(basic_auth("user1", "password1"))
             .respond_with(ResponseTemplate::new(401))
-            .expect(2)
+            .expect(0)
             .mount(&server)
             .await;
         Mock::given(method("GET"))
@@ -2204,12 +2215,10 @@ mod tests {
             .build();
 
         assert_eq!(client.get(index_url_1).send().await?.status(), 200);
-        // These requests should succeed, but the first index's cached credentials currently
-        // bypass the second index's keyring lookup. See astral-sh/uv#18955.
         assert_eq!(
             client.get(index_url_2).send().await?.status(),
-            401,
-            "The second index receives the first index's cached credentials"
+            200,
+            "The second index should use its own keyring credentials"
         );
         assert_eq!(
             client
@@ -2217,8 +2226,8 @@ mod tests {
                 .send()
                 .await?
                 .status(),
-            401,
-            "File requests also receive the first index's cached credentials"
+            200,
+            "File requests should also use the second index's credentials"
         );
 
         Ok(())
