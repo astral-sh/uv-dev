@@ -1,5 +1,7 @@
 name: CI speed samples
-run-name: CI speed samples / ${{ inputs.workload }} / ${{ inputs.variant }} / ${{ inputs.round }}
+run-name:
+  CI speed samples / ${{ inputs.workload }} / ${{ inputs.variant }} / ${{ inputs.round }} / ${{ inputs.change-source
+  && 'changed-source' || 'unchanged' }}
 "on":
   workflow_dispatch:
     inputs:
@@ -28,6 +30,11 @@ run-name: CI speed samples / ${{ inputs.workload }} / ${{ inputs.variant }} / ${
         type: boolean
         default: false
         required: true
+      change-source:
+        description: Change the resolver checksum to measure partial rebuilds (bench only)
+        type: boolean
+        default: false
+        required: true
 permissions:
   contents: read
 concurrency:
@@ -52,6 +59,14 @@ jobs:
         run: 'git rev-parse HEAD
 
           test "$(git rev-parse HEAD)" = "bf041f9245952ba7c9e3c29aebe0a8acc2bc983d"'
+      - name: Change resolver source checksum
+        if: ${{ inputs.change-source }}
+        run:
+          'printf "\n// CI cache measurement: rebuild the resolver and its dependents.\n" >> crates/uv-resolver/src/lib.rs
+
+          git diff --stat
+
+          sha256sum crates/uv-resolver/src/lib.rs'
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
         with:
           save-if: ${{ inputs.seed }}
@@ -116,6 +131,14 @@ jobs:
         run: 'git rev-parse HEAD
 
           test "$(git rev-parse HEAD)" = "bf041f9245952ba7c9e3c29aebe0a8acc2bc983d"'
+      - name: Change resolver source checksum
+        if: ${{ inputs.change-source }}
+        run:
+          'printf "\n// CI cache measurement: rebuild the resolver and its dependents.\n" >> crates/uv-resolver/src/lib.rs
+
+          git diff --stat
+
+          sha256sum crates/uv-resolver/src/lib.rs'
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
         with:
           save-if: ${{ inputs.seed }}
@@ -375,6 +398,14 @@ jobs:
         run: 'git rev-parse HEAD
 
           test "$(git rev-parse HEAD)" = "bea4e50e27a46b83e7c8c39fded3035e0d3045a7"'
+      - name: Change resolver source checksum
+        if: ${{ inputs.change-source }}
+        run:
+          'printf "\n// CI cache measurement: rebuild the resolver and its dependents.\n" >> crates/uv-resolver/src/lib.rs
+
+          git diff --stat
+
+          sha256sum crates/uv-resolver/src/lib.rs'
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
         id: rust-cache
         with:
@@ -459,6 +490,14 @@ jobs:
         run: 'git rev-parse HEAD
 
           test "$(git rev-parse HEAD)" = "bea4e50e27a46b83e7c8c39fded3035e0d3045a7"'
+      - name: Change resolver source checksum
+        if: ${{ inputs.change-source }}
+        run:
+          'printf "\n// CI cache measurement: rebuild the resolver and its dependents.\n" >> crates/uv-resolver/src/lib.rs
+
+          git diff --stat
+
+          sha256sum crates/uv-resolver/src/lib.rs'
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
         id: rust-cache
         with:
