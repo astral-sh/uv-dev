@@ -25,6 +25,60 @@ use uv_test::{READ_ONLY_GITHUB_TOKEN, decode_token};
 #[cfg(feature = "test-universal")]
 use uv_test::{download_to_disk, venv_bin_path};
 
+/// Lock validation warnings should explain why a local dependency's metadata could not be read.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_validation_warning_chain() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+            [project]
+            name = "project"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = ["child"]
+
+            [tool.uv.sources]
+            child = { path = "child" }
+        "#})?;
+    let child = context.temp_dir.child("child");
+    child.create_dir_all()?;
+    let pyproject = child.child("pyproject.toml");
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+    "#})?;
+    context.lock().arg("--offline").assert().success();
+
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = 42
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    warning: Failed to validate existing lockfile
+      Caused by: Failed to parse `[TEMP_DIR]/child/pyproject.toml`
+      Caused by: TOML parse error at line 3, column 11
+          |
+        3 | version = 42
+          |           ^^
+        invalid type: integer `42`, expected a string
+      × Failed to build `child @ file://[TEMP_DIR]/child`
+      ├─▶ Failed to parse metadata from built wheel
+      ╰─▶ TOML parse error at line 3, column 11
+            |
+          3 | version = 42
+            |           ^^
+          invalid type: integer `42`, expected a string
+    ");
+    Ok(())
+}
+
 /// Generate the preview lock without package metadata.
 #[cfg(feature = "test-universal")]
 fn lock_without_package_metadata(lock: &str) -> Result<toml_edit::DocumentMut> {

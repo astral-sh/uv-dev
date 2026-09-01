@@ -18862,6 +18862,34 @@ fn compile_missing_python_version_default_fallback() -> Result<()> {
     Ok(())
 }
 
+/// Invalid client identities should report the underlying TLS error, not just `builder error`.
+#[test]
+fn compile_client_certificate_warning_chain() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let certificate = context.temp_dir.child("client.pem");
+    certificate.write_str("not a PEM identity\n")?;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("idna==3.6\n")?;
+
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .arg("--offline")
+        .arg("requirements.in")
+        .env(EnvVars::SSL_CLIENT_CERT, certificate.path()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    warning: Ignoring invalid `SSL_CLIENT_CERT`
+      Caused by: builder error
+      Caused by: unexpected error: private key or certificate not found
+      × No solution found when resolving dependencies:
+      ╰─▶ Because idna was not found in the cache and you require idna==3.6, we can conclude that your requirements are unsatisfiable.
+
+    hint: Packages were unavailable because the network was disabled. When the network is disabled, registry packages may only be read from the cache.
+    ");
+    Ok(())
+}
+
 /// Test that pip compile warns on download errors
 #[cfg(feature = "test-python-managed")]
 #[tokio::test]
