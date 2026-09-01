@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 20784,
+        "title": "Ignore malformed PEP 723 scripts during project checks",
+        "url": "https://github.com/astral-sh/uv/pull/20784",
+        "state": "merged",
+        "reason": "Closest precedent: it addresses the same malformed-fixture failure for `uv check`, while explicitly preserving and testing strict behavior for `uv workspace list --scripts`."
+      },
+      {
+        "kind": "pull_request",
+        "number": 20009,
+        "title": "Add `uv workspace list --scripts`",
+        "url": "https://github.com/astral-sh/uv/pull/20009",
+        "state": "merged",
+        "reason": "Introduced the preview feature for enumerating PEP 723 scripts and anticipated further iteration, but did not decide how malformed candidates should be handled."
+      },
+      {
+        "kind": "issue",
+        "number": 18617,
+        "title": "Script metadata parser silently accepts duplicate script blocks",
+        "url": "https://github.com/astral-sh/uv/issues/18617",
+        "state": "closed",
+        "reason": "Canonical report establishing that the triggering duplicate PEP 723 blocks must be rejected; it does not address workspace-wide discovery resilience."
+      },
+      {
+        "kind": "pull_request",
+        "number": 19544,
+        "title": "Reject duplicate PEP 723 script blocks",
+        "url": "https://github.com/astral-sh/uv/pull/19544",
+        "state": "merged",
+        "reason": "Closed astral-sh/uv#18617 and implemented the exact duplicate-block error reported here, explaining the trigger but not the desired listing policy."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests for `uv workspace list --scripts`, `workspace-list-scripts`, the exact discovery and duplicate-block errors, malformed or invalid PEP 723 metadata, warn-and-skip and `--skip-invalid` behavior, resilient script enumeration, candidate parse failures, and cause-neutral workspace discovery failures. Reviewed the command history through astral-sh/uv#20009, astral-sh/uv#20099, astral-sh/uv#20676, and astral-sh/uv#20784, then followed astral-sh/uv#18617 to astral-sh/uv#19544. astral-sh/uv#20055 was ruled out because it concerns root-project membership in `workspace list`, while astral-sh/uv#18215 only concerns documentation."
+  },
+  "type": "enhancement",
+  "type_reason": "The issue requests a more tolerant policy or a new option for an existing preview feature. Current source deliberately returns malformed candidates as per-item errors, and astral-sh/uv#20784 explicitly keeps `uv workspace list --scripts` strict while making `uv check` tolerant. No regression, source-confirmed correctness defect, or existing tracker for changing that policy was found.",
+  "summary": "No duplicate was found. astral-sh/uv#20784 is the closest behavioral precedent, while astral-sh/uv#18617 and astral-sh/uv#19544 establish why the reported duplicate-block fixture correctly produces a parse error.",
+  "draft_response": "`uv workspace list --scripts` currently treats malformed candidate metadata as an error. This distinction is explicit in astral-sh/uv#20784: `uv check` skips malformed discovered metadata, while explicit script checks and `uv workspace list --scripts` remain strict.\n\nSince `--scripts` is still a preview feature, changing discovery to warn and skip malformed candidates is reasonable to consider. An opt-in `--skip-invalid` flag would preserve strict behavior but add interface surface. The next step is to decide the default semantics here before implementation."
+}
