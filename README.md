@@ -10,24 +10,26 @@ The reporter requests a new `uv lint` command that delegates to `ruff check`, pl
 form corresponding to `ruff check --fix`. The motivation is command symmetry with the existing
 `uv format` integration for Ruff formatting and `uv check` integration for ty type checking.
 
-The same dedicated Ruff-check shorthand is already requested by astral-sh/uv#16314. A second open
-issue, astral-sh/uv#19768, discusses the broader interface choice of adding Ruff and formatting checks
-to `uv check` or exposing Ruff through a separate `uv lint` command, including fix behavior. No
-related open, closed-unmerged, or merged pull request was found.
+The Ruff-check integration is already requested by astral-sh/uv#16314. A repository member closed
+astral-sh/uv#21392 as its duplicate and expressed a tentative preference for extending `uv check` to
+run both `ruff check` and `ty check` and combine their results, rather than introducing a separate
+`uv lint` command. The interface is explicitly not settled yet. A second open issue,
+astral-sh/uv#19768, discusses that combined-check design and the alternative `uv lint` interface,
+including fix behavior. No related open, closed-unmerged, or merged pull request was found.
 
-## Draft response
+## Maintainer decision
 
-Thanks. This is already tracked in astral-sh/uv#16314, which requests a Ruff check/lint counterpart
-to `uv format`. astral-sh/uv#19768 also discusses whether Ruff linting should be exposed through
-`uv check` or a separate `uv lint` command, including fix behavior. Let’s centralize the dedicated
-`uv lint` request in astral-sh/uv#16314.
+A repository member closed astral-sh/uv#21392 as a duplicate of astral-sh/uv#16314. They would
+currently prefer `uv check` to run both Ruff and ty and combine the results, but cautioned that this
+design is not set in stone.
 
 ## Classification
 
-This is a duplicate of astral-sh/uv#16314. Both issues request a uv-level counterpart to `uv format`
-that invokes Ruff's checking/linting operation. The new report makes the proposed spelling
-(`uv lint`) and `--fix` forwarding explicit, but those details belong in the existing feature
-discussion rather than requiring a separate tracker.
+This is a confirmed duplicate of astral-sh/uv#16314. Both issues request a uv-level counterpart to
+`uv format` that invokes Ruff's checking/linting operation. The new report makes the proposed
+spelling (`uv lint`) and `--fix` forwarding explicit, but those details belong in the existing
+feature discussion rather than requiring a separate tracker. The duplicate closure confirms the
+canonical issue; it does not establish the final command-line design.
 
 Absent the prior issue, this would be an enhancement: it asks for a new command and does not report
 incorrect existing behavior. Duplicate takes precedence because the earlier open issue covers the
@@ -35,12 +37,14 @@ same underlying capability.
 
 ## Related
 
-- astral-sh/uv#16314 — Open enhancement and the closest match. It predates this report and requests
-  the same `ruff check` equivalent to the existing `uv format` shorthand. Its framing is broad enough
-  to contain discussion of the proposed `uv lint` name and `--fix` behavior.
+- astral-sh/uv#16314 — Open enhancement and confirmed canonical issue. It predates this report and
+  requests a `ruff check` equivalent to the existing `uv format` shorthand. A repository member
+  closed astral-sh/uv#21392 as its duplicate; whether the capability becomes part of `uv check` or a
+  separate command remains undecided.
 - astral-sh/uv#19768 — Open enhancement with substantial overlap. It explicitly proposes either
   incorporating `ruff check` into `uv check` or adding `uv lint`, and also describes fix forwarding.
-  It differs by primarily exploring a combined type, lint, and format check command.
+  Its combined-check proposal aligns with the repository member's stated preference, though no
+  final design decision has been made.
 
 ## Search evidence
 
