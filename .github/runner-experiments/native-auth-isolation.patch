@@ -1,0 +1,30 @@
+diff --git a/crates/uv/tests/it/auth.rs b/crates/uv/tests/it/auth.rs
+index 2f0f0cf2b2..bdcd748ccc 100644
+--- a/crates/uv/tests/it/auth.rs
++++ b/crates/uv/tests/it/auth.rs
+@@ -232,14 +232,17 @@ async fn token_native_auth() -> Result<()> {
+     let context = uv_test::test_context_with_versions!(&[]).with_real_home();
+     let proxy = crate::pypi_proxy::start().await;
+ 
+-    // Clear state before the test
+-    context
+-        .auth_logout()
+-        .arg(proxy.url("/basic-auth/simple"))
+-        .arg("--username")
+-        .arg("public")
+-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth")
+-        .status()?;
++    // The proxy can reuse a port from an earlier test, including one that stored a token.
++    // Clear both identities so the no-credentials assertions cannot find a stale token.
++    for username in ["public", "__token__"] {
++        context
++            .auth_logout()
++            .arg(proxy.url("/basic-auth/simple"))
++            .arg("--username")
++            .arg(username)
++            .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth")
++            .status()?;
++    }
+ 
+     // Without persisted credentials
+     uv_snapshot!(context.filters(), context.auth_token()
