@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 12983,
+        "title": "uv sync breaks venv if folder is called python",
+        "url": "https://github.com/astral-sh/uv/issues/12983",
+        "state": "closed",
+        "reason": "Same inferred `python` project name and generated `[project.scripts] python` collision. Its observed failure was environment corruption during `uv sync`, whereas the new report sees the later safety check reject installation."
+      },
+      {
+        "kind": "pull_request",
+        "number": 13051,
+        "title": "Block scripts from overwriting `python`",
+        "url": "https://github.com/astral-sh/uv/pull/13051",
+        "state": "merged",
+        "reason": "Fix for astral-sh/uv#12983 that added the reserved-script rejection producing the exact error in the new report."
+      },
+      {
+        "kind": "pull_request",
+        "number": 19197,
+        "title": "Package by default: Stabilize preview feature",
+        "url": "https://github.com/astral-sh/uv/pull/19197",
+        "state": "merged",
+        "reason": "Changed default `uv init` output to a packaged application with an entry point named after the project, making a directory-derived `python` name hit the existing safeguard without an explicit `--package`."
+      },
+      {
+        "kind": "pull_request",
+        "number": 16554,
+        "title": "Improve `uv init` error for invalid directory names",
+        "url": "https://github.com/astral-sh/uv/pull/16554",
+        "state": "merged",
+        "reason": "Adjacent prior improvement that makes inferred-name failures identify the directory and recommend `--name`; it does not cover `python`, which is a valid package name but an invalid generated script name."
+      }
+    ],
+    "search_scope": "Literal searches covered the exact reserved-name error, wheel identifier, `python` folder/directory, and `uv init`; conceptual searches covered inferred project names, generated entry points, name validation, partial initialization, cleanup, atomic/transactional init, and package-by-default changes across issues and pull requests in all states. Fix-oriented inspection followed astral-sh/uv#12983 to astral-sh/uv#13051 and checked the later default change in astral-sh/uv#19197. astral-sh/uv#5152 and astral-sh/uv#5165 were inspected but ruled out as less direct because they concern explicit entry-point writes and symlink handling rather than directory-name inference or init validation."
+  },
+  "type": "bug",
+  "type_reason": "Repository source confirms that `uv init` infers `python` from the directory and the default packaged-application template emits `[project.scripts] python`, while installation deliberately rejects `python` as reserved. The resulting generated project cannot be installed as-is, and validation happens after project files are generated. This is a current correctness issue introduced into the default path by astral-sh/uv#19197, not a duplicate of the closed corruption bug astral-sh/uv#12983; that bug's safeguard remains effective.",
+  "summary": "The same name collision previously caused environment corruption in astral-sh/uv#12983 and was made safe by astral-sh/uv#13051, which now supplies the reported error. astral-sh/uv#19197 later made name-matched entry points the default, exposing the collision during ordinary initialization. No open issue or pull request already tracks this early-validation and diagnostic gap.",
+  "draft_response": "Thanks for the report. The inferred project name `python` is valid as a package name, but the default packaged-application template also creates a `python` entry point. uv deliberately rejects that entry-point name because it would overwrite the environment's Python executable; that protection was added in astral-sh/uv#13051 for astral-sh/uv#12983. Since astral-sh/uv#19197 made packaged applications the default, `uv init` should detect this collision before writing project files and explain which inferred name caused it. As a workaround, please use a non-reserved project name, for example `uv init --name my-project --python 3.13`. Could you also provide the exact output of `uv --version` and `uv init --verbose --python 3.13`? Current source does not perform the project installation inside `uv init`, so that detail is needed to confirm where the reported install step is being triggered."
+}
