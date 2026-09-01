@@ -35,6 +35,7 @@ jobs:
       contents: read
     outputs:
       base_sha: ${{ steps.prepare.outputs.base_sha }}
+      empty: ${{ steps.verify.outputs.empty }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -120,23 +121,35 @@ jobs:
           prompt-file: "${{ runner.temp }}/rebase-pull-request.md"
 
       - name: Verify rebased pull request
+        id: verify
         env:
-          BASE_REF: ${{ inputs.base-ref }}
+          BASE_SHA: ${{ steps.prepare.outputs.base_sha }}
         run: |
           if [ -d "$(git rev-parse --git-path rebase-merge)" ] || [ -d "$(git rev-parse --git-path rebase-apply)" ]; then
             echo "The rebase is still in progress; refusing to push." >&2
             exit 1
           fi
 
-          git diff --check "refs/remotes/origin/$BASE_REF...HEAD"
+          if ! git merge-base --is-ancestor "$BASE_SHA" HEAD; then
+            echo "The rebased pull request does not contain its base; refusing to push." >&2
+            exit 1
+          fi
+
+          git diff --check "$BASE_SHA...HEAD"
           if [ -n "$(git status --porcelain)" ]; then
             echo "The worktree is not clean after the rebase; refusing to push." >&2
             exit 1
           fi
 
-          git bundle create "$RUNNER_TEMP/rebased.bundle" "refs/remotes/origin/$BASE_REF..HEAD"
+          if [ "$(git rev-parse HEAD)" = "$BASE_SHA" ]; then
+            echo "empty=true" >> "$GITHUB_OUTPUT"
+          else
+            git bundle create "$RUNNER_TEMP/rebased.bundle" "$BASE_SHA..HEAD"
+            echo "empty=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Upload rebased pull request
+        if: steps.verify.outputs.empty == 'false'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: rebased-pull-request-${{ inputs.number }}-${{ inputs.head-sha }}
@@ -148,6 +161,7 @@ jobs:
   push:
     name: "Push rebased pull request #${{ inputs.number }}"
     needs: rebase
+    if: needs.rebase.outputs.empty == 'false'
     runs-on: ubuntu-slim
     environment: automations
     timeout-minutes: 10
@@ -220,3 +234,21 @@ jobs:
             --force-with-lease="refs/heads/$HEAD_REF:$HEAD_SHA" \
             "https://x-access-token:${GH_TOKEN}@github.com/${HEAD_REPOSITORY}.git" \
             "${REBASED_HEAD}:refs/heads/$HEAD_REF"
+
+  close:
+    name: "Close empty pull request #${{ inputs.number }}"
+    needs: rebase
+    if: needs.rebase.outputs.empty == 'true'
+    permissions:
+      contents: read
+      pull-requests: read
+      id-token: write
+    uses: $/.github/workflows/close-empty-pull-request.yml
+    with:
+      number: ${{ inputs.number }}
+      base-ref: ${{ inputs.base-ref }}
+      base-sha: ${{ needs.rebase.outputs.base_sha }}
+      base-previous-sha: ${{ inputs.base-previous-sha }}
+      head-ref: ${{ inputs.head-ref }}
+      head-sha: ${{ inputs.head-sha }}
+      head-repository: ${{ inputs.head-repository }}

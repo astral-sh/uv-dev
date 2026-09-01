@@ -1,0 +1,139 @@
+name: Close empty pull request
+
+on:
+  workflow_call:
+    inputs:
+      number:
+        required: true
+        type: number
+      base-ref:
+        required: true
+        type: string
+      base-sha:
+        required: true
+        type: string
+      base-previous-sha:
+        required: false
+        type: string
+        default: ""
+      head-ref:
+        required: true
+        type: string
+      head-sha:
+        required: true
+        type: string
+      head-repository:
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  close:
+    name: "Close empty pull request #${{ inputs.number }}"
+    runs-on: ubuntu-slim
+    environment: automations
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+      id-token: write
+    env:
+      BASE_REF: ${{ inputs.base-ref }}
+      BASE_SHA: ${{ inputs.base-sha }}
+      BASE_PREVIOUS_SHA: ${{ inputs.base-previous-sha }}
+      HEAD_REF: ${{ inputs.head-ref }}
+      HEAD_SHA: ${{ inputs.head-sha }}
+      HEAD_REPOSITORY: ${{ inputs.head-repository }}
+      PULL_REQUEST_NUMBER: ${{ inputs.number }}
+      GIT_CONFIG_GLOBAL: /dev/null
+      GIT_CONFIG_NOSYSTEM: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify empty pull request
+        id: verify
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          current_base_sha=$(git rev-parse --verify "refs/remotes/origin/$BASE_REF^{commit}")
+          if [ "$current_base_sha" != "$BASE_SHA" ]; then
+            echo "The pull request base changed; skipping the stale rebase."
+            exit 0
+          fi
+
+          git -c core.hooksPath=/dev/null fetch --no-tags "https://github.com/$HEAD_REPOSITORY.git" "refs/heads/$HEAD_REF"
+          if [ "$(git rev-parse 'FETCH_HEAD^{commit}')" != "$HEAD_SHA" ]; then
+            echo "The pull request head changed; skipping the stale rebase."
+            exit 0
+          fi
+
+          # Verify the original changes without checking out PR code or trusting the
+          # agent's conflict resolution. For stacked PRs, exclude the previous parent.
+          merge_options=()
+          if [ -n "$BASE_PREVIOUS_SHA" ]; then
+            if ! [[ "$BASE_PREVIOUS_SHA" =~ ^[0-9a-f]{40}$ ]] || ! git merge-base --is-ancestor "$BASE_PREVIOUS_SHA" "$HEAD_SHA"; then
+              echo "The stacked pull request does not contain its previous base; refusing to close it." >&2
+              exit 1
+            fi
+            merge_options+=("--merge-base=$BASE_PREVIOUS_SHA")
+          fi
+          if ! merged_tree=$(git -c core.hooksPath=/dev/null merge-tree --write-tree "${merge_options[@]}" "$BASE_SHA" "$HEAD_SHA"); then
+            echo "The original pull request does not merge cleanly; leaving it open for review." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [ "$merged_tree" != "$(git rev-parse "$BASE_SHA^{tree}")" ]; then
+            echo "The original pull request still has changes; leaving it open for review." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          pull_request=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PULL_REQUEST_NUMBER")
+          if ! jq --exit-status \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --argjson repository_id "$GITHUB_REPOSITORY_ID" \
+            --arg base_ref "$BASE_REF" --arg base_sha "$BASE_SHA" \
+            --arg head_repository "$HEAD_REPOSITORY" \
+            --arg head_ref "$HEAD_REF" --arg head_sha "$HEAD_SHA" \
+            '.state == "open" and .base.repo.full_name == $repository and .base.repo.id == $repository_id and .base.ref == $base_ref and .base.sha == $base_sha and .head.repo.full_name == $head_repository and .head.ref == $head_ref and .head.sha == $head_sha' \
+            <<< "$pull_request" > /dev/null; then
+            echo "The pull request changed; skipping the stale rebase."
+            exit 0
+          fi
+          echo "close=true" >> "$GITHUB_OUTPUT"
+
+      - name: Get pull request token
+        id: token
+        if: steps.verify.outputs.close == 'true'
+        uses: open-security-tools/ost-simple-sts@9e012247e07c39080fb6a832dbfbcfeacebc19c4
+        with:
+          exchange-url: ${{ secrets.STS_API_URL }}/exchange
+          audience: ${{ secrets.STS_API_URL }}
+          repository: ${{ github.repository }}
+          permissions: |
+            pull_requests: write
+
+      - name: Close empty pull request
+        if: steps.verify.outputs.close == 'true'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+        run: |
+          # Recheck after exchanging credentials, immediately before the GitHub writes.
+          pull_request=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PULL_REQUEST_NUMBER")
+          if ! jq --exit-status \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --argjson repository_id "$GITHUB_REPOSITORY_ID" \
+            --arg base_ref "$BASE_REF" --arg base_sha "$BASE_SHA" \
+            --arg head_repository "$HEAD_REPOSITORY" \
+            --arg head_ref "$HEAD_REF" --arg head_sha "$HEAD_SHA" \
+            '.state == "open" and .base.repo.full_name == $repository and .base.repo.id == $repository_id and .base.ref == $base_ref and .base.sha == $base_sha and .head.repo.full_name == $head_repository and .head.ref == $head_ref and .head.sha == $head_sha' \
+            <<< "$pull_request" > /dev/null; then
+            echo "The pull request changed; skipping the stale rebase."
+            exit 0
+          fi
+
+          printf -v comment 'Closing automatically because the changes in this pull request are already present in the base branch at %s, leaving no changes after rebasing.\n\nRebase run: %s/%s/actions/runs/%s' \
+            "$BASE_SHA" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID"
+          gh pr close "$PULL_REQUEST_NUMBER" --repo "$GITHUB_REPOSITORY" --comment "$comment"
