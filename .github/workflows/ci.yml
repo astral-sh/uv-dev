@@ -1,306 +1,727 @@
-name: CI
-
-on:
-  push:
-    branches: [main]
-  pull_request:
+name: CI speed samples
+run-name: CI speed samples / ${{ inputs.workload }} / ${{ inputs.variant }} / ${{ inputs.round }}
+"on":
   workflow_dispatch:
-
+    inputs:
+      workload:
+        type: choice
+        options:
+          - all
+          - bench
+          - arm
+          - schedule
+        default: all
+        required: true
+      variant:
+        type: choice
+        options:
+          - both
+          - baseline
+          - candidate
+        default: both
+        required: true
+      round:
+        type: string
+        default: warmup
+        required: true
+      seed:
+        type: boolean
+        default: false
+        required: true
 permissions:
   contents: read
-
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref_name }}-${{ github.event.pull_request.number || github.sha }}
-  cancel-in-progress: true
-
+  group: ci-speed-${{ github.ref }}-${{ inputs.workload }}-${{ inputs.variant }}-${{ inputs.round }}
+  cancel-in-progress: false
 jobs:
-  plan:
-    uses: $/.github/workflows/plan.yml
-
-  check-fmt:
-    uses: $/.github/workflows/check-fmt.yml
-
-  review:
-    needs: plan
-    if: ${{ github.event_name == 'pull_request' && github.repository == 'astral-sh/uv' && github.event.pull_request.head.repo.full_name == github.repository && needs.plan.outputs.review-security == 'true' }}
-    uses: $/.github/workflows/pull-request-security-review.yml
-    secrets: inherit
-    permissions:
-      contents: read
-      id-token: write
-      issues: read
-      pull-requests: read
-
-  check-lint:
-    needs: plan
-    uses: $/.github/workflows/check-lint.yml
-    with:
-      code-changed: ${{ needs.plan.outputs.test-code }}
-      save-rust-cache: ${{ needs.plan.outputs.save-rust-cache }}
-
-  check-docs:
-    needs: plan
-    if: ${{ needs.plan.outputs.run-checks == 'true' }}
-    uses: $/.github/workflows/check-docs.yml
-    secrets: inherit
-
-  check-zizmor:
-    needs: plan
-    if: ${{ needs.plan.outputs.run-checks == 'true' }}
-    uses: $/.github/workflows/check-zizmor.yml
-    permissions:
-      contents: read
-      security-events: write
-
-  check-publish:
-    needs: plan
-    if: ${{ needs.plan.outputs.test-code == 'true' }}
-    uses: $/.github/workflows/check-publish.yml
-
-  check-release:
-    needs: plan
-    if: ${{ needs.plan.outputs.run-checks == 'true' }}
-    uses: $/.github/workflows/check-release.yml
-
-  check-lock:
-    needs: plan
-    if: ${{ needs.plan.outputs.run-checks == 'true' }}
-    uses: $/.github/workflows/check-lock.yml
-
-  check-generated-files:
-    needs: plan
-    if: ${{ needs.plan.outputs.test-code == 'true' }}
-    uses: $/.github/workflows/check-generated-files.yml
-    with:
-      schema-changed: ${{ needs.plan.outputs.check-schema }}
-      save-rust-cache: ${{ needs.plan.outputs.save-rust-cache }}
-
-  test:
-    needs: plan
-    if: ${{ needs.plan.outputs.test-code == 'true' }}
-    uses: $/.github/workflows/test.yml
-    with:
-      save-rust-cache: ${{ needs.plan.outputs.save-rust-cache }}
-      test-macos: ${{ needs.plan.outputs.test-macos }}
-
-  test-windows-trampolines:
-    needs: plan
-    if: ${{ needs.plan.outputs.test-windows-trampoline == 'true' }}
-    uses: $/.github/workflows/test-windows-trampolines.yml
-    with:
-      trampoline-build: ${{ needs.plan.outputs.test-windows-trampoline-check-binary }}
-
-  build-dev-binaries:
-    needs: plan
-    if: ${{ needs.plan.outputs.test-code == 'true' }}
-    uses: $/.github/workflows/build-dev-binaries.yml
-    with:
-      save-rust-cache: ${{ needs.plan.outputs.save-rust-cache }}
-
-  test-smoke:
-    needs:
-      - plan
-      - build-dev-binaries
-    if: ${{ needs.plan.outputs.test-smoke == 'true' }}
-    uses: $/.github/workflows/test-smoke.yml
-    with:
-      sha: ${{ github.sha }}
-
-  test-integration:
-    needs:
-      - plan
-      - build-dev-binaries
-    if: ${{ needs.plan.outputs.test-integration == 'true' }}
-    uses: $/.github/workflows/test-integration.yml
-    secrets: inherit
-    permissions:
-      contents: read
-      id-token: write
-    with:
-      sha: ${{ github.sha }}
-
-  test-system:
-    needs:
-      - plan
-      - build-dev-binaries
-    if: ${{ needs.plan.outputs.test-system == 'true' }}
-    uses: $/.github/workflows/test-system.yml
-    with:
-      sha: ${{ github.sha }}
-
-  test-ecosystem:
-    needs:
-      - plan
-      - build-dev-binaries
-    if: ${{ needs.plan.outputs.test-ecosystem == 'true' }}
-    uses: $/.github/workflows/test-ecosystem.yml
-    with:
-      sha: ${{ github.sha }}
-
-  build-release-binaries:
-    needs: plan
-    if: ${{ needs.plan.outputs.build-release-binaries == 'true' }}
-    uses: $/.github/workflows/build-release-binaries.yml
-    secrets: inherit
-
-  build-docker:
-    needs: plan
-    if: ${{ needs.plan.outputs.build-docker == 'true' }}
-    uses: $/.github/workflows/build-docker.yml
-    with:
-      push-dev: ${{ needs.plan.outputs.push-docker == 'true' }}
-    secrets: inherit
-    permissions:
-      contents: read
-      id-token: write
-      packages: write
-      attestations: write
-
-  bench:
-    needs: plan
-    if: ${{ needs.plan.outputs.run-bench == 'true' }}
-    uses: $/.github/workflows/bench.yml
-    secrets: inherit
-    with:
-      save-rust-cache: ${{ needs.plan.outputs.save-rust-cache }}
-    permissions:
-      id-token: write
-
-  # This job cannot be moved into a reusable workflow because it includes coverage for uploading
-  # attestations and PyPI does not support attestations in reusable workflows.
-  test-publish:
-    name: "test uv publish"
-    timeout-minutes: 20
-    needs:
-      - plan
-      - build-dev-binaries
-    runs-on: ubuntu-latest
-    # Only the main repository is a trusted publisher
-    if: ${{ github.repository == 'astral-sh/uv' && github.event.pull_request.head.repo.fork != true && needs.plan.outputs.test-publish == 'true' }}
-    environment:
-      name: uv-test-publish
-      deployment: false
-    env:
-      # No dbus in GitHub Actions
-      PYTHON_KEYRING_BACKEND: keyrings.alt.file.PlaintextKeyring
-      PYTHON_VERSION: 3.12
-    permissions:
-      # For trusted publishing
-      id-token: write
+  bench-benchmarks-walltime-build-baseline:
+    name: walltime build / baseline / ${{ inputs.round }}
+    runs-on: depot-ubuntu-22.04-arm-4
+    if:
+      ${{ (inputs.workload == 'all' || inputs.workload == 'bench') && (inputs.variant == 'both' || inputs.variant == 'baseline')
+      }}
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Checkout Branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          fetch-depth: 0
           persist-credentials: false
+          ref: bf041f9245952ba7c9e3c29aebe0a8acc2bc983d
+      - name: Record source revision
+        shell: bash
+        run: 'git rev-parse HEAD
 
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+          test "$(git rev-parse HEAD)" = "bf041f9245952ba7c9e3c29aebe0a8acc2bc983d"'
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
         with:
-          python-version: "${{ env.PYTHON_VERSION }}"
-
-      - name: "Download binary"
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: uv-linux-libc-${{ github.sha }}
-
-      - name: "Prepare binary"
-        run: chmod +x ./uv
-
-      - name: "Build astral-test-pypa-gh-action"
-        shell: bash -eo pipefail {0}
-        run: |
-          # Build a yet unused version of `astral-test-pypa-gh-action`
-          mkdir astral-test-pypa-gh-action
-          cd astral-test-pypa-gh-action
-          ../uv init --package --no-workspace
-          # Get the latest patch version
-          patch_version=$(curl https://test.pypi.org/simple/astral-test-pypa-gh-action/?format=application/vnd.pypi.simple.v1+json | jq --raw-output '[.files[].filename | select(endswith(".tar.gz"))] | last' | grep -oP '(?<=astral_test_pypa_gh_action-0\.1\.)\d+(?=\.tar\.gz)')
-          # Set the current version to one higher (which should be unused)
-          sed -i "s/0.1.0/0.1.$((patch_version + 1))/g" pyproject.toml
-          ../uv build
-
-      - name: "Publish astral-test-pypa-gh-action"
-        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
-        with:
-          # With this GitHub action, we can't do as rigid checks as with our custom Python script, so we publish more
-          # leniently
-          skip-existing: "true"
-          verbose: "true"
-          repository-url: "https://test.pypi.org/legacy/"
-          packages-dir: "astral-test-pypa-gh-action/dist"
-
-      - name: "Request GitLab OIDC tokens for impersonation"
-        uses: digital-blueprint/gitlab-pipeline-trigger-action@c59b56e9d2688ab42c1304322ac8831a4ef6f7d2 # v1.4.0
-        with:
-          host: gitlab.com
-          id: astral-test-publish/astral-test-gitlab-pypi-tp
-          ref: main
-          trigger_token: ${{ secrets.GITLAB_TEST_PUBLISH_TRIGGER_TOKEN }}
-          access_token: ${{ secrets.GITLAB_TEST_PUBLISH_ACCESS_TOKEN }}
-          download_artifacts: true
-          fail_if_no_artifacts: true
-          download_path: ./gitlab-artifacts
-
-      - name: "Load GitLab OIDC tokens from GitLab job artifacts"
-        id: load-gitlab-oidc-token
-        run: |
-          # we expect ./gitlab-artifacts/*/artifacts/pypi-id-token to exist
-          pypi_id_token_file=$(find ./gitlab-artifacts -type f -name pypi-id-token | head -n 1)
-          if [ -z "${pypi_id_token_file}" ]; then
-            echo "No pypi-id-token file found in GitLab artifacts"
-            exit 1
-          fi
-          GITLAB_PYPI_OIDC_TOKEN=$(cat "${pypi_id_token_file}")
-
-          # Add secret masks for the tokens.
-          echo "::add-mask::$GITLAB_PYPI_OIDC_TOKEN"
-
-          echo "GITLAB_PYPI_OIDC_TOKEN=${GITLAB_PYPI_OIDC_TOKEN}" >> "${GITHUB_OUTPUT}"
-
-      - name: "Add password to keyring"
-        run: |
-          # `keyrings.alt` contains the plaintext keyring
-          ./uv tool install --with keyrings.alt keyring
-          echo $UV_TEST_PUBLISH_KEYRING | keyring set https://test.pypi.org/legacy/?astral-test-keyring __token__
+          save-if: ${{ inputs.seed }}
+        id: rust-cache
+      - name: Record cache hit
+        shell: bash
         env:
-          UV_TEST_PUBLISH_KEYRING: ${{ secrets.UV_TEST_PUBLISH_KEYRING }}
+          CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        run: printf "cache-hit=%s\n" "$CACHE_HIT"
+      - name: Install Rust toolchain
+        run: rustup show
+      - name: Install codspeed
+        uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad
+        with:
+          tool: cargo-codspeed@5.0.1
+      - name: Install requirements and prime cache
+        run: "sudo apt-get update
 
-      - name: "Add password to uv text store"
-        run: |
-          ./uv auth login https://test.pypi.org/legacy/?astral-test-text-store --token ${UV_TEST_PUBLISH_TEXT_STORE}
-        env:
-          UV_TEST_PUBLISH_TEXT_STORE: ${{ secrets.UV_TEST_PUBLISH_TEXT_STORE }}
+          sudo apt-get install -y libsasl2-dev libldap2-dev libkrb5-dev
 
-      - name: "Publish test packages"
-        # `-p 3.12` prefers the python we just installed over the one locked in `.python_version`.
-        run: ./uv run --no-project -p "${PYTHON_VERSION}" scripts/publish/test_publish.py --uv ./uv all
-        env:
-          RUST_LOG: uv=debug,uv_publish=trace
-          UV_TEST_PUBLISH_TOKEN: ${{ secrets.UV_TEST_PUBLISH_TOKEN }}
-          UV_TEST_PUBLISH_PASSWORD: ${{ secrets.UV_TEST_PUBLISH_PASSWORD }}
-          UV_TEST_PUBLISH_GITLAB_PAT: ${{ secrets.UV_TEST_PUBLISH_GITLAB_PAT }}
-          UV_TEST_PUBLISH_CODEBERG_TOKEN: ${{ secrets.UV_TEST_PUBLISH_CODEBERG_TOKEN }}
-          UV_TEST_PUBLISH_CLOUDSMITH_TOKEN: ${{ secrets.UV_TEST_PUBLISH_CLOUDSMITH_TOKEN }}
-          UV_TEST_PUBLISH_PYTHON_VERSION: ${{ env.PYTHON_VERSION }}
-          UV_TEST_PUBLISH_GITLAB_PYPI_OIDC_TOKEN: ${{ steps.load-gitlab-oidc-token.outputs.GITLAB_PYPI_OIDC_TOKEN }}
+          cargo run --bin uv -- venv --cache-dir .cache
 
-  required-checks-passed:
-    name: "all required jobs passed"
-    if: always()
-    needs:
-      - check-fmt
-      - check-lint
-      - check-docs
-      - check-generated-files
-      - test
-      - build-dev-binaries
-    runs-on: ubuntu-slim
+          # Resolve benchmark fixtures without the repository's tooling build policy.
+
+          cargo run --bin uv -- --config-file test/uv.toml pip compile test/requirements/jupyter.in --universal --exclude-newer
+          2024-08-08 --cache-dir .cache
+
+          cargo run --bin uv -- --config-file test/uv.toml pip compile test/requirements/airflow.in --universal --exclude-newer
+          2024-08-08 --cache-dir .cache
+
+          "
+      - name: Build benchmarks
+        run: cargo codspeed build -m walltime --profile profiling -p uv-bench --bench uv --bench workspace_discovery
+      - name: Create artifact archive
+        run: tar -cvf benchmarks-walltime.tar target/codspeed target/debug/uv .cache
+      - name: Upload benchmark artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: bench-walltime-build-baseline-${{ inputs.round }}
+          path: benchmarks-walltime.tar
+          retention-days: 1
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      RUSTUP_MAX_RETRIES: 10
+  bench-benchmarks-simulated-baseline:
+    name: simulated build / baseline / ${{ inputs.round }}
+    runs-on: depot-ubuntu-24.04-4
+    if:
+      ${{ (inputs.workload == 'all' || inputs.workload == 'bench') && (inputs.variant == 'both' || inputs.variant == 'baseline')
+      }}
+    timeout-minutes: 45
     steps:
-      - name: "Check required jobs passed"
-        run: |
-          failing=$(echo "$NEEDS_JSON" | jq -r 'to_entries[] | select(.value.result != "success" and .value.result != "skipped") | "\(.key): \(.value.result)"')
-          if [ -n "$failing" ]; then
-            echo "$failing"
-            exit 1
-          fi
+      - name: Checkout Branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: bf041f9245952ba7c9e3c29aebe0a8acc2bc983d
+      - name: Record source revision
+        shell: bash
+        run: 'git rev-parse HEAD
+
+          test "$(git rev-parse HEAD)" = "bf041f9245952ba7c9e3c29aebe0a8acc2bc983d"'
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+        with:
+          save-if: ${{ inputs.seed }}
+        id: rust-cache
+      - name: Record cache hit
+        shell: bash
         env:
-          NEEDS_JSON: ${{ toJSON(needs) }}
+          CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        run: printf "cache-hit=%s\n" "$CACHE_HIT"
+      - name: Install Rust toolchain
+        run: rustup show
+      - name: Install codspeed
+        uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad
+        with:
+          tool: cargo-codspeed@5.0.1
+      - name: Install requirements and prime cache
+        run: "sudo apt-get update
+
+          sudo apt-get install -y libsasl2-dev libldap2-dev libkrb5-dev
+
+          cargo run --bin uv -- venv --cache-dir .cache
+
+          # Resolve benchmark fixtures without the repository's tooling build policy.
+
+          cargo run --bin uv -- --config-file test/uv.toml pip compile test/requirements/jupyter.in --universal --exclude-newer
+          2024-08-08 --cache-dir .cache
+
+          cargo run --bin uv -- --config-file test/uv.toml pip compile test/requirements/airflow.in --universal --exclude-newer
+          2024-08-08 --cache-dir .cache
+
+          "
+      - name: Build benchmarks
+        run: cargo codspeed build --profile profiling -p uv-bench
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      RUSTUP_MAX_RETRIES: 10
+  arm-build-binary-windows-aarch64-baseline:
+    name: arm build / baseline / ${{ inputs.round }}
+    timeout-minutes: 10
+    runs-on: windows-11-arm
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      RUSTUP_MAX_RETRIES: 10
+      RUSTC_BOOTSTRAP: 1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: bf041f9245952ba7c9e3c29aebe0a8acc2bc983d
+      - name: Record source revision
+        shell: bash
+        run: 'git rev-parse HEAD
+
+          test "$(git rev-parse HEAD)" = "bf041f9245952ba7c9e3c29aebe0a8acc2bc983d"'
+      - name: Setup Dev Drive
+        run: ${{ github.workspace }}/.github/workflows/setup-dev-drive.ps1
+      - name: Copy Git Repo to Dev Drive
+        run:
+          'Copy-Item -Path "${{ github.workspace }}" -Destination "$Env:UV_WORKSPACE" -Recurse
+
+          '
+      - name: Install Rust toolchain
+        working-directory: ${{ env.UV_WORKSPACE }}
+        run: rustup toolchain install --profile minimal
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+        with:
+          prefix-key: v1-rust-workspace
+          workspaces: ${{ env.UV_WORKSPACE }}
+          cache-workspace-crates: "true"
+          save-if: ${{ inputs.seed }}
+          shared-key: build-binary-windows-aarch64
+        id: rust-cache
+      - name: Record cache hit
+        shell: bash
+        env:
+          CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        run: printf "cache-hit=%s\n" "$CACHE_HIT"
+      - name: Build
+        working-directory: ${{ env.UV_WORKSPACE }}
+        run: cargo build --profile no-debug-nightly -Z checksum-freshness --bin uv --bin uvx
+      - name: Upload binary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: arm-arm-build-baseline-${{ inputs.round }}
+          path: "${{ env.UV_WORKSPACE }}/target/no-debug-nightly/uv.exe
+
+            ${{ env.UV_WORKSPACE }}/target/no-debug-nightly/uvx.exe
+
+            "
+          retention-days: 1
+    if:
+      ${{ (inputs.workload == 'all' || inputs.workload == 'arm') && (inputs.variant == 'both' || inputs.variant == 'baseline')
+      }}
+  arm-smoke-baseline:
+    name: native ARM64 smoke / baseline / ${{ inputs.round }}
+    timeout-minutes: 10
+    runs-on: windows-11-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: bf041f9245952ba7c9e3c29aebe0a8acc2bc983d
+      - name: Download binary
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: arm-arm-build-baseline-${{ inputs.round }}
+      - name: Smoke test
+        run: "./uv run --no-project scripts/smoke-test
+
+          "
+      - name: Test uv shell completions
+        run:
+          "(& ./uv generate-shell-completion powershell) | Out-String | Invoke-Expression
+
+          "
+      - name: Test uvx shell completions
+        run:
+          "(& ./uvx --generate-shell-completion powershell) | Out-String | Invoke-Expression
+
+          "
+    needs: arm-build-binary-windows-aarch64-baseline
+    if:
+      ${{ (inputs.workload == 'all' || inputs.workload == 'arm') && (inputs.variant == 'both' || inputs.variant == 'baseline')
+      }}
+  schedule-cargo-test-windows-baseline:
+    timeout-minutes: 15
+    runs-on: namespace-profile-windows-2022-x86-64-16x32
+    name: windows tests / baseline / ${{ inputs.round }} / ${{ matrix.partition }}
+    strategy:
+      fail-fast: false
+      matrix:
+        partition:
+          - 1
+          - 2
+          - 3
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: bf041f9245952ba7c9e3c29aebe0a8acc2bc983d
+      - name: Record source revision
+        shell: bash
+        run: 'git rev-parse HEAD
+
+          test "$(git rev-parse HEAD)" = "bf041f9245952ba7c9e3c29aebe0a8acc2bc983d"'
+      - name: Setup Dev Drive
+        run: ${{ github.workspace }}/.github/workflows/setup-dev-drive.ps1
+      - name: Copy Git Repo to Dev Drive
+        run:
+          'Copy-Item -Path "${{ github.workspace }}" -Destination "$Env:UV_WORKSPACE" -Recurse
+
+          '
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
+        with:
+          version: 0.12.7
+      - name: Install required Python versions
+        run: uv python install
+      - name: Install Rust toolchain
+        working-directory: ${{ env.UV_WORKSPACE }}
+        run: rustup toolchain install --profile minimal
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+        id: rust-cache
+        with:
+          prefix-key: v1-rust-workspace
+          key: ${{ hashFiles('Cargo.toml') }}
+          workspaces: ${{ env.UV_WORKSPACE }}
+          cache-workspace-crates: "true"
+          add-job-id-key: false
+          save-if: "false"
+      - name: Record cache hit
+        shell: bash
+        env:
+          CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        run: printf "cache-hit=%s\n" "$CACHE_HIT"
+      - name: Record Cargo cache freshness
+        if: ${{ false }}
+        run: New-Item -ItemType File -Path "$env:RUNNER_TEMP/uv-cargo-cache-marker"
+      - name: Create NTFS test directory (low hardlink limit)
+        run: New-Item -Path "C:\uv" -ItemType Directory -Force
+      - name: Create SMB test share (alternative filesystem)
+        run: 'New-Item -Path "C:\uv-smb" -ItemType Directory -Force
+
+          New-SmbShare -Name "uv-alt-fs" -Path "C:\uv-smb" -FullAccess "Everyone"
+
+          '
+      - name: Install cargo nextest
+        uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad
+        with:
+          tool: cargo-nextest
+      - name: Cargo test
+        working-directory: ${{ env.UV_WORKSPACE }}
+        env:
+          UV_HTTP_RETRIES: 5
+          UV_LINK_MODE: copy
+          RUST_BACKTRACE: 1
+          CARGO_UNSTABLE_MTIME_ON_USE: false
+          UV_INTERNAL__TEST_ALT_FS: \\localhost\uv-alt-fs
+          UV_INTERNAL__TEST_SMB_FS: \\localhost\uv-alt-fs
+          UV_INTERNAL__TEST_LOWLINKS_FS: C:\uv
+          INSTA_UPDATE: new
+          INSTA_PENDING_DIR: ${{ github.workspace }}/pending-snapshots
+        shell: bash
+        run:
+          "cargo nextest run \\\n  --cargo-profile fast-build-nightly \\\n  -Z panic-abort-tests \\\n  -Z checksum-freshness\
+          \ \\\n  --no-default-features \\\n  --features test-python,test-pypi,test-python-managed,test-windows-registry,native-auth,windows-native\
+          \ \\\n  --workspace \\\n  --profile ci-windows \\\n  --partition hash:${{ matrix.partition }}/3\n"
+      - name: Prune superseded workspace artifacts
+        if: ${{ false }}
+        working-directory: ${{ env.UV_WORKSPACE }}
+        run: python scripts/prune_cargo_workspace_cache.py target/fast-build-nightly "$env:RUNNER_TEMP/uv-cargo-cache-marker"
+      - name: Upload pending snapshots
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: schedule-windows-tests-baseline-${{ matrix.partition }}-${{ inputs.round }}
+          path: pending-snapshots/
+          if-no-files-found: ignore
+          include-hidden-files: true
+          retention-days: 14
+      - name: Upload JUnit results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: schedule-windows-tests-baseline-${{ matrix.partition }}-${{ inputs.round }}
+          path: ${{ env.UV_WORKSPACE }}/target/nextest/ci*/junit.xml
+          if-no-files-found: ignore
+          retention-days: 14
+    if:
+      ${{ (inputs.workload == 'all' || inputs.workload == 'schedule') && (inputs.variant == 'both' || inputs.variant ==
+      'baseline') }}
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      PYTHON_VERSION: "3.12"
+      RUSTC_BOOTSTRAP: 1
+      RUSTUP_MAX_RETRIES: 10
+  bench-benchmarks-walltime-build-candidate:
+    name: walltime build / candidate / ${{ inputs.round }}
+    runs-on: depot-ubuntu-22.04-arm-4
+    if:
+      ${{ (inputs.workload == 'all' || inputs.workload == 'bench') && (inputs.variant == 'both' || inputs.variant == 'candidate')
+      }}
+    timeout-minutes: 45
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      RUSTUP_MAX_RETRIES: 10
+      RUSTC_BOOTSTRAP: 1
+      CARGO_UNSTABLE_CHECKSUM_FRESHNESS: true
+    steps:
+      - name: Checkout Branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: bea4e50e27a46b83e7c8c39fded3035e0d3045a7
+      - name: Record source revision
+        shell: bash
+        run: 'git rev-parse HEAD
+
+          test "$(git rev-parse HEAD)" = "bea4e50e27a46b83e7c8c39fded3035e0d3045a7"'
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+        id: rust-cache
+        with:
+          prefix-key: v1-rust-workspace-bench
+          key: ${{ hashFiles('Cargo.toml') }}
+          cache-workspace-crates: "true"
+          save-if: ${{ inputs.seed }}
+      - name: Record cache hit
+        shell: bash
+        env:
+          CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        run: printf "cache-hit=%s\n" "$CACHE_HIT"
+      - name: Record Cargo cache freshness
+        if: ${{ inputs.seed && steps.rust-cache.outputs.cache-hit != 'true' }}
+        run: touch "$RUNNER_TEMP/uv-cargo-cache-marker"
+      - name: Install Rust toolchain
+        run: rustup show
+      - name: Install codspeed
+        uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad
+        with:
+          tool: cargo-codspeed@5.0.1
+      - name: Install requirements and prime cache
+        env:
+          CARGO_UNSTABLE_MTIME_ON_USE: ${{ inputs.seed && steps.rust-cache.outputs.cache-hit != 'true' }}
+        run: "sudo apt-get update
+
+          sudo apt-get install -y libsasl2-dev libldap2-dev libkrb5-dev
+
+          cargo run --bin uv -- venv --cache-dir .cache
+
+          # Resolve benchmark fixtures without the repository's tooling build policy.
+
+          cargo run --bin uv -- --config-file test/uv.toml pip compile test/requirements/jupyter.in --universal --exclude-newer
+          2024-08-08 --cache-dir .cache
+
+          cargo run --bin uv -- --config-file test/uv.toml pip compile test/requirements/airflow.in --universal --exclude-newer
+          2024-08-08 --cache-dir .cache
+
+          "
+      - name: Build benchmarks
+        env:
+          CARGO_UNSTABLE_MTIME_ON_USE: ${{ inputs.seed && steps.rust-cache.outputs.cache-hit != 'true' }}
+        run: cargo codspeed build -m walltime --profile profiling -p uv-bench --bench uv --bench workspace_discovery
+      - name: Prune superseded workspace artifacts
+        if: ${{ inputs.seed && steps.rust-cache.outputs.cache-hit != 'true' }}
+        run:
+          'python3 scripts/prune_cargo_workspace_cache.py target/debug "$RUNNER_TEMP/uv-cargo-cache-marker"
+
+          python3 scripts/prune_cargo_workspace_cache.py target/profiling "$RUNNER_TEMP/uv-cargo-cache-marker"
+
+          '
+      - name: Create artifact archive
+        run: tar -cvf benchmarks-walltime.tar target/codspeed target/debug/uv .cache
+      - name: Upload benchmark artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: bench-walltime-build-candidate-${{ inputs.round }}
+          path: benchmarks-walltime.tar
+          retention-days: 1
+  bench-benchmarks-simulated-candidate:
+    name: simulated build / candidate / ${{ inputs.round }}
+    runs-on: depot-ubuntu-24.04-4
+    if:
+      ${{ (inputs.workload == 'all' || inputs.workload == 'bench') && (inputs.variant == 'both' || inputs.variant == 'candidate')
+      }}
+    timeout-minutes: 45
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      RUSTUP_MAX_RETRIES: 10
+      RUSTC_BOOTSTRAP: 1
+      CARGO_UNSTABLE_CHECKSUM_FRESHNESS: true
+    steps:
+      - name: Checkout Branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: bea4e50e27a46b83e7c8c39fded3035e0d3045a7
+      - name: Record source revision
+        shell: bash
+        run: 'git rev-parse HEAD
+
+          test "$(git rev-parse HEAD)" = "bea4e50e27a46b83e7c8c39fded3035e0d3045a7"'
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+        id: rust-cache
+        with:
+          prefix-key: v1-rust-workspace-bench
+          key: ${{ hashFiles('Cargo.toml') }}
+          cache-workspace-crates: "true"
+          save-if: ${{ inputs.seed }}
+      - name: Record cache hit
+        shell: bash
+        env:
+          CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        run: printf "cache-hit=%s\n" "$CACHE_HIT"
+      - name: Record Cargo cache freshness
+        if: ${{ inputs.seed && steps.rust-cache.outputs.cache-hit != 'true' }}
+        run: touch "$RUNNER_TEMP/uv-cargo-cache-marker"
+      - name: Install Rust toolchain
+        run: rustup show
+      - name: Install codspeed
+        uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad
+        with:
+          tool: cargo-codspeed@5.0.1
+      - name: Install requirements and prime cache
+        env:
+          CARGO_UNSTABLE_MTIME_ON_USE: ${{ inputs.seed && steps.rust-cache.outputs.cache-hit != 'true' }}
+        run: "sudo apt-get update
+
+          sudo apt-get install -y libsasl2-dev libldap2-dev libkrb5-dev
+
+          cargo run --bin uv -- venv --cache-dir .cache
+
+          # Resolve benchmark fixtures without the repository's tooling build policy.
+
+          cargo run --bin uv -- --config-file test/uv.toml pip compile test/requirements/jupyter.in --universal --exclude-newer
+          2024-08-08 --cache-dir .cache
+
+          cargo run --bin uv -- --config-file test/uv.toml pip compile test/requirements/airflow.in --universal --exclude-newer
+          2024-08-08 --cache-dir .cache
+
+          "
+      - name: Build benchmarks
+        env:
+          CARGO_UNSTABLE_MTIME_ON_USE: ${{ inputs.seed && steps.rust-cache.outputs.cache-hit != 'true' }}
+        run: cargo codspeed build --profile profiling -p uv-bench
+      - name: Prune superseded workspace artifacts
+        if: ${{ inputs.seed && steps.rust-cache.outputs.cache-hit != 'true' }}
+        run:
+          'python3 scripts/prune_cargo_workspace_cache.py target/debug "$RUNNER_TEMP/uv-cargo-cache-marker"
+
+          python3 scripts/prune_cargo_workspace_cache.py target/profiling "$RUNNER_TEMP/uv-cargo-cache-marker"
+
+          '
+  arm-build-binary-windows-aarch64-candidate:
+    name: arm build / candidate / ${{ inputs.round }}
+    timeout-minutes: 10
+    runs-on: namespace-profile-windows-2022-x86-64-16x32
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      RUSTUP_MAX_RETRIES: 10
+      RUSTC_BOOTSTRAP: 1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: 261271a78cf33c4ce6491346f840e8e122f33cbc
+      - name: Record source revision
+        shell: bash
+        run: 'git rev-parse HEAD
+
+          test "$(git rev-parse HEAD)" = "261271a78cf33c4ce6491346f840e8e122f33cbc"'
+      - name: Setup Dev Drive
+        run: ${{ github.workspace }}/.github/workflows/setup-dev-drive.ps1
+      - name: Copy Git Repo to Dev Drive
+        run:
+          'Copy-Item -Path "${{ github.workspace }}" -Destination "$Env:UV_WORKSPACE" -Recurse
+
+          '
+      - name: Install Rust toolchain
+        working-directory: ${{ env.UV_WORKSPACE }}
+        run: "rustup toolchain install --profile minimal
+
+          rustup target add aarch64-pc-windows-msvc
+
+          "
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+        with:
+          prefix-key: v1-rust-workspace
+          workspaces: ${{ env.UV_WORKSPACE }}
+          cache-workspace-crates: "true"
+          save-if: ${{ inputs.seed }}
+          shared-key: build-binary-windows-aarch64
+        id: rust-cache
+      - name: Record cache hit
+        shell: bash
+        env:
+          CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        run: printf "cache-hit=%s\n" "$CACHE_HIT"
+      - name: Build
+        working-directory: ${{ env.UV_WORKSPACE }}
+        run: cargo build --profile no-debug-nightly -Z checksum-freshness --target aarch64-pc-windows-msvc --bin uv --bin uvx
+      - name: Upload binary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: arm-arm-build-candidate-${{ inputs.round }}
+          path:
+            "${{ env.UV_WORKSPACE }}/target/aarch64-pc-windows-msvc/no-debug-nightly/uv.exe
+
+            ${{ env.UV_WORKSPACE }}/target/aarch64-pc-windows-msvc/no-debug-nightly/uvx.exe
+
+            "
+          retention-days: 1
+    if:
+      ${{ (inputs.workload == 'all' || inputs.workload == 'arm') && (inputs.variant == 'both' || inputs.variant == 'candidate')
+      }}
+  arm-smoke-candidate:
+    name: native ARM64 smoke / candidate / ${{ inputs.round }}
+    timeout-minutes: 10
+    runs-on: windows-11-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: 261271a78cf33c4ce6491346f840e8e122f33cbc
+      - name: Download binary
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: arm-arm-build-candidate-${{ inputs.round }}
+      - name: Smoke test
+        run: "./uv run --no-project scripts/smoke-test
+
+          "
+      - name: Test uv shell completions
+        run:
+          "(& ./uv generate-shell-completion powershell) | Out-String | Invoke-Expression
+
+          "
+      - name: Test uvx shell completions
+        run:
+          "(& ./uvx --generate-shell-completion powershell) | Out-String | Invoke-Expression
+
+          "
+    needs: arm-build-binary-windows-aarch64-candidate
+    if:
+      ${{ (inputs.workload == 'all' || inputs.workload == 'arm') && (inputs.variant == 'both' || inputs.variant == 'candidate')
+      }}
+  schedule-cargo-test-windows-candidate:
+    timeout-minutes: 15
+    runs-on: namespace-profile-windows-2022-x86-64-16x32
+    name: windows tests / candidate / ${{ inputs.round }} / ${{ matrix.partition }}
+    strategy:
+      fail-fast: false
+      matrix:
+        partition:
+          - 1
+          - 2
+          - 3
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: ce983e64f3363d36d5f424effcb51e6fad4ab39a
+      - name: Record source revision
+        shell: bash
+        run: 'git rev-parse HEAD
+
+          test "$(git rev-parse HEAD)" = "ce983e64f3363d36d5f424effcb51e6fad4ab39a"'
+      - name: Setup Dev Drive
+        run: ${{ github.workspace }}/.github/workflows/setup-dev-drive.ps1
+      - name: Copy Git Repo to Dev Drive
+        run:
+          'Copy-Item -Path "${{ github.workspace }}" -Destination "$Env:UV_WORKSPACE" -Recurse
+
+          '
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
+        with:
+          version: 0.12.7
+      - name: Install required Python versions
+        run: uv python install
+      - name: Install Rust toolchain
+        working-directory: ${{ env.UV_WORKSPACE }}
+        run: rustup toolchain install --profile minimal
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+        id: rust-cache
+        with:
+          prefix-key: v1-rust-workspace
+          key: ${{ hashFiles('Cargo.toml') }}
+          workspaces: ${{ env.UV_WORKSPACE }}
+          cache-workspace-crates: "true"
+          add-job-id-key: false
+          save-if: "false"
+      - name: Record cache hit
+        shell: bash
+        env:
+          CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        run: printf "cache-hit=%s\n" "$CACHE_HIT"
+      - name: Record Cargo cache freshness
+        if: ${{ false }}
+        run: New-Item -ItemType File -Path "$env:RUNNER_TEMP/uv-cargo-cache-marker"
+      - name: Create NTFS test directory (low hardlink limit)
+        run: New-Item -Path "C:\uv" -ItemType Directory -Force
+      - name: Create SMB test share (alternative filesystem)
+        run: 'New-Item -Path "C:\uv-smb" -ItemType Directory -Force
+
+          New-SmbShare -Name "uv-alt-fs" -Path "C:\uv-smb" -FullAccess "Everyone"
+
+          '
+      - name: Install cargo nextest
+        uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad
+        with:
+          tool: cargo-nextest
+      - name: Cargo test
+        working-directory: ${{ env.UV_WORKSPACE }}
+        env:
+          UV_HTTP_RETRIES: 5
+          UV_LINK_MODE: copy
+          RUST_BACKTRACE: 1
+          CARGO_UNSTABLE_MTIME_ON_USE: false
+          UV_INTERNAL__TEST_ALT_FS: \\localhost\uv-alt-fs
+          UV_INTERNAL__TEST_SMB_FS: \\localhost\uv-alt-fs
+          UV_INTERNAL__TEST_LOWLINKS_FS: C:\uv
+          INSTA_UPDATE: new
+          INSTA_PENDING_DIR: ${{ github.workspace }}/pending-snapshots
+        shell: bash
+        run:
+          "cargo nextest run \\\n  --cargo-profile fast-build-nightly \\\n  -Z panic-abort-tests \\\n  -Z checksum-freshness\
+          \ \\\n  --no-default-features \\\n  --features test-python,test-pypi,test-python-managed,test-windows-registry,native-auth,windows-native\
+          \ \\\n  --workspace \\\n  --profile ci-windows \\\n  --partition hash:${{ matrix.partition }}/3\n"
+      - name: Prune superseded workspace artifacts
+        if: ${{ false }}
+        working-directory: ${{ env.UV_WORKSPACE }}
+        run: python scripts/prune_cargo_workspace_cache.py target/fast-build-nightly "$env:RUNNER_TEMP/uv-cargo-cache-marker"
+      - name: Upload pending snapshots
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: schedule-windows-tests-candidate-${{ matrix.partition }}-${{ inputs.round }}
+          path: pending-snapshots/
+          if-no-files-found: ignore
+          include-hidden-files: true
+          retention-days: 14
+      - name: Upload JUnit results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: schedule-windows-tests-candidate-${{ matrix.partition }}-${{ inputs.round }}
+          path: ${{ env.UV_WORKSPACE }}/target/nextest/ci*/junit.xml
+          if-no-files-found: ignore
+          retention-days: 14
+    if:
+      ${{ (inputs.workload == 'all' || inputs.workload == 'schedule') && (inputs.variant == 'both' || inputs.variant ==
+      'candidate') }}
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      PYTHON_VERSION: "3.12"
+      RUSTC_BOOTSTRAP: 1
+      RUSTUP_MAX_RETRIES: 10
