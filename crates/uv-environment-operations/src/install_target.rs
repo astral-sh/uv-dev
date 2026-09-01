@@ -11,8 +11,8 @@ use uv_configuration::{
     ExtrasSpecificationWithDefaults, InstallOptions, InstallTarget as InstallOptionTarget,
 };
 use uv_distribution_types::{Index, RequiresPython, Resolution};
-use uv_lock::{Installable, InstallableRootKind, Lock, LockError, Package};
-use uv_normalize::{DEV_DEPENDENCIES, ExtraName, GroupName, PackageName};
+use uv_lock::{Installable, Lock, LockError, Package};
+use uv_normalize::{DEV_DEPENDENCIES, GroupName, PackageName};
 use uv_platform_tags::Tags;
 use uv_pypi_types::{
     DependencyGroupSpecifier, DependencyGroups, LenientRequirement, ResolverMarkerEnvironment,

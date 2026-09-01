@@ -23,6 +23,9 @@ use uv_environment_operations::{
 use uv_fs::Simplified;
 use uv_install_operations::loggers::DefaultInstallLogger;
 use uv_install_operations::{PrunePolicy, RemovalRoot};
+use uv_lock::{
+    DependencySection, reachable_declared_package_names, reachable_direct_dependency_names,
+};
 use uv_lock_operations::{LockMode, LockOperation, LockResult, LockTarget};
 use uv_normalize::{DEV_DEPENDENCIES, DefaultExtras, DefaultGroups, PackageName};
 use uv_preview::Preview;
@@ -32,9 +35,6 @@ use uv_python_discovery::ProjectPythonRequest;
 use uv_python_discovery::ScriptInterpreter;
 use uv_python_types::{PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest};
 use uv_resolve_operations::loggers::DefaultResolveLogger;
-use uv_resolver::{
-    DependencySection, reachable_declared_package_names, reachable_direct_dependency_names,
-};
 use uv_scripts::Pep723Script;
 use uv_settings::{
     FrozenSource, LockCheck, MalwareCheckSettings, PythonInstallMirrors, ResolverInstallerSettings,
