@@ -179,7 +179,7 @@ jobs:
       RUSTUP_MAX_RETRIES: 10
   arm-build-binary-windows-aarch64-baseline:
     name: arm build / baseline / ${{ inputs.round }}
-    timeout-minutes: 10
+    timeout-minutes: 30
     runs-on: windows-11-arm
     env:
       CARGO_INCREMENTAL: 0
@@ -209,7 +209,7 @@ jobs:
         run: rustup toolchain install --profile minimal
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
         with:
-          prefix-key: v1-rust-workspace
+          prefix-key: v2-ci-speed-arm-controlled
           workspaces: ${{ env.UV_WORKSPACE }}
           cache-workspace-crates: "true"
           save-if: ${{ inputs.seed }}
@@ -551,7 +551,7 @@ jobs:
           '
   arm-build-binary-windows-aarch64-candidate:
     name: arm build / candidate / ${{ inputs.round }}
-    timeout-minutes: 10
+    timeout-minutes: 30
     runs-on: namespace-profile-windows-2022-x86-64-16x32
     env:
       CARGO_INCREMENTAL: 0
@@ -585,7 +585,7 @@ jobs:
           "
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
         with:
-          prefix-key: v1-rust-workspace
+          prefix-key: v2-ci-speed-arm-controlled
           workspaces: ${{ env.UV_WORKSPACE }}
           cache-workspace-crates: "true"
           save-if: ${{ inputs.seed }}
