@@ -79,6 +79,9 @@ pub use crate::lock::export::{
 use crate::lock::inputs::ManifestFilter;
 pub use crate::lock::installable::{Installable, InstallableRootKind};
 pub use crate::lock::map::PackageMap;
+pub use crate::lock::reachability::{
+    DependencySection, reachable_declared_package_names, reachable_direct_dependency_names,
+};
 pub use crate::lock::tree::{TreeDisplay, TreeJsonTarget};
 use crate::lock::walk::LockWalker;
 
@@ -89,6 +92,7 @@ pub(crate) mod export;
 mod inputs;
 mod installable;
 mod map;
+mod reachability;
 mod requirements;
 mod serialize;
 mod tree;
