@@ -18,7 +18,7 @@ use crate::universal_marker::UniversalMarker;
 /// A state is queued again when its marker grows, including after it has been popped. Multiple
 /// updates to a pending state are coalesced; popping it returns the latest accumulated marker.
 /// Callers choose the states, edges, and markers to propagate.
-pub(crate) struct MarkerReachability<State, Marker> {
+pub struct MarkerReachability<State, Marker> {
     markers: FxHashMap<State, Marker>,
     queue: VecDeque<State>,
     queued: FxHashSet<State>,
@@ -29,7 +29,7 @@ where
     State: Copy + Eq + Hash,
     Marker: Boolean + Copy + PartialEq,
 {
-    pub(crate) fn with_capacity(capacity: usize) -> Self {
+    pub fn with_capacity(capacity: usize) -> Self {
         Self {
             markers: FxHashMap::with_capacity_and_hasher(capacity, FxBuildHasher),
             queue: VecDeque::new(),
@@ -38,7 +38,7 @@ where
     }
 
     /// Propagate a marker to a state, queuing it if its reachability expands.
-    pub(crate) fn push(&mut self, state: State, marker: Marker) {
+    pub fn push(&mut self, state: State, marker: Marker) {
         let changed = match self.markers.entry(state) {
             Entry::Occupied(mut entry) => {
                 let mut combined = *entry.get();
@@ -60,13 +60,13 @@ where
         }
     }
 
-    pub(crate) fn pop(&mut self) -> Option<(State, Marker)> {
+    pub fn pop(&mut self) -> Option<(State, Marker)> {
         let state = self.queue.pop_front()?;
         self.queued.remove(&state);
         Some((state, self.markers[&state]))
     }
 
-    pub(crate) fn into_markers(self) -> FxHashMap<State, Marker> {
+    pub fn into_markers(self) -> FxHashMap<State, Marker> {
         self.markers
     }
 }

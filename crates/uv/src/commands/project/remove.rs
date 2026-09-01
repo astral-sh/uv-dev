@@ -14,12 +14,12 @@ use uv_configuration::{
     ActiveEnvironment, Concurrency, DependencyGroups, DryRun, ExtrasSpecification, InstallOptions,
 };
 use uv_fs::Simplified;
+use uv_lock::{
+    DependencySection, Lock, reachable_declared_package_names, reachable_direct_dependency_names,
+};
 use uv_normalize::{DEV_DEPENDENCIES, DefaultExtras, DefaultGroups, PackageName};
 use uv_preview::Preview;
 use uv_python::{ConfigDiscovery, PythonDownloads, PythonPreference, PythonRequest};
-use uv_resolver::{
-    DependencySection, Lock, reachable_declared_package_names, reachable_direct_dependency_names,
-};
 use uv_scripts::{Pep723Metadata, Pep723Script};
 use uv_settings::{MalwareCheckSettings, PythonInstallMirrors};
 use uv_warnings::warn_user_once;
