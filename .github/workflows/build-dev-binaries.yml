@@ -287,7 +287,8 @@ jobs:
   build-binary-windows-aarch64:
     name: "windows aarch64"
     timeout-minutes: 10
-    runs-on: windows-11-arm
+    # Cross-compile here; test-smoke.yml still executes the binaries on native ARM64.
+    runs-on: namespace-profile-windows-2022-x86-64-16x32
     env:
       RUSTC_BOOTSTRAP: 1
     steps:
@@ -305,7 +306,9 @@ jobs:
 
       - name: "Install Rust toolchain"
         working-directory: ${{ env.UV_WORKSPACE }}
-        run: rustup toolchain install --profile minimal
+        run: |
+          rustup toolchain install --profile minimal
+          rustup target add aarch64-pc-windows-msvc
 
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
@@ -316,15 +319,15 @@ jobs:
 
       - name: "Build"
         working-directory: ${{ env.UV_WORKSPACE }}
-        run: cargo build --profile no-debug-nightly -Z checksum-freshness --bin uv --bin uvx
+        run: cargo build --profile no-debug-nightly -Z checksum-freshness --target aarch64-pc-windows-msvc --bin uv --bin uvx
 
       - name: "Upload binary"
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: uv-windows-aarch64-${{ github.sha }}
           path: |
-            ${{ env.UV_WORKSPACE }}/target/no-debug-nightly/uv.exe
-            ${{ env.UV_WORKSPACE }}/target/no-debug-nightly/uvx.exe
+            ${{ env.UV_WORKSPACE }}/target/aarch64-pc-windows-msvc/no-debug-nightly/uv.exe
+            ${{ env.UV_WORKSPACE }}/target/aarch64-pc-windows-msvc/no-debug-nightly/uvx.exe
           retention-days: 1
 
   build-binary-msrv:
