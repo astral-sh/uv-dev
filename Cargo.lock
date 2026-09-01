@@ -5789,7 +5789,6 @@ dependencies = [
  "assert_fs",
  "astral_async_zip",
  "axoupdater",
- "backon",
  "byteorder",
  "bytes",
  "clap",

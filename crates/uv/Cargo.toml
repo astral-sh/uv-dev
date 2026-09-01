@@ -122,7 +122,6 @@ uv-trampoline-builder = { workspace = true }
 assert_cmd = { workspace = true }
 assert_fs = { workspace = true }
 async_zip = { workspace = true, features = ["zstd"] }
-backon = { workspace = true }
 byteorder = { workspace = true }
 bytes = { workspace = true }
 dunce = { workspace = true }
