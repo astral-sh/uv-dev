@@ -86,7 +86,7 @@ async fn lock_index_credentials_before_realm_cache() -> Result<()> {
             "WWW-Authenticate",
             r#"Basic realm="GitLab Packages Registry""#,
         ))
-        .expect(1)
+        .expect(0)
         .mount(&server)
         .await;
 
@@ -129,15 +129,10 @@ async fn lock_index_credentials_before_realm_cache() -> Result<()> {
             server.uri(),
         })?;
 
-    // This should resolve, but the first index's cached credentials bypass the second index's
-    // stored credentials. See astral-sh/uv#18955.
     uv_snapshot!(context.filters(), context.lock().env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
-    exit_code: 1 (failure)
+    exit_code: 0 (success)
     ----- stderr -----
-      × No solution found when resolving dependencies:
-      ╰─▶ Because basic-package was not found in the package registry and your project depends on basic-package, we can conclude that your project's requirements are unsatisfiable.
-
-    hint: An index URL (http://[LOCALHOST]/second/simple) could not be queried due to a lack of valid authentication credentials (401 Unauthorized)
+    Resolved 2 packages in [TIME]
     ");
 
     Ok(())

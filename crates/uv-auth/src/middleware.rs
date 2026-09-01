@@ -2622,7 +2622,7 @@ mod tests {
             .and(path_regex("^/prefix_2/"))
             .and(basic_auth("user1", "password1"))
             .respond_with(ResponseTemplate::new(401))
-            .expect(2)
+            .expect(0)
             .mount(&server)
             .await;
         Mock::given(method("GET"))
@@ -2667,16 +2667,14 @@ mod tests {
                 .status(),
             200
         );
-        // These requests should succeed, but the first index's cached credentials currently
-        // bypass the second index's keyring lookup. See astral-sh/uv#18955.
         assert_eq!(
             client
                 .get(index_url_2.into_unsafe_url())
                 .send()
                 .await?
                 .status(),
-            401,
-            "The second index receives the first index's cached credentials"
+            200,
+            "The second index should use its own keyring credentials"
         );
         assert_eq!(
             client
@@ -2688,8 +2686,8 @@ mod tests {
                 .send()
                 .await?
                 .status(),
-            401,
-            "File requests also receive the first index's cached credentials"
+            200,
+            "File requests should also use the second index's credentials"
         );
 
         Ok(())
