@@ -1,0 +1,15 @@
+diff --git a/crates/uv-test/src/lib.rs b/crates/uv-test/src/lib.rs
+--- a/crates/uv-test/src/lib.rs
++++ b/crates/uv-test/src/lib.rs
+@@ -2086,6 +2086,11 @@
+             command.env_remove(env_var);
+         }
+
++        // Diagnostic default; explicit per-test settings are applied afterwards.
++        if let Some(threads) = env::var_os("UV_RUNNER_EXPERIMENT_INSTALL_THREADS") {
++            command.env(EnvVars::UV_CONCURRENT_INSTALLS, threads);
++        }
++
+         command
+     }
+ }

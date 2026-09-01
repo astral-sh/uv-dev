@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 
 SOURCE_REVISION = "e9837f6e09e481bf5d1c2c2f13b641c14a366518"
+INSTALL_POOL_OVERRIDE = "UV_RUNNER_EXPERIMENT_INSTALL_THREADS"
 CARGO = [
     "cargo",
     "nextest",
@@ -91,6 +92,7 @@ def measure(command, name, environment, results):
             re.search(r"System time \(seconds\): ([0-9.]+)", timing)[1]
         ),
         "tmpdir": environment["TMPDIR"],
+        "install_pool_override": environment.get(INSTALL_POOL_OVERRIDE),
         "filesystem": capture(
             ["findmnt", "-n", "-o", "FSTYPE,TARGET", "-T", environment["TMPDIR"]]
         ),
@@ -117,13 +119,15 @@ def measure(command, name, environment, results):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("cpu", "filesystem"))
+    parser.add_argument("mode", choices=("cpu", "filesystem", "install-pool"))
     parser.add_argument("--results", type=Path, required=True)
     parser.add_argument("--dry-run", action="store_true")
     arguments = parser.parse_args()
-    variants = {"cpu": [8, 20, 40], "filesystem": ["native", "ext4", "tmpfs"]}[
-        arguments.mode
-    ]
+    variants = {
+        "cpu": [8, 20, 40],
+        "filesystem": ["native", "ext4", "tmpfs"],
+        "install-pool": ["default", "1", "8"],
+    }[arguments.mode]
     # Rotate each variant through every position to balance order effects.
     schedules = [variants[index:] + variants[:index] for index in range(len(variants))]
     if arguments.dry_run:
@@ -143,6 +147,12 @@ def main():
     changed = capture(["git", "diff", "--name-only"])
     if changed:
         raise RuntimeError(f"Unexpected source changes: {changed}")
+    if arguments.mode == "install-pool":
+        # Every variant uses the same test-only hook, including the default control.
+        # Explicit per-test environment settings are applied after this hook.
+        patch = Path(__file__).with_name("install-pool.patch")
+        subprocess.run(["git", "apply", "--check", str(patch)], check=True)
+        subprocess.run(["git", "apply", str(patch)], check=True)
 
     results = arguments.results.resolve()
     results.mkdir(parents=True, exist_ok=True)
@@ -152,6 +162,7 @@ def main():
     seed = scratch / "python-seed"
     seed.mkdir(exist_ok=True)
     environment = dict(os.environ, TMPDIR=str(native), UV_PYTHON_CACHE_DIR=str(seed))
+    environment.pop(INSTALL_POOL_OVERRIDE, None)
     metadata = {
         "source": SOURCE_REVISION,
         "mode": arguments.mode,
@@ -198,6 +209,8 @@ def main():
                 sample_environment = dict(
                     environment, TMPDIR=temporary, UV_PYTHON_CACHE_DIR=str(python_cache)
                 )
+                if arguments.mode == "install-pool" and variant != "default":
+                    sample_environment[INSTALL_POOL_OVERRIDE] = variant
                 workers = str(variant) if arguments.mode == "cpu" else "20"
                 row = measure(
                     [*command, "--test-threads", workers],
