@@ -25,6 +25,7 @@ jobs:
     timeout-minutes: 30
     env:
       RUSTC_BOOTSTRAP: "1"
+      # cargo-codspeed invokes Cargo internally without forwarding arbitrary -Z flags.
       CARGO_UNSTABLE_CHECKSUM_FRESHNESS: "true"
     steps:
       - name: "Checkout Branch"
@@ -155,6 +156,7 @@ jobs:
       id-token: write # for codspeed authentication
     env:
       RUSTC_BOOTSTRAP: "1"
+      # cargo-codspeed invokes Cargo internally without forwarding arbitrary -Z flags.
       CARGO_UNSTABLE_CHECKSUM_FRESHNESS: "true"
     steps:
       - name: "Checkout Branch"
