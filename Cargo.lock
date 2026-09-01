@@ -5899,7 +5899,6 @@ dependencies = [
  "petgraph",
  "predicates",
  "regex",
- "reqwest",
  "rkyv",
  "rustc-hash",
  "self-replace",
