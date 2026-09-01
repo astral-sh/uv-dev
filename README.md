@@ -25,7 +25,9 @@ does not create shared membership or reuse the external workspace's lockfile.
 The reporter has clarified that the real layout is a large monorepo with relevant projects scattered
 across it. A single workspace file at their common ancestor is undesirable because multiple teams
 may need independent workspaces rooted from that same directory. Moving the selected projects under
-one directory is possible but would require reorganizing the monorepo.
+one directory is possible, but some participating teams prefer to retain their existing directories,
+where review rules and related repository configuration are already established. This is an
+organizational and convenience constraint, not a reported technical impossibility.
 
 A maintainer suggested allowing a root `uv.toml` to define multiple workspaces. The reporter said
 that model would meet the use case. This is a design suggestion in the discussion, not an accepted
@@ -43,10 +45,11 @@ confirmed that would work. The proposal would retain a discoverable common ances
 all teams into one workspace, but its precise configuration and discovery semantics have not been
 designed in the discussion.
 
-Maintainer @zsol has now asked what specifically prevents moving the projects beneath a common
-parent directory. The reporter has not yet answered that narrower question. The remaining useful
-clarification is whether repository layout is constrained by ownership, build tooling, source
-history, or another concrete requirement beyond convenience. If the projects are intended to remain
+In response to maintainer @zsol's question about regrouping the projects, the reporter clarified
+that most members are already together, while projects owned by other teams may remain elsewhere
+primarily for convenience and because review rules and related configuration are attached to those
+locations. The discussion therefore establishes a concrete multi-team workflow cost, but no hard
+technical blocker to the supported common-parent layout. If the projects are intended to remain
 independently locked, path-valued workspace sources from astral-sh/uv#18401 remain a separate
 alternative rather than a shared-workspace solution.
 
@@ -62,7 +65,8 @@ semantics (or another explicit way to associate an external member with its root
 The classification remains `enhancement`. The reporter has established why one common-parent
 workspace is insufficient for the intended multi-team setup, and confirmed that a root configuration
 capable of defining multiple workspaces would satisfy it. Maintainers have not selected that design,
-and the practical constraint against regrouping the projects remains under discussion.
+and the stated reason not to regroup the outlying projects is preservation of team-local layout,
+review rules, and related configuration rather than technical necessity.
 
 This is not a duplicate. astral-sh/uv#13589 covers the same broad flat-sibling topology but answers
 it with a virtual root at the common parent. astral-sh/uv#18348 and astral-sh/uv#18401 cover
