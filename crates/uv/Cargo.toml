@@ -132,7 +132,6 @@ uv-test = { workspace = true }
 
 assert_cmd = { workspace = true }
 assert_fs = { workspace = true }
-backon = { workspace = true }
 byteorder = { workspace = true }
 bytes = { workspace = true }
 filetime = { workspace = true }
