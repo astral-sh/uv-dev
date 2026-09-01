@@ -1,11 +1,9 @@
 //! Expand requirements before lowering them into PubGrub dependencies.
 
 use std::borrow::Cow;
-use std::collections::VecDeque;
 use std::{iter, slice};
 
 use either::Either;
-use rustc_hash::FxHashSet;
 use tracing::trace;
 
 use uv_configuration::{Constraints, Excludes, Overrides};
@@ -14,6 +12,7 @@ use uv_normalize::{ExtraName, PackageName};
 use uv_pep440::Version;
 use uv_pep508::MarkerTree;
 use uv_pypi_types::ConflictItemRef;
+use uv_types::OnceQueue;
 
 use crate::python_requirement::PythonRequirement;
 use crate::resolver::environment::ResolverEnvironment;
@@ -123,16 +122,12 @@ impl<'a> RequirementExpander<'a> {
 
         // Transitively process all extras that are recursively included, starting with the current
         // extra.
-        let mut seen = FxHashSet::<(ExtraName, MarkerTree)>::default();
-        let mut queue: VecDeque<_> = requirements
+        let mut queue: OnceQueue<_> = requirements
             .iter()
             .filter(|req| name == &req.name)
             .flat_map(|req| req.extras.iter().cloned().map(|extra| (extra, req.marker)))
             .collect();
-        while let Some((extra, marker)) = queue.pop_front() {
-            if !seen.insert((extra.clone(), marker)) {
-                continue;
-            }
+        while let Some((extra, marker)) = queue.pop() {
             for requirement in self.requirements_for_context(
                 dependencies,
                 RequirementContext::Extra {
