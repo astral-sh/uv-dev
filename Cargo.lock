@@ -5886,7 +5886,6 @@ dependencies = [
  "astral-version-ranges",
  "astral_async_zip",
  "axoupdater",
- "backon",
  "byteorder",
  "bytes",
  "clap",
