@@ -237,6 +237,15 @@ async fn run_with_workspace_cache(
         // When running a target, discover the workspace starting from the target's directory
         // rather than the current working directory.
         Cow::Owned(std::path::absolute(dir)?)
+    } else if let Commands::Workspace(WorkspaceNamespace {
+        command: WorkspaceCommand::Metadata(args),
+    }) = &*cli.command
+        && args.script.as_deref() == Some(Path::new("-"))
+        && let Some(filename) = args.stdin_filename.as_ref()
+    {
+        // Use the associated script path to discover configuration for editor-provided content.
+        let path = normalize_path(std::path::absolute(filename)?);
+        Cow::Owned(path.parent().unwrap_or(path.as_ref()).to_path_buf())
     } else {
         Cow::Borrowed(&*CWD)
     };
@@ -439,6 +448,10 @@ async fn run_with_workspace_cache(
     }) = &*cli.command
         && let Some(script) = args.script.as_ref()
     {
+        if args.stdin_filename.is_some() && script != Path::new("-") {
+            bail!("`--stdin-filename` can only be used with `--script -`");
+        }
+
         if script == Path::new("-") {
             let mut contents = Vec::new();
             stdin().read_to_end(&mut contents)?;
@@ -2119,6 +2132,7 @@ async fn run_with_workspace_cache(
                     args.settings,
                     client_builder.subcommand(vec!["workspace".to_owned(), "metadata".to_owned()]),
                     script,
+                    args.stdin_filename,
                     globals.python_preference,
                     globals.python_downloads,
                     globals.concurrency,

@@ -7767,6 +7767,13 @@ pub struct MetadataArgs {
     #[arg(long, value_hint = ValueHint::FilePath)]
     pub script: Option<PathBuf>,
 
+    /// The filename associated with a Python script read from stdin.
+    ///
+    /// The script contents are still read from stdin, but the filename is used to identify the
+    /// script and discover its configuration and environment.
+    #[arg(long, requires = "script", value_hint = ValueHint::FilePath)]
+    pub stdin_filename: Option<PathBuf>,
+
     /// Check if the lockfile is up-to-date [env: UV_LOCKED=]
     ///
     /// Asserts that the `uv.lock` would remain unchanged after a resolution. If the lockfile is
