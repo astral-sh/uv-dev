@@ -114,6 +114,51 @@ pub trait Installable<'lock> {
     /// Return the [`PackageName`] of the target, if available.
     fn project_name(&self) -> Option<&PackageName>;
 
+    /// Return the roots and workspace members reachable through the selected extras and groups.
+    ///
+    /// This is a conservative walk across lock forks, without environment or conflict filtering.
+    /// Package identity is preserved until projecting the result to workspace member names.
+    fn reachable_workspace_members<'target>(
+        &'target self,
+        extras: &ExtrasSpecification,
+        groups: &DependencyGroupsWithDefaults,
+    ) -> BTreeSet<&'target PackageName>
+    where
+        'lock: 'target,
+    {
+        let lock = self.lock();
+        let mut required_members = self.roots().collect::<BTreeSet<_>>();
+        let mut walker = LockWalker::new(lock);
+
+        for (name, kind) in self.roots_with_kind(groups) {
+            for package in lock.packages_for_name(name) {
+                if kind == InstallableRootKind::Production && groups.prod() {
+                    walker.push_package(
+                        lock.by_id[&package.id],
+                        extras.extra_names(package.optional_dependencies.keys()),
+                    );
+                }
+                for (group, dependencies) in package.resolved_dependency_groups() {
+                    if self.includes_group(Some(package.name()), group, groups) {
+                        for dependency in dependencies {
+                            walker.push_dependency(dependency);
+                        }
+                    }
+                }
+            }
+        }
+
+        while let Some(visit) = walker.pop() {
+            if lock.members().contains(visit.package.name()) {
+                required_members.insert(lock.package(visit.index).name());
+            }
+            for dependency in visit.dependencies {
+                walker.push_dependency(dependency);
+            }
+        }
+        required_members
+    }
+
     /// Convert the [`Lock`] to a [`Resolution`] using the given marker environment, tags, and root.
     fn to_resolution(
         &self,

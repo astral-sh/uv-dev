@@ -4,7 +4,7 @@ use petgraph::graph::NodeIndex;
 use petgraph::prelude::EdgeRef;
 use petgraph::visit::IntoNodeReferences;
 use petgraph::{Direction, Graph};
-use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
+use rustc_hash::{FxBuildHasher, FxHashMap};
 
 use uv_configuration::{
     DependencyGroupsWithDefaults, ExtrasSpecificationWithDefaults, InstallOptions,
@@ -162,56 +162,30 @@ impl<'lock> ExportableRequirements<'lock> {
 
         // Add requirements that are exclusive to the workspace root (e.g., dependency groups in
         // non-project workspace roots).
-        let root_requirements = target
+        for requirement in target
             .root_requirements(groups)
             .filter(|dep| !prune.contains(&dep.name))
-            .collect::<Vec<_>>();
+        {
+            for (package_index, dist) in target.lock().packages_for_requirement(requirement) {
+                let Some(marker) = target.lock().root_requirement_marker(requirement, dist) else {
+                    continue;
+                };
+                // Add the dependency to the graph and get its index.
+                let dep_index = *inverse[package_index.0]
+                    .get_or_insert_with(|| graph.add_node(Node::Package(dist)));
 
-        // Index the lockfile by package name, to avoid making multiple passes over the lockfile.
-        if !root_requirements.is_empty() {
-            let by_name: FxHashMap<_, Vec<_>> = {
-                let names = root_requirements
-                    .iter()
-                    .map(|dep| &dep.name)
-                    .collect::<FxHashSet<_>>();
-                target.lock().packages().iter().fold(
-                    FxHashMap::with_capacity_and_hasher(size_guess, FxBuildHasher),
-                    |mut map, package| {
-                        if names.contains(&package.id.name) {
-                            map.entry(&package.id.name).or_default().push(package);
-                        }
-                        map
+                // Add an edge from the root.
+                graph.add_edge(
+                    root,
+                    dep_index,
+                    Edge::Prod {
+                        marker,
+                        dep_extras: requirement.extras.iter().collect(),
                     },
-                )
-            };
+                );
 
-            for requirement in root_requirements {
-                for dist in by_name.get(&requirement.name).into_iter().flatten() {
-                    // Determine whether this entry is relevant for the requirement by
-                    // intersecting and simplifying the markers.
-                    let Some(marker) = target.lock().root_requirement_marker(requirement, dist)
-                    else {
-                        continue;
-                    };
-                    let package_index = target.lock().by_id[&dist.id];
-
-                    // Add the dependency to the graph and get its index.
-                    let dep_index = *inverse[package_index.0]
-                        .get_or_insert_with(|| graph.add_node(Node::Package(dist)));
-
-                    // Add an edge from the root.
-                    graph.add_edge(
-                        root,
-                        dep_index,
-                        Edge::Prod {
-                            marker,
-                            dep_extras: requirement.extras.iter().collect(),
-                        },
-                    );
-
-                    // Push its dependencies on the queue.
-                    walker.push_package(package_index, &requirement.extras);
-                }
+                // Push its dependencies on the queue.
+                walker.push_package(package_index, &requirement.extras);
             }
         }
 

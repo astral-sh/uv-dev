@@ -1,5 +1,6 @@
-use std::collections::BTreeSet;
 use std::collections::hash_map::Entry;
+use std::collections::{BTreeSet, VecDeque};
+use std::hash::Hash;
 
 use petgraph::graph::{EdgeIndex, NodeIndex};
 use petgraph::visit::EdgeRef;
@@ -11,6 +12,64 @@ use uv_pypi_types::{ConflictItem, Conflicts, Inference};
 
 use crate::resolution::ResolutionGraphNode;
 use crate::universal_marker::UniversalMarker;
+
+/// Accumulate the markers under which each state is reachable.
+///
+/// A state is queued again when its marker grows, including after it has been popped. Multiple
+/// updates to a pending state are coalesced; popping it returns the latest accumulated marker.
+/// Callers choose the states, edges, and markers to propagate.
+pub(crate) struct MarkerReachability<State, Marker> {
+    markers: FxHashMap<State, Marker>,
+    queue: VecDeque<State>,
+    queued: FxHashSet<State>,
+}
+
+impl<State, Marker> MarkerReachability<State, Marker>
+where
+    State: Copy + Eq + Hash,
+    Marker: Boolean + Copy + PartialEq,
+{
+    pub(crate) fn with_capacity(capacity: usize) -> Self {
+        Self {
+            markers: FxHashMap::with_capacity_and_hasher(capacity, FxBuildHasher),
+            queue: VecDeque::new(),
+            queued: FxHashSet::default(),
+        }
+    }
+
+    /// Propagate a marker to a state, queuing it if its reachability expands.
+    pub(crate) fn push(&mut self, state: State, marker: Marker) {
+        let changed = match self.markers.entry(state) {
+            Entry::Occupied(mut entry) => {
+                let mut combined = *entry.get();
+                combined.or(marker);
+                if combined == *entry.get() {
+                    false
+                } else {
+                    entry.insert(combined);
+                    true
+                }
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(marker);
+                true
+            }
+        };
+        if changed && self.queued.insert(state) {
+            self.queue.push_back(state);
+        }
+    }
+
+    pub(crate) fn pop(&mut self) -> Option<(State, Marker)> {
+        let state = self.queue.pop_front()?;
+        self.queued.remove(&state);
+        Some((state, self.markers[&state]))
+    }
+
+    pub(crate) fn into_markers(self) -> FxHashMap<State, Marker> {
+        self.markers
+    }
+}
 
 /// Determine the markers under which a package is reachable in the dependency tree.
 ///
@@ -29,21 +88,18 @@ pub(crate) fn marker_reachability<
 ) -> FxHashMap<NodeIndex, Marker> {
     // Note that we build including the virtual packages due to how we propagate markers through
     // the graph, even though we then only read the markers for base packages.
-    let mut reachability = FxHashMap::with_capacity_and_hasher(graph.node_count(), FxBuildHasher);
+    let mut reachability = MarkerReachability::with_capacity(graph.node_count());
 
     // Collect the root nodes.
     //
     // Besides the actual virtual root node, virtual dev dependencies packages are also root
     // nodes since the edges don't cover dev dependencies.
-    let mut queue: Vec<_> = graph
-        .node_indices()
-        .filter(|node_index| {
-            graph
-                .edges_directed(*node_index, Direction::Incoming)
-                .next()
-                .is_none()
-        })
-        .collect();
+    let roots = graph.node_indices().filter(|node_index| {
+        graph
+            .edges_directed(*node_index, Direction::Incoming)
+            .next()
+            .is_none()
+    });
 
     // The root nodes are always applicable, unless the user has restricted resolver
     // environments with `tool.uv.environments`.
@@ -57,37 +113,22 @@ pub(crate) fn marker_reachability<
                 acc
             })
     };
-    for root_index in &queue {
-        reachability.insert(*root_index, root_markers);
+    for root_index in roots {
+        reachability.push(root_index, root_markers);
     }
 
     // Propagate all markers through the graph, so that the eventual marker for each node is the
     // union of the markers of each path we can reach the node by.
-    while let Some(parent_index) = queue.pop() {
-        let marker = reachability[&parent_index];
+    while let Some((parent_index, marker)) = reachability.pop() {
         for child_edge in graph.edges_directed(parent_index, Direction::Outgoing) {
             // The marker for all paths to the child through the parent.
             let mut child_marker = child_edge.weight().marker();
             child_marker.and(marker);
-            match reachability.entry(child_edge.target()) {
-                Entry::Occupied(mut existing) => {
-                    // If the marker is a subset of the existing marker (A ⊆ B exactly if
-                    // A ∪ B = A), updating the child wouldn't change child's marker.
-                    child_marker.or(*existing.get());
-                    if &child_marker != existing.get() {
-                        existing.insert(child_marker);
-                        queue.push(child_edge.target());
-                    }
-                }
-                Entry::Vacant(vacant) => {
-                    vacant.insert(child_marker);
-                    queue.push(child_edge.target());
-                }
-            }
+            reachability.push(child_edge.target(), child_marker);
         }
     }
 
-    reachability
+    reachability.into_markers()
 }
 
 /// Traverse the given dependency graph and propagate activated markers.
@@ -340,5 +381,60 @@ impl Boolean for MarkerTree {
 
     fn or(&mut self, other: Self) {
         *self = Self::or(*self, other);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error;
+
+    use petgraph::Graph;
+    use uv_pep508::MarkerTree;
+
+    use super::{MarkerReachability, marker_reachability};
+
+    #[test]
+    fn marker_reachability_revisits_only_on_growth() -> Result<(), Box<dyn Error>> {
+        let windows: MarkerTree = "sys_platform == 'win32'".parse()?;
+        let linux: MarkerTree = "sys_platform == 'linux'".parse()?;
+        let mut reachability = MarkerReachability::with_capacity(1);
+
+        reachability.push(0, windows);
+        reachability.push(0, windows);
+        assert_eq!(reachability.pop(), Some((0, windows)));
+        assert_eq!(reachability.pop(), None);
+
+        reachability.push(0, windows);
+        assert_eq!(reachability.pop(), None);
+        reachability.push(0, linux);
+        reachability.push(0, MarkerTree::TRUE);
+        assert_eq!(reachability.pop(), Some((0, MarkerTree::TRUE)));
+        assert_eq!(reachability.pop(), None);
+        reachability.push(0, linux);
+        assert_eq!(reachability.pop(), None);
+        Ok(())
+    }
+
+    #[test]
+    fn marker_reachability_propagates_growth_through_cycles() -> Result<(), Box<dyn Error>> {
+        let windows: MarkerTree = "sys_platform == 'win32'".parse()?;
+        let linux: MarkerTree = "sys_platform == 'linux'".parse()?;
+        let mut graph = Graph::new();
+        let root = graph.add_node(());
+        let direct = graph.add_node(());
+        let indirect = graph.add_node(());
+        let intermediary = graph.add_node(());
+        let leaf = graph.add_node(());
+        graph.add_edge(root, direct, windows);
+        graph.add_edge(root, indirect, linux);
+        graph.add_edge(indirect, intermediary, MarkerTree::TRUE);
+        graph.add_edge(intermediary, direct, MarkerTree::TRUE);
+        graph.add_edge(direct, leaf, MarkerTree::TRUE);
+        graph.add_edge(leaf, direct, MarkerTree::TRUE);
+
+        let reachability = marker_reachability(&graph, &[]);
+        assert_eq!(reachability[&direct], windows.or(linux));
+        assert_eq!(reachability[&leaf], windows.or(linux));
+        Ok(())
     }
 }

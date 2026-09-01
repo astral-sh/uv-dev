@@ -1460,6 +1460,15 @@ impl Lock {
         requirement: &Requirement,
         package: &Package,
     ) -> Option<MarkerTree> {
+        Self::root_requirement_marker_intersection(requirement, package)
+            .map(|marker| self.simplify_environment(marker))
+    }
+
+    /// Intersect a requirement marker with the forks that contain a package.
+    fn root_requirement_marker_intersection(
+        requirement: &Requirement,
+        package: &Package,
+    ) -> Option<MarkerTree> {
         let marker = if package.fork_markers.is_empty() {
             requirement.marker
         } else {
@@ -1471,7 +1480,17 @@ impl Lock {
             combined
         };
 
-        (!marker.is_false()).then(|| self.simplify_environment(marker))
+        (!marker.is_false()).then_some(marker)
+    }
+
+    /// Return the locked packages that share a root requirement's name.
+    fn packages_for_requirement<'lock>(
+        &'lock self,
+        requirement: &'lock Requirement,
+    ) -> impl Iterator<Item = (PackageIndex, &'lock Package)> + 'lock {
+        self.packages_for_name(&requirement.name)
+            .iter()
+            .map(|package| (self.by_id[&package.id], package))
     }
 
     /// Returns the dependency groups that were used to generate this lock.
@@ -1773,13 +1792,7 @@ impl Lock {
 
         // Seed from requirements attached directly to the lock (e.g., PEP 723 scripts).
         for requirement in self.requirements() {
-            for (index, _) in self
-                .packages
-                .iter()
-                .enumerate()
-                .filter(|(_, package)| package.id.name == requirement.name)
-            {
-                let index = PackageIndex(index);
+            for (index, _package) in self.packages_for_requirement(requirement) {
                 walker.push_package(index, &requirement.extras);
             }
         }
@@ -1791,13 +1804,7 @@ impl Lock {
                 continue;
             }
             for requirement in requirements {
-                for (index, _) in self
-                    .packages
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, package)| package.id.name == requirement.name)
-                {
-                    let index = PackageIndex(index);
+                for (index, _package) in self.packages_for_requirement(requirement) {
                     walker.push_package(index, &requirement.extras);
                 }
             }
@@ -2661,19 +2668,11 @@ impl Lock {
                         continue;
                     }
 
-                    let marker = if package.fork_markers.is_empty() {
-                        requirement.marker
-                    } else {
-                        let mut combined = MarkerTree::FALSE;
-                        for fork_marker in &package.fork_markers {
-                            combined = combined.or(fork_marker.pep508());
-                        }
-                        combined = combined.and(requirement.marker);
-                        combined
-                    };
-                    if marker.is_false() {
+                    let Some(marker) =
+                        Self::root_requirement_marker_intersection(requirement, package)
+                    else {
                         continue;
-                    }
+                    };
                     if !marker.evaluate(markers, &[]) {
                         continue;
                     }
