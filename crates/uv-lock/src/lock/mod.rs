@@ -96,9 +96,9 @@ mod reachability;
 mod requirements;
 mod serialize;
 mod tree;
+mod walk;
 #[cfg(test)]
 mod windows_emulation_tests;
-mod walk;
 
 /// The current version of the lockfile format.
 const VERSION: u32 = 1;

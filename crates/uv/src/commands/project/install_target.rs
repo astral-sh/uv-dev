@@ -668,9 +668,7 @@ impl<'lock> InstallTarget<'lock> {
         groups: &DependencyGroupsWithDefaults,
     ) -> BTreeSet<&PackageName> {
         match self.package_selection() {
-            Some(PackageSelection::Projects(_)) => {
-                self.reachable_workspace_members(extras, groups)
-            }
+            Some(PackageSelection::Projects(_)) => self.reachable_workspace_members(extras, groups),
             Some(PackageSelection::Workspace | PackageSelection::NonProjectWorkspace) => {
                 // Return all workspace members
                 self.lock().members().iter().collect()
