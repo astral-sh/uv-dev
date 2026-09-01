@@ -495,12 +495,40 @@ impl Middleware for AuthMiddleware {
         // For a known index, only reuse realm credentials after looking up its own credentials.
         // Another index on the same server may require a different username or password.
         if index.is_some()
-            && let Some(credentials) = self
+            && let Some(realm_credentials) = self
                 .cache()
                 .get_realm(Realm::from(&**retry_request_url), username)
         {
-            trace!("Retrying request for {url} with realm credentials {credentials:?}");
-            retry_request = credentials.authenticate(retry_request).await?;
+            // A username-only realm entry can enable a lookup that was skipped without a
+            // username. Use it only when the index lookup finds nothing and the index has no username.
+            if !realm_credentials.is_authenticated()
+                && realm_credentials.username().is_some()
+                && credentials
+                    .as_ref()
+                    .is_none_or(|credentials| credentials.username().is_none())
+                && let Some(credentials) = self
+                    .fetch_credentials(
+                        Some(&realm_credentials),
+                        retry_request_url,
+                        index,
+                        auth_policy,
+                    )
+                    .await?
+            {
+                retry_request = credentials.authenticate(retry_request).await?;
+                return self
+                    .complete_request(
+                        Some(credentials),
+                        retry_request,
+                        extensions,
+                        next,
+                        auth_policy,
+                    )
+                    .await;
+            }
+
+            trace!("Retrying request for {url} with realm credentials {realm_credentials:?}");
+            retry_request = realm_credentials.authenticate(retry_request).await?;
             return self
                 .complete_request(None, retry_request, extensions, next, auth_policy)
                 .await;
@@ -2314,6 +2342,45 @@ mod tests {
             client.get(index_url_2).send().await?.status(),
             200,
             "The cached realm username should enable the second index's keyring lookup"
+        );
+
+        Ok(())
+    }
+
+    /// An index's credentials take precedence over a username cached for another index.
+    #[test(tokio::test)]
+    async fn test_credentials_from_keyring_before_cached_realm_username() -> Result<(), Error> {
+        let username = "user2";
+        let password = "password2";
+        let server = start_test_server(username, password).await;
+        let base_url = Url::parse(&server.uri())?;
+        let index_url_1 = base_url.join("prefix_1/simple")?;
+        let index_url_2 = base_url.join("prefix_2/simple")?;
+        let cache = CredentialsCache::new();
+        cache.store_credentials(
+            DisplaySafeUrl::ref_cast(&index_url_1),
+            Credentials::basic(Some("user1".to_string()), None),
+        );
+        let client = test_client_builder()
+            .with(
+                AuthMiddleware::new()
+                    .with_cache(cache)
+                    .with_netrc(None)
+                    .with_text_store(None)
+                    .with_keyring(Some(KeyringProvider::dummy([(
+                        index_url_2.clone(),
+                        username,
+                        password,
+                    )])))
+                    .with_indexes(indexes_for(&index_url_2, AuthPolicy::Always)),
+            )
+            .build();
+
+        // Looking up the index with the cached username would miss its different keyring account.
+        assert_eq!(
+            client.get(index_url_2).send().await?.status(),
+            200,
+            "The index's keyring account should take precedence over the cached realm username"
         );
 
         Ok(())
