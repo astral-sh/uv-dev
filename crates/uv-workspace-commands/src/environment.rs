@@ -91,6 +91,7 @@ pub(super) async fn collect_environment(
             InstallOptions::default(),
             modifications,
             None,
+            None,
             installer_settings,
             client_builder,
             &state.fork(),
