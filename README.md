@@ -14,7 +14,7 @@ After reviewing the report, repository member Zsol Dollenstein selected the inte
 
 ## Maintainer decision
 
-Change `uv workspace list --scripts` so a malformed PEP 723 candidate emits a warning and is skipped, allowing discovery to continue. This direction was stated by repository member Zsol Dollenstein in the issue discussion. No separate `--skip-invalid` mode was requested in that decision.
+Change `uv workspace list --scripts` so a malformed PEP 723 candidate emits a warning and is skipped, allowing discovery to continue. This direction was stated by repository member Zsol Dollenstein in the issue discussion. No separate `--skip-invalid` mode was requested in that decision. Repository member and issue author William Woodruff volunteered to own the implementation.
 
 ## Classification
 
