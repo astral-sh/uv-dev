@@ -1,0 +1,27 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 16314,
+        "title": "`ruff check` equivalent to `uv format` for `ruff format`",
+        "url": "https://github.com/astral-sh/uv/issues/16314",
+        "state": "open",
+        "reason": "astral-sh/uv#16314 is the earlier, exact request for a uv shorthand that runs Ruff checking as the counterpart to `uv format`."
+      },
+      {
+        "kind": "issue",
+        "number": 19768,
+        "title": "Include additional checks, such as `ruff check`, in `uv check`",
+        "url": "https://github.com/astral-sh/uv/issues/19768",
+        "state": "open",
+        "reason": "astral-sh/uv#19768 explicitly considers either adding Ruff checking to `uv check` or introducing `uv lint`, including fix forwarding; it is broader because it also proposes combined type and format checks."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed-unmerged, and merged pull requests using literal queries for `uv lint`, `ruff check`, `ruff check --fix`, `uv check`, and `uv format`, plus conceptual queries for lint/linter commands, Ruff integration, static analysis, code-quality checks, format commands, and task aliases. No related pull request was found. astral-sh/uv#6308 was ruled out because it concerns formatting or validating `pyproject.toml`; astral-sh/uv#5903 concerns general task aliases rather than built-in Ruff integration."
+  },
+  "type": "duplicate",
+  "type_reason": "astral-sh/uv#16314 already tracks the same requested Ruff-check shorthand. The explicit `uv lint` spelling and `--fix` forwarding are details of that existing enhancement, while astral-sh/uv#19768 contains an overlapping broader interface discussion.",
+  "summary": "astral-sh/uv#16314 is the canonical exact request; astral-sh/uv#19768 is a broader overlapping discussion. No related pull request was found.",
+  "draft_response": "Thanks. This is already tracked in astral-sh/uv#16314, which requests a Ruff check/lint counterpart to `uv format`. astral-sh/uv#19768 also discusses whether Ruff linting should be exposed through `uv check` or a separate `uv lint` command, including fix behavior. Let’s centralize the dedicated `uv lint` request in astral-sh/uv#16314."
+}
