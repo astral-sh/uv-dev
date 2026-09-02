@@ -10,6 +10,8 @@ The reported PEP 592 partial-yank behavior is independently reproducible. With o
 
 No existing issue or pull request tracks this exact partial-yank lockfile defect. The closest precedent is astral-sh/uv#12296 and its fix astral-sh/uv#12299, where an individual wheel excluded by `--exclude-newer` was correctly rejected during resolution but still appeared in the lockfile. astral-sh/uv#6145 records the repository's recognition that yank status is per-file rather than necessarily uniform across a release.
 
+A follow-up comment adds two adjacent requests: warn or otherwise diagnose yank-related outcomes during `--locked` checks, and explain when `--upgrade` moves a package to an older unyanked version. These do not change the reproduced bug or its fixed status; they concern diagnostics and CLI wording beyond the artifact-filtering fix.
+
 ## Classification
 
 Bug. The independent fixture confirms that fresh resolution knows which file is yanked and chooses the other file, while lockfile serialization still retains both files. This is distinct from uv intentionally retaining a previously valid artifact that is yanked only after lock creation.
@@ -103,6 +105,20 @@ Successful focused validation:
 
 The active Rust 1.98 toolchain did not have rustfmt or clippy installed, and its read-only toolchain location prevented adding those components. The installed stable rustfmt and clippy were therefore used for the successful formatting and lint checks.
 
+## Follow-up diagnostic and documentation requests
+
+The reporter subsequently described two silent outcomes and proposed clarifying the `--locked` help text:
+
+- `uv sync --locked` does not warn when an artifact represented by an existing lock is now yanked upstream, or when the pre-fix lock carries an unused yanked wheel.
+- `uv lock --upgrade` can select an older unyanked version without explaining that a newer version was skipped because it was yanked.
+- The current help text says `--locked` will "Assert that the `uv.lock` will remain unchanged"; the reporter suggests explicitly scoping that assertion to the current project definition.
+
+Source inspection supports the narrow diagnostic observation. `ResolutionDiagnostic::YankedVersion` is populated in `crates/uv-resolver/src/resolution/output.rs` only from `ResolvedDist::yanked()`, and `ResolvedDist::yanked()` in `crates/uv-distribution-types/src/resolved.rs` checks the selected source distribution or `best_wheel()`. It does not report rejected yanked candidates. A wheel reconstructed from `uv.lock` also has no yank metadata, so detecting a yank applied after lock creation would require obtaining current registry state through some separate check.
+
+The `--locked` implementation is narrower than a general registry-health guarantee: `LockMode::Locked` runs the lock operation without writing and errors if the resulting lock would change, while its source comment defines it as checking whether the lockfile is up to date with project requirements. The CLI help already follows its one-line assertion with "Requires that the lockfile is up-to-date" and errors if it is missing or needs updating. Whether the first line should additionally say "for the current project definition" is a documentation decision, not part of the fixed partial-yank serialization bug.
+
+The follow-up requests do not share the same immediate root cause as the lockfile defect. The completed fix filters known, non-allowed yanked artifacts during registry-distribution aggregation. Reporting rejected candidates would require new diagnostic plumbing, while reporting a yank applied after lock creation may require registry access. The existing discussions below should guide whether these behaviors belong in this issue or separate follow-ups.
+
 ## Related
 
 - astral-sh/uv#12296 — **Wheels in lockfile are not filtered by `exclude-newer`** (closed). This is the closest structural analogue: uv respected a per-file eligibility condition during resolution but serialized ineligible wheels into `uv.lock`. Its trigger is upload time rather than yank status.
@@ -110,11 +126,13 @@ The active Rust 1.98 toolchain did not have rustfmt or clippy installed, and its
 - astral-sh/uv#6145 — **Reduce repeated information across `File` in a single distribution** (open). Its discussion explicitly corrected the assumption that yank state is uniform across all files in a package version and notes that PEP 592 defines per-file yanking. It tracks metadata deduplication and performance, not this lockfile correctness defect.
 - astral-sh/uv#5928 — **Resolve from lockfile cannot detect yanked versions** (closed). Maintainers established that resolving from an existing lockfile does not query the registry, and astral-sh/uv#6219 documented that limitation. That issue concerns discovering a yank after lock creation; astral-sh/uv#21430 concerns discarding a yank already known during fresh lock generation.
 - astral-sh/uv#413 — **Filter out yanked files** (merged). This historical fix filtered yanked files during the older `pip-compile` resolution path and warned during `pip-sync`. It established the general per-file filtering behavior but did not address universal `uv.lock` artifact aggregation, so the new issue is neither a duplicate nor a confirmed regression of that implementation.
+- astral-sh/uv#19112 — **Prevent installing yanked packages** (open). This directly overlaps the follow-up request for warnings or rejection when an already-locked artifact is later yanked. Maintainers state that continued installation from an existing lock is intentional under the packaging specification and suggest `uv audit` or a future diagnostic interface for current yank checks.
+- astral-sh/uv#3644 — **`pip compile --upgrade` behavior with yanked packages** (open). This is the closest precedent for the follow-up's silent-downgrade concern. Maintainers favored selecting the older unyanked version with a warning; a later comment confirmed that the downgrade currently occurs without one. It covers `uv pip compile --upgrade`, not `uv lock --upgrade`.
 
 ## Search scope and ruled-out candidates
 
 Searches covered open and closed issues and open, closed, and merged pull requests. Literal queries included `"yanked wheel" "uv.lock"`, `per-file yank`, `partially yanked`, `PEP 592`, `data-yanked`, `AllowedYanks`, `is_excluded Yanked`, `yanked lockfile wheel`, and exact lockfile-wheel titles. Conceptual queries covered a private index with mixed yank state, artifact-level eligibility versus version selection, frozen lockfile behavior, and analogous individual-file filtering. Fix-oriented searches covered historical yank filtering and the `exclude-newer` implementation that introduced `is_excluded`.
 
-astral-sh/uv#19112 was inspected but ruled out as a duplicate: it asks uv to query for and reject a whole version that became yanked after it was already locked, while maintainers explain that continuing from an existing lock is intentional. astral-sh/uv#3644 and astral-sh/uv#3425 concern whole-version selection during `uv pip compile`, not retaining one yanked file alongside an unyanked file of the same version. astral-sh/uv#17143 also involves bad artifact data persisted in `uv.lock`, but its mechanism is selecting an unsupported hash algorithm from a private index rather than failing to filter a yanked file.
+astral-sh/uv#19112 and astral-sh/uv#3644 were not duplicates of the original serialization report, but the follow-up comment makes them directly relevant to the newly requested diagnostics. astral-sh/uv#3425 concerns whole-version selection during `uv pip compile`, not retaining one yanked file alongside an unyanked file of the same version. astral-sh/uv#17143 also involves bad artifact data persisted in `uv.lock`, but its mechanism is selecting an unsupported hash algorithm from a private index rather than failing to filter a yanked file.
 
-Pull request: https://github.com/astral-sh/uv-dev/pull/963
+Pull request: astral-sh/uv-dev#963
