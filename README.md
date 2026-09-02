@@ -24,6 +24,15 @@ No existing issue or pull request was found that tracks this same sequence with 
 refresh. The closest discussions retain a live workspace or path declaration, use frozen or locked
 operation, or leave a matched directory without a `pyproject.toml`.
 
+## Current status
+
+A maintainer has indicated that the issue does not yet contain enough information to reproduce or
+diagnose the failure. The issue is awaiting a minimal reproducible example containing the uv
+version, operating system, exact command, and its complete `--verbose` output. The project pointed
+the reporter to its reproducible-example guidance and the reporting requirements in
+astral-sh/uv#9452. This confirms that further investigation is blocked on reporter-supplied details;
+it does not establish a root cause or change the bug classification.
+
 ## Reproduction
 
 Outcome: **needs more information**.
@@ -90,9 +99,9 @@ sync. The direct command-line reproduction above covers that sequence and succee
 the claimed ordinary-sync failure, maintainers still need all root and member `pyproject.toml`
 sections before and after deletion (including dependency groups, optional dependencies,
 `tool.uv.sources`, and `tool.uv.workspace`), the directory layout, the exact command and complete
-error output, any `uv.toml`, and whether `UV_LOCKED`, `UV_FROZEN`, `--locked`, or `--frozen` is in
-effect. The reported macOS 26 Intel platform may also matter if the same complete fixture succeeds
-on Linux.
+`--verbose` output, any `uv.toml`, and whether `UV_LOCKED`, `UV_FROZEN`, `--locked`, or `--frozen`
+is in effect. The reported macOS 26 Intel platform may also matter if the same complete fixture
+succeeds on Linux.
 
 ## Draft response
 
