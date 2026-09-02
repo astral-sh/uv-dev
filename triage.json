@@ -1,0 +1,27 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 18879,
+        "title": "Conflicts in [tool.uv] ignored for a workspace with virtual root",
+        "url": "https://github.com/astral-sh/uv/issues/18879",
+        "state": "closed",
+        "reason": "Canonical historical report: uv silently ignored conflicts declared at a virtual workspace root."
+      },
+      {
+        "kind": "pull_request",
+        "number": 18886,
+        "title": "Include conflicts defined in virtual workspace root",
+        "url": "https://github.com/astral-sh/uv/pull/18886",
+        "state": "merged",
+        "reason": "The fix for astral-sh/uv#18879 began reading virtual-root conflicts and deliberately added the missing-`package` diagnostic because a virtual root has no project name to infer. It directly explains the reported version change."
+      }
+    ],
+    "search_scope": "Searched the exact error and identifiers, `default-groups`, mixed group/extra declarations, virtual and non-project roots, workspace-root inheritance, package scoping, and conflict propagation, including closed issues and merged fixes across uv 0.9–0.12. No open issue or pull request tracks package-less conflicts involving a virtual-root dependency group. astral-sh/uv#10405 and astral-sh/uv#18015 were inspected but concern named workspace projects and package/extra propagation; astral-sh/uv#18317 concerns conflict-related lockfile growth."
+  },
+  "type": "enhancement",
+  "type_reason": "Source and tests establish that unqualified conflicts require a project identity from which uv can infer the package. A virtual root has no such identity, so its entries intentionally require `package`; conflicts involving a dependency group owned by the virtual root are currently unsupported. uv 0.9 silently ignored virtual-root conflicts rather than enforcing them, so the later diagnostic is not a returned bug.",
+  "summary": "astral-sh/uv#18879 and its fix astral-sh/uv#18886 explain the behavior change, but they do not provide the requested support for unqualified virtual-root group conflicts.",
+  "draft_response": "Thanks for the report. The exact error indicates this is being read as a virtual workspace root, where uv has no root project name to use as the implicit package. Before astral-sh/uv#18886, uv silently ignored `[tool.uv].conflicts` on virtual roots, so uv 0.9 was not enforcing this declaration. Since that fix, conflicts at a virtual root are read, but each item must include `package`; a dependency group owned directly by the virtual root cannot currently be represented this way.\n\nCould you provide a minimal `pyproject.toml` showing the workspace members and where the `databricks` extra is declared? That will clarify the necessary package scoping and give us a concrete case for supporting virtual-root groups."
+}
