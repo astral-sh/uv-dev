@@ -51,6 +51,7 @@ class Origin(http.server.BaseHTTPRequestHandler):
             {
                 "method": self.command,
                 "target": self.path,
+                "raw_target": self.requestline.split(" ", 2)[1],
                 "host": self.headers["Host"],
                 "headers": {key.lower(): value for key, value in self.headers.items()},
                 "body": body,
@@ -178,6 +179,17 @@ class URLProxyTests(unittest.TestCase):
                 + [
                     {"url": f"{scheme}://allowed.example/echo", "methods": ["POST"]}
                     for scheme in ("http", "https")
+                ]
+                + [
+                    {
+                        "url": f"{scheme}://allowed.example{path}",
+                        "methods": ["GET"],
+                        "match": "exact",
+                        "query": "any",
+                        "allow_repeated_slashes": True,
+                    }
+                    for scheme in ("http", "https")
+                    for path in ("/oidc//token", "//oidc/token")
                 ]
                 + [
                     {
@@ -335,6 +347,68 @@ class URLProxyTests(unittest.TestCase):
                         self.assertEqual(
                             len(self.state.dials) - before, int(expected == 200)
                         )
+
+    def test_explicit_repeated_slash_paths_are_forwarded_unchanged(self):
+        allowed = ("/oidc//token?audience=synthetic", "//oidc/token?audience=synthetic")
+        denied = (
+            "/oidc/token?audience=synthetic",
+            "/oidc///token?audience=synthetic",
+            "///oidc/token?audience=synthetic",
+            "/oidc//token/other?audience=synthetic",
+            "//second.example/oidc/token?audience=synthetic",
+            "/query//item",
+        )
+        with self.proxy() as port:
+            for target in allowed:
+                for absolute in (False, True):
+                    with self.subTest(cleartext=target, absolute=absolute):
+                        before = len(self.state.dials)
+                        request_target = (
+                            "http://allowed.example" + target if absolute else target
+                        )
+                        self.assertEqual(
+                            self.clear_request(port, request_target)[0], 200
+                        )
+                        self.assertEqual(len(self.state.dials) - before, 1)
+                        observed = self.cleartext_origin.requests[-1]
+                        self.assertEqual(observed["raw_target"], target)
+                        self.assertEqual(observed["host"], "allowed.example")
+            for method, host, target in (
+                *(("GET", "allowed.example", target) for target in denied),
+                ("POST", "allowed.example", allowed[0]),
+                ("GET", "second.example", allowed[0]),
+            ):
+                with self.subTest(method=method, host=host, target=target):
+                    before = len(self.state.dials)
+                    self.assertEqual(
+                        self.clear_request(port, target, method=method, host=host)[0],
+                        403,
+                    )
+                    self.assertEqual(len(self.state.dials), before)
+        for handler in (url_proxy.TLSHandler, url_proxy.HTTPHandler):
+            with self.subTest(handler=handler.__name__), self.proxy(handler) as port:
+                for method, target, expected in (
+                    *(("GET", target, 200) for target in allowed),
+                    *(("GET", target, 403) for target in denied),
+                    ("POST", allowed[0], 403),
+                ):
+                    with self.subTest(method=method, target=target):
+                        before = len(self.state.dials)
+                        result = self.response(
+                            self.tls_connection(
+                                port, connect=handler is url_proxy.HTTPHandler
+                            ),
+                            method,
+                            target,
+                        )
+                        self.assertEqual(result[0], expected)
+                        self.assertEqual(
+                            len(self.state.dials) - before, int(expected == 200)
+                        )
+                        if expected == 200:
+                            observed = self.tls_origin.requests[-1]
+                            self.assertEqual(observed["raw_target"], target)
+                            self.assertEqual(observed["host"], "allowed.example")
 
     def test_denied_bodies_preserve_the_policy_response(self):
         cache_target = (

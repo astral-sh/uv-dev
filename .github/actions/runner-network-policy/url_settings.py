@@ -3,7 +3,7 @@
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
 from policy import hostname, private_origins
-from url_policy import URLPolicy, profile_config
+from url_policy import URLPolicy, parse_url, profile_config
 
 METHODS = ("GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS")
 RESULTS = "https://results-receiver.actions.githubusercontent.com/"
@@ -52,12 +52,16 @@ def oidc_url(value):
     if not isinstance(value, str) or any(not 32 < ord(item) < 127 for item in value):
         raise ValueError("invalid OIDC service URL")
     parsed = urlsplit(value)
-    if parsed.fragment or parsed.path in {"", "/"}:
+    if "#" in value:
         raise ValueError("unexpected OIDC service URL")
-    return service_url(
+    endpoint = service_url(
         urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", "")),
         directory=False,
     )
+    # Some runner-issued routes contain repeated slashes. Keep that exact path,
+    # but reject every other spelling the URL matcher considers ambiguous.
+    parse_url(endpoint, allow_repeated_slashes=True)
+    return endpoint
 
 
 def runtime_services(environment):
@@ -124,7 +128,11 @@ def compile_policy(path, name, domain_policy, services):
         if "oidc" in services:
             # The original query is deliberately not persisted; clients append
             # their audience to this one exact, authenticated request path.
-            rules.append(rule(oidc_url(services["oidc"]), ("GET",), match="exact"))
+            endpoint = oidc_url(services["oidc"])
+            identity_rule = rule(endpoint, ("GET",), match="exact")
+            if "//" in urlsplit(endpoint).path:
+                identity_rule["allow_repeated_slashes"] = True
+            rules.append(identity_rule)
         for origin in dict.fromkeys((results, RESULTS)):
             rules.extend(rule(origin + suffix, ("POST",)) for suffix in RESULTS_PATHS)
         # These exact GitHub-published storage accounts carry signed log/artifact

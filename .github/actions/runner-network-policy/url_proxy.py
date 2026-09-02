@@ -245,8 +245,10 @@ def request_host(request):
 
 
 def origin_target(target):
-    if not target.startswith("/") or target.startswith("//"):
+    if not target.startswith("/"):
         raise RequestError()
+    # An exact reviewed rule may opt in to a repeated slash. Keep the raw path
+    # for that decision; never resolve it as a network-relative URL.
     return target
 
 

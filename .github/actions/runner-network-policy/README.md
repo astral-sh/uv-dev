@@ -7,10 +7,11 @@ during setup. The bootstrap installs `nftables` from the configured Ubuntu/Debia
 the image does not already contain it.
 
 Select a bundled `profile`, explicitly set `disposable: true`, and choose `privileges: drop` or
-`privileges: retain`. The default removes sudo and access to the Docker/containerd services. Jobs
-using job containers, service containers, `ubuntu-slim`, macOS, Windows, or persistent self-hosted
-runners are not supported by this first prototype. Privileged build jobs must retain privileges
-explicitly and cannot treat the policy as tamper-resistant.
+`privileges: retain`. The default makes the canonical `/usr/bin/sudo` executable root-only and
+removes access to the Docker/containerd services. Jobs using job containers, service containers,
+`ubuntu-slim`, macOS, Windows, or persistent self-hosted runners are not supported by this first
+prototype. Privileged build jobs must retain privileges explicitly and cannot treat the policy as
+tamper-resistant.
 
 The root-owned service runs as a separate, unprivileged account. An atomic `nftables` ruleset
 redirects new outbound DNS, HTTP, and HTTPS connections to it for both IP families. Other external
@@ -62,10 +63,12 @@ request-aware; there is no unrestricted `CONNECT` tunnel or fallback to domain-o
 
 Each rule names an HTTP or HTTPS URL, allowed `methods`, an `exact`, directory `prefix`, or
 `{integer}`-segment `template` path match, and an `exact` or explicitly unrestricted `any` query
-match. Ambiguous path spellings, underscore-bearing request headers, unsupported framing, and
-protocol upgrades are rejected. Redirects are returned to the client, so the next URL must pass the
-policy separately. Rules govern requests, not the behavior of an allowed service: a permitted
-application-layer relay or an overly broad prefix can still widen access.
+match. An exact rule can set `allow_repeated_slashes: true` for a server-issued path with that
+spelling; prefix and template rules cannot use this exception. Other ambiguous path spellings,
+underscore-bearing request headers, unsupported framing, and protocol upgrades are rejected.
+Redirects are returned to the client, so the next URL must pass the policy separately. Rules govern
+requests, not the behavior of an allowed service: a permitted application-layer relay or an overly
+broad prefix can still widen access.
 
 The `github-api-probe` example allows only `GET` and `HEAD` for the uv-dev repository API and
 GitHub's rate-limit endpoint. Its explicit `runner_services: true` setting also adds the job's

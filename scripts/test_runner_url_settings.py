@@ -51,14 +51,141 @@ class URLSettingsTests(unittest.TestCase):
         for value in (
             "https://api.github.com/job/oidctoken",
             "https://user@identity.actions.githubusercontent.com/job/oidctoken",
-            "https://identity.actions.githubusercontent.com/",
             "https://identity.actions.githubusercontent.com/job/oidctoken#fragment",
+            "https://identity.actions.githubusercontent.com/job/oidctoken#",
             "http://identity.actions.githubusercontent.com/job/oidctoken",
             "https://identity.actions.githubusercontent.com:444/job/oidctoken",
             "https://identity.actions.githubusercontent.com/job/oidctoken?bad=\n",
+            "https://identity.actions.githubusercontent.com/job/../oidctoken",
+            "https://identity.actions.githubusercontent.com/job/./oidctoken",
+            "https://identity.actions.githubusercontent.com/job/..;x/oidctoken",
+            "https://identity.actions.githubusercontent.com/job/..%20/oidctoken",
+            "https://identity.actions.githubusercontent.com/job/%2e%2e/oidctoken",
+            "https://identity.actions.githubusercontent.com/job/%2foidctoken",
+            "https://identity.actions.githubusercontent.com/job\\oidctoken",
+            "https://identity.actions.githubusercontent.com/job/{integer}/oidctoken",
         ):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 oidc_url(value)
+
+    def test_oidc_repeated_slash_exception_is_one_exact_injected_route(self):
+        endpoint = "https://identity.actions.githubusercontent.com/job//oidctoken"
+        services = runtime_services(
+            {
+                "ACTIONS_RUNTIME_URL": "https://pipelines.actions.githubusercontent.com/account/",
+                "ACTIONS_ID_TOKEN_REQUEST_URL": endpoint + "?opaque=synthetic-secret",
+            }
+        )
+        self.assertEqual(services["oidc"], endpoint)
+        domain = load(ACTION / "policies.json", "github")
+        policy = compile_policy(
+            ACTION / "url-policies.json", "github-api-probe", domain, services
+        )
+        self.assertEqual(
+            [
+                item.to_dict()
+                for item in policy.rules
+                if item.host == "identity.actions.githubusercontent.com"
+            ],
+            [
+                {
+                    "url": endpoint,
+                    "methods": ["GET"],
+                    "match": "exact",
+                    "query": "any",
+                    "allow_repeated_slashes": True,
+                }
+            ],
+        )
+        self.assertNotIn("synthetic-secret", json.dumps(policy.to_dict()))
+        self.assertTrue(
+            policy.permits(
+                "https",
+                "identity.actions.githubusercontent.com",
+                443,
+                "GET",
+                "/job//oidctoken?audience=synthetic%2Fvalue%3D",
+            )
+        )
+        for method, target in (
+            ("POST", "/job//oidctoken"),
+            ("GET", "/job/oidctoken"),
+            ("GET", "/job///oidctoken"),
+            ("GET", "//job/oidctoken"),
+            ("GET", "/job//oidctoken/other"),
+            ("GET", "/job//../oidctoken"),
+            ("GET", "/job//oidctoken?bad=%0a"),
+        ):
+            with self.subTest(method=method, target=target):
+                self.assertFalse(
+                    policy.permits(
+                        "https",
+                        "identity.actions.githubusercontent.com",
+                        443,
+                        method,
+                        target,
+                    )
+                )
+        denied = Policy(
+            domain.allow, (*domain.deny, "identity.actions.githubusercontent.com")
+        )
+        with self.assertRaisesRegex(
+            ValueError, "^URL profile exceeds its domain policy$"
+        ):
+            compile_policy(
+                ACTION / "url-policies.json", "github-api-probe", denied, services
+            )
+
+    def test_oidc_root_path_is_a_valid_exact_route(self):
+        endpoint = "https://identity.actions.githubusercontent.com"
+        for value in (endpoint, endpoint + "/?opaque=synthetic-secret"):
+            with self.subTest(value=value):
+                self.assertEqual(oidc_url(value), endpoint + "/")
+        policy = compile_policy(
+            ACTION / "url-policies.json",
+            "github-api-probe",
+            load(ACTION / "policies.json", "github"),
+            {
+                "runtime": "https://pipelines.actions.githubusercontent.com/",
+                "results": "https://results-receiver.actions.githubusercontent.com/",
+                "oidc": endpoint,
+            },
+        )
+        self.assertEqual(
+            [
+                item.to_dict()
+                for item in policy.rules
+                if item.host == "identity.actions.githubusercontent.com"
+            ],
+            [
+                {
+                    "url": endpoint + "/",
+                    "methods": ["GET"],
+                    "match": "exact",
+                    "query": "any",
+                }
+            ],
+        )
+        self.assertTrue(
+            policy.permits(
+                "https",
+                "identity.actions.githubusercontent.com",
+                443,
+                "GET",
+                "/?audience=synthetic",
+            )
+        )
+        for method, target in (("POST", "/"), ("GET", "//"), ("GET", "/oidctoken")):
+            with self.subTest(method=method, target=target):
+                self.assertFalse(
+                    policy.permits(
+                        "https",
+                        "identity.actions.githubusercontent.com",
+                        443,
+                        method,
+                        target,
+                    )
+                )
 
     def test_effective_example_preserves_url_restrictions(self):
         services = {

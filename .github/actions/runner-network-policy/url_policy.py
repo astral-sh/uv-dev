@@ -60,13 +60,17 @@ def validate_component(value: str, *, path: bool) -> None:
         index += 3
 
 
-def request_target(value: str) -> tuple[str, str]:
+def request_target(
+    value: str, *, allow_repeated_slashes: bool = False
+) -> tuple[str, str]:
     """Return the unchanged path and query suffix, retaining a bare question mark."""
+    if type(allow_repeated_slashes) is not bool:
+        raise ValueError("invalid repeated-slash parsing mode")
     visible_ascii(value)
     path, separator, query = value.partition("?")
     if (
         not path.startswith("/")
-        or "//" in path
+        or ("//" in path and not allow_repeated_slashes)
         or any(segment in {".", ".."} for segment in path.split("/"))
     ):
         raise ValueError("ambiguous request path")
@@ -75,8 +79,14 @@ def request_target(value: str) -> tuple[str, str]:
     return path, separator + query
 
 
-def parse_url(value: str, *, template: bool = False) -> tuple[str, str, int, str, str]:
+def parse_url(
+    value: str, *, template: bool = False, allow_repeated_slashes: bool = False
+) -> tuple[str, str, int, str, str]:
     """Parse the small HTTP URL grammar without permissive URL-parser rewriting."""
+    if type(allow_repeated_slashes) is not bool or (
+        template and allow_repeated_slashes
+    ):
+        raise ValueError("invalid repeated-slash parsing mode")
     visible_ascii(value)
     scheme, separator, remainder = value.partition("://")
     scheme = scheme.lower()
@@ -108,7 +118,9 @@ def parse_url(value: str, *, template: bool = False) -> tuple[str, str, int, str
         )
         _, query = request_target(concrete + separator + query)
     else:
-        path, query = request_target(target)
+        path, query = request_target(
+            target, allow_repeated_slashes=allow_repeated_slashes
+        )
     return scheme, host, DEFAULT_PORTS[scheme], path, query
 
 
@@ -123,13 +135,15 @@ class URLRule:
     query_suffix: str
     match: str
     query_mode: str
+    allow_repeated_slashes: bool
 
     @classmethod
     def from_dict(cls, value: dict) -> URLRule:
         if (
             not isinstance(value, dict)
             or not {"url", "methods"} <= value.keys()
-            or not value.keys() <= {"url", "methods", "match", "query"}
+            or not value.keys()
+            <= {"url", "methods", "match", "query", "allow_repeated_slashes"}
         ):
             raise ValueError("unexpected URL rule fields")
         methods = value["methods"]
@@ -150,8 +164,15 @@ class URLRule:
             "any",
         ):
             raise ValueError("unknown URL matching mode")
+        allow_repeated_slashes = value.get("allow_repeated_slashes", False)
+        if type(allow_repeated_slashes) is not bool or (
+            "allow_repeated_slashes" in value and match != "exact"
+        ):
+            raise ValueError("only exact URL rules may allow repeated slashes")
         scheme, host, port, path, query = parse_url(
-            value["url"], template=match == "template"
+            value["url"],
+            template=match == "template",
+            allow_repeated_slashes=allow_repeated_slashes,
         )
         if match == "prefix" and not path.endswith("/"):
             raise ValueError("URL prefix must end with a slash")
@@ -167,17 +188,25 @@ class URLRule:
             query,
             match,
             query_mode,
+            allow_repeated_slashes,
         )
 
     def to_dict(self) -> dict:
-        return {
+        result = {
             "url": self.url,
             "methods": list(self.methods),
             "match": self.match,
             "query": self.query_mode,
         }
+        if self.allow_repeated_slashes:
+            result["allow_repeated_slashes"] = True
+        return result
 
     def matches_path(self, path: str) -> bool:
+        # Parsing preserves repeated slashes so one reviewed exact route can
+        # match them. That exception must never widen a prefix or template.
+        if "//" in path and not (self.match == "exact" and self.allow_repeated_slashes):
+            return False
         if self.match == "exact":
             return path == self.path
         if self.match == "prefix":
@@ -231,7 +260,7 @@ class URLPolicy:
             return False
         try:
             host = canonical_hostname(host)
-            path, query = request_target(target)
+            path, query = request_target(target, allow_repeated_slashes=True)
         except ValueError:
             return False
         return any(
