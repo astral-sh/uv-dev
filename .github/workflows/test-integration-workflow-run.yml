@@ -1,0 +1,30 @@
+name: Integration tests
+
+on: # zizmor: ignore[dangerous-triggers]
+  # GitHub only activates this listener once it is on the default branch.
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+# GitHub grants `workflow_run` read-only access to the default branch's cache.
+# These permissions govern the separate GITHUB_TOKEN used to download artifacts.
+# https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching#cache-access-for-low-trust-workflow-triggers
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: integration-tests-${{ github.event.workflow_run.id }}
+  cancel-in-progress: true
+
+jobs:
+  test-integration:
+    # Restrict credentialed tests to the upstream repository's main-branch pushes.
+    # A PR can also have a branch named main, so the branch filter is insufficient.
+    if: ${{ github.event.workflow_run.event == 'push' && github.event.workflow_run.path == '.github/workflows/ci.yml' && github.event.workflow_run.head_repository.id == github.event.repository.id && github.event.workflow_run.conclusion == 'success' }}
+    uses: $/.github/workflows/test-integration.yml
+    secrets: inherit
+    with:
+      sha: ${{ github.event.workflow_run.head_sha }}
+      run-id: ${{ github.event.workflow_run.id }}
