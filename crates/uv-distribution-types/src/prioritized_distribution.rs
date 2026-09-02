@@ -540,7 +540,12 @@ impl PrioritizedDist {
             adjusted_wheels.push(wheel.clone());
         }
 
-        let sdist = self.0.source.as_ref().map(|(sdist, _)| sdist.clone());
+        let sdist = self
+            .0
+            .source
+            .as_ref()
+            .filter(|(_, compatibility)| !compatibility.is_excluded())
+            .map(|(sdist, _)| sdist.clone());
         Some(RegistryBuiltDist {
             wheels: adjusted_wheels,
             best_wheel_index: adjusted_best_index,
@@ -565,6 +570,7 @@ impl PrioritizedDist {
             .0
             .wheels
             .iter()
+            .filter(|(_, compatibility)| !compatibility.is_excluded())
             .map(|(wheel, _)| wheel.clone())
             .collect();
         Some(sdist)
@@ -681,7 +687,16 @@ impl WheelCompatibility {
 
     /// Return `true` if the distribution is excluded.
     fn is_excluded(&self) -> bool {
-        matches!(self, Self::Incompatible(IncompatibleWheel::ExcludeNewer(_)))
+        match self {
+            Self::Compatible(_, _, _) => false,
+            Self::Incompatible(incompatibility) => match incompatibility {
+                IncompatibleWheel::ExcludeNewer(_) | IncompatibleWheel::Yanked(_) => true,
+                IncompatibleWheel::Tag(_)
+                | IncompatibleWheel::RequiresPython(_, _)
+                | IncompatibleWheel::NoBinary
+                | IncompatibleWheel::MissingPlatform(_) => false,
+            },
+        }
     }
 
     /// Return `true` if the current compatibility is more compatible than another.
@@ -713,10 +728,15 @@ impl SourceDistCompatibility {
 
     /// Return `true` if the distribution is excluded.
     fn is_excluded(&self) -> bool {
-        matches!(
-            self,
-            Self::Incompatible(IncompatibleSource::ExcludeNewer(_))
-        )
+        match self {
+            Self::Compatible(_) => false,
+            Self::Incompatible(incompatibility) => match incompatibility {
+                IncompatibleSource::ExcludeNewer(_) | IncompatibleSource::Yanked(_) => true,
+                IncompatibleSource::RequiresPython(_, _)
+                | IncompatibleSource::NoBuild
+                | IncompatibleSource::NotPep625Filename => false,
+            },
+        }
     }
 
     /// Return the higher priority compatibility.
