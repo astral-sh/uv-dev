@@ -24,7 +24,7 @@ jobs:
     steps:
       - name: Record unguarded API and direct-address controls
         id: control
-        uses: astral-sh/uv-dev/.github/actions/runner-url-probe@4926f7deef7bc544f54cd6d227b47437899b9523
+        uses: astral-sh/uv-dev/.github/actions/runner-url-probe@b1c268a6240645d4a264d1daa14163a5ac17ce38
         env:
           GH_TOKEN: ${{ github.token }}
         with:
@@ -55,7 +55,7 @@ jobs:
       id-token: write
     steps:
       - name: Install exact URL policy before other action hooks
-        uses: astral-sh/uv-dev/.github/actions/runner-network-policy@d8a0ae6382b52d52fbae8f3081f2aa08041b0294
+        uses: astral-sh/uv-dev/.github/actions/runner-network-policy@bccf23f6ab482091b787b5327ed57c852c65d2ee
         with:
           profile: github
           url-profile: github-api-probe
@@ -68,7 +68,7 @@ jobs:
           path: ${{ runner.temp }}/url-policy-seed
 
       - name: Check URLs, direct addresses, artifacts, and test-audience OIDC
-        uses: astral-sh/uv-dev/.github/actions/runner-url-probe@4926f7deef7bc544f54cd6d227b47437899b9523
+        uses: astral-sh/uv-dev/.github/actions/runner-url-probe@b1c268a6240645d4a264d1daa14163a5ac17ce38
         env:
           GH_TOKEN: ${{ github.token }}
           URL_POLICY_BASELINE_ADDRESSES: ${{ needs.control.outputs.addresses }}
@@ -93,7 +93,7 @@ jobs:
       id-token: write
     steps:
       - name: Install URL policy with explicit service-control privileges
-        uses: astral-sh/uv-dev/.github/actions/runner-network-policy@d8a0ae6382b52d52fbae8f3081f2aa08041b0294
+        uses: astral-sh/uv-dev/.github/actions/runner-network-policy@bccf23f6ab482091b787b5327ed57c852c65d2ee
         with:
           profile: github
           url-profile: github-api-probe
@@ -107,7 +107,7 @@ jobs:
           path: ${{ runner.temp }}/url-policy-seed
 
       - name: Check policy while stopping and restarting only its service
-        uses: astral-sh/uv-dev/.github/actions/runner-url-probe@4926f7deef7bc544f54cd6d227b47437899b9523
+        uses: astral-sh/uv-dev/.github/actions/runner-url-probe@b1c268a6240645d4a264d1daa14163a5ac17ce38
         env:
           GH_TOKEN: ${{ github.token }}
           URL_POLICY_BASELINE_ADDRESSES: ${{ needs.control.outputs.addresses }}
