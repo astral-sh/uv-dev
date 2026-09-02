@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "Using uv 0.12.9 on Linux x86_64 with CPython 3.12.3, I served a temporary PEP 503 index containing two demo==1.0.0 wheels, one marked data-yanked, then ran `env -u UV_LOCKED UV_CACHE_DIR=/tmp/uv-issue-21430-repro/cache-a uv lock --refresh --verbose`. uv selected the unyanked wheel but wrote both wheel URLs and SHA-256 hashes to uv.lock. Reversing the yank marker made uv select the other wheel, while both again remained in uv.lock. No existing test covers mixed yank status among files of one version. The issue-context README was updated with the fixture, commands, results, and related coverage."
+}

@@ -6,27 +6,79 @@ Classification: bug
 
 ## Summary
 
-The report demonstrates a PEP 592 partial-yank case against a devpi index: one of two wheels for the same package version is yanked, while the other remains usable. A fresh `uv lock` or `uv sync` avoids selecting the yanked wheel as the best distribution but nevertheless writes both wheel URLs and hashes to the package's `wheels` array in `uv.lock`. Reversing which wheel is yanked produces the same result.
+The reported PEP 592 partial-yank behavior is independently reproducible. With one of two wheels for `demo==1.0.0` marked `data-yanked` in a local PEP 503 index, a fresh `uv lock` selected the unyanked wheel for resolution but wrote both the yanked and unyanked wheel URLs and SHA-256 hashes to `uv.lock`. Reversing which wheel was yanked produced the same result.
 
 No existing issue or pull request tracks this exact partial-yank lockfile defect. The closest precedent is astral-sh/uv#12296 and its fix astral-sh/uv#12299, where an individual wheel excluded by `--exclude-newer` was correctly rejected during resolution but still appeared in the lockfile. astral-sh/uv#6145 records the repository's recognition that yank status is per-file rather than necessarily uniform across a release.
 
-## Draft response
-
-Thanks for the detailed reproduction. The current source confirms a lockfile filtering gap for partial yanks, and I couldn't find an existing issue tracking this exact case. This is analogous to astral-sh/uv#12296, fixed by astral-sh/uv#12299 for `--exclude-newer`: `PrioritizedDist::built_dist` filters artifacts through `is_excluded`, but that predicate currently covers `ExcludeNewer` and not `Yanked`.
-
-The next step is a focused `uv lock` integration regression test with one yanked and one unyanked wheel for the same version, followed by a fix that preserves the existing cases where a yanked artifact is explicitly allowed.
-
 ## Classification
 
-This is a bug. The repository already labels astral-sh/uv#21430 as `bug`, and the checked-out source independently confirms the correctness gap:
+Bug. The independent fixture confirms that fresh resolution knows which file is yanked and chooses the other file, while lockfile serialization still retains both files. This is distinct from uv intentionally retaining a previously valid artifact that is yanked only after lock creation.
 
-- `crates/uv-resolver/src/version_map.rs` documents that yank state is tracked separately for each file and that unyanked distributions from a partially yanked release can be used. Its wheel and source-distribution compatibility functions return `Yanked` incompatibilities for non-allowed yanked files.
-- `PrioritizedDist::built_dist` in `crates/uv-distribution-types/src/prioritized_distribution.rs` removes only entries for which `WheelCompatibility::is_excluded()` is true. That predicate currently recognizes `IncompatibleWheel::ExcludeNewer` only, so a non-selected `IncompatibleWheel::Yanked` remains in the returned wheel list. The analogous source-distribution predicate also recognizes only `ExcludeNewer`.
-- `Wheel` in `crates/uv-resolver/src/lock/mod.rs` stores URL, hash, size, upload time, and filename, but no yank status. Deserializing a locked wheel reconstructs its `File` with `yanked: None`. Thus the persisted entry cannot retain the yank information observed during fresh resolution.
+Source inspection is consistent with the reporter's hypothesis: `version_map.rs` computes file-level yank compatibility, while `PrioritizedDist::built_dist` removes artifacts only when `WheelCompatibility::is_excluded()` returns true, and that predicate recognizes `ExcludeNewer` but not `Yanked`. This inspection supports where to investigate, but the reproduction alone establishes the observed defect; the exact fix still needs to preserve cases where users explicitly opt into a yanked version.
 
-This is distinct from the expected behavior of continuing to install an artifact that was valid when it was originally locked and yanked later. Here, fresh lock generation already knows that one file is yanked, has an unyanked alternative for the selected version, and still serializes the yanked file. Existing yank tests cover yanked releases and explicit pins, but the searches found no integration coverage for mixed yank status among files of one version.
+## Reproduction
 
-The reporter's proposed predicate change identifies the relevant code path, but the exact fix requires care: uv deliberately permits yanked versions in established cases such as an exact `==` request. A regression test should define filtering for a fresh, non-opted-in partial yank without changing those semantics.
+Outcome: **reproducible**.
+
+Environment:
+
+- uv 0.12.9 (`x86_64-unknown-linux-gnu`), newer than the reported 0.12.4
+- Linux x86_64
+- CPython 3.12.3, with project `requires-python = ">=3.12"`
+- Local unauthenticated HTTP PEP 503 index; no devpi-specific behavior was required
+
+The temporary index exposed two minimal valid wheels for the same name and version:
+
+```html
+<a href="../../files/demo-1.0.0-1-py3-none-any.whl#sha256=e1b7517e..." data-yanked="broken build 1">demo-1.0.0-1-py3-none-any.whl</a>
+<a href="../../files/demo-1.0.0-2-py3-none-any.whl#sha256=e1b7517e...">demo-1.0.0-2-py3-none-any.whl</a>
+```
+
+The project configuration was:
+
+```toml
+[project]
+name = "repro"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = ["demo>=1.0.0"]
+
+[[tool.uv.index]]
+name = "local"
+url = "http://127.0.0.1:38889/simple"
+default = true
+```
+
+After serving the index locally, the targeted command was run with a fresh temporary cache and no existing lockfile:
+
+```console
+env -u UV_LOCKED UV_CACHE_DIR=/tmp/uv-issue-21430-repro/cache-a uv lock --refresh --verbose
+```
+
+uv's verbose output explicitly selected the unyanked artifact:
+
+```text
+Selecting: demo==1.0.0 [compatible] (demo-1.0.0-2-py3-none-any.whl)
+```
+
+However, the new `uv.lock` contained both artifacts, including the yanked build 1, with their complete URLs and hashes:
+
+```toml
+wheels = [
+    { url = "http://127.0.0.1:38889/files/demo-1.0.0-1-py3-none-any.whl", hash = "sha256:e1b7517e38028749d8892d124dff910ab75c67a3d81014a564e31fc148c1e7a1" },
+    { url = "http://127.0.0.1:38889/files/demo-1.0.0-2-py3-none-any.whl", hash = "sha256:e1b7517e38028749d8892d124dff910ab75c67a3d81014a564e31fc148c1e7a1" },
+]
+```
+
+The `data-yanked` attribute was then moved from build 1 to build 2, the lockfile was regenerated with another empty cache, and verbose output selected build 1. The regenerated lockfile again contained both build 1 and yanked build 2. This confirms the reported symmetry.
+
+Existing coverage checked:
+
+- `crates/uv/tests/lock/lock.rs::lock_project_with_scoped_override_yank` covers an explicitly opted-in yanked release and its warning, but does not create mixed yank states among files of one version or assert artifact filtering in `uv.lock`.
+- `crates/uv/tests/pip/pip_install_scenarios.rs::package_yanked_specified_mixed_available` covers choosing an unyanked version over yanked versions, not a partially yanked set of files for one version and not lockfile contents.
+- `crates/uv/tests/lock/lock.rs::lock_omit_wheels_exclude_newer` verifies that individual wheels excluded by upload time are omitted from `uv.lock`; it is the nearest lockfile artifact-filtering precedent but does not exercise yank metadata.
+
+No existing test was found that covers mixed yanked and unyanked artifacts for one version. A focused `uv lock` integration regression test should capture this fixture before changing filtering behavior.
 
 ## Related
 
