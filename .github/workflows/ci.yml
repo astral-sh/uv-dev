@@ -133,6 +133,7 @@ jobs:
       actions: read
     steps:
       - name: Wait for integration tests
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           INTEGRATION_RUN_NAME: Integration tests for CI ${{ github.run_id }}, attempt ${{ github.run_attempt }}
@@ -146,7 +147,7 @@ jobs:
             if [[ -z "$run_id" ]]; then
               run_id=$(gh api --method GET "repos/$GITHUB_REPOSITORY/actions/workflows/test-integration-workflow-run.yml/runs" \
                 -f event=workflow_run -f "created=>=$started_at" -f per_page=100 --paginate --slurp | \
-                jq -r '[.[].workflow_runs[] | select(.display_title == env.INTEGRATION_RUN_NAME) | .id] | if length == 1 then .[0] elif length == 0 then empty else error("Multiple integration runs matched") end')
+                jq -r '[.[].workflow_runs[] | select(.display_title == env.INTEGRATION_RUN_NAME) | .id] | min // empty')
               if [[ -z "$run_id" ]]; then
                 sleep 30
                 continue

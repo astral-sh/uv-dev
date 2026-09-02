@@ -16,8 +16,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: integration-tests-${{ github.event.workflow_run.id }}
-  cancel-in-progress: true
+  group: integration-tests-${{ github.event.workflow_run.id }}-${{ github.event.workflow_run.run_attempt }}
+  cancel-in-progress: false
 
 jobs:
   prepare:
@@ -26,8 +26,32 @@ jobs:
     if: ${{ github.event.workflow_run.event == 'push' && github.event.workflow_run.path == '.github/workflows/ci.yml' && github.event.workflow_run.head_repository.id == github.event.repository.id }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    outputs:
+      run-tests: ${{ steps.claim.outputs.run-tests }}
     steps:
+      - name: Ignore duplicate workflow notifications
+        shell: bash
+        id: claim
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INTEGRATION_RUN_NAME: Integration tests for CI ${{ github.event.workflow_run.id }}, attempt ${{ github.event.workflow_run.run_attempt }}
+          SOURCE_STARTED_AT: ${{ github.event.workflow_run.run_started_at }}
+        run: |
+          # CI can enter in_progress again when a dependent job starts. Keep the
+          # first consumer for each CI attempt; later notifications are no-ops.
+          first_run=$(gh api --method GET "repos/$GITHUB_REPOSITORY/actions/workflows/test-integration-workflow-run.yml/runs" \
+            -f event=workflow_run -f "created=>=$SOURCE_STARTED_AT" -f per_page=100 --paginate --slurp | \
+            jq -er '[.[].workflow_runs[] | select(.display_title == env.INTEGRATION_RUN_NAME) | .id] | min // error("Integration run not found")')
+          if [[ "$first_run" == "$GITHUB_RUN_ID" ]]; then
+            echo 'run-tests=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'run-tests=false' >> "$GITHUB_OUTPUT"
+            echo "CI attempt is already handled by integration run $first_run"
+          fi
+
       - name: Wait for binary builds
+        shell: bash
+        if: ${{ steps.claim.outputs.run-tests == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
@@ -57,6 +81,7 @@ jobs:
 
   test-integration:
     needs: prepare
+    if: ${{ needs.prepare.outputs.run-tests == 'true' }}
     uses: $/.github/workflows/test-integration.yml
     secrets: inherit
     with:
