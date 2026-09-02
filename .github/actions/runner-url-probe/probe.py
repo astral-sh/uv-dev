@@ -1,13 +1,17 @@
 """Harmless hosted proof of exact-URL enforcement; never logs credentials or bodies."""
 
 import base64
+import errno
+import grp
 import http.client
 import importlib
 import ipaddress
 import json
 import os
+import pwd
 import socket
 import ssl
+import stat
 import subprocess
 import sys
 import time
@@ -19,6 +23,9 @@ ALLOWED = "/repos/astral-sh/uv-dev"
 DENIED = ALLOWED + "/readme"
 RATE_LIMIT = "/rate_limit"
 MARKER = b"Harmless URL-policy artifact. No executable content.\n"
+POLICY_DIRECTORY = Path("/run/uv-network-policy")
+PROXY_USER = "uv-network-policy"
+CANONICAL_SUDO = Path("/usr/bin/sudo")
 
 
 def stage(name):
@@ -68,6 +75,117 @@ def health():
             raise RuntimeError("URL policy health check failed")
     finally:
         connection.close()
+
+
+def runner_access(path, mode):
+    return os.access(path, mode) or os.access(path, mode, effective_ids=True)
+
+
+def trusted_metadata(path, *, directory=False):
+    metadata = path.lstat()
+    expected_type = stat.S_ISDIR if directory else stat.S_ISREG
+    if (
+        not expected_type(metadata.st_mode)
+        or metadata.st_uid != 0
+        or stat.S_IMODE(metadata.st_mode) & 0o022
+        or runner_access(path, os.W_OK)
+    ):
+        raise RuntimeError("installed proxy metadata is not protected")
+    return metadata
+
+
+def installation_permissions(operation):
+    if operation not in {"probe", "fault"} or 0 in {os.getuid(), os.geteuid()}:
+        raise RuntimeError("permission checks require the non-root runner")
+
+    stage("trusted-files")
+    for directory in (POLICY_DIRECTORY, *POLICY_DIRECTORY.parents):
+        trusted_metadata(directory, directory=True)
+    for name in ("policy.py", "proxy.py", "url_policy.py", "url_proxy.py"):
+        trusted_metadata(POLICY_DIRECTORY / name)
+    for name in ("policies.json", "url-policy.json", "settings.json", "rules.nft"):
+        trusted_metadata(POLICY_DIRECTORY / name)
+    trusted_metadata(Path("/run/systemd/system/uv-network-policy.service"))
+
+    stage("proxy-group")
+    account = pwd.getpwnam(PROXY_USER)
+    group = grp.getgrnam(PROXY_USER)
+    runner_groups = {*os.getgroups(), os.getgid(), os.getegid()}
+    if (
+        account.pw_name != PROXY_USER
+        or group.gr_name != PROXY_USER
+        or account.pw_uid in {0, os.getuid(), os.geteuid()}
+        or account.pw_gid == 0
+        or account.pw_gid != group.gr_gid
+        or account.pw_gid in runner_groups
+        or any(member != PROXY_USER for member in group.gr_mem)
+        or any(
+            item.pw_gid == account.pw_gid and item.pw_name != PROXY_USER
+            for item in pwd.getpwall()
+        )
+        or any(
+            item.gr_gid == group.gr_gid
+            and (
+                item.gr_name != PROXY_USER
+                or any(member != PROXY_USER for member in item.gr_mem)
+            )
+            for item in grp.getgrall()
+        )
+    ):
+        raise RuntimeError("proxy primary group is not dedicated")
+
+    stage("tls-key")
+    key = POLICY_DIRECTORY / "server.key"
+    metadata = key.lstat()
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != 0
+        or metadata.st_gid != group.gr_gid
+        or stat.S_IMODE(metadata.st_mode) != 0o640
+    ):
+        raise RuntimeError("TLS key ownership or mode differed")
+    # Check access through the kernel; never open or read the private key.
+    if runner_access(key, os.R_OK):
+        raise RuntimeError("runner can directly read the TLS key")
+
+    stage("sudo")
+    sudo = CANONICAL_SUDO.resolve(strict=True)
+    metadata = trusted_metadata(sudo)
+    harmless = Path("/usr/bin/true").resolve(strict=True)
+    trusted_metadata(harmless)
+    if operation == "probe" and (
+        stat.S_IMODE(metadata.st_mode) != 0o700
+        or runner_access(sudo, os.R_OK)
+        or runner_access(sudo, os.X_OK)
+    ):
+        raise RuntimeError("canonical sudo is not root-only")
+    try:
+        completed = subprocess.run(
+            [str(sudo), "-n", "--", str(harmless)],
+            check=False,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        )
+    except PermissionError as error:
+        if operation != "probe" or error.errno != errno.EACCES:
+            raise RuntimeError("unexpected canonical sudo access failure") from None
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("canonical sudo check timed out") from None
+    else:
+        if operation != "fault" or completed.returncode != 0:
+            raise RuntimeError("canonical sudo privilege check differed")
+
+    return {
+        "trusted_proxy_code": True,
+        "trusted_effective_policy": True,
+        "dedicated_proxy_group": True,
+        "private_tls_key": True,
+        "runner_key_unreadable": True,
+        "sudo_restricted": operation == "probe",
+        "sudo_retained": operation == "fault",
+    }
 
 
 def scheme_denied():
@@ -330,7 +448,15 @@ def oidc():
 
 def fault(address):
     subprocess.run(
-        ["sudo", "-n", "systemctl", "stop", "uv-network-policy.service"], check=True
+        [
+            str(CANONICAL_SUDO),
+            "-n",
+            "--",
+            "/usr/bin/systemctl",
+            "stop",
+            "uv-network-policy.service",
+        ],
+        check=True,
     )
     try:
         try:
@@ -341,7 +467,14 @@ def fault(address):
             raise RuntimeError("stopped proxy allowed direct egress")
     finally:
         subprocess.run(
-            ["sudo", "-n", "systemctl", "start", "uv-network-policy.service"],
+            [
+                str(CANONICAL_SUDO),
+                "-n",
+                "--",
+                "/usr/bin/systemctl",
+                "start",
+                "uv-network-policy.service",
+            ],
             check=True,
         )
     for _ in range(20):
@@ -359,6 +492,7 @@ def fault(address):
 def probe():
     stage("health")
     health()
+    permissions = installation_permissions(os.environ["INPUT_OPERATION"])
     stage("allowed-urls")
     for method, target in (("GET", ALLOWED), ("HEAD", ALLOWED), ("GET", RATE_LIMIT)):
         if api(method, target)[0] != 200:
@@ -407,6 +541,7 @@ def probe():
     ).read_bytes() != MARKER:
         raise RuntimeError("artifact download differed")
     result = {
+        **permissions,
         "urls": True,
         "methods": True,
         "queries": True,
