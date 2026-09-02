@@ -18,6 +18,46 @@
     {
       "repository": "uv",
       "on": {
+        "pull_request": ["opened", "reopened", "synchronize"]
+      },
+      "allow_draft": true,
+      "workflow": "malicious-code-scan.yml",
+      "inputs": {
+        "base_sha": "/pull_request/base/sha"
+      }
+    },
+    {
+      "repository": "uv",
+      "on": {
+        "pull_request": ["edited"]
+      },
+      "conditions": {
+        "/changes/base/ref/from": { "exists": true }
+      },
+      "allow_draft": true,
+      "workflow": "malicious-code-scan.yml",
+      "inputs": {
+        "base_sha": "/pull_request/base/sha"
+      }
+    },
+    {
+      "repository": "uv",
+      "on": {
+        "push": []
+      },
+      "conditions": {
+        "/ref": "refs/heads/main",
+        "/deleted": false
+      },
+      "workflow": "malicious-code-scan.yml",
+      "inputs": {
+        "base_sha": "/before",
+        "head_sha": "/after"
+      }
+    },
+    {
+      "repository": "uv",
+      "on": {
         "pull_request": ["opened", "reopened"]
       },
       "conditions": {
@@ -105,7 +145,10 @@
           "one_of": ["pull_request", "push", "schedule", "workflow_dispatch"]
         },
         "/workflow/path": {
-          "not": ".github/workflows/diagnose-workflow-failure.yml"
+          "not_one_of": [
+            ".github/workflows/diagnose-workflow-failure.yml",
+            ".github/workflows/malicious-code-scan.yml"
+          ]
         }
       },
       "workflow": "diagnose-workflow-failure.yml",

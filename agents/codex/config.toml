@@ -1,5 +1,12 @@
 default_permissions = ":read-only"
 
+[permissions.malicious-code-scan]
+description = "Static inspection of Git evidence without executing repository code or accessing the network."
+extends = ":read-only"
+
+[permissions.malicious-code-scan.network]
+enabled = false
+
 [permissions.issue-triage]
 description = "Issue triage with temporary filesystem and GitHub API access."
 extends = ":read-only"
