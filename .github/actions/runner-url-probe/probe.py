@@ -20,6 +20,10 @@ RATE_LIMIT = "/rate_limit"
 MARKER = b"Harmless URL-policy artifact. No executable content.\n"
 
 
+def stage(name):
+    print("URL_POLICY_STAGE=" + name, flush=True)
+
+
 def api(method, target, address=None):
     context = ssl.create_default_context()
     connection = http.client.HTTPSConnection(HOST, timeout=10, context=context)
@@ -72,14 +76,16 @@ def scheme_denied():
 
 
 def cache_rpc_paths_denied():
-    probes = (
+    probes = [
         (
+            "cache-legacy",
             os.environ["ACTIONS_RUNTIME_URL"],
             "GET",
             "_apis/artifactcache/cache?keys=uv-url-policy-probe&version=synthetic",
             None,
         ),
         (
+            "cache-v2",
             os.environ["ACTIONS_RESULTS_URL"],
             "POST",
             "twirp/github.actions.results.api.v1.CacheService/GetCacheEntryDownloadURL",
@@ -91,8 +97,21 @@ def cache_rpc_paths_denied():
                 }
             ).encode(),
         ),
-    )
-    for base, method, suffix, body in probes:
+    ]
+    cache_url = os.environ.get("ACTIONS_CACHE_URL", "")
+    private_legacy = urlsplit(cache_url).scheme == "http"
+    if private_legacy:
+        probes.append(
+            (
+                "cache-depot-legacy",
+                cache_url,
+                "GET",
+                "_apis/artifactcache/cache?keys=uv-url-policy-probe&version=synthetic",
+                None,
+            )
+        )
+    for label, base, method, suffix, body in probes:
+        stage(label)
         endpoint = urlsplit(base)
         if endpoint.scheme == "https":
             if not endpoint.hostname.endswith(
@@ -104,9 +123,11 @@ def cache_rpc_paths_denied():
             endpoint.scheme == "http"
             and ipaddress.ip_address(endpoint.hostname)
             in ipaddress.ip_network("10.0.0.0/8")
-            and endpoint.port == 978
+            and endpoint.port in {977, 978}
         ):
-            connection = http.client.HTTPConnection(endpoint.hostname, 978, timeout=10)
+            connection = http.client.HTTPConnection(
+                endpoint.hostname, endpoint.port, timeout=10
+            )
         else:
             raise RuntimeError("unexpected runtime service")
         if (
@@ -134,6 +155,7 @@ def cache_rpc_paths_denied():
                 raise RuntimeError("cache RPC path was not denied locally")
         finally:
             connection.close()
+    return private_legacy
 
 
 def control():
@@ -256,13 +278,17 @@ def fault(address):
 
 
 def probe():
+    stage("health")
     health()
+    stage("allowed-urls")
     for method, target in (("GET", ALLOWED), ("HEAD", ALLOWED), ("GET", RATE_LIMIT)):
         if api(method, target)[0] != 200:
             raise RuntimeError("allowed repository API URL failed")
+    stage("path-method-query-denials")
     denied("GET", DENIED)
     denied("GET", ALLOWED + "?unexpected=1")
     denied("OPTIONS", ALLOWED)
+    stage("canonical-paths")
     for target in (
         "/repos//astral-sh/uv-dev",
         "/repos/astral-sh/./uv-dev",
@@ -270,8 +296,10 @@ def probe():
         "/repos/astral-sh/%75v-dev",
     ):
         denied("GET", target)
+    stage("scheme")
     scheme_denied()
-    cache_rpc_paths_denied()
+    private_legacy = cache_rpc_paths_denied()
+    stage("direct-addresses")
     addresses = json.loads(os.environ["URL_POLICY_BASELINE_ADDRESSES"])
     if not addresses or any(
         not ipaddress.ip_address(address).is_global for address in addresses
@@ -281,15 +309,20 @@ def probe():
         if api("GET", ALLOWED, address)[0] != 200:
             raise RuntimeError("allowed direct-address request failed")
         denied("GET", DENIED, address)
+    stage("connect")
     connection = http.client.HTTPConnection("127.0.0.1", 18080, timeout=5)
     try:
-        connection.request("CONNECT", "denied.invalid:443")
+        connection.request(
+            "CONNECT", "denied.invalid:443", headers={"Host": "denied.invalid:443"}
+        )
         response = connection.getresponse()
         if (response.status, response.getheader("X-UV-URL-Policy")) != (403, "denied"):
             raise RuntimeError("unconfigured CONNECT was accepted")
     finally:
         connection.close()
+    stage("oidc")
     oidc()
+    stage("artifact")
     if (
         Path(os.environ["RUNNER_TEMP"]) / "url-policy-seed/url-policy-marker.txt"
     ).read_bytes() != MARKER:
@@ -301,11 +334,13 @@ def probe():
         "schemes": True,
         "canonical_paths": True,
         "cache_rpc_paths": True,
+        "private_cache_entrypoint": private_legacy,
         "direct_addresses": len(addresses),
         "oidc": True,
         "artifact": True,
     }
     if os.environ["INPUT_OPERATION"] == "fault":
+        stage("stopped-proxy")
         fault(addresses[0])
         result["stopped_proxy_denied"] = True
     destination = Path(os.environ["RUNNER_TEMP"]) / "url-policy-evidence.json"
@@ -334,6 +369,9 @@ if __name__ == "__main__":
         RuntimeError,
         http.client.HTTPException,
         subprocess.CalledProcessError,
-    ):
-        print("::error::URL policy acceptance probe failed", file=sys.stderr)
+    ) as error:
+        print(
+            f"::error::URL policy acceptance probe failed ({type(error).__name__})",
+            file=sys.stderr,
+        )
         raise SystemExit(1) from None
