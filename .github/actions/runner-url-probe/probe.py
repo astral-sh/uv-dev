@@ -49,7 +49,13 @@ def api(method, target, address=None):
 
 
 def denied(method, target, address=None):
-    if api(method, target, address) != (403, "denied"):
+    status, marker = api(method, target, address)
+    if (status, marker) != (403, "denied"):
+        print(
+            "URL_POLICY_HTTP="
+            + json.dumps({"status": status, "local_denial": marker == "denied"}),
+            flush=True,
+        )
         raise RuntimeError("URL policy did not deny the request")
 
 
@@ -229,15 +235,33 @@ def oidc():
             },
         )
         response = connection.getresponse()
-        payload = json.loads(response.read(65536))
-        if response.status != 200 or not isinstance(payload.get("value"), str):
+        body = response.read(65536)
+        if response.status != 200:
+            print(
+                "URL_POLICY_OIDC_HTTP="
+                + json.dumps(
+                    {
+                        "status": response.status,
+                        "local_denial": response.getheader("X-UV-URL-Policy")
+                        == "denied",
+                    }
+                ),
+                flush=True,
+            )
             raise RuntimeError("OIDC control failed")
+        payload = json.loads(body)
+        if not isinstance(payload, dict):
+            raise TypeError("OIDC response format differed")
+        if not isinstance(payload.get("value"), str):
+            raise TypeError("OIDC token format differed")
         parts = payload["value"].split(".")
         if len(parts) != 3:
             raise RuntimeError("OIDC token format differed")
         claims = json.loads(
             base64.urlsafe_b64decode(parts[1] + "=" * (-len(parts[1]) % 4))
         )
+        if not isinstance(claims, dict):
+            raise TypeError("OIDC claims format differed")
         if (
             claims.get("iss") != "https://token.actions.githubusercontent.com"
             or claims.get("aud") != "uv-runner-url-policy-probe"
@@ -365,6 +389,7 @@ if __name__ == "__main__":
     except (
         OSError,
         ValueError,
+        TypeError,
         KeyError,
         RuntimeError,
         http.client.HTTPException,
