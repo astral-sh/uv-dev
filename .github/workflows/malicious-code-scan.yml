@@ -1,0 +1,171 @@
+# Scan pull requests and main updates dispatched by .github/automations-dispatch.json.
+name: "Malicious-code scan"
+
+on:
+  workflow_dispatch:
+    inputs:
+      pull_request:
+        description: "A pull request number; omit for a main branch update"
+        required: false
+        type: string
+      base_sha:
+        description: "The PR base SHA or main SHA before the push"
+        required: true
+        type: string
+      head_sha:
+        description: "The PR head SHA or main SHA after the push"
+        required: true
+        type: string
+
+permissions: {}
+
+# Keep distinct main pushes so a later update cannot cancel an unreviewed range.
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.pull_request || 'main' }}-${{ inputs.base_sha }}-${{ inputs.head_sha }}
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    if: github.repository == 'astral-sh/uv' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: automations
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      ready: ${{ steps.context.outputs.ready }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Prompts, configuration, and helper scripts come from the dispatched main revision.
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: "Prepare scan evidence"
+        id: context
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PULL_REQUEST: ${{ inputs.pull_request }}
+          BASE_SHA: ${{ inputs.base_sha }}
+          HEAD_SHA: ${{ inputs.head_sha }}
+        run: |
+          if ! [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ && "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Scan revisions must be full commit SHAs." >&2
+            exit 1
+          fi
+          if [ "$HEAD_SHA" = '0000000000000000000000000000000000000000' ]; then
+            echo "A deleted branch has no head to scan." >&2
+            exit 1
+          fi
+
+          mkdir -p "$RUNNER_TEMP/malicious-code/report"
+          kind=PUSH
+          if [ -n "$PULL_REQUEST" ]; then
+            if ! [[ "$PULL_REQUEST" =~ ^[1-9][0-9]*$ ]]; then
+              echo "Invalid pull request number." >&2
+              exit 1
+            fi
+            kind=PULL_REQUEST
+            gh api "repos/$GITHUB_REPOSITORY/pulls/$PULL_REQUEST" \
+              > "$RUNNER_TEMP/malicious-code/pull-request.json"
+            # Keep the dispatched base even if main advances while the scan is queued.
+            if ! jq --exit-status --arg repository "$GITHUB_REPOSITORY" \
+              --arg head "$HEAD_SHA" '
+                .state == "open" and .base.repo.full_name == $repository and
+                .head.repo.full_name == $repository and .head.sha == $head
+              ' "$RUNNER_TEMP/malicious-code/pull-request.json" > /dev/null; then
+              echo "The pull request no longer matches the dispatched revision; skipping the stale scan." >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            jq '{number, title, body}' "$RUNNER_TEMP/malicious-code/pull-request.json" \
+              > "$RUNNER_TEMP/malicious-code/context.json"
+          else
+            jq --null-input --arg repository "$GITHUB_REPOSITORY" \
+              '{repository: $repository, ref: "refs/heads/main"}' \
+              > "$RUNNER_TEMP/malicious-code/context.json"
+          fi
+
+          # Fetch Git objects only: target files, hooks, submodules, and agent configuration are never checked out.
+          source_git="$RUNNER_TEMP/malicious-code/source.git"
+          git init --bare --template= "$source_git"
+          revisions=("$HEAD_SHA")
+          if [ "$BASE_SHA" != '0000000000000000000000000000000000000000' ]; then
+            revisions+=("$BASE_SHA")
+          fi
+          git --git-dir "$source_git" fetch --no-tags --no-recurse-submodules \
+            "https://github.com/$GITHUB_REPOSITORY" "${revisions[@]}"
+          python3 agents/scripts/malicious-code-scan.py prepare \
+            --git-dir "$source_git" --output "$RUNNER_TEMP/malicious-code/scan" \
+            --kind "$kind" --base "$BASE_SHA" --head "$HEAD_SHA"
+          cp "$RUNNER_TEMP/malicious-code/context.json" "$RUNNER_TEMP/malicious-code/scan/context.json"
+          cp "$RUNNER_TEMP/malicious-code/scan/receipt.json" "$RUNNER_TEMP/malicious-code/report/receipt.json"
+          echo 'ready=true' >> "$GITHUB_OUTPUT"
+
+      - name: "Scan for malicious code"
+        if: steps.context.outputs.ready == 'true'
+        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56 # v1.11
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          codex-version: "0.146.0"
+          working-directory: "${{ runner.temp }}/malicious-code/scan"
+          codex-home: "${{ github.workspace }}/agents/codex"
+          effort: high
+          permission-profile: "malicious-code-scan"
+          safety-strategy: drop-sudo
+          allow-bot-users: "astral-automations-bot[bot]"
+          prompt-file: "${{ github.workspace }}/agents/prompts/malicious-code-scan.md"
+          output-schema-file: "${{ github.workspace }}/agents/schemas/malicious-code-scan.json"
+          output-file: "${{ runner.temp }}/malicious-code/report/result.json"
+
+      - name: "Report scan outcome"
+        if: steps.context.outputs.ready == 'true'
+        run: |
+          python3 agents/scripts/malicious-code-scan.py report \
+            --receipt "$RUNNER_TEMP/malicious-code/report/receipt.json" \
+            --report "$RUNNER_TEMP/malicious-code/report/result.json" \
+            --summary "$GITHUB_STEP_SUMMARY"
+
+      - name: "Upload scan report"
+        if: always() && steps.context.outputs.ready == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: malicious-code-scan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/malicious-code/report
+          if-no-files-found: warn
+
+      - name: "Upload Codex thread"
+        if: always() && steps.context.outputs.ready == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codex-thread-malicious-code-scan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: agents/codex/sessions
+          if-no-files-found: warn
+
+  report:
+    needs: scan
+    if: always() && needs.scan.outputs.ready == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      statuses: write
+    steps:
+      # The dispatcher runs on main; attach the result to the commit that was actually scanned.
+      - name: "Report status on scanned commit"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_SHA: ${{ inputs.head_sha }}
+          SCAN_RESULT: ${{ needs.scan.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          case "$SCAN_RESULT" in
+            success) state=success; description='Static scan found no suspicious changes.' ;;
+            failure) state=failure; description='Scan needs human review; see findings or coverage gaps.' ;;
+            *) state=error; description='The malicious-code scan did not complete.' ;;
+          esac
+          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA" \
+            --raw-field state="$state" \
+            --raw-field context='Malicious-code scan' \
+            --raw-field description="$description" \
+            --raw-field target_url="$RUN_URL" \
+            --silent
