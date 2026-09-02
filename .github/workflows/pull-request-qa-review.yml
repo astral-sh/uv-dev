@@ -1,0 +1,124 @@
+on:
+  workflow_call:
+    inputs:
+      sha:
+        description: "The commit SHA used to build the dev binary"
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  review:
+    name: "quality assurance review"
+    runs-on: ubuntu-latest
+    environment: automations
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: "Download binary"
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          # Use the artifact from this CI run, built from the same merge commit as the checkout.
+          name: uv-linux-libc-${{ inputs.sha }}
+          path: .qa-bin
+
+      - name: "Prepare review"
+        env:
+          BUILD_SHA: ${{ inputs.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$BUILD_SHA"
+          git merge-base --is-ancestor "$HEAD_SHA" "$BUILD_SHA"
+          git merge-base --is-ancestor "$BASE_SHA" "$BUILD_SHA"
+
+          chmod +x .qa-bin/uv .qa-bin/uvx
+          mkdir -p "$RUNNER_TEMP/qa-work" "$RUNNER_TEMP/qa-report"
+
+          # Use the event and local commits so a later PR update cannot change the review context.
+          jq --arg tested_commit "$BUILD_SHA" \
+            '{number, pull_request: (.pull_request | {title, body, base, head}), tested_commit: $tested_commit}' \
+            "$GITHUB_EVENT_PATH" > .pull-request-qa-event.json
+          git diff --no-ext-diff --no-textconv "$BASE_SHA...$HEAD_SHA" > .pull-request-qa.diff
+          sha256sum .qa-bin/uv .qa-bin/uvx > "$RUNNER_TEMP/qa-report/binaries.sha256"
+          cp .pull-request-qa-event.json "$RUNNER_TEMP/qa-report/context.json"
+
+      - name: "Review pull request"
+        id: review
+        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56 # v1.11
+        env:
+          TMPDIR: ${{ runner.temp }}/qa-work
+          UV_QA_BIN: ${{ github.workspace }}/.qa-bin/uv
+          UV_QA_UVX_BIN: ${{ github.workspace }}/.qa-bin/uvx
+          UV_CACHE_DIR: ${{ runner.temp }}/qa-work/cache
+          UV_PYTHON_INSTALL_DIR: ${{ runner.temp }}/qa-work/python
+          UV_PYTHON_BIN_DIR: ${{ runner.temp }}/qa-work/bin
+          UV_TOOL_DIR: ${{ runner.temp }}/qa-work/tools
+          UV_TOOL_BIN_DIR: ${{ runner.temp }}/qa-work/bin
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          codex-version: "0.146.0"
+          codex-home: "agents/codex"
+          effort: high
+          permission-profile: "pull-request-qa"
+          safety-strategy: drop-sudo
+          allow-bot-users: "astral-automations-bot[bot],renovate[bot]"
+          prompt-file: "agents/prompts/pull-request-qa-review.md"
+          output-schema-file: "agents/schemas/pull-request-qa-review.json"
+          output-file: "${{ runner.temp }}/qa-report/review.json"
+
+      - name: "Summarize review"
+        env:
+          BUILD_SHA: ${{ inputs.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # Reject contradictory reports rather than presenting unexecuted checks as passing.
+          jq --exit-status '
+            if .outcome == "FINDINGS" then
+              . as $review |
+              (.findings | length) > 0 and
+              all(.findings[]; .scenario as $scenario |
+                any($review.scenarios[]; .name == $scenario and .outcome == "FAIL"))
+            elif .outcome == "PASS" then
+              (.findings | length) == 0 and
+              any(.scenarios[]; .outcome == "PASS") and
+              all(.scenarios[]; .outcome != "FAIL")
+            else
+              (.outcome == "INCONCLUSIVE" or .outcome == "NOT_APPLICABLE") and
+              (.findings | length) == 0
+            end
+          ' "$RUNNER_TEMP/qa-report/review.json" > /dev/null
+          {
+            printf '## Quality assurance review\n\n'
+            # The backticks are literal Markdown code spans.
+            # shellcheck disable=SC2016
+            printf 'PR head: `%s`\n\nTested merge commit: `%s`\n\n' "$HEAD_SHA" "$BUILD_SHA"
+            # JSON escaping keeps generated text inside the code block, including embedded fences.
+            printf '```json\n'
+            jq --ascii-output . "$RUNNER_TEMP/qa-report/review.json"
+            printf '```\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: "Upload review"
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pull-request-qa-review-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/qa-report
+          if-no-files-found: warn
+
+      - name: "Upload Codex thread"
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codex-thread-pull-request-qa-review-${{ github.run_id }}-${{ github.run_attempt }}
+          path: agents/codex/sessions
+          if-no-files-found: warn
