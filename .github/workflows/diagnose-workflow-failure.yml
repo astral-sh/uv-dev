@@ -24,7 +24,7 @@ jobs:
     steps:
       - name: Record unguarded API and direct-address controls
         id: control
-        uses: astral-sh/uv-dev/.github/actions/runner-url-probe@5c87854186189efde9746afca71413f85b59ac43
+        uses: astral-sh/uv-dev/.github/actions/runner-url-probe@4926f7deef7bc544f54cd6d227b47437899b9523
         env:
           GH_TOKEN: ${{ github.token }}
         with:
@@ -55,7 +55,7 @@ jobs:
       id-token: write
     steps:
       - name: Install exact URL policy before other action hooks
-        uses: astral-sh/uv-dev/.github/actions/runner-network-policy@4796518b24f522bb0fb53ac8854725546424df35
+        uses: astral-sh/uv-dev/.github/actions/runner-network-policy@d8a0ae6382b52d52fbae8f3081f2aa08041b0294
         with:
           profile: github
           url-profile: github-api-probe
@@ -68,7 +68,7 @@ jobs:
           path: ${{ runner.temp }}/url-policy-seed
 
       - name: Check URLs, direct addresses, artifacts, and test-audience OIDC
-        uses: astral-sh/uv-dev/.github/actions/runner-url-probe@5c87854186189efde9746afca71413f85b59ac43
+        uses: astral-sh/uv-dev/.github/actions/runner-url-probe@4926f7deef7bc544f54cd6d227b47437899b9523
         env:
           GH_TOKEN: ${{ github.token }}
           URL_POLICY_BASELINE_ADDRESSES: ${{ needs.control.outputs.addresses }}
@@ -93,7 +93,7 @@ jobs:
       id-token: write
     steps:
       - name: Install URL policy with explicit service-control privileges
-        uses: astral-sh/uv-dev/.github/actions/runner-network-policy@4796518b24f522bb0fb53ac8854725546424df35
+        uses: astral-sh/uv-dev/.github/actions/runner-network-policy@d8a0ae6382b52d52fbae8f3081f2aa08041b0294
         with:
           profile: github
           url-profile: github-api-probe
@@ -107,7 +107,7 @@ jobs:
           path: ${{ runner.temp }}/url-policy-seed
 
       - name: Check policy while stopping and restarting only its service
-        uses: astral-sh/uv-dev/.github/actions/runner-url-probe@5c87854186189efde9746afca71413f85b59ac43
+        uses: astral-sh/uv-dev/.github/actions/runner-url-probe@4926f7deef7bc544f54cd6d227b47437899b9523
         env:
           GH_TOKEN: ${{ github.token }}
           URL_POLICY_BASELINE_ADDRESSES: ${{ needs.control.outputs.addresses }}
@@ -149,6 +149,8 @@ jobs:
               result = json.loads(path.read_text())
               assert all(result.get(name) is True for name in ("urls", "methods", "queries", "schemes", "canonical_paths", "cache_rpc_paths", "oidc", "artifact"))
               assert isinstance(result.get("direct_addresses"), int) and result["direct_addresses"] > 0
+              if path.parent.name.endswith(("-depot-linux", "-depot-latest")):
+                  assert result.get("private_cache_entrypoint") is True
               faults += result.get("stopped_proxy_denied") is True
           assert faults == 1, "Expected the stopped-proxy denial result"
           print("URL_POLICY_RESULT=" + json.dumps({"verified": len(results), "stopped_proxy_denied": True}))
