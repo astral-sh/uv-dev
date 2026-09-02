@@ -110,10 +110,12 @@ jobs:
     needs:
       - plan
       - build-dev-binaries
-    if: ${{ needs.plan.outputs.test-integration == 'true' }}
+    # Pushes to main run these tests separately with read-only cache access.
+    if: ${{ github.event_name != 'push' && needs.plan.outputs.test-integration == 'true' }}
     uses: $/.github/workflows/test-integration.yml
     secrets: inherit
     permissions:
+      actions: read
       contents: read
       id-token: write
     with:
