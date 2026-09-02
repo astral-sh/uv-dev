@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "profiles": {
+    "github-api-probe": {
+      "runner_services": true,
+      "rules": [
+        {
+          "url": "https://api.github.com/repos/astral-sh/uv-dev",
+          "methods": ["GET", "HEAD"]
+        },
+        {
+          "url": "https://api.github.com/rate_limit",
+          "methods": ["GET", "HEAD"]
+        }
+      ]
+    }
+  }
+}

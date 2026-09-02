@@ -26,7 +26,8 @@ and additional query records do not expand the policy.
 
 On Depot, only the private cache/results addresses injected by the runner are redirected. Their
 requests are forwarded to the corresponding public GitHub Actions service over verified TLS; this
-does not grant general access to private networks or arbitrary ports.
+does not grant general access to private networks or arbitrary ports. Other routes to those injected
+service ports, including loopback and bridge aliases, are rejected.
 
 Existing runner-owned HTTPS connections from trusted bootstrap are retained by exact destination and
 source port. Action downloads, runner startup, and container preparation can happen before the first
@@ -51,3 +52,49 @@ profiles that still require hosted validation, not an automatically inferred min
 
 Run `python3 scripts/test_runner_network_policy.py` for local loopback integration tests. Never run
 `install.py` on a development machine.
+
+## Exact URL profiles
+
+Set the optional `url-profile` input to a reviewed profile in `url-policies.json` to enforce HTTP
+methods, paths, and query strings as well as domains. The domain profile remains an upper bound:
+every URL host must be permitted by it. In this mode, new external HTTP and HTTPS connections are
+request-aware; there is no unrestricted `CONNECT` tunnel or fallback to domain-only TLS forwarding.
+
+Each rule names an exact HTTP or HTTPS URL, allowed `methods`, an `exact` or directory `prefix` path
+match, and an `exact` or explicitly unrestricted `any` query match. Ambiguous path spellings,
+underscore-bearing request headers, unsupported framing, and protocol upgrades are rejected.
+Redirects are returned to the client, so the next URL must pass the policy separately. Rules govern
+requests, not the behavior of an allowed service: a permitted application-layer relay or an overly
+broad prefix can still widen access.
+
+The `github-api-probe` example allows only `GET` and `HEAD` for the uv-dev repository API and
+GitHub's rate-limit endpoint. Its explicit `runner_services: true` setting also adds the job's
+validated runtime API prefixes, results/log and artifact RPCs, GitHub's named results storage
+accounts, and the reviewed hosted-runner control-plane hosts. These are visible in the root-owned
+effective `url-policy.json`. They are coarse infrastructure exceptions, not inferred minimal
+permissions. The cache RPCs are not among the generated service rules. A profile can omit
+`runner_services` when those exceptions are not needed, but this can interrupt GitHub's job
+reporting.
+
+URL mode installs a short-lived local CA on the disposable VM and terminates TLS 1.2 or newer using
+HTTP/1.1. The proxy verifies upstream TLS itself. The leaf certificate covers only the exact allowed
+hostnames, and the CA signing key is deleted before the service starts. Root owns the executable,
+policy, and certificate metadata; only the unprivileged service can read its leaf key and write its
+separate audit directory. URLs, query strings, plaintext, credentials, and request bodies are not
+logged. Clients with separate trust stores, certificate pinning, HTTP/2-only protocols, or streaming
+request bodies may fail closed until explicitly supported. As with domain mode, trusted VM teardown
+is the cleanup boundary, and a first action `pre` hook does not isolate earlier runner setup.
+
+For example:
+
+```yaml
+- uses: astral-sh/uv-dev/.github/actions/runner-network-policy@<reviewed-commit>
+  with:
+    profile: github
+    url-profile: github-api-probe
+    disposable: true
+```
+
+Run `python3 -m unittest discover -s scripts -p 'test_runner_url_*.py'` for the focused URL-policy
+tests. Do not enable this prototype in a publishing job before its required URLs and clients have
+been exercised on that job's runner.

@@ -255,6 +255,38 @@ class PolicyTests(unittest.TestCase):
                 validate_private_origins(value)
         rules = install.firewall(991, 1001, ["10.0.0.2"], [], expected)
         self.assertIn("ip daddr 10.2.3.4 tcp dport 978 redirect to :18080", rules)
+        reject = "tcp dport { 978 } reject with tcp reset"
+        self.assertEqual(rules.count(reject), 2)
+        self.assertLess(rules.index(reject), rules.index('oifname "lo" accept'))
+        self.assertNotIn("977", rules)
+        self.assertNotIn(
+            "reject with tcp reset", install.firewall(991, 1001, ["10.0.0.2"], [])
+        )
+
+    def test_policy_files_have_explicit_permissions_and_refuse_collisions(self):
+        scratch = Path.home() / "code/tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(
+            prefix="uv-network-policy-files-", dir=scratch
+        ) as temporary:
+            directory = Path(temporary)
+            for mask in (0, 0o077):
+                path = directory / f"policy-{mask}.json"
+                previous = os.umask(mask)
+                try:
+                    install.write_trusted(path, "trusted\n")
+                finally:
+                    os.umask(previous)
+                with self.subTest(mask=mask):
+                    self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o644)
+                    with self.assertRaises(FileExistsError):
+                        install.write_trusted(path, "replacement\n")
+                    self.assertEqual(path.read_text(), "trusted\n")
+            link = directory / "linked.json"
+            link.symlink_to(path)
+            with self.assertRaises(FileExistsError):
+                install.write_trusted(link, "replacement\n")
+            self.assertEqual(path.read_text(), "trusted\n")
 
     def test_only_root_owned_regular_sudoers_files_are_normalized(self):
         path = MagicMock()

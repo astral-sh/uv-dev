@@ -4,6 +4,10 @@ inputs:
   profile:
     description: Name of the bundled, reviewed network profile
     required: true
+  url-profile:
+    description: Optional bundled URL policy; decrypts HTTPS to enforce methods, paths, and queries
+    required: false
+    default: ""
   privileges:
     description: Drop sudo and container-daemon access, or retain them explicitly
     required: false
