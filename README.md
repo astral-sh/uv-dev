@@ -78,7 +78,30 @@ Existing coverage checked:
 - `crates/uv/tests/pip/pip_install_scenarios.rs::package_yanked_specified_mixed_available` covers choosing an unyanked version over yanked versions, not a partially yanked set of files for one version and not lockfile contents.
 - `crates/uv/tests/lock/lock.rs::lock_omit_wheels_exclude_newer` verifies that individual wheels excluded by upload time are omitted from `uv.lock`; it is the nearest lockfile artifact-filtering precedent but does not exercise yank metadata.
 
-No existing test was found that covers mixed yanked and unyanked artifacts for one version. A focused `uv lock` integration regression test should capture this fixture before changing filtering behavior.
+At reproduction time, no existing test covered mixed yanked and unyanked artifacts for one version. The parent regression described below now provides that coverage.
+
+## Fix
+
+Outcome: fixed in the checkout.
+
+The reproduction and implementation confirm that the defect was in artifact aggregation after candidate selection. `version_map.rs` correctly assigns `IncompatibleWheel::Yanked` or `IncompatibleSource::Yanked` to a non-allowed yanked file, but `PrioritizedDist` treated only `ExcludeNewer` as an excluded artifact when constructing the registry distribution later serialized into `uv.lock`. As a result, candidate selection could use an unyanked file while the aggregate still carried yanked wheels or source distributions.
+
+`crates/uv-distribution-types/src/prioritized_distribution.rs` now treats incompatible yanked wheels and source distributions as excluded alongside `ExcludeNewer`. Both aggregation directions apply that predicate: a wheel-selected `RegistryBuiltDist` filters its wheel list and optional source distribution, and a source-selected `RegistrySourceDist` filters its attached wheel list. Explicitly allowed yanks retain their existing behavior because `version_map.rs` classifies them as compatible before this filter is applied.
+
+The parent integration regression `crates/uv/tests/lock/lock.rs::lock_partially_yanked_release` now asserts the desired lockfile instead of snapshotting the defect. Its fixture covers a yanked wheel and yanked source distribution beside a usable wheel, plus a source-selected release whose yanked wheel must not be attached. The resulting lockfile retains the usable artifacts and omits every non-allowed yanked artifact. The test also validates an offline `uv lock --locked` round trip against the generated lockfile.
+
+Successful focused validation:
+
+- `cargo test --package uv --test lock --features test-universal lock_partially_yanked_release`
+- `cargo test --package uv --test lock --features test-universal lock_project_with_scoped_override_yank`
+- `cargo test --package uv --test lock --features test-universal lock_omit_wheels_exclude_newer`
+- `cargo test --package uv --test pip_compile --features test-universal omit_wheels_exclude_newer`
+- `cargo test --package uv-distribution-types`
+- `cargo +stable clippy --package uv-distribution-types --all-targets -- -D warnings`
+- `cargo +stable fmt --all -- --check`
+- `git diff --check`
+
+The active Rust 1.98 toolchain did not have rustfmt or clippy installed, and its read-only toolchain location prevented adding those components. The installed stable rustfmt and clippy were therefore used for the successful formatting and lint checks.
 
 ## Related
 
@@ -93,3 +116,5 @@ No existing test was found that covers mixed yanked and unyanked artifacts for o
 Searches covered open and closed issues and open, closed, and merged pull requests. Literal queries included `"yanked wheel" "uv.lock"`, `per-file yank`, `partially yanked`, `PEP 592`, `data-yanked`, `AllowedYanks`, `is_excluded Yanked`, `yanked lockfile wheel`, and exact lockfile-wheel titles. Conceptual queries covered a private index with mixed yank state, artifact-level eligibility versus version selection, frozen lockfile behavior, and analogous individual-file filtering. Fix-oriented searches covered historical yank filtering and the `exclude-newer` implementation that introduced `is_excluded`.
 
 astral-sh/uv#19112 was inspected but ruled out as a duplicate: it asks uv to query for and reject a whole version that became yanked after it was already locked, while maintainers explain that continuing from an existing lock is intentional. astral-sh/uv#3644 and astral-sh/uv#3425 concern whole-version selection during `uv pip compile`, not retaining one yanked file alongside an unyanked file of the same version. astral-sh/uv#17143 also involves bad artifact data persisted in `uv.lock`, but its mechanism is selecting an unsupported hash algorithm from a private index rather than failing to filter a yanked file.
+
+Pull request: https://github.com/astral-sh/uv-dev/pull/963

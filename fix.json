@@ -1,0 +1,15 @@
+{
+  "outcome": "fixed",
+  "summary": "Yanked files were rejected during candidate selection but retained when registry distributions were aggregated for lockfile serialization. The fix excludes non-allowed yanked wheels and source distributions from both aggregation paths, while the updated integration regression verifies wheel-selected and source-selected lockfiles and preserves explicitly allowed yanks.",
+  "validation": [
+    "cargo test --package uv --test lock --features test-universal lock_partially_yanked_release",
+    "cargo test --package uv --test lock --features test-universal lock_project_with_scoped_override_yank",
+    "cargo test --package uv --test lock --features test-universal lock_omit_wheels_exclude_newer",
+    "cargo test --package uv --test pip_compile --features test-universal omit_wheels_exclude_newer",
+    "cargo test --package uv-distribution-types",
+    "cargo +stable clippy --package uv-distribution-types --all-targets -- -D warnings",
+    "cargo +stable fmt --all -- --check",
+    "git diff --check"
+  ],
+  "pull_request": "https://github.com/astral-sh/uv-dev/pull/963"
+}
