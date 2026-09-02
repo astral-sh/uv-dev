@@ -34,6 +34,18 @@ jobs:
           version: "0.12.5"
       - run: uv run --only-group=check ruff check .
 
+  runner-network-policy:
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: "Check runner network policy"
+        run: |
+          python3 -m unittest discover -s scripts -p 'test_runner_*.py'
+          python3 scripts/generate_runner_network_policy.py --check
+
   ty:
     timeout-minutes: 10
     runs-on: ubuntu-slim

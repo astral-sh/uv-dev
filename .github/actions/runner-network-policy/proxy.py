@@ -16,7 +16,9 @@ from collections import Counter
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from policy import hostname, load, validate_private_origins
+import url_proxy
+from policy import Policy, hostname, load, validate_private_origins
+from url_policy import URLPolicy
 
 HTTP_PORT = 18080
 TLS_PORT = 18443
@@ -225,8 +227,12 @@ def dns_aliases(packet, original):
 
 
 class State:
-    def __init__(self, policy, resolvers, audit, private_services=None):
+    def __init__(
+        self, policy, resolvers, audit, private_services=None, url_policy=None
+    ):
         self.policy = policy
+        self.url_policy = url_policy
+        self.tls_context = None
         self.resolvers = resolvers
         self.audit = audit
         self.counts = Counter()
@@ -564,17 +570,38 @@ class UDPServer(socketserver.ThreadingUDPServer):
 
 def serve(directory):
     settings = json.loads((directory / "settings.json").read_text())
+    policy = load(directory / "policies.json", settings["profile"])
+    url_profile = settings["url_profile"]
+    if not isinstance(url_profile, str):
+        raise TypeError("invalid URL policy selection")
+    url_policy = None
+    if url_profile:
+        url_policy = URLPolicy.from_dict(
+            json.loads((directory / "url-policy.json").read_text())
+        )
+        if any(not policy.permits(host) for host in url_policy.hosts):
+            raise ValueError("URL profile exceeds its domain policy")
+        policy = Policy(url_policy.hosts, policy.deny)
     state = State(
-        load(directory / "policies.json", settings["profile"]),
+        policy,
         settings["resolvers"],
         directory / "audit" / "events.json",
         settings.get("private_origins", {}),
+        url_policy,
     )
+    if url_policy:
+        state.tls_context = url_proxy.make_tls_context(
+            directory / "server.crt", directory / "server.key", state
+        )
     servers = []
     for family, address in ((socket.AF_INET, "127.0.0.1"), (socket.AF_INET6, "::1")):
         for base, handler, port in (
-            (TCPServer, HTTPHandler, HTTP_PORT),
-            (TCPServer, TLSHandler, TLS_PORT),
+            (
+                TCPServer,
+                url_proxy.HTTPHandler if url_policy else HTTPHandler,
+                HTTP_PORT,
+            ),
+            (TCPServer, url_proxy.TLSHandler if url_policy else TLSHandler, TLS_PORT),
             (TCPServer, DNSStreamHandler, DNS_PORT),
             (UDPServer, DNSDatagramHandler, DNS_PORT),
         ):

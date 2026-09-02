@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 from policy import load, private_origins
+from url_settings import compile_policy, runtime_services
 
 DIRECTORY = Path("/run/uv-network-policy")
 
@@ -41,7 +42,16 @@ def pre():
         raise RuntimeError("job containers and root jobs are not supported")
     profile = os.environ["INPUT_PROFILE"]
     privileges = os.environ.get("INPUT_PRIVILEGES", "drop")
-    load(Path(__file__).with_name("policies.json"), profile)
+    domain_policy = load(Path(__file__).with_name("policies.json"), profile)
+    url_profile = os.environ.get("INPUT_URL-PROFILE", "")
+    services = runtime_services(os.environ) if url_profile else {}
+    if url_profile:
+        compile_policy(
+            Path(__file__).with_name("url-policies.json"),
+            url_profile,
+            domain_policy,
+            services,
+        )
     if privileges not in {"drop", "retain"}:
         raise ValueError("unknown privilege mode")
     if not shutil.which("nft"):
@@ -71,6 +81,10 @@ def pre():
             privileges,
             str(os.getuid()),
             json.dumps(private_origins(os.environ)),
+            "--url-profile",
+            url_profile,
+            "--runtime-services",
+            json.dumps(services),
         ],
         check=True,
     )
@@ -90,6 +104,11 @@ def pre():
     export("UV_NETWORK_POLICY_ACTIVE", "1")
     export("UV_NETWORK_POLICY_PROFILE", profile)
     export("UV_NETWORK_POLICY_AUDIT", str(DIRECTORY / "audit/events.json"))
+    if url_profile:
+        export("UV_NETWORK_URL_PROFILE", url_profile)
+        export("NODE_EXTRA_CA_CERTS", str(DIRECTORY / "ca.crt"))
+        export("SSL_CERT_FILE", "/etc/ssl/certs/ca-certificates.crt")
+        export("REQUESTS_CA_BUNDLE", "/etc/ssl/certs/ca-certificates.crt")
 
 
 def post():
