@@ -6,30 +6,39 @@ Classification: bug
 
 ## Summary
 
-The reporter is running uv 0.12.6 (`x86_64-unknown-linux-gnu`) with Python 3.13 on an EL8 Linux system (kernel 4.18, glibc 2.28). A periodic `uv pip sync` crash produced a core whose active thread faults in glibc's `__pthread_detach` while the main thread waits in `pthread_join`; the other listed threads are waiting in `syscall`. The uv frames are not symbolized, so the trace confirms a native uv crash but does not establish which uv subsystem or dependency caused it.
+The reporter sees periodic native crashes during `uv pip sync` on EL8 Linux (kernel 4.18, glibc 2.28, x86-64). The submitted core from uv 0.12.6 faults in glibc's `__pthread_detach` at `pthread_detach.c:49`; GDB cannot access the thread-control-block address passed to that function. The process has 74 threads: the original thread is waiting to join uv's `main2` thread, while approximately 72 worker threads remain alive in syscalls.
 
-No existing issue tracks the same failure closely enough to make this a duplicate. The strongest fix-oriented lead is astral-sh/uv#21401: uv 0.12.6 contains `astral_async_http_range_reader` 0.11.0, while uv 0.12.9 updates it to 0.11.1 to fix a potential use-after-free while reading metadata ranges from remote wheels. That mechanism could produce a native crash, but the available trace does not confirm that it applies here.
+The reporter has no reliable reproducer, but has a core with the same backtrace from uv 0.11.15 in May 2026. This establishes that the problem predates uv 0.12.6 and rules out the Linux x86-64 profile-guided release build introduced in that version as the regression point.
 
-Two older reports establish a separate adjacent failure mode on Rocky Linux 8 during installation. In astral-sh/uv#3150 and astral-sh/uv#14462, Rayon worker-pool creation fails under resource pressure and uv then aborts or segfaults. Those reports contain explicit allocation, `ThreadPoolBuildError`, and `Resource temporarily unavailable` diagnostics. None appears in astral-sh/uv#21428, so they are not evidence of a shared root cause.
+A maintainer identified the root cause as an interaction between the runtime-shutdown behavior introduced by astral-sh/uv#4793 and glibc bug 19951. astral-sh/uv#4793 changed uv to call Tokio's `shutdown_background`, allowing runtime worker handles to be detached rather than waiting for all pending tasks. When `main2` drops those handles while workers are exiting, affected glibc versions can race in `pthread_detach`, free or unmap the thread control block, and then access it. That mechanism matches both the crash location and GDB's inaccessible thread address.
 
-## Draft response
+The upstream glibc fix is commit `5da15b15adab661c80e373b6af89be0b5fa5b3ad`, **nptl: Do not use pthread set_tid_address as state synchronization (BZ #19951)**. Its commit message confirms a use-after-free caused by using separate `joinid` and `cancelhandling` fields to synchronize `pthread_join`, `pthread_detach`, and thread exit. It replaces those fields with a single atomic thread-state machine and explicitly states that this avoids the `pthread_detach` race. The maintainer reports that the fix is included in glibc 2.43 and later.
 
-Thanks for the core-dump details. This confirms that the uv process is crashing, but the unsymbolized uv frames do not identify the cause. uv 0.12.9 includes astral-sh/uv#21401, which fixes a potential use-after-free in the HTTP range reader used for remote wheel metadata; we cannot determine from this trace whether that is the failure here.
+## Impact and workarounds
 
-Could you first retry with uv 0.12.9 or newer and report whether the crash recurs? If it does, please include the install source for the uv binary, the approximate failure frequency, the last output from `uv pip sync -vv` with credentials and private paths removed, whether the requirements use a private index or direct wheel URLs, and GDB output from `info files` and `thread apply all bt full` for the matching core and binary.
+- Confirmed affected combinations include uv 0.11.15 and uv 0.12.6 on the reporter's glibc 2.28 EL8 environment.
+- The failure is intermittent because it depends on worker shutdown racing with handle detachment.
+- The maintainer recommends uv's statically linked musl build on RHEL as a short-term workaround; it does not use the affected glibc pthread implementation.
+- Upgrading to glibc 2.43 or later incorporates the upstream fix, though that is generally not practical on EL8.
+- Whether uv should add its own mitigation remains an open maintainer decision.
 
 ## Classification
 
-This is a bug because a supported `uv pip sync` invocation terminates the uv process with SIGSEGV in `__pthread_detach`. A reproduction is not required to establish that the observed behavior is incorrect. It is not classified as a duplicate: no inspected issue or pull request has the same command, trigger, crash frame, and environment with a confirmed matching mechanism. In particular, astral-sh/uv#21401 is a pre-existing merged fix that may cover the failure but is not confirmed by this unsymbolized trace, while the related thread-pool issues fail earlier and report explicit resource exhaustion.
+This remains a bug: a supported `uv pip sync` invocation can terminate uv with SIGSEGV. It is not a duplicate of another uv issue. The fault is now source-backed as an interaction between uv's background Tokio shutdown and an affected glibc thread-lifecycle implementation, rather than an unlocalized uv memory error.
 
 ## Related
 
-- astral-sh/uv#21401 — **Bump async_http_range_reader to 0.11.1** (merged pull request). This is the closest fix-oriented candidate. It replaced the range-reader version present in uv 0.12.6 and fixed a potential use-after-free when reading remote wheel metadata. The report's intermittent native crash could be consistent with memory unsafety, but no symbolized frame or reproduction ties this crash to the range reader.
-- astral-sh/uv#14462 — **Threadpool initialization fails during basic builds on HPC cluster unless low `concurrent-builds` limit set** (open issue). This is an adjacent installer/threading failure on Rocky Linux 8. It differs because the abort follows explicit memory-allocation failures and a Rayon `ThreadPoolBuildError` with EAGAIN; astral-sh/uv#21428 reports none of those diagnostics.
-- astral-sh/uv#3150 — **Segfault after Resource temporarily unavailable** (closed issue). This historical report is close in command, EL8/Rocky platform family, and final segmentation fault. Its identified trigger was failure to create the Rayon pool, and reducing `RAYON_NUM_THREADS` resolved it. The current core instead stops in `__pthread_detach` without a preceding resource error, so the same cause is not established.
+- astral-sh/uv#4793 — **Avoid hangs before exiting CLI** (merged pull request). This introduced explicit `runtime.shutdown_background()` calls so uv would not wait for unnecessary pending HTTP tasks during shutdown. The resulting background worker detachment exposes the glibc `pthread_detach`/thread-exit race on affected systems.
+- astral-sh/uv#14462 — **Threadpool initialization fails during basic builds on HPC cluster unless low `concurrent-builds` limit set** (open issue). This remains adjacent because it concerns many-thread installation failures on Rocky Linux 8, but its explicit allocation failure and `ThreadPoolBuildError`/EAGAIN mechanism is different.
+- astral-sh/uv#3150 — **Segfault after Resource temporarily unavailable** (closed issue). This also involved installation on Rocky Linux 8, but the segfault followed failure to create the Rayon pool and was mitigated with `RAYON_NUM_THREADS`; it is not the `pthread_detach` race diagnosed here.
 
-## Search evidence
+## Superseded leads
 
-Literal searches covered `SIGSEGV`, `Segmentation fault`, `core dumped`, `__pthread_detach`, `pthread`, `main2`, `uv pip sync`, `uv pip install`, periodic/intermittent/sporadic crashes, uv 0.12.6, glibc 2.28, EL8/RHEL/Rocky 8, and `Resource temporarily unavailable`. Conceptual searches covered worker and thread-pool failures, Rayon, excessive concurrency, installer and cold-cache failures, mmap/range-reader lifetime problems, use-after-free, and wheel metadata. Closed issues, merged pull requests, and release notes from uv 0.12.5 through 0.12.9 were reviewed for version-specific fixes.
+astral-sh/uv#21401 is no longer the leading explanation. Although it fixed a separate potential use-after-free in remote-wheel range reading, the same crash on uv 0.11.15 plus the exact glibc race matching the core make that range-reader issue unrelated to this failure. astral-sh/uv#21001 is likewise ruled out as the regression source because the crash predates its Linux x86-64 PGO release changes.
 
-astral-sh/uv#21001 was an especially plausible version-specific lead because uv 0.12.6 first enabled profile-guided optimization for Linux x86-64 release binaries, but it was excluded from the related list because the report provides no comparison with a non-PGO release and no evidence connects PGO to the crash. Reports involving QEMU, iSH, riscv64-musl TLS, and subprocess signal reporting were also excluded because their platforms, triggers, or crashing processes differ materially.
+## Supporting sources
+
+- The maintainer diagnosis is recorded in astral-sh/uv#21428's discussion.
+- astral-sh/uv#4793's patch shows the change from implicitly dropping the Tokio runtime to explicitly calling `shutdown_background()` in both runtime paths.
+- glibc bug 19951: https://sourceware.org/bugzilla/show_bug.cgi?id=19951
+- Upstream glibc fix: https://github.com/bminor/glibc/commit/5da15b15adab661c80e373b6af89be0b5fa5b3ad
