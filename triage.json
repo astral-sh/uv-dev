@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 21401,
+        "title": "Bump async_http_range_reader to 0.11.1",
+        "url": "https://github.com/astral-sh/uv/pull/21401",
+        "state": "merged",
+        "reason": "Fix-oriented candidate: uv 0.12.6 used range-reader 0.11.0, while this merged update fixes a potential use-after-free when reading remote wheel metadata. The intermittent native crash could be consistent with memory unsafety, but the unsymbolized trace does not confirm this mechanism."
+      },
+      {
+        "kind": "issue",
+        "number": 14462,
+        "title": "Threadpool initialization fails during basic builds on HPC cluster unless low `concurrent-builds` limit set",
+        "url": "https://github.com/astral-sh/uv/issues/14462",
+        "state": "open",
+        "reason": "Adjacent installer/threading failure on Rocky Linux 8: wheel installation can abort when Rayon cannot create its worker pool. It differs because that issue has explicit allocation and ThreadPoolBuildError/EAGAIN diagnostics, which are absent here."
+      },
+      {
+        "kind": "issue",
+        "number": 3150,
+        "title": "Segfault after Resource temporarily unavailable",
+        "url": "https://github.com/astral-sh/uv/issues/3150",
+        "state": "closed",
+        "reason": "Historical close match in command, platform family, and outcome: uv pip install on Rocky Linux 8 ended in a segmentation fault after Rayon worker-pool creation failed. Reducing RAYON_NUM_THREADS mitigated it, but astral-sh/uv#21428 shows no preceding resource-exhaustion error, so the same cause is not established."
+      }
+    ],
+    "search_scope": "Literal searches covered SIGSEGV, segmentation fault, core dumped, __pthread_detach/pthread, main2, uv pip sync/install, periodic/intermittent/sporadic crashes, uv 0.12.6, glibc 2.28, EL8/RHEL/Rocky 8, and Resource temporarily unavailable. Conceptual searches covered worker/thread-pool and Rayon failures, excessive concurrency, installer and cold-cache failures, mmap/range-reader lifetime problems, use-after-free, and wheel metadata. Fix-oriented review covered closed issues, merged pull requests, and releases 0.12.5 through 0.12.9. The new Linux x86-64 PGO build in astral-sh/uv#21001 was inspected but ruled out because no evidence ties optimization to this crash; QEMU, iSH, riscv64-musl TLS, and subprocess signal-reporting reports had different platforms, triggers, or crashing processes."
+  },
+  "type": "bug",
+  "type_reason": "A supported uv pip sync invocation terminates the uv process with SIGSEGV in __pthread_detach, which is incorrect behavior. No existing issue or pull request is close enough to centralize the report, and the unsymbolized frames do not confirm whether the merged range-reader memory-safety fix or the older resource-exhaustion/thread-pool failures apply.",
+  "summary": "No duplicate was found. The strongest fix-oriented lead is merged astral-sh/uv#21401 because uv 0.12.6 predates its remote-wheel range-reader memory-safety fix. astral-sh/uv#14462 and astral-sh/uv#3150 are adjacent Rocky Linux installer/thread failures, but both expose resource-exhaustion diagnostics missing from this report.",
+  "draft_response": "Thanks for the core-dump details. This confirms that the uv process is crashing, but the unsymbolized uv frames do not identify the cause. uv 0.12.9 includes astral-sh/uv#21401, which fixes a potential use-after-free in the HTTP range reader used for remote wheel metadata; we cannot determine from this trace whether that is the failure here. Could you first retry with uv 0.12.9 or newer and report whether the crash recurs? If it does, please include the install source for the uv binary, the approximate failure frequency, the last output from uv pip sync -vv with credentials and private paths removed, whether the requirements use a private index or direct wheel URLs, and GDB output from info files and thread apply all bt full for the matching core and binary."
+}
