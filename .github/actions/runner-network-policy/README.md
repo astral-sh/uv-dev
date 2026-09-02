@@ -69,14 +69,14 @@ application-layer relay or an overly broad prefix can still widen access.
 
 The `github-api-probe` example allows only `GET` and `HEAD` for the uv-dev repository API and
 GitHub's rate-limit endpoint. Its explicit `runner_services: true` setting also adds the job's
-validated runtime API prefixes, Run Service renewal/completion routes on GitHub's named hosts,
-results/log and artifact RPCs, GitHub's named results storage accounts, and the reviewed
-hosted-runner control-plane hosts. These are visible in the root-owned effective `url-policy.json`.
-They are coarse infrastructure exceptions, not inferred minimal permissions. The Run Service
-exception permits only `POST` to the two named routes, optionally under a numeric shard path; GitHub
-does not expose that original service base to actions in every job. The cache RPCs are not among the
-generated service rules. A profile can omit `runner_services` when those exceptions are not needed,
-but this can interrupt GitHub's job reporting.
+validated runtime API prefixes, the exact runner-provided OIDC route, Run Service renewal/completion
+routes on GitHub's named hosts, results/log and artifact RPCs, GitHub's named results storage
+accounts, and the reviewed hosted-runner control-plane hosts. These are visible in the root-owned
+effective `url-policy.json`. They are coarse infrastructure exceptions, not inferred minimal
+permissions. The Run Service exception permits only `POST` to the two named routes, optionally under
+a numeric shard path; GitHub does not expose that original service base to actions in every job. The
+cache RPCs are not among the generated service rules. A profile can omit `runner_services` when
+those exceptions are not needed, but this can interrupt GitHub's job reporting.
 
 URL mode installs a short-lived local CA on the disposable VM and terminates TLS 1.2 or newer using
 HTTP/1.1. The proxy verifies upstream TLS itself. The leaf certificate covers only the exact allowed

@@ -14,6 +14,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent.parent
 ACTION = ROOT / ".github/actions/runner-network-policy"
@@ -334,6 +335,139 @@ class URLProxyTests(unittest.TestCase):
                         self.assertEqual(
                             len(self.state.dials) - before, int(expected == 200)
                         )
+
+    def test_denied_bodies_preserve_the_policy_response(self):
+        cache_target = (
+            "/twirp/github.actions.results.api.v1.CacheService/GetCacheEntryDownloadURL"
+        )
+        for handler in (url_proxy.TLSHandler, url_proxy.HTTPHandler):
+            with self.subTest(handler=handler.__name__), self.proxy(handler) as port:
+                for name, target, size in (
+                    ("allowed.example", "/private", 1024 * 1024),
+                    (RESULTS, cache_target, 128),
+                    (RESULTS, cache_target, 1024 * 1024),
+                ):
+                    with self.subTest(host=name, target=target, size=size):
+                        status, headers, body = self.response(
+                            self.tls_connection(
+                                port,
+                                connect=handler is url_proxy.HTTPHandler,
+                                name=name,
+                            ),
+                            "POST",
+                            target,
+                            body=b"x" * size,
+                        )
+                        self.assertEqual((status, body), (403, b""))
+                        self.assertIn(("X-UV-URL-Policy", "denied"), headers)
+        with self.proxy() as port:
+            for host, target in (
+                ("allowed.example", "/private"),
+                ("10.2.3.4:978", cache_target),
+            ):
+                with self.subTest(cleartext_host=host):
+                    status, headers, body = self.clear_request(
+                        port,
+                        target,
+                        method="POST",
+                        host=host,
+                        body=b"x" * (1024 * 1024),
+                    )
+                    self.assertEqual((status, body), (403, b""))
+                    self.assertIn(("X-UV-URL-Policy", "denied"), headers)
+        self.assertEqual(self.state.dials, [])
+        self.assertEqual(self.cleartext_origin.requests, [])
+        self.assertEqual(self.tls_origin.requests, [])
+
+    def test_denied_expect_continue_is_drained_without_forwarding(self):
+        body = b"synthetic denied body" * 4096
+        for handler in (url_proxy.TLSHandler, url_proxy.HTTPHandler):
+            with self.subTest(handler=handler.__name__), self.proxy(handler) as port:
+                connection = self.tls_connection(
+                    port, connect=handler is url_proxy.HTTPHandler
+                )
+                try:
+                    if connection.sock is None:
+                        connection.connect()
+                    stream = connection.sock
+                    stream.sendall(
+                        (
+                            "POST /private HTTP/1.1\r\nHost: allowed.example\r\n"
+                            f"Content-Length: {len(body)}\r\n"
+                            "Expect: 100-continue\r\n\r\n"
+                        ).encode()
+                    )
+                    with stream.makefile("rb", buffering=0) as incoming:
+                        self.assertEqual(
+                            incoming.readline(), b"HTTP/1.1 100 Continue\r\n"
+                        )
+                        self.assertEqual(incoming.readline(), b"\r\n")
+                    stream.sendall(body)
+                    response = http.client.HTTPResponse(stream)
+                    response.begin()
+                    self.assertEqual(
+                        (response.status, response.getheader("X-UV-URL-Policy")),
+                        (403, "denied"),
+                    )
+                    self.assertEqual(response.read(), b"")
+                    response.close()
+                finally:
+                    connection.close()
+        self.assertEqual(self.state.dials, [])
+        self.assertEqual(self.cleartext_origin.requests, [])
+        self.assertEqual(self.tls_origin.requests, [])
+
+    def test_denied_body_size_timeout_and_framing_limits_remain(self):
+        with self.proxy() as port:
+            for framing, expected in (
+                (b"Content-Length: 67108865\r\n", 413),
+                (b"Transfer-Encoding: chunked\r\n", 400),
+            ):
+                with self.subTest(framing=framing):
+                    self.assertEqual(
+                        self.raw_response(
+                            port,
+                            b"POST /private HTTP/1.1\r\nHost: allowed.example\r\n"
+                            + framing
+                            + b"\r\n",
+                        )[0],
+                        expected,
+                    )
+            self.assertEqual(
+                self.raw_response(
+                    port,
+                    b"POST /private HTTP/1.1\r\nHost: allowed.example\r\n"
+                    b"Content-Length: 2\r\n\r\nx",
+                    half_close=True,
+                )[0],
+                400,
+            )
+        with patch.object(url_proxy, "IO_TIMEOUT", 1):
+            for handler in (url_proxy.TLSHandler, url_proxy.HTTPHandler):
+                with (
+                    self.subTest(handler=handler.__name__),
+                    self.proxy(handler) as port,
+                ):
+                    connection = self.tls_connection(
+                        port, connect=handler is url_proxy.HTTPHandler
+                    )
+                    try:
+                        if connection.sock is None:
+                            connection.connect()
+                        connection.sock.sendall(
+                            b"POST /private HTTP/1.1\r\nHost: allowed.example\r\n"
+                            b"Content-Length: 16\r\n\r\nx"
+                        )
+                        response = http.client.HTTPResponse(connection.sock)
+                        response.begin()
+                        self.assertEqual(response.status, 408)
+                        self.assertEqual(response.read(), b"")
+                        response.close()
+                    finally:
+                        connection.close()
+        self.assertEqual(self.state.dials, [])
+        self.assertEqual(self.cleartext_origin.requests, [])
+        self.assertEqual(self.tls_origin.requests, [])
 
     def test_connect_authority_sni_and_host_must_agree(self):
         with self.proxy() as port:

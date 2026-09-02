@@ -47,6 +47,19 @@ def service_url(value, *, directory=True):
     return urlunsplit(("https", name, path, "", ""))
 
 
+def oidc_url(value):
+    """Keep the runner's exact identity-token route, without its query data."""
+    if not isinstance(value, str) or any(not 32 < ord(item) < 127 for item in value):
+        raise ValueError("invalid OIDC service URL")
+    parsed = urlsplit(value)
+    if parsed.fragment or parsed.path in {"", "/"}:
+        raise ValueError("unexpected OIDC service URL")
+    return service_url(
+        urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", "")),
+        directory=False,
+    )
+
+
 def runtime_services(environment):
     """Pass endpoint metadata to the root installer, never credentials or queries."""
     runtime = service_url(environment["ACTIONS_RUNTIME_URL"], directory=False)
@@ -59,7 +72,10 @@ def runtime_services(environment):
             raise ValueError("unexpected private results service")
         # The validated Depot mapping forwards to this public origin.
         results = RESULTS
-    return {"runtime": runtime, "results": service_url(results)}
+    services = {"runtime": runtime, "results": service_url(results)}
+    if endpoint := environment.get("ACTIONS_ID_TOKEN_REQUEST_URL"):
+        services["oidc"] = oidc_url(endpoint)
+    return services
 
 
 def rule(url, methods=METHODS, *, match="prefix", query="any"):
@@ -75,7 +91,11 @@ def compile_policy(path, name, domain_policy, services):
     selected = profile_config(path, name)
     rules = selected["rules"]
     if selected["runner_services"]:
-        if set(services) != {"runtime", "results"}:
+        if (
+            not isinstance(services, dict)
+            or not {"runtime", "results"} <= services.keys()
+            or not services.keys() <= {"runtime", "results", "oidc"}
+        ):
             raise ValueError("runner service URLs are required")
         runtime_base = service_url(services["runtime"], directory=False)
         runtime = service_url(runtime_base)
@@ -101,6 +121,10 @@ def compile_policy(path, name, domain_policy, services):
             for origin in RUN_SERVICE_ORIGINS
             for suffix in RUN_SERVICE_PATHS
         )
+        if "oidc" in services:
+            # The original query is deliberately not persisted; clients append
+            # their audience to this one exact, authenticated request path.
+            rules.append(rule(oidc_url(services["oidc"]), ("GET",), match="exact"))
         for origin in dict.fromkeys((results, RESULTS)):
             rules.extend(rule(origin + suffix, ("POST",)) for suffix in RESULTS_PATHS)
         # These exact GitHub-published storage accounts carry signed log/artifact

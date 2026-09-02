@@ -14,7 +14,7 @@ sys.path.insert(0, str(ACTION))
 import proxy
 import url_proxy
 from policy import Policy, load
-from url_settings import compile_policy, runtime_services, service_url
+from url_settings import compile_policy, oidc_url, runtime_services, service_url
 
 
 class URLSettingsTests(unittest.TestCase):
@@ -22,6 +22,7 @@ class URLSettingsTests(unittest.TestCase):
         environment = {
             "ACTIONS_RUNTIME_URL": "https://pipelines.actions.githubusercontent.com/account/",
             "ACTIONS_RESULTS_URL": "http://10.2.3.4:978/",
+            "ACTIONS_ID_TOKEN_REQUEST_URL": "https://identity.actions.githubusercontent.com/job/oidctoken?opaque=synthetic-secret",
             "ACTIONS_RUNTIME_TOKEN": "synthetic-secret",
         }
         self.assertEqual(
@@ -29,8 +30,10 @@ class URLSettingsTests(unittest.TestCase):
             {
                 "runtime": environment["ACTIONS_RUNTIME_URL"],
                 "results": "https://results-receiver.actions.githubusercontent.com/",
+                "oidc": "https://identity.actions.githubusercontent.com/job/oidctoken",
             },
         )
+        self.assertNotIn("synthetic-secret", json.dumps(runtime_services(environment)))
         for value in (
             "https://api.github.com/",
             "https://user@pipelines.actions.githubusercontent.com/",
@@ -45,11 +48,23 @@ class URLSettingsTests(unittest.TestCase):
         for value in ("http://10.2.3.4:977/", "http://example.invalid:978/"):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 runtime_services({**environment, "ACTIONS_RESULTS_URL": value})
+        for value in (
+            "https://api.github.com/job/oidctoken",
+            "https://user@identity.actions.githubusercontent.com/job/oidctoken",
+            "https://identity.actions.githubusercontent.com/",
+            "https://identity.actions.githubusercontent.com/job/oidctoken#fragment",
+            "http://identity.actions.githubusercontent.com/job/oidctoken",
+            "https://identity.actions.githubusercontent.com:444/job/oidctoken",
+            "https://identity.actions.githubusercontent.com/job/oidctoken?bad=\n",
+        ):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                oidc_url(value)
 
     def test_effective_example_preserves_url_restrictions(self):
         services = {
             "runtime": "https://pipelines.actions.githubusercontent.com/account/",
             "results": "https://results-receiver.actions.githubusercontent.com/",
+            "oidc": "https://identity.actions.githubusercontent.com/job/oidctoken",
         }
         domain = load(ACTION / "policies.json", "github")
         policy = compile_policy(
@@ -57,6 +72,30 @@ class URLSettingsTests(unittest.TestCase):
         )
         self.assertTrue(all(domain.permits(host) for host in policy.hosts))
         self.assertLessEqual(len(policy.hosts), 128)
+        self.assertTrue(
+            policy.permits(
+                "https",
+                "identity.actions.githubusercontent.com",
+                443,
+                "GET",
+                "/job/oidctoken?audience=synthetic",
+            )
+        )
+        for method, path in (
+            ("POST", "/job/oidctoken"),
+            ("GET", "/job/oidctoken/other"),
+            ("GET", "/another/oidctoken"),
+        ):
+            with self.subTest(method=method, path=path):
+                self.assertFalse(
+                    policy.permits(
+                        "https",
+                        "identity.actions.githubusercontent.com",
+                        443,
+                        method,
+                        path,
+                    )
+                )
         for method in ("GET", "HEAD"):
             self.assertTrue(
                 policy.permits(

@@ -177,19 +177,39 @@ def read_request(stream):
     return Request(method, target, version, headers, length, bool(expect))
 
 
-def read_body(stream, length):
+def body_chunks(stream, length):
+    if not 0 <= length <= MAX_BODY:
+        raise RequestError(413)
     deadline = time.monotonic() + IO_TIMEOUT
-    body = bytearray()
-    while len(body) < length:
+    remaining = length
+    while remaining:
         deadline_timeout(stream, deadline)
         try:
-            block = stream.recv(min(65536, length - len(body)))
+            block = stream.recv(min(65536, remaining))
         except TimeoutError:
             raise RequestError(408) from None
         if not block:
             raise RequestError()
+        remaining -= len(block)
+        yield block
+
+
+def read_body(stream, length):
+    body = bytearray()
+    for block in body_chunks(stream, length):
         body.extend(block)
     return bytes(body)
+
+
+def deny_request(stream, request):
+    # Closing TLS with unread request data can reset the connection before the
+    # client receives our denial. Consume only the validated, bounded body; it
+    # is never retained, authorized, or passed to an upstream connection.
+    if request.expect_continue:
+        stream.sendall(b"HTTP/1.1 100 Continue\r\n\r\n")
+    for _ in body_chunks(stream, request.length):
+        pass
+    send_reply(stream, 403)
 
 
 def authority(value, default_port):
@@ -460,6 +480,7 @@ def connect_request(stream, server, request):
 
 def serve_http(stream, server, tls_host=None, private_authority=None):
     stream.settimeout(IO_TIMEOUT)
+    request = None
     try:
         request = read_request(stream)
         if request.method == "CONNECT":
@@ -490,7 +511,14 @@ def serve_http(stream, server, tls_host=None, private_authority=None):
         server.state.count("http_error")
         send_reply(stream, error.status)
     except PermissionError:
-        send_reply(stream, 403)
+        if request is None:
+            send_reply(stream, 403)
+        else:
+            try:
+                deny_request(stream, request)
+            except RequestError as error:
+                server.state.count("http_error")
+                send_reply(stream, error.status)
     except (OSError, ValueError, http.client.HTTPException):
         server.state.count("http_error")
         send_reply(stream, 502)
