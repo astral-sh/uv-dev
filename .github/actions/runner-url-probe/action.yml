@@ -1,0 +1,13 @@
+name: Runner URL policy acceptance probe
+description: Harmless checks against the uv-dev repository and disposable runner
+inputs:
+  operation:
+    description: Run the unguarded control, protected probe, or service fault check
+    required: true
+outputs:
+  addresses:
+    description: Public API addresses reached by the unguarded control
+runs:
+  using: node24
+  pre: pre.cjs
+  main: main.cjs
