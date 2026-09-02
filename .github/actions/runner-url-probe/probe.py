@@ -2,6 +2,7 @@
 
 import base64
 import http.client
+import importlib
 import ipaddress
 import json
 import os
@@ -196,7 +197,7 @@ def control():
 
 
 def early():
-    if os.environ["INPUT_OPERATION"] == "control":
+    if os.environ["INPUT_OPERATION"] in {"control", "metadata"}:
         return
     if os.environ.get("UV_NETWORK_URL_PROFILE") != "github-api-probe":
         raise RuntimeError("URL policy did not run before the later pre hook")
@@ -204,6 +205,60 @@ def early():
         raise RuntimeError("allowed HTTPS URL failed in later pre hook")
     denied("GET", DENIED)
     print("URL_POLICY_RESULT=" + json.dumps({"later_pre_denied": True}))
+
+
+def metadata():
+    endpoint = urlsplit(os.environ["ACTIONS_ID_TOKEN_REQUEST_URL"])
+    result = {
+        "https": endpoint.scheme == "https",
+        "actions_host": bool(endpoint.hostname)
+        and endpoint.hostname.endswith(".actions.githubusercontent.com"),
+        "default_port": endpoint.port in {None, 443},
+        "path_is_root": endpoint.path in {"", "/"},
+        "path_length": len(endpoint.path),
+        "repeated_slash": "//" in endpoint.path,
+        "dot_segment": any(part in {".", ".."} for part in endpoint.path.split("/")),
+        "semicolon": ";" in endpoint.path,
+        "percent_escape": "%" in endpoint.path,
+        "braces": any(part in endpoint.path for part in "{}"),
+        "query_present": bool(endpoint.query),
+        "fragment_present": bool(endpoint.fragment),
+    }
+    source = (
+        Path(os.environ["GITHUB_WORKSPACE"]) / ".github/actions/runner-network-policy"
+    )
+    sys.path.insert(0, str(source))
+    settings = importlib.import_module("url_settings")
+    domain = importlib.import_module("policy")
+    phase = "runtime-metadata"
+    try:
+        services = settings.runtime_services(os.environ)
+        phase = "url-profile"
+        settings.compile_policy(
+            source / "url-policies.json",
+            "github-api-probe",
+            domain.load(source / "policies.json", "github"),
+            services,
+        )
+        result["configuration_accepted"] = True
+    except (ValueError, TypeError, KeyError) as error:
+        reasons = {
+            "invalid OIDC service URL",
+            "unexpected OIDC service URL",
+            "invalid runner service URL",
+            "unexpected runner service URL",
+            "URL must use visible ASCII",
+            "invalid URL character",
+            "invalid URL escape",
+            "ambiguous URL escape",
+            "ambiguous request path",
+            "URL profile exceeds its domain policy",
+            "too many URL policy hosts",
+        }
+        result["configuration_accepted"] = False
+        result["rejected_at"] = phase
+        result["reason"] = str(error) if str(error) in reasons else type(error).__name__
+    print("URL_POLICY_METADATA=" + json.dumps(result), flush=True)
 
 
 def oidc():
@@ -377,6 +432,8 @@ def main():
         early()
     elif os.environ["INPUT_OPERATION"] == "control":
         control()
+    elif os.environ["INPUT_OPERATION"] == "metadata":
+        metadata()
     elif os.environ["INPUT_OPERATION"] in {"probe", "fault"}:
         probe()
     else:
