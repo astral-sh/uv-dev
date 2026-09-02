@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 13670,
+        "title": "Feature Request: Optional Workspaces",
+        "url": "https://github.com/astral-sh/uv/issues/13670",
+        "state": "open",
+        "reason": "Also concerns an absent local workspace, but intentionally retains the dependency and requests fallback behavior; astral-sh/uv#21429 reports failure after removing the declaration."
+      },
+      {
+        "kind": "issue",
+        "number": 7055,
+        "title": "Ignore path dependency's workspace with `uv lock`",
+        "url": "https://github.com/astral-sh/uv/issues/7055",
+        "state": "open",
+        "reason": "Also reports locking blocked by a missing local workspace package, but that package remains declared inside a vendored path dependency."
+      },
+      {
+        "kind": "issue",
+        "number": 6685,
+        "title": "`--no-install-workspace` needs the pyproject.toml of each workspace member to be present",
+        "url": "https://github.com/astral-sh/uv/issues/6685",
+        "state": "closed",
+        "reason": "Established a missing-workspace-member sync failure, but specifically with retained members and lock-preserving Docker workflows."
+      },
+      {
+        "kind": "pull_request",
+        "number": 6737,
+        "title": "Do not require workspace members to sync with `--frozen`",
+        "url": "https://github.com/astral-sh/uv/pull/6737",
+        "state": "merged",
+        "reason": "Fixed astral-sh/uv#6685 for frozen sync, where the existing lockfile is authoritative; it does not cover pruning a removed dependency during relocking."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests for missing workspace members, missing local dependencies, stale lockfile dependencies, deleted workspace packages, broken-dependency removal, and the `uv sync`, `uv lock`, and `uv remove` commands. Conceptual and fix-oriented searches covered optional workspaces, absent path sources, stale derived lock state, and recovery behavior after uv 0.11.28. No same failure was found. astral-sh/uv#17196, astral-sh/uv#17901, and astral-sh/uv#18051 were ruled out because they concern existing directories without `pyproject.toml`; astral-sh/uv#12661 and astral-sh/uv#16407 concern frozen-mode workspace identity or error reporting; astral-sh/uv#16468 and astral-sh/uv#19412 concern damaged installed environments."
+  },
+  "type": "bug",
+  "type_reason": "The central report is a correctness failure: after a dependency is removed from project metadata, an unfrozen lock refresh should regenerate the derived lockfile without that package. The doctor and recovery proposals are secondary enhancements. The missing reproduction prevents confirmation of the mechanism but does not turn the reported incorrect behavior into a question, and no existing item tracks the same failure closely enough for duplicate classification.",
+  "summary": "No duplicate was found. The closest items involve missing workspace members that remain declared, optional fallback behavior, or frozen synchronization rather than failure to prune a removed local dependency during an ordinary lock refresh.",
+  "draft_response": "Thanks for the report. After a dependency has been removed from the project metadata—including any applicable dependency-group, optional-dependency, `tool.uv.sources`, and `tool.uv.workspace.members` entries—an unfrozen `uv lock` or `uv sync` should refresh `uv.lock` and remove the stale local package. `uv remove` only removes dependencies still declared in project metadata; it does not directly edit lock-only records.\n\nCould you retry with the current release, uv 0.12.9, and provide a minimal reproduction if it still fails? Please include the directory layout and relevant `pyproject.toml` files before and after deletion, the exact commands and complete error output, and whether `UV_FROZEN`, `UV_LOCKED`, or equivalent command-line flags are set."
+}
