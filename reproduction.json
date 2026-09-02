@@ -1,0 +1,4 @@
+{
+  "reproduction": "needs_more_information",
+  "reason": "On Linux x86_64 with Python 3.12.3, both uv 0.11.28 and 0.12.9 recovered successfully: after `uv lock`, removing the dependency declaration and deleting its directory, ordinary `uv sync` pruned it from `uv.lock`. `uv remove` reported it was already absent from `project.dependencies`. `uv sync --locked` rejected the stale lock, while `uv sync --frozen` failed on the missing local distribution. Explicit workspace-member and path-source variants also recovered with ordinary sync. Existing coverage includes `crates/uv/tests/lock/lock.rs` tests `lock_remove_member`, `lock_remove_member_non_project`, and `lock_unused_external_workspace_source`. The report needs complete root/member configuration, directory layout, exact commands and errors, any `uv.toml`, and locked/frozen flags or environment variables to identify the failing path."
+}
