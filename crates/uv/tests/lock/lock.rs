@@ -2325,7 +2325,7 @@ fn lock_project_with_scoped_override_yank() -> Result<()> {
     Ok(())
 }
 
-/// Lock a project when only one wheel in a release is yanked.
+/// Lock a project when only some distributions in a release are yanked.
 #[cfg(feature = "test-universal")]
 #[tokio::test]
 async fn lock_partially_yanked_release() -> Result<()> {
@@ -2352,11 +2352,58 @@ async fn lock_partially_yanked_release() -> Result<()> {
                     >
                       basic_package-0.1.0-2-py3-none-any.whl
                     </a>
+                    <a
+                      href="/files/basic_package-0.1.0.tar.gz#sha256=3333333333333333333333333333333333333333333333333333333333333333"
+                      data-yanked="broken source distribution"
+                    >
+                      basic_package-0.1.0.tar.gz
+                    </a>
                   </body>
                 </html>
             "#},
             "text/html",
         ))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/simple/extras/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            indoc! {r#"
+                <!DOCTYPE html>
+                <html>
+                  <body>
+                    <a
+                      href="/files/extras-0.0.2-py3-none-any.whl#sha256=4444444444444444444444444444444444444444444444444444444444444444"
+                      data-core-metadata="true"
+                      data-yanked="broken wheel"
+                    >
+                      extras-0.0.2-py3-none-any.whl
+                    </a>
+                    <a
+                      href="/files/extras-0.0.2-cp311-cp311-any.whl#sha256=6666666666666666666666666666666666666666666666666666666666666666"
+                      data-core-metadata="true"
+                    >
+                      extras-0.0.2-cp311-cp311-any.whl
+                    </a>
+                    <a
+                      href="/files/extras-0.0.2.tar.gz#sha256=8c6bf0e0d2cb5dd1051ca06c7824917b6e00ab40e93097ca5bb8bb1598e08830"
+                    >
+                      extras-0.0.2.tar.gz
+                    </a>
+                  </body>
+                </html>
+            "#},
+            "text/html",
+        ))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/files/extras-0.0.2-cp311-cp311-any.whl.metadata"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(indoc! {"
+            Metadata-Version: 2.1
+            Name: extras
+            Version: 0.0.2
+        "}))
         .mount(&server)
         .await;
     Mock::given(method("GET"))
@@ -2379,7 +2426,7 @@ async fn lock_partially_yanked_release() -> Result<()> {
             name = "project"
             version = "0.1.0"
             requires-python = ">=3.12,<3.13"
-            dependencies = ["basic-package>=0.1.0"]
+            dependencies = ["basic-package>=0.1.0", "extras>=0.0.2"]
         "#})?;
 
     uv_snapshot!(context.filters(), context.lock()
@@ -2388,10 +2435,10 @@ async fn lock_partially_yanked_release() -> Result<()> {
         .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 2 packages in [TIME]
+    Resolved 3 packages in [TIME]
     ");
 
-    // The yanked wheel is undesirably retained in the lockfile; see astral-sh/uv#21430.
+    // Yanked distributions should not be retained in the lockfile; see astral-sh/uv#21430.
     insta::with_settings!({
         filters => context.filters(),
     }, {
@@ -2406,8 +2453,13 @@ async fn lock_partially_yanked_release() -> Result<()> {
         source = { registry = "http://[LOCALHOST]/simple" }
         wheels = [
             { url = "http://[LOCALHOST]/files/basic_package-0.1.0-1-py3-none-any.whl", hash = "sha256:1111111111111111111111111111111111111111111111111111111111111111" },
-            { url = "http://[LOCALHOST]/files/basic_package-0.1.0-2-py3-none-any.whl", hash = "sha256:2222222222222222222222222222222222222222222222222222222222222222" },
         ]
+
+        [[package]]
+        name = "extras"
+        version = "0.0.2"
+        source = { registry = "http://[LOCALHOST]/simple" }
+        sdist = { url = "http://[LOCALHOST]/files/extras-0.0.2.tar.gz", hash = "sha256:8c6bf0e0d2cb5dd1051ca06c7824917b6e00ab40e93097ca5bb8bb1598e08830" }
 
         [[package]]
         name = "project"
@@ -2415,12 +2467,25 @@ async fn lock_partially_yanked_release() -> Result<()> {
         source = { virtual = "." }
         dependencies = [
             { name = "basic-package" },
+            { name = "extras" },
         ]
 
         [package.metadata]
-        requires-dist = [{ name = "basic-package", specifier = ">=0.1.0" }]
+        requires-dist = [
+            { name = "basic-package", specifier = ">=0.1.0" },
+            { name = "extras", specifier = ">=0.0.2" },
+        ]
         "#);
     });
+
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--locked")
+        .arg("--offline")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
 
     Ok(())
 }
