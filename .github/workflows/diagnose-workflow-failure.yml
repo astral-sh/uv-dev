@@ -1,5 +1,5 @@
 # Isolated probe, excluded from uv-dev's failure-report automation.
-name: Runner URL policy acceptance probe
+name: Runner URL policy metadata diagnostic
 
 on:
   push:
@@ -11,147 +11,22 @@ permissions:
 env:
   ACTIONS_CACHE_MODE: none
 
-defaults:
-  run:
-    shell: bash
-
 jobs:
-  control:
+  metadata:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    outputs:
-      addresses: ${{ steps.control.outputs.addresses }}
-    steps:
-      - name: Record unguarded API and direct-address controls
-        id: control
-        uses: astral-sh/uv-dev/.github/actions/runner-url-probe@b1c268a6240645d4a264d1daa14163a5ac17ce38
-        env:
-          GH_TOKEN: ${{ github.token }}
-        with:
-          operation: control
-
-      - name: Upload harmless artifact control
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: url-policy-seed-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/url-policy-marker.txt
-          if-no-files-found: error
-          retention-days: 1
-
-  protected:
-    name: protected-${{ matrix.label }}
-    needs: control
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { label: github-linux, runner: ubuntu-24.04 }
-          - { label: depot-linux, runner: depot-ubuntu-24.04-4 }
-          - { label: depot-latest, runner: depot-ubuntu-latest-4 }
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 10
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - name: Install exact URL policy before other action hooks
-        uses: astral-sh/uv-dev/.github/actions/runner-network-policy@bccf23f6ab482091b787b5327ed57c852c65d2ee
-        with:
-          profile: github
-          url-profile: github-api-probe
-          disposable: true
-
-      - name: Download harmless artifact through the policy
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: url-policy-seed-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/url-policy-seed
-
-      - name: Check URLs, direct addresses, artifacts, and test-audience OIDC
-        uses: astral-sh/uv-dev/.github/actions/runner-url-probe@b1c268a6240645d4a264d1daa14163a5ac17ce38
-        env:
-          GH_TOKEN: ${{ github.token }}
-          URL_POLICY_BASELINE_ADDRESSES: ${{ needs.control.outputs.addresses }}
-        with:
-          operation: probe
-
-      - name: Upload sanitized evidence through the policy
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: url-policy-result-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.label }}
-          path: ${{ runner.temp }}/url-policy-evidence.json
-          if-no-files-found: error
-          retention-days: 1
-
-  fault:
-    runs-on: ubuntu-24.04
-    needs: control
-    timeout-minutes: 10
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - name: Install URL policy with explicit service-control privileges
-        uses: astral-sh/uv-dev/.github/actions/runner-network-policy@bccf23f6ab482091b787b5327ed57c852c65d2ee
-        with:
-          profile: github
-          url-profile: github-api-probe
-          disposable: true
-          privileges: retain
-
-      - name: Download harmless artifact through the policy
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: url-policy-seed-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/url-policy-seed
-
-      - name: Check policy while stopping and restarting only its service
-        uses: astral-sh/uv-dev/.github/actions/runner-url-probe@b1c268a6240645d4a264d1daa14163a5ac17ce38
-        env:
-          GH_TOKEN: ${{ github.token }}
-          URL_POLICY_BASELINE_ADDRESSES: ${{ needs.control.outputs.addresses }}
-        with:
-          operation: fault
-
-      - name: Upload sanitized fault evidence through the policy
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: url-policy-result-${{ github.run_id }}-${{ github.run_attempt }}-fault
-          path: ${{ runner.temp }}/url-policy-evidence.json
-          if-no-files-found: error
-          retention-days: 1
-
-  verify:
-    runs-on: ubuntu-24.04
-    needs: [protected, fault]
     timeout-minutes: 5
+    permissions:
+      contents: read
+      id-token: write
     steps:
-      - name: Download sanitized evidence
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - name: Check out the exact policy compiler
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          pattern: url-policy-result-${{ github.run_id }}-${{ github.run_attempt }}-*
-          path: ${{ runner.temp }}/url-policy-results
+          ref: bccf23f6ab482091b787b5327ed57c852c65d2ee
+          persist-credentials: false
+          sparse-checkout: .github/actions/runner-network-policy
 
-      - name: Verify all protected runners and the fault check
-        run: |
-          python3 - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-
-          root = Path(os.environ["RUNNER_TEMP"]) / "url-policy-results"
-          results = list(root.glob("*/url-policy-evidence.json"))
-          assert len(results) == 4, "Expected all four URL-policy results"
-          faults = 0
-          for path in results:
-              result = json.loads(path.read_text())
-              assert all(result.get(name) is True for name in ("urls", "methods", "queries", "schemes", "canonical_paths", "cache_rpc_paths", "oidc", "artifact"))
-              assert isinstance(result.get("direct_addresses"), int) and result["direct_addresses"] > 0
-              if path.parent.name.endswith(("-depot-linux", "-depot-latest")):
-                  assert result.get("private_cache_entrypoint") is True
-              faults += result.get("stopped_proxy_denied") is True
-          assert faults == 1, "Expected the stopped-proxy denial result"
-          print("URL_POLICY_RESULT=" + json.dumps({"verified": len(results), "stopped_proxy_denied": True}))
-          PY
+      - name: Report sanitized runner metadata constraints
+        uses: astral-sh/uv-dev/.github/actions/runner-url-probe@2f4479e25139954db942ab87fc926ef317b8a3d5
+        with:
+          operation: metadata
