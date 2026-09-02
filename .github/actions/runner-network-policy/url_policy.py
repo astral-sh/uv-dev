@@ -19,6 +19,7 @@ PATH_CHARACTERS = frozenset(UNRESERVED + SUB_DELIMITERS + ":@/") - {";"}
 QUERY_CHARACTERS = PATH_CHARACTERS | frozenset("?;")
 ENCODED_PATH_DELIMITERS = frozenset(":/?#[]@!$&'()*+,;=.%\\")
 IPV4_SPELLING = re.compile(r"(?:0x[0-9a-f]+|[0-9]+)(?:\.(?:0x[0-9a-f]+|[0-9]+)){0,3}")
+INTEGER_SEGMENT = "{integer}"
 
 
 def visible_ascii(value: str) -> None:
@@ -74,7 +75,7 @@ def request_target(value: str) -> tuple[str, str]:
     return path, separator + query
 
 
-def parse_url(value: str) -> tuple[str, str, int, str, str]:
+def parse_url(value: str, *, template: bool = False) -> tuple[str, str, int, str, str]:
     """Parse the small HTTP URL grammar without permissive URL-parser rewriting."""
     visible_ascii(value)
     scheme, separator, remainder = value.partition("://")
@@ -93,7 +94,21 @@ def parse_url(value: str) -> tuple[str, str, int, str, str]:
     target = remainder[authority_end:]
     if not target or target.startswith("?"):
         target = "/" + target
-    path, query = request_target(target)
+    if template:
+        path, separator, query = target.partition("?")
+        segments = path.split("/")
+        if INTEGER_SEGMENT not in segments or any(
+            ("{" in segment or "}" in segment) and segment != INTEGER_SEGMENT
+            for segment in segments
+        ):
+            raise ValueError("template requires complete integer segments")
+        # Validate the rule with a concrete segment while retaining its spelling.
+        concrete = "/".join(
+            "0" if segment == INTEGER_SEGMENT else segment for segment in segments
+        )
+        _, query = request_target(concrete + separator + query)
+    else:
+        path, query = request_target(target)
     return scheme, host, DEFAULT_PORTS[scheme], path, query
 
 
@@ -130,9 +145,14 @@ class URLRule:
             raise ValueError("explicit supported HTTP methods are required")
         match = value.get("match", "exact")
         query_mode = value.get("query", "exact")
-        if match not in ("exact", "prefix") or query_mode not in ("exact", "any"):
+        if match not in ("exact", "prefix", "template") or query_mode not in (
+            "exact",
+            "any",
+        ):
             raise ValueError("unknown URL matching mode")
-        scheme, host, port, path, query = parse_url(value["url"])
+        scheme, host, port, path, query = parse_url(
+            value["url"], template=match == "template"
+        )
         if match == "prefix" and not path.endswith("/"):
             raise ValueError("URL prefix must end with a slash")
         if query_mode == "any" and query not in ("", "?"):
@@ -156,6 +176,24 @@ class URLRule:
             "match": self.match,
             "query": self.query_mode,
         }
+
+    def matches_path(self, path: str) -> bool:
+        if self.match == "exact":
+            return path == self.path
+        if self.match == "prefix":
+            return path.startswith(self.path)
+        if self.match != "template":
+            return False
+        expected = self.path.split("/")
+        actual = path.split("/")
+        return len(actual) == len(expected) and all(
+            bool(actual_segment)
+            and actual_segment.isascii()
+            and actual_segment.isdecimal()
+            if expected_segment == INTEGER_SEGMENT
+            else actual_segment == expected_segment
+            for expected_segment, actual_segment in zip(expected, actual, strict=True)
+        )
 
 
 @dataclass(frozen=True)
@@ -201,11 +239,7 @@ class URLPolicy:
             and rule.host == host
             and rule.port == port
             and method in rule.methods
-            and (
-                path == rule.path
-                if rule.match == "exact"
-                else path.startswith(rule.path)
-            )
+            and rule.matches_path(path)
             and (rule.query_mode == "any" or query == rule.query_suffix)
             for rule in self.rules
         )

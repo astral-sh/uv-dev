@@ -115,6 +115,108 @@ class URLPolicyTests(unittest.TestCase):
                     allowed.permits("https", "allowed.example", 443, "GET", target)
                 )
 
+    def test_templates_match_complete_ascii_decimal_segments(self):
+        allowed = policy(
+            "https://allowed.example/{integer}/completejob",
+            methods=["POST"],
+            match="template",
+        )
+        for target in ("/0/completejob", "/58/completejob", "/0058/completejob"):
+            with self.subTest(target=target):
+                self.assertTrue(
+                    allowed.permits("https", "allowed.example", 443, "POST", target)
+                )
+        for target in (
+            "//completejob",
+            "/+58/completejob",
+            "/-58/completejob",
+            "/5.8/completejob",
+            "/0x3a/completejob",
+            "/58a/completejob",
+            "/%35%38/completejob",
+            "/５８/completejob",
+            "/58/CompleteJob",
+            "/58/completejob/",
+            "/58/completejob/extra",
+            "/58/completejob?",
+            "/58/completejob?unexpected=1",
+            "/58/../completejob",
+            "/58;parameter/completejob",
+            "/58%20/completejob",
+        ):
+            with self.subTest(target=target):
+                self.assertFalse(
+                    allowed.permits("https", "allowed.example", 443, "POST", target)
+                )
+        self.assertFalse(
+            allowed.permits("https", "allowed.example", 443, "GET", "/58/completejob")
+        )
+        self.assertEqual(URLPolicy.from_dict(allowed.to_dict()), allowed)
+
+    def test_templates_keep_literal_segments_and_query_rules(self):
+        allowed = policy(
+            "https://allowed.example/runs/{integer}/jobs/{integer}/?api-version=6.0",
+            methods=["POST"],
+            match="template",
+        )
+        self.assertTrue(
+            allowed.permits(
+                "https",
+                "allowed.example",
+                443,
+                "POST",
+                "/runs/58/jobs/9/?api-version=6.0",
+            )
+        )
+        for target in (
+            "/runs/58/jobs/9/",
+            "/runs/58/jobs/9/?api-version=%36.0",
+            "/runs/58/jobs/9/?api-version=6.0&extra=1",
+            "/runs/58/job/9/?api-version=6.0",
+            "/runs/58/jobs/9/more/?api-version=6.0",
+        ):
+            with self.subTest(target=target):
+                self.assertFalse(
+                    allowed.permits("https", "allowed.example", 443, "POST", target)
+                )
+        literal = policy(
+            "https://allowed.example/*/{integer}/fixed",
+            match="template",
+            query="any",
+        )
+        self.assertTrue(
+            literal.permits("https", "allowed.example", 443, "GET", "/*/7/fixed?q=%20")
+        )
+        self.assertFalse(
+            literal.permits("https", "allowed.example", 443, "GET", "/other/7/fixed")
+        )
+        self.assertEqual(URLPolicy.from_dict(literal.to_dict()), literal)
+
+    def test_invalid_templates_are_rejected(self):
+        for url in (
+            "https://allowed.example/58/completejob",
+            "https://{integer}.example/completejob",
+            "https://allowed.example:{integer}/completejob",
+            "https://allowed.example/completejob?shard={integer}",
+            "https://allowed.example/{integer}/completejob?shard={integer}",
+            "https://allowed.example/{integer}suffix/completejob",
+            "https://allowed.example/prefix{integer}/completejob",
+            "https://allowed.example/{integer}{integer}/completejob",
+            "https://allowed.example/{id}/completejob",
+            "https://allowed.example/{Integer}/completejob",
+            "https://allowed.example/{integer*}/completejob",
+            "https://allowed.example/%7Binteger%7D/completejob",
+            "https://allowed.example//{integer}/completejob",
+            "https://allowed.example/{integer}/../completejob",
+            "https://allowed.example/{integer};parameter/completejob",
+            "https://allowed.example/{integer}/%2e/completejob",
+        ):
+            with self.subTest(url=url), self.assertRaises(ValueError):
+                policy(url, match="template")
+        for mode in ("exact", "prefix"):
+            with self.subTest(mode=mode), self.assertRaises(ValueError):
+                policy("https://allowed.example/{integer}/", match=mode)
+
     def test_query_any_is_explicit_and_preserves_signed_data(self):
         allowed = policy(
             "https://allowed.example/packages/", match="prefix", query="any"

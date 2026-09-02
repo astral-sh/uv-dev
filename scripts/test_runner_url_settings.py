@@ -109,6 +109,53 @@ class URLSettingsTests(unittest.TestCase):
                 "/account/_apis/artifactcache/cache?keys=synthetic",
             )
         )
+        for host, path in (
+            ("pipelines.actions.githubusercontent.com", "/account/renewjob"),
+            ("pipelines.actions.githubusercontent.com", "/account/completejob"),
+            (
+                "run-actions-1-azure-eastus.actions.githubusercontent.com",
+                "/renewjob",
+            ),
+            (
+                "run-actions-3-azure-eastus.actions.githubusercontent.com",
+                "/completejob",
+            ),
+            (
+                "run-actions-1-azure-eastus.actions.githubusercontent.com",
+                "/58/completejob",
+            ),
+            (
+                "run-actions-2-azure-eastus.actions.githubusercontent.com",
+                "/176/renewjob",
+            ),
+        ):
+            with self.subTest(host=host, path=path):
+                self.assertTrue(policy.permits("https", host, 443, "POST", path))
+                self.assertFalse(policy.permits("https", host, 443, "GET", path))
+                self.assertFalse(
+                    policy.permits("https", host, 443, "POST", path + "/extra")
+                )
+                self.assertFalse(
+                    policy.permits("https", host, 443, "POST", path + "?unexpected=1")
+                )
+        self.assertFalse(
+            policy.permits(
+                "https",
+                "run-actions-4-azure-eastus.actions.githubusercontent.com",
+                443,
+                "POST",
+                "/completejob",
+            )
+        )
+        self.assertFalse(
+            policy.permits(
+                "https",
+                "run-actions-1-azure-eastus.actions.githubusercontent.com",
+                443,
+                "POST",
+                "/other/completejob",
+            )
+        )
         self.assertTrue(
             policy.permits(
                 "https",
@@ -137,6 +184,42 @@ class URLSettingsTests(unittest.TestCase):
                     "results": "https://results-receiver.actions.githubusercontent.com/",
                 },
             )
+
+    def test_runtime_candidate_preserves_relative_uri_resolution(self):
+        services = runtime_services(
+            {
+                "ACTIONS_RUNTIME_URL": "https://pipelines.actions.githubusercontent.com/account",
+                "ACTIONS_RESULTS_URL": "https://results-receiver.actions.githubusercontent.com/",
+            }
+        )
+        self.assertEqual(
+            services["runtime"],
+            "https://pipelines.actions.githubusercontent.com/account",
+        )
+        policy = compile_policy(
+            ACTION / "url-policies.json",
+            "github-api-probe",
+            load(ACTION / "policies.json", "github"),
+            services,
+        )
+        self.assertTrue(
+            policy.permits(
+                "https",
+                "pipelines.actions.githubusercontent.com",
+                443,
+                "POST",
+                "/completejob",
+            )
+        )
+        self.assertFalse(
+            policy.permits(
+                "https",
+                "pipelines.actions.githubusercontent.com",
+                443,
+                "POST",
+                "/account/completejob",
+            )
+        )
 
     def test_runner_exceptions_are_opt_in(self):
         scratch = Path.home() / "code/tmp"

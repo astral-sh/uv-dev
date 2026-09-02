@@ -1,6 +1,6 @@
 """Compile a reviewed URL profile and explicit GitHub runner-service rules."""
 
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urljoin, urlsplit, urlunsplit
 
 from policy import hostname, private_origins
 from url_policy import URLPolicy, profile_config
@@ -18,9 +18,14 @@ RUNTIME_PATHS = (
     "_apis/actions/",
     "api/v3/workflow/",
 )
+RUN_SERVICE_PATHS = ("renewjob", "completejob")
+RUN_SERVICE_ORIGINS = tuple(
+    f"https://run-actions-{index}-azure-eastus.actions.githubusercontent.com/"
+    for index in range(1, 4)
+)
 
 
-def service_url(value):
+def service_url(value, *, directory=True):
     """Accept only the exact, public service origins supplied by the runner."""
     if not isinstance(value, str) or any(not 32 < ord(item) < 127 for item in value):
         raise ValueError("invalid runner service URL")
@@ -36,12 +41,15 @@ def service_url(value):
         or parsed.fragment
     ):
         raise ValueError("unexpected runner service URL")
-    return urlunsplit(("https", name, (parsed.path or "/").rstrip("/") + "/", "", ""))
+    path = parsed.path or "/"
+    if directory:
+        path = path.rstrip("/") + "/"
+    return urlunsplit(("https", name, path, "", ""))
 
 
 def runtime_services(environment):
     """Pass endpoint metadata to the root installer, never credentials or queries."""
-    runtime = service_url(environment["ACTIONS_RUNTIME_URL"])
+    runtime = service_url(environment["ACTIONS_RUNTIME_URL"], directory=False)
     results = environment.get("ACTIONS_RESULTS_URL", RESULTS)
     if results.startswith("http://"):
         if (
@@ -54,12 +62,12 @@ def runtime_services(environment):
     return {"runtime": runtime, "results": service_url(results)}
 
 
-def rule(url, methods=METHODS, *, prefix=True):
+def rule(url, methods=METHODS, *, match="prefix", query="any"):
     return {
         "url": url,
         "methods": list(methods),
-        "match": "prefix" if prefix else "exact",
-        "query": "any",
+        "match": match,
+        "query": query,
     }
 
 
@@ -69,10 +77,30 @@ def compile_policy(path, name, domain_policy, services):
     if selected["runner_services"]:
         if set(services) != {"runtime", "results"}:
             raise ValueError("runner service URLs are required")
-        runtime = service_url(services["runtime"])
+        runtime_base = service_url(services["runtime"], directory=False)
+        runtime = service_url(runtime_base)
         results = service_url(services["results"])
         rules.extend(rule(runtime + suffix) for suffix in RUNTIME_PATHS)
-        rules.append(rule(runtime + "_apis/connectionData", prefix=False))
+        rules.append(rule(runtime + "_apis/connectionData", match="exact"))
+        # The runner can expose a different PipelinesServiceUrl to actions.
+        # These exact Run Service hosts are published in GET /meta. Its opaque
+        # per-job base is not exposed to actions; numeric shard prefixes are an
+        # explicit compatibility exception for the two post-bootstrap routes.
+        rules.extend(
+            rule(urljoin(origin, suffix), ("POST",), match="exact", query="exact")
+            for origin in dict.fromkeys((runtime_base, *RUN_SERVICE_ORIGINS))
+            for suffix in RUN_SERVICE_PATHS
+        )
+        rules.extend(
+            rule(
+                origin + "{integer}/" + suffix,
+                ("POST",),
+                match="template",
+                query="exact",
+            )
+            for origin in RUN_SERVICE_ORIGINS
+            for suffix in RUN_SERVICE_PATHS
+        )
         for origin in dict.fromkeys((results, RESULTS)):
             rules.extend(rule(origin + suffix, ("POST",)) for suffix in RESULTS_PATHS)
         # These exact GitHub-published storage accounts carry signed log/artifact

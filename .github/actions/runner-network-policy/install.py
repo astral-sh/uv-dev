@@ -269,6 +269,9 @@ def install(
         server_key.chmod(0o640)
         write_trusted(URL_CA, certificate.read_text())
         run("update-ca-certificates")
+        # The already-running .NET worker rechecks Linux system-root timestamps
+        # at five-second intervals. Let it observe the CA before TLS cutover.
+        time.sleep(5.1)
     write_trusted(
         DIRECTORY / "settings.json",
         json.dumps(
