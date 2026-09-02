@@ -2,7 +2,7 @@
 
 Issue: astral-sh/uv#21424
 
-Classification: enhancement
+Classification: question
 
 ## Summary
 
@@ -14,44 +14,32 @@ They interpret this as root conflict configuration no longer being inherited by 
 
 The exact error is emitted when uv reads conflicts from a non-project (virtual) workspace root and
 cannot infer a package name for an entry. Current source and tests deliberately require
-`package = ...` for conflicts at such a root. This behavior was introduced by astral-sh/uv#18886:
-before that fix, uv silently ignored all conflicts declared on a virtual root. Consequently, uv
-0.9 accepting this file does not establish that the conflict was enforced.
+`package = ...` for conflicts at such a root. This behavior was introduced in uv 0.11.4 by
+astral-sh/uv#18886: before that fix, uv silently ignored all conflicts declared on a virtual root.
+Consequently, uv 0.9 accepting this file does not establish that the conflict was enforced.
 
-The missing capability is a way to represent a conflict involving a dependency group owned by a
-virtual root, which has no project name to use as the package scope. No open issue or pull request
-was found that already tracks that exact capability.
+A maintainer confirmed that the diagnostic is correct and that the supported configuration is to
+add the owning `package` to each conflict entry. This resolves the report as a configuration and
+scoping clarification rather than missing inheritance behavior.
 
-## Draft response
+## Maintainer guidance
 
-Thanks for the report. The exact error indicates this is being read as a virtual workspace root,
-where uv has no root project name to use as the implicit package. Before astral-sh/uv#18886, uv
-silently ignored `[tool.uv].conflicts` on virtual roots, so uv 0.9 was not enforcing this
-declaration. Since that fix, conflicts at a virtual root are read, but each item must include
-`package`; a dependency group owned directly by the virtual root cannot currently be represented
-this way.
-
-Could you provide a minimal `pyproject.toml` showing the workspace members and where the
-`databricks` extra is declared? That will clarify the necessary package scoping and give us a
-concrete case for supporting virtual-root groups.
+For a root `pyproject.toml` without a `[project]` table, uv has no implicit package name for an
+unqualified `group` or `extra`. Each conflict item should therefore identify its owner explicitly,
+for example by adding `package = "<owning-package>"` alongside `group = "local-spark"` and
+`extra = "databricks"` as appropriate. The issue does not yet identify those owning packages, so
+the handoff cannot provide the exact corrected declaration.
 
 ## Classification
 
-Classify as `enhancement`. The observable behavior change is real, but repository history shows
-that uv 0.9 ignored virtual-root conflicts rather than successfully inheriting and enforcing them.
-astral-sh/uv#18886 fixed that correctness bug by reading the declarations and intentionally
-rejecting any virtual-root conflict item without an explicit package. The integration test
+Classify as `question`. The observable behavior change is real, but repository history and the
+maintainer response establish that uv 0.9 ignored virtual-root conflicts rather than successfully
+inheriting and enforcing them. astral-sh/uv#18886 fixed that correctness bug in uv 0.11.4 by
+reading the declarations and intentionally rejecting any virtual-root conflict item without an
+explicit package. The integration test
 `lock_non_project_member_conflicts_missing_package` expects the reporter's exact class of error,
-and the lock-scenario test `group_virtual` documents that conflicting groups in a project without
-`[project]` are not currently supported because the internal representation requires a package
-name.
-
-Supporting an unqualified `local-spark` group owned by the virtual root would therefore add
-currently absent behavior. The report does not include the complete root manifest or show where
-the `databricks` extra is declared, so a minimal example is still needed to determine the intended
-cross-package scope. If the root actually has an effective project identity, the example could
-instead expose a bug in workspace discovery; the exact diagnostic alone indicates that uv did not
-have such an identity while collecting these conflicts.
+and the maintainer confirmed that adding the owning package is the supported fix. No incorrect
+current behavior or missing capability remains established by the available report.
 
 ## Related
 
@@ -61,8 +49,8 @@ have such an identity while collecting these conflicts.
   member conflicts, unlike astral-sh/uv#21424's unqualified root group and extra.
 - astral-sh/uv#18886 — Merged pull request that fixed astral-sh/uv#18879 by collecting virtual-root
   conflicts. It also added explicit coverage that rejects entries without `package = ...` because
-  a non-project root supplies no package name to infer. The fix merged on 2026-04-06 and first
-  appeared in the uv 0.11 release line, matching the reported 0.9-to-0.11 change.
+  a non-project root supplies no package name to infer. The fix merged on 2026-04-06 and appeared
+  in uv 0.11.4, matching the reported 0.9-to-0.11 change.
 
 ## Search evidence
 
