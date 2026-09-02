@@ -1,0 +1,51 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 12296,
+        "title": "Wheels in lockfile are not filtered by `exclude-newer`",
+        "url": "https://github.com/astral-sh/uv/issues/12296",
+        "state": "closed",
+        "reason": "Closest structural analogue: uv respected a per-file eligibility condition during resolution but serialized ineligible wheels into `uv.lock`. Its trigger is upload time rather than yank status."
+      },
+      {
+        "kind": "pull_request",
+        "number": 12299,
+        "title": "Omit wheels from lockfile based on `--exclude-newer`",
+        "url": "https://github.com/astral-sh/uv/pull/12299",
+        "state": "merged",
+        "reason": "Introduced the implicated `PrioritizedDist::built_dist` filtering path. Its `is_excluded` predicate covers only `ExcludeNewer`, providing a direct implementation and test precedent."
+      },
+      {
+        "kind": "issue",
+        "number": 6145,
+        "title": "Reduce repeated information across `File` in a single distribution",
+        "url": "https://github.com/astral-sh/uv/issues/6145",
+        "state": "open",
+        "reason": "Its discussion explicitly recognizes that PEP 592 yank status is per-file. It tracks metadata deduplication, not this lockfile correctness defect."
+      },
+      {
+        "kind": "issue",
+        "number": 5928,
+        "title": "Resolve from lockfile cannot detect yanked versions",
+        "url": "https://github.com/astral-sh/uv/issues/5928",
+        "state": "closed",
+        "reason": "Establishes that an existing lockfile cannot discover later yank state without querying the registry. The new report instead concerns a yank already known during fresh lock generation."
+      },
+      {
+        "kind": "pull_request",
+        "number": 413,
+        "title": "Filter out yanked files",
+        "url": "https://github.com/astral-sh/uv/pull/413",
+        "state": "merged",
+        "reason": "Historical fix establishing per-file yank filtering in the older `pip-compile` path. It did not cover universal `uv.lock` artifact aggregation."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests. Literal searches covered `yanked wheel` with `uv.lock`, per-file and partial yanks, PEP 592, `data-yanked`, `AllowedYanks`, and `is_excluded`. Conceptual searches covered mixed yank state on private indexes, artifact eligibility versus version selection, and frozen lock behavior. Fix-oriented searches followed historical yank filtering and the analogous `exclude-newer` lockfile fix. astral-sh/uv#19112 was inspected but ruled out because it requests rechecking a whole version yanked after locking; astral-sh/uv#17143 concerns incorrect hash selection rather than artifact filtering."
+  },
+  "type": "bug",
+  "type_reason": "Source confirms that fresh resolution marks a non-allowed yanked file incompatible per file, but `PrioritizedDist::built_dist` filters only `ExcludeNewer` incompatibilities. The yanked wheel is therefore serialized with its URL and hash, while lockfile deserialization has no yank metadata. Retaining a known-unusable artifact when an unyanked alternative exists is incorrect behavior, and no existing item tracks this exact partial-yank gap.",
+  "summary": "No duplicate was found. astral-sh/uv#12296 and astral-sh/uv#12299 are the closest structural precedent; astral-sh/uv#6145, astral-sh/uv#5928, and astral-sh/uv#413 establish the surrounding per-file yank and lockfile behavior.",
+  "draft_response": "Thanks for the detailed reproduction. The current source confirms a lockfile filtering gap for partial yanks, and I couldn’t find an existing issue tracking this exact case. This is analogous to astral-sh/uv#12296, fixed by astral-sh/uv#12299 for `--exclude-newer`: `PrioritizedDist::built_dist` filters artifacts through `is_excluded`, but that predicate currently covers `ExcludeNewer` and not `Yanked`. The next step is a focused `uv lock` integration regression test with one yanked and one unyanked wheel for the same version, followed by a fix that preserves the existing cases where a yanked artifact is explicitly allowed."
+}
