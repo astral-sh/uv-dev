@@ -303,6 +303,89 @@ class PolicyTests(unittest.TestCase):
                 install.normalize_runner_sudoers(path)
             path.chmod.assert_not_called()
 
+    def test_proxy_account_has_an_explicit_private_group(self):
+        account = SimpleNamespace(pw_uid=991, pw_gid=991)
+        with (
+            patch.object(install, "run") as run,
+            patch.object(install.pwd, "getpwnam", return_value=account) as lookup,
+        ):
+            self.assertIs(install.create_proxy_account(), account)
+        run.assert_called_once_with(
+            "useradd",
+            "--system",
+            "--user-group",
+            "--no-create-home",
+            "--shell",
+            "/usr/sbin/nologin",
+            install.USER,
+        )
+        lookup.assert_called_once_with(install.USER)
+
+    def test_sudo_restriction_checks_the_root_owned_inode(self):
+        path = MagicMock()
+        path.resolve.return_value = path
+        before = SimpleNamespace(
+            st_dev=4, st_ino=9, st_uid=0, st_mode=stat.S_IFREG | 0o4755
+        )
+        after = SimpleNamespace(st_uid=0, st_mode=stat.S_IFREG | 0o700)
+        path.stat.return_value = before
+        with (
+            patch.object(install.os, "open", return_value=47) as open_file,
+            patch.object(install.os, "fstat", side_effect=(before, after)),
+            patch.object(install.os, "fchmod") as chmod,
+            patch.object(install.os, "close") as close,
+        ):
+            self.assertIs(install.restrict_sudo(path), path)
+        path.resolve.assert_called_once_with(strict=True)
+        open_file.assert_called_once_with(path, os.O_RDONLY | os.O_NOFOLLOW)
+        chmod.assert_called_once_with(47, 0o700)
+        close.assert_called_once_with(47)
+
+    def test_sudo_restriction_rejects_untrusted_or_replaced_files(self):
+        path = MagicMock()
+        path.resolve.return_value = path
+        valid = SimpleNamespace(
+            st_dev=4, st_ino=9, st_uid=0, st_mode=stat.S_IFREG | 0o4755
+        )
+        restricted = SimpleNamespace(st_uid=0, st_mode=stat.S_IFREG | 0o700)
+        for owner, mode in (
+            (1001, stat.S_IFREG | 0o4755),
+            (0, stat.S_IFREG | 0o4775),
+            (0, stat.S_IFLNK | 0o777),
+        ):
+            with (
+                self.subTest(owner=owner, mode=mode),
+                patch.object(install.os, "open", return_value=47),
+                patch.object(
+                    install.os,
+                    "fstat",
+                    return_value=SimpleNamespace(st_uid=owner, st_mode=mode),
+                ),
+                patch.object(install.os, "fchmod") as chmod,
+                patch.object(install.os, "close") as close,
+                self.assertRaisesRegex(RuntimeError, "^unexpected sudo executable$"),
+            ):
+                install.restrict_sudo(path)
+            chmod.assert_not_called()
+            close.assert_called_once_with(47)
+        for observed, current in (
+            (valid, valid),
+            (restricted, SimpleNamespace(st_dev=4, st_ino=10)),
+        ):
+            path.stat.return_value = current
+            with (
+                self.subTest(observed=observed, current=current),
+                patch.object(install.os, "open", return_value=47),
+                patch.object(install.os, "fstat", side_effect=(valid, observed)),
+                patch.object(install.os, "fchmod"),
+                patch.object(install.os, "close") as close,
+                self.assertRaisesRegex(
+                    RuntimeError, "^sudo executable restriction failed$"
+                ),
+            ):
+                install.restrict_sudo(path)
+            close.assert_called_once_with(47)
+
     def test_dns_refusal(self):
         packet = query("denied.example")
         state = proxy.State(Policy(("allowed.example",)), [], None)
@@ -441,7 +524,7 @@ class PolicyTests(unittest.TestCase):
         )
         self.assertIn("ip6 daddr ::1 tcp dport { 1053, 18080, 18443 } accept", rules)
         self.assertIn(
-            "meta skuid 1001 ct state established ip daddr 140.82.112.3 tcp sport 45678 tcp dport 443 accept",
+            "meta skuid 1001 ct state established tcp flags & syn == 0 ip daddr 140.82.112.3 tcp sport 45678 tcp dport 443 accept",
             rules,
         )
         self.assertNotIn("ct state established accept", rules)

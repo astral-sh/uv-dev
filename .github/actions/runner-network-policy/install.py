@@ -98,8 +98,10 @@ def firewall(proxy_uid, runner_uid, dns_servers, connections, private_services=N
         )
     for version, address, source_port, port in connections:
         family = "ip" if version == 4 else "ip6"
+        # Conntrack can reuse a tuple after a new handshake. Preserve packets
+        # from the trusted bootstrap flow, never a later SYN using its ports.
         rules.append(
-            f"meta skuid {runner_uid} ct state established {family} daddr {ipaddress.ip_address(address)} tcp sport {int(source_port)} tcp dport {int(port)} accept"
+            f"meta skuid {runner_uid} ct state established tcp flags & syn == 0 {family} daddr {ipaddress.ip_address(address)} tcp sport {int(source_port)} tcp dport {int(port)} accept"
         )
     exceptions = "\n    ".join(rules)
     redirects = "\n    ".join(
@@ -168,6 +170,47 @@ def normalize_runner_sudoers(path):
         path.chmod(0o440)
 
 
+def create_proxy_account():
+    # The URL-mode leaf key is readable by this primary group. Do not inherit
+    # an image's potentially shared default useradd group.
+    run(
+        "useradd",
+        "--system",
+        "--user-group",
+        "--no-create-home",
+        "--shell",
+        "/usr/sbin/nologin",
+        USER,
+    )
+    return pwd.getpwnam(USER)
+
+
+def restrict_sudo(path):
+    """Make the canonical root-owned sudo inode inaccessible to non-root users."""
+    path = path.resolve(strict=True)
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        before = os.fstat(descriptor)
+        if (
+            before.st_uid != 0
+            or not stat.S_ISREG(before.st_mode)
+            or stat.S_IMODE(before.st_mode) & 0o022
+        ):
+            raise RuntimeError("unexpected sudo executable")
+        os.fchmod(descriptor, 0o700)
+        after = os.fstat(descriptor)
+        current = path.stat()
+        if (
+            (current.st_dev, current.st_ino) != (before.st_dev, before.st_ino)
+            or after.st_uid != 0
+            or stat.S_IMODE(after.st_mode) != 0o700
+        ):
+            raise RuntimeError("sudo executable restriction failed")
+    finally:
+        os.close(descriptor)
+    return path
+
+
 def drop_privileges(account):
     # Existing supplementary groups are retained by Runner.Worker. Merely
     # removing the user from the docker group does not revoke socket access.
@@ -192,9 +235,24 @@ def drop_privileges(account):
     run("visudo", "-cf", str(policy))
     write_trusted(destination, policy.read_text(), 0o440)
     run("visudo", "-c")
+    # A later command-specific sudoers grant can override our deny rule while
+    # still denying `sudo true`. Remove executable access independently of
+    # sudoers ordering on the reviewed Ubuntu/Debian images.
+    configured_sudo = shutil.which("sudo")
+    canonical_sudo = Path("/usr/bin/sudo")
+    if configured_sudo is None or not Path(configured_sudo).samefile(canonical_sudo):
+        raise RuntimeError("unexpected sudo executable")
+    canonical_sudo = restrict_sudo(canonical_sudo)
     if (
         run(
-            "runuser", "-u", account.pw_name, "--", "sudo", "-n", "true", check=False
+            "runuser",
+            "-u",
+            account.pw_name,
+            "--",
+            str(canonical_sudo),
+            "-n",
+            "true",
+            check=False,
         ).returncode
         == 0
     ):
@@ -245,8 +303,7 @@ def install(
             raise RuntimeError("jobs with running containers are not supported")
     dns_servers = resolvers()
     connections = bootstrap_connections(runner_uid)
-    run("useradd", "--system", "--no-create-home", "--shell", "/usr/sbin/nologin", USER)
-    proxy_account = pwd.getpwnam(USER)
+    proxy_account = create_proxy_account()
     DIRECTORY.mkdir(mode=0o755)
     DIRECTORY.chmod(0o755)
     for name in (
