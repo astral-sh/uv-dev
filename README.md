@@ -12,11 +12,15 @@ No existing issue or pull request tracks this exact partial-yank lockfile defect
 
 A follow-up comment adds two adjacent requests: warn or otherwise diagnose yank-related outcomes during `--locked` checks, and explain when `--upgrade` moves a package to an older unyanked version. These do not change the reproduced bug or its fixed status; they concern diagnostics and CLI wording beyond the artifact-filtering fix.
 
+A maintainer subsequently questioned whether the lockfile-content behavior should be classified as a bug because uv does not currently promise specific `uv.lock` contents, while agreeing that the behavior could be improved. This introduces classification uncertainty but does not dispute the reproduction or the proposed improvement.
+
 ## Classification
 
 Bug. The independent fixture confirms that fresh resolution knows which file is yanked and chooses the other file, while lockfile serialization still retains both files. This is distinct from uv intentionally retaining a previously valid artifact that is yanked only after lock creation.
 
 Source inspection is consistent with the reporter's hypothesis: `version_map.rs` computes file-level yank compatibility, while `PrioritizedDist::built_dist` removes artifacts only when `WheelCompatibility::is_excluded()` returns true, and that predicate recognizes `ExcludeNewer` but not `Yanked`. This inspection supports where to investigate, but the reproduction alone establishes the observed defect; the exact fix still needs to preserve cases where users explicitly opt into a yanked version.
+
+Maintainer feedback leaves the label open to reconsideration. The maintainer's stated reason is that uv provides no known guarantee about which artifacts appear in `uv.lock`, so they may view omission of the yanked file as an improvement rather than correction of a contractual violation. The existing handoff retains `bug` because the behavior is reproducible, uv already applies the same artifact-level omission for `--exclude-newer`, and retaining a known-ineligible artifact can affect later lockfile consumers. However, the maintainer comment is the current project-position signal and should be resolved before merging or presenting the change as a required correctness fix.
 
 ## Reproduction
 
