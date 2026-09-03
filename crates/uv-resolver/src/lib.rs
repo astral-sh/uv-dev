@@ -1,9 +1,8 @@
 pub use dependency_mode::DependencyMode;
 pub use error::{ErrorTree, NoSolutionError, NoSolutionHeader, ResolveError};
 pub use exclude_newer::{
-    ExcludeNewer, ExcludeNewerChange, ExcludeNewerOverrideChange, ExcludeNewerPackage,
-    ExcludeNewerPackageChange, ExcludeNewerPackageEntry, ExcludeNewerValueChange,
-    ExcludeNewerValueWithSpanRef, serialize_exclude_newer_package_with_spans,
+    ExcludeNewer, ExcludeNewerPackage, ExcludeNewerPackageEntry, ExcludeNewerValueWithSpanRef,
+    serialize_exclude_newer_package_with_spans,
 };
 pub use exclusions::Exclusions;
 pub use flat_index::{FlatDistributions, FlatIndex};

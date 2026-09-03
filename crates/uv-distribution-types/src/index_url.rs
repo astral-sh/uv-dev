@@ -17,7 +17,7 @@ use uv_pypi_types::HashAlgorithm;
 use uv_redacted::DisplaySafeUrl;
 use uv_warnings::warn_user;
 
-use crate::{ExcludeNewerOverride, Index, IndexStatusCodeStrategy, Verbatim};
+use crate::{ExcludeNewerOverride, Index, IndexFormat, IndexStatusCodeStrategy, Verbatim};
 
 pub static PYPI_URL: LazyLock<DisplaySafeUrl> =
     LazyLock::new(|| DisplaySafeUrl::parse("https://pypi.org/simple").unwrap());
@@ -390,6 +390,14 @@ impl<'a> IndexLocations {
     /// Return an iterator over the [`FlatIndexLocation`] entries.
     pub fn flat_indexes(&'a self) -> impl Iterator<Item = &'a Index> + 'a {
         self.flat_index.iter()
+    }
+
+    /// Return whether the given URL is configured as a flat index.
+    pub fn is_flat_index(&self, url: &IndexUrl) -> bool {
+        self.flat_index
+            .iter()
+            .chain(&self.indexes)
+            .any(|index| index.format == IndexFormat::Flat && is_same_index(index.url(), url))
     }
 
     /// Return the `--no-index` flag.

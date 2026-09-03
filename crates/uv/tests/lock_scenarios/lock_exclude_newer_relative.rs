@@ -85,7 +85,7 @@ fn lock_exclude_newer_relative() -> Result<()> {
 
     assert_eq!(context.read("uv.lock"), lock);
 
-    // Changing the span to 2 weeks should cause a new resolution.
+    // Upgrading with a 2-week span should admit idna 3.7.
     // 2 weeks before 2024-05-01 is 2024-04-17, which is after idna 3.7 (released 2024-04-11).
     uv_snapshot!(context.filters(), context
         .lock()
@@ -96,7 +96,6 @@ fn lock_exclude_newer_relative() -> Result<()> {
         .arg("--upgrade"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolving despite existing lockfile due to change of exclude newer span from `P3W` to `P2W`
     Resolved 2 packages in [TIME]
     Updated idna v3.6 -> v3.7
     ");
@@ -247,7 +246,7 @@ fn lock_exclude_newer_older_vs_newer() -> Result<()> {
         .arg("3 weeks"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolving despite existing lockfile due to change of exclude newer span from `P2W` to `P3W`
+    Resolving despite existing lockfile because package `idna` contains artifacts that do not satisfy the `exclude-newer` cutoff of `2024-04-10T00:00:00Z`
     Resolved 2 packages in [TIME]
     Updated idna v3.7 -> v3.6
     ");
@@ -268,7 +267,6 @@ fn lock_exclude_newer_older_vs_newer() -> Result<()> {
         .arg("2 weeks"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolving despite existing lockfile due to change of exclude newer span from `P3W` to `P2W`
     Resolved 2 packages in [TIME]
     ");
 
@@ -391,7 +389,6 @@ fn lock_exclude_newer_package_relative() -> Result<()> {
         .arg("--upgrade"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolving despite existing lockfile due to change of exclude newer span from `P3W` to `P2W` for package `idna`
     Resolved 2 packages in [TIME]
     Updated idna v3.6 -> v3.7
     ");
@@ -724,7 +721,7 @@ fn lock_exclude_newer_relative_global_and_package() -> Result<()> {
     Resolved 3 packages in [TIME]
     ");
 
-    // Changing the global span to 2 weeks should cause a new resolution.
+    // Upgrading with a 2-week global span should admit idna 3.7.
     // 2 weeks before 2024-05-01 is 2024-04-17 (after idna 3.7 released 2024-04-11) → idna 3.7
     uv_snapshot!(context.filters(), context
         .lock()
@@ -737,12 +734,11 @@ fn lock_exclude_newer_relative_global_and_package() -> Result<()> {
         .arg("--upgrade"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolving despite existing lockfile due to change of exclude newer span from `P3W` to `P2W`
     Resolved 3 packages in [TIME]
     Updated idna v3.6 -> v3.7
     ");
 
-    // Changing the package-specific span should also invalidate the lockfile
+    // Changing the package-specific span does not invalidate artifacts that still satisfy it.
     uv_snapshot!(context.filters(), context
         .lock()
         .env_remove(EnvVars::UV_EXCLUDE_NEWER)
@@ -753,7 +749,6 @@ fn lock_exclude_newer_relative_global_and_package() -> Result<()> {
         .arg("typing-extensions=3 days"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolving despite existing lockfile due to change of exclude newer span from `P2W` to `P3D` for package `typing-extensions`
     Resolved 3 packages in [TIME]
     ");
 
@@ -768,20 +763,20 @@ fn lock_exclude_newer_relative_global_and_package() -> Result<()> {
         .arg("typing-extensions=2 weeks"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolving despite existing lockfile due to removal of exclude newer span
     Resolved 3 packages in [TIME]
     ");
 
     let lock = context.read("uv.lock");
-    // idna 3.7 (absolute cutoff 2024-05-20 is after 3.7 release on 2024-04-11)
-    // typing-extensions 4.11.0 (relative cutoff 2024-04-17)
+    // Both locked versions satisfy the current cutoffs, so the serialized settings remain
+    // unchanged.
     assert_snapshot!(lock, @r#"
     version = 1
     revision = 3
     requires-python = ">=3.12"
 
     [options]
-    exclude-newer = "2024-05-20T00:00:00Z"
+    exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for backwards compatibility when using relative exclude-newer values.
+    exclude-newer-span = "P2W"
 
     [options.exclude-newer-package]
     typing-extensions = { timestamp = "0001-01-01T00:00:00Z", span = "P2W" }
@@ -831,7 +826,7 @@ fn lock_exclude_newer_relative_global_and_package() -> Result<()> {
         .arg("typing-extensions=2024-04-01T00:00:00Z"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolving despite existing lockfile due to addition of exclude newer span `P3W`
+    Resolving despite existing lockfile because package `idna` contains artifacts that do not satisfy the `exclude-newer` cutoff of `2024-04-10T00:00:00Z`
     Resolved 3 packages in [TIME]
     Updated idna v3.7 -> v3.6
     Updated typing-extensions v4.11.0 -> v4.10.0
@@ -921,7 +916,6 @@ fn lock_exclude_newer_relative_values() -> Result<()> {
         .arg("30days"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolving despite existing lockfile due to change of exclude newer span from `P1D` to `P30D`
     Resolved 2 packages in [TIME]
     ");
 
@@ -932,7 +926,6 @@ fn lock_exclude_newer_relative_values() -> Result<()> {
         .arg("P1D"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolving despite existing lockfile due to change of exclude newer span from `P30D` to `P1D`
     Resolved 2 packages in [TIME]
     ");
 
@@ -943,7 +936,6 @@ fn lock_exclude_newer_relative_values() -> Result<()> {
         .arg("1 week"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolving despite existing lockfile due to change of exclude newer span from `P1D` to `P1W`
     Resolved 2 packages in [TIME]
     ");
 
@@ -954,7 +946,6 @@ fn lock_exclude_newer_relative_values() -> Result<()> {
         .arg("1 week ago"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolving despite existing lockfile due to change of exclude newer span from `P1W` to `-P1W`
     Resolved 2 packages in [TIME]
     ");
 
@@ -1034,7 +1025,7 @@ fn lock_exclude_newer_relative_values() -> Result<()> {
         .arg("2006-12-02T02:07:43Z"), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    Resolving despite existing lockfile due to removal of exclude newer span
+    Resolving despite existing lockfile because package `iniconfig` contains artifacts that do not satisfy the `exclude-newer` cutoff of `2006-12-02T02:07:43Z`
       × No solution found when resolving dependencies:
       ╰─▶ Because there are no versions of iniconfig and iniconfig==2.0.0 was published after the exclude newer time, we can conclude that all versions of iniconfig cannot be used.
           And because your project depends on iniconfig, we can conclude that your project's requirements are unsatisfiable.
