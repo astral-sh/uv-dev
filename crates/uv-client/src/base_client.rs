@@ -67,6 +67,8 @@ pub const DEFAULT_READ_TIMEOUT_UPLOAD: Duration = Duration::from_mins(15);
 pub enum ClientBuildError {
     #[error("failed to build HTTP client")]
     Reqwest(#[from] reqwest::Error),
+    #[error("No CA certificates could be loaded from the system")]
+    NoSystemCertificates,
     #[error(transparent)]
     Credentials(#[from] CredentialsFromUrlError),
     #[error(transparent)]
@@ -558,6 +560,20 @@ impl<'a> BaseClientBuilder<'a> {
         } else {
             CertificateSource::WebPki
         };
+
+        let custom_certs =
+            if self.system_certs && cfg!(target_os = "android") && custom_certs.is_none() {
+                // Android's platform verifier requires a JVM and application context. Standalone
+                // executables use certificate files instead, including Termux's CA bundle. Load them
+                // once for both clients, retaining the system certificate source for diagnostics.
+                Some(
+                    Certificates::from_system()
+                        .ok_or(ClientBuildError::NoSystemCertificates)?
+                        .to_reqwest_certs(),
+                )
+            } else {
+                custom_certs
+            };
 
         // Create a secure client that validates certificates.
         let raw_client = self.create_client(
