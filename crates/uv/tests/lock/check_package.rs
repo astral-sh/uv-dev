@@ -106,7 +106,7 @@ fn ignores_unrelated_members() -> Result<()> {
         .arg("--offline").arg("--check-package").arg("unrelated"), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    error: The lockfile at `uv.lock` needs to be updated for the selected packages, but `--check-package` was provided.
+    error: The lockfile at `uv.lock` needs to be updated for `unrelated`, but `--check-package` was provided.
 
     hint: To update the lockfile, run `uv lock`.
     ");
@@ -114,7 +114,7 @@ fn ignores_unrelated_members() -> Result<()> {
         .arg("--offline").arg("--check-package").arg("added"), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    error: The lockfile at `uv.lock` needs to be updated for the selected packages, but `--check-package` was provided.
+    error: The lockfile at `uv.lock` needs to be updated for `added`, but `--check-package` was provided.
 
     hint: To update the lockfile, run `uv lock`.
     ");
@@ -171,7 +171,7 @@ fn ignores_incompatible_sibling_requirements() -> Result<()> {
         .arg("--offline").arg("--check-package").arg("second"), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    error: The lockfile at `uv.lock` needs to be updated for the selected packages, but `--check-package` was provided.
+    error: The lockfile at `uv.lock` needs to be updated for `second`, but `--check-package` was provided.
 
     hint: To update the lockfile, run `uv lock`.
     ");
@@ -180,7 +180,7 @@ fn ignores_incompatible_sibling_requirements() -> Result<()> {
         .arg("--check-package").arg("second"), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    error: The lockfile at `uv.lock` needs to be updated for the selected packages, but `--check-package` was provided.
+    error: The lockfile at `uv.lock` needs to be updated for `first` and `second`, but `--check-package` was provided.
 
     hint: To update the lockfile, run `uv lock`.
     ");
@@ -205,7 +205,7 @@ fn checks_transitive_dependencies_extras_and_groups() -> Result<()> {
                 .arg("--offline").arg("--check-package").arg("application"), @"
             exit_code: 1 (failure)
             ----- stderr -----
-            error: The lockfile at `uv.lock` needs to be updated for the selected packages, but `--check-package` was provided.
+            error: The lockfile at `uv.lock` needs to be updated for `application`, but `--check-package` was provided.
 
             hint: To update the lockfile, run `uv lock`.
             ");
@@ -239,7 +239,7 @@ fn checks_new_dependency_edges() -> Result<()> {
         .arg("--offline").arg("--check-package").arg("application"), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    error: The lockfile at `uv.lock` needs to be updated for the selected packages, but `--check-package` was provided.
+    error: The lockfile at `uv.lock` needs to be updated for `application`, but `--check-package` was provided.
 
     hint: To update the lockfile, run `uv lock`.
     ");
@@ -262,7 +262,7 @@ fn checks_workspace_policy() -> Result<()> {
         .arg("--offline").arg("--check-package").arg("application"), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    error: The lockfile at `uv.lock` needs to be updated for the selected packages, but `--check-package` was provided.
+    error: The lockfile at `uv.lock` needs to be updated for `application`, but `--check-package` was provided.
 
     hint: To update the lockfile, run `uv lock`.
     ");
@@ -310,7 +310,7 @@ fn checks_lock_without_package_metadata() -> Result<()> {
         .arg("--check-package").arg("application"), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    error: The lockfile at `uv.lock` needs to be updated for the selected packages, but `--check-package` was provided.
+    error: The lockfile at `uv.lock` needs to be updated for `application`, but `--check-package` was provided.
 
     hint: To update the lockfile, run `uv lock`.
     ");
