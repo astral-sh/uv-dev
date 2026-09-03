@@ -16,9 +16,14 @@ files. They also propose doctor-style diagnostics and more forgiving recovery in
 The reported failure could not be produced from that sequence alone. On Linux x86_64 with CPython
 3.12.3, both the reported uv 0.11.28 and current uv 0.12.9 refreshed `uv.lock` successfully during an
 ordinary `uv sync` after the dependency declaration and local directory were removed. Locked and
-frozen syncs did fail, but for their documented stale-lock behavior. Because the report omits its
-workspace manifests, exact command and error, and locked/frozen configuration, there is not enough
-information to determine which path the reporter encountered.
+frozen syncs did fail, but for their documented stale-lock behavior.
+
+A contributor subsequently supplied a small path-dependency example that produces the missing
+distribution error during ordinary `uv sync`. However, that example still declares the deleted
+package in both `project.dependencies` and `tool.uv.sources`. It therefore demonstrates uv trying to
+resolve a live path dependency whose directory is absent, not the originally reported failure after
+the dependency reference was removed. The inability to remove that live declaration, or a failure
+to relock after removing it, remains unproduced.
 
 No existing issue or pull request was found that tracks this same sequence with an ordinary lock
 refresh. The closest discussions retain a live workspace or path declaration, use frozen or locked
@@ -26,16 +31,54 @@ operation, or leave a matched directory without a `pyproject.toml`.
 
 ## Current status
 
-A maintainer has indicated that the issue does not yet contain enough information to reproduce or
-diagnose the failure. The issue is awaiting a minimal reproducible example containing the uv
-version, operating system, exact command, and its complete `--verbose` output. The project pointed
-the reporter to its reproducible-example guidance and the reporting requirements in
-astral-sh/uv#9452. This confirms that further investigation is blocked on reporter-supplied details;
-it does not establish a root cause or change the bug classification.
+A maintainer indicated that the issue did not contain enough information to reproduce or diagnose
+the failure and requested a minimal reproducible example following astral-sh/uv#9452. The later
+contributor example supplies a directory layout, minimal consumer configuration, command, and
+error, but it omits the uv version, operating system, and complete `--verbose` output requested by
+the maintainer. More importantly, it retains the dependency reference that the original report says
+was removed. Investigation therefore still needs the failing removal command or the post-removal
+configuration and verbose sync output. The new example does not establish a root cause or change
+the bug classification.
 
 ## Reproduction
 
 Outcome: **needs more information**.
+
+### Contributor-provided missing-path variant
+
+A contributor reports that the following sequence fails:
+
+1. Create sibling projects `sub-proj1` and `sub-proj2`.
+2. Declare `sub-proj1` as a path dependency of `sub-proj2`.
+3. Delete the entire `sub-proj1` directory.
+4. Run `uv sync` for `sub-proj2`.
+
+The supplied minimum configuration for `sub-proj2` is:
+
+```toml
+[project]
+name = "sub-proj2"
+version = "0.1.0"
+dependencies = ["sub-proj1"]
+
+[tool.uv.sources]
+sub-proj1 = { path = "../sub-proj1" }
+```
+
+The reported error is:
+
+```console
+error: Failed to generate package metadata for `sub-proj1==0.1.0 @ directory+../sub-proj1`
+  Caused by: Distribution not found at: file:///home/casch/Projects/open-source/uv-bug-repro-21429/sub-proj1
+```
+
+This is a useful reproduction of the missing-path symptom, but the configuration still requires
+`sub-proj1`. It does not show the claimed failure after deleting the dependency entry, nor does it
+show an attempted `uv remove sub-proj1`. The comment also does not identify the uv version,
+platform, or verbose output, and the variant has not been independently reproduced as part of this
+handoff.
+
+### Existing independent reproduction
 
 The minimal fixture began with a root project containing:
 
@@ -96,12 +139,13 @@ Relevant existing integration coverage is in `crates/uv/tests/lock/lock.rs`:
 
 The tests do not cover the reporter's exact sequence of deleting the directory before the ordinary
 sync. The direct command-line reproduction above covers that sequence and succeeds. To reproduce
-the claimed ordinary-sync failure, maintainers still need all root and member `pyproject.toml`
-sections before and after deletion (including dependency groups, optional dependencies,
-`tool.uv.sources`, and `tool.uv.workspace`), the directory layout, the exact command and complete
-`--verbose` output, any `uv.toml`, and whether `UV_LOCKED`, `UV_FROZEN`, `--locked`, or `--frozen`
-is in effect. The reported macOS 26 Intel platform may also matter if the same complete fixture
-succeeds on Linux.
+the claimed removal or ordinary-sync failure, maintainers still need the exact command used to
+remove the dependency, all root and member `pyproject.toml` sections before and after that command
+(including dependency groups, optional dependencies, `tool.uv.sources`, and
+`tool.uv.workspace`), the directory layout, the uv version and platform, the complete `--verbose`
+output, any `uv.toml`, and whether `UV_LOCKED`, `UV_FROZEN`, `--locked`, or `--frozen` is in effect.
+The reported macOS 26 Intel platform may also matter if the same complete fixture succeeds on
+Linux.
 
 ## Draft response
 
@@ -131,8 +175,9 @@ project metadata, leaving no supported recovery path. That failure is not confir
 recovered in the tested fixtures, while locked and frozen failures were expected. The request for a
 doctor command and broader advice is an enhancement component, but it is secondary to the reported
 recovery failure. Missing configuration prevents determining whether the report involves a live
-metadata reference, lock-preserving mode, or a distinct bug. No existing issue or pull request is
-close enough to centralize this report, so it is not a duplicate.
+metadata reference, lock-preserving mode, or a distinct bug. The contributor's configuration
+confirms the live-reference case but does not provide the original post-removal state. No existing
+issue or pull request is close enough to centralize this report, so it is not a duplicate.
 
 ## Related
 
