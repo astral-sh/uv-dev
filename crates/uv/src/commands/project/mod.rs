@@ -121,6 +121,11 @@ pub(crate) enum ProjectError {
     LockMismatch(Option<Box<Lock>>, Box<Lock>, LockedSource),
 
     #[error(
+        "The lockfile at `uv.lock` needs to be updated for the selected packages, but `--check-package` was provided."
+    )]
+    LockPackageMismatch,
+
+    #[error(
         "The lockfile at `{0}` has non-canonical formatting at line {1}, but `{2}` was provided."
     )]
     LockFormat(PathBuf, usize, LockedSource),
@@ -403,7 +408,9 @@ impl std::fmt::Display for MalwareFindings {
 impl uv_errors::Hint for ProjectError {
     fn hints(&self) -> uv_errors::Hints<'_> {
         match self {
-            Self::LockMismatch(..) | Self::LockWorkspaceMismatch(..) => {
+            Self::LockMismatch(..)
+            | Self::LockPackageMismatch
+            | Self::LockWorkspaceMismatch(..) => {
                 uv_errors::Hints::from("To update the lockfile, run `uv lock`.")
             }
             Self::LockFormat(..) => uv_errors::Hints::from(
