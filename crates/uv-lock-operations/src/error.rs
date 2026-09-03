@@ -5,7 +5,7 @@ use std::io;
 use std::path::PathBuf;
 
 use uv_client::{ClientBuildError, FlatIndexError};
-use uv_command_support::UvError;
+use uv_command_support::{UvError, conjunction};
 use uv_distribution::{LoweringError, MetadataError};
 use uv_distribution_types::{ExtraBuildRequiresError, IndexCredentialsError, IndexUrlError};
 use uv_errors::{Hinted, Hints};
@@ -59,9 +59,10 @@ pub enum LockError {
     LockMismatch(Option<Box<Lock>>, Box<Lock>, LockedSource),
 
     #[error(
-        "The lockfile at `uv.lock` needs to be updated for the selected packages, but `--check-package` was provided."
+        "The lockfile at `uv.lock` needs to be updated for {}, but `--check-package` was provided.",
+        conjunction(.0.iter().map(|name| format!("`{name}`")).collect())
     )]
-    LockPackageMismatch,
+    LockPackageMismatch(Vec<PackageName>),
 
     #[error(
         "The lockfile at `{0}` has non-canonical formatting at line {1}, but `{2}` was provided."
@@ -189,7 +190,7 @@ impl From<LockError> for UvError {
     fn from(error: LockError) -> Self {
         match error {
             error @ (LockError::LockMismatch(..)
-            | LockError::LockPackageMismatch
+            | LockError::LockPackageMismatch(..)
             | LockError::LockFormat(..)
             | LockError::MissingLockfile(..)
             | LockError::LockWorkspaceMismatch(..)) => Self::user(error),
@@ -229,7 +230,7 @@ impl Hinted for LockError {
     fn hints(&self) -> Hints<'_> {
         match self {
             Self::LockMismatch(..)
-            | Self::LockPackageMismatch
+            | Self::LockPackageMismatch(..)
             | Self::LockWorkspaceMismatch(..) => {
                 Hints::from("To update the lockfile, run `uv lock`.")
             }

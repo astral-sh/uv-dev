@@ -235,7 +235,7 @@ pub async fn lock(
         // Lock mismatches from `--check`/`--locked` are expected validation failures.
         Err(
             err @ (LockError::LockMismatch(..)
-            | LockError::LockPackageMismatch
+            | LockError::LockPackageMismatch(..)
             | LockError::LockFormat(..)),
         ) => Err(UvError::user(err).into()),
         Err(err) => Err(UvError::from(err).into()),

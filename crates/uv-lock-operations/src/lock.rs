@@ -856,7 +856,7 @@ async fn do_lock(
             .as_ref()
             .is_none_or(|lock| !matches!(lock, ValidatedLock::Satisfies(_)))
     {
-        return Err(LockError::LockPackageMismatch);
+        return Err(LockError::LockPackageMismatch(check_packages.to_vec()));
     }
 
     match existing_lock {
