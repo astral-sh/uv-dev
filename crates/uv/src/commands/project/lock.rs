@@ -277,7 +277,7 @@ pub(crate) async fn lock(
         // Lock mismatches from `--check`/`--locked` are expected validation failures.
         Err(
             err @ (ProjectError::LockMismatch(..)
-            | ProjectError::LockPackageMismatch
+            | ProjectError::LockPackageMismatch(..)
             | ProjectError::LockFormat(..)),
         ) => Err(UvError::user(err).into()),
         Err(ProjectError::Operation(err)) => diagnostics::OperationDiagnostic::default()
@@ -997,7 +997,7 @@ async fn do_lock(
             .as_ref()
             .is_none_or(|lock| !lock.is_satisfied())
     {
-        return Err(ProjectError::LockPackageMismatch);
+        return Err(ProjectError::LockPackageMismatch(check_packages.to_vec()));
     }
 
     match existing_lock {

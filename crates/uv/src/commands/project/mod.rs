@@ -121,9 +121,10 @@ pub(crate) enum ProjectError {
     LockMismatch(Option<Box<Lock>>, Box<Lock>, LockedSource),
 
     #[error(
-        "The lockfile at `uv.lock` needs to be updated for the selected packages, but `--check-package` was provided."
+        "The lockfile at `uv.lock` needs to be updated for {}, but `--check-package` was provided.",
+        conjunction(.0.iter().map(|name| format!("`{name}`")).collect())
     )]
-    LockPackageMismatch,
+    LockPackageMismatch(Vec<PackageName>),
 
     #[error(
         "The lockfile at `{0}` has non-canonical formatting at line {1}, but `{2}` was provided."
@@ -409,7 +410,7 @@ impl uv_errors::Hint for ProjectError {
     fn hints(&self) -> uv_errors::Hints<'_> {
         match self {
             Self::LockMismatch(..)
-            | Self::LockPackageMismatch
+            | Self::LockPackageMismatch(..)
             | Self::LockWorkspaceMismatch(..) => {
                 uv_errors::Hints::from("To update the lockfile, run `uv lock`.")
             }
