@@ -4092,6 +4092,16 @@ pub struct LockArgs {
     #[arg(long, value_parser = clap::builder::BoolishValueParser::new(), conflicts_with_all = ["check_exists", "upgrade"], overrides_with_all = ["check", "no_locked"])]
     pub check: bool,
 
+    /// Check whether the lockfile is up-to-date for a workspace member.
+    ///
+    /// Checks the selected member and its locked dependencies, including optional dependencies and
+    /// dependency groups. Changes to unrelated workspace members are ignored, while workspace-wide
+    /// resolver settings are still checked. The lockfile will not be updated.
+    ///
+    /// May be provided multiple times to check several members.
+    #[arg(long, value_name = "PACKAGE", conflicts_with_all = ["check_exists", "frozen", "no_locked", "dry_run", "upgrade", "upgrade_package", "upgrade_group", "refresh", "refresh_package", "script"])]
+    pub check_package: Vec<PackageName>,
+
     /// Check if the lockfile is up-to-date [env: UV_LOCKED=]
     ///
     /// Asserts that the `uv.lock` would remain unchanged after a resolution. If the lockfile is
