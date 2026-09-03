@@ -2216,10 +2216,6 @@ impl LockSettings {
 
         let (locked, frozen) = resolve_lock_flags(locked, frozen)?;
 
-        if matches!(output_format, LockFormat::Json) && !matches!(locked, LockCheck::Enabled(_)) {
-            bail!("`--output-format json` requires `--check` or `--locked`");
-        }
-
         Ok(Self {
             lock_check: locked,
             output_format,

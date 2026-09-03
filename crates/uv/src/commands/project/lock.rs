@@ -48,7 +48,7 @@ use uv_workspace::{
 };
 
 use crate::commands::pip::loggers::{DefaultResolveLogger, ResolveLogger, SummaryResolveLogger};
-use crate::commands::project::lock_report::{LockCheckReason, LockCheckReport, ReasonCode};
+use crate::commands::project::lock_report::{LockReason, LockReport, ReasonCode};
 use crate::commands::project::lock_target::{LockTarget, find_lock_format_error};
 use crate::commands::project::{
     MissingLockfileSource, ProjectEnvironmentPolicy, ProjectError, ProjectInterpreter,
@@ -117,7 +117,7 @@ pub(crate) async fn lock(
                     PreviewFeature::JsonOutput
                 );
             }
-            Some(LockCheckReport::default())
+            Some(LockReport::new(lock_check, frozen, dry_run))
         }
     };
     let result = Box::pin(lock_inner(
@@ -172,7 +172,7 @@ async fn lock_inner(
     workspace_cache: &WorkspaceCache,
     printer: Printer,
     preview: Preview,
-    mut report: Option<&mut LockCheckReport>,
+    mut report: Option<&mut LockReport>,
 ) -> anyhow::Result<ExitStatus> {
     // If necessary, initialize the PEP 723 script.
     let script = match script {
@@ -300,10 +300,11 @@ async fn lock_inner(
         .execute(target),
     )
     .await;
-    if let Some(report) = report
-        && let Err(error) = &result
-    {
-        report.operation_error(error);
+    if let Some(report) = report {
+        match &result {
+            Ok(lock) => report.operation_success(&mode, lock),
+            Err(error) => report.operation_error(error),
+        }
     }
     match result {
         Ok(lock) => {
@@ -373,7 +374,7 @@ pub(crate) struct LockOperation<'env> {
     constraints: Vec<NameRequirementSpecification>,
     refresh: Option<&'env Refresh>,
     check_lockfile_contents: bool,
-    report: Option<&'env mut LockCheckReport>,
+    report: Option<&'env mut LockReport>,
     settings: &'env ResolverSettings,
     client_builder: &'env BaseClientBuilder<'env>,
     state: &'env UniversalState,
@@ -443,13 +444,16 @@ impl<'env> LockOperation<'env> {
 
     /// Record the reason the existing lock could not be reused.
     #[must_use]
-    fn with_report(mut self, report: Option<&'env mut LockCheckReport>) -> Self {
+    fn with_report(mut self, report: Option<&'env mut LockReport>) -> Self {
         self.report = report;
         self
     }
 
     /// Perform a [`LockOperation`].
-    pub(crate) async fn execute(self, target: LockTarget<'_>) -> Result<LockResult, ProjectError> {
+    pub(crate) async fn execute(
+        mut self,
+        target: LockTarget<'_>,
+    ) -> Result<LockResult, ProjectError> {
         if !matches!(&self.mode, LockMode::Frozen(_)) {
             target.validate_upgrade_groups(&self.settings.upgrade)?;
         }
@@ -538,7 +542,12 @@ impl<'env> LockOperation<'env> {
                     Ok(Some((existing, existing_contents))) => {
                         (Some(existing), Some(existing_contents))
                     }
-                    Ok(None) => (None, None),
+                    Ok(None) => {
+                        if let Some(report) = self.report.as_deref_mut() {
+                            report.stale(LockReason::new(ReasonCode::MissingLockfile));
+                        }
+                        (None, None)
+                    }
                     Err(ProjectError::Lock(err)) => {
                         warn_user!(
                             "Failed to read existing lockfile; ignoring locked requirements: {err}"
@@ -594,7 +603,7 @@ async fn do_lock(
     interpreter: &Interpreter,
     existing_lock: Option<Lock>,
     check_lockfile_contents: Option<String>,
-    mut report: Option<&mut LockCheckReport>,
+    mut report: Option<&mut LockReport>,
     external: Vec<NameRequirementSpecification>,
     refresh: Option<&Refresh>,
     settings: &ResolverSettings,
@@ -1267,7 +1276,7 @@ impl ValidatedLock {
         database: &DistributionDatabase<'_, Context>,
         preview: Preview,
         printer: Printer,
-        mut report: Option<&mut LockCheckReport>,
+        mut report: Option<&mut LockReport>,
     ) -> Result<Self, ProjectError> {
         // Perform checks in a deliberate order, such that the most extreme conditions are tested
         // first (i.e., every check that returns `Self::Unusable`, followed by every check that
@@ -1276,7 +1285,7 @@ impl ValidatedLock {
         if lock.resolution_mode() != options.resolution_mode {
             if let Some(report) = report.as_deref_mut() {
                 report.stale(
-                    LockCheckReason::new(ReasonCode::ResolutionModeChanged)
+                    LockReason::new(ReasonCode::ResolutionModeChanged)
                         .values([options.resolution_mode], [lock.resolution_mode()]),
                 );
             }
@@ -1291,7 +1300,7 @@ impl ValidatedLock {
         if lock.fork_strategy() != options.fork_strategy {
             if let Some(report) = report.as_deref_mut() {
                 report.stale(
-                    LockCheckReason::new(ReasonCode::ForkStrategyChanged)
+                    LockReason::new(ReasonCode::ForkStrategyChanged)
                         .values([options.fork_strategy], [lock.fork_strategy()]),
                 );
             }
@@ -1308,7 +1317,7 @@ impl ValidatedLock {
             // the span duration changed or some other operation causes a new resolution
             if !change.is_relative_timestamp_change() {
                 if let Some(report) = report.as_deref_mut() {
-                    report.stale(LockCheckReason::exclude_newer(&change));
+                    report.stale(LockReason::exclude_newer(&change));
                 }
                 let _ = writeln!(
                     printer.stderr(),
@@ -1334,7 +1343,7 @@ impl ValidatedLock {
         // to re-use the existing fork markers.
         if let Err((fork_markers_union, environments_union)) = lock.check_marker_coverage() {
             if let Some(report) = report.as_deref_mut() {
-                report.stale(LockCheckReason::new(ReasonCode::MarkerCoverageChanged));
+                report.stale(LockReason::new(ReasonCode::MarkerCoverageChanged));
             }
             warn_user!(
                 "Resolving despite existing lockfile due to fork markers not covering the supported environments: `{}` vs `{}`",
@@ -1354,7 +1363,7 @@ impl ValidatedLock {
             lock.requires_python_coverage(requires_python)
         {
             if let Some(report) = report.as_deref_mut() {
-                report.stale(LockCheckReason::new(ReasonCode::PythonCoverageChanged));
+                report.stale(LockReason::new(ReasonCode::PythonCoverageChanged));
             }
             warn_user!(
                 "Resolving despite existing lockfile due to fork markers being disjoint with `requires-python`: `{}` vs `{}`",
@@ -1379,7 +1388,7 @@ impl ValidatedLock {
             .collect::<Vec<_>>();
         if expected != actual {
             if let Some(report) = report.as_deref_mut() {
-                report.stale(LockCheckReason::new(ReasonCode::EnvironmentsChanged));
+                report.stale(LockReason::new(ReasonCode::EnvironmentsChanged));
             }
             debug!(
                 "Resolving despite existing lockfile due to change in supported environments: `{:?}` vs. `{:?}`",
@@ -1399,9 +1408,7 @@ impl ValidatedLock {
             .collect::<Vec<_>>();
         if expected != actual {
             if let Some(report) = report.as_deref_mut() {
-                report.stale(LockCheckReason::new(
-                    ReasonCode::RequiredEnvironmentsChanged,
-                ));
+                report.stale(LockReason::new(ReasonCode::RequiredEnvironmentsChanged));
             }
             debug!(
                 "Resolving despite existing lockfile due to change in supported environments: `{:?}` vs. `{:?}`",
@@ -1413,7 +1420,7 @@ impl ValidatedLock {
         // If the conflicting group config has changed, we have to perform a clean resolution.
         if conflicts != lock.conflicts() {
             if let Some(report) = report.as_deref_mut() {
-                report.stale(LockCheckReason::new(ReasonCode::ConflictsChanged));
+                report.stale(LockReason::new(ReasonCode::ConflictsChanged));
             }
             debug!(
                 "Resolving despite existing lockfile due to change in conflicting groups: `{:?}` vs. `{:?}`",
@@ -1428,7 +1435,7 @@ impl ValidatedLock {
         if lock.requires_python().range() != requires_python.range() {
             if let Some(report) = report.as_deref_mut() {
                 report.stale(
-                    LockCheckReason::new(ReasonCode::RequiresPythonChanged)
+                    LockReason::new(ReasonCode::RequiresPythonChanged)
                         .values([requires_python], [lock.requires_python()]),
                 );
             }
@@ -1448,7 +1455,7 @@ impl ValidatedLock {
         // versions and forks.
         if lock.prerelease() != &options.prerelease {
             if let Some(report) = report.as_deref_mut() {
-                report.stale(LockCheckReason::new(ReasonCode::PrereleaseChanged));
+                report.stale(LockReason::new(ReasonCode::PrereleaseChanged));
             }
             if lock.prerelease_mode() != options.prerelease.global {
                 let _ = writeln!(
@@ -1476,7 +1483,7 @@ impl ValidatedLock {
 
         if !lock.satisfies_hash_algorithms(install_path, index_locations)? {
             if let Some(report) = report.as_deref_mut() {
-                report.stale(LockCheckReason::new(ReasonCode::HashAlgorithmsChanged));
+                report.stale(LockReason::new(ReasonCode::HashAlgorithmsChanged));
             }
             debug!("Resolving despite existing lockfile due to mismatched hash algorithm");
             return Ok(Self::Preferable(lock));
@@ -1526,7 +1533,7 @@ impl ValidatedLock {
             )
             .await?;
         if let Some(report) = report
-            && let Some(reason) = LockCheckReason::from_satisfies(&satisfies)
+            && let Some(reason) = LockReason::from_satisfies(&satisfies)
         {
             report.stale(reason);
         }
