@@ -1,4 +1,4 @@
-//! Machine-readable results for `uv lock --check`.
+//! Machine-readable results for `uv lock`.
 
 use std::error::Error;
 use std::fmt::Display;
@@ -8,14 +8,16 @@ use anstream::adapter::strip_str;
 use serde::Serialize;
 
 use uv_client::{ErrorKind as ClientErrorKind, WrappedReqwestError};
+use uv_command_support::ExitStatus;
+use uv_configuration::DryRun;
 use uv_distribution_types::Name;
 use uv_fs::PortablePathBuf;
 use uv_lock_operations::{
-    LockError, LockReporter, LockValidationError, LockValidationReason, LockValidationReasonCode,
+    LockError, LockMode, LockReporter, LockResult, LockValidationError, LockValidationReason,
+    LockValidationReasonCode,
 };
 use uv_normalize::PackageName;
-
-use uv_command_support::ExitStatus;
+use uv_settings::{FrozenSource, LockCheck};
 
 /// This schema is intentionally experimental, like the `uv sync` JSON report.
 #[derive(Debug, Serialize)]
@@ -26,42 +28,124 @@ struct Schema {
 #[derive(Debug, Default, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum Status {
+    /// The lockfile on disk is up-to-date after the operation.
     Fresh,
+    /// The lockfile on disk is missing or needs changes.
     Stale,
+    /// Freshness was deliberately not checked.
+    NotChecked,
     #[default]
     Indeterminate,
 }
 
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum Action {
+    Use,
+    Check,
+    Update,
+    Create,
+}
+
 #[derive(Debug, Serialize)]
-pub(crate) struct LockCheckReport {
+pub(crate) struct LockReport {
     schema: Schema,
     #[serde(skip_serializing_if = "Option::is_none")]
     path: Option<PortablePathBuf>,
     status: Status,
+    /// The lockfile action; create and update are proposed actions in a dry run.
     #[serde(skip_serializing_if = "Option::is_none")]
-    reason: Option<LockCheckReason>,
+    action: Option<Action>,
+    dry_run: bool,
+    #[serde(skip)]
+    completed: bool,
+    /// Why the previous lock could not be reused, if known.
     #[serde(skip_serializing_if = "Option::is_none")]
-    validation_error: Option<CheckError>,
+    reason: Option<LockReason>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<CheckError>,
+    validation_error: Option<ErrorReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<ErrorReport>,
 }
 
-impl Default for LockCheckReport {
-    fn default() -> Self {
+impl LockReport {
+    pub(super) fn new(
+        lock_check: LockCheck,
+        frozen: Option<FrozenSource>,
+        dry_run: DryRun,
+    ) -> Self {
+        let (action, dry_run) = if frozen.is_some() {
+            (Some(Action::Use), false)
+        } else {
+            match lock_check {
+                LockCheck::Enabled(_) => (Some(Action::Check), false),
+                LockCheck::Disabled => (None, dry_run.enabled()),
+            }
+        };
         Self {
             schema: Schema { version: "preview" },
             path: None,
             status: Status::Indeterminate,
+            action,
+            dry_run,
+            completed: false,
             reason: None,
             validation_error: None,
             error: None,
         }
     }
-}
 
-impl LockCheckReport {
     pub(super) fn set_path(&mut self, path: &Path) {
         self.path = Some(path.into());
+    }
+
+    pub(super) fn operation_success(&mut self, mode: &LockMode<'_>, result: &LockResult) {
+        self.completed = true;
+        match mode {
+            LockMode::Frozen(_) => {
+                self.action = Some(Action::Use);
+                self.status = Status::NotChecked;
+                self.reason = None;
+                self.validation_error = None;
+            }
+            LockMode::Locked(..) => {
+                self.action = Some(Action::Check);
+                match result {
+                    LockResult::Unchanged(_) => {
+                        self.status = Status::Fresh;
+                        self.reason = None;
+                        self.validation_error = None;
+                    }
+                    LockResult::Changed(..) => {
+                        self.status = Status::Stale;
+                        self.reason
+                            .get_or_insert_with(|| LockReason::new(ReasonCode::LockChanged));
+                    }
+                }
+            }
+            LockMode::Write(_) | LockMode::DryRun(_) => match result {
+                LockResult::Unchanged(_) => {
+                    self.action = Some(Action::Check);
+                    self.status = Status::Fresh;
+                    self.reason = None;
+                    self.validation_error = None;
+                }
+                LockResult::Changed(previous, _) => {
+                    self.action = Some(if previous.is_some() {
+                        Action::Update
+                    } else {
+                        Action::Create
+                    });
+                    self.status = if self.dry_run {
+                        Status::Stale
+                    } else {
+                        Status::Fresh
+                    };
+                    self.reason
+                        .get_or_insert_with(|| LockReason::new(ReasonCode::LockChanged));
+                }
+            },
+        }
     }
 
     pub(super) fn operation_error(&mut self, error: &LockError) {
@@ -75,32 +159,30 @@ impl LockCheckReport {
             None
         };
         if let Some(reason) = reason {
-            self.reason
-                .get_or_insert_with(|| LockCheckReason::new(reason));
+            self.reason.get_or_insert_with(|| LockReason::new(reason));
         } else {
-            self.error = Some(CheckError::from_lock(error));
+            self.error = Some(ErrorReport::from_lock(error));
         }
     }
 
     pub(super) fn finish(&mut self, result: &anyhow::Result<ExitStatus>) {
         match result {
             Ok(ExitStatus::Success) => {
-                self.status = Status::Fresh;
-                self.reason = None;
-                self.validation_error = None;
                 self.error = None;
             }
             Ok(ExitStatus::Failure | ExitStatus::Error | ExitStatus::External(_)) | Err(_) => {
-                self.status = if self.reason.is_some() {
-                    Status::Stale
-                } else {
-                    Status::Indeterminate
-                };
+                if !self.completed {
+                    self.status = if self.reason.is_some() {
+                        Status::Stale
+                    } else {
+                        Status::Indeterminate
+                    };
+                }
                 if self.error.is_none()
-                    && self.reason.is_none()
+                    && (self.reason.is_none() || self.completed)
                     && let Err(error) = result
                 {
-                    self.error = Some(CheckError::new(error.as_ref()));
+                    self.error = Some(ErrorReport::new(error.as_ref()));
                 }
             }
         }
@@ -152,7 +234,7 @@ pub(super) enum ReasonCode {
 }
 
 #[derive(Debug, Serialize)]
-pub(super) struct LockCheckReason {
+pub(super) struct LockReason {
     code: ReasonCode,
     #[serde(skip_serializing_if = "Option::is_none")]
     package: Option<PackageName>,
@@ -166,7 +248,7 @@ pub(super) struct LockCheckReason {
     actual: Option<Vec<String>>,
 }
 
-impl LockCheckReason {
+impl LockReason {
     pub(super) fn new(code: ReasonCode) -> Self {
         Self {
             code,
@@ -178,7 +260,7 @@ impl LockCheckReason {
     }
 }
 
-impl From<LockValidationReason> for LockCheckReason {
+impl From<LockValidationReason> for LockReason {
     fn from(reason: LockValidationReason) -> Self {
         Self {
             code: reason.code.into(),
@@ -193,6 +275,7 @@ impl From<LockValidationReason> for LockCheckReason {
 impl From<LockValidationReasonCode> for ReasonCode {
     fn from(code: LockValidationReasonCode) -> Self {
         match code {
+            LockValidationReasonCode::MissingLockfile => Self::MissingLockfile,
             LockValidationReasonCode::ResolutionModeChanged => Self::ResolutionModeChanged,
             LockValidationReasonCode::ForkStrategyChanged => Self::ForkStrategyChanged,
             LockValidationReasonCode::ExcludeNewerChanged => Self::ExcludeNewerChanged,
@@ -249,13 +332,13 @@ impl From<LockValidationReasonCode> for ReasonCode {
     }
 }
 
-impl LockReporter for LockCheckReport {
+impl LockReporter for LockReport {
     fn stale(&mut self, reason: LockValidationReason) {
         self.reason = Some(reason.into());
     }
 
     fn validation_error(&mut self, error: &LockValidationError) {
-        self.validation_error = Some(CheckError::from_validation(error));
+        self.validation_error = Some(ErrorReport::from_validation(error));
     }
 }
 
@@ -272,7 +355,7 @@ enum ErrorCode {
 }
 
 #[derive(Debug, Serialize)]
-struct CheckError {
+struct ErrorReport {
     code: ErrorCode,
     #[serde(skip_serializing_if = "Option::is_none")]
     package: Option<PackageName>,
@@ -283,7 +366,7 @@ struct CheckError {
     causes: Vec<String>,
 }
 
-impl CheckError {
+impl ErrorReport {
     fn new(error: &(dyn Error + 'static)) -> Self {
         let mut report = Self {
             code: ErrorCode::EvaluationFailed,

@@ -35,8 +35,8 @@ use uv_settings::{FrozenSource, LockCheck, PythonInstallMirrors, ResolverSetting
 use uv_warnings::warn_user;
 use uv_workspace::{DiscoveryOptions, VirtualProject, WorkspaceCache};
 
-use crate::lock_report::LockCheckReport;
 use crate::ScriptPath;
+use crate::lock_report::LockReport;
 
 /// Resolve the project requirements into a lockfile.
 pub async fn lock(
@@ -70,7 +70,7 @@ pub async fn lock(
                     PreviewFeature::JsonOutput
                 );
             }
-            Some(LockCheckReport::default())
+            Some(LockReport::new(lock_check, frozen, dry_run))
         }
     };
     let result = Box::pin(lock_inner(
@@ -127,7 +127,7 @@ async fn lock_inner(
     workspace_cache: &WorkspaceCache,
     printer: Printer,
     preview: Preview,
-    mut report: Option<&mut LockCheckReport>,
+    mut report: Option<&mut LockReport>,
 ) -> anyhow::Result<ExitStatus> {
     // If necessary, initialize the PEP 723 script.
     let script = match script {
@@ -261,10 +261,11 @@ async fn lock_inner(
         .execute(target),
     )
     .await;
-    if let Some(report) = report
-        && let Err(error) = &result
-    {
-        report.operation_error(error);
+    if let Some(report) = report {
+        match &result {
+            Ok(lock) => report.operation_success(&mode, lock),
+            Err(error) => report.operation_error(error),
+        }
     }
     match result {
         Ok(lock) => {

@@ -57,7 +57,7 @@ pub enum LockFormat {
     /// Display the result in a human-readable format.
     #[default]
     Text,
-    /// Display the lock check result as JSON.
+    /// Display the lock operation result as JSON.
     Json,
 }
 

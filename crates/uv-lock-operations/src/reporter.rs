@@ -99,10 +99,10 @@ impl LockValidationReason {
             SatisfiesResult::MismatchedDynamic(package, _) => {
                 Self::new(LockValidationReasonCode::DynamicChanged).package(package)
             }
-            SatisfiesResult::MismatchedVersion(package, expected, actual) => {
+            SatisfiesResult::MismatchedVersion(package, locked, current) => {
                 Self::new(LockValidationReasonCode::VersionChanged)
                     .package(package)
-                    .values([expected], actual)
+                    .values(current, [locked])
             }
             SatisfiesResult::MismatchedRequirements(expected, actual) => {
                 Self::new(LockValidationReasonCode::RequirementsChanged).values(expected, actual)
@@ -163,6 +163,7 @@ impl LockValidationReason {
 /// The kind of mismatch found while validating an existing lockfile.
 #[derive(Debug, Clone, Copy)]
 pub enum LockValidationReasonCode {
+    MissingLockfile,
     ResolutionModeChanged,
     ForkStrategyChanged,
     ExcludeNewerChanged,

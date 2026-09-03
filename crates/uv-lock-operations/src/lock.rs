@@ -39,6 +39,7 @@ use crate::lock_target::find_lock_format_error;
 use crate::{
     LockError, LockReporter, LockTarget, LockValidationError, MissingLockfileSource, ValidatedLock,
 };
+use crate::{LockValidationReason, LockValidationReasonCode};
 
 /// The result of running a lock operation.
 #[derive(Debug, Clone)]
@@ -169,7 +170,7 @@ impl<'env> LockOperation<'env> {
     }
 
     /// Perform a [`LockOperation`].
-    pub async fn execute(self, target: LockTarget<'_>) -> Result<LockResult, LockError> {
+    pub async fn execute(mut self, target: LockTarget<'_>) -> Result<LockResult, LockError> {
         if !matches!(&self.mode, LockMode::Frozen(_)) {
             target.validate_upgrade_groups(&self.settings.upgrade)?;
         }
@@ -241,7 +242,14 @@ impl<'env> LockOperation<'env> {
                     Ok(Some((existing, existing_contents))) => {
                         (Some(existing), Some(existing_contents))
                     }
-                    Ok(None) => (None, None),
+                    Ok(None) => {
+                        if let Some(reporter) = self.reporter.as_deref_mut() {
+                            reporter.stale(LockValidationReason::new(
+                                LockValidationReasonCode::MissingLockfile,
+                            ));
+                        }
+                        (None, None)
+                    }
                     Err(LockError::Lock(err)) => {
                         warn_user!(
                             "Failed to read existing lockfile; ignoring locked requirements: {err}"
