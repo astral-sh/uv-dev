@@ -539,6 +539,7 @@ impl ToolLock {
             &database,
             preview,
             printer,
+            None,
         )
         .await?;
         let satisfied = validated.is_satisfied();
