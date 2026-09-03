@@ -23,7 +23,9 @@ distribution error during ordinary `uv sync`. However, that example still declar
 package in both `project.dependencies` and `tool.uv.sources`. It therefore demonstrates uv trying to
 resolve a live path dependency whose directory is absent, not the originally reported failure after
 the dependency reference was removed. The inability to remove that live declaration, or a failure
-to relock after removing it, remains unproduced.
+to relock after removing it, remains unproduced. A maintainer confirmed this distinction and
+demonstrated that, after removing the dependency from `sub-proj2`, ordinary `uv sync` succeeds,
+removes `sub-proj1` from the environment, and rebuilds `sub-proj2`.
 
 No existing issue or pull request was found that tracks this same sequence with an ordinary lock
 refresh. The closest discussions retain a live workspace or path declaration, use frozen or locked
@@ -33,12 +35,13 @@ operation, or leave a matched directory without a `pyproject.toml`.
 
 A maintainer indicated that the issue did not contain enough information to reproduce or diagnose
 the failure and requested a minimal reproducible example following astral-sh/uv#9452. The later
-contributor example supplies a directory layout, minimal consumer configuration, command, and
-error, but it omits the uv version, operating system, and complete `--verbose` output requested by
-the maintainer. More importantly, it retains the dependency reference that the original report says
-was removed. Investigation therefore still needs the failing removal command or the post-removal
-configuration and verbose sync output. The new example does not establish a root cause or change
-the bug classification.
+contributor example now supplies a directory layout, minimal consumer configuration, uv 0.12.9 on
+Linux x86_64, Python 3.12, the command, and verbose output. More importantly, it retains the
+dependency reference that the original report says was removed. A maintainer considers that failure
+expected and confirmed that sync recovers after deleting the declaration. Investigation therefore
+still needs the original failing removal command or post-removal configuration and verbose sync
+output. The new discussion narrows the issue but does not establish a root cause or change the bug
+classification.
 
 ## Reproduction
 
@@ -72,11 +75,17 @@ error: Failed to generate package metadata for `sub-proj1==0.1.0 @ directory+../
   Caused by: Distribution not found at: file:///home/casch/Projects/open-source/uv-bug-repro-21429/sub-proj1
 ```
 
+The contributor ran this on uv 0.12.9 (`x86_64-unknown-linux-gnu`) with Python 3.12. Their verbose
+output confirms that uv reads static requirements from `sub-proj2`, finds no `pyproject.toml` for
+the declared `sub-proj1` source, and then emits the missing-distribution error above.
+
 This is a useful reproduction of the missing-path symptom, but the configuration still requires
 `sub-proj1`. It does not show the claimed failure after deleting the dependency entry, nor does it
-show an attempted `uv remove sub-proj1`. The comment also does not identify the uv version,
-platform, or verbose output, and the variant has not been independently reproduced as part of this
-handoff.
+show an attempted `uv remove sub-proj1`. A maintainer stated that failure is expected while the
+dependency remains declared. The maintainer then removed the dependency and showed ordinary
+`uv sync` succeeding, uninstalling `sub-proj1`, and rebuilding `sub-proj2`. This aligns with the
+independent reproduction below and rules out the contributor's retained-reference example as a
+reproduction of the central recovery failure.
 
 ### Existing independent reproduction
 
@@ -176,8 +185,10 @@ recovered in the tested fixtures, while locked and frozen failures were expected
 doctor command and broader advice is an enhancement component, but it is secondary to the reported
 recovery failure. Missing configuration prevents determining whether the report involves a live
 metadata reference, lock-preserving mode, or a distinct bug. The contributor's configuration
-confirms the live-reference case but does not provide the original post-removal state. No existing
-issue or pull request is close enough to centralize this report, so it is not a duplicate.
+confirms the live-reference case, and a maintainer confirmed that its failure is expected and that
+ordinary sync recovers once the declaration is removed. It does not provide the original
+post-removal state. No existing issue or pull request is close enough to centralize this report, so
+it is not a duplicate.
 
 ## Related
 
