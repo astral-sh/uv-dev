@@ -59,6 +59,11 @@ pub enum LockError {
     LockMismatch(Option<Box<Lock>>, Box<Lock>, LockedSource),
 
     #[error(
+        "The lockfile at `uv.lock` needs to be updated for the selected packages, but `--check-package` was provided."
+    )]
+    LockPackageMismatch,
+
+    #[error(
         "The lockfile at `{0}` has non-canonical formatting at line {1}, but `{2}` was provided."
     )]
     LockFormat(PathBuf, usize, LockedSource),
@@ -184,6 +189,7 @@ impl From<LockError> for UvError {
     fn from(error: LockError) -> Self {
         match error {
             error @ (LockError::LockMismatch(..)
+            | LockError::LockPackageMismatch
             | LockError::LockFormat(..)
             | LockError::MissingLockfile(..)
             | LockError::LockWorkspaceMismatch(..)) => Self::user(error),
@@ -222,7 +228,9 @@ impl From<LockError> for UvError {
 impl Hinted for LockError {
     fn hints(&self) -> Hints<'_> {
         match self {
-            Self::LockMismatch(..) | Self::LockWorkspaceMismatch(..) => {
+            Self::LockMismatch(..)
+            | Self::LockPackageMismatch
+            | Self::LockWorkspaceMismatch(..) => {
                 Hints::from("To update the lockfile, run `uv lock`.")
             }
             Self::LockFormat(..) => Hints::from(

@@ -39,6 +39,7 @@ use crate::ScriptPath;
 pub async fn lock(
     project_dir: &Path,
     lock_check: LockCheck,
+    check_packages: &[PackageName],
     frozen: Option<FrozenSource>,
     dry_run: DryRun,
     refresh: Refresh,
@@ -95,6 +96,16 @@ pub async fn lock(
         .await?;
         LockTarget::Workspace(workspace.workspace())
     };
+
+    for name in check_packages {
+        let found = match target {
+            LockTarget::Workspace(workspace) => workspace.packages().contains_key(name),
+            LockTarget::Script(_) => false,
+        };
+        if !found {
+            anyhow::bail!("Package `{name}` not found in workspace");
+        }
+    }
 
     // Determine the lock mode.
     let interpreter;
@@ -174,6 +185,7 @@ pub async fn lock(
             preview,
         )
         .with_refresh(&refresh)
+        .with_check_packages(check_packages)
         .with_lockfile_contents_check(
             matches!(&refresh, Refresh::All(..))
                 && preview.is_enabled(PreviewFeature::LockfileFormatCheck),
@@ -221,9 +233,11 @@ pub async fn lock(
             Ok(ExitStatus::Success)
         }
         // Lock mismatches from `--check`/`--locked` are expected validation failures.
-        Err(err @ (LockError::LockMismatch(..) | LockError::LockFormat(..))) => {
-            Err(UvError::user(err).into())
-        }
+        Err(
+            err @ (LockError::LockMismatch(..)
+            | LockError::LockPackageMismatch
+            | LockError::LockFormat(..)),
+        ) => Err(UvError::user(err).into()),
         Err(err) => Err(UvError::from(err).into()),
     }
 }

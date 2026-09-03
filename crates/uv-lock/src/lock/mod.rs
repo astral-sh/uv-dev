@@ -3851,6 +3851,23 @@ impl Lock {
         Ok(found_dist)
     }
 
+    /// Find the locked source tree for a workspace member, without confusing it with a registry
+    /// package that has the same name.
+    fn find_workspace_package(
+        &self,
+        root: &Path,
+        name: &PackageName,
+        member: &WorkspaceMember,
+    ) -> Option<&Package> {
+        let mut candidates = self.packages_for_name(name).iter().filter(|package| {
+            package.id.source.as_source_tree().is_some_and(|path| {
+                normalize_path(root.join(path)).as_ref() == normalize_path(member.root()).as_ref()
+            })
+        });
+        let package = candidates.next()?;
+        candidates.next().is_none().then_some(package)
+    }
+
     /// Returns the package with the given name.
     ///
     /// If there are multiple matching packages, returns the package that
@@ -4203,6 +4220,7 @@ impl Lock {
         root: &Path,
         packages: &BTreeMap<PackageName, WorkspaceMember>,
         members: &[PackageName],
+        check_packages: &[PackageName],
         required_members: &BTreeMap<PackageName, Editability>,
         requirements: &[Requirement],
         constraints: &[Requirement],
@@ -4229,8 +4247,38 @@ impl Lock {
         let mut validated_extras: FxHashMap<PackageIndex, BTreeMap<ExtraName, UniversalMarker>> =
             FxHashMap::default();
 
+        // Use the committed graph to determine the scope of a package check. A newly added or
+        // changed dependency is still detected when its parent's current metadata is validated.
+        // Include every marker branch, extra, and dependency group, rather than projecting the
+        // graph for the interpreter that happens to run the check.
+        let checked_indices = if check_packages.is_empty() {
+            None
+        } else {
+            let mut pending = VecDeque::new();
+            for name in check_packages {
+                let Some(package) = packages
+                    .get(name)
+                    .and_then(|member| self.find_workspace_package(root, name, member))
+                else {
+                    return Ok(SatisfiesResult::MissingRoot(name.clone()));
+                };
+                pending.push_back(self.by_id[&package.id]);
+            }
+            let mut indices = FxHashSet::default();
+            while let Some(package_index) = pending.pop_front() {
+                if indices.insert(package_index) {
+                    pending.extend(
+                        self.package(package_index)
+                            .all_dependencies()
+                            .map(|dependency| dependency.index),
+                    );
+                }
+            }
+            Some(indices)
+        };
+
         // Validate that the lockfile was generated with the same root members.
-        {
+        if check_packages.is_empty() {
             let expected = members.iter().cloned().collect::<BTreeSet<_>>();
             let actual = &self.manifest.members;
             if expected != *actual {
@@ -4300,7 +4348,19 @@ impl Lock {
         // Validate that the member sources have not changed (e.g., that they've switched from
         // virtual to non-virtual or vice versa).
         for (name, member) in packages {
-            let source = self.find_by_name(name).ok().flatten();
+            if let Some(checked_indices) = &checked_indices
+                && !self.packages_for_name(name).iter().any(|package| {
+                    package.id.source.is_source_tree()
+                        && checked_indices.contains(&self.by_id[&package.id])
+                })
+            {
+                continue;
+            }
+            let source = if checked_indices.is_some() {
+                self.find_workspace_package(root, name, member)
+            } else {
+                self.find_by_name(name).ok().flatten()
+            };
 
             // Determine whether the member was required by any other member.
             let value = required_members.get(name);
@@ -4337,7 +4397,7 @@ impl Lock {
         let normalizer = RequirementNormalizer::new(root, &self.requires_python);
 
         // Validate that the lockfile was generated with equivalent requirements.
-        {
+        if check_packages.is_empty() {
             let expected = normalizer.requirements(requirements.iter().cloned())?;
             let actual = normalizer.requirements(self.manifest.requirements.iter().cloned())?;
             if expected != actual {
@@ -4446,7 +4506,8 @@ impl Lock {
             }
         }
 
-        {
+        // Validate that the lockfile was generated with equivalent dependency groups.
+        if check_packages.is_empty() {
             let expected = dependency_groups
                 .iter()
                 .filter(|(_, requirements)| !requirements.is_empty())
@@ -4512,7 +4573,8 @@ impl Lock {
                 DependencyModifierScope::Global,
                 requirements
                     .iter()
-                    .chain(dependency_groups.values().flatten()),
+                    .chain(dependency_groups.values().flatten())
+                    .filter(|_| check_packages.is_empty()),
             )
             .collect::<Vec<_>>();
         let dependency_sources = if allow_missing_package_metadata {
@@ -4521,6 +4583,7 @@ impl Lock {
                 &root_requirements,
                 dependency_metadata,
                 &dependency_modifiers,
+                checked_indices.as_ref(),
                 root,
                 tags,
                 markers,
@@ -4567,10 +4630,16 @@ impl Lock {
         });
 
         // Add the workspace packages to the queue.
-        for root_name in packages.keys() {
-            let root = self
-                .find_by_name(root_name)
-                .expect("found too many packages matching root");
+        for root_name in packages
+            .keys()
+            .filter(|name| check_packages.is_empty() || check_packages.contains(name))
+        {
+            let root = if checked_indices.is_some() {
+                self.find_workspace_package(root, root_name, &packages[root_name])
+            } else {
+                self.find_by_name(root_name)
+                    .expect("found too many packages matching root")
+            };
 
             let Some(root) = root else {
                 // The package is not in the lockfile, so it can't be satisfied.
@@ -4686,6 +4755,15 @@ impl Lock {
 
             // If the package is immutable, we don't need to validate it (or its dependencies).
             if package.id.source.is_immutable() {
+                // A package-scoped check does not seed every workspace member. Follow immutable
+                // packages too, so a mutable source reached through one cannot escape validation.
+                if checked_indices.is_some() {
+                    for dependency in package.all_dependencies() {
+                        if seen.insert(dependency.index) {
+                            queue.push_back(dependency.index);
+                        }
+                    }
+                }
                 continue;
             }
 
@@ -5511,6 +5589,7 @@ impl Lock {
         root_requirements: &[Cow<'_, Requirement>],
         dependency_metadata: &DependencyMetadata,
         dependency_modifiers: &DependencyModifiers,
+        checked_indices: Option<&FxHashSet<PackageIndex>>,
         root: &Path,
         tags: &Tags,
         markers: &MarkerEnvironment,
@@ -5546,7 +5625,10 @@ impl Lock {
         let root_marker = self.fork_markers_union();
         let mut reachability = DependencySourceReachability::default();
         for package in &self.packages {
-            if self.is_workspace_package(package) {
+            if self.is_workspace_package(package)
+                && checked_indices
+                    .is_none_or(|indices| indices.contains(&self.by_id[&package.id]))
+            {
                 reachability
                     .package_queue
                     .push_back((package, None, root_marker));
@@ -5665,7 +5747,11 @@ impl Lock {
         let mut pending_packages = self
             .packages
             .iter()
-            .filter(|package| self.is_workspace_package(package))
+            .filter(|package| {
+                self.is_workspace_package(package)
+                    && checked_indices
+                        .is_none_or(|indices| indices.contains(&self.by_id[&package.id]))
+            })
             .collect::<Vec<_>>();
         let mut visited_packages = FxHashSet::default();
 

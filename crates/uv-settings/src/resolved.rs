@@ -19,6 +19,7 @@ use crate::{ResolverInstallerOptions, ResolverOptions};
 pub enum LockedFlag {
     Locked,
     Check,
+    CheckPackage,
 }
 
 impl LockedFlag {
@@ -27,6 +28,7 @@ impl LockedFlag {
         match self {
             Self::Locked => "locked",
             Self::Check => "check",
+            Self::CheckPackage => "check-package",
         }
     }
 }

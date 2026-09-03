@@ -86,6 +86,7 @@ pub struct LockOperation<'env> {
     first_party_exclusions: BTreeSet<PackageName>,
     refresh: Option<&'env Refresh>,
     check_lockfile_contents: bool,
+    check_packages: &'env [PackageName],
     settings: &'env ResolverSettings,
     client_builder: &'env BaseClientBuilder<'env>,
     state: &'env UniversalState,
@@ -117,6 +118,7 @@ impl<'env> LockOperation<'env> {
             first_party_exclusions: BTreeSet::new(),
             refresh: None,
             check_lockfile_contents: false,
+            check_packages: &[],
             settings,
             client_builder,
             state,
@@ -154,6 +156,13 @@ impl<'env> LockOperation<'env> {
     #[must_use]
     pub fn with_lockfile_contents_check(mut self, enabled: bool) -> Self {
         self.check_lockfile_contents = enabled;
+        self
+    }
+
+    /// Restrict a read-only lock check to the given workspace members.
+    #[must_use]
+    pub fn with_check_packages(mut self, packages: &'env [PackageName]) -> Self {
+        self.check_packages = packages;
         self
     }
 
@@ -197,6 +206,7 @@ impl<'env> LockOperation<'env> {
                     Some(existing),
                     self.mode,
                     check_lockfile_contents,
+                    self.check_packages,
                     self.constraints,
                     self.first_party_exclusions,
                     self.refresh,
@@ -252,6 +262,7 @@ impl<'env> LockOperation<'env> {
                     existing,
                     self.mode,
                     check_lockfile_contents,
+                    &[],
                     self.constraints,
                     self.first_party_exclusions,
                     self.refresh,
@@ -287,6 +298,7 @@ async fn do_lock(
     existing_lock: Option<Lock>,
     mode: LockMode<'_>,
     check_lockfile_contents: Option<String>,
+    check_packages: &[PackageName],
     external: Vec<NameRequirementSpecification>,
     first_party_exclusions: BTreeSet<PackageName>,
     refresh: Option<&Refresh>,
@@ -779,6 +791,7 @@ async fn do_lock(
             target.install_path(),
             packages,
             &members,
+            check_packages,
             required_members,
             &requirements,
             &dependency_groups,
@@ -807,6 +820,7 @@ async fn do_lock(
         .await
         {
             Ok(result) => Some(result),
+            Err(err) if !check_packages.is_empty() => return Err(err.into()),
             Err(LockValidationError::Lock(err)) if err.is_resolution() || err.is_no_build() => {
                 // Resolver errors are not recoverable, as such errors can leave the resolver in a
                 // broken state. Specifically, tasks that fail with an error can be left as pending.
@@ -833,6 +847,17 @@ async fn do_lock(
     } else {
         None
     };
+
+    // A scoped check must not fall back to resolving the whole workspace: an unrelated stale
+    // member could make that resolution fail, and a subset resolution would produce a different
+    // lockfile. Only an existing lock that passes validation can satisfy the check.
+    if !check_packages.is_empty()
+        && existing_lock
+            .as_ref()
+            .is_none_or(|lock| !matches!(lock, ValidatedLock::Satisfies(_)))
+    {
+        return Err(LockError::LockPackageMismatch);
+    }
 
     match existing_lock {
         // Resolution from the lockfile succeeded.
