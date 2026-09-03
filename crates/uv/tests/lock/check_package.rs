@@ -412,6 +412,163 @@ fn preserves_shared_explicit_index_assignments() -> Result<()> {
 }
 
 #[test]
+fn preserves_shared_direct_sources_without_metadata() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let links = context.temp_dir.child("links");
+    links.create_dir_all()?;
+    let (filename, wheel) = generate_wheel(
+        &"shared-dep".parse()?,
+        &"3.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+    );
+    links.child(&filename).write_binary(&wheel)?;
+    let url = Url::from_file_path(links.child(&filename).path())
+        .map_err(|()| anyhow::anyhow!("could not convert wheel path to URL"))?;
+    let root = indoc! {r#"
+        [tool.uv.workspace]
+        members = ["packages/*"]
+    "#};
+    context.temp_dir.child("pyproject.toml").write_str(root)?;
+    context
+        .temp_dir
+        .child("packages/web/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "web"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["shared-dep"]
+    "#})?;
+    let worker = formatdoc! {r#"
+        [project]
+        name = "worker"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["shared-dep"]
+
+        [tool.uv.sources]
+        shared-dep = {{ path = "../../links/{filename}" }}
+    "#};
+    let worker_path = context.temp_dir.child("packages/worker/pyproject.toml");
+    worker_path.write_str(&worker)?;
+    context
+        .lock()
+        .arg("--offline")
+        .arg("--preview-features")
+        .arg("lock-without-metadata")
+        .assert()
+        .success();
+    let lock = context.read("uv.lock");
+    worker_path.write_str(&worker.replace("1.0.0", "2.0.0"))?;
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--offline").arg("--preview-features").arg("lock-without-metadata")
+        .arg("--check-package").arg("web"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--offline").arg("--preview-features").arg("lock-without-metadata")
+        .arg("--check-package").arg("worker"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: The lockfile at `uv.lock` needs to be updated for `worker`, but `--check-package` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+
+    // An unused source with the same URL cannot authorize the shared package.
+    let worker = worker.replace("shared-dep = { path", "other-dep = { path");
+    worker_path.write_str(&worker)?;
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--offline").arg("--preview-features").arg("lock-without-metadata")
+        .arg("--check-package").arg("web"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: The lockfile at `uv.lock` needs to be updated for `web`, but `--check-package` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    assert_eq!(context.read("uv.lock"), lock);
+
+    // A non-project workspace root can also select the shared source from a dependency group.
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        {root}
+        [dependency-groups]
+        tools = ["shared-dep @ {url}"]
+    "#})?;
+    context
+        .lock()
+        .arg("--offline")
+        .arg("--preview-features")
+        .arg("lock-without-metadata")
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--offline").arg("--preview-features").arg("lock-without-metadata")
+        .arg("--check-package").arg("web"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    Ok(())
+}
+
+#[test]
+fn skips_unrelated_metadata_for_known_direct_sources() -> Result<()> {
+    let context = workspace()?;
+    let unrelated = context.temp_dir.child("packages/unrelated/pyproject.toml");
+    unrelated.write_str(indoc! {r#"
+        [project]
+        name = "unrelated"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["shared"]
+
+        [tool.uv]
+        package = false
+    "#})?;
+    context.lock().arg("--offline").assert().success();
+    let mut lock = context.read("uv.lock").parse::<toml_edit::DocumentMut>()?;
+    let Some(packages) = lock["package"].as_array_of_tables_mut() else {
+        anyhow::bail!("lockfile did not contain a package array");
+    };
+    for package in packages.iter_mut() {
+        package.remove("metadata");
+    }
+    lock["revision"] = toml_edit::value(4);
+    let lock = lock.to_string();
+    context.temp_dir.child("uv.lock").write_str(&lock)?;
+    unrelated.write_str(indoc! {r#"
+        [project]
+        name = "unrelated"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dynamic = ["dependencies"]
+
+        [build-system]
+        requires = []
+        build-backend = "missing_backend"
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--offline").arg("--preview-features").arg("lock-without-metadata")
+        .arg("--no-build-package").arg("unrelated")
+        .arg("--check-package").arg("application"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 6 packages in [TIME]
+    ");
+    assert_eq!(context.read("uv.lock"), lock);
+    Ok(())
+}
+
+#[test]
 fn checks_lock_without_package_metadata() -> Result<()> {
     let context = workspace()?;
     let mut lock = context.read("uv.lock").parse::<toml_edit::DocumentMut>()?;
