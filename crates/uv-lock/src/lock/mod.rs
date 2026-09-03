@@ -4319,22 +4319,26 @@ impl Lock {
         };
         // Projectless workspace groups and scripts are root declarations, so apply only
         // global overrides and exclusions before using them for sources or validation.
-        let root_requirements = dependency_overrides
+        let source_root_requirements = dependency_overrides
             .apply_for_package(
                 None,
                 requirements
                     .iter()
-                    .chain(dependency_groups.values().flatten())
-                    .filter(|_| check_packages.is_empty()),
+                    .chain(dependency_groups.values().flatten()),
             )
             .filter(|requirement| {
                 !dependency_excludes.contains_for_package(None, &requirement.name)
             })
             .collect::<Vec<_>>();
+        let root_requirements = if check_packages.is_empty() {
+            source_root_requirements.as_slice()
+        } else {
+            &[]
+        };
         let dependency_sources = if allow_missing_package_metadata {
             Box::pin(self.collect_dependency_sources(
                 normalized_constraints,
-                &root_requirements,
+                &source_root_requirements,
                 dependency_metadata,
                 &dependency_overrides,
                 &dependency_excludes,
@@ -4411,7 +4415,7 @@ impl Lock {
 
         // Add requirements attached directly to the target root (e.g., PEP 723 requirements or
         // dependency groups in workspaces without a `[project]` table).
-        for requirement in &root_requirements {
+        for requirement in root_requirements {
             if let RequirementSource::Registry {
                 index: Some(index), ..
             } = &requirement.source
@@ -4427,7 +4431,7 @@ impl Lock {
                         continue;
                     }
                     if allow_missing_package_metadata {
-                        if !Self::package_satisfies_requirement(package, &requirement, root)? {
+                        if !Self::package_satisfies_requirement(package, requirement, root)? {
                             continue;
                         }
                         let is_bare_registry_requirement = matches!(
@@ -5385,7 +5389,7 @@ impl Lock {
         markers: &MarkerEnvironment,
         build_options: &BuildOptions,
         hasher: &HashStrategy,
-        index: &InMemoryIndex,
+        index: &DistributionMetadataIndex,
         database: &DistributionDatabase<'_, Context>,
         source_tree_metadata: &mut FxHashMap<PackageId, Option<SourceTreeRequiresDist>>,
     ) -> Result<FxHashSet<PackageIndex>, LockError> {
@@ -5512,6 +5516,164 @@ impl Lock {
             source_requirements.extend(global_source_overrides);
         }
 
+        // A selected package can share a direct source declared by another workspace member.
+        // Read an unselected member only when the selected graph still needs its exact source.
+        if let Some(checked_indices) = checked_indices {
+            let checked_source_indices = checked_indices
+                .iter()
+                .flat_map(|index| self.package(*index).all_dependencies())
+                .filter(|dependency| !matches!(dependency.package_id.source, Source::Registry(..)))
+                .map(|dependency| dependency.index)
+                .collect::<FxHashSet<_>>();
+            let requirement_selects_checked_source =
+                |requirement: &Requirement| -> Result<bool, LockError> {
+                    for package in self.packages_for_name(&requirement.name) {
+                        if checked_source_indices.contains(&self.by_id[&package.id])
+                            && !requirement.marker.is_false()
+                            && package.is_included_by_marker(requirement.marker)
+                            && package
+                                .id
+                                .source
+                                .satisfies_requirement_source(&requirement.source, root)?
+                        {
+                            return Ok(true);
+                        }
+                    }
+                    Ok(false)
+                };
+            let add_requirements = |source_requirements: &mut BTreeSet<Requirement>,
+                                    package: &Package,
+                                    package_version: Option<&Version>,
+                                    requirements: &[Requirement],
+                                    context: DependencyContext<'_>|
+             -> Result<(), LockError> {
+                for requirement in Self::preprocess_requirements(
+                    &package.id.name,
+                    package_version,
+                    requirements,
+                    context,
+                    dependency_overrides,
+                    dependency_excludes,
+                ) {
+                    if !matches!(requirement.source, RequirementSource::Registry { .. })
+                        && requirement_selects_checked_source(&requirement)?
+                    {
+                        source_requirements.insert(normalize_requirement(
+                            requirement,
+                            root,
+                            &self.requires_python,
+                        )?);
+                    }
+                }
+                Ok(())
+            };
+
+            for requirement in root_requirements {
+                if !matches!(requirement.source, RequirementSource::Registry { .. })
+                    && requirement_selects_checked_source(requirement)?
+                {
+                    source_requirements.insert(normalize_requirement(
+                        requirement.clone().into_owned(),
+                        root,
+                        &self.requires_python,
+                    )?);
+                }
+            }
+
+            let checked = self.packages.iter().enumerate().filter(|(index, package)| {
+                self.is_workspace_package(package)
+                    && checked_indices.contains(&PackageIndex(*index))
+            });
+            let unchecked = self.packages.iter().enumerate().filter(|(index, package)| {
+                self.is_workspace_package(package)
+                    && !checked_indices.contains(&PackageIndex(*index))
+            });
+            for (package_index, package) in checked.chain(unchecked) {
+                if !checked_indices.contains(&PackageIndex(package_index)) {
+                    let mut needed = false;
+                    for dependency in package
+                        .all_dependencies()
+                        .filter(|dependency| checked_source_indices.contains(&dependency.index))
+                    {
+                        if !Self::constraint_selects_source(
+                            self.package(dependency.index),
+                            MarkerTree::TRUE,
+                            &source_requirements,
+                            root,
+                        )? {
+                            needed = true;
+                            break;
+                        }
+                    }
+                    if !needed {
+                        continue;
+                    }
+                }
+
+                let (package_version, requirements, dependency_groups) = if let Some(metadata) =
+                    dependency_metadata.get(&package.id.name, package.id.version.as_ref())
+                {
+                    (
+                        Some(metadata.version.clone()),
+                        Box::into_iter(metadata.requires_dist)
+                            .map(Requirement::from)
+                            .collect(),
+                        BTreeMap::new(),
+                    )
+                } else if let Some(source_tree) = package.id.source.as_source_tree()
+                    && let Some(SourceTreeRequiresDist {
+                        version, metadata, ..
+                    }) = Self::source_tree_requires_dist_cached(
+                        source_tree,
+                        root,
+                        package,
+                        database,
+                        source_tree_metadata,
+                    )
+                    .await?
+                {
+                    (
+                        version.or_else(|| package.id.version.clone()),
+                        metadata.requires_dist,
+                        metadata.dependency_groups,
+                    )
+                } else {
+                    let metadata = Self::package_metadata(
+                        package,
+                        root,
+                        tags,
+                        markers,
+                        build_options,
+                        hasher,
+                        index,
+                        database,
+                    )
+                    .await?;
+                    (
+                        Some(metadata.version),
+                        metadata.requires_dist,
+                        metadata.dependency_groups,
+                    )
+                };
+                add_requirements(
+                    &mut source_requirements,
+                    package,
+                    package_version.as_ref(),
+                    &requirements,
+                    DependencyContext::Production,
+                )?;
+                for (group, requirements) in dependency_groups {
+                    add_requirements(
+                        &mut source_requirements,
+                        package,
+                        package_version.as_ref(),
+                        &requirements,
+                        DependencyContext::Group(&group),
+                    )?;
+                }
+            }
+        }
+
         // Keep inactive constraints as candidates: a newly authorized source tree may
         // expose a current dependency that selects one later in the traversal.
         let mut source_candidates = source_requirements.clone();
@@ -5522,8 +5684,7 @@ impl Lock {
         let mut reachability = DependencySourceReachability::default();
         for package in &self.packages {
             if self.is_workspace_package(package)
-                && checked_indices
-                    .is_none_or(|indices| indices.contains(&self.by_id[&package.id]))
+                && checked_indices.is_none_or(|indices| indices.contains(&self.by_id[&package.id]))
             {
                 reachability
                     .package_queue
