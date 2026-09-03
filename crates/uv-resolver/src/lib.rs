@@ -14,11 +14,9 @@ pub use resolver::{
 pub use universal_marker::UniversalMarker;
 pub use upgrade::UpgradePackages;
 pub use uv_configuration::{
-    AnnotationStyle, DependencyMode, ExcludeNewer, ExcludeNewerChange, ExcludeNewerOverrideChange,
-    ExcludeNewerPackage, ExcludeNewerPackageChange, ExcludeNewerPackageEntry,
-    ExcludeNewerValueChange, ExcludeNewerValueWithSpanRef, ForkStrategy, Prerelease,
-    PrereleaseMode, PrereleasePackage, PrereleasePackageEntry, ResolutionMode,
-    serialize_exclude_newer_package_with_spans,
+    AnnotationStyle, DependencyMode, ExcludeNewer, ExcludeNewerPackage, ExcludeNewerPackageEntry,
+    ExcludeNewerValueWithSpanRef, ForkStrategy, Prerelease, PrereleaseMode, PrereleasePackage,
+    PrereleasePackageEntry, ResolutionMode, serialize_exclude_newer_package_with_spans,
 };
 pub use uv_distribution_types::{ExcludeNewerOverride, ExcludeNewerSpan, ExcludeNewerValue};
 pub use uv_resolver_types::{Flexibility, Options, OptionsBuilder};
