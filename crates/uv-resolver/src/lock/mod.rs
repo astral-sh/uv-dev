@@ -59,6 +59,7 @@ use uv_redacted::{DisplaySafeUrl, DisplaySafeUrlError};
 use uv_small_str::SmallString;
 use uv_types::{BuildContext, HashStrategy};
 use uv_warnings::warn_user_once;
+use uv_workspace::pyproject::Source as WorkspaceSource;
 use uv_workspace::{Editability, WorkspaceMember};
 
 use crate::fork_strategy::ForkStrategy;
@@ -2714,6 +2715,8 @@ impl Lock {
                 .collect::<BTreeSet<_>>()
         });
 
+        let mut workspace_index_packages = None;
+
         // Add the workspace packages to the queue.
         for root_name in packages
             .keys()
@@ -2794,32 +2797,58 @@ impl Lock {
         while let Some(package_index) = queue.pop_front() {
             let package = self.package(package_index);
             // If the lockfile references an index that was not provided, we can't validate it.
-            if let Source::Registry(index) = &package.id.source {
-                match index {
-                    RegistrySource::Url(url) => {
-                        if remotes
-                            .as_ref()
-                            .is_some_and(|remotes| !remotes.contains(url))
-                        {
-                            let name = &package.id.name;
-                            let version = &package
-                                .id
-                                .version
-                                .as_ref()
-                                .expect("version for registry source");
-                            return Ok(SatisfiesResult::MissingRemoteIndex(name, version, url));
-                        }
-                    }
+            if let Source::Registry(registry) = &package.id.source {
+                let missing = match registry {
+                    RegistrySource::Url(url) => remotes
+                        .as_ref()
+                        .is_some_and(|remotes| !remotes.contains(url)),
                     RegistrySource::Path(path) => {
-                        if locals.as_ref().is_some_and(|locals| !locals.contains(path)) {
-                            let name = &package.id.name;
-                            let version = &package
-                                .id
-                                .version
-                                .as_ref()
-                                .expect("version for registry source");
-                            return Ok(SatisfiesResult::MissingLocalIndex(name, version, path));
-                        }
+                        locals.as_ref().is_some_and(|locals| !locals.contains(path))
+                    }
+                };
+                if missing {
+                    // An index assignment in another member can determine the source of a
+                    // dependency shared with a selected member. Refresh those assignments only
+                    // when needed, without requiring the other member's versions or dependency
+                    // graph to be up to date. Authorize the assigned package, not every package
+                    // that happens to have been locked from the same index.
+                    if workspace_index_packages.is_none()
+                        && let Some(checked_indices) = &checked_indices
+                    {
+                        workspace_index_packages = Some(
+                            self.collect_workspace_index_packages(
+                                checked_indices,
+                                packages,
+                                root,
+                                tags,
+                                markers,
+                                build_options,
+                                hasher,
+                                index,
+                                database,
+                                &mut source_tree_metadata,
+                            )
+                            .await?,
+                        );
+                    }
+                    if !workspace_index_packages
+                        .as_ref()
+                        .is_some_and(|packages| packages.contains(&package_index))
+                    {
+                        let name = &package.id.name;
+                        let version = &package
+                            .id
+                            .version
+                            .as_ref()
+                            .expect("version for registry source");
+                        return Ok(match registry {
+                            RegistrySource::Url(url) => {
+                                SatisfiesResult::MissingRemoteIndex(name, version, url)
+                            }
+                            RegistrySource::Path(path) => {
+                                SatisfiesResult::MissingLocalIndex(name, version, path)
+                            }
+                        });
                     }
                 }
             }
@@ -3131,6 +3160,105 @@ impl Lock {
         }
 
         Ok(SatisfiesResult::Satisfied)
+    }
+
+    /// Find checked registry packages whose explicit index is selected by a workspace member.
+    async fn collect_workspace_index_packages<Context: BuildContext>(
+        &self,
+        checked_indices: &FxHashSet<PackageIndex>,
+        packages: &BTreeMap<PackageName, WorkspaceMember>,
+        root: &Path,
+        tags: &Tags,
+        markers: &MarkerEnvironment,
+        build_options: &BuildOptions,
+        hasher: &HashStrategy,
+        index: &InMemoryIndex,
+        database: &DistributionDatabase<'_, Context>,
+        source_tree_metadata: &mut FxHashMap<PackageId, Option<SourceTreeRequiresDist>>,
+    ) -> Result<FxHashSet<PackageIndex>, LockError> {
+        let registry_names = checked_indices
+            .iter()
+            .map(|index| self.package(*index))
+            .filter(|package| matches!(package.id.source, Source::Registry(..)))
+            .map(|package| &package.id.name)
+            .collect::<FxHashSet<_>>();
+        let mut authorized = FxHashSet::default();
+        for (name, member) in packages {
+            let Some(sources) = member
+                .pyproject_toml()
+                .tool
+                .as_ref()
+                .and_then(|tool| tool.uv.as_ref())
+                .and_then(|uv| uv.sources.as_ref())
+            else {
+                continue;
+            };
+            if !sources.inner().iter().any(|(name, sources)| {
+                registry_names.contains(name)
+                    && sources.iter().any(|source| match source {
+                        WorkspaceSource::Registry { .. } => true,
+                        WorkspaceSource::Git { .. }
+                        | WorkspaceSource::Url { .. }
+                        | WorkspaceSource::Path { .. }
+                        | WorkspaceSource::Workspace { .. } => false,
+                    })
+            }) {
+                continue;
+            }
+            let Some(package) = self.find_workspace_package(root, name, member) else {
+                continue;
+            };
+            let Some(source_tree) = package.id.source.as_source_tree() else {
+                continue;
+            };
+            let (requirements, groups) = if let Some(SourceTreeRequiresDist { metadata, .. }) =
+                Self::source_tree_requires_dist_cached(
+                    source_tree,
+                    root,
+                    package,
+                    database,
+                    source_tree_metadata,
+                )
+                .await?
+            {
+                (metadata.requires_dist, metadata.dependency_groups)
+            } else {
+                let metadata = Self::package_metadata(
+                    package,
+                    root,
+                    tags,
+                    markers,
+                    build_options,
+                    hasher,
+                    index,
+                    database,
+                )
+                .await?;
+                (metadata.requires_dist, metadata.dependency_groups)
+            };
+            for requirement in requirements.iter().chain(groups.values().flatten()) {
+                if !matches!(
+                    requirement.source,
+                    RequirementSource::Registry { index: Some(_), .. }
+                ) {
+                    continue;
+                }
+                for dependency in self.packages_for_name(&requirement.name) {
+                    let dependency_index = self.by_id[&dependency.id];
+                    if checked_indices.contains(&dependency_index)
+                        && !requirement.marker.is_false()
+                        && dependency.is_included_by_marker(requirement.marker)
+                        && dependency
+                            .id
+                            .source
+                            .satisfies_requirement_source(&requirement.source, root)?
+                    {
+                        authorized.insert(dependency_index);
+                    }
+                }
+            }
+        }
+        Ok(authorized)
     }
 
     /// Collect direct-source requirements that apply across packages in the lock.

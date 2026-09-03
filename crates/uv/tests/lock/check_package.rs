@@ -1,10 +1,14 @@
+use std::collections::BTreeMap;
+
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use indoc::{formatdoc, indoc};
 use insta::allow_duplicates;
+use url::Url;
 
 use uv_static::EnvVars;
+use uv_test::packse::generate_wheel;
 use uv_test::{TestContext, uv_snapshot};
 
 fn workspace() -> Result<TestContext> {
@@ -128,6 +132,7 @@ fn ignores_unrelated_members() -> Result<()> {
     hint: To update the lockfile, run `uv lock`.
     ");
     assert_eq!(context.read("uv.lock"), lock);
+
     Ok(())
 }
 
@@ -267,6 +272,142 @@ fn checks_workspace_policy() -> Result<()> {
     hint: To update the lockfile, run `uv lock`.
     ");
     assert_eq!(context.read("uv.lock"), lock);
+    Ok(())
+}
+
+#[test]
+fn preserves_shared_explicit_index_assignments() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let links = context.temp_dir.child("links");
+    links.create_dir_all()?;
+    let (filename, wheel) = generate_wheel(
+        &"shared-dep".parse()?,
+        &"3.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+    );
+    links.child(filename).write_binary(&wheel)?;
+    let index = Url::from_directory_path(links.path())
+        .map_err(|()| anyhow::anyhow!("could not convert index path to URL"))?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["packages/*"]
+
+        [[tool.uv.index]]
+        name = "default"
+        url = "https://pypi.org/simple"
+        default = true
+    "#})?;
+    context
+        .temp_dir
+        .child("packages/web/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "web"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["shared-dep"]
+    "#})?;
+    let worker = formatdoc! {r#"
+        [project]
+        name = "worker"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["shared-dep"]
+
+        [tool.uv.sources]
+        shared-dep = {{ index = "local" }}
+
+        [[tool.uv.index]]
+        name = "local"
+        url = "{index}"
+        format = "flat"
+        explicit = true
+    "#};
+    let worker_path = context.temp_dir.child("packages/worker/pyproject.toml");
+    worker_path.write_str(&worker)?;
+    context.lock().arg("--offline").assert().success();
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--offline").arg("--check-package").arg("web"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+
+    // The assignment must also be recoverable from current declarations when package metadata is
+    // omitted from the committed lock.
+    let mut lock = context.read("uv.lock").parse::<toml_edit::DocumentMut>()?;
+    let Some(packages) = lock["package"].as_array_of_tables_mut() else {
+        anyhow::bail!("lockfile did not contain a package array");
+    };
+    for package in packages.iter_mut() {
+        package.remove("metadata");
+    }
+    lock["revision"] = toml_edit::value(4);
+    let lock = lock.to_string();
+    context.temp_dir.child("uv.lock").write_str(&lock)?;
+    worker_path.write_str(&worker.replace("[\"shared-dep\"]", "[\"shared-dep>=4\"]"))?;
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--offline").arg("--preview-features").arg("lock-without-metadata")
+        .arg("--check-package").arg("web"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--offline").arg("--preview-features").arg("lock-without-metadata")
+        .arg("--check-package").arg("worker"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: The lockfile at `uv.lock` needs to be updated for `worker`, but `--check-package` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+
+    // Keeping the index definition is not sufficient when the relevant assignment is removed.
+    worker_path.write_str(&worker.replace(
+        "shared-dep = { index = \"local\" }",
+        "other-dep = { index = \"local\" }",
+    ))?;
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--offline").arg("--preview-features").arg("lock-without-metadata")
+        .arg("--check-package").arg("web"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: The lockfile at `uv.lock` needs to be updated for `web`, but `--check-package` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    assert_eq!(context.read("uv.lock"), lock);
+
+    // A member inside the selected closure may also provide the shared index. The result must not
+    // depend on whether that member is visited before the registry package.
+    worker_path.write_str(&worker)?;
+    context
+        .temp_dir
+        .child("packages/web/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "web"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["shared-dep", "worker"]
+
+        [tool.uv.sources]
+        worker = { workspace = true }
+    "#})?;
+    context.lock().arg("--offline").assert().success();
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--offline").arg("--check-package").arg("web"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
     Ok(())
 }
 
