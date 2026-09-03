@@ -1,0 +1,51 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 5190,
+        "title": "Locking of build dependencies",
+        "url": "https://github.com/astral-sh/uv/issues/5190",
+        "state": "open",
+        "reason": "Canonical request for `uv.lock` to include isolated build requirements and prevent unlocked downloads during installation."
+      },
+      {
+        "kind": "issue",
+        "number": 18894,
+        "title": "Generate requirements file for `uv build`'s build constraints argument",
+        "url": "https://github.com/astral-sh/uv/issues/18894",
+        "state": "open",
+        "reason": "Closest `uv build` variant, requesting automatic generation of a complete, hashed build-requirements input."
+      },
+      {
+        "kind": "issue",
+        "number": 12449,
+        "title": "exclude-newer should have an extra flag to allow it to skip over packages that don't have publish date information.",
+        "url": "https://github.com/astral-sh/uv/issues/12449",
+        "state": "open",
+        "reason": "Tracks fallback behavior when indexes omit PEP 700 upload times. Unlike this guidance request, it seeks additional automatic skipping behavior; maintainers point to scoped opt-outs."
+      },
+      {
+        "kind": "pull_request",
+        "number": 16854,
+        "title": "Allow disabling `exclude-newer` per package",
+        "url": "https://github.com/astral-sh/uv/pull/16854",
+        "state": "merged",
+        "reason": "Implemented `exclude-newer-package = { hatchling = false }`, the package-scoped workaround for missing upload times."
+      },
+      {
+        "kind": "pull_request",
+        "number": 18839,
+        "title": "Add `exclude-newer` to `[[tool.uv.index]]`",
+        "url": "https://github.com/astral-sh/uv/pull/18839",
+        "state": "merged",
+        "reason": "Implemented `exclude-newer = false` for a configured index, directly covering timestamp-less pull-through proxies."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests using exact fragments (`missing an upload date`, `filtered by exclude-newer`, `build-system.requires`, `UV_FROZEN`, `uv.lock`) and separate conceptual queries for PEP 700 metadata, private mirrors and proxies, scoped cooldown bypasses, build isolation, constraints, deterministic builds, and locked backends. Inspected reference chains around astral-sh/uv#10394, astral-sh/uv#16813, astral-sh/uv#16846, astral-sh/uv#12446, and astral-sh/uv#13416. astral-sh/uv#12476 was ruled out because it proposes deriving cutoffs from sdist release dates rather than locking build dependencies or handling missing proxy timestamps."
+  },
+  "type": "duplicate",
+  "type_reason": "The requested capability to include `build-system.requires` and its transitive closure in `uv.lock`, eliminating unlocked isolated-build resolution in frozen CI, is already tracked by astral-sh/uv#5190; the `uv build` constraints-generation variant is tracked by astral-sh/uv#18894. Missing upload-time behavior is documented and has supported scoped opt-outs, so it does not establish a new correctness defect. Duplicate takes precedence over question.",
+  "summary": "Build-backend locking duplicates astral-sh/uv#5190, while astral-sh/uv#18894 covers hashed constraints generation for `uv build`. The proxy behavior is a known PEP 700 limitation addressed by package- and index-scoped opt-outs.",
+  "draft_response": "There are two separate pieces here. `--frozen` tells project commands to use `uv.lock` without checking whether it is current; it does not make PEP 517 isolated build environments part of that lock. Fully locking build requirements and their transitive dependencies is tracked in astral-sh/uv#5190. If this is specifically `uv build`, automatic generation of the complete hashed constraints input is tracked in astral-sh/uv#18894; today the reproducible path is a fully pinned, hashed constraints file with `uv build --build-constraint constraints.txt --require-hashes`. For project syncs, `build-constraint-dependencies` can constrain backend versions, but it still requires resolution and is not a complete build-dependency lock.\n\n`exclude-newer` cannot determine whether a file predates the cutoff when the index omits the PEP 700 `upload-time`, so treating that file as unavailable is intentional. With uv 0.12.9, you can set `exclude-newer = false` on the configured proxpi `[[tool.uv.index]]`, as implemented by astral-sh/uv#18839, or use `[tool.uv] exclude-newer-package = { hatchling = false }`, as implemented by astral-sh/uv#16854. A package override must also cover any transitive build requirements whose timestamps are missing. There is no mode that can both enforce a timestamp cutoff and accept artifacts whose timestamps are unknown.\n\nSince the remaining full-locking capability is already tracked in astral-sh/uv#5190, we can continue that discussion there."
+}
