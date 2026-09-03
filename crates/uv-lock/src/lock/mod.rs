@@ -2818,16 +2818,6 @@ impl Lock {
         self
     }
 
-    /// Retain cutoffs for locked packages and names whose cutoffs are already stored in the lock.
-    pub fn filter_exclude_newer(&self, exclude_newer: ExcludeNewer) -> ExcludeNewer {
-        exclude_newer.filter_packages(
-            self.packages
-                .iter()
-                .map(Package::name)
-                .chain(self.options.exclude_newer.package.keys()),
-        )
-    }
-
     /// Returns `true` if this [`Lock`] includes `provides-extra` metadata.
     pub fn supports_provides_extra(&self) -> bool {
         // `provides-extra` was added in Version 1 Revision 1.
@@ -2955,6 +2945,50 @@ impl Lock {
         Ok(true)
     }
 
+    /// Return the first locked package with an artifact that does not satisfy its current
+    /// `exclude-newer` cutoff.
+    pub fn find_exclude_newer_mismatch(
+        &self,
+        root: &Path,
+        exclude_newer: &ExcludeNewer,
+        index_locations: &IndexLocations,
+    ) -> Result<Option<(&PackageName, Timestamp)>, LockError> {
+        for package in &self.packages {
+            let Some(index) = package.index(root)? else {
+                continue;
+            };
+            let Some(cutoff) = exclude_newer.exclude_newer_package_for_index(
+                package.name(),
+                index_locations.exclude_newer_for(&index),
+            ) else {
+                continue;
+            };
+
+            // Flat-index artifacts do not have upload times and bypass `exclude-newer` during
+            // resolution. An artifact with a timestamp came from a Simple API response and must
+            // still satisfy the cutoff even if the package's index is also configured via
+            // `--find-links`.
+            let flat_index = index_locations.is_flat_index(&index);
+            let mismatched = |upload_time: Option<Timestamp>| {
+                upload_time.map_or(!flat_index, |upload_time| upload_time >= cutoff)
+            };
+
+            if package
+                .sdist
+                .iter()
+                .any(|sdist| mismatched(sdist.upload_time()))
+                || package
+                    .wheels
+                    .iter()
+                    .any(|wheel| mismatched(wheel.upload_time))
+            {
+                return Ok(Some((package.name(), cutoff)));
+            }
+        }
+
+        Ok(None)
+    }
+
     /// Returns the supported Python version range for the lockfile, if present.
     pub fn requires_python(&self) -> &RequiresPython {
         &self.requires_python
@@ -2983,11 +3017,6 @@ impl Lock {
     /// Return the selected libc implementation and minimum version.
     pub fn minimum_libc_version(&self) -> Option<MinimumLibcVersion> {
         self.options.minimum_libc_version
-    }
-
-    /// Returns the exclude newer setting used to generate this lock.
-    pub fn exclude_newer(&self) -> &ExcludeNewer {
-        &self.options.exclude_newer
     }
 
     /// Returns the conflicting groups that were used to generate this lock.
