@@ -3280,19 +3280,35 @@ impl Lock {
         database: &DistributionDatabase<'_, Context>,
         source_tree_metadata: &mut FxHashMap<PackageId, Option<SourceTreeRequiresDist>>,
     ) -> Result<Constraints, LockError> {
+        // Another first-party package can select a direct source for an otherwise unqualified
+        // dependency in the checked graph. Keep those shared source selections without validating
+        // unrelated packages or importing their version constraints.
+        let checked_source_names = checked_indices.map(|indices| {
+            indices
+                .iter()
+                .flat_map(|index| self.package(*index).all_dependencies())
+                .filter(|dependency| !matches!(dependency.package_id.source, Source::Registry(..)))
+                .map(|dependency| &dependency.package_id.name)
+                .collect::<FxHashSet<_>>()
+        });
+        let relevant_source = |requirement: &Requirement| {
+            !matches!(requirement.source, RequirementSource::Registry { .. })
+                && checked_source_names
+                    .as_ref()
+                    .is_none_or(|names| names.contains(&requirement.name))
+        };
         for requirement in dependency_overrides
             .apply_for_package(
                 None,
                 requirements
                     .iter()
-                    .chain(dependency_groups.values().flatten())
-                    .filter(|_| checked_indices.is_none()),
+                    .chain(dependency_groups.values().flatten()),
             )
             .filter(|requirement| {
                 !dependency_excludes.contains_for_package(None, &requirement.name)
             })
         {
-            if matches!(requirement.source, RequirementSource::Registry { .. }) {
+            if !relevant_source(&requirement) {
                 continue;
             }
 
@@ -3303,8 +3319,9 @@ impl Lock {
             )?);
         }
 
-        let mut add_source_requirements = |package: &Package,
-                                           requirements: Vec<Requirement>|
+        let add_source_requirements = |source_requirements: &mut BTreeSet<Requirement>,
+                                       package: &Package,
+                                       requirements: Vec<Requirement>|
          -> Result<(), LockError> {
             let package_context = package
                 .id
@@ -3318,7 +3335,7 @@ impl Lock {
                     !dependency_excludes.contains_for_package(package_context, &requirement.name)
                 })
             {
-                if matches!(requirement.source, RequirementSource::Registry { .. }) {
+                if !relevant_source(&requirement) {
                     continue;
                 }
 
@@ -3332,16 +3349,51 @@ impl Lock {
             Ok(())
         };
 
-        for (package_index, package) in self.packages.iter().enumerate() {
-            if checked_indices
-                .is_some_and(|indices| !indices.contains(&PackageIndex(package_index)))
+        // Prefer declarations inside the checked graph. Only refresh another package if a shared
+        // direct source has not already been selected by those declarations or root constraints.
+        let checked = self.packages.iter().enumerate().filter(|(index, _)| {
+            checked_indices.is_none_or(|indices| indices.contains(&PackageIndex(*index)))
+        });
+        let unchecked = self.packages.iter().enumerate().filter(|(index, _)| {
+            checked_indices.is_some_and(|indices| !indices.contains(&PackageIndex(*index)))
+        });
+        for (package_index, package) in checked.chain(unchecked) {
+            if let Some(indices) = checked_indices
+                && !indices.contains(&PackageIndex(package_index))
             {
-                continue;
+                let mut needed = false;
+                for dependency in package.all_dependencies().filter(|dependency| {
+                    indices.contains(&dependency.index)
+                        && !matches!(dependency.package_id.source, Source::Registry(..))
+                }) {
+                    let mut selected = false;
+                    for requirement in source_requirements
+                        .iter()
+                        .filter(|requirement| requirement.name == dependency.package_id.name)
+                    {
+                        if dependency
+                            .package_id
+                            .source
+                            .satisfies_requirement_source(&requirement.source, root)?
+                        {
+                            selected = true;
+                            break;
+                        }
+                    }
+                    if !selected {
+                        needed = true;
+                        break;
+                    }
+                }
+                if !needed {
+                    continue;
+                }
             }
             if let Some(metadata) =
                 dependency_metadata.get(&package.id.name, package.id.version.as_ref())
             {
                 add_source_requirements(
+                    &mut source_requirements,
                     package,
                     Box::into_iter(metadata.requires_dist)
                         .map(Requirement::from)
@@ -3395,7 +3447,7 @@ impl Lock {
                         .flat_map(<[Requirement]>::into_vec),
                 )
                 .collect();
-            add_source_requirements(package, direct_requirements)?;
+            add_source_requirements(&mut source_requirements, package, direct_requirements)?;
         }
 
         Ok(Constraints::from_requirements(
