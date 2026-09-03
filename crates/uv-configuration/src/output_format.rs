@@ -51,6 +51,16 @@ pub enum PipInstallFormat {
     Json,
 }
 
+#[derive(Debug, Default, Clone, Copy)]
+#[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
+pub enum LockFormat {
+    /// Display the result in a human-readable format.
+    #[default]
+    Text,
+    /// Display the lock check result as JSON.
+    Json,
+}
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
 pub enum TreeFormat {

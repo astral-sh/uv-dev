@@ -17,7 +17,7 @@ use uv_configuration::RequirementsInput;
 use uv_configuration::{
     AddBoundsKind, AnnotationStyle, AuditOutputFormat, AuthorFrom, ColorChoice,
     ExcludeNewerPackageEntry, ExportFormat, ForkStrategy, IndexStrategy, KeyringProviderType,
-    ListFormat, PackageNameSpecifier, PipCompileFormat, PipInstallFormat, PrereleaseMode,
+    ListFormat, LockFormat, PackageNameSpecifier, PipCompileFormat, PipInstallFormat, PrereleaseMode,
     PrereleasePackageEntry, ProjectBuildBackend, PythonListFormat, ResolutionMode, SyncFormat,
     TargetTriple, TreeFormat, TrustedHost, TrustedPublishing, VersionBump, VersionBumpSpec,
     VersionControlSystem, VersionFormat,
@@ -3790,6 +3790,13 @@ pub struct LockArgs {
     /// Equivalent to `--locked`.
     #[arg(long, value_parser = clap::builder::BoolishValueParser::new(), conflicts_with_all = ["check_exists", "upgrade"], overrides_with_all = ["check", "no_locked"])]
     pub check: bool,
+
+    /// Select the output format for a lock check.
+    ///
+    /// JSON output requires `--check` or `--locked`. The JSON schema is experimental and may
+    /// change without warning.
+    #[arg(long, value_enum, default_value_t = LockFormat::default())]
+    pub output_format: LockFormat,
 
     /// Check if the lockfile is up-to-date [env: UV_LOCKED=]
     ///

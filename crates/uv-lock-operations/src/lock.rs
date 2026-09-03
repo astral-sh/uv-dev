@@ -36,7 +36,9 @@ use uv_warnings::{warn_user, warn_user_once, warn_user_with_chain};
 use uv_workspace::WorkspaceCache;
 
 use crate::lock_target::find_lock_format_error;
-use crate::{LockError, LockTarget, LockValidationError, MissingLockfileSource, ValidatedLock};
+use crate::{
+    LockError, LockReporter, LockTarget, LockValidationError, MissingLockfileSource, ValidatedLock,
+};
 
 /// The result of running a lock operation.
 #[derive(Debug, Clone)]
@@ -86,6 +88,7 @@ pub struct LockOperation<'env> {
     first_party_exclusions: BTreeSet<PackageName>,
     refresh: Option<&'env Refresh>,
     check_lockfile_contents: bool,
+    reporter: Option<&'env mut dyn LockReporter>,
     settings: &'env ResolverSettings,
     client_builder: &'env BaseClientBuilder<'env>,
     state: &'env UniversalState,
@@ -117,6 +120,7 @@ impl<'env> LockOperation<'env> {
             first_party_exclusions: BTreeSet::new(),
             refresh: None,
             check_lockfile_contents: false,
+            reporter: None,
             settings,
             client_builder,
             state,
@@ -154,6 +158,13 @@ impl<'env> LockOperation<'env> {
     #[must_use]
     pub fn with_lockfile_contents_check(mut self, enabled: bool) -> Self {
         self.check_lockfile_contents = enabled;
+        self
+    }
+
+    /// Report structured diagnostics while validating the existing lockfile.
+    #[must_use]
+    pub fn with_reporter(mut self, reporter: Option<&'env mut dyn LockReporter>) -> Self {
+        self.reporter = reporter;
         self
     }
 
@@ -197,6 +208,7 @@ impl<'env> LockOperation<'env> {
                     Some(existing),
                     self.mode,
                     check_lockfile_contents,
+                    self.reporter,
                     self.constraints,
                     self.first_party_exclusions,
                     self.refresh,
@@ -252,6 +264,7 @@ impl<'env> LockOperation<'env> {
                     existing,
                     self.mode,
                     check_lockfile_contents,
+                    self.reporter,
                     self.constraints,
                     self.first_party_exclusions,
                     self.refresh,
@@ -287,6 +300,7 @@ async fn do_lock(
     existing_lock: Option<Lock>,
     mode: LockMode<'_>,
     check_lockfile_contents: Option<String>,
+    reporter: Option<&mut dyn LockReporter>,
     external: Vec<NameRequirementSpecification>,
     first_party_exclusions: BTreeSet<PackageName>,
     refresh: Option<&Refresh>,
@@ -803,6 +817,7 @@ async fn do_lock(
             &database,
             preview,
             printer,
+            reporter,
         ))
         .await
         {
