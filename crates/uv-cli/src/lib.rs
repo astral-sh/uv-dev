@@ -74,7 +74,7 @@ pub enum LockFormat {
     /// Display the result in a human-readable format.
     #[default]
     Text,
-    /// Display the lock check result as JSON.
+    /// Display the lock operation result as JSON.
     Json,
 }
 
@@ -4101,10 +4101,9 @@ pub struct LockArgs {
     #[arg(long, value_parser = clap::builder::BoolishValueParser::new(), conflicts_with_all = ["check_exists", "upgrade"], overrides_with_all = ["check", "no_locked"])]
     pub check: bool,
 
-    /// Select the output format for a lock check.
+    /// Select the output format.
     ///
-    /// JSON output requires `--check` or `--locked`. The JSON schema is experimental and may
-    /// change without warning.
+    /// The JSON schema is experimental and may change without warning.
     #[arg(long, value_enum, default_value_t = LockFormat::default())]
     pub output_format: LockFormat,
 
