@@ -327,10 +327,10 @@ impl CachedEnvironment {
             interpreter.clone(),
             uv_virtualenv::Prompt::None,
             false,
-            uv_virtualenv::OnExisting::Replace(uv_virtualenv::Removal {
+            uv_virtualenv::OnExisting::Replace {
                 reason: uv_virtualenv::RemovalReason::TemporaryEnvironment,
                 clear_non_virtualenv: ClearNonVirtualenv::Allow,
-            }),
+            },
             true,
             uv_virtualenv::Seed::Disabled,
             false,
