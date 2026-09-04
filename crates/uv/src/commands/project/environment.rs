@@ -19,6 +19,7 @@ use uv_configuration::{Concurrency, Constraints, HashCheckingMode, TargetTriple}
 use uv_distribution_types::{
     BuiltDist, Dist, Identifier, Node, Resolution, ResolvedDist, SourceDist,
 };
+use uv_fs::ClearNonVirtualenv;
 use uv_preview::Preview;
 use uv_python::{Interpreter, PythonEnvironment, canonicalize_executable};
 use uv_settings::MalwareCheckSettings;
@@ -326,7 +327,10 @@ impl CachedEnvironment {
             interpreter.clone(),
             uv_virtualenv::Prompt::None,
             false,
-            uv_virtualenv::OnExisting::Remove(uv_virtualenv::RemovalReason::TemporaryEnvironment),
+            uv_virtualenv::OnExisting::Remove {
+                reason: uv_virtualenv::RemovalReason::TemporaryEnvironment,
+                clear_non_virtualenv: ClearNonVirtualenv::Allow,
+            },
             true,
             uv_virtualenv::Seed::Disabled,
             false,

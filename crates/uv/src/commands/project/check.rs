@@ -11,7 +11,7 @@ use uv_configuration::{
     ActiveEnvironment, Concurrency, DependencyGroups, DependencyGroupsWithDefaults, DryRun,
     ExtrasSpecification, InstallOptions,
 };
-use uv_fs::normalize_path;
+use uv_fs::{ClearNonVirtualenv, normalize_path};
 use uv_normalize::{DEV_DEPENDENCIES, DefaultExtras, PackageName};
 use uv_preview::{Preview, PreviewFeature};
 use uv_python::{
@@ -350,7 +350,10 @@ pub(crate) async fn check(
             interpreter,
             uv_virtualenv::Prompt::None,
             false,
-            uv_virtualenv::OnExisting::Remove(uv_virtualenv::RemovalReason::TemporaryEnvironment),
+            uv_virtualenv::OnExisting::Remove {
+                reason: uv_virtualenv::RemovalReason::TemporaryEnvironment,
+                clear_non_virtualenv: ClearNonVirtualenv::Allow,
+            },
             false,
             uv_virtualenv::Seed::Disabled,
             false,
