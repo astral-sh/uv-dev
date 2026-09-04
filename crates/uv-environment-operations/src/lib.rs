@@ -58,11 +58,15 @@ use uv_python_discovery::EnvironmentIncompatibilityError;
 use uv_python_discovery::EnvironmentKind;
 use uv_python_discovery::ProjectPythonRequest;
 use uv_python_discovery::PythonDownloadReporter;
+use uv_python_discovery::ScriptEnvironmentSelection;
 use uv_python_discovery::ScriptInterpreter;
 use uv_python_discovery::check_environment_compatibility;
 use uv_resolve_operations::locked_requirements::{LockedRequirements, read_lock_requirements};
 use uv_resolve_operations::loggers::ResolveLogger;
 use uv_settings::{InstallerSettingsRef, ResolverInstallerSettings, ResolverSettings};
+use uv_virtualenv::{
+    CreatedVenv, CreationAction, CreationEvent, OnExisting, Removal, RemovalReason,
+};
 
 pub mod environment;
 mod error;
@@ -71,6 +75,35 @@ pub mod install_target;
 pub mod malware;
 mod sync;
 pub use sync::{store_credentials_from_target, sync_from_lock};
+
+fn creation_error(
+    kind: &EnvironmentKind,
+    root: &Path,
+    error: uv_virtualenv::Error,
+) -> EnvironmentError {
+    let reason = match error {
+        uv_virtualenv::Error::ClearNonVirtualenv { .. } => {
+            "it is not a virtual environment".to_string()
+        }
+        uv_virtualenv::Error::InspectExisting { source, .. } => {
+            format!("uv cannot determine if it is a virtual environment: {source}")
+        }
+        error @ (uv_virtualenv::Error::Io(_)
+        | uv_virtualenv::Error::NotFound(_)
+        | uv_virtualenv::Error::Python(_)
+        | uv_virtualenv::Error::Exists { .. }
+        | uv_virtualenv::Error::NonUtf8Path { .. }) => return error.into(),
+    };
+    match kind {
+        EnvironmentKind::Script => {
+            EnvironmentError::InvalidScriptEnvironmentDir(root.to_path_buf(), reason)
+        }
+        EnvironmentKind::Project => EnvironmentError::InvalidProjectEnvironmentDir(
+            root.to_path_buf(),
+            format!("it is not a compatible environment but cannot be recreated because {reason}"),
+        ),
+    }
+}
 
 #[derive(Debug)]
 pub struct ConflictError {
@@ -483,7 +516,12 @@ pub fn update_project_environment_link(
 
     if fs_err::symlink_metadata(&link).is_ok_and(|metadata| metadata.is_dir()) {
         if uv_fs::is_virtualenv_base(&link) {
-            if let Err(err) = uv_fs::remove_virtualenv(&link, ClearNonVirtualenv::Error) {
+            if let Err(err) = (Removal {
+                reason: RemovalReason::ManagedEnvironment,
+                clear_non_virtualenv: ClearNonVirtualenv::Error,
+            })
+            .remove(&link)
+            {
                 report_error(format_args!(
                     "Failed to remove existing local virtual environment: {err}"
                 ));
@@ -933,47 +971,17 @@ impl ProjectEnvironment {
                 };
                 let centralized_environment_reference =
                     !centralized && is_centralized_environment_reference(&root, cache);
-                let clear_non_virtualenv = if centralized {
-                    ClearNonVirtualenv::Allow
+                let on_existing = if centralized || centralized_environment_reference {
+                    // Replace the uv-owned entry without following a link outside the cache.
+                    OnExisting::Replace(Removal {
+                        reason: RemovalReason::ManagedEnvironment,
+                        clear_non_virtualenv: ClearNonVirtualenv::Allow,
+                    })
                 } else {
-                    ClearNonVirtualenv::Error
-                };
-
-                // Avoid removing things that are not virtual environments and are outside the
-                // environment cache.
-                let replace_environment = if centralized_environment_reference {
-                    true
-                } else {
-                    match (root.try_exists(), uv_fs::try_is_virtualenv_base(&root)) {
-                        // It's a virtual environment we can remove it
-                        (_, Ok(true)) => true,
-                        // It doesn't exist at all, we should use it without deleting it to avoid TOCTOU bugs
-                        (Ok(false), Ok(false)) => false,
-                        // If it's not a virtual environment, bail
-                        (Ok(true), Ok(false)) => {
-                            // Unless it's empty, in which case we just ignore it
-                            if root.read_dir().is_ok_and(|mut dir| dir.next().is_none()) {
-                                false
-                            } else if centralized {
-                                // Unless it's the derived cache entry, which is uv-owned and safe to replace
-                                true
-                            } else {
-                                return Err(EnvironmentError::InvalidProjectEnvironmentDir(
-                                    root,
-                                    "it is not a compatible environment but cannot be recreated because it is not a virtual environment".to_string(),
-                                ));
-                            }
-                        }
-                        // Similarly, if we can't _tell_ if it exists we should bail
-                        (_, Err(err)) | (Err(err), _) => {
-                            return Err(EnvironmentError::InvalidProjectEnvironmentDir(
-                                root,
-                                format!(
-                                    "it is not a compatible environment but cannot be recreated because uv cannot determine if it is a virtual environment: {err}"
-                                ),
-                            ));
-                        }
-                    }
+                    OnExisting::Clear(Removal {
+                        reason: RemovalReason::ManagedEnvironment,
+                        clear_non_virtualenv: ClearNonVirtualenv::Error,
+                    })
                 };
 
                 // Determine a prompt for the environment, in order of preference:
@@ -995,91 +1003,84 @@ impl ProjectEnvironment {
 
                 // Under `--dry-run`, avoid modifying the environment.
                 if dry_run.enabled() {
+                    let action = on_existing
+                        .check(&root)
+                        .map_err(|err| creation_error(&EnvironmentKind::Project, &root, err))?;
                     let temp_dir = cache.venv_dir()?;
                     let environment = uv_virtualenv::create_venv(
                         temp_dir.path(),
                         interpreter,
                         prompt,
                         false,
-                        uv_virtualenv::OnExisting::Remove {
+                        uv_virtualenv::OnExisting::Replace(uv_virtualenv::Removal {
                             reason: uv_virtualenv::RemovalReason::TemporaryEnvironment,
                             clear_non_virtualenv: ClearNonVirtualenv::Allow,
-                        },
+                        }),
                         uv_preview::is_enabled(PreviewFeature::RelocatableEnvsDefault),
                         uv_virtualenv::Seed::Disabled,
                         upgrade_policy,
                     )?;
-                    return Ok(if replace_environment {
-                        Self::WouldReplace(root, environment, temp_dir)
-                    } else {
-                        Self::WouldCreate(root, environment, temp_dir)
+                    return Ok(match action {
+                        CreationAction::Replace => Self::WouldReplace(root, environment, temp_dir),
+                        CreationAction::Create => Self::WouldCreate(root, environment, temp_dir),
                     });
                 }
 
-                if replace_environment {
-                    // Remove centralized references directly to preserve their cached targets.
-                    let removed = if centralized_environment_reference {
-                        match uv_fs::remove_virtualenv(&root, ClearNonVirtualenv::Allow) {
-                            Ok(()) => true,
-                            Err(err) if err.kind() == std::io::ErrorKind::NotFound => false,
-                            Err(err) => return Err(uv_virtualenv::Error::from(err).into()),
-                        }
-                    } else {
-                        uv_fs::clear_virtualenv(&root, clear_non_virtualenv)
-                            .map_err(uv_virtualenv::Error::from)?
-                    };
-                    if removed {
-                        let removed_entry = if centralized_environment_reference {
-                            "link to project environment"
-                        } else {
-                            "virtual environment"
-                        };
-                        writeln!(
-                            printer.stderr(),
-                            "Removed {removed_entry} at: {}",
-                            root.user_display().cyan()
-                        )?;
-                    }
-                }
-
-                if centralized {
-                    writeln!(
-                        printer.stderr(),
-                        "Creating virtual environment `{}`",
-                        root.file_name()
-                            .unwrap_or(root.as_os_str())
-                            .to_string_lossy()
-                            .cyan(),
-                    )?;
-                } else {
-                    writeln!(
-                        printer.stderr(),
-                        "Creating virtual environment at: {}",
-                        root.user_display().cyan()
-                    )?;
-                }
-
-                let environment = uv_virtualenv::create_venv(
+                let created = uv_virtualenv::create_venv_with_reporter(
                     &root,
                     interpreter,
                     prompt,
                     false,
-                    uv_virtualenv::OnExisting::Fail,
+                    on_existing,
                     uv_preview::is_enabled(PreviewFeature::RelocatableEnvsDefault),
                     uv_virtualenv::Seed::Disabled,
                     upgrade_policy,
-                )?;
-                environment.cache_virtualenv(false, cache)?;
+                    |event| {
+                        match event {
+                            CreationEvent::Removed => {
+                                let removed_entry = if centralized_environment_reference {
+                                    "link to project environment"
+                                } else {
+                                    "virtual environment"
+                                };
+                                writeln!(
+                                    printer.stderr(),
+                                    "Removed {removed_entry} at: {}",
+                                    root.user_display().cyan()
+                                )
+                            }
+                            CreationEvent::Creating if centralized => writeln!(
+                                printer.stderr(),
+                                "Creating virtual environment `{}`",
+                                root.file_name()
+                                    .unwrap_or(root.as_os_str())
+                                    .to_string_lossy()
+                                    .cyan(),
+                            ),
+                            CreationEvent::Creating => writeln!(
+                                printer.stderr(),
+                                "Creating virtual environment at: {}",
+                                root.user_display().cyan()
+                            ),
+                        }
+                        .map_err(io::Error::other)
+                    },
+                )
+                .map_err(|err| creation_error(&EnvironmentKind::Project, &root, err))?;
+                created.environment().cache_virtualenv(false, cache)?;
 
                 if centralized {
-                    update_project_environment_link(&environment, target, link_error_reporting);
+                    update_project_environment_link(
+                        created.environment(),
+                        target,
+                        link_error_reporting,
+                    );
                 }
 
-                if replace_environment {
-                    Ok(Self::Replaced(environment))
-                } else {
-                    Ok(Self::Created(environment))
-                }
+                Ok(match created {
+                    CreatedVenv::Created(environment) => Self::Created(environment),
+                    CreatedVenv::Replaced(environment) => Self::Replaced(environment),
+                })
             }
         }
     }
@@ -1196,43 +1197,19 @@ impl ScriptEnvironment {
             ScriptInterpreter::Interpreter(requested) => {
                 let upgrade_policy = UpgradePolicy::from_request(requested.request());
                 let interpreter = requested.into_interpreter();
-                let root = ScriptInterpreter::root(script, active, cache);
-
-                // Only the derived cache entry belongs to uv. An active environment can point
-                // anywhere, so do not remove it unless it is a virtual environment.
-                let clear_non_virtualenv =
-                    if root == ScriptInterpreter::root(script, Some(false), cache) {
-                        ClearNonVirtualenv::Allow
-                    } else {
-                        ClearNonVirtualenv::Error
-                    };
-                let replace_environment = match clear_non_virtualenv {
-                    ClearNonVirtualenv::Allow => true,
-                    ClearNonVirtualenv::Error => {
-                        match (root.try_exists(), uv_fs::try_is_virtualenv_base(&root)) {
-                            (_, Ok(true)) => true,
-                            (Ok(false), Ok(false)) => false,
-                            (Ok(true), Ok(false)) => {
-                                if root.read_dir().is_ok_and(|mut dir| dir.next().is_none()) {
-                                    false
-                                } else {
-                                    return Err(EnvironmentError::InvalidScriptEnvironmentDir(
-                                        root,
-                                        "it is not a virtual environment".to_string(),
-                                    ));
-                                }
-                            }
-                            (_, Err(err)) | (Err(err), _) => {
-                                return Err(EnvironmentError::InvalidScriptEnvironmentDir(
-                                    root,
-                                    format!(
-                                        "uv cannot determine if it is a virtual environment: {err}"
-                                    ),
-                                ));
-                            }
+                let (root, clear_non_virtualenv) =
+                    match ScriptInterpreter::environment_selection(script, active, cache) {
+                        ScriptEnvironmentSelection::Cached(root) => {
+                            (root, ClearNonVirtualenv::Allow)
                         }
-                    }
-                };
+                        ScriptEnvironmentSelection::Active(root) => {
+                            (root, ClearNonVirtualenv::Error)
+                        }
+                    };
+                let on_existing = OnExisting::Replace(Removal {
+                    reason: RemovalReason::ManagedEnvironment,
+                    clear_non_virtualenv,
+                });
 
                 // Determine a prompt for the environment, in order of preference:
                 //
@@ -1247,65 +1224,58 @@ impl ScriptEnvironment {
 
                 // Under `--dry-run`, avoid modifying the environment.
                 if dry_run.enabled() {
+                    let action = on_existing
+                        .check(&root)
+                        .map_err(|err| creation_error(&EnvironmentKind::Script, &root, err))?;
                     let temp_dir = cache.venv_dir()?;
                     let environment = uv_virtualenv::create_venv(
                         temp_dir.path(),
                         interpreter,
                         prompt,
                         false,
-                        uv_virtualenv::OnExisting::Remove {
+                        uv_virtualenv::OnExisting::Replace(uv_virtualenv::Removal {
                             reason: uv_virtualenv::RemovalReason::TemporaryEnvironment,
                             clear_non_virtualenv: ClearNonVirtualenv::Allow,
-                        },
+                        }),
                         false,
                         uv_virtualenv::Seed::Disabled,
                         upgrade_policy,
                     )?;
-                    return Ok(if replace_environment && root.exists() {
-                        Self::WouldReplace(root, environment, temp_dir)
-                    } else {
-                        Self::WouldCreate(root, environment, temp_dir)
+                    return Ok(match action {
+                        CreationAction::Replace => Self::WouldReplace(root, environment, temp_dir),
+                        CreationAction::Create => Self::WouldCreate(root, environment, temp_dir),
                     });
                 }
 
-                // Remove the existing virtual environment.
-                let replaced = if replace_environment {
-                    match uv_fs::remove_virtualenv(&root, clear_non_virtualenv) {
-                        Ok(()) => {
-                            debug!(
-                                "Removed virtual environment at: {}",
-                                root.user_display().cyan()
-                            );
-                            true
-                        }
-                        Err(err) if err.kind() == std::io::ErrorKind::NotFound => false,
-                        Err(err) => return Err(uv_virtualenv::Error::from(err).into()),
-                    }
-                } else {
-                    false
-                };
-
-                debug!(
-                    "Creating script environment at: {}",
-                    root.user_display().cyan()
-                );
-
-                let environment = uv_virtualenv::create_venv(
+                let created = uv_virtualenv::create_venv_with_reporter(
                     &root,
                     interpreter,
                     prompt,
                     false,
-                    uv_virtualenv::OnExisting::Fail,
+                    on_existing,
                     false,
                     uv_virtualenv::Seed::Disabled,
                     upgrade_policy,
-                )?;
-                environment.cache_virtualenv(false, cache)?;
+                    |event| {
+                        match event {
+                            CreationEvent::Removed => debug!(
+                                "Removed virtual environment at: {}",
+                                root.user_display().cyan()
+                            ),
+                            CreationEvent::Creating => debug!(
+                                "Creating script environment at: {}",
+                                root.user_display().cyan()
+                            ),
+                        }
+                        Ok(())
+                    },
+                )
+                .map_err(|err| creation_error(&EnvironmentKind::Script, &root, err))?;
+                created.environment().cache_virtualenv(false, cache)?;
 
-                Ok(if replaced {
-                    Self::Replaced(environment)
-                } else {
-                    Self::Created(environment)
+                Ok(match created {
+                    CreatedVenv::Created(environment) => Self::Created(environment),
+                    CreatedVenv::Replaced(environment) => Self::Replaced(environment),
                 })
             }
         }

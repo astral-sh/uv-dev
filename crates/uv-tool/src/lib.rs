@@ -18,7 +18,9 @@ use uv_pep440::Version;
 use uv_python_interpreter::{BrokenLink, Interpreter, PythonEnvironment};
 use uv_state::{StateBucket, StateStore};
 use uv_static::EnvVars;
-use uv_virtualenv::UpgradePolicy;
+use uv_virtualenv::{
+    CreationEvent, OnExisting, Removal, RemovalReason, UpgradePolicy,
+};
 use uv_warnings::warn_user;
 
 pub(crate) use receipt::ToolReceipt;
@@ -257,8 +259,12 @@ impl InstalledTools {
             environment_path.user_display()
         );
 
-        uv_fs::remove_virtualenv(environment_path.as_path(), ClearNonVirtualenv::Allow)
-            .map_err(uv_virtualenv::Error::from)?;
+        Removal {
+            reason: RemovalReason::ManagedEnvironment,
+            clear_non_virtualenv: ClearNonVirtualenv::Allow,
+        }
+        .remove(&environment_path)
+        .map_err(uv_virtualenv::Error::from)?;
 
         Ok(())
     }
@@ -333,37 +339,36 @@ impl InstalledTools {
     ) -> Result<PythonEnvironment, Error> {
         let environment_path = self.tool_dir(name);
 
-        // Remove any existing environment.
-        match uv_fs::remove_virtualenv(&environment_path, ClearNonVirtualenv::Allow) {
-            Ok(()) => {
-                debug!(
-                    "Removed existing environment for tool `{name}`: {}",
-                    environment_path.user_display()
-                );
-            }
-            Err(err) if err.kind() == io::ErrorKind::NotFound => (),
-            Err(err) => return Err(uv_virtualenv::Error::from(err).into()),
-        }
-
-        debug!(
-            "Creating environment for tool `{name}`: {}",
-            environment_path.user_display()
-        );
-
         // Create a virtual environment.
-        let venv = uv_virtualenv::create_venv(
+        let venv = uv_virtualenv::create_venv_with_reporter(
             &environment_path,
             interpreter,
             uv_virtualenv::Prompt::None,
             false,
-            uv_virtualenv::OnExisting::Fail,
+            OnExisting::Replace(Removal {
+                reason: RemovalReason::ManagedEnvironment,
+                clear_non_virtualenv: ClearNonVirtualenv::Allow,
+            }),
             false,
             uv_virtualenv::Seed::Disabled,
             UpgradePolicy::Fixed,
+            |event| {
+                match event {
+                    CreationEvent::Removed => debug!(
+                        "Removed existing environment for tool `{name}`: {}",
+                        environment_path.user_display()
+                    ),
+                    CreationEvent::Creating => debug!(
+                        "Creating environment for tool `{name}`: {}",
+                        environment_path.user_display()
+                    ),
+                }
+                Ok(())
+            },
         )?;
         venv.cache_virtualenv(false, cache)?;
 
-        Ok(venv)
+        Ok(venv.into_environment())
     }
 
     /// Initialize the tools directory.

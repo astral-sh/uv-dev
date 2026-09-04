@@ -491,10 +491,10 @@ pub async fn run(
                     interpreter,
                     uv_virtualenv::Prompt::None,
                     false,
-                    uv_virtualenv::OnExisting::Remove {
+                    uv_virtualenv::OnExisting::Replace(uv_virtualenv::Removal {
                         reason: uv_virtualenv::RemovalReason::TemporaryEnvironment,
                         clear_non_virtualenv: ClearNonVirtualenv::Allow,
-                    },
+                    }),
                     false,
                     uv_virtualenv::Seed::Disabled,
                     UpgradePolicy::Fixed,
@@ -685,10 +685,10 @@ pub async fn run(
                     interpreter.into_interpreter(),
                     uv_virtualenv::Prompt::None,
                     false,
-                    uv_virtualenv::OnExisting::Remove {
+                    uv_virtualenv::OnExisting::Replace(uv_virtualenv::Removal {
                         reason: uv_virtualenv::RemovalReason::TemporaryEnvironment,
                         clear_non_virtualenv: ClearNonVirtualenv::Allow,
-                    },
+                    }),
                     false,
                     uv_virtualenv::Seed::Disabled,
                     UpgradePolicy::Fixed,
@@ -890,10 +890,10 @@ pub async fn run(
                     interpreter,
                     uv_virtualenv::Prompt::None,
                     false,
-                    uv_virtualenv::OnExisting::Remove {
+                    uv_virtualenv::OnExisting::Replace(uv_virtualenv::Removal {
                         reason: uv_virtualenv::RemovalReason::TemporaryEnvironment,
                         clear_non_virtualenv: ClearNonVirtualenv::Allow,
-                    },
+                    }),
                     false,
                     uv_virtualenv::Seed::Disabled,
                     UpgradePolicy::Fixed,
@@ -1023,10 +1023,10 @@ pub async fn run(
                 base_interpreter.clone(),
                 uv_virtualenv::Prompt::None,
                 false,
-                uv_virtualenv::OnExisting::Remove {
+                uv_virtualenv::OnExisting::Replace(uv_virtualenv::Removal {
                     reason: uv_virtualenv::RemovalReason::TemporaryEnvironment,
                     clear_non_virtualenv: ClearNonVirtualenv::Allow,
-                },
+                }),
                 false,
                 uv_virtualenv::Seed::Disabled,
                 UpgradePolicy::Fixed,
