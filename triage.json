@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 16017,
+        "title": "rocm7.0 and rocm7.9 should be supported as torch backends, you might also need rocm7.0+gfx110X as a label",
+        "url": "https://github.com/astral-sh/uv/issues/16017",
+        "state": "open",
+        "reason": "Tracks the same underlying request to support AMD-hosted ROCm wheel indexes when PyTorch-hosted indexes are insufficient. The new issue adds official Windows availability and the `[device-all]` convention."
+      },
+      {
+        "kind": "issue",
+        "number": 14086,
+        "title": "Add ROCm detection to `--torch-backend`",
+        "url": "https://github.com/astral-sh/uv/issues/14086",
+        "state": "closed",
+        "reason": "Historical discussion for automatic AMD GPU detection. It covered the existing Linux/PyTorch-index model, not AMD’s Windows repository."
+      },
+      {
+        "kind": "pull_request",
+        "number": 14120,
+        "title": "Add ROCm backends to `--torch-backend`",
+        "url": "https://github.com/astral-sh/uv/pull/14120",
+        "state": "merged",
+        "reason": "Introduced explicit ROCm backend selection and download.pytorch.org ROCm URLs, which Windows support would need to augment."
+      },
+      {
+        "kind": "pull_request",
+        "number": 14176,
+        "title": "Add auto-detection for AMD GPUs",
+        "url": "https://github.com/astral-sh/uv/pull/14176",
+        "state": "merged",
+        "reason": "Implemented AMD detection using `rocm_agent_enumerator` with a Linux installation test; it did not add Windows AMD detection or repository selection."
+      }
+    ],
+    "search_scope": "Literal searches covered `ROCm Windows`, `official ROCm`, `device-all`, TheRock, AMD repository, and Windows PyTorch-index terms. Conceptual searches covered ROCm, Torch indexes, `torch-backend`, AMD GPU detection, automatic selection, and GPU wheel variants across issues and pull requests in all states. Fix-oriented inspection followed historical ROCm issues to merged implementations and later version additions. astral-sh/uv#16522 was ruled out because it concerns generalized package variants; astral-sh/uv#18844 and astral-sh/uv#10712 concern manual Linux index configuration and Triton dependencies."
+  },
+  "type": "duplicate",
+  "type_reason": "Open issue astral-sh/uv#16017 already tracks the same underlying capability: using AMD-hosted ROCm repositories where PyTorch-hosted indexes are insufficient. Official Windows wheels and `[device-all]` are updated requirements within that request. Current source and documentation intentionally use download.pytorch.org and restrict automatic ROCm selection to Linux, so this is not a regression.",
+  "summary": "astral-sh/uv#16017 is the canonical open request for AMD-hosted ROCm indexes. Earlier merged work added explicit ROCm backends and Linux AMD auto-detection, but not AMD’s official Windows repository.",
+  "draft_response": "Thanks. This is the Windows/stable form of the AMD-hosted ROCm-index request already tracked in astral-sh/uv#16017. uv currently routes ROCm backends to download.pytorch.org and only selects ROCm index candidates automatically on Linux, so supporting AMD’s Windows repository, including `[device-all]`, requires extending that backend logic rather than fixing a regression. Let’s keep the implementation discussion in astral-sh/uv#16017. Please add the exact AMD index URL and a minimal pip command that succeeds on Windows there; those details will help define the expected behavior."
+}
