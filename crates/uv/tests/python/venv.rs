@@ -6,7 +6,7 @@ use assert_fs::prelude::*;
 use indoc::indoc;
 use predicates::prelude::*;
 use uv_cache_key::cache_digest;
-use uv_fs::{LockedFile, LockedFileMode};
+use uv_fs::{ClearNonVirtualenv, LockedFile, LockedFileMode};
 use uv_python::{PYTHON_VERSION_FILENAME, PYTHON_VERSIONS_FILENAME};
 use uv_static::EnvVars;
 
@@ -505,7 +505,7 @@ fn create_centralized_project_environment_path_file() -> Result<()> {
     let marker = target.join("marker");
     fs_err::write(&marker, "")?;
 
-    uv_fs::remove_virtualenv(environment.path())?;
+    uv_fs::remove_virtualenv(environment.path(), ClearNonVirtualenv::Allow)?;
     environment.write_str(&target.to_string_lossy())?;
 
     // With the preview, `--allow-existing` selects the root for the requested interpreter.
@@ -524,7 +524,7 @@ fn create_centralized_project_environment_path_file() -> Result<()> {
     assert_ne!(target, fs_err::read_link(environment.path())?);
     assert!(marker.is_file());
 
-    uv_fs::remove_virtualenv(environment.path())?;
+    uv_fs::remove_virtualenv(environment.path(), ClearNonVirtualenv::Error)?;
     environment.write_str(&target.to_string_lossy())?;
 
     // Without the preview, `--allow-existing` replaces the path file without clearing its target.
@@ -1512,6 +1512,54 @@ fn non_empty_dir_exists_clear_force() -> Result<()> {
     ");
 
     directory.child("file").assert(predicates::path::missing());
+
+    Ok(())
+}
+
+#[test]
+fn non_empty_dir_with_marker_directory() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let directory = context.temp_dir.child("not-a-virtualenv");
+    directory.child("pyvenv.cfg").create_dir_all()?;
+    directory.child("file").write_str("important data")?;
+
+    uv_snapshot!(context.filters(), context.venv()
+        .arg(directory.as_os_str())
+        .arg("--clear")
+        .arg("--python")
+        .arg("3.12"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Creating virtual environment at: not-a-virtualenv
+    error: Failed to create virtual environment
+      Caused by: uv will not clear a directory that is not a virtual environment
+
+    hint: Use the `--force` flag to remove the existing directory anyway
+    ");
+
+    directory.child("file").assert("important data");
+    directory
+        .child("pyvenv.cfg")
+        .assert(predicates::path::is_dir());
+
+    uv_snapshot!(context.filters(), context.venv()
+        .arg(directory.as_os_str())
+        .arg("--clear")
+        .arg("--force")
+        .arg("--python")
+        .arg("3.12"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Creating virtual environment at: not-a-virtualenv
+    Activate with: source not-a-virtualenv/[BIN]/activate
+    ");
+
+    directory.child("file").assert(predicates::path::missing());
+    directory
+        .child("pyvenv.cfg")
+        .assert(predicates::path::is_file());
 
     Ok(())
 }
