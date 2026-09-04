@@ -7,7 +7,7 @@ use uv_fs::Simplified;
 use uv_python_interpreter::{Interpreter, PythonEnvironment};
 pub use uv_python_managed::UpgradePolicy;
 
-pub use existing::{CreationAction, CreationEvent, OnExisting, Removal, RemovalReason};
+pub use existing::{CreationAction, CreationEvent, OnExisting, RemovalReason};
 pub use uv_fs::ClearNonVirtualenv;
 pub use virtualenv::Seed;
 
