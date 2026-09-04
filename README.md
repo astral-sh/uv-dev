@@ -29,6 +29,12 @@ complete alternative under development: exact pins and hashes in `build-constrai
 with `require-build-hashes = true`, while retaining isolated builds. That proposal would still
 resolve build dependencies and apply `exclude-newer`.
 
+The reporter subsequently clarified that the proxy index is injected dynamically by the build
+environment. They could make the index declaration static, but prefer the current dynamic setup;
+consequently, a static `[[tool.uv.index]] exclude-newer = false` override is not a practical fit for
+their present configuration. They are considering the package-scoped `hatchling = false` override
+instead.
+
 ## Maintainer guidance and current workarounds
 
 - `--frozen` uses `uv.lock` without checking whether it is current, but does not freeze isolated
@@ -52,6 +58,12 @@ astral-sh/uv#18839, or use
 package override must also cover any transitive build requirements whose timestamps are missing.
 There is no mode that can both enforce a timestamp cutoff and accept artifacts whose timestamps are
 unknown.
+
+For this reporter, the package override is the configuration-compatible option because their proxy
+index is injected dynamically. It can allow `hatchling` itself, but it will not automatically exempt
+`hatchling`'s transitive build dependency closure; each registry package without `upload-time` would
+need its own override. Making the proxy a static named index would allow the single index-scoped
+override instead.
 
 ## Classification
 
@@ -109,6 +121,9 @@ missing capability. The cache portion has a direct supported answer in current u
   strict no-resolution-in-CI requirement.
 - The same maintainer corrected the proposed mechanism: the warning prints the configured cutoff;
   uv does not assign that timestamp to distributions whose upload times are unknown.
+- The reporter clarified that the build environment dynamically inserts the proxy index, explaining
+  why the otherwise recommended static index-scoped override does not suit their current CI
+  configuration.
 
 ## Search coverage
 
