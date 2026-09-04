@@ -1,0 +1,27 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 12639,
+        "title": "Constraints files with spaces",
+        "url": "https://github.com/astral-sh/uv/issues/12639",
+        "state": "open",
+        "reason": "This reports the same quoted-path splitting on the neighboring `--constraint` option. Maintainer comments confirm that CLI and environment-variable values share space-delimited parsing."
+      },
+      {
+        "kind": "pull_request",
+        "number": 158,
+        "title": "Fix quoted requirement-file paths",
+        "url": "https://github.com/astral-sh/uv-dev/pull/158",
+        "state": "open",
+        "reason": "This pre-existing draft explicitly covers constraint, override, and exclude paths by preserving CLI paths while splitting only environment-provided lists."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests using literal terms including `--overrides`, `File not found`, `override.txt`, Windows, and quoted paths with spaces; conceptual terms covering whitespace splitting, requirement and constraint paths, CLI versus environment parsing; and fix-oriented history. astral-sh/uv#15806 and astral-sh/uv#15815 were adjacent `--env-file` cases, while astral-sh/uv#17227 concerned the unrelated `-` stdin regression."
+  },
+  "type": "duplicate",
+  "type_reason": "astral-sh/uv#12639 already tracks the same underlying quoted requirements-file path splitting in the shared space-delimited parsing used by `--constraint` and `--overrides`. The pre-existing astral-sh/uv-dev#158 proposes a fix covering both flags.",
+  "summary": "This is a Windows-specific reproduction of the open cross-platform problem in astral-sh/uv#12639, with a draft fix already in astral-sh/uv-dev#158.",
+  "draft_response": "Thanks for the clear reproduction. This is the same underlying file-path parsing problem tracked in astral-sh/uv#12639: `--constraint` and `--overrides` currently use the same space-delimited parsing as their environment-variable forms, so quoting a CLI path does not prevent it from being split. A draft fix covering constraint, override, and exclude paths is in astral-sh/uv-dev#158. Let’s centralize the discussion in astral-sh/uv#12639."
+}
