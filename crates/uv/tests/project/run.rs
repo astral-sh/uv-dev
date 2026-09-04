@@ -4752,6 +4752,22 @@ fn run_active_script_environment_non_virtualenv() -> Result<()> {
         .child("pyvenv.cfg")
         .assert(predicate::path::is_dir());
 
+    let active_file = context.temp_dir.child("active-file");
+    active_file.write_str("important data")?;
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--active")
+        .arg("--python")
+        .arg(&context.python_versions[0].1)
+        .arg("--script")
+        .arg("main.py")
+        .env_remove(EnvVars::RUST_LOG)
+        .env(EnvVars::VIRTUAL_ENV, "active-file"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Script virtual environment directory `[TEMP_DIR]/active-file` cannot be used because it is not a virtual environment
+    ");
+    active_file.assert("important data");
+
     let empty_environment = context.temp_dir.child("empty");
     empty_environment.create_dir_all()?;
     context
@@ -4825,6 +4841,48 @@ fn run_script_environment_cache_repair() -> Result<()> {
             .child("stale.txt")
             .assert(predicate::path::missing());
     }
+
+    // Replacing the owned cache entry must not clear a directory outside the cache.
+    uv_fs::remove_virtualenv(environment.path(), ClearNonVirtualenv::Error)?;
+    let target = context.temp_dir.child("target");
+    target.create_dir_all()?;
+    target.child("important.txt").write_str("important data")?;
+    uv_fs::create_symlink(target.path(), environment.path())?;
+
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--script")
+        .arg("main.py")
+        .env_remove(EnvVars::RUST_LOG), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [CACHE_DIR]/environments-v2/main-[HASH]
+    ");
+    target.child("important.txt").assert("important data");
+    target
+        .child("pyvenv.cfg")
+        .assert(predicate::path::missing());
+    assert!(fs_err::read_link(environment.path()).is_err());
+
+    // A dangling link at the same owned entry can also be replaced.
+    uv_fs::remove_virtualenv(environment.path(), ClearNonVirtualenv::Error)?;
+    let missing = context.temp_dir.child("missing");
+    missing.create_dir_all()?;
+    uv_fs::create_symlink(missing.path(), environment.path())?;
+    fs_err::remove_dir(missing.path())?;
+
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--script")
+        .arg("main.py")
+        .env_remove(EnvVars::RUST_LOG), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [CACHE_DIR]/environments-v2/main-[HASH]
+    ");
+    missing.assert(predicate::path::missing());
+    environment
+        .child("pyvenv.cfg")
+        .assert(predicate::path::is_file());
+    assert!(fs_err::read_link(environment.path()).is_err());
 
     Ok(())
 }
