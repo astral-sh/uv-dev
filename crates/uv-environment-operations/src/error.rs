@@ -60,10 +60,8 @@ pub enum EnvironmentError {
     #[error("Project virtual environment directory `{0}` cannot be used because {1}")]
     InvalidProjectEnvironmentDir(PathBuf, String),
 
-    #[error(
-        "Script environment at `{0}` cannot be replaced because it is a non-empty directory that is not a virtual environment"
-    )]
-    InvalidScriptEnvironmentDir(PathBuf),
+    #[error("Script virtual environment directory `{0}` cannot be used because {1}")]
+    InvalidScriptEnvironmentDir(PathBuf, String),
 
     #[error(
         "Malware detected in one or more dependencies that would be installed; aborting sync. Set `UV_MALWARE_CHECK=0` to bypass this check."
