@@ -33,7 +33,7 @@ use uv_shell::{Shell, shlex_posix, shlex_windows};
 use uv_types::{
     AnyErrorBuild, BuildContext, BuildIsolation, BuildStack, HashStrategy, SourceTreeEditablePolicy,
 };
-use uv_virtualenv::{OnExisting, Removal, RemovalReason, Seed};
+use uv_virtualenv::{OnExisting, RemovalReason, Seed};
 use uv_warnings::warn_user;
 use uv_workspace::{DiscoveryOptions, VirtualProject, WorkspaceCache, WorkspaceErrorKind};
 
@@ -256,31 +256,31 @@ pub(crate) async fn venv(
     let on_existing = match on_existing {
         OnExisting::Prompt if owned_destination => {
             // Centralized environments are managed by uv, so replace them without prompting.
-            OnExisting::Replace(Removal {
+            OnExisting::Replace {
                 reason: RemovalReason::ManagedEnvironment,
                 clear_non_virtualenv: ClearNonVirtualenv::Allow,
-            })
+            }
         }
-        OnExisting::Clear(removal) if owned_destination => OnExisting::Replace(Removal {
+        OnExisting::Clear { reason, .. } if owned_destination => OnExisting::Replace {
+            reason,
             clear_non_virtualenv: ClearNonVirtualenv::Allow,
-            ..removal
-        }),
+        },
         OnExisting::Allow
             if fs_err::symlink_metadata(&path).is_ok_and(|metadata| metadata.is_file())
                 && centralized_reference =>
         {
             // TODO(tk): Revisit after PEP 832.
             // Ignore uv-owned path files when creating a local environment.
-            OnExisting::Replace(Removal {
+            OnExisting::Replace {
                 reason: RemovalReason::ManagedEnvironment,
                 clear_non_virtualenv: ClearNonVirtualenv::Allow,
-            })
+            }
         }
         OnExisting::Prompt
         | OnExisting::Fail
         | OnExisting::Allow
-        | OnExisting::Clear(_)
-        | OnExisting::Replace(_) => on_existing,
+        | OnExisting::Clear { .. }
+        | OnExisting::Replace { .. } => on_existing,
     };
 
     // Create the virtual environment.

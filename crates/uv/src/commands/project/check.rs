@@ -350,10 +350,10 @@ pub(crate) async fn check(
             interpreter,
             uv_virtualenv::Prompt::None,
             false,
-            uv_virtualenv::OnExisting::Replace(uv_virtualenv::Removal {
+            uv_virtualenv::OnExisting::Replace {
                 reason: uv_virtualenv::RemovalReason::TemporaryEnvironment,
                 clear_non_virtualenv: ClearNonVirtualenv::Allow,
-            }),
+            },
             false,
             uv_virtualenv::Seed::Disabled,
             false,

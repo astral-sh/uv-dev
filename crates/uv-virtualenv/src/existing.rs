@@ -32,44 +32,17 @@ impl std::fmt::Display for RemovalReason {
     }
 }
 
-/// The intent and permissions for removing an existing environment.
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
-pub struct Removal {
-    /// The diagnostic context, independent of permission to remove user data.
-    pub reason: RemovalReason,
-    /// Whether an entry without a virtual environment marker may be removed.
-    pub clear_non_virtualenv: ClearNonVirtualenv,
-}
-
-impl Removal {
-    /// Remove the environment entry without following a link at `location`.
-    pub fn remove(self, location: &Path) -> io::Result<()> {
-        debug!(
-            "Removing existing environment at {} ({})",
-            location.user_display(),
-            self.reason
-        );
-        uv_fs::remove_virtualenv(location, self.clear_non_virtualenv)
-    }
-
-    /// Clear an environment, preserving links to its directory.
-    fn clear(self, location: &Path) -> io::Result<bool> {
-        debug!(
-            "Clearing existing environment at {} ({})",
-            location.user_display(),
-            self.reason
-        );
-        uv_fs::clear_virtualenv(location, self.clear_non_virtualenv)
-    }
-
-    fn check(self, location: &Path, is_virtualenv: bool) -> Result<(), Error> {
-        match self.clear_non_virtualenv {
-            ClearNonVirtualenv::Allow => Ok(()),
-            ClearNonVirtualenv::Error if is_virtualenv => Ok(()),
-            ClearNonVirtualenv::Error => Err(Error::ClearNonVirtualenv {
-                path: location.to_path_buf(),
-            }),
-        }
+fn check_removal(
+    location: &Path,
+    clear_non_virtualenv: ClearNonVirtualenv,
+    is_virtualenv: bool,
+) -> Result<(), Error> {
+    match clear_non_virtualenv {
+        ClearNonVirtualenv::Allow => Ok(()),
+        ClearNonVirtualenv::Error if is_virtualenv => Ok(()),
+        ClearNonVirtualenv::Error => Err(Error::ClearNonVirtualenv {
+            path: location.to_path_buf(),
+        }),
     }
 }
 
@@ -102,17 +75,33 @@ pub enum OnExisting {
     /// Overwrite virtual environment files while retaining other existing files.
     Allow,
     /// Clear the environment directory, preserving links to it.
-    Clear(Removal),
+    Clear {
+        /// Why the directory is being cleared (for diagnostics).
+        reason: RemovalReason,
+        /// Whether an entry without a virtual environment marker may be cleared.
+        clear_non_virtualenv: ClearNonVirtualenv,
+    },
     /// Replace the destination entry without following a link to another directory.
-    Replace(Removal),
+    Replace {
+        /// Why the entry is being replaced (for diagnostics).
+        reason: RemovalReason,
+        /// Whether an entry without a virtual environment marker may be replaced.
+        clear_non_virtualenv: ClearNonVirtualenv,
+    },
 }
 
 /// A read-only decision. It is never retained as authorization for a later removal.
 enum ExistingAction {
     Create,
     Allow,
-    Clear(Removal),
-    Replace(Removal),
+    Clear {
+        reason: RemovalReason,
+        clear_non_virtualenv: ClearNonVirtualenv,
+    },
+    Replace {
+        reason: RemovalReason,
+        clear_non_virtualenv: ClearNonVirtualenv,
+    },
     Prompt,
 }
 
@@ -126,10 +115,10 @@ impl OnExisting {
         if allow_existing {
             Self::Allow
         } else if clear {
-            Self::Clear(Removal {
+            Self::Clear {
                 reason: RemovalReason::UserRequest,
                 clear_non_virtualenv,
-            })
+            }
         } else if no_clear {
             Self::Fail
         } else {
@@ -143,9 +132,9 @@ impl OnExisting {
     pub fn check(self, location: &Path) -> Result<CreationAction, Error> {
         Ok(match self.action(location)? {
             ExistingAction::Create | ExistingAction::Allow => CreationAction::Create,
-            ExistingAction::Clear(_) | ExistingAction::Replace(_) | ExistingAction::Prompt => {
-                CreationAction::Replace
-            }
+            ExistingAction::Clear { .. }
+            | ExistingAction::Replace { .. }
+            | ExistingAction::Prompt => CreationAction::Replace,
         })
     }
 
@@ -164,19 +153,28 @@ impl OnExisting {
 
         // An explicitly owned entry can be replaced without inspecting its target. This also
         // handles dangling links and centralized-environment path files.
-        if let Self::Replace(removal) = self
-            && removal.clear_non_virtualenv == ClearNonVirtualenv::Allow
+        if let Self::Replace {
+            reason,
+            clear_non_virtualenv: ClearNonVirtualenv::Allow,
+        } = self
             && !entry.is_dir()
         {
-            return Ok(ExistingAction::Replace(removal));
+            return Ok(ExistingAction::Replace {
+                reason,
+                clear_non_virtualenv: ClearNonVirtualenv::Allow,
+            });
         }
 
         let metadata = if entry.file_type().is_symlink() {
             match fs_err::metadata(location) {
                 Ok(metadata) => metadata,
                 Err(err) if err.kind() == io::ErrorKind::NotFound => {
-                    if let Self::Replace(removal) = self {
-                        removal.check(location, false)?;
+                    if let Self::Replace {
+                        clear_non_virtualenv,
+                        ..
+                    } = self
+                    {
+                        check_removal(location, clear_non_virtualenv, false)?;
                     }
                     return Ok(ExistingAction::Create);
                 }
@@ -186,8 +184,12 @@ impl OnExisting {
             entry
         };
         if !metadata.is_dir() {
-            if let Self::Replace(removal) = self {
-                removal.check(location, false)?;
+            if let Self::Replace {
+                clear_non_virtualenv,
+                ..
+            } = self
+            {
+                check_removal(location, clear_non_virtualenv, false)?;
             }
             let message = if metadata.is_file() {
                 "File exists"
@@ -211,13 +213,16 @@ impl OnExisting {
 
         // A uv-owned destination can be repaired even if its marker cannot be inspected.
         let is_virtualenv = match self {
-            Self::Clear(removal) | Self::Replace(removal)
-                if removal.clear_non_virtualenv == ClearNonVirtualenv::Allow =>
-            {
-                false
+            Self::Clear {
+                clear_non_virtualenv: ClearNonVirtualenv::Allow,
+                ..
             }
+            | Self::Replace {
+                clear_non_virtualenv: ClearNonVirtualenv::Allow,
+                ..
+            } => false,
             Self::Allow => false,
-            Self::Prompt | Self::Fail | Self::Clear(_) | Self::Replace(_) => {
+            Self::Prompt | Self::Fail | Self::Clear { .. } | Self::Replace { .. } => {
                 uv_fs::try_is_virtualenv_base(location).map_err(inspect_error)?
             }
         };
@@ -234,13 +239,25 @@ impl OnExisting {
             Self::Fail => Err(exists()),
             Self::Prompt if is_virtualenv => Ok(ExistingAction::Prompt),
             Self::Prompt => Err(exists()),
-            Self::Clear(removal) => {
-                removal.check(location, is_virtualenv)?;
-                Ok(ExistingAction::Clear(removal))
+            Self::Clear {
+                reason,
+                clear_non_virtualenv,
+            } => {
+                check_removal(location, clear_non_virtualenv, is_virtualenv)?;
+                Ok(ExistingAction::Clear {
+                    reason,
+                    clear_non_virtualenv,
+                })
             }
-            Self::Replace(removal) => {
-                removal.check(location, is_virtualenv)?;
-                Ok(ExistingAction::Replace(removal))
+            Self::Replace {
+                reason,
+                clear_non_virtualenv,
+            } => {
+                check_removal(location, clear_non_virtualenv, is_virtualenv)?;
+                Ok(ExistingAction::Replace {
+                    reason,
+                    clear_non_virtualenv,
+                })
             }
         }
     }
@@ -256,18 +273,39 @@ impl OnExisting {
                 debug!("Allowing existing directory due to `--allow-existing`");
                 false
             }
-            ExistingAction::Clear(removal) => removal.clear(location)?,
-            ExistingAction::Replace(removal) => match removal.remove(location) {
-                Ok(()) => true,
-                Err(err) if err.kind() == io::ErrorKind::NotFound => false,
-                Err(err) => return Err(err.into()),
-            },
-            ExistingAction::Prompt => match confirm_clear(location)? {
-                Some(true) => Removal {
-                    reason: RemovalReason::UserConfirmation,
-                    clear_non_virtualenv: ClearNonVirtualenv::Error,
+            ExistingAction::Clear {
+                reason,
+                clear_non_virtualenv,
+            } => {
+                debug!(
+                    "Clearing existing environment at {} ({reason})",
+                    location.user_display()
+                );
+                uv_fs::clear_virtualenv(location, clear_non_virtualenv)?
+            }
+            ExistingAction::Replace {
+                reason,
+                clear_non_virtualenv,
+            } => {
+                debug!(
+                    "Removing existing environment at {} ({reason})",
+                    location.user_display()
+                );
+                match uv_fs::remove_virtualenv(location, clear_non_virtualenv) {
+                    Ok(()) => true,
+                    Err(err) if err.kind() == io::ErrorKind::NotFound => false,
+                    Err(err) => return Err(err.into()),
                 }
-                .clear(location)?,
+            }
+            ExistingAction::Prompt => match confirm_clear(location)? {
+                Some(true) => {
+                    debug!(
+                        "Clearing existing environment at {} ({})",
+                        location.user_display(),
+                        RemovalReason::UserConfirmation
+                    );
+                    uv_fs::clear_virtualenv(location, ClearNonVirtualenv::Error)?
+                }
                 Some(false) | None => {
                     return Err(Error::Exists {
                         name: "virtual environment",

@@ -18,7 +18,7 @@ use uv_pep440::Version;
 use uv_python::{BrokenLink, Interpreter, PythonEnvironment};
 use uv_state::{StateBucket, StateStore};
 use uv_static::EnvVars;
-use uv_virtualenv::{CreationEvent, OnExisting, Removal, RemovalReason};
+use uv_virtualenv::{CreationEvent, OnExisting, RemovalReason};
 use uv_warnings::warn_user;
 
 pub(crate) use receipt::ToolReceipt;
@@ -257,12 +257,8 @@ impl InstalledTools {
             environment_path.user_display()
         );
 
-        Removal {
-            reason: RemovalReason::ManagedEnvironment,
-            clear_non_virtualenv: ClearNonVirtualenv::Allow,
-        }
-        .remove(&environment_path)
-        .map_err(uv_virtualenv::Error::from)?;
+        uv_fs::remove_virtualenv(&environment_path, ClearNonVirtualenv::Allow)
+            .map_err(uv_virtualenv::Error::from)?;
 
         Ok(())
     }
@@ -340,10 +336,10 @@ impl InstalledTools {
             interpreter,
             uv_virtualenv::Prompt::None,
             false,
-            OnExisting::Replace(Removal {
+            OnExisting::Replace {
                 reason: RemovalReason::ManagedEnvironment,
                 clear_non_virtualenv: ClearNonVirtualenv::Allow,
-            }),
+            },
             false,
             uv_virtualenv::Seed::Disabled,
             false,
