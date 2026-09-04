@@ -7988,7 +7988,7 @@ fn run_centralized_environment_no_sync_uses_incompatible_python() -> Result<()> 
 
     // Without the project link, discovery must reuse the cached environment before
     // rejecting the selected interpreter against the updated requirement.
-    uv_fs::remove_virtualenv(&context.temp_dir.join(".venv"))?;
+    uv_fs::remove_virtualenv(&context.temp_dir.join(".venv"), ClearNonVirtualenv::Allow)?;
     context
         .temp_dir
         .child("pyproject.toml")

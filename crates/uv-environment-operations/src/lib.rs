@@ -64,9 +64,7 @@ use uv_python_discovery::check_environment_compatibility;
 use uv_resolve_operations::locked_requirements::{LockedRequirements, read_lock_requirements};
 use uv_resolve_operations::loggers::ResolveLogger;
 use uv_settings::{InstallerSettingsRef, ResolverInstallerSettings, ResolverSettings};
-use uv_virtualenv::{
-    CreatedVenv, CreationAction, CreationEvent, OnExisting, Removal, RemovalReason,
-};
+use uv_virtualenv::{CreatedVenv, CreationAction, CreationEvent, OnExisting, RemovalReason};
 
 pub mod environment;
 mod error;
@@ -516,12 +514,7 @@ pub fn update_project_environment_link(
 
     if fs_err::symlink_metadata(&link).is_ok_and(|metadata| metadata.is_dir()) {
         if uv_fs::is_virtualenv_base(&link) {
-            if let Err(err) = (Removal {
-                reason: RemovalReason::ManagedEnvironment,
-                clear_non_virtualenv: ClearNonVirtualenv::Error,
-            })
-            .remove(&link)
-            {
+            if let Err(err) = uv_fs::remove_virtualenv(&link, ClearNonVirtualenv::Error) {
                 report_error(format_args!(
                     "Failed to remove existing local virtual environment: {err}"
                 ));
@@ -973,15 +966,15 @@ impl ProjectEnvironment {
                     !centralized && is_centralized_environment_reference(&root, cache);
                 let on_existing = if centralized || centralized_environment_reference {
                     // Replace the uv-owned entry without following a link outside the cache.
-                    OnExisting::Replace(Removal {
+                    OnExisting::Replace {
                         reason: RemovalReason::ManagedEnvironment,
                         clear_non_virtualenv: ClearNonVirtualenv::Allow,
-                    })
+                    }
                 } else {
-                    OnExisting::Clear(Removal {
+                    OnExisting::Clear {
                         reason: RemovalReason::ManagedEnvironment,
                         clear_non_virtualenv: ClearNonVirtualenv::Error,
-                    })
+                    }
                 };
 
                 // Determine a prompt for the environment, in order of preference:
@@ -1012,10 +1005,10 @@ impl ProjectEnvironment {
                         interpreter,
                         prompt,
                         false,
-                        uv_virtualenv::OnExisting::Replace(uv_virtualenv::Removal {
+                        uv_virtualenv::OnExisting::Replace {
                             reason: uv_virtualenv::RemovalReason::TemporaryEnvironment,
                             clear_non_virtualenv: ClearNonVirtualenv::Allow,
-                        }),
+                        },
                         uv_preview::is_enabled(PreviewFeature::RelocatableEnvsDefault),
                         uv_virtualenv::Seed::Disabled,
                         upgrade_policy,
@@ -1206,10 +1199,10 @@ impl ScriptEnvironment {
                             (root, ClearNonVirtualenv::Error)
                         }
                     };
-                let on_existing = OnExisting::Replace(Removal {
+                let on_existing = OnExisting::Replace {
                     reason: RemovalReason::ManagedEnvironment,
                     clear_non_virtualenv,
-                });
+                };
 
                 // Determine a prompt for the environment, in order of preference:
                 //
@@ -1233,10 +1226,10 @@ impl ScriptEnvironment {
                         interpreter,
                         prompt,
                         false,
-                        uv_virtualenv::OnExisting::Replace(uv_virtualenv::Removal {
+                        uv_virtualenv::OnExisting::Replace {
                             reason: uv_virtualenv::RemovalReason::TemporaryEnvironment,
                             clear_non_virtualenv: ClearNonVirtualenv::Allow,
-                        }),
+                        },
                         false,
                         uv_virtualenv::Seed::Disabled,
                         upgrade_policy,

@@ -13,7 +13,7 @@ use uv_python_discovery::{PYTHON_VERSION_FILENAME, PYTHON_VERSIONS_FILENAME};
 use uv_python_interpreter::{Interpreter, PythonEnvironment};
 use uv_static::EnvVars;
 use uv_virtualenv::{
-    CreatedVenv, CreationAction, CreationEvent, OnExisting, Removal, RemovalReason,
+    CreatedVenv, CreationAction, CreationEvent, OnExisting, RemovalReason, UpgradePolicy,
 };
 
 #[cfg(unix)]
@@ -188,10 +188,10 @@ fn create_venv_rechecks_destination() -> Result<()> {
     let cache = Cache::from_path(context.cache_dir.path());
     let interpreter = Interpreter::query(&context.python_versions[0].1, &cache)?;
     let directory = context.temp_dir.child("environment");
-    let on_existing = OnExisting::Replace(Removal {
+    let on_existing = OnExisting::Replace {
         reason: RemovalReason::ManagedEnvironment,
         clear_non_virtualenv: ClearNonVirtualenv::Error,
-    });
+    };
     let create = |events: &mut Vec<CreationEvent>| {
         uv_virtualenv::create_venv_with_reporter(
             directory.path(),
@@ -201,7 +201,7 @@ fn create_venv_rechecks_destination() -> Result<()> {
             on_existing,
             false,
             uv_virtualenv::Seed::Disabled,
-            false,
+            UpgradePolicy::Fixed,
             |event| {
                 events.push(event);
                 Ok(())
@@ -261,11 +261,10 @@ fn check_venv_replacement_links() -> Result<()> {
     target.create_dir_all()?;
     let directory = context.temp_dir.child("environment");
     uv_fs::create_symlink(target.path(), directory.path())?;
-    let removal = Removal {
+    let on_existing = OnExisting::Replace {
         reason: RemovalReason::ManagedEnvironment,
         clear_non_virtualenv: ClearNonVirtualenv::Error,
     };
-    let on_existing = OnExisting::Replace(removal);
 
     assert_eq!(on_existing.check(directory.path())?, CreationAction::Create);
     target.child("pyvenv.cfg").touch()?;
@@ -289,10 +288,10 @@ fn check_venv_replacement_links() -> Result<()> {
         Err(uv_virtualenv::Error::ClearNonVirtualenv { .. })
     );
     assert_eq!(
-        OnExisting::Replace(Removal {
+        OnExisting::Replace {
+            reason: RemovalReason::ManagedEnvironment,
             clear_non_virtualenv: ClearNonVirtualenv::Allow,
-            ..removal
-        })
+        }
         .check(directory.path())?,
         CreationAction::Replace
     );
@@ -311,11 +310,16 @@ fn check_venv_preserves_inspection_errors() -> Result<()> {
         .write_str("important data")?;
     symlink("pyvenv.cfg", directory.child("pyvenv.cfg"))?;
 
-    let removal = Removal {
-        reason: RemovalReason::ManagedEnvironment,
-        clear_non_virtualenv: ClearNonVirtualenv::Error,
-    };
-    for on_existing in [OnExisting::Clear(removal), OnExisting::Replace(removal)] {
+    for on_existing in [
+        OnExisting::Clear {
+            reason: RemovalReason::ManagedEnvironment,
+            clear_non_virtualenv: ClearNonVirtualenv::Error,
+        },
+        OnExisting::Replace {
+            reason: RemovalReason::ManagedEnvironment,
+            clear_non_virtualenv: ClearNonVirtualenv::Error,
+        },
+    ] {
         assert_matches!(
             on_existing.check(directory.path()),
             Err(uv_virtualenv::Error::InspectExisting { .. })
@@ -325,10 +329,10 @@ fn check_venv_preserves_inspection_errors() -> Result<()> {
 
     // Ownership permits repairing an entry even when the marker cannot be inspected.
     assert_eq!(
-        OnExisting::Replace(Removal {
+        OnExisting::Replace {
+            reason: RemovalReason::ManagedEnvironment,
             clear_non_virtualenv: ClearNonVirtualenv::Allow,
-            ..removal
-        })
+        }
         .check(directory.path())?,
         CreationAction::Replace
     );
@@ -1890,7 +1894,7 @@ fn non_empty_dir_with_marker_directory() -> Result<()> {
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
     Creating virtual environment at: not-a-virtualenv
     error: Failed to create virtual environment
-      Caused by: uv will not clear a directory that is not a virtual environment
+      cause: uv will not clear a directory that is not a virtual environment
 
     hint: Use the `--force` flag to remove the existing directory anyway
     ");
