@@ -7,15 +7,23 @@ use uv_fs::Simplified;
 use uv_python_interpreter::{Interpreter, PythonEnvironment};
 pub use uv_python_managed::UpgradePolicy;
 
+pub use existing::{CreationAction, CreationEvent, OnExisting, Removal, RemovalReason};
 pub use uv_fs::ClearNonVirtualenv;
-pub use virtualenv::{OnExisting, RemovalReason, Seed};
+pub use virtualenv::Seed;
 
+mod existing;
 mod virtualenv;
 
 #[derive(Debug, Error)]
 pub enum Error {
     #[error(transparent)]
     Io(#[from] io::Error),
+    #[error("Failed to inspect virtual environment directory at {}", path.user_display())]
+    InspectExisting {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
     #[error(
         "Could not find a suitable Python executable for the virtual environment based on the interpreter: {0}"
     )]
@@ -50,7 +58,11 @@ impl uv_errors::Hinted for Error {
             Self::ClearNonVirtualenv { .. } => uv_errors::Hints::from(
                 "Use the `--force` flag to remove the existing directory anyway",
             ),
-            _ => uv_errors::Hints::none(),
+            Self::Io(_)
+            | Self::InspectExisting { .. }
+            | Self::NotFound(_)
+            | Self::Python(_)
+            | Self::NonUtf8Path { .. } => uv_errors::Hints::none(),
         }
     }
 }
@@ -89,8 +101,55 @@ pub fn create_venv(
     seed: Seed,
     upgrade_policy: UpgradePolicy,
 ) -> Result<PythonEnvironment, Error> {
+    create_venv_with_reporter(
+        location,
+        interpreter,
+        prompt,
+        system_site_packages,
+        on_existing,
+        relocatable,
+        seed,
+        upgrade_policy,
+        |_| Ok(()),
+    )
+    .map(CreatedVenv::into_environment)
+}
+
+/// The result of creating a virtual environment.
+#[derive(Debug)]
+pub enum CreatedVenv {
+    Created(PythonEnvironment),
+    Replaced(PythonEnvironment),
+}
+
+impl CreatedVenv {
+    pub fn environment(&self) -> &PythonEnvironment {
+        match self {
+            Self::Created(environment) | Self::Replaced(environment) => environment,
+        }
+    }
+
+    pub fn into_environment(self) -> PythonEnvironment {
+        match self {
+            Self::Created(environment) | Self::Replaced(environment) => environment,
+        }
+    }
+}
+
+/// Create a virtualenv and report the actual removal and creation events.
+pub fn create_venv_with_reporter(
+    location: &Path,
+    interpreter: Interpreter,
+    prompt: Prompt,
+    system_site_packages: bool,
+    on_existing: OnExisting,
+    relocatable: bool,
+    seed: Seed,
+    upgrade_policy: UpgradePolicy,
+    mut reporter: impl FnMut(CreationEvent) -> io::Result<()>,
+) -> Result<CreatedVenv, Error> {
     // Create the virtualenv at the given location.
-    let virtualenv = virtualenv::create(
+    let (virtualenv, action) = virtualenv::create(
         location,
         &interpreter,
         prompt,
@@ -99,9 +158,14 @@ pub fn create_venv(
         relocatable,
         seed,
         upgrade_policy,
+        &mut reporter,
     )?;
 
     // Create the corresponding `PythonEnvironment`.
     let interpreter = interpreter.with_virtualenv(virtualenv);
-    Ok(PythonEnvironment::from_interpreter(interpreter))
+    let environment = PythonEnvironment::from_interpreter(interpreter);
+    Ok(match action {
+        CreationAction::Create => CreatedVenv::Created(environment),
+        CreationAction::Replace => CreatedVenv::Replaced(environment),
+    })
 }
