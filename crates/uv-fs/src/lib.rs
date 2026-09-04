@@ -993,12 +993,19 @@ pub enum ClearNonVirtualenv {
 
 /// Perform a safe removal of a virtual environment.
 ///
-/// The link or file at `location` is removed without following it.
+/// Links are removed without following them. Removing an entry that is not a virtual environment
+/// requires [`ClearNonVirtualenv::Allow`]. Empty directories can always be removed.
 pub fn remove_virtualenv(
     location: &Path,
     clear_non_virtualenv: ClearNonVirtualenv,
 ) -> io::Result<()> {
     if !fs_err::symlink_metadata(location)?.is_dir() {
+        if clear_non_virtualenv == ClearNonVirtualenv::Error && !try_is_virtualenv_base(location)? {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("`{}` is not a virtual environment", location.display()),
+            ));
+        }
         return remove_symlink(location);
     }
 
@@ -1076,9 +1083,11 @@ pub fn clear_virtualenv(
     location: &Path,
     clear_non_virtualenv: ClearNonVirtualenv,
 ) -> io::Result<bool> {
-    let location = location
-        .canonicalize()
-        .unwrap_or_else(|_| location.to_path_buf());
+    let location = match fs_err::canonicalize(location) {
+        Ok(location) => location,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => location.to_path_buf(),
+        Err(err) => return Err(err),
+    };
     let cleared = match remove_virtualenv(&location, clear_non_virtualenv) {
         Ok(()) => true,
         Err(err) if err.kind() == io::ErrorKind::NotFound => false,
@@ -1123,13 +1132,80 @@ mod tests {
         let environment = tempdir.path().join("environment");
         create_symlink(&target, &environment)?;
 
-        remove_virtualenv(&environment, ClearNonVirtualenv::Error)?;
+        remove_virtualenv(&environment, ClearNonVirtualenv::Allow)?;
 
         assert_matches!(
             fs_err::symlink_metadata(environment),
             Err(err) if err.kind() == io::ErrorKind::NotFound
         );
         assert!(marker.is_file());
+        Ok(())
+    }
+
+    #[test]
+    fn remove_virtualenv_checks_the_link_target() -> io::Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let target = tempdir.path().join("target");
+        fs_err::create_dir(&target)?;
+        let important = target.join("important.txt");
+        fs_err::write(&important, "content")?;
+        let environment = tempdir.path().join("environment");
+        create_symlink(&target, &environment)?;
+
+        assert_matches!(
+            remove_virtualenv(&environment, ClearNonVirtualenv::Error),
+            Err(err) if err.kind() == io::ErrorKind::InvalidInput
+        );
+        assert_eq!(fs_err::read_to_string(&important)?, "content");
+        assert_eq!(fs_err::read_link(&environment)?, target);
+
+        let marker = target.join("pyvenv.cfg");
+        fs_err::write(&marker, "")?;
+        remove_virtualenv(&environment, ClearNonVirtualenv::Error)?;
+        assert_matches!(
+            fs_err::symlink_metadata(&environment),
+            Err(err) if err.kind() == io::ErrorKind::NotFound
+        );
+        assert!(marker.is_file());
+        assert_eq!(fs_err::read_to_string(&important)?, "content");
+        Ok(())
+    }
+
+    #[test]
+    fn remove_virtualenv_requires_permission_to_remove_a_file() -> io::Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let environment = tempdir.path().join("environment");
+        fs_err::write(&environment, "content")?;
+
+        assert_matches!(
+            remove_virtualenv(&environment, ClearNonVirtualenv::Error),
+            Err(err) if err.kind() == io::ErrorKind::InvalidInput
+        );
+        assert_eq!(fs_err::read_to_string(&environment)?, "content");
+        remove_virtualenv(&environment, ClearNonVirtualenv::Allow)?;
+        assert!(!environment.try_exists()?);
+        Ok(())
+    }
+
+    #[test]
+    fn remove_virtualenv_can_remove_an_owned_dangling_link() -> io::Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let target = tempdir.path().join("target");
+        fs_err::create_dir(&target)?;
+        let environment = tempdir.path().join("environment");
+        create_symlink(&target, &environment)?;
+        fs_err::remove_dir(&target)?;
+
+        assert_matches!(
+            remove_virtualenv(&environment, ClearNonVirtualenv::Error),
+            Err(err) if err.kind() == io::ErrorKind::InvalidInput
+        );
+        remove_virtualenv(&environment, ClearNonVirtualenv::Allow)?;
+        assert_matches!(
+            fs_err::symlink_metadata(&environment),
+            Err(err) if err.kind() == io::ErrorKind::NotFound
+        );
+        assert!(!target.try_exists()?);
         Ok(())
     }
 
