@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 11932,
+        "title": "`uv lock --check` doesn't error if environment doesn't match lockfile",
+        "url": "https://github.com/astral-sh/uv/issues/11932",
+        "state": "open",
+        "reason": "Closest broad command-design discussion. It requests checks across project, lockfile, environment, and hashes; a maintainer clarifies that `uv lock --check` only checks project/lock consistency."
+      },
+      {
+        "kind": "issue",
+        "number": 12276,
+        "title": "Validate locked versions against constraints in lock file",
+        "url": "https://github.com/astral-sh/uv/issues/12276",
+        "state": "open",
+        "reason": "Directly tracks rejecting corrupted lockfiles whose selected versions violate recorded constraints, but does not validate artifact URLs against fresh index metadata."
+      },
+      {
+        "kind": "pull_request",
+        "number": 12235,
+        "title": "Error on lockfiles with incoherent wheel versions",
+        "url": "https://github.com/astral-sh/uv/pull/12235",
+        "state": "merged",
+        "reason": "Implemented a narrower structural integrity check for inconsistent package and wheel versions, establishing precedent without providing network-backed provenance verification."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests using literal terms including `uv.lock`, verify, legitimate, tamper, malicious, and URL, plus conceptual queries covering integrity, authenticity, constraints, hashes, artifact provenance, index metadata, refresh, re-resolution, CI, and `uv audit`. Followed the maintainer-linked chain through astral-sh/uv#11932, astral-sh/uv#12276, astral-sh/uv#12254, and astral-sh/uv#12235. No item covers the complete network-backed comparison. astral-sh/uv#18562 repeats the constraint inconsistency covered by astral-sh/uv#12276; astral-sh/uv#18619 is limited to missing hashes for direct/path sdists; astral-sh/uv#18506 concerns vulnerability and malware advisories rather than lockfile provenance."
+  },
+  "type": "enhancement",
+  "type_reason": "This requests a new independent, network-backed verification capability. Existing checks establish project/lock freshness and verify downloaded bytes against hashes stored in the lockfile, but they do not establish that the lockfile's URL/hash records came from configured-index metadata. No existing item covers the full request.",
+  "summary": "No exact prior tracker was found. astral-sh/uv#11932 and astral-sh/uv#12276 cover broad check semantics and constraint validation, while astral-sh/uv#12235 added a narrower coherence check; none authenticates artifact provenance against fresh index metadata.",
+  "draft_response": "The check you're describing goes beyond `uv lock --check`, which checks whether `uv.lock` is consistent with project metadata rather than independently authenticating every entry against freshly fetched index metadata. During sync, uv verifies downloaded artifacts against the hashes in `uv.lock`, so changing only a wheel URL cannot install different bytes without a hash mismatch. However, the lockfile remains the source of truth for the URL and hash pair.\n\nFor CI today, the closest check is `uv lock --refresh` followed by `git diff --exit-code -- uv.lock`. This revalidates index metadata and reports whether uv would regenerate the lockfile differently. The narrower version/constraint check is tracked in astral-sh/uv#12276, while astral-sh/uv#11932 discusses broader check semantics; neither covers the full provenance check requested here. We can keep this issue open to track a dedicated verification workflow and define its guarantees."
+}
