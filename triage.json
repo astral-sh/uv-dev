@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 7883,
+        "title": "HelloGitHub Badge",
+        "url": "https://github.com/astral-sh/uv/issues/7883",
+        "state": "closed",
+        "reason": "Canonical precedent: another external service requested its promotional badge in uv's README, and a maintainer declined."
+      },
+      {
+        "kind": "issue",
+        "number": 15076,
+        "title": "Update badge logo SVG",
+        "url": "https://github.com/astral-sh/uv/issues/15076",
+        "state": "open",
+        "reason": "Adjacent but distinct: it concerns uv's own badge asset for downstream READMEs, not a third-party score in uv's README."
+      },
+      {
+        "kind": "pull_request",
+        "number": 15075,
+        "title": "Update badge logo SVG",
+        "url": "https://github.com/astral-sh/uv/pull/15075",
+        "state": "open",
+        "reason": "The implementation paired with astral-sh/uv#15076 confirms that discussion is limited to the project-owned uv badge's logo."
+      }
+    ],
+    "search_scope": "Exact searches covered “Agent Friendly,” agentfriendlycode.com, “score badge,” and “agent friendliness”; conceptual searches covered badge, README badge, external badge, code-quality badge, AI friendliness, and shields.io; implementation-oriented searches covered badge-related pull requests in open, closed, and merged states. The strongest candidates and their comment/reference chains were inspected. No provider-specific predecessor or merged implementation was found. astral-sh/uv#13061 was ruled out as an off-topic CI-badge comment extracted from unrelated astral-sh/uv#13051, and astral-sh/uv#18304 was ruled out because it proposes AI chat in the documentation."
+  },
+  "type": "duplicate",
+  "type_reason": "astral-sh/uv#7883 covers the same underlying repository request: an external service asking uv to display its badge in the project README. A maintainer declined that request. The provider and advertised metric differ, but the requested change and policy decision are the same, so duplicate takes precedence over enhancement.",
+  "summary": "The request most closely duplicates the declined external-service badge proposal in astral-sh/uv#7883. astral-sh/uv#15076 and astral-sh/uv#15075 are related only as a contrasting discussion of uv's own downstream badge asset.",
+  "draft_response": "Thanks for sharing this. We previously declined the same kind of request to add an external service's badge to uv's README in astral-sh/uv#7883. We'll keep the README unchanged here and close this as a duplicate of astral-sh/uv#7883."
+}
