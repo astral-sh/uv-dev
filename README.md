@@ -15,11 +15,13 @@ different, both issues require the same repository and policy decision: whether 
 external service's badge in its README. The current request can therefore be centralized with that
 closed discussion.
 
-## Draft response
+The request has now also been explicitly declined on astral-sh/uv#21482 by a repository member.
 
-Thanks for sharing this. We previously declined the same kind of request to add an external
-service's badge to uv's README in astral-sh/uv#7883. We'll keep the README unchanged here and close
-this as a duplicate of astral-sh/uv#7883.
+## Maintainer decision
+
+Repository member `zsol` responded “No thank you” on September 5, 2026. This directly confirms that
+the proposed Agent Friendly Code badge will not be added; no further technical investigation or
+implementation is needed.
 
 ## Classification
 
@@ -27,6 +29,10 @@ this as a duplicate of astral-sh/uv#7883.
 operator asking uv to place that service's badge in the project README. Its maintainer response is
 the existing repository decision most directly applicable here. The different provider and score
 do not change the requested repository behavior.
+
+The repository-member response on astral-sh/uv#21482 independently confirms the outcome for this
+specific badge request. It does not change the `duplicate` classification because
+astral-sh/uv#7883 remains the earlier canonical discussion of the same class of request.
 
 This is not a bug because no incorrect uv behavior is reported. If considered without the prior
 discussion, it would be an enhancement because it requests new README content, but duplicate takes
