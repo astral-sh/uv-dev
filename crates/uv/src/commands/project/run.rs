@@ -30,7 +30,7 @@ use uv_fs::which::is_executable;
 use uv_fs::{PythonExt, Simplified, create_symlink};
 use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
 use uv_normalize::{DefaultExtras, DefaultGroups, PackageName};
-use uv_preview::Preview;
+use uv_preview::{Preview, PreviewFeature};
 use uv_python::{
     ConfigDiscovery, EnvironmentPreference, Interpreter, PyVenvConfiguration, PythonDownloads,
     PythonEnvironment, PythonInstallation, PythonPreference, PythonRequest, PythonVersionFile,
@@ -422,45 +422,93 @@ pub(crate) async fn run(
                     })
                     .ok();
 
-                match update_environment(
-                    environment,
-                    spec,
-                    modifications,
-                    python_platform.as_ref(),
-                    SourceTreeEditablePolicy::Project,
-                    build_constraints.unwrap_or_default(),
-                    script_extra_build_requires,
-                    &settings,
-                    &client_builder,
-                    &sync_state,
-                    if show_resolution {
-                        Box::new(DefaultResolveLogger)
-                    } else {
-                        Box::new(SummaryResolveLogger)
-                    },
-                    if show_resolution {
-                        Box::new(DefaultInstallLogger)
-                    } else {
-                        Box::new(SummaryInstallLogger)
-                    },
-                    installer_metadata,
-                    &concurrency,
-                    &cache,
-                    workspace_cache,
-                    DryRun::Disabled,
-                    printer,
-                    preview,
-                )
-                .await
+                if preview.is_enabled(PreviewFeature::SharedScriptEnvironments)
+                    && active != Some(true)
+                    && script_extra_build_requires.is_empty()
                 {
-                    Ok(update) => Some(update.into_environment().into_interpreter()),
-                    Err(ProjectError::Operation(err)) => {
-                        return diagnostics::OperationDiagnostic::default()
-                            .with_context("script")
-                            .report(err)
-                            .map_or(Ok(ExitStatus::Failure), |err| Err(err.into()));
+                    let result = CachedEnvironment::from_spec(
+                        spec.into(),
+                        build_constraints.unwrap_or_default(),
+                        environment.interpreter(),
+                        python_platform.as_ref(),
+                        &settings,
+                        &client_builder,
+                        &sync_state,
+                        if show_resolution {
+                            Box::new(DefaultResolveLogger)
+                        } else {
+                            Box::new(SummaryResolveLogger)
+                        },
+                        if show_resolution {
+                            Box::new(DefaultInstallLogger)
+                        } else {
+                            Box::new(SummaryInstallLogger)
+                        },
+                        installer_metadata,
+                        &concurrency,
+                        &cache,
+                        workspace_cache,
+                        printer,
+                        preview,
+                    )
+                    .await;
+
+                    match result {
+                        Ok(shared_environment) => {
+                            let shared_environment = PythonEnvironment::from(shared_environment);
+                            let script_environment = EphemeralEnvironment::from(environment);
+                            script_environment.set_shared_script_base(&shared_environment)?;
+                            Some(PythonEnvironment::from(script_environment).into_interpreter())
+                        }
+                        Err(ProjectError::Operation(err)) => {
+                            return diagnostics::OperationDiagnostic::default()
+                                .with_context("script")
+                                .report(err)
+                                .map_or(Ok(ExitStatus::Failure), |err| Err(err.into()));
+                        }
+                        Err(err) => return Err(err.into()),
                     }
-                    Err(err) => return Err(err.into()),
+                } else {
+                    match update_environment(
+                        environment,
+                        spec,
+                        modifications,
+                        python_platform.as_ref(),
+                        SourceTreeEditablePolicy::Project,
+                        build_constraints.unwrap_or_default(),
+                        script_extra_build_requires,
+                        &settings,
+                        &client_builder,
+                        &sync_state,
+                        if show_resolution {
+                            Box::new(DefaultResolveLogger)
+                        } else {
+                            Box::new(SummaryResolveLogger)
+                        },
+                        if show_resolution {
+                            Box::new(DefaultInstallLogger)
+                        } else {
+                            Box::new(SummaryInstallLogger)
+                        },
+                        installer_metadata,
+                        &concurrency,
+                        &cache,
+                        workspace_cache,
+                        DryRun::Disabled,
+                        printer,
+                        preview,
+                    )
+                    .await
+                    {
+                        Ok(update) => Some(update.into_environment().into_interpreter()),
+                        Err(ProjectError::Operation(err)) => {
+                            return diagnostics::OperationDiagnostic::default()
+                                .with_context("script")
+                                .report(err)
+                                .map_or(Ok(ExitStatus::Failure), |err| Err(err.into()));
+                        }
+                        Err(err) => return Err(err.into()),
+                    }
                 }
             } else {
                 // Create a virtual environment.
