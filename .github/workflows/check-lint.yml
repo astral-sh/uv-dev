@@ -115,11 +115,12 @@ jobs:
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           save-if: ${{ inputs.save-rust-cache == 'true' }}
-      - name: "Check uv_build dependencies"
-        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+      - name: "Install cargo-deny"
+        uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad # v2.85.10
         with:
-          command: check bans
-          manifest-path: crates/uv-build/Cargo.toml
+          tool: cargo-deny@0.20.2
+      - name: "Check uv_build dependencies"
+        run: cargo deny --log-level warn --manifest-path crates/uv-build/Cargo.toml --all-features check bans
       - name: "Install Rust toolchain"
         run: rustup component add clippy
       - name: "Clippy"
