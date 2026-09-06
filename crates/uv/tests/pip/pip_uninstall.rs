@@ -434,6 +434,45 @@ Version: 0.22.0
     Ok(())
 }
 
+/// Uninstall a legacy editable when `easy-install.pth` has already been removed.
+#[test]
+fn uninstall_legacy_editable_missing_easy_install() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let site_packages = ChildPath::new(context.site_packages());
+    let target = context.temp_dir.child("zstandard_project");
+
+    target.child("zstd").create_dir_all()?;
+    target.child("zstd").child("__init__.py").write_str("")?;
+    target.child("zstandard.egg-info").create_dir_all()?;
+    target
+        .child("zstandard.egg-info")
+        .child("PKG-INFO")
+        .write_str(
+            "Metadata-Version: 2.1
+Name: zstandard
+Version: 0.22.0
+",
+        )?;
+    site_packages
+        .child("zstandard.egg-link")
+        .write_str(&target.path().to_string_lossy())?;
+
+    uv_snapshot!(context.pip_uninstall().arg("zstandard"), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Uninstalled 1 package in [TIME]
+     - zstandard==0.22.0
+    ");
+
+    assert!(!site_packages.child("zstandard.egg-link").exists());
+    assert!(target.child("zstandard.egg-info").exists());
+
+    Ok(())
+}
+
 #[test]
 fn dry_run_uninstall_egg_info() -> Result<()> {
     let context = uv_test::test_context!("3.12");
