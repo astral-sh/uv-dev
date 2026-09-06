@@ -13557,6 +13557,129 @@ requires_python = "==3.13.*"
 }
 
 #[test]
+fn pep_751_synthetic_default_group() -> Result<()> {
+    let context = uv_test::test_context!("3.13");
+
+    for wheel in [
+        "ok-1.0.0-py3-none-any.whl",
+        "basic_package-0.1.0-py3-none-any.whl",
+    ] {
+        fs::copy(
+            context.workspace_root.join("test/links").join(wheel),
+            context.temp_dir.child(wheel),
+        )?;
+    }
+
+    context.temp_dir.child("pylock.toml").write_str(
+        r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        dependency-groups = ["test"]
+        default-groups = ["default"]
+
+        [[packages]]
+        name = "ok"
+        version = "1.0.0"
+        marker = "\"default\" in dependency_groups"
+        wheels = [{ path = "ok-1.0.0-py3-none-any.whl", hashes = { sha256 = "79f0b33e6ce1e09eaa1784c8eee275dfe84d215d9c65c652f07c18e85fdaac5f" } }]
+
+        [[packages]]
+        name = "basic-package"
+        version = "0.1.0"
+        marker = "\"test\" in dependency_groups"
+        wheels = [{ path = "basic_package-0.1.0-py3-none-any.whl", hashes = { sha256 = "7b6229db79b5800e4e98a351b5628c1c8a944533a2d428aeeaa7275a30d4ea82" } }]
+        "#,
+    )?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--preview")
+        .arg("-r")
+        .arg("pylock.toml"), @r#"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + ok==1.0.0
+    "#);
+
+    uv_snapshot!(context.filters(), context.pip_sync()
+        .arg("--preview")
+        .arg("pylock.toml"), @r#"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Checked 1 package in [TIME]
+    "#);
+
+    // A synthetic default must disappear when an explicit group disables defaults.
+    uv_snapshot!(context.filters(), context.pip_sync()
+        .arg("--preview")
+        .arg("pylock.toml")
+        .arg("--group")
+        .arg("default"), @r#"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Uninstalled 1 package in [TIME]
+     - ok==1.0.0
+    "#);
+
+    // Synthetic defaults are marker values, not explicitly selectable dependency groups.
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--preview")
+        .arg("-r")
+        .arg("pylock.toml")
+        .arg("--group")
+        .arg("default"), @r#"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Checked in [TIME]
+    "#);
+
+    // An explicitly selected declared group must not restore synthetic defaults.
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--preview")
+        .arg("-r")
+        .arg("pylock.toml")
+        .arg("--group")
+        .arg("test"), @r#"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + basic-package==0.1.0
+    "#);
+
+    uv_snapshot!(context.filters(), context.pip_sync()
+        .arg("--preview")
+        .arg("pylock.toml")
+        .arg("--group")
+        .arg("test"), @r#"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Checked 1 package in [TIME]
+    "#);
+
+    Ok(())
+}
+
+#[test]
 fn pep_751_lock_version() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
