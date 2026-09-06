@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::cell::OnceCell;
 use std::collections::BTreeMap;
 use std::fmt::Write;
 use std::io::ErrorKind;
@@ -671,6 +672,7 @@ async fn perform_install(
     };
 
     let installations: Vec<_> = downloaded.iter().chain(satisfied.iter().copied()).collect();
+    let installations_by_executable = OnceCell::new();
 
     // Ensure that the installations are _complete_ for both downloaded installations and existing
     // installations that match the request
@@ -701,6 +703,7 @@ async fn perform_install(
                 is_default_install,
                 &existing_installations,
                 &installations,
+                &installations_by_executable,
                 &mut changelog,
                 &mut errors,
                 preview,
@@ -971,7 +974,7 @@ async fn perform_install(
 ///
 /// This function is fallible, but errors are pushed to `errors` instead of being thrown.
 #[expect(clippy::fn_params_excessive_bools)]
-fn create_bin_links(
+fn create_bin_links<'a>(
     installation: &ManagedPythonInstallation,
     bin: &Path,
     reinstall: bool,
@@ -980,8 +983,9 @@ fn create_bin_links(
     upgradeable: bool,
     upgrade: bool,
     is_default_install: bool,
-    existing_installations: &[ManagedPythonInstallation],
-    installations: &[&ManagedPythonInstallation],
+    existing_installations: &'a [ManagedPythonInstallation],
+    installations: &[&'a ManagedPythonInstallation],
+    installations_by_executable: &OnceCell<FxHashMap<PathBuf, &'a ManagedPythonInstallation>>,
     changelog: &mut Changelog,
     errors: &mut Vec<(InstallErrorKind, PythonInstallationKey, Error)>,
     preview: Preview,
@@ -1045,10 +1049,14 @@ fn create_bin_links(
 
                 //  Figure out what installation it references, if any
                 let existing = find_matching_bin_link(
-                    installations
-                        .iter()
-                        .copied()
-                        .chain(existing_installations.iter()),
+                    installations_by_executable.get_or_init(|| {
+                        index_installations_by_executable(
+                            installations
+                                .iter()
+                                .copied()
+                                .chain(existing_installations.iter()),
+                        )
+                    }),
                     &target,
                 );
 
@@ -1344,7 +1352,7 @@ fn warn_if_not_on_path(bin: &Path) {
 ///
 /// Will resolve symlinks on Unix. On Windows, will resolve the target link for a trampoline.
 fn find_matching_bin_link<'a>(
-    mut installations: impl Iterator<Item = &'a ManagedPythonInstallation>,
+    installations_by_executable: &FxHashMap<PathBuf, &'a ManagedPythonInstallation>,
     path: &Path,
 ) -> Option<&'a ManagedPythonInstallation> {
     if cfg!(unix) {
@@ -1353,7 +1361,7 @@ fn find_matching_bin_link<'a>(
         }
         let target = fs_err::canonicalize(path).ok()?;
 
-        installations.find(|installation| installation.executable(false) == target)
+        installations_by_executable.get(&target).copied()
     } else if cfg!(windows) {
         let launcher = Launcher::try_from_path(path).ok()??;
         if !matches!(launcher.kind, LauncherKind::Python) {
@@ -1361,10 +1369,22 @@ fn find_matching_bin_link<'a>(
         }
         let target = dunce::canonicalize(launcher.python_path).ok()?;
 
-        installations.find(|installation| installation.executable(false) == target)
+        installations_by_executable.get(&target).copied()
     } else {
         unreachable!("Only Unix and Windows are supported")
     }
+}
+
+fn index_installations_by_executable<'a>(
+    installations: impl Iterator<Item = &'a ManagedPythonInstallation>,
+) -> FxHashMap<PathBuf, &'a ManagedPythonInstallation> {
+    let mut installations_by_executable = FxHashMap::default();
+    for installation in installations {
+        installations_by_executable
+            .entry(installation.executable(false))
+            .or_insert(installation);
+    }
+    installations_by_executable
 }
 
 /// Check if a download's build version matches an installation's build version.
@@ -1378,5 +1398,91 @@ fn matches_build(download_build: Option<&str>, installation_build: Option<&str>)
         (Some(_), None) => false,
         // Download doesn't have build info, assume matches
         (None, _) => true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use anyhow::{Context, Result};
+    use uv_python::downloads::{ManagedPythonDownloadList, PythonDownloadRequest};
+    use uv_python::managed::{ManagedPythonInstallation, create_link_to_executable};
+
+    use super::{find_matching_bin_link, index_installations_by_executable};
+
+    #[test]
+    fn find_matching_bin_link_uses_first_installation_for_shared_executable() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let downloads = ManagedPythonDownloadList::new_only_embedded()?;
+
+        let changed = ManagedPythonInstallation::new(
+            temp_dir.path().join("shared"),
+            downloads.find(&PythonDownloadRequest::from_str("3.12.8")?.fill()?)?,
+        );
+        let existing = ManagedPythonInstallation::new(
+            temp_dir.path().join("shared"),
+            downloads.find(&PythonDownloadRequest::from_str("3.12.6")?.fill()?)?,
+        );
+        let other = ManagedPythonInstallation::new(
+            temp_dir.path().join("other"),
+            downloads.find(&PythonDownloadRequest::from_str("3.11.9")?.fill()?)?,
+        );
+
+        let shared_executable = changed.executable(false);
+        assert_eq!(shared_executable, existing.executable(false));
+        let other_executable = other.executable(false);
+        for executable in [&shared_executable, &other_executable] {
+            fs_err::create_dir_all(executable.parent().context("missing executable parent")?)?;
+            fs_err::write(executable, "python")?;
+        }
+
+        let shared_link = temp_dir.path().join("bin/python3.12");
+        let other_link = temp_dir.path().join("bin/python3.11");
+        create_link_to_executable(&shared_link, &shared_executable)?;
+        create_link_to_executable(&other_link, &other_executable)?;
+
+        let changed_installations = [&changed];
+        let existing_installations = [&existing, &other];
+        let installations_by_executable = index_installations_by_executable(
+            changed_installations
+                .into_iter()
+                .chain(existing_installations),
+        );
+
+        assert_eq!(
+            find_matching_bin_link(&installations_by_executable, &shared_link)
+                .map(ManagedPythonInstallation::key),
+            Some(changed.key())
+        );
+        assert_eq!(
+            find_matching_bin_link(&installations_by_executable, &other_link)
+                .map(ManagedPythonInstallation::key),
+            Some(other.key())
+        );
+
+        let foreign_executable = temp_dir.path().join("foreign/python");
+        fs_err::create_dir_all(
+            foreign_executable
+                .parent()
+                .context("missing foreign executable parent")?,
+        )?;
+        fs_err::write(&foreign_executable, "python")?;
+        let foreign_link = temp_dir.path().join("bin/foreign");
+        create_link_to_executable(&foreign_link, &foreign_executable)?;
+        assert!(find_matching_bin_link(&installations_by_executable, &foreign_link).is_none());
+
+        let unmanaged_file = temp_dir.path().join("bin/unmanaged");
+        fs_err::write(&unmanaged_file, "python")?;
+        assert!(find_matching_bin_link(&installations_by_executable, &unmanaged_file).is_none());
+
+        #[cfg(unix)]
+        {
+            let broken_link = temp_dir.path().join("bin/broken");
+            fs_err::os::unix::fs::symlink(temp_dir.path().join("missing"), &broken_link)?;
+            assert!(find_matching_bin_link(&installations_by_executable, &broken_link).is_none());
+        }
+
+        Ok(())
     }
 }
