@@ -921,7 +921,6 @@ async fn get_or_create_environment(
             capabilities: &capabilities,
             prerelease: &settings.resolver.prerelease,
             exclude_newer: &settings.resolver.exclude_newer,
-            index_locations: &settings.resolver.index_locations,
             tags: None,
             requires_python: None,
         };

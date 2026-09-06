@@ -7,8 +7,8 @@ use uv_client::MetadataFormat;
 use uv_configuration::BuildOptions;
 use uv_distribution::{ArchiveMetadata, DistributionDatabase, Reporter};
 use uv_distribution_types::{
-    Dist, IndexCapabilities, IndexLocations, IndexMetadata, IndexMetadataRef, InstalledDist,
-    RequestedDist, RequiresPython,
+    Dist, IndexCapabilities, IndexLocations, IndexLocationsLookup, IndexMetadata, IndexMetadataRef,
+    InstalledDist, RequestedDist, RequiresPython,
 };
 use uv_normalize::PackageName;
 use uv_pep440::{Version, VersionSpecifiers};
@@ -124,7 +124,7 @@ pub struct DefaultResolverProvider<'a, Context: BuildContext> {
     hasher: HashStrategy,
     exclude_newer: ExcludeNewer,
     available_version_cutoff: Option<jiff::Timestamp>,
-    index_locations: &'a IndexLocations,
+    index_locations: IndexLocationsLookup,
     build_options: &'a BuildOptions,
     capabilities: &'a IndexCapabilities,
 }
@@ -154,7 +154,7 @@ impl<'a, Context: BuildContext> DefaultResolverProvider<'a, Context> {
             available_version_cutoff: std::env::var(EnvVars::UV_TEST_AVAILABLE_VERSION_CUTOFF)
                 .ok()
                 .and_then(|value| value.parse().ok()),
-            index_locations,
+            index_locations: IndexLocationsLookup::from(index_locations),
             build_options,
             capabilities,
         }
