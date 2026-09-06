@@ -107,13 +107,18 @@
       matchManagers: ["custom.regex"],
       matchDatasources: ["python-version"],
       matchDepNames: ["python"],
-      // Keep each test interpreter on its current minor version.
+      // Roll patches together; adding a new minor is a test coverage decision.
       allowedVersions: "/^{{{major}}}\\.{{{minor}}}\\.\\d+$/",
       groupName: "Python test versions",
     },
     {
-      // The generic regexes also match these fixed comparison and prerelease versions.
-      matchFileNames: [".python-versions", "crates/uv/tests/lock/lock.rs"],
+      // 3.13.0 is needed for `==3.13` tests and as a comparison baseline.
+      // 3.14.0rc2 covers prereleases; neither version should roll.
+      matchFileNames: [
+        ".python-versions",
+        "crates/uv/tests/**/*.rs",
+        "test/scenarios/**/*.toml",
+      ],
       matchManagers: ["custom.regex"],
       matchDatasources: ["python-version"],
       matchCurrentValue: "/^(3\\.13\\.0|3\\.14\\.0rc2)$/",
@@ -143,7 +148,6 @@
     },
   ],
   customManagers: [
-    // Match every version in the file; fixed test cases are disabled above.
     {
       customType: "regex",
       managerFilePatterns: ["/^\\.python-versions$/"],
@@ -152,7 +156,7 @@
       datasourceTemplate: "python-version",
       versioningTemplate: "python",
     },
-    // Keep exact-version test inputs and their snapshots in sync with the 3.12 pin.
+    // Update interpreter requests and their snapshots within the same test.
     {
       customType: "regex",
       managerFilePatterns: [
@@ -167,7 +171,7 @@
       datasourceTemplate: "python-version",
       versioningTemplate: "python",
     },
-    // The other version in this test is deliberately fixed at 3.13.0.
+    // Compare fixed 3.13.0 with a rolling 3.13 patch in the lock test.
     {
       customType: "regex",
       managerFilePatterns: ["/^crates/uv/tests/lock/lock\\.rs$/"],
@@ -180,7 +184,7 @@
       datasourceTemplate: "python-version",
       versioningTemplate: "python",
     },
-    // Keep the 3.9 test contexts, examples, and snapshot warning together.
+    // Update the selected 3.9 interpreter and the warning that reports it.
     {
       customType: "regex",
       managerFilePatterns: [
@@ -195,7 +199,7 @@
       datasourceTemplate: "python-version",
       versioningTemplate: "python",
     },
-    // Keep the Packse scenario environments with their test contexts.
+    // These environments use the 3.9 interpreter selected by their Rust tests.
     {
       customType: "regex",
       managerFilePatterns: [
