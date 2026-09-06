@@ -983,6 +983,99 @@ fn init_script_shebang() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn init_script_byte_order_mark() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let script_path = context.temp_dir.child("script.py");
+    fs_err::write(&script_path, b"\xef\xbb\xbfprint(\"Hello, world!\")\n")?;
+
+    context
+        .init()
+        .arg("--script")
+        .arg("script.py")
+        .assert()
+        .success();
+
+    let resulting_script = fs_err::read(&script_path)?;
+    assert!(resulting_script.starts_with(b"\xef\xbb\xbf\n# /// script\n"));
+    assert_snapshot!(std::str::from_utf8(&resulting_script[4..])?, @r#"
+    # /// script
+    # requires-python = ">=3.12"
+    # dependencies = []
+    # ///
+
+    print("Hello, world!")
+    "#);
+    uv_snapshot!(context.filters(), context.run().arg("script.py"), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+    Hello, world!
+
+    ----- stderr -----
+    ");
+
+    Ok(())
+}
+
+#[test]
+fn init_script_byte_order_mark_shebang() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let script_path = context.temp_dir.child("script.py");
+    fs_err::write(
+        &script_path,
+        "\u{feff}#!/usr/bin/env python3\nprint(\"Hello, café!\")\n",
+    )?;
+
+    context
+        .init()
+        .arg("--script")
+        .arg("script.py")
+        .assert()
+        .success();
+
+    let resulting_script = fs_err::read(&script_path)?;
+    assert!(resulting_script.starts_with(b"#!/usr/bin/env python3\n"));
+    assert_snapshot!(std::str::from_utf8(&resulting_script)?, @r#"
+    #!/usr/bin/env python3
+    #
+    # /// script
+    # requires-python = ">=3.12"
+    # dependencies = []
+    # ///
+
+    print("Hello, café!")
+    "#);
+    uv_snapshot!(context.filters(), context.run().arg("script.py"), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+    Hello, café!
+
+    ----- stderr -----
+    ");
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        fs_err::set_permissions(&script_path, PermissionsExt::from_mode(0o755))?;
+
+        let mut command = std::process::Command::new(script_path.path());
+        context.add_shared_env(&mut command, false);
+        uv_snapshot!(context.filters(), command, @"
+        success: true
+        exit_code: 0
+        ----- stdout -----
+        Hello, café!
+
+        ----- stderr -----
+        ");
+    }
+
+    Ok(())
+}
+
 // Make sure that `uv init --script` picks the latest non-pre-release version of Python
 // for the `requires-python` constraint.
 #[cfg(feature = "test-python-patch")]
