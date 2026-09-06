@@ -26599,6 +26599,51 @@ fn lock_request_requires_python() -> Result<()> {
 
 #[cfg(feature = "test-universal")]
 #[test]
+fn lock_incompatible_python_version_without_interpreter() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        "#
+        })?;
+
+    let python_version = context.temp_dir.child(".python-version");
+    python_version.write_str("3.7")?;
+
+    // An incompatible pin should be rejected before attempting to download its interpreter.
+    uv_snapshot!(context.filters(), context.lock().arg("--offline").arg("--no-python-downloads"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: No interpreter found for Python 3.7 in managed installations or search path
+    ");
+
+    // An explicit request takes precedence over the incompatible pin.
+    uv_snapshot!(context.filters(), context.lock().arg("--offline").arg("--python").arg("3.12"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+
+    // A compatible pin should continue to select the available interpreter.
+    python_version.write_str("3.12")?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+
+    Ok(())
+}
+
+#[cfg(feature = "test-universal")]
+#[test]
 fn lock_duplicate_sources() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
