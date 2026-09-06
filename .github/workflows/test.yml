@@ -307,6 +307,16 @@ jobs:
           New-Item -Path "C:\uv-smb" -ItemType Directory -Force
           New-SmbShare -Name "uv-alt-fs" -Path "C:\uv-smb" -FullAccess "Everyone"
 
+      - name: "Use OpenSSL-backed curl"
+        shell: pwsh
+        run: |
+          $gitDirectory = Split-Path -Parent (Split-Path -Parent (Get-Command git.exe).Source)
+          $curlDirectory = Join-Path $gitDirectory 'mingw64\bin'
+          if (-not (Test-Path (Join-Path $curlDirectory 'curl.exe'))) {
+            throw 'Git for Windows curl was not found'
+          }
+          Add-Content -Path $env:GITHUB_PATH -Value $curlDirectory
+
       - name: "Install cargo nextest"
         uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad # v2.85.10
         with:
