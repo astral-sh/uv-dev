@@ -629,40 +629,12 @@ impl<'a> LockedDependencyBuilder<'a> {
             self.parent_marker,
             marker,
         );
-        let dependency =
-            Dependency::new(self.requires_python, package_id, extras, simplified_marker);
-
-        // It's important that we do a comparison on
-        // *simplified* markers here. In particular, when
-        // we write markers out to the lock file, we use
-        // "simplified" markers, or markers that are simplified
-        // *given* that `requires-python` is satisfied. So if
-        // we don't do equality based on what the simplified
-        // marker is, we might wind up not merging dependencies
-        // that ought to be merged and thus writing out extra
-        // entries.
-        //
-        // For example, if `requires-python = '>=3.8'` and we
-        // have `foo==1` and
-        // `foo==1 ; python_version >= '3.8'` dependencies,
-        // then they don't have equivalent complexified
-        // markers, but their simplified markers are identical.
-        //
-        // NOTE: It does seem like perhaps this should
-        // be implemented semantically/algebraically on
-        // `MarkerTree` itself, but it wasn't totally clear
-        // how to do that. I think `pep508` would need to
-        // grow a concept of "requires python" and provide an
-        // operation specifically for that.
-        let existing = dependencies.iter_mut().find(|existing| {
-            existing.package_id == dependency.package_id
-                && existing.simplified_marker == dependency.simplified_marker
-        });
-        if let Some(existing) = existing {
-            existing.extra.extend(dependency.extra);
-        } else {
-            dependencies.push(dependency);
-        }
+        dependencies.push(Dependency::new(
+            self.requires_python,
+            package_id,
+            extras,
+            simplified_marker,
+        ));
     }
 }
 
@@ -1108,6 +1080,10 @@ impl Lock {
                     root,
                 )?;
             }
+        }
+
+        for package in packages.values_mut() {
+            package.merge_dependency_extras();
         }
 
         let packages = packages.into_values().collect();
@@ -3894,6 +3870,17 @@ impl Package {
         Ok(())
     }
 
+    /// Merge extras requested by repeated base, optional, and group dependencies.
+    fn merge_dependency_extras(&mut self) {
+        merge_dependency_extras(&mut self.dependencies);
+        for dependencies in self.optional_dependencies.values_mut() {
+            merge_dependency_extras(dependencies);
+        }
+        for dependencies in self.dependency_groups.values_mut() {
+            merge_dependency_extras(dependencies);
+        }
+    }
+
     /// Convert the [`Package`] to a [`Dist`] that can be used in installation, along with its hash.
     fn to_dist(
         &self,
@@ -6432,6 +6419,33 @@ impl Display for Dependency {
     }
 }
 
+/// Merge requested extras for dependencies with the same package and simplified marker.
+fn merge_dependency_extras(dependencies: &mut Vec<Dependency>) {
+    dependencies.sort_unstable_by(|dependency1, dependency2| {
+        dependency1
+            .package_id
+            .cmp(&dependency2.package_id)
+            .then_with(|| {
+                dependency1
+                    .simplified_marker
+                    .cmp(&dependency2.simplified_marker)
+            })
+    });
+    dependencies.dedup_by(|dependency, previous| {
+        if dependency.package_id == previous.package_id
+            // Dependencies are written using markers simplified by `requires-python`. Two
+            // otherwise-distinct edges can therefore produce the same lockfile dependency; for
+            // example, `foo` and `foo ; python_version >= '3.8'` with `requires-python = '>=3.8'`.
+            && dependency.simplified_marker == previous.simplified_marker
+        {
+            previous.extra.append(&mut dependency.extra);
+            true
+        } else {
+            false
+        }
+    });
+}
+
 /// A single dependency of a package in a lockfile.
 #[derive(Clone, Debug, Eq, PartialEq, PartialOrd, Ord, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -8076,6 +8090,106 @@ mod tests {
             marker.try_to_string().as_deref(),
             Some("python_full_version >= '3.12' and extra != 'extra-1-x-foo'")
         );
+    }
+
+    #[test]
+    fn dependency_extras_merge_using_simplified_markers() {
+        let requires_python = RequiresPython::from_specifiers(
+            VersionSpecifiers::from_str(">=3.8").expect("valid version specifier"),
+        );
+        let package_id = |name: &str| PackageId {
+            name: PackageName::from_str(name).expect("valid package name"),
+            version: Some(Version::from_str("1.0.0").expect("valid version")),
+            source: Source::Virtual(PathBuf::new().into_boxed_path()),
+        };
+        let dependency = |name: &str, extra: &str, marker: Option<&str>| {
+            Dependency::new(
+                &requires_python,
+                package_id(name),
+                [ExtraName::from_str(extra).expect("valid extra")].into(),
+                SimplifiedMarkerTree::new(
+                    &requires_python,
+                    marker.map_or(MarkerTree::TRUE, |marker| {
+                        MarkerTree::from_str(marker).expect("valid marker")
+                    }),
+                ),
+            )
+        };
+        let dependencies = vec![
+            dependency("foo", "extra-b", Some("python_version >= '3.8'")),
+            dependency("bar", "extra-c", Some("sys_platform == 'darwin'")),
+            dependency("foo", "extra-a", None),
+            dependency("foo", "extra-d", Some("sys_platform == 'darwin'")),
+        ];
+
+        let optional = ExtraName::from_str("optional").expect("valid extra");
+        let group = GroupName::from_str("dev").expect("valid group");
+        let mut package = Package {
+            id: package_id("project"),
+            sdist: None,
+            wheels: vec![],
+            fork_markers: vec![],
+            dependencies: dependencies.clone(),
+            optional_dependencies: [(optional.clone(), dependencies.clone())].into(),
+            dependency_groups: [(group.clone(), dependencies)].into(),
+            metadata: PackageMetadata::default(),
+        };
+
+        package.merge_dependency_extras();
+
+        for dependencies in [
+            &package.dependencies,
+            package
+                .optional_dependencies
+                .get(&optional)
+                .expect("optional dependencies"),
+            package
+                .dependency_groups
+                .get(&group)
+                .expect("group dependencies"),
+        ] {
+            assert_eq!(dependencies.len(), 3);
+            let unconditional = dependencies
+                .iter()
+                .find(|dependency| {
+                    dependency.package_id.name.as_ref() == "foo"
+                        && dependency
+                            .simplified_marker
+                            .as_simplified_marker_tree()
+                            .is_true()
+                })
+                .expect("unconditional dependency");
+            assert_eq!(
+                unconditional.extra,
+                [
+                    ExtraName::from_str("extra-a").expect("valid extra"),
+                    ExtraName::from_str("extra-b").expect("valid extra"),
+                ]
+                .into()
+            );
+            let conditional = dependencies
+                .iter()
+                .find(|dependency| {
+                    dependency.package_id.name.as_ref() == "foo"
+                        && !dependency
+                            .simplified_marker
+                            .as_simplified_marker_tree()
+                            .is_true()
+                })
+                .expect("conditional dependency");
+            assert_eq!(
+                conditional.extra,
+                [ExtraName::from_str("extra-d").expect("valid extra")].into()
+            );
+            assert_eq!(
+                conditional
+                    .simplified_marker
+                    .as_simplified_marker_tree()
+                    .try_to_string()
+                    .as_deref(),
+                Some("sys_platform == 'darwin'")
+            );
+        }
     }
 
     #[test]
