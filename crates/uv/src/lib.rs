@@ -50,6 +50,7 @@ use uv_static::EnvVars;
 use uv_warnings::{warn_user, warn_user_once};
 use uv_workspace::{DiscoveryOptions, Workspace, WorkspaceCache};
 
+use crate::commands::pip::EnvironmentValidation;
 use crate::commands::{
     ExitStatus, ParsedRunCommand, ProjectError, RunCommand, ScriptPath, ToolRunCommand, UvError,
 };
@@ -830,7 +831,7 @@ async fn run_with_workspace_cache(
                 args.settings.annotation_style,
                 args.settings.link_mode,
                 args.settings.python,
-                args.settings.system,
+                args.settings.environment_preference,
                 globals.python_preference,
                 globals.concurrency,
                 globals.quiet > 0,
@@ -913,10 +914,10 @@ async fn run_with_workspace_cache(
                 args.settings.python_platform,
                 globals.python_downloads,
                 args.settings.install_mirrors,
-                args.settings.strict,
+                EnvironmentValidation::from_args(args.settings.strict),
                 args.settings.exclude_newer,
                 args.settings.python,
-                args.settings.system,
+                args.settings.environment_preference,
                 args.settings.break_system_packages,
                 args.settings.target,
                 args.settings.prefix,
@@ -1076,11 +1077,11 @@ async fn run_with_workspace_cache(
                 args.settings.python_platform,
                 globals.python_downloads,
                 args.settings.install_mirrors,
-                args.settings.strict,
+                EnvironmentValidation::from_args(args.settings.strict),
                 args.settings.exclude_newer,
                 args.settings.sources,
                 args.settings.python,
-                args.settings.system,
+                args.settings.environment_preference,
                 args.settings.break_system_packages,
                 args.settings.target,
                 args.settings.prefix,
@@ -1120,7 +1121,7 @@ async fn run_with_workspace_cache(
             commands::pip_uninstall(
                 &sources,
                 args.settings.python,
-                args.settings.system,
+                args.settings.environment_preference,
                 args.settings.break_system_packages,
                 args.settings.target,
                 args.settings.prefix,
@@ -1149,7 +1150,7 @@ async fn run_with_workspace_cache(
                 args.settings.strict,
                 &args.settings.dependency_metadata,
                 args.settings.python.as_deref(),
-                args.settings.system,
+                args.settings.environment_preference,
                 args.settings.target,
                 args.settings.prefix,
                 args.paths,
@@ -1185,7 +1186,7 @@ async fn run_with_workspace_cache(
                 args.settings.exclude_newer,
                 &args.settings.dependency_metadata,
                 args.settings.python.as_deref(),
-                args.settings.system,
+                args.settings.environment_preference,
                 args.settings.target,
                 args.settings.prefix,
                 &cache,
@@ -1209,7 +1210,7 @@ async fn run_with_workspace_cache(
                 args.settings.strict,
                 &args.settings.dependency_metadata,
                 args.settings.python.as_deref(),
-                args.settings.system,
+                args.settings.environment_preference,
                 args.settings.target,
                 args.settings.prefix,
                 args.files,
@@ -1245,7 +1246,7 @@ async fn run_with_workspace_cache(
                 args.settings.exclude_newer,
                 &args.settings.dependency_metadata,
                 args.settings.python.as_deref(),
-                args.settings.system,
+                args.settings.environment_preference,
                 &cache,
                 printer,
             )
@@ -1264,7 +1265,7 @@ async fn run_with_workspace_cache(
 
             commands::pip_check(
                 args.settings.python.as_deref(),
-                args.settings.system,
+                args.settings.environment_preference,
                 args.settings.python_version.as_ref(),
                 args.settings.python_platform.as_ref(),
                 &args.settings.dependency_metadata,
@@ -1973,7 +1974,7 @@ async fn run_with_workspace_cache(
                     args.show_version,
                     args.resolve_links,
                     args.no_project,
-                    args.system,
+                    args.environment_preference,
                     config_discovery,
                     globals.python_preference,
                     args.python_downloads_json_url.as_deref(),
