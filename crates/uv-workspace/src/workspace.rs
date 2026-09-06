@@ -71,9 +71,9 @@ type CachedWorkspaceResult = Result<Arc<Workspace>, WorkspaceError>;
 /// The cache is indexed both by the workspace root and by the path of each workspace member.
 ///
 /// The cache makes assumptions about [`DiscoveryOptions`]:
-/// * `stop_discovery_at` is only used for isolation workspaces in the cache. Otherwise, we avoid
-///   traversing into an external cache if `cache` is accidentally included in the workspace member
-///   glob.
+/// * Bounded discoveries can reuse an unrestricted result within their discovery boundary, but
+///   their results are not cached because a later unrestricted discovery may find a parent
+///   workspace.
 /// * Only [`MemberDiscovery::All`] results are stored. Successful results can be reused for
 ///   [`MemberDiscovery::Existing`], which discovers the same members when none are missing.
 #[derive(Debug, Default, Clone)]
@@ -120,17 +120,32 @@ impl WorkspaceCache {
     /// Get the cached workspace, if any, from the path to the workspace root or to a member root.
     ///
     /// A successful complete discovery can satisfy [`MemberDiscovery::Existing`]. Cached errors
-    /// cannot, since `Existing` intentionally tolerates missing workspace members.
-    fn get(
-        &self,
-        path: &Path,
-        member_discovery: &MemberDiscovery,
-    ) -> Option<CachedWorkspaceResult> {
-        match member_discovery {
-            MemberDiscovery::All => self.workspaces.get(path),
+    /// cannot, since `Existing` intentionally tolerates missing workspace members. A bounded
+    /// discovery can only reuse a workspace whose root is within its discovery boundary.
+    fn get(&self, path: &Path, options: &DiscoveryOptions) -> Option<CachedWorkspaceResult> {
+        match &options.members {
+            MemberDiscovery::All => match self.workspaces.get(path) {
+                Some(Ok(workspace))
+                    if options
+                        .stop_discovery_at
+                        .as_ref()
+                        .is_some_and(|boundary| !workspace.install_path.starts_with(boundary)) =>
+                {
+                    None
+                }
+                Some(Err(_)) if options.stop_discovery_at.is_some() => None,
+                result => result,
+            },
             MemberDiscovery::Existing => match self.workspaces.get(path) {
-                Some(Ok(workspace)) => Some(Ok(workspace)),
-                Some(Err(_)) | None => None,
+                Some(Ok(workspace))
+                    if options
+                        .stop_discovery_at
+                        .as_ref()
+                        .is_none_or(|boundary| workspace.install_path.starts_with(boundary)) =>
+                {
+                    Some(Ok(workspace))
+                }
+                Some(Ok(_) | Err(_)) | None => None,
             },
             MemberDiscovery::None | MemberDiscovery::Ignore(_) => None,
         }
@@ -344,7 +359,7 @@ impl Workspace {
         // at the same time from different roots, both failing this check. These cases are fine, we
         // synchronize them after finding the workspace root and allow only one of them to perform
         // the full discovery.
-        if let Some(workspace) = workspace_cache.get(&project_path, &options.members) {
+        if let Some(workspace) = workspace_cache.get(&project_path, options) {
             return workspace;
         }
 
@@ -405,7 +420,7 @@ impl Workspace {
                 )
             };
 
-        if options.members == MemberDiscovery::All {
+        if options.members == MemberDiscovery::All && options.stop_discovery_at.is_none() {
             // Ensure that workspace discovery runs only once for any given workspace root.
             // If two threads start at different packages at the same time, they only read their
             // package `pyproject.toml` and the workspace root `pyproject.toml` before arriving
@@ -441,7 +456,7 @@ impl Workspace {
             cache,
         )
         .await;
-        if options.members == MemberDiscovery::All {
+        if options.members == MemberDiscovery::All && options.stop_discovery_at.is_none() {
             workspace_cache.insert(result.clone(), &workspace_root);
         }
         result
@@ -1505,7 +1520,7 @@ impl ProjectWorkspace {
         options: &DiscoveryOptions,
         cache: &WorkspaceCache,
     ) -> Result<Option<Self>, WorkspaceError> {
-        let workspace = match cache.get(project_root, &options.members) {
+        let workspace = match cache.get(project_root, options) {
             Some(Ok(workspace)) => workspace,
             Some(Err(error)) => return Err(error),
             None => return Ok(None),
@@ -1757,7 +1772,7 @@ impl ProjectWorkspace {
                 pyproject_toml: project_pyproject_toml.clone(),
             };
             let workspace = Arc::new(workspace);
-            if options.members == MemberDiscovery::All {
+            if options.members == MemberDiscovery::All && options.stop_discovery_at.is_none() {
                 workspace_cache.insert(Ok(workspace.clone()), &project_path);
             }
             return Ok(Self {
@@ -1767,7 +1782,7 @@ impl ProjectWorkspace {
             });
         };
 
-        if options.members == MemberDiscovery::All {
+        if options.members == MemberDiscovery::All && options.stop_discovery_at.is_none() {
             // Ensure that workspace discovery runs only once for any given workspace root.
             if let Some(workspace) = workspace_cache.register_or_wait(&workspace_root).await {
                 return workspace.map(|workspace| Self {
@@ -1792,7 +1807,7 @@ impl ProjectWorkspace {
             cache,
         )
         .await;
-        if options.members == MemberDiscovery::All {
+        if options.members == MemberDiscovery::All && options.stop_discovery_at.is_none() {
             workspace_cache.insert(result.clone(), &workspace_root);
         }
 
@@ -2111,7 +2126,7 @@ impl VirtualProject {
         );
 
         // Fast path: The workspace is already cached.
-        if let Some(workspace) = workspace_cache.get(project_root, &options.members) {
+        if let Some(workspace) = workspace_cache.get(project_root, options) {
             let workspace = workspace?;
             let virtual_project = if let Some((project_name, _member)) = workspace
                 .packages
@@ -2168,7 +2183,7 @@ impl VirtualProject {
                 cache,
             )
             .await;
-            if options.members == MemberDiscovery::All {
+            if options.members == MemberDiscovery::All && options.stop_discovery_at.is_none() {
                 workspace_cache.insert(result.clone(), &project_path);
             }
             Ok(Self::NonProject(result?))
@@ -2188,7 +2203,7 @@ impl VirtualProject {
                 cache,
             )
             .await;
-            if options.members == MemberDiscovery::All {
+            if options.members == MemberDiscovery::All && options.stop_discovery_at.is_none() {
                 workspace_cache.insert(result.clone(), &project_path);
             }
             Ok(Self::NonProject(result?))
@@ -2767,6 +2782,154 @@ mod tests {
         .expect("cached workspace member ignores invalid change in the meantime");
 
         assert!(Arc::ptr_eq(&root_workspace, &member_project.workspace));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn workspace_cache_respects_discovery_boundary() -> Result<()> {
+        let root = tempfile::TempDir::new()?;
+        let root = ChildPath::new(root.path());
+
+        root.child("pyproject.toml").write_str(
+            r#"
+            [project]
+            name = "albatross"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+
+            [tool.uv.workspace]
+            members = ["packages/*"]
+            "#,
+        )?;
+
+        let member_root = root.child("packages").child("seeds");
+        member_root.child("pyproject.toml").write_str(
+            r#"
+            [project]
+            name = "seeds"
+            version = "1.0.0"
+            requires-python = ">=3.12"
+            "#,
+        )?;
+
+        let cache = Cache::from_path(root.child("cache").path().to_path_buf());
+        let workspace_cache = WorkspaceCache::default();
+        let root_workspace = Workspace::discover(
+            root.as_ref(),
+            &DiscoveryOptions::default(),
+            &cache,
+            &workspace_cache,
+        )
+        .await?;
+
+        let bounded_options = DiscoveryOptions {
+            stop_discovery_at: Some(member_root.path().to_path_buf()),
+            ..DiscoveryOptions::default()
+        };
+        let bounded_project = ProjectWorkspace::discover(
+            member_root.as_ref(),
+            &bounded_options,
+            &cache,
+            &workspace_cache,
+        )
+        .await?;
+
+        assert_eq!(
+            bounded_project.workspace().install_path(),
+            member_root.path()
+        );
+        assert_eq!(bounded_project.workspace().packages().len(), 1);
+
+        let unrestricted_project = ProjectWorkspace::discover(
+            member_root.as_ref(),
+            &DiscoveryOptions::default(),
+            &cache,
+            &workspace_cache,
+        )
+        .await?;
+
+        assert!(Arc::ptr_eq(
+            &root_workspace,
+            &unrestricted_project.workspace
+        ));
+
+        let root_bounded_options = DiscoveryOptions {
+            stop_discovery_at: Some(root.path().to_path_buf()),
+            ..DiscoveryOptions::default()
+        };
+        let root_bounded_project = ProjectWorkspace::discover(
+            member_root.as_ref(),
+            &root_bounded_options,
+            &cache,
+            &workspace_cache,
+        )
+        .await?;
+
+        assert!(Arc::ptr_eq(
+            &root_workspace,
+            &root_bounded_project.workspace
+        ));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn workspace_cache_does_not_reuse_bounded_discovery_without_boundary() -> Result<()> {
+        let root = tempfile::TempDir::new()?;
+        let root = ChildPath::new(root.path());
+
+        root.child("pyproject.toml").write_str(
+            r#"
+            [project]
+            name = "albatross"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+
+            [tool.uv.workspace]
+            members = ["packages/*"]
+            "#,
+        )?;
+
+        let member_root = root.child("packages").child("seeds");
+        member_root.child("pyproject.toml").write_str(
+            r#"
+            [project]
+            name = "seeds"
+            version = "1.0.0"
+            requires-python = ">=3.12"
+            "#,
+        )?;
+
+        let cache = Cache::from_path(root.child("cache").path().to_path_buf());
+        let workspace_cache = WorkspaceCache::default();
+        let bounded_options = DiscoveryOptions {
+            stop_discovery_at: Some(member_root.path().to_path_buf()),
+            ..DiscoveryOptions::default()
+        };
+        let bounded_project = ProjectWorkspace::discover(
+            member_root.as_ref(),
+            &bounded_options,
+            &cache,
+            &workspace_cache,
+        )
+        .await?;
+
+        assert_eq!(
+            bounded_project.workspace().install_path(),
+            member_root.path()
+        );
+
+        let unrestricted_project = ProjectWorkspace::discover(
+            member_root.as_ref(),
+            &DiscoveryOptions::default(),
+            &cache,
+            &workspace_cache,
+        )
+        .await?;
+
+        assert_eq!(unrestricted_project.workspace().install_path(), root.path());
+        assert_eq!(unrestricted_project.workspace().packages().len(), 2);
 
         Ok(())
     }
