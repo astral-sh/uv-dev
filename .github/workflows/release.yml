@@ -397,7 +397,8 @@ jobs:
     uses: $/.github/workflows/publish-versions.yml
     with:
       plan: ${{ needs.plan.outputs.val }}
-    secrets: inherit
+    secrets:
+      ASTRAL_VERSIONS_PAT: ${{ secrets.ASTRAL_VERSIONS_PAT }}
 
   publish-mirror:
     needs:

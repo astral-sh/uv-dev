@@ -10,6 +10,9 @@ on:
       plan:
         required: true
         type: string
+    secrets:
+      ASTRAL_VERSIONS_PAT:
+        required: true
 
 permissions: {}
 
@@ -33,7 +36,12 @@ jobs:
         run: echo "BRANCH_NAME=update-versions-$VERSION-$(date +%s)" >> $GITHUB_ENV
 
       - name: "Clone versions repo"
-        run: git clone https://${{ secrets.ASTRAL_VERSIONS_PAT }}@github.com/astral-sh/versions.git astral-versions
+        env:
+          ASTRAL_VERSIONS_REF: bfaa684f15a3024c938f151df91df5ad0f9af8ba
+        run: |
+          git clone --branch main --single-branch https://${{ secrets.ASTRAL_VERSIONS_PAT }}@github.com/astral-sh/versions.git astral-versions
+          git -C astral-versions fetch --depth 1 origin "$ASTRAL_VERSIONS_REF"
+          git -C astral-versions reset --hard "$ASTRAL_VERSIONS_REF"
 
       - name: "Install uv"
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
