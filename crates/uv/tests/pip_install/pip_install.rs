@@ -9990,6 +9990,29 @@ fn incompatible_build_constraint() -> Result<()> {
     Ok(())
 }
 
+/// Reject a `pyproject.toml` file passed as a build constraint.
+#[test]
+fn build_constraint_pyproject_toml() -> Result<()> {
+    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION);
+
+    context.temp_dir.child("pyproject.toml").write_str("")?;
+
+    uv_snapshot!(context.pip_install()
+        .arg("requests")
+        .arg("--build-constraint")
+        .arg("pyproject.toml"), @"
+    success: false
+    exit_code: 2
+    ----- stdout -----
+
+    ----- stderr -----
+    error: The file `pyproject.toml` appears to be a `pyproject.toml` file, but constraints must be specified in `requirements.txt` format
+    "
+    );
+
+    Ok(())
+}
+
 /// Include a `build_constraints.txt` file with an incompatible constraint from stdin.
 #[test]
 #[expect(clippy::disallowed_types)]
