@@ -16208,12 +16208,12 @@ fn abi_compatibility_on_nondebug_python_with_debug_wheel() {
 #[test]
 fn fail_on_bz2_wheel() {
     let context = uv_test::test_context!("3.14");
-    let vendor = FindLinksServer::vendor();
+    let server = FindLinksServer::new(&context.workspace_root.join("test/links"));
 
     uv_snapshot!(
         context.filters(),
         context.pip_install()
-            .arg(format!("futzed_bz2 @ {}/futzed_bz2-0.1.0-py3-none-any.whl", vendor.url())),
+            .arg(format!("futzed_bz2 @ {}/futzed_bz2-0.1.0-py3-none-any.whl", server.url())),
         @"
     exit_code: 1 (failure)
     ----- stderr -----
@@ -16227,12 +16227,12 @@ fn fail_on_bz2_wheel() {
 #[test]
 fn fail_on_lzma_wheel() {
     let context = uv_test::test_context!("3.14");
-    let vendor = FindLinksServer::vendor();
+    let server = FindLinksServer::new(&context.workspace_root.join("test/links"));
 
     uv_snapshot!(
         context.filters(),
         context.pip_install()
-            .arg(format!("futzed_lzma @ {}/futzed_lzma-0.1.0-py3-none-any.whl", vendor.url())),
+            .arg(format!("futzed_lzma @ {}/futzed_lzma-0.1.0-py3-none-any.whl", server.url())),
         @"
     exit_code: 1 (failure)
     ----- stderr -----
