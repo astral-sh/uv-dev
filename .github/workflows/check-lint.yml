@@ -77,6 +77,31 @@ jobs:
       - name: "Run shellcheck"
         run: find . -name '*.sh' -type f | xargs shellcheck --shell bash --severity style
 
+  actionlint:
+    timeout-minutes: 10
+    runs-on: ubuntu-slim
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: "Install shellcheck"
+        uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad # v2.85.10
+        with:
+          tool: shellcheck@0.11.0
+          fallback: none
+      - name: "Install actionlint"
+        working-directory: ${{ runner.temp }}
+        run: |
+          curl --proto '=https' --tlsv1.2 -LsSf \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz \
+            -o actionlint.tar.gz
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  actionlint.tar.gz" | sha256sum --check
+          mkdir actionlint-bin
+          tar -xzf actionlint.tar.gz -C actionlint-bin actionlint
+          echo "$PWD/actionlint-bin" >> "$GITHUB_PATH"
+      - name: "Run actionlint"
+        run: actionlint -color -pyflakes=
+
   validate-pyproject:
     timeout-minutes: 10
     runs-on: ubuntu-slim
