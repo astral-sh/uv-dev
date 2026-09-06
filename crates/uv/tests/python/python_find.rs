@@ -1436,6 +1436,83 @@ fn python_find_search_path() {
     ");
 }
 
+#[cfg(unix)]
+#[test]
+fn python_find_range_debug_search_path() {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_filtered_python_keys()
+        .with_filtered_python_sources()
+        .with_managed_python_dirs()
+        .with_python_download_cache();
+
+    context
+        .python_install()
+        .arg("--preview")
+        .arg("3.13+debug")
+        .assert()
+        .success();
+
+    let search_path = context.temp_dir.child("search-path");
+    search_path.create_dir_all().unwrap();
+    fs_err::os::unix::fs::symlink(
+        context.bin_dir.join("python3.13d"),
+        search_path.join("python3.13d"),
+    )
+    .unwrap();
+
+    uv_snapshot!(context.filters(), context
+        .python_find()
+        .arg("3.13+debug")
+        .env(EnvVars::UV_PYTHON_SEARCH_PATH, search_path.path())
+        .env(
+            EnvVars::UV_PYTHON_INSTALL_DIR,
+            context.temp_dir.join("other-managed"),
+        ), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/search-path/python3.13d
+    ");
+
+    uv_snapshot!(context.filters(), context
+        .python_find()
+        .arg(">=3.13,<3.14+debug")
+        .env(EnvVars::UV_PYTHON_SEARCH_PATH, search_path.path())
+        .env(
+            EnvVars::UV_PYTHON_INSTALL_DIR,
+            context.temp_dir.join("other-managed"),
+        ), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/search-path/python3.13d
+    ");
+
+    context
+        .python_install()
+        .arg("--preview")
+        .arg("3.13td")
+        .assert()
+        .success();
+
+    fs_err::os::unix::fs::symlink(
+        context.bin_dir.join("python3.13td"),
+        search_path.join("python3.13td"),
+    )
+    .unwrap();
+
+    uv_snapshot!(context.filters(), context
+        .python_find()
+        .arg(">=3.13,<3.14+freethreaded+debug")
+        .env(EnvVars::UV_PYTHON_SEARCH_PATH, search_path.path())
+        .env(
+            EnvVars::UV_PYTHON_INSTALL_DIR,
+            context.temp_dir.join("other-managed"),
+        ), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/search-path/python3.13td
+    ");
+}
+
 /// When `requires-python` constrains to a minor version, we should find the correct interpreter
 /// even when only a version-specific executable (e.g., `python3.12`) is available.
 ///
