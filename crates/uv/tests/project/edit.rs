@@ -4336,6 +4336,72 @@ fn add_frozen() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn add_frozen_dynamic_dependencies() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    fs_err::remove_dir_all(&context.venv)?;
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    let production = indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dynamic = ["dependencies"]
+    "#};
+    pyproject_toml.write_str(production)?;
+
+    uv_snapshot!(context.filters(), context.add().arg("anyio==3.7.0").arg("--frozen"), @"
+    success: false
+    exit_code: 2
+    ----- stdout -----
+
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    error: Cannot add `dependencies` because it is declared as dynamic in `project.dynamic`
+    ");
+    assert_eq!(context.read("pyproject.toml"), production);
+
+    let optional = indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dynamic = ["optional-dependencies"]
+    "#};
+    pyproject_toml.write_str(optional)?;
+
+    uv_snapshot!(context.filters(), context.add().arg("anyio==3.7.0").arg("--optional").arg("test").arg("--frozen"), @"
+    success: false
+    exit_code: 2
+    ----- stdout -----
+
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    error: Cannot add `optional-dependencies` because it is declared as dynamic in `project.dynamic`
+    ");
+    assert_eq!(context.read("pyproject.toml"), optional);
+
+    let requirements = context.temp_dir.child("requirements.txt");
+    requirements.write_str("")?;
+
+    uv_snapshot!(context.filters(), context.add().arg("--requirements").arg("requirements.txt").arg("--optional").arg("test").arg("--frozen"), @"
+    success: false
+    exit_code: 2
+    ----- stdout -----
+
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    warning: Requirements file `requirements.txt` does not contain any dependencies
+    error: Cannot add `optional-dependencies` because it is declared as dynamic in `project.dynamic`
+    ");
+    assert_eq!(context.read("pyproject.toml"), optional);
+    assert!(!context.temp_dir.join("uv.lock").exists());
+    assert!(!context.venv.exists());
+
+    Ok(())
+}
+
 /// Add a requirement without updating the environment.
 #[test]
 fn add_no_sync() -> Result<()> {
