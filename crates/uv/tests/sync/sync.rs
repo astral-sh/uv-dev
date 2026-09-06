@@ -3839,6 +3839,50 @@ fn sync_exclude_group_with_environment_variable() -> Result<()> {
 }
 
 #[test]
+fn sync_dev_group_environment_conflicts() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [dependency-groups]
+        dev = []
+        foo = []
+        "#,
+    )?;
+
+    context.lock().assert().success();
+
+    uv_snapshot!(context.filters(), context.sync().arg("--only-group").arg("foo").env(EnvVars::UV_DEV, "1"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: the argument `UV_DEV` (environment variable) cannot be used with `--only-group`
+    ");
+
+    uv_snapshot!(context.filters(), context.sync().arg("--only-dev").env(EnvVars::UV_NO_DEV, "1"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: the argument `UV_NO_DEV` (environment variable) cannot be used with `--only-dev`
+    ");
+
+    // An explicit `--no-dev` takes precedence over `UV_DEV` and leaves `--only-group` valid.
+    context
+        .sync()
+        .arg("--no-dev")
+        .arg("--only-group")
+        .arg("foo")
+        .env(EnvVars::UV_DEV, "1")
+        .assert()
+        .success();
+
+    Ok(())
+}
+
+#[test]
 fn sync_dev_group() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
