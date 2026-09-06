@@ -1438,6 +1438,31 @@ fn compile_python_312() -> Result<()> {
     Ok(())
 }
 
+/// Resolve a requirement with a reversed Python version containment marker.
+#[test]
+fn compile_reversed_python_version_in_marker() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let requirements_in = context.temp_dir.child("requirements.in");
+    requirements_in.write_str(r#"does-not-exist ; "3.11" in python_version"#)?;
+
+    // This marker should be false for Python 3.9, but is treated as true; see astral-sh/uv#21309.
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .arg("requirements.in")
+        .arg("--python-version")
+        .arg("3.9")
+        .arg("--no-index"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    warning: The requested Python version 3.9 is not available; 3.12.[X] will be used to build dependencies instead.
+      × No solution found when resolving dependencies:
+      ╰─▶ Because does-not-exist was not found in the provided package locations and you require does-not-exist, we can conclude that your requirements are unsatisfiable.
+
+    hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
+    ");
+
+    Ok(())
+}
+
 /// Resolve a specific version of Black at Python 3.12 with `--annotation-style=line`.
 #[test]
 fn compile_python_312_annotation_line() -> Result<()> {
