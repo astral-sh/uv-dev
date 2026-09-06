@@ -772,6 +772,8 @@ impl InstallationPlan {
         let Plan {
             cached,
             remote,
+            build_dependencies,
+            forced_rebuilds,
             reinstalls,
             extraneous,
         } = plan;
@@ -799,6 +801,8 @@ impl InstallationPlan {
         let (isolated_phase, shared_phase) = Plan {
             cached,
             remote,
+            build_dependencies,
+            forced_rebuilds,
             reinstalls,
             extraneous,
         }
@@ -1033,6 +1037,8 @@ async fn execute_plan(
     let Plan {
         cached,
         remote,
+        build_dependencies,
+        forced_rebuilds,
         reinstalls,
         extraneous,
     } = plan;
@@ -1058,7 +1064,15 @@ async fn execute_plan(
             PrepareReporter::from(printer).with_length(remote.len() as u64),
         ));
 
-        let wheels = preparer.prepare(remote, in_flight, resolution).await?;
+        let wheels = preparer
+            .prepare(
+                remote,
+                &build_dependencies,
+                &forced_rebuilds,
+                in_flight,
+                resolution,
+            )
+            .await?;
 
         logger.on_prepare(
             wheels.len(),
@@ -1263,6 +1277,8 @@ fn report_dry_run(
     let Plan {
         cached,
         remote,
+        build_dependencies: _,
+        forced_rebuilds: _,
         reinstalls,
         extraneous,
     } = plan;
