@@ -31,7 +31,9 @@ use uv_normalize::{DEV_DEPENDENCIES, DefaultGroups, ExtraName, GroupName, Packag
 use uv_pep440::{TildeVersionSpecifier, Version, VersionSpecifiers};
 use uv_pep508::MarkerTreeContents;
 use uv_preview::{Preview, PreviewFeature};
-use uv_pypi_types::{ConflictItem, ConflictKind, ConflictSet, Conflicts};
+use uv_pypi_types::{
+    ConflictItem, ConflictKind, ConflictSet, Conflicts, ResolverMarkerEnvironment,
+};
 use uv_python::managed::{ManagedPythonInstallation, PythonMinorVersionLink};
 use uv_python::{
     BrokenLink, ConfigDiscovery, EnvironmentPreference, Interpreter, InvalidEnvironmentKind,
@@ -3242,6 +3244,7 @@ pub(crate) fn detect_conflicts(
     target: &InstallTarget,
     extras: &ExtrasSpecification,
     groups: &DependencyGroupsWithDefaults,
+    marker_env: Option<&ResolverMarkerEnvironment>,
 ) -> Result<(), ProjectError> {
     // Validate that we aren't trying to install extras or groups that
     // are declared as conflicting. Note that we need to collect all
@@ -3250,7 +3253,7 @@ pub(crate) fn detect_conflicts(
     // group `g` are declared as conflicting, then enabling both of
     // those should result in an error.
     let lock = target.lock();
-    let packages = target.packages(extras, groups);
+    let packages = target.packages(extras, groups, marker_env);
     let conflicts = lock.conflicts();
     for set in conflicts.iter() {
         let mut conflicts: Vec<ConflictItem> = vec![];

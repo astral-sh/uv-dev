@@ -4561,6 +4561,42 @@ impl Package {
         &self.dependency_groups
     }
 
+    /// Returns whether a resolved dependency applies to an environment using the original
+    /// requirement marker, when available.
+    pub fn dependency_applies_to_environment(
+        &self,
+        dependency: &Dependency,
+        marker_environment: &MarkerEnvironment,
+        extra: Option<&ExtraName>,
+        group: Option<&GroupName>,
+    ) -> bool {
+        let requirements = group.map_or(Some(&self.metadata.requires_dist), |group| {
+            self.metadata.dependency_groups.get(group)
+        });
+        let Some(requirements) = requirements.filter(|requirements| !requirements.is_empty())
+        else {
+            return dependency
+                .complexified_marker
+                .pep508()
+                .evaluate(marker_environment, &[]);
+        };
+
+        let mut requirements = requirements
+            .iter()
+            .filter(|requirement| requirement.name == *dependency.package_name());
+        let Some(requirement) = requirements.next() else {
+            return dependency
+                .complexified_marker
+                .pep508()
+                .evaluate(marker_environment, &[]);
+        };
+
+        let extras: &[ExtraName] = extra.map_or(&[], slice::from_ref);
+        requirement.marker.evaluate(marker_environment, extras)
+            || requirements
+                .any(|requirement| requirement.marker.evaluate(marker_environment, extras))
+    }
+
     /// Returns an [`InstallTarget`] view for filtering decisions.
     fn as_install_target(&self) -> InstallTarget<'_> {
         InstallTarget {
