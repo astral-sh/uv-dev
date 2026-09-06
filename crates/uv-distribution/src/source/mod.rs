@@ -263,6 +263,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         tags: &Tags,
         hashes: HashPolicy<'_>,
         client: &ManagedClient<'_>,
+        force_rebuild: bool,
     ) -> Result<BuiltWheelMetadata, Error> {
         let built_wheel_metadata = match &source {
             BuildableSource::Dist(SourceDist::Registry(dist)) => {
@@ -350,9 +351,15 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                     .await?
             }
             BuildableSource::Dist(SourceDist::Directory(dist)) => {
-                self.source_tree(source, &DirectorySourceUrl::from(dist), tags, hashes)
-                    .boxed_local()
-                    .await?
+                self.source_tree(
+                    source,
+                    &DirectorySourceUrl::from(dist),
+                    tags,
+                    hashes,
+                    force_rebuild,
+                )
+                .boxed_local()
+                .await?
             }
             BuildableSource::Dist(SourceDist::Path(dist)) => {
                 let cache_shard = self.build_context.cache().shard(
@@ -401,7 +408,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                     .await?
             }
             BuildableSource::Url(SourceUrl::Directory(resource)) => {
-                self.source_tree(source, resource, tags, hashes)
+                self.source_tree(source, resource, tags, hashes, force_rebuild)
                     .boxed_local()
                     .await?
             }
@@ -1381,6 +1388,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         resource: &DirectorySourceUrl<'_>,
         tags: &Tags,
         hashes: HashPolicy<'_>,
+        force_rebuild: bool,
     ) -> Result<BuiltWheelMetadata, Error> {
         // Before running the build, check that the hashes match.
         if hashes.requires_validation() {
@@ -1404,7 +1412,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             cache_info,
             revision,
         } = self
-            .source_tree_revision(source, resource, &cache_shard)
+            .source_tree_revision(source, resource, &cache_shard, force_rebuild)
             .await?;
 
         // Scope all operations to the revision. Within the revision, there's no need to check for
@@ -1538,7 +1546,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
 
         // Fetch the revision for the source distribution.
         let LocalRevisionPointer { revision, .. } = self
-            .source_tree_revision(source, resource, &cache_shard)
+            .source_tree_revision(source, resource, &cache_shard, false)
             .await?;
 
         // Scope all operations to the revision. Within the revision, there's no need to check for
@@ -1702,6 +1710,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         source: &BuildableSource<'_>,
         resource: &DirectorySourceUrl<'_>,
         cache_shard: &CacheShard,
+        force_rebuild: bool,
     ) -> Result<LocalRevisionPointer, Error> {
         // Verify that the source tree exists.
         if !resource.install_path.is_dir() {
@@ -1715,12 +1724,13 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         let entry = cache_shard.entry(LOCAL_REVISION);
 
         // If the revision is fresh, return it.
-        if self
-            .build_context
-            .cache()
-            .freshness(&entry, source.name(), source.source_tree())
-            .map_err(Error::CacheRead)?
-            .is_fresh()
+        if !force_rebuild
+            && self
+                .build_context
+                .cache()
+                .freshness(&entry, source.name(), source.source_tree())
+                .map_err(Error::CacheRead)?
+                .is_fresh()
         {
             match LocalRevisionPointer::read_from(&entry) {
                 Ok(Some(pointer)) => {

@@ -158,10 +158,11 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         dist: &Dist,
         tags: &Tags,
         hashes: HashPolicy<'_>,
+        force_rebuild: bool,
     ) -> Result<LocalWheel, Error> {
         match dist {
             Dist::Built(built) => self.get_wheel(built, hashes).await,
-            Dist::Source(source) => self.build_wheel(source, tags, hashes).await,
+            Dist::Source(source) => self.build_wheel(source, tags, hashes, force_rebuild).await,
         }
     }
 
@@ -452,10 +453,17 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         dist: &SourceDist,
         tags: &Tags,
         hashes: HashPolicy<'_>,
+        force_rebuild: bool,
     ) -> Result<LocalWheel, Error> {
         let built_wheel = self
             .builder
-            .download_and_build(&BuildableSource::Dist(dist), tags, hashes, &self.client)
+            .download_and_build(
+                &BuildableSource::Dist(dist),
+                tags,
+                hashes,
+                &self.client,
+                force_rebuild,
+            )
             .boxed_local()
             .await?;
 

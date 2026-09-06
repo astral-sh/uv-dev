@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -10,13 +11,13 @@ use uv_cache::{Cache, CacheBucket, WheelCache};
 use uv_cache_info::Timestamp;
 use uv_configuration::{BuildOptions, Reinstall};
 use uv_distribution::{
-    BuiltWheelIndex, HttpArchivePointer, PathArchivePointer, RegistryWheelIndex,
+    BuildRequires, BuiltWheelIndex, HttpArchivePointer, PathArchivePointer, RegistryWheelIndex,
 };
 use uv_distribution_filename::WheelFilename;
 use uv_distribution_types::{
     BuiltDist, CachedDirectUrlDist, CachedDist, ConfigSettings, Dist, Error, ExtraBuildRequires,
-    ExtraBuildVariables, Hashed, IndexLocations, InstalledDist, Name, PackageConfigSettings,
-    RequirementSource, Resolution, ResolvedDist, SourceDist,
+    ExtraBuildVariables, FirstParty, Hashed, IndexLocations, InstalledDist, Name,
+    PackageConfigSettings, RequirementSource, Resolution, ResolvedDist, SourceDist,
 };
 use uv_fs::Simplified;
 use uv_normalize::PackageName;
@@ -296,6 +297,39 @@ impl<'a> Planner<'a> {
         let mut reinstalls = vec![];
         let mut extraneous = vec![];
 
+        // Identify build requirements that resolve to another first-party workspace member. The
+        // build frontend already installs these requirements before invoking the dependent's build
+        // backend; the install plan only needs to ensure that the dependent is rebuilt when one of
+        // those members is rebuilt in this operation.
+        let directory_distributions = self
+            .resolution
+            .distributions()
+            .filter_map(|resolved| {
+                let ResolvedDist::Installable { dist, .. } = resolved else {
+                    return None;
+                };
+                let Dist::Source(SourceDist::Directory(source)) = dist.as_ref() else {
+                    return None;
+                };
+                matches!(source.first_party, FirstParty::Yes)
+                    .then(|| (source.name.clone(), dist.clone()))
+            })
+            .collect::<BTreeMap<_, _>>();
+        let mut build_dependencies = BTreeMap::new();
+        for (name, dist) in &directory_distributions {
+            let Dist::Source(SourceDist::Directory(source)) = dist.as_ref() else {
+                unreachable!("directory distributions only contain source trees");
+            };
+            let dependencies = BuildRequires::workspace_names_from_directory(&source.install_path)?
+                .into_iter()
+                .filter(|dependency| directory_distributions.contains_key(dependency))
+                .collect::<BTreeSet<_>>();
+            if !dependencies.is_empty() {
+                build_dependencies.insert(name.clone(), dependencies);
+            }
+        }
+        let mut satisfied = BTreeMap::new();
+
         // TODO(charlie): There are a few assumptions here that are hard to spot:
         //
         // 1. Apparently, we never return direct URL distributions as [`ResolvedDist::Installed`].
@@ -346,6 +380,9 @@ impl<'a> Planner<'a> {
                             }
                             RequirementSatisfaction::Satisfied => {
                                 debug!("Requirement already installed: {installed}");
+                                if directory_distributions.contains_key(installed.name()) {
+                                    satisfied.insert(installed.name().clone(), installed.clone());
+                                }
                                 continue;
                             }
                             RequirementSatisfaction::OutOfDate => {
@@ -746,6 +783,45 @@ impl<'a> Planner<'a> {
             remote.push(dist.clone());
         }
 
+        let mut builds = remote
+            .iter()
+            .filter_map(|dist| match dist.as_ref() {
+                Dist::Source(SourceDist::Directory(source))
+                    if matches!(source.first_party, FirstParty::Yes) =>
+                {
+                    Some(source.name.clone())
+                }
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        let mut forced_rebuilds = BTreeSet::new();
+
+        loop {
+            let dependents = build_dependencies
+                .iter()
+                .filter(|(name, dependencies)| {
+                    !builds.contains(*name) && !dependencies.is_disjoint(&builds)
+                })
+                .map(|(name, _)| name.clone())
+                .collect::<Vec<_>>();
+            if dependents.is_empty() {
+                break;
+            }
+
+            for name in dependents {
+                let Some(dist) = directory_distributions.get(&name) else {
+                    continue;
+                };
+                cached.retain(|dist| dist.name() != &name);
+                if let Some(installed) = satisfied.remove(&name) {
+                    reinstalls.push(installed);
+                }
+                remote.push(dist.clone());
+                builds.insert(name.clone());
+                forced_rebuilds.insert(name);
+            }
+        }
+
         // Remove any unnecessary packages.
         if site_packages.any() {
             // Retain seed packages unless: (1) the virtual environment was created by uv and
@@ -765,6 +841,7 @@ impl<'a> Planner<'a> {
         Ok(Plan {
             cached,
             remote,
+            forced_rebuilds,
             reinstalls,
             extraneous,
         })
@@ -824,6 +901,9 @@ pub struct Plan {
     /// not available in the local cache.
     pub remote: Vec<Arc<Dist>>,
 
+    /// Remote source trees that must ignore an otherwise-fresh built wheel.
+    pub forced_rebuilds: BTreeSet<PackageName>,
+
     /// Any distributions that are already installed in the current environment, but will be
     /// re-installed (including upgraded) to satisfy the requirements.
     pub reinstalls: Vec<InstalledDist>,
@@ -857,6 +937,7 @@ impl Plan {
         let Self {
             cached,
             remote,
+            forced_rebuilds,
             reinstalls,
             extraneous,
         } = self;
@@ -865,6 +946,19 @@ impl Plan {
         let (left_remote, right_remote) = remote
             .into_iter()
             .partition::<Vec<_>, _>(|dist| f(dist.name()));
+        let left_names = left_remote
+            .iter()
+            .map(|dist| dist.name().clone())
+            .collect::<BTreeSet<_>>();
+        let right_names = right_remote
+            .iter()
+            .map(|dist| dist.name().clone())
+            .collect::<BTreeSet<_>>();
+        let left_forced_rebuilds = forced_rebuilds.intersection(&left_names).cloned().collect();
+        let right_forced_rebuilds = forced_rebuilds
+            .intersection(&right_names)
+            .cloned()
+            .collect();
 
         // If any remote distributions are not matched, but are already installed, ensure that
         // they're uninstalled as part of the right plan. (Uninstalling them as part of the left
@@ -889,6 +983,7 @@ impl Plan {
         let left_plan = Self {
             cached: left_cached,
             remote: left_remote,
+            forced_rebuilds: left_forced_rebuilds,
             reinstalls: left_reinstalls,
             extraneous: left_extraneous,
         };
@@ -898,6 +993,7 @@ impl Plan {
         let right_plan = Self {
             cached: right_cached,
             remote: right_remote,
+            forced_rebuilds: right_forced_rebuilds,
             reinstalls: right_reinstalls,
             extraneous: right_extraneous,
         };
