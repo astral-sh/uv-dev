@@ -13,6 +13,8 @@ use tokio::net::{TcpListener, TcpStream};
 use url::Url;
 
 use uv_cache::Cache;
+#[cfg(target_os = "android")]
+use uv_client::ClientBuildError;
 use uv_client::{BaseClientBuilder, Certificates, RegistryClientBuilder};
 use uv_distribution_types::IndexUrl;
 use uv_errors::{ErrorOptions, Hint, write_error_chain_with_options};
@@ -895,6 +897,72 @@ async fn test_system_certs_with_ssl_cert_file_valid() -> Result<()> {
         .ssl_cert_file(&cert.trust_path)
         .expect_https_connect_succeeds(&cert)
         .await;
+    Ok(())
+}
+
+/// Standalone Android clients verify with certificate files without initializing a JVM.
+#[cfg(target_os = "android")]
+#[tokio::test]
+async fn test_android_system_certs_without_jvm() -> Result<()> {
+    let cert = TestCertificate::new()?;
+    let untrusted = TestCertificate::new()?;
+    async_with_vars(
+        [
+            (EnvVars::SSL_CERT_FILE, Some(cert.trust_path.as_os_str())),
+            (EnvVars::SSL_CERT_DIR, None),
+            (EnvVars::SSL_CLIENT_CERT, None),
+        ],
+        async {
+            let (server_task, addr) = start_https_user_agent_server(&cert.server).await?;
+            // Configure the base client directly so the environment supplies the native loader's
+            // test store, rather than taking uv's custom-certificate override path.
+            let client = BaseClientBuilder::default()
+                .with_system_certs(true)
+                .build()?;
+            let url = DisplaySafeUrl::from_str(&format!("https://{addr}"))?;
+            client
+                .for_host(&url)
+                .get(Url::from(url.clone()))
+                .send()
+                .await?;
+            server_task.await??;
+
+            // Loading system roots must not allow certificates issued by an unrelated CA.
+            let (server_task, addr) = start_https_user_agent_server(&untrusted.server).await?;
+            let url = DisplaySafeUrl::from_str(&format!("https://{addr}"))?;
+            let response = client
+                .for_host(&url)
+                .get(Url::from(url.clone()))
+                .send()
+                .await;
+            assert_fatal_reqwest_error(&response);
+            let _ = server_task.await;
+            Ok(())
+        },
+    )
+    .await
+}
+
+/// An empty Android system store reports an error without falling back to another verifier.
+#[cfg(target_os = "android")]
+#[tokio::test]
+async fn test_android_system_certs_empty_store() -> Result<()> {
+    let dir = TempDir::new()?;
+    let cert_path = dir.path().join("empty.pem");
+    fs_err::write(&cert_path, "")?;
+    async_with_vars(
+        [
+            (EnvVars::SSL_CERT_FILE, Some(cert_path.as_os_str())),
+            (EnvVars::SSL_CERT_DIR, None),
+        ],
+        async {
+            assert_matches!(
+                BaseClientBuilder::default().with_system_certs(true).build(),
+                Err(ClientBuildError::NoSystemCertificates)
+            );
+        },
+    )
+    .await;
     Ok(())
 }
 
