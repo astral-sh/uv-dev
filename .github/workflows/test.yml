@@ -328,16 +328,16 @@ jobs:
           # Write pending snapshots to a separate directory for artifact upload
           INSTA_UPDATE: new
           INSTA_PENDING_DIR: ${{ github.workspace }}/pending-snapshots
-        shell: bash
+        shell: pwsh
         run: |
-          cargo nextest run \
-            --cargo-profile fast-build-nightly \
-            -Z panic-abort-tests \
-            -Z checksum-freshness \
-            --no-default-features \
-            --features test-python,test-pypi,test-python-managed,test-windows-registry,native-auth,windows-native \
-            --workspace \
-            --profile ci-windows \
+          cargo nextest run `
+            --cargo-profile fast-build-nightly `
+            -Z panic-abort-tests `
+            -Z checksum-freshness `
+            --no-default-features `
+            --features test-python,test-pypi,test-python-managed,test-windows-registry,native-auth,windows-native `
+            --workspace `
+            --profile ci-windows `
             --partition hash:${{ matrix.partition }}/3
 
       - name: "Prune superseded workspace artifacts"
