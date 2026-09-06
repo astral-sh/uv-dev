@@ -722,7 +722,6 @@ impl PyProjectToml {
 
             let mut license_files = Vec::new();
             let mut license_globs_parsed = Vec::with_capacity(license_globs.len());
-            let mut license_glob_matchers = Vec::with_capacity(license_globs.len());
 
             for license_glob in license_globs {
                 let pep639_glob =
@@ -732,12 +731,13 @@ impl PyProjectToml {
                             field: license_glob.to_owned(),
                             source: err,
                         })?;
-                license_glob_matchers.push(pep639_glob.compile_matcher());
                 license_globs_parsed.push(pep639_glob);
             }
 
             // Track whether each user-specified glob matched so we can flag the unmatched ones.
             let mut license_globs_matched = vec![false; license_globs_parsed.len()];
+            let mut unmatched_globs = license_globs_parsed.len();
+            let mut matching_globs = Vec::new();
 
             let license_globs = GlobDirFilter::from_globs(license_globs_parsed.clone());
             let license_globs = license_globs.map_err(|err| Error::GlobSetTooLarge {
@@ -786,16 +786,13 @@ impl PyProjectToml {
 
                 debug!("License files match: {}", relative.user_display());
 
-                for (matched, matcher) in license_globs_matched
-                    .iter_mut()
-                    .zip(license_glob_matchers.iter())
-                {
-                    if *matched {
-                        continue;
-                    }
-
-                    if matcher.is_match(relative) {
-                        *matched = true;
+                if unmatched_globs > 0 {
+                    license_globs.matching_globs_into(relative, &mut matching_globs);
+                    for index in &matching_globs {
+                        if !license_globs_matched[*index] {
+                            license_globs_matched[*index] = true;
+                            unmatched_globs -= 1;
+                        }
                     }
                 }
 
@@ -1935,6 +1932,21 @@ mod tests {
         Invalid project metadata
           Caused by: When `project.license-files` is defined, `project.license` must be an SPDX expression string
         ");
+    }
+
+    #[test]
+    fn overlapping_license_globs() {
+        let temp_dir = TempDir::new().unwrap();
+        fs_err::write(temp_dir.path().join("LICENSE-MIT"), "MIT").unwrap();
+        fs_err::write(temp_dir.path().join("LICENSE-APACHE"), "Apache-2.0").unwrap();
+        let contents = extend_project(indoc! {r#"
+            license = "MIT OR Apache-2.0"
+            license-files = ["LICENSE-*", "LICENSE-MIT", "LICENSE-*", "LICENSE-APACHE"]
+        "#});
+        let pyproject_toml: PyProjectToml = toml::from_str(&contents).unwrap();
+        let metadata = pyproject_toml.to_metadata(temp_dir.path()).unwrap();
+
+        assert_eq!(metadata.license_files, ["LICENSE-APACHE", "LICENSE-MIT"]);
     }
 
     #[test]

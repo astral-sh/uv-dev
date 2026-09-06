@@ -79,6 +79,13 @@ impl GlobDirFilter {
         self.match_directory(path) || self.glob_set.is_match(path)
     }
 
+    /// Write the indices of all globs that match `path` into `matches`.
+    ///
+    /// The indices correspond to the order of the globs passed to [`Self::from_globs`].
+    pub fn matching_globs_into(&self, path: &Path, matches: &mut Vec<usize>) {
+        self.glob_set.matches_into(path, matches);
+    }
+
     /// Check whether a directory or any of its children can be matched by any of the globs.
     ///
     /// This option never returns false if any child matches, but it may return true even if we
@@ -158,6 +165,23 @@ mod tests {
         assert!(matcher.match_directory(&Path::new("path3").join("dir3")));
         assert!(matcher.match_directory(&Path::new("path4").join("dir4")));
         assert!(!matcher.match_directory(&Path::new("path5").join("dir5")));
+    }
+
+    #[test]
+    fn matching_globs() {
+        let patterns = ["LICENSE-*", "LICENSE-MIT", "licenses/*", "LICENSE-*"]
+            .map(|pattern| PortableGlobParser::Pep639.parse(pattern).unwrap());
+        let matcher = GlobDirFilter::from_globs(patterns.into_iter().collect()).unwrap();
+        let mut matches = vec![usize::MAX];
+
+        matcher.matching_globs_into(Path::new("LICENSE-MIT"), &mut matches);
+        assert_eq!(matches, [0, 1, 3]);
+
+        matcher.matching_globs_into(Path::new("licenses/LICENSE-APACHE"), &mut matches);
+        assert_eq!(matches, [2]);
+
+        matcher.matching_globs_into(Path::new("README.md"), &mut matches);
+        assert!(matches.is_empty());
     }
 
     /// Check that we skip directories that can never match.
