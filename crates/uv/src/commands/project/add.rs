@@ -58,7 +58,7 @@ use crate::commands::project::lock::LockMode;
 use crate::commands::project::lock_target::LockTarget;
 use crate::commands::project::{
     LinkErrorReporting, PlatformState, ProjectEnvironment, ProjectEnvironmentPolicy, ProjectError,
-    ProjectInterpreter, ScriptInterpreter, UniversalState, WorkspacePython,
+    ProjectInterpreter, ScriptInterpreter, SyncMode, UniversalState, WorkspacePython,
     default_dependency_groups, init_script_python_requirement,
 };
 use crate::commands::reporters::{PythonDownloadReporter, ResolverReporter};
@@ -73,7 +73,7 @@ pub(crate) async fn add(
     lock_check: LockCheck,
     frozen: Option<FrozenSource>,
     active: ActiveEnvironment,
-    no_sync: bool,
+    sync: SyncMode,
     no_install_project: bool,
     only_install_project: bool,
     no_install_workspace: bool,
@@ -112,6 +112,8 @@ pub(crate) async fn add(
     preview: Preview,
     malware_settings: &MalwareCheckSettings,
 ) -> Result<ExitStatus> {
+    let no_sync = sync.no_sync();
+
     for source in &requirements {
         match source {
             RequirementsSource::PyprojectToml(_) => {

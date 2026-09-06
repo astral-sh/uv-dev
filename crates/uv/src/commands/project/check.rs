@@ -31,8 +31,8 @@ use crate::commands::project::lock::LockMode;
 use crate::commands::project::lock_target::LockTarget;
 use crate::commands::project::{
     LinkErrorReporting, ProjectEnvironment, ProjectEnvironmentPolicy, ProjectError,
-    ProjectInterpreter, ScriptEnvironment, ScriptInterpreter, UniversalState, WorkspacePython,
-    default_dependency_groups, validate_project_requires_python,
+    ProjectInterpreter, ScriptEnvironment, ScriptInterpreter, SyncMode, UniversalState,
+    WorkspacePython, default_dependency_groups, validate_project_requires_python,
 };
 use crate::commands::reporters::PythonDownloadReporter;
 use crate::commands::{ExitStatus, diagnostics, project};
@@ -49,7 +49,7 @@ pub(crate) async fn check(
     fix: bool,
     lock_check: LockCheck,
     frozen: Option<FrozenSource>,
-    no_sync: bool,
+    sync: SyncMode,
     no_install_project: bool,
     isolated: bool,
     all_packages: bool,
@@ -77,6 +77,8 @@ pub(crate) async fn check(
     config_discovery: ConfigDiscovery,
     malware_settings: MalwareCheckSettings,
 ) -> Result<ExitStatus> {
+    let no_sync = sync.no_sync();
+
     if !preview.is_enabled(PreviewFeature::CheckCommand) {
         warn_user!(
             "`uv check` is experimental and may change without warning. Pass `--preview-features {}` to disable this warning.",
