@@ -2622,7 +2622,7 @@ fn add_path_implicit_workspace() -> Result<()> {
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
     Creating virtual environment at: .venv
-    Added `packages/child` to workspace members
+    Adding `packages/child` to workspace members
     Resolved 2 packages in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
@@ -8618,7 +8618,7 @@ fn fail_to_add_revert_workspace_root() -> Result<()> {
     uv_snapshot!(context.filters(), context.add().arg("./broken"), @r#"
     exit_code: 1 (failure)
     ----- stderr -----
-    Added `broken` to workspace members
+    Adding `broken` to workspace members
     Resolved 3 packages in [TIME]
       × Failed to build `broken @ file://[TEMP_DIR]/broken`
       ├─▶ The build backend returned an error
@@ -8663,6 +8663,73 @@ fn fail_to_add_revert_workspace_root() -> Result<()> {
     });
 
     // The lockfile should not exist, even though resolution succeeded.
+    assert!(!context.temp_dir.join("uv.lock").exists());
+
+    Ok(())
+}
+
+/// Leave the workspace `pyproject.toml` unchanged when source or index validation fails.
+#[test]
+fn fail_to_add_revert_workspace_root_before_resolution() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "parent"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.add().arg("./child").arg("--index").arg("./missing-index"), @r"
+    success: false
+    exit_code: 2
+    ----- stdout -----
+
+    ----- stderr -----
+    error: Directory not found for index: file://[TEMP_DIR]/missing-index
+    ");
+
+    uv_snapshot!(context.filters(), context.add().arg("./child").arg("--rev").arg("main"), @r"
+    success: false
+    exit_code: 2
+    ----- stdout -----
+
+    ----- stderr -----
+    Adding `child` to workspace members
+    error: `child` did not resolve to a Git repository, but a Git reference (`--rev main`) was provided.
+    ");
+
+    let pyproject_toml = fs_err::read_to_string(context.temp_dir.join("pyproject.toml"))?;
+
+    insta::with_settings!({
+        filters => context.filters(),
+    }, {
+        assert_snapshot!(
+            pyproject_toml, @r#"
+        [project]
+        name = "parent"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+        "#
+        );
+    });
+
     assert!(!context.temp_dir.join("uv.lock").exists());
 
     Ok(())
@@ -8732,7 +8799,7 @@ fn fail_to_add_revert_workspace_member() -> Result<()> {
     uv_snapshot!(context.filters(), context.add().current_dir(&project).arg("../broken"), @r#"
     exit_code: 1 (failure)
     ----- stderr -----
-    Added `broken` to workspace members
+    Adding `broken` to workspace members
     Resolved 4 packages in [TIME]
       × Failed to build `broken @ file://[TEMP_DIR]/broken`
       ├─▶ The build backend returned an error
@@ -14451,7 +14518,7 @@ fn add_path_with_existing_workspace() -> Result<()> {
         .arg("../dep"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Added `dep` to workspace members
+    Adding `dep` to workspace members
     Resolved 3 packages in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
@@ -14527,7 +14594,7 @@ fn add_path_with_workspace() -> Result<()> {
         .arg("--workspace"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Added `dep` to workspace members
+    Adding `dep` to workspace members
     Resolved 2 packages in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
@@ -14592,7 +14659,7 @@ fn add_path_within_workspace_defaults_to_workspace() -> Result<()> {
         .arg("./dep"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Added `dep` to workspace members
+    Adding `dep` to workspace members
     Resolved 2 packages in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]

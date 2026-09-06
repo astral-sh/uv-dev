@@ -517,6 +517,26 @@ pub(crate) async fn add(
 
     // Store the content prior to any modifications.
     let snapshot = target.snapshot().await?;
+    let mut transaction = AddTargetTransaction::new(&snapshot);
+
+    // Validate any indexes that were provided on the command-line before modifying the workspace.
+    let mut valid_indexes = Vec::with_capacity(indexes.len());
+    for index in indexes {
+        if let IndexUrl::Path(url) = &index.url {
+            let path = url
+                .to_file_path()
+                .map_err(|()| anyhow::anyhow!("Invalid file path in index URL: {url}"))?;
+            if !path.is_dir() {
+                bail!("Directory not found for index: {url}");
+            }
+            if fs_err::read_dir(&path)?.next().is_none() {
+                warn_user_once!("Index directory `{url}` is empty, skipping");
+                continue;
+            }
+        }
+        valid_indexes.push(index);
+    }
+    let indexes = valid_indexes;
 
     // If the user provides a single, named index, pin all requirements to that index.
     let index = indexes
@@ -601,7 +621,7 @@ pub(crate) async fn add(
 
                 writeln!(
                     printer.stderr(),
-                    "Added `{}` to workspace members",
+                    "Adding `{}` to workspace members",
                     relative_path.user_display().cyan()
                 )?;
             }
@@ -611,6 +631,7 @@ pub(crate) async fn add(
         // the discovered members, etc.
         target = if modified {
             let workspace_content = toml.to_string();
+            transaction.activate();
             fs_err::write(
                 project.workspace().install_path().join("pyproject.toml"),
                 &workspace_content,
@@ -672,26 +693,6 @@ pub(crate) async fn add(
         }
     }
 
-    // Validate any indexes that were provided on the command-line to ensure
-    // they point to existing non-empty directories when using path URLs.
-    let mut valid_indexes = Vec::with_capacity(indexes.len());
-    for index in indexes {
-        if let IndexUrl::Path(url) = &index.url {
-            let path = url
-                .to_file_path()
-                .map_err(|()| anyhow::anyhow!("Invalid file path in index URL: {url}"))?;
-            if !path.is_dir() {
-                bail!("Directory not found for index: {url}");
-            }
-            if fs_err::read_dir(&path)?.next().is_none() {
-                warn_user_once!("Index directory `{url}` is empty, skipping");
-                continue;
-            }
-        }
-        valid_indexes.push(index);
-    }
-    let indexes = valid_indexes;
-
     // Add any indexes that were provided on the command-line, in priority order.
     if !raw {
         let root_dir = match &target {
@@ -711,11 +712,13 @@ pub(crate) async fn add(
     let content = toml.to_string();
 
     // Save the modified `pyproject.toml` or script.
+    transaction.activate();
     modified |= target.write(&content)?;
 
     // If `--frozen`, exit early. There's no reason to lock and sync, since we don't need a `uv.lock`
     // to exist at all.
     if frozen.is_some() {
+        transaction.commit();
         return Ok(ExitStatus::Success);
     }
 
@@ -785,28 +788,24 @@ pub(crate) async fn add(
     ))
     .await
     {
-        Ok(()) => Ok(ExitStatus::Success),
-        Err(err) => {
-            if modified {
-                let _ = snapshot.revert();
-            }
-            match err {
-                ProjectError::Operation(err) => {
-                    let standard_library_hint = standard_library_hint(&err, &edits, python_minor);
-                    let diagnostic = diagnostics::OperationDiagnostic::default();
-                    let diagnostic = if let Some(hint) = standard_library_hint {
-                        diagnostic.with_hint(hint)
-                    } else {
-                        diagnostic
-                    };
-                    diagnostic
-                        .with_hint(format!("If you want to add the package regardless of the failed resolution, provide the `{}` flag to skip locking and syncing", "--frozen".green()))
-                        .report(err)
-                        .map_or(Ok(ExitStatus::Failure), |err| Err(err.into()))
-                }
-                err => Err(err.into()),
-            }
+        Ok(()) => {
+            transaction.commit();
+            Ok(ExitStatus::Success)
         }
+        Err(ProjectError::Operation(err)) => {
+            let standard_library_hint = standard_library_hint(&err, &edits, python_minor);
+            let diagnostic = diagnostics::OperationDiagnostic::default();
+            let diagnostic = if let Some(hint) = standard_library_hint {
+                diagnostic.with_hint(hint)
+            } else {
+                diagnostic
+            };
+            diagnostic
+                .with_hint(format!("If you want to add the package regardless of the failed resolution, provide the `{}` flag to skip locking and syncing", "--frozen".green()))
+                .report(err)
+                .map_or(Ok(ExitStatus::Failure), |err| Err(err.into()))
+        }
+        Err(err) => Err(err.into()),
     }
 }
 
@@ -1476,7 +1475,11 @@ impl AddTargetSnapshot {
                     fs_err::write(target.lock_path(), lock)?;
                 } else {
                     debug!("Removing `uv.lock`");
-                    fs_err::remove_file(target.lock_path())?;
+                    if let Err(err) = fs_err::remove_file(target.lock_path()) {
+                        if err.kind() != io::ErrorKind::NotFound {
+                            return Err(err);
+                        }
+                    }
                 }
                 Ok(())
             }
@@ -1505,10 +1508,45 @@ impl AddTargetSnapshot {
                     fs_err::write(target.lock_path(), lock)?;
                 } else {
                     debug!("Removing `uv.lock`");
-                    fs_err::remove_file(target.lock_path())?;
+                    if let Err(err) = fs_err::remove_file(target.lock_path()) {
+                        if err.kind() != io::ErrorKind::NotFound {
+                            return Err(err);
+                        }
+                    }
                 }
                 Ok(())
             }
+        }
+    }
+}
+
+/// Revert an add operation if any error occurs after a manifest is written.
+struct AddTargetTransaction<'a> {
+    snapshot: &'a AddTargetSnapshot,
+    active: bool,
+}
+
+impl<'a> AddTargetTransaction<'a> {
+    fn new(snapshot: &'a AddTargetSnapshot) -> Self {
+        Self {
+            snapshot,
+            active: false,
+        }
+    }
+
+    fn activate(&mut self) {
+        self.active = true;
+    }
+
+    fn commit(&mut self) {
+        self.active = false;
+    }
+}
+
+impl Drop for AddTargetTransaction<'_> {
+    fn drop(&mut self) {
+        if self.active {
+            let _ = self.snapshot.revert();
         }
     }
 }
