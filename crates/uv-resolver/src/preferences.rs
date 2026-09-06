@@ -332,18 +332,51 @@ impl Preferences {
             .unwrap_or_default()
     }
 
+    /// Index the hashes for each pinned package by version.
+    pub(crate) fn hashes(&self) -> PreferenceHashes<'_> {
+        let mut hashes = FxHashMap::default();
+        for (package_name, entries) in &self.0 {
+            if entries.len() <= PreferenceHashes::INDEX_THRESHOLD {
+                continue;
+            }
+            for entry in entries {
+                hashes
+                    .entry((package_name, entry.pin.version()))
+                    .or_insert(entry.pin.hashes());
+            }
+        }
+        PreferenceHashes {
+            preferences: &self.0,
+            hashes,
+        }
+    }
+}
+
+/// A borrowed index of hashes for pinned packages.
+pub(crate) struct PreferenceHashes<'a> {
+    preferences: &'a FxHashMap<PackageName, Vec<Entry>>,
+    hashes: FxHashMap<(&'a PackageName, &'a Version), &'a [HashDigest]>,
+}
+
+impl PreferenceHashes<'_> {
+    /// The maximum number of preferences to scan before indexing hashes by version.
+    const INDEX_THRESHOLD: usize = 32;
+
     /// Return the hashes for a package, if the version matches that of the pin.
-    pub(crate) fn match_hashes(
+    pub(crate) fn get(
         &self,
         package_name: &PackageName,
         version: &Version,
     ) -> Option<&[HashDigest]> {
-        self.0
-            .get(package_name)
-            .into_iter()
-            .flatten()
-            .find(|entry| entry.pin.version() == version)
-            .map(|entry| entry.pin.hashes())
+        let entries = self.preferences.get(package_name)?;
+        if entries.len() <= Self::INDEX_THRESHOLD {
+            entries
+                .iter()
+                .find(|entry| entry.pin.version() == version)
+                .map(|entry| entry.pin.hashes())
+        } else {
+            self.hashes.get(&(package_name, version)).copied()
+        }
     }
 }
 
@@ -385,6 +418,62 @@ impl From<Version> for Pin {
 mod tests {
     use super::*;
     use std::str::FromStr;
+
+    #[test]
+    fn preference_hashes_preserve_first_pin() {
+        let package_name = PackageName::from_str("example").unwrap();
+        let first_version = Version::from_str("1.0.0").unwrap();
+        let second_version = Version::from_str("2.0.0").unwrap();
+        let first_hash = HashDigest::from_str(
+            "sha256:0576fe974b40a400449768941d5d0858cc624e3249dfd1e0c33674e5c7ca7aed",
+        )
+        .unwrap();
+        let second_hash = HashDigest::from_str(
+            "sha256:085fd3201e7b12809f9e6e9bc1e5c96a368c8523fad5afb02afe3c051ae4afcc",
+        )
+        .unwrap();
+
+        let entry = |version: &Version, hashes: HashDigests| Entry {
+            marker: UniversalMarker::TRUE,
+            index: PreferenceIndex::Any,
+            pin: Pin {
+                version: version.clone(),
+                hashes,
+            },
+            source: PreferenceSource::RequirementsTxt,
+        };
+        let mut entries = vec![
+            entry(&first_version, HashDigests::empty()),
+            entry(&first_version, HashDigests::from(first_hash.clone())),
+            entry(&second_version, HashDigests::from(first_hash.clone())),
+            entry(&second_version, HashDigests::from(second_hash.clone())),
+        ];
+
+        let preferences = Preferences(FxHashMap::from_iter([(
+            package_name.clone(),
+            entries.clone(),
+        )]));
+
+        let hashes = preferences.hashes();
+        assert_eq!(hashes.get(&package_name, &first_version), Some(&[][..]));
+        assert_eq!(
+            hashes.get(&package_name, &second_version),
+            Some(&[first_hash.clone()][..])
+        );
+
+        entries.resize(
+            PreferenceHashes::INDEX_THRESHOLD + 1,
+            entry(&second_version, HashDigests::from(second_hash)),
+        );
+        let preferences = Preferences(FxHashMap::from_iter([(package_name.clone(), entries)]));
+
+        let hashes = preferences.hashes();
+        assert_eq!(hashes.get(&package_name, &first_version), Some(&[][..]));
+        assert_eq!(
+            hashes.get(&package_name, &second_version),
+            Some(&[first_hash][..])
+        );
+    }
 
     /// Test that [`PreferenceIndex::matches`] correctly ignores credentials when comparing URLs.
     ///

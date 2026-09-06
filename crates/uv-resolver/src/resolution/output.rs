@@ -24,7 +24,7 @@ use uv_pypi_types::{Conflicts, HashDigests, ParsedUrlError, VerbatimParsedUrl, Y
 
 use crate::graph_ops::{marker_reachability, simplify_conflict_markers};
 use crate::pins::FilePins;
-use crate::preferences::Preferences;
+use crate::preferences::{PreferenceHashes, Preferences};
 use crate::redirect::url_to_precise;
 use crate::resolution::AnnotatedDist;
 use crate::resolution_mode::ResolutionStrategy;
@@ -144,6 +144,8 @@ impl ResolverOutput {
         // Add the root node.
         let root_index = graph.add_node(ResolutionGraphNode::Root);
 
+        let preference_hashes = preferences.hashes();
+
         let mut seen = FxHashSet::default();
         for resolution in resolutions {
             // Add every package to the graph.
@@ -156,7 +158,7 @@ impl ResolverOutput {
                     &mut graph,
                     &mut inverse,
                     &mut diagnostics,
-                    preferences,
+                    &preference_hashes,
                     &resolution.pins,
                     index,
                     git,
@@ -324,7 +326,7 @@ impl ResolverOutput {
         graph: &mut Graph<ResolutionGraphNode, UniversalMarker>,
         inverse: &mut FxHashMap<PackageRef<'a>, NodeIndex>,
         diagnostics: &mut Vec<ResolutionDiagnostic>,
-        preferences: &Preferences,
+        preference_hashes: &PreferenceHashes<'_>,
         pins: &FilePins,
         in_memory: &InMemoryIndex,
         git: &GitResolver,
@@ -346,7 +348,7 @@ impl ResolverOutput {
             version,
             pins,
             diagnostics,
-            preferences,
+            preference_hashes,
             in_memory,
             git,
         )?;
@@ -405,7 +407,7 @@ impl ResolverOutput {
         version: &Version,
         pins: &FilePins,
         diagnostics: &mut Vec<ResolutionDiagnostic>,
-        preferences: &Preferences,
+        preference_hashes: &PreferenceHashes<'_>,
         in_memory: &InMemoryIndex,
         git: &GitResolver,
     ) -> Result<(ResolvedDist, HashDigests, Option<Metadata>), ResolveError> {
@@ -422,7 +424,7 @@ impl ResolverOutput {
                 Some(url),
                 &metadata_id,
                 version,
-                preferences,
+                preference_hashes,
                 in_memory,
             );
 
@@ -481,7 +483,7 @@ impl ResolverOutput {
                 None,
                 &hashes_id,
                 version,
-                preferences,
+                preference_hashes,
                 in_memory,
             );
 
@@ -511,11 +513,11 @@ impl ResolverOutput {
         url: Option<&VerbatimParsedUrl>,
         metadata_id: &DistributionId,
         version: &Version,
-        preferences: &Preferences,
+        preference_hashes: &PreferenceHashes<'_>,
         in_memory: &InMemoryIndex,
     ) -> HashDigests {
         // 1. Look for hashes from the lockfile.
-        if let Some(digests) = preferences.match_hashes(name, version) {
+        if let Some(digests) = preference_hashes.get(name, version) {
             if !digests.is_empty() {
                 return HashDigests::from(digests);
             }
