@@ -243,10 +243,11 @@ async fn run_with_workspace_cache(
 
     // Validate that the project directory exists if explicitly provided via --project, except for
     // `uv init`, which creates the project directory (separate deprecation).
-    let skip_project_validation = matches!(
-        &*cli.command,
-        Commands::Project(command) if matches!(**command, ProjectCommand::Init(_))
-    );
+    let skip_project_validation = matches!(&*cli.command, Commands::Pip(_))
+        || matches!(
+            &*cli.command,
+            Commands::Project(command) if matches!(**command, ProjectCommand::Init(_))
+        );
 
     if !skip_project_validation {
         if let Some(project_path) = cli.top_level.global_args.project.as_ref() {
@@ -321,6 +322,13 @@ async fn run_with_workspace_cache(
         cli.top_level.cache_args.no_cache,
         cli.top_level.cache_args.cache_dir.clone(),
     )?;
+    // Project selection still determines the root for implicit dependency groups in the pip
+    // interface, but must not redirect configuration discovery.
+    let config_discovery_dir: &Path = if matches!(&*cli.command, Commands::Pip(_)) {
+        &CWD
+    } else {
+        &project_dir
+    };
     let filesystem = if let Some(config_file) = cli.top_level.config_file.as_ref() {
         if config_file
             .file_name()
@@ -339,7 +347,7 @@ async fn run_with_workspace_cache(
             .map_err(map_settings_error)?
             .combine(FilesystemOptions::system().map_err(map_settings_error)?)
     } else if let Ok(workspace) = Workspace::discover(
-        &project_dir,
+        config_discovery_dir,
         &DiscoveryOptions::default(),
         &discovery_cache,
         &workspace_cache,
@@ -352,7 +360,7 @@ async fn run_with_workspace_cache(
         let user = FilesystemOptions::user().map_err(map_settings_error)?;
         project.combine(user).combine(system)
     } else {
-        let project = FilesystemOptions::find(&project_dir).map_err(map_settings_error)?;
+        let project = FilesystemOptions::find(config_discovery_dir).map_err(map_settings_error)?;
         let system = FilesystemOptions::system().map_err(map_settings_error)?;
         let user = FilesystemOptions::user().map_err(map_settings_error)?;
         project.combine(user).combine(system)
