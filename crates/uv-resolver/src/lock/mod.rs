@@ -4660,8 +4660,14 @@ impl PackageWire {
     ) -> Result<Package, LockError> {
         // Consistency check
         if !uv_flags::contains(uv_flags::EnvironmentFlags::SKIP_WHEEL_FILENAME_CHECK) {
-            if let Some(version) = &self.id.version {
-                for wheel in &self.wheels {
+            for wheel in &self.wheels {
+                if self.id.name != wheel.filename.name {
+                    return Err(LockError::from(LockErrorKind::InconsistentNames {
+                        name: self.id.name,
+                        wheel: wheel.clone(),
+                    }));
+                }
+                if let Some(version) = &self.id.version {
                     if *version != wheel.filename.version
                         && *version != wheel.filename.version.clone().without_local()
                     {
@@ -4672,9 +4678,9 @@ impl PackageWire {
                         }));
                     }
                 }
-                // We can't check the source dist version since it does not need to contain the version
-                // in the filename.
             }
+            // We can't check the source dist version since it does not need to contain the version
+            // in the filename.
         }
 
         // A registry-source package must carry a version; downstream conversions
@@ -7594,6 +7600,14 @@ enum LockErrorKind {
         /// The version of the package with the inconsistent entry.
         version: Version,
         /// The wheel with the inconsistent version.
+        wheel: Wheel,
+    },
+    /// A package has an inconsistent name in a wheel filename.
+    #[error("The entry for package `{name}` has wheel `{wheel_filename}` with inconsistent name ({wheel_name}), which indicates a malformed wheel. If this is intentional, set `{env_var}`.", name = name.cyan(), wheel_filename = wheel.filename, wheel_name = wheel.filename.name, env_var = "UV_SKIP_WHEEL_FILENAME_CHECK=1".green())]
+    InconsistentNames {
+        /// The name of the package with the inconsistent entry.
+        name: PackageName,
+        /// The wheel with the inconsistent name.
         wheel: Wheel,
     },
     #[error(

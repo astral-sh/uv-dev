@@ -12732,6 +12732,69 @@ fn locked_version_coherence() -> Result<()> {
     Ok(())
 }
 
+/// Test that a local wheel cannot silently install a different package from its lock entry.
+#[test]
+fn locked_wheel_name_coherence() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let links = context.temp_dir.child("links");
+    links.create_dir_all()?;
+
+    for filename in [
+        "build_tag-1.0.0-5-py2.py3-none-any.whl",
+        "ok-1.0.0-py3-none-any.whl",
+    ] {
+        fs_err::copy(
+            context.workspace_root.join("test/links").join(filename),
+            links.child(filename),
+        )?;
+    }
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["build-tag==1.0.0"]
+
+        [tool.uv]
+        find-links = ["{}"]
+    "#,
+            links.path().portable_display(),
+        })?;
+
+    context.lock().arg("--offline").assert().success();
+
+    let lock = context.read("uv.lock").replace(
+        "build_tag-1.0.0-5-py2.py3-none-any.whl",
+        "ok-1.0.0-py3-none-any.whl",
+    );
+    context.temp_dir.child("uv.lock").write_str(&lock)?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline"), @"
+    success: false
+    exit_code: 2
+    ----- stdout -----
+
+    ----- stderr -----
+    error: Failed to parse `uv.lock`
+      Caused by: The entry for package `build-tag` has wheel `ok-1.0.0-py3-none-any.whl` with inconsistent name (ok), which indicates a malformed wheel. If this is intentional, set `UV_SKIP_WHEEL_FILENAME_CHECK=1`.
+    ");
+
+    context
+        .sync()
+        .arg("--locked")
+        .arg("--offline")
+        .env(EnvVars::UV_SKIP_WHEEL_FILENAME_CHECK, "1")
+        .assert()
+        .success();
+    assert!(context.site_packages().join("ok-1.0.0.dist-info").exists());
+
+    Ok(())
+}
+
 /// `uv sync` should respect build constraints. In this case, `json-merge-patch` should _not_ fail
 /// to build, despite the fact that `setuptools==78.0.1` is the most recent version and _does_ fail
 /// to build that package.
