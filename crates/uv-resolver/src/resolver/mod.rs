@@ -3148,6 +3148,11 @@ impl ForkState {
         workspace_members: &BTreeSet<PackageName>,
         resolution_strategy: &ResolutionStrategy,
     ) -> Result<(), ResolveError> {
+        const LOWER_BOUNDED_DIRECT_DEPENDENCY_INDEX_THRESHOLD: usize = 32;
+
+        let mut lower_bounded_direct_dependencies = None;
+        let mut lower_bounded_direct_dependency_lookups = 0;
+
         for dependency in dependencies {
             let PubGrubDependency {
                 package,
@@ -3205,13 +3210,34 @@ impl ForkState {
                     // "coverage[toml] ; python_version < '3.11'",
                     // "coverage >= 7.10.0",
                     // ```
-                    let bound_on_other_package = dependencies.iter().any(|other| {
-                        Some(name) == other.package.name()
-                            && !other
-                                .version
-                                .bounding_range()
-                                .is_none_or(|(lowest, _highest)| lowest == Bound::Unbounded)
-                    });
+                    let bound_on_other_package = if dependencies.len()
+                        < LOWER_BOUNDED_DIRECT_DEPENDENCY_INDEX_THRESHOLD
+                        || lower_bounded_direct_dependency_lookups
+                            < LOWER_BOUNDED_DIRECT_DEPENDENCY_INDEX_THRESHOLD
+                    {
+                        lower_bounded_direct_dependency_lookups += 1;
+                        dependencies.iter().any(|other| {
+                            Some(name) == other.package.name()
+                                && !other
+                                    .version
+                                    .bounding_range()
+                                    .is_none_or(|(lowest, _highest)| lowest == Bound::Unbounded)
+                        })
+                    } else {
+                        lower_bounded_direct_dependencies
+                            .get_or_insert_with(|| {
+                                dependencies
+                                    .iter()
+                                    .filter(|other| {
+                                        !other.version.bounding_range().is_none_or(
+                                            |(lowest, _highest)| lowest == Bound::Unbounded,
+                                        )
+                                    })
+                                    .filter_map(|other| other.package.name())
+                                    .collect::<FxHashSet<_>>()
+                            })
+                            .contains(name)
+                    };
 
                     if !bound_on_other_package {
                         warn_user_once!(
