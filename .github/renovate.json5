@@ -112,6 +112,14 @@
       groupName: "Python test versions",
     },
     {
+      // The generic regexes also match these fixed comparison and prerelease versions.
+      matchFileNames: [".python-versions", "crates/uv/tests/lock/lock.rs"],
+      matchManagers: ["custom.regex"],
+      matchDatasources: ["python-version"],
+      matchCurrentValue: "/^(3\\.13\\.0|3\\.14\\.0rc2)$/",
+      enabled: false,
+    },
+    {
       commitMessageTopic: "MSRV",
       matchManagers: ["custom.regex"],
       matchDepNames: ["msrv"],
@@ -135,15 +143,11 @@
     },
   ],
   customManagers: [
-    // Update the regular test versions; the versions below that block are fixed test cases.
+    // Match every version in the file; fixed test cases are disabled above.
     {
       customType: "regex",
       managerFilePatterns: ["/^\\.python-versions$/"],
-      matchStringsStrategy: "recursive",
-      matchStrings: [
-        "^# These are versions of Python required[\\s\\S]*?\\n\\n(?:3\\.\\d+\\.\\d+\\n)+",
-        "(?<currentValue>3\\.\\d+\\.\\d+)",
-      ],
+      matchStrings: ["\\n(?<currentValue>3\\.\\d+\\.\\d+\\S*)"],
       depNameTemplate: "python",
       datasourceTemplate: "python-version",
       versioningTemplate: "python",
@@ -170,7 +174,7 @@
       matchStringsStrategy: "recursive",
       matchStrings: [
         "fn lock_requires_python_empty_lock_file\\(\\) -> Result<\\(\\)> \\{[\\s\\S]*?\\n\\}",
-        "(?<currentValue>3\\.13\\.[1-9]\\d*)",
+        "(?<currentValue>3\\.13\\.\\d+)",
       ],
       depNameTemplate: "python",
       datasourceTemplate: "python-version",
