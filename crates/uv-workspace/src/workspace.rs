@@ -300,6 +300,25 @@ pub struct Workspace {
     pyproject_toml: PyProjectToml,
 }
 
+/// Compiled workspace member patterns.
+#[derive(Debug, Default)]
+pub struct WorkspaceMemberMatcher {
+    patterns: Vec<glob::Pattern>,
+}
+
+impl WorkspaceMemberMatcher {
+    /// Returns `true` if the path is included by the workspace member patterns.
+    pub fn includes(&self, project_path: &Path) -> bool {
+        let options = MatchOptions {
+            require_literal_separator: true,
+            ..MatchOptions::new()
+        };
+        self.patterns
+            .iter()
+            .any(|pattern| pattern.matches_path_with(project_path, options))
+    }
+}
+
 impl Workspace {
     /// Find the workspace containing the given path.
     ///
@@ -1027,6 +1046,21 @@ impl Workspace {
             is_included_in_workspace(project_path, &self.install_path, workspace)
         } else {
             Ok(false)
+        }
+    }
+
+    /// Returns the compiled workspace member patterns.
+    pub fn member_matcher(&self) -> Result<WorkspaceMemberMatcher, WorkspaceError> {
+        if let Some(workspace) = self
+            .pyproject_toml
+            .tool
+            .as_ref()
+            .and_then(|tool| tool.uv.as_ref())
+            .and_then(|uv| uv.workspace.as_ref())
+        {
+            workspace_member_matcher(&self.install_path, workspace)
+        } else {
+            Ok(WorkspaceMemberMatcher::default())
         }
     }
 
@@ -2046,20 +2080,42 @@ fn is_included_in_workspace(
         ..MatchOptions::new()
     };
     for member_glob in workspace.members.iter().flatten() {
-        // Normalize the member glob to remove leading `./` and other relative path components
-        let normalized_glob = normalize_path(Path::new(member_glob.as_str()));
-        let absolute_glob = PathBuf::from(glob::Pattern::escape(
-            workspace_root.simplified().to_string_lossy().as_ref(),
-        ))
-        .join(normalized_glob);
-        let absolute_glob = absolute_glob.to_string_lossy();
-        let include_pattern = glob::Pattern::new(&absolute_glob)
-            .map_err(|err| WorkspaceErrorKind::Pattern(absolute_glob.to_string(), err))?;
-        if include_pattern.matches_path_with(project_path, options) {
+        if workspace_member_pattern(workspace_root, member_glob.as_str())?
+            .matches_path_with(project_path, options)
+        {
             return Ok(true);
         }
     }
     Ok(false)
+}
+
+/// Compile the `tool.uv.workspace.members` patterns of a workspace.
+fn workspace_member_matcher(
+    workspace_root: &Path,
+    workspace: &ToolUvWorkspace,
+) -> Result<WorkspaceMemberMatcher, WorkspaceError> {
+    let patterns = workspace
+        .members
+        .iter()
+        .flatten()
+        .map(|member_glob| workspace_member_pattern(workspace_root, member_glob.as_str()))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(WorkspaceMemberMatcher { patterns })
+}
+
+fn workspace_member_pattern(
+    workspace_root: &Path,
+    member_glob: &str,
+) -> Result<glob::Pattern, WorkspaceError> {
+    // Normalize the member glob to remove leading `./` and other relative path components.
+    let normalized_glob = normalize_path(Path::new(member_glob));
+    let absolute_glob = PathBuf::from(glob::Pattern::escape(
+        workspace_root.simplified().to_string_lossy().as_ref(),
+    ))
+    .join(normalized_glob);
+    let absolute_glob = absolute_glob.to_string_lossy();
+    glob::Pattern::new(&absolute_glob)
+        .map_err(|err| WorkspaceErrorKind::Pattern(absolute_glob.to_string(), err).into())
 }
 
 /// A project that can be discovered.

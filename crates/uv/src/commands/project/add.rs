@@ -568,6 +568,8 @@ pub(crate) async fn add(
             &project.workspace().pyproject_toml().raw,
             DependencyTarget::PyProjectToml,
         )?;
+        let member_matcher = project.workspace().member_matcher()?;
+        let mut workspace_members = Vec::new();
 
         // Check each requirement to see if it's a path dependency
         for requirement in &requirements {
@@ -588,7 +590,7 @@ pub(crate) async fn add(
                 }
 
                 // If the project is already a member of the workspace, skip it.
-                if project.workspace().includes(&absolute_path)? {
+                if member_matcher.includes(&absolute_path) {
                     continue;
                 }
 
@@ -596,13 +598,19 @@ pub(crate) async fn add(
                     .strip_prefix(project.workspace().install_path())
                     .unwrap_or(&absolute_path);
 
-                toml.add_workspace(relative_path)?;
-                modified |= true;
+                workspace_members.push(relative_path.to_path_buf());
+            }
+        }
 
+        if !workspace_members.is_empty() {
+            toml.add_workspaces(&workspace_members)?;
+            modified |= true;
+
+            for member in workspace_members {
                 writeln!(
                     printer.stderr(),
                     "Added `{}` to workspace members",
-                    relative_path.user_display().cyan()
+                    member.user_display().cyan()
                 )?;
             }
         }
