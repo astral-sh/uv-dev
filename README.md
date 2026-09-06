@@ -13,6 +13,10 @@ versions satisfy declared constraints, and recorded wheel and source-distributio
 are actually advertised by the configured indexes. The motivating case is a pull request that hides
 an attacker-controlled artifact URL among otherwise legitimate lockfile changes.
 
+The reporter clarifies that this is an explicit trust-boundary check for contributions from
+non-maintainers, intended for pull-request CI or manual local review of a checked-out contribution.
+They are not requesting an index-backed verification step on every `uv sync`.
+
 The repository currently provides related but narrower safeguards. `uv lock --check` checks whether
 the lockfile is up to date with project metadata; it is not an independent provenance check for all
 lockfile records. During sync, uv derives a hash-verification strategy from the lock resolution and
@@ -107,7 +111,9 @@ provenance, and astral-sh/uv#11932 primarily asks to compare a project environme
   discuss preserving index-free locked installs for performance and using OSV malware reports as a
   cheaper layered defense. They also confirm that a PyPI artifact referenced directly by a lockfile
   can remain retrievable after its index entry is quarantined or removed. This explains the current
-  design tradeoff but does not validate arbitrary locked URLs or previously unknown malware.
+  design tradeoff but addresses compromised dependencies during installation, not deliberate
+  lockfile manipulation at contribution-review time. The requested verifier would be invoked
+  separately rather than changing the normal locked-sync path.
 - astral-sh/uv#18936 — **Reject locked malware installations** (merged pull request). This added a
   malware check against `MAL-` OSV reports before project installation. It checks known malicious
   package versions rather than establishing that the dependency graph, artifact URL, and hash came
