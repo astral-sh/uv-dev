@@ -5,7 +5,7 @@ use fs_err as fs;
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use uv_fs::{LockedFile, LockedFileError, LockedFileMode};
+use uv_fs::{LockedFile, LockedFileError, LockedFileMode, persist_with_retry_sync};
 use uv_preview::{Preview, PreviewFeature};
 use uv_redacted::DisplaySafeUrl;
 
@@ -263,10 +263,40 @@ impl TextCredentialStore {
     /// Acquire a lock on the credentials file at the given path.
     async fn lock(path: &Path) -> Result<LockedFile, TomlCredentialError> {
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
+            Self::create_directory(parent)?;
         }
-        let lock = path.with_added_extension("lock");
-        Ok(LockedFile::acquire(lock, LockedFileMode::Exclusive, "credentials store").await?)
+        let lock_path = path.with_added_extension("lock");
+
+        #[cfg(unix)]
+        {
+            use fs_err::os::unix::fs::OpenOptionsExt;
+
+            fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .mode(0o600)
+                .open(&lock_path)?;
+        }
+
+        Ok(LockedFile::acquire(&lock_path, LockedFileMode::Exclusive, "credentials store").await?)
+    }
+
+    fn create_directory(path: &Path) -> Result<(), TomlCredentialError> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+
+            std::fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o700)
+                .create(path)?;
+        }
+
+        #[cfg(not(unix))]
+        fs::create_dir_all(path)?;
+
+        Ok(())
     }
 
     /// Read credentials from a file.
@@ -325,14 +355,15 @@ impl TextCredentialStore {
 
         let toml_creds = TomlCredentials { credentials };
         let content = toml::to_string_pretty(&toml_creds)?;
-        fs::create_dir_all(
-            path.as_ref()
-                .parent()
-                .ok_or(TomlCredentialError::CredentialsDirError)?,
-        )?;
+        let path = path.as_ref();
+        let parent = path
+            .parent()
+            .ok_or(TomlCredentialError::CredentialsDirError)?;
+        Self::create_directory(parent)?;
 
-        // TODO(zanieb): We should use an atomic write here
-        fs::write(path, content)?;
+        let temp_file = tempfile::NamedTempFile::new_in(parent)?;
+        fs::write(&temp_file, content)?;
+        persist_with_retry_sync(temp_file, path)?;
         Ok(())
     }
 
@@ -515,15 +546,16 @@ password = "pass2"
         assert_eq!(cred.password(), Some("testpass"));
 
         // Test saving
-        let temp_output = NamedTempFile::new().unwrap();
+        let temp_output = tempfile::tempdir().unwrap();
+        let temp_output_path = temp_output.path().join("credentials.toml");
         store
             .write(
-                temp_output.path(),
+                &temp_output_path,
                 TextCredentialStore::lock(temp_file.path()).await.unwrap(),
             )
             .unwrap();
 
-        let content = fs::read_to_string(temp_output.path()).unwrap();
+        let content = fs::read_to_string(temp_output_path).unwrap();
         assert!(content.contains("example.com"));
         assert!(content.contains("testuser"));
     }

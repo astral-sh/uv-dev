@@ -4,6 +4,8 @@ use assert_fs::{fixture::PathChild, prelude::FileWriteStr};
 use insta::allow_duplicates;
 use uv_static::EnvVars;
 
+#[cfg(unix)]
+use uv_test::get_bin;
 use uv_test::uv_snapshot;
 
 #[tokio::test]
@@ -1062,6 +1064,118 @@ fn login_text_store_empty_file() -> Result<()> {
     ----- stdout -----
     test-token
     ");
+
+    Ok(())
+}
+
+/// Plaintext credentials and their lock must remain private under a permissive umask.
+#[cfg(unix)]
+#[test]
+fn login_text_store_private_permissions() -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::Command;
+
+    let context = uv_test::test_context_with_versions!(&[]);
+    let credentials_dir = context.temp_dir.child("credentials");
+    let mut command = Command::new("sh");
+    command
+        .arg("-c")
+        .arg("umask 000; exec \"$@\"")
+        .arg("sh")
+        .arg(get_bin!())
+        .arg("auth")
+        .arg("login")
+        .arg("--cache-dir")
+        .arg(context.cache_dir.path())
+        .arg("https://example.com/simple")
+        .arg("--token")
+        .arg("secret-token")
+        .env(EnvVars::UV_CREDENTIALS_DIR, credentials_dir.path());
+    context.add_shared_env(&mut command, false);
+
+    uv_snapshot!(context.filters(), command, @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Stored credentials for https://example.com/
+    ");
+
+    let credentials = credentials_dir.child("credentials.toml");
+    let lock = credentials_dir.child("credentials.toml.lock");
+    assert_eq!(
+        fs_err::metadata(credentials_dir.path())?
+            .permissions()
+            .mode()
+            & 0o777,
+        0o700
+    );
+    assert_eq!(
+        fs_err::metadata(credentials.path())?.permissions().mode() & 0o777,
+        0o600
+    );
+    assert_eq!(
+        fs_err::metadata(lock.path())?.permissions().mode() & 0o777,
+        0o600
+    );
+    assert!(fs_err::read_to_string(credentials.path())?.contains("secret-token"));
+
+    Ok(())
+}
+
+/// Reading an existing shared credential store must not change its permissions.
+#[cfg(unix)]
+#[test]
+fn token_text_store_read_only_permissions() -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let context = uv_test::test_context_with_versions!(&[]);
+    let credentials_dir = context.temp_dir.child("credentials");
+    let credentials = credentials_dir.child("credentials.toml");
+    let lock = credentials_dir.child("credentials.toml.lock");
+    credentials.write_str(indoc::indoc! {r#"
+        [[credential]]
+        service = "https://example.com"
+        username = "__token__"
+        password = "shared-token"
+    "#})?;
+    lock.write_str("")?;
+
+    let mut permissions = fs_err::metadata(credentials.path())?.permissions();
+    permissions.set_mode(0o444);
+    fs_err::set_permissions(credentials.path(), permissions)?;
+    let mut permissions = fs_err::metadata(lock.path())?.permissions();
+    permissions.set_mode(0o644);
+    fs_err::set_permissions(lock.path(), permissions)?;
+    let mut permissions = fs_err::metadata(credentials_dir.path())?.permissions();
+    permissions.set_mode(0o555);
+    fs_err::set_permissions(credentials_dir.path(), permissions)?;
+
+    uv_snapshot!(context.auth_token()
+        .arg("https://example.com/simple")
+        .env(EnvVars::UV_CREDENTIALS_DIR, credentials_dir.path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    shared-token
+    ");
+
+    assert_eq!(
+        fs_err::metadata(credentials_dir.path())?
+            .permissions()
+            .mode()
+            & 0o777,
+        0o555
+    );
+    assert_eq!(
+        fs_err::metadata(credentials.path())?.permissions().mode() & 0o777,
+        0o444
+    );
+    assert_eq!(
+        fs_err::metadata(lock.path())?.permissions().mode() & 0o777,
+        0o644
+    );
+
+    let mut permissions = fs_err::metadata(credentials_dir.path())?.permissions();
+    permissions.set_mode(0o700);
+    fs_err::set_permissions(credentials_dir.path(), permissions)?;
 
     Ok(())
 }
