@@ -99,7 +99,15 @@
       description: "version-ranges and pubgrub are in the same Git repository",
     },
     {
-      matchFileNames: [".python-versions"],
+      matchFileNames: [
+        ".python-versions",
+        "crates/uv/tests/lock/lock.rs",
+        "crates/uv/tests/pip/pip_compile_scenarios.rs",
+        "crates/uv/tests/pip_compile/pip_compile.rs",
+        "crates/uv/tests/python/venv.rs",
+        "test/scenarios/requires_python/python-patch-override-no-patch.toml",
+        "test/scenarios/requires_python/python-patch-override-patch-compatible.toml",
+      ],
       matchManagers: ["custom.regex"],
       matchDepNames: ["python"],
       // Keep each test interpreter on its current minor version.
@@ -138,6 +146,62 @@
       matchStrings: [
         "^# These are versions of Python required[\\s\\S]*?\\n\\n(?:3\\.\\d+\\.\\d+\\n)+",
         "(?<currentValue>3\\.\\d+\\.\\d+)",
+      ],
+      depNameTemplate: "python",
+      datasourceTemplate: "python-version",
+      versioningTemplate: "python",
+    },
+    // Keep exact-version test inputs and their snapshots in sync with the 3.12 pin.
+    {
+      customType: "regex",
+      managerFilePatterns: [
+        "/^crates/uv/tests/(?:pip_compile/pip_compile|python/venv)\\.rs$/",
+      ],
+      matchStringsStrategy: "recursive",
+      matchStrings: [
+        "fn (?:emit_marker_expression_exciting_linux|emit_marker_expression_direct|emit_marker_expression_pypy|create_venv_python_patch)\\(\\)(?: -> Result<\\(\\)>)? \\{[\\s\\S]*?\\n\\}",
+        "(?<currentValue>3\\.12\\.\\d+)",
+      ],
+      depNameTemplate: "python",
+      datasourceTemplate: "python-version",
+      versioningTemplate: "python",
+    },
+    // The other version in this test is deliberately fixed at 3.13.0.
+    {
+      customType: "regex",
+      managerFilePatterns: ["/^crates/uv/tests/lock/lock\\.rs$/"],
+      matchStringsStrategy: "recursive",
+      matchStrings: [
+        "fn lock_requires_python_empty_lock_file\\(\\) -> Result<\\(\\)> \\{[\\s\\S]*?\\n\\}",
+        "(?<currentValue>3\\.13\\.[1-9]\\d*)",
+      ],
+      depNameTemplate: "python",
+      datasourceTemplate: "python-version",
+      versioningTemplate: "python",
+    },
+    // Keep the 3.9 test contexts, examples, and snapshot warning together.
+    {
+      customType: "regex",
+      managerFilePatterns: [
+        "/^crates/uv/tests/pip/pip_compile_scenarios\\.rs$/",
+      ],
+      matchStrings: [
+        "python(?<currentValue>3\\.9\\.\\d+)",
+        'test_context!\\("(?<currentValue>3\\.9\\.\\d+)"\\)',
+        "3\\.9\\.0 is not available; (?<currentValue>3\\.9\\.\\d+) will be used",
+      ],
+      depNameTemplate: "python",
+      datasourceTemplate: "python-version",
+      versioningTemplate: "python",
+    },
+    // Keep the Packse scenario environments with their test contexts.
+    {
+      customType: "regex",
+      managerFilePatterns: [
+        "/^test/scenarios/requires_python/python-patch-override-(?:no-patch|patch-compatible)\\.toml$/",
+      ],
+      matchStrings: [
+        '\\[environment\\]\\npython = "(?<currentValue>3\\.9\\.\\d+)"',
       ],
       depNameTemplate: "python",
       datasourceTemplate: "python-version",
