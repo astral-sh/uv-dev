@@ -4,7 +4,7 @@ use std::ops::Bound;
 use arcstr::ArcStr;
 use indexmap::IndexMap;
 use itertools::Itertools;
-use rustc_hash::FxBuildHasher;
+use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 use version_ranges::Ranges;
 
 use uv_pep440::{Version, VersionSpecifier};
@@ -218,11 +218,34 @@ fn collect_dnf(
 /// Note: This function has quadratic time complexity. However, it is not applied on every marker
 /// operation, only to user facing output, which are typically very simple.
 fn simplify(dnf: &mut Vec<Vec<MarkerExpression>>) {
+    const CLAUSE_MEMBERSHIP_INDEX_THRESHOLD: usize = 32;
+
+    if dnf.len() < 2 {
+        return;
+    }
+    if dnf
+        .iter()
+        .all(|clause| clause.len() < CLAUSE_MEMBERSHIP_INDEX_THRESHOLD)
+    {
+        simplify_small(dnf);
+        return;
+    }
+
     for i in 0..dnf.len() {
         let clause = &dnf[i];
 
+        let positions = (clause.len() >= CLAUSE_MEMBERSHIP_INDEX_THRESHOLD).then(|| {
+            let mut positions = FxHashMap::default();
+            positions.reserve(clause.len());
+            for (position, term) in clause.iter().enumerate() {
+                positions.entry(term).or_insert(position);
+            }
+            positions
+        });
+
         // Find redundant terms in this clause.
         let mut redundant_terms = Vec::new();
+        let mut removed_terms = positions.as_ref().map(|_| vec![false; clause.len()]);
         'term: for (skipped, skipped_term) in clause.iter().enumerate() {
             for (j, other_clause) in dnf.iter().enumerate() {
                 if i == j {
@@ -245,25 +268,33 @@ fn simplify(dnf: &mut Vec<Vec<MarkerExpression>>) {
                         return true;
                     }
 
-                    // TODO(ibraheem): if we intern variables we could reduce this
-                    // from a linear search to an integer `HashSet` lookup
-                    clause
-                        .iter()
-                        .position(|x| x == term)
+                    positions
+                        .as_ref()
+                        .map_or_else(
+                            || clause.iter().position(|candidate| candidate == term),
+                            |positions| positions.get(term).copied(),
+                        )
                         // If the term was already removed from this one, we cannot
                         // depend on it for further simplification.
-                        .is_some_and(|i| !redundant_terms.contains(&i))
+                        .is_some_and(|position| {
+                            removed_terms.as_ref().map_or_else(
+                                || !redundant_terms.contains(&position),
+                                |removed_terms| !removed_terms[position],
+                            )
+                        })
                 }) {
                     redundant_terms.push(skipped);
+                    if let Some(removed_terms) = &mut removed_terms {
+                        removed_terms[skipped] = true;
+                    }
                     continue 'term;
                 }
             }
         }
 
         // Eliminate any redundant terms.
-        redundant_terms.sort_by(|a, b| b.cmp(a));
-        for term in redundant_terms {
-            dnf[i].remove(term);
+        for position in redundant_terms.into_iter().rev() {
+            dnf[i].remove(position);
         }
     }
 
@@ -271,30 +302,95 @@ fn simplify(dnf: &mut Vec<Vec<MarkerExpression>>) {
     // For example, `(A and B) or (not A and B)` would have been simplified above to
     // `(A and B) or B` and can now be further simplified to just `B`.
     let mut redundant_clauses = Vec::new();
+    let mut removed_clauses = dnf
+        .iter()
+        .any(|clause| clause.len() >= CLAUSE_MEMBERSHIP_INDEX_THRESHOLD)
+        .then(|| vec![false; dnf.len()]);
     'clause: for i in 0..dnf.len() {
         let clause = &dnf[i];
+        let terms = (clause.len() >= CLAUSE_MEMBERSHIP_INDEX_THRESHOLD)
+            .then(|| clause.iter().collect::<FxHashSet<_>>());
 
         for (j, other_clause) in dnf.iter().enumerate() {
             // Ignore clauses that are going to be eliminated.
-            if i == j || redundant_clauses.contains(&j) {
+            if i == j
+                || removed_clauses.as_ref().map_or_else(
+                    || redundant_clauses.contains(&j),
+                    |removed_clauses| removed_clauses[j],
+                )
+            {
                 continue;
             }
 
             // There is another clause that is a subset of this one, thus this clause is redundant.
             if other_clause.iter().all(|term| {
-                // TODO(ibraheem): if we intern variables we could reduce this
-                // from a linear search to an integer `HashSet` lookup
-                clause.contains(term)
+                terms
+                    .as_ref()
+                    .map_or_else(|| clause.contains(term), |terms| terms.contains(term))
             }) {
                 redundant_clauses.push(i);
+                if let Some(removed_clauses) = &mut removed_clauses {
+                    removed_clauses[i] = true;
+                }
                 continue 'clause;
             }
         }
     }
 
     // Eliminate any redundant clauses.
-    for i in redundant_clauses.into_iter().rev() {
-        dnf.remove(i);
+    for position in redundant_clauses.into_iter().rev() {
+        dnf.remove(position);
+    }
+}
+
+/// Simplify the short marker clauses that dominate normal dependency metadata without indexing.
+fn simplify_small(dnf: &mut Vec<Vec<MarkerExpression>>) {
+    for i in 0..dnf.len() {
+        let clause = &dnf[i];
+        let mut redundant_terms = Vec::new();
+        'term: for (skipped, skipped_term) in clause.iter().enumerate() {
+            for (j, other_clause) in dnf.iter().enumerate() {
+                if i == j {
+                    continue;
+                }
+                if other_clause.iter().all(|term| {
+                    if term == skipped_term {
+                        return false;
+                    }
+                    if is_negation(term, skipped_term) {
+                        return true;
+                    }
+                    clause
+                        .iter()
+                        .position(|candidate| candidate == term)
+                        .is_some_and(|position| !redundant_terms.contains(&position))
+                }) {
+                    redundant_terms.push(skipped);
+                    continue 'term;
+                }
+            }
+        }
+        redundant_terms.sort_by(|left, right| right.cmp(left));
+        for position in redundant_terms {
+            dnf[i].remove(position);
+        }
+    }
+
+    let mut redundant_clauses = Vec::new();
+    'clause: for i in 0..dnf.len() {
+        let clause = &dnf[i];
+        for (j, other_clause) in dnf.iter().enumerate() {
+            if i == j || redundant_clauses.contains(&j) {
+                continue;
+            }
+            if other_clause.iter().all(|term| clause.contains(term)) {
+                redundant_clauses.push(i);
+                continue 'clause;
+            }
+        }
+    }
+    for position in redundant_clauses.into_iter().rev() {
+        dnf.remove(position);
     }
 }
 
@@ -468,5 +564,120 @@ fn is_negation(left: &MarkerExpression, right: &MarkerExpression) -> bool {
 
             pair == pair2 && operator != operator2
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use uv_normalize::ExtraName;
+
+    use super::*;
+    use crate::MarkerValueExtra;
+
+    fn extra(name: &str, operator: ExtraOperator) -> MarkerExpression {
+        MarkerExpression::Extra {
+            name: MarkerValueExtra::Extra(ExtraName::from_str(name).expect("valid extra name")),
+            operator,
+        }
+    }
+
+    #[test]
+    fn indexed_clause_membership_matches_linear_simplification() {
+        for (clauses, terms) in [(4, 7), (8, 16), (12, 32)] {
+            let disjoint = (0..clauses)
+                .map(|clause| {
+                    (0..terms)
+                        .map(|term| {
+                            extra(
+                                &format!("clause-{clause}-term-{term}"),
+                                ExtraOperator::Equal,
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
+            let mut indexed = disjoint.clone();
+            let mut linear = disjoint;
+            simplify(&mut indexed);
+            simplify_small(&mut linear);
+            assert_eq!(indexed, linear);
+
+            let common = (0..terms)
+                .map(|term| extra(&format!("common-{term}"), ExtraOperator::Equal))
+                .collect::<Vec<_>>();
+            let redundant = (0..clauses)
+                .flat_map(|clause| {
+                    let mut positive = common.clone();
+                    positive.push(extra(&format!("selector-{clause}"), ExtraOperator::Equal));
+                    let mut negative = common.clone();
+                    negative.push(extra(
+                        &format!("selector-{clause}"),
+                        ExtraOperator::NotEqual,
+                    ));
+                    [positive, negative]
+                })
+                .collect::<Vec<_>>();
+            let mut indexed = redundant.clone();
+            let mut linear = redundant;
+            simplify(&mut indexed);
+            simplify_small(&mut linear);
+            assert_eq!(indexed, linear);
+        }
+    }
+
+    #[test]
+    fn indexed_clause_membership_uses_the_first_duplicate_term() {
+        let fillers = (0..30)
+            .map(|term| extra(&format!("filler-{term}"), ExtraOperator::Equal))
+            .collect::<Vec<_>>();
+        let a = extra("a", ExtraOperator::Equal);
+        let b = extra("b", ExtraOperator::Equal);
+        let not_b = extra("b", ExtraOperator::NotEqual);
+        let c = extra("c", ExtraOperator::Equal);
+        let mut first = vec![a.clone(), not_b.clone()];
+        first.extend(fillers.iter().cloned());
+        let mut duplicate = vec![b.clone(), a.clone(), b.clone(), c.clone()];
+        duplicate.extend(fillers.iter().cloned());
+        let mut third = vec![c.clone(), b.clone()];
+        third.extend(fillers.iter().cloned());
+        let mut indexed = vec![first.clone(), duplicate.clone(), third.clone()];
+        let mut linear = vec![first, duplicate, third];
+
+        simplify(&mut indexed);
+        simplify_small(&mut linear);
+        assert_eq!(indexed, linear);
+        assert_eq!(indexed.len(), 3);
+        assert_eq!(&indexed[0][..2], [a.clone(), not_b]);
+        assert_eq!(&indexed[1][..2], [a, c.clone()]);
+        assert_eq!(&indexed[2][..2], [c, b]);
+    }
+
+    #[test]
+    fn a_single_wide_clause_is_unchanged() {
+        let clause = (0..64)
+            .map(|term| extra(&format!("term-{term}"), ExtraOperator::Equal))
+            .collect::<Vec<_>>();
+        let mut dnf = vec![clause.clone()];
+
+        simplify(&mut dnf);
+        assert_eq!(dnf, [clause]);
+    }
+
+    #[test]
+    fn mixed_width_clauses_match_linear_simplification() {
+        let a = extra("a", ExtraOperator::Equal);
+        let b = extra("b", ExtraOperator::Equal);
+        let not_b = extra("b", ExtraOperator::NotEqual);
+        let c = extra("c", ExtraOperator::Equal);
+        let mut wide = vec![b.clone(), a.clone(), b.clone(), c.clone()];
+        wide.extend((0..30).map(|term| extra(&format!("filler-{term}"), ExtraOperator::Equal)));
+        let mut indexed = vec![vec![a, not_b], wide, vec![c, b]];
+        let mut linear = indexed.clone();
+
+        simplify(&mut indexed);
+        simplify_small(&mut linear);
+        assert_eq!(indexed, linear);
     }
 }
