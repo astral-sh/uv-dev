@@ -2,15 +2,6 @@ name: plan
 
 on:
   workflow_call:
-    inputs:
-      base-sha:
-        description: "The base SHA used to determine changed files"
-        required: false
-        type: string
-      head-sha:
-        description: "The head SHA used to determine changed files"
-        required: false
-        type: string
     outputs:
       test-code:
         description: "Whether code tests should run"
@@ -94,9 +85,29 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.head-sha }}
-          fetch-depth: 0
+          fetch-depth: 2
           persist-credentials: false
+
+      - name: "Fetch main"
+        if: ${{ github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          auth_header="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64)"
+          shallow_args=()
+          if [[ "$(git rev-parse --is-shallow-repository)" == "true" ]]; then
+            shallow_args+=(--unshallow)
+          fi
+          echo "::add-mask::$auth_header"
+          git \
+            -c "http.${GITHUB_SERVER_URL}/.extraheader=AUTHORIZATION: basic $auth_header" \
+            fetch \
+            "${shallow_args[@]}" \
+            --filter=blob:none \
+            --no-tags \
+            --no-recurse-submodules \
+            origin \
+            "+refs/heads/main:refs/remotes/origin/main"
 
       - name: "Plan"
         id: plan
@@ -115,7 +126,6 @@ jobs:
           HAS_BUILD_RELEASE_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'build:release') }}
           HAS_BUILD_PUSH_DOCKER_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'build:push-docker') }}
           HAS_BUILD_WINDOWS_TRAMPOLINE_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'build:windows-trampoline') }}
-          BASE_SHA: ${{ inputs.base-sha || github.event.pull_request.base.sha }}
         run: |
           [[ "$GH_REF" == "refs/heads/main" ]] && on_main_branch=1
           [[ "$HAS_SKIP_LABEL" == "true" ]] && has_skip_label=1
@@ -130,6 +140,22 @@ jobs:
           [[ "$HAS_BUILD_RELEASE_LABEL" == "true" ]] && has_build_release_label=1
           [[ "$HAS_BUILD_PUSH_DOCKER_LABEL" == "true" ]] && has_build_push_docker_label=1
           [[ "$HAS_BUILD_WINDOWS_TRAMPOLINE_LABEL" == "true" ]] && has_build_windows_trampoline_label=1
+
+          # Pull requests check out GitHub's synthetic merge commit, whose first parent is the
+          # current base. Other events compare against `main`, which is fetched above for branch
+          # dispatches.
+          if [[ "$GH_REF" == refs/pull/*/merge ]]; then
+            comparison_base="HEAD^1"
+          else
+            comparison_base="origin/main"
+          fi
+
+          if ! changed_files="$(
+            git diff --no-ext-diff --no-textconv --name-only "${comparison_base}...HEAD"
+          )"; then
+            echo "::error::Failed to compare ${comparison_base}...HEAD"
+            exit 1
+          fi
 
           # Detect changed files
           while IFS= read -r file; do
@@ -160,7 +186,7 @@ jobs:
             [[ "$file" == "scripts/check_system_python.py" || "$file" == "scripts/check_embedded_python.py" ]] && system_test_changed=1
             [[ "$file" =~ ^docs/ || "$file" =~ ^mkdocs.*\.yml$ || "$file" =~ \.md$ || "$file" =~ ^bin/ || "$file" =~ ^assets/ || "$file" =~ ^agents/ || "$file" =~ ^\.claude/ || "$file" =~ ^\.codex/ ]] && continue
             any_code_changed=1
-          done <<< "$(git diff --no-ext-diff --no-textconv --name-only "${BASE_SHA:-origin/main}...HEAD")"
+          done <<< "$changed_files"
 
           # Derived groups
           [[ $rust_code_changed || $rust_deps_changed || $rust_config_changed ]] && any_rust_changed=1
