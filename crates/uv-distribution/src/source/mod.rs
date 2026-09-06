@@ -42,7 +42,9 @@ use uv_metadata::read_archive_metadata;
 use uv_normalize::PackageName;
 use uv_pep440::{Version, release_specifiers_to_ranges};
 use uv_platform_tags::Tags;
-use uv_pypi_types::{HashAlgorithm, HashDigest, HashDigests, PyProjectToml, ResolutionMetadata};
+use uv_pypi_types::{
+    HashAlgorithm, HashDigest, HashDigests, MetadataError, PyProjectToml, ResolutionMetadata,
+};
 use uv_redacted::DisplaySafeUrl;
 use uv_types::{BuildContext, BuildKey, BuildStack, SourceBuildTrait};
 use uv_workspace::pyproject::ToolUvSources;
@@ -3457,7 +3459,9 @@ fn validate_filename(filename: &WheelFilename, metadata: &ResolutionMetadata) ->
         });
     }
 
-    if metadata.version != filename.version {
+    if metadata.version != filename.version
+        && metadata.version != filename.version.clone().without_local()
+    {
         return Err(Error::WheelFilenameVersionMismatch {
             metadata: metadata.version.clone(),
             filename: filename.version.clone(),
@@ -3667,4 +3671,20 @@ fn read_wheel_metadata(
     let dist_info = read_archive_metadata(filename, reader)
         .map_err(|err| Error::WheelMetadata(wheel.to_path_buf(), Box::new(err)))?;
     Ok(ResolutionMetadata::parse_metadata(&dist_info)?)
+}
+
+/// Validate that a built wheel's filename matches its embedded metadata.
+pub fn validate_wheel_metadata(filename: &WheelFilename, wheel: &Path) -> Result<(), Error> {
+    let metadata = match read_wheel_metadata(filename, wheel) {
+        Ok(metadata) => metadata,
+        Err(Error::Metadata(MetadataError::FieldNotFound("Name")))
+            if filename.name.as_str() == "unknown" =>
+        {
+            // Setuptools can produce an `UNKNOWN` wheel without a name when the source tree has
+            // no project metadata.
+            return Ok(());
+        }
+        Err(err) => return Err(err),
+    };
+    validate_filename(filename, &metadata)
 }
