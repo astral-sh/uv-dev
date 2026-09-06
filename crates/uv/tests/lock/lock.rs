@@ -38449,6 +38449,70 @@ fn lock_path_dependency_marker_gated_requires_python() -> Result<()> {
     Ok(())
 }
 
+/// Renaming a local path dependency invalidates its existing locked package identity.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_invalidates_renamed_path_dependency() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["local"]
+
+        [tool.uv.sources]
+        local = { path = "local" }
+        "#})?;
+    let local = context.temp_dir.child("local/pyproject.toml");
+    local.write_str(indoc! {r#"
+        [project]
+        name = "local"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        "#})?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    local.write_str(indoc! {r#"
+        [project]
+        name = "renamed"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        "#})?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--locked")
+        .arg("--offline")
+        .arg("--no-build"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+      × Failed to build `local @ file://[TEMP_DIR]/local`
+      ╰─▶ Building source distributions for `local` is disabled
+    ");
+
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--preview-features")
+        .arg("lock-without-metadata")
+        .arg("--locked")
+        .arg("--offline")
+        .arg("--no-build"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+      × Failed to build `local @ file://[TEMP_DIR]/local`
+      ╰─▶ Building source distributions for `local` is disabled
+    ");
+
+    Ok(())
+}
+
 /// Test that a nested path dependency with an explicit index validates correctly.
 #[cfg(feature = "test-universal")]
 #[tokio::test]
