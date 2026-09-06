@@ -192,6 +192,8 @@ impl PythonVersionFile {
                     path.display()
                 );
                 let versions = content
+                    .strip_prefix('\u{feff}')
+                    .unwrap_or(&content)
                     .lines()
                     .filter(|line| {
                         // Skip comments and empty lines.
