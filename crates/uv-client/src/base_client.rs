@@ -1040,7 +1040,7 @@ fn request_into_redirect(
 
     // Check if there are credentials on the redirect location itself.
     // If so, move them to Authorization header.
-    if !redirect_url.username().is_empty() {
+    if !redirect_url.username().is_empty() || redirect_url.password().is_some() {
         if let Some(credentials) =
             Credentials::from_url(&redirect_url).map_err(reqwest_middleware::Error::middleware)?
         {
@@ -1386,6 +1386,39 @@ mod tests {
                 request_into_redirect(request, &response, CrossOriginCredentialsPolicy::Secure)?
                     .unwrap();
             assert!(!redirect_request.headers().contains_key(AUTHORIZATION));
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_redirect_applies_password_only_credentials() -> Result<()> {
+        for status in &[301, 302, 303, 307, 308] {
+            let server = MockServer::start().await;
+            let location = server.uri().replacen("http://", "http://:token@", 1) + "/redirect";
+            Mock::given(method("GET"))
+                .respond_with(ResponseTemplate::new(*status).insert_header("location", location))
+                .mount(&server)
+                .await;
+
+            let request = Client::new().get(server.uri()).build().unwrap();
+            let response = Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .unwrap()
+                .execute(request.try_clone().unwrap())
+                .await
+                .unwrap();
+
+            let redirect_request =
+                request_into_redirect(request, &response, CrossOriginCredentialsPolicy::Secure)?
+                    .unwrap();
+            assert_eq!(
+                redirect_request.headers().get(AUTHORIZATION),
+                Some(&HeaderValue::from_static("Basic OnRva2Vu"))
+            );
+            assert!(redirect_request.url().username().is_empty());
+            assert!(redirect_request.url().password().is_none());
         }
 
         Ok(())
