@@ -494,7 +494,8 @@ jobs:
           # from 64-bit version of the container, breaking the pattern from other builds.
           container: quay.io/pypa/manylinux2014
           manylinux: 2_17
-          docker-options: -e CARGO -e AWS_LC_SYS_USE_SYSTEM
+          # Prefer the bundled OpenSSL curl so rustup can enforce strong TLS cipher suites.
+          docker-options: -e CARGO -e AWS_LC_SYS_USE_SYSTEM -e PATH=/opt/_internal/curl-4/bin:/opt/rh/devtoolset-10/root/usr/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
           args: --release --locked --out dist --features self-update --compatibility pypi
           before-script-linux: |
             # Install the 32-bit cross target on 64-bit (noop if we're already on 64-bit)
@@ -572,7 +573,8 @@ jobs:
           maturin-version: v1.14.1
           target: ${{ matrix.target }}
           manylinux: 2_17
-          docker-options: -e CARGO -e AWS_LC_SYS_USE_SYSTEM
+          # Prefer the bundled OpenSSL curl so rustup can enforce strong TLS cipher suites.
+          docker-options: -e CARGO -e AWS_LC_SYS_USE_SYSTEM -e PATH=/opt/_internal/curl-4/bin:/opt/rh/devtoolset-10/root/usr/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
           args: --profile minimal-size --locked --out crates/uv-build/dist -m crates/uv-build/Cargo.toml --compatibility pypi
           before-script-linux: |
             scripts/install-cargo-extensions.sh
