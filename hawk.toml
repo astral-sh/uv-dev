@@ -67,14 +67,6 @@ reason = "retained for downstream uv-client consumers"
 
 [[override]]
 lint = "hawk::unnecessary_public"
-crate = "uv_distribution"
-item = "index::registry_wheel_index::RegistryWheelIndex::<'a>::get"
-kind = "inherent_method"
-level = "expect"
-reason = "used by Pixi to inspect cached registry wheels"
-
-[[override]]
-lint = "hawk::unnecessary_public"
 crate = "uv_resolver"
 item = "python_requirement::PythonRequirement::from_marker_environment"
 kind = "inherent_method"
