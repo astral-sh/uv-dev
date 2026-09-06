@@ -6949,6 +6949,56 @@ fn sync_custom_environment_path() -> Result<()> {
     Ok(())
 }
 
+/// A non-virtual Python installation selected as the project environment must not be replaced.
+/// Windows virtual environment launchers cannot run without `pyvenv.cfg`.
+#[cfg(unix)]
+#[test]
+fn sync_custom_non_virtual_project_environment() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
+        .with_filtered_virtualenv_bin()
+        .with_filtered_python_names();
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+        "#
+        })?;
+
+    // Start with a valid Python installation, then remove the marker that identifies it as a
+    // virtual environment so it behaves like a system Python installation.
+    uv_snapshot!(context.filters(), context.venv().arg("system-python").arg("--python").arg("3.11"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.11.[X] interpreter at: [PYTHON-3.11]
+    warning: The requested interpreter resolved to Python 3.11.[X], which is incompatible with the project's Python requirement: `>=3.12` (from `project.requires-python`)
+    Creating virtual environment at: system-python
+    Activate with: source system-python/[BIN]/activate
+    ");
+
+    let environment = context.temp_dir.child("system-python");
+    fs_err::remove_file(environment.child("pyvenv.cfg"))?;
+    environment.child("sentinel").write_str("preserve me")?;
+
+    uv_snapshot!(context.filters(), context.sync().arg("--offline").env(EnvVars::UV_PROJECT_ENVIRONMENT, environment.path()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    error: Project virtual environment directory `[TEMP_DIR]/system-python` cannot be used because it is not a compatible environment but cannot be recreated because it is not a virtual environment
+    ");
+
+    environment
+        .child("sentinel")
+        .assert(predicate::path::is_file());
+
+    Ok(())
+}
+
 #[test]
 fn sync_active_project_environment() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
