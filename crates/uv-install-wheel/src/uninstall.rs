@@ -6,7 +6,7 @@ use std::sync::{LazyLock, Mutex, OnceLock};
 
 use tracing::trace;
 
-use uv_fs::write_atomic_sync;
+use uv_fs::{Simplified, write_atomic_sync};
 use uv_pypi_types::Identifier;
 use uv_warnings::warn_user;
 
@@ -177,6 +177,42 @@ fn is_path_in_scheme(
     layout: &Layout,
 ) -> bool {
     let normalized = normalize_path(&site_packages.join(path));
+    let resolved = normalized
+        .parent()
+        .and_then(|parent| parent.simple_canonicalize().ok())
+        .and_then(|parent| normalized.file_name().map(|name| parent.join(name)))
+        .unwrap_or_else(|| normalized.clone());
+
+    // Wheels can install files into the environment root, but must never claim the interpreter or
+    // the virtual environment configuration itself, including through a directory symlink.
+    let paths_equal = |left: &Path, right: &Path| {
+        left.as_os_str()
+            .as_encoded_bytes()
+            .eq_ignore_ascii_case(right.as_os_str().as_encoded_bytes())
+    };
+    let targets_core_file = paths_equal(&resolved, &normalize_path(&layout.sys_executable))
+        || paths_equal(
+            &resolved,
+            &normalize_path(&layout.scheme.data.join("pyvenv.cfg")),
+        )
+        || resolved.parent().is_some_and(|parent| {
+            paths_equal(parent, &normalize_path(&layout.scheme.scripts))
+                && resolved.file_name().is_some_and(|name| {
+                    let name = name.to_string_lossy().to_ascii_lowercase();
+                    let name = name.strip_suffix(".exe").unwrap_or(&name);
+                    matches!(
+                        name,
+                        "python" | "pythonw" | "python3" | "pypy" | "pypy2" | "pypy3" | "graalpy"
+                    ) || ["python3.", "pythonw3.", "pypy3."].iter().any(|prefix| {
+                        name.strip_prefix(prefix).is_some_and(|minor| {
+                            minor.parse::<u8>().is_ok()
+                                || minor
+                                    .strip_suffix('t')
+                                    .is_some_and(|minor| minor.parse::<u8>().is_ok())
+                        })
+                    })
+                })
+        });
 
     // `purelib` or `platlib` are site-packages (depending on `Root-Is-Purelib`). As
     // `.data/*` goes into the directories of `scheme`, `.dist-info` goes into site-packages
@@ -187,11 +223,12 @@ fn is_path_in_scheme(
     // `.data/data`. For a system environment, wheels are allowed to write to
     // whole system directories, for example `data` is `/usr/local` for system Python on
     // Ubuntu 24.04.
-    if normalized.starts_with(&layout.scheme.data)
-        || normalized.starts_with(&layout.scheme.purelib)
-        || normalized.starts_with(&layout.scheme.platlib)
-        || normalized.starts_with(&layout.scheme.scripts)
-        || normalized.starts_with(&layout.scheme.include)
+    if !targets_core_file
+        && (normalized.starts_with(&layout.scheme.data)
+            || normalized.starts_with(&layout.scheme.purelib)
+            || normalized.starts_with(&layout.scheme.platlib)
+            || normalized.starts_with(&layout.scheme.scripts)
+            || normalized.starts_with(&layout.scheme.include))
     {
         true
     } else {
@@ -203,11 +240,19 @@ fn is_path_in_scheme(
             .expect("The mutex is broken, did some other thread panic?")
             .insert(distribution.to_string())
         {
-            warn_user!(
-                "Invalid RECORD entry in {} that escapes the Python environment, skipping: {}",
-                distribution,
-                path
-            );
+            if targets_core_file {
+                warn_user!(
+                    "Invalid RECORD entry in {} that targets a core Python environment file, skipping: {}",
+                    distribution,
+                    path
+                );
+            } else {
+                warn_user!(
+                    "Invalid RECORD entry in {} that escapes the Python environment, skipping: {}",
+                    distribution,
+                    path
+                );
+            }
         }
         false
     }
