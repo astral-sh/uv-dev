@@ -1140,6 +1140,59 @@ async fn install_remote_requirements_txt() -> Result<()> {
     Ok(())
 }
 
+/// Resolve root-relative and scheme-relative requirements and constraints from a remote file.
+#[tokio::test]
+async fn install_remote_relative_requirements_txt() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    let authority = Url::parse(&server.uri())?
+        .host_str()
+        .context("mock server should have a host")?
+        .to_string();
+    let authority = format!("{authority}:{}", server.address().port());
+
+    Mock::given(method("GET"))
+        .and(path("/nested/requirements.txt"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(formatdoc! {"
+            -r /requirements.txt
+            -c /constraints.txt
+            -r //{authority}/scheme-requirements.txt
+            -c //{authority}/scheme-constraints.txt
+        "}))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    for filename in [
+        "/requirements.txt",
+        "/constraints.txt",
+        "/scheme-requirements.txt",
+        "/scheme-constraints.txt",
+    ] {
+        Mock::given(method("GET"))
+            .and(path(filename))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+    }
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("-r")
+        .arg(format!("{}/nested/requirements.txt", server.uri()))
+        .arg("--no-index"), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    warning: Requirements file `http://[LOCALHOST]/nested/requirements.txt` does not contain any dependencies
+    Checked in [TIME]
+    ");
+
+    Ok(())
+}
+
 async fn start_requirements_server(
     username: &str,
     password: &str,
