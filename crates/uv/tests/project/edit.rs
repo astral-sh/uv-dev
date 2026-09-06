@@ -14916,6 +14916,73 @@ fn remove_preserves_existing_sources_during_staged_update() -> Result<()> {
     Ok(())
 }
 
+/// Removing a production dependency must retain a source used by inline extras or groups.
+#[test]
+fn remove_preserves_sources_for_inline_dependencies() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        dependency-groups = { test = ["dep"] }
+
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["dep"]
+        optional-dependencies = { feature = ["dep"] }
+
+        [tool.uv.sources]
+        dep = { path = "dep" }
+    "#})?;
+    context
+        .temp_dir
+        .child("dep")
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "dep"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.remove().arg("dep").arg("--frozen"), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    ");
+
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    dependency-groups = { test = ["dep"] }
+
+    [project]
+    name = "project"
+    version = "0.1.0"
+    requires-python = ">=3.12"
+    dependencies = []
+    optional-dependencies = { feature = ["dep"] }
+
+    [tool.uv.sources]
+    dep = { path = "dep" }
+    "#);
+
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    Ok(())
+}
+
 /// See: <https://github.com/astral-sh/uv/issues/14961>
 #[test]
 fn add_multiline_indentation() -> Result<()> {
