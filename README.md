@@ -29,6 +29,37 @@ environment, and hash checks. astral-sh/uv#12276 directly tracks the requested v
 subset, and astral-sh/uv#12235 implemented one narrower structural consistency check for package and
 wheel versions.
 
+The follow-up comment adds a concrete report against uv 0.12.9. After generating a project locked
+with `six`, changing only `files.pythonhosted.org` to the lookalike
+`files.pythonhcsted.org` leaves `uv lock --check` successful. A subsequent uncached locked sync
+attempts to resolve the modified host and fails at DNS lookup. The commenter also reports that
+adding an otherwise unjustified registry package to the lockfile and linking it from the root
+package's resolved dependency list still passes `uv lock --check` when the project metadata is left
+unchanged.
+
+## Reproduction
+
+The new comment provides these macOS-style shell steps, reported with uv 0.12.9:
+
+```console
+$ uv init --name demo .
+$ uv add six
+$ sed -i '' 's#files.pythonhosted.org#files.pythonhcsted.org#' uv.lock
+$ uv lock --check
+# exits 0
+$ rm -rf .venv
+$ uv sync --locked --no-cache
+# fails resolving files.pythonhcsted.org
+```
+
+This has not been independently executed in the handoff environment because no `uv` executable is
+installed there. The checkout source does support the mechanism described by the commenter:
+`Lock::satisfies` treats registry and Git sources as immutable and skips per-package metadata and
+dependency validation for them. When the overall satisfaction check succeeds, the lock operation
+can return the existing lock unchanged. Separately, the sync path builds its download hash policy
+from the accepted lock resolution, so the changed URL is consulted before downloaded content can be
+checked against the lockfile hash.
+
 ## Draft response
 
 `uv lock --check` currently checks whether `uv.lock` is consistent with the project metadata; it
@@ -72,6 +103,15 @@ provenance, and astral-sh/uv#11932 primarily asks to compare a project environme
   This added a narrower structural integrity check after externally edited lockfiles paired package
   versions with inconsistent wheel versions. It demonstrates an existing approach to rejecting
   internally incoherent lock contents, but does not validate artifact URLs against an index.
+- astral-sh/uv#18781 — **Reject locked malware installations** (closed issue). Maintainers explicitly
+  discuss preserving index-free locked installs for performance and using OSV malware reports as a
+  cheaper layered defense. They also confirm that a PyPI artifact referenced directly by a lockfile
+  can remain retrievable after its index entry is quarantined or removed. This explains the current
+  design tradeoff but does not validate arbitrary locked URLs or previously unknown malware.
+- astral-sh/uv#18936 — **Reject locked malware installations** (merged pull request). This added a
+  malware check against `MAL-` OSV reports before project installation. It checks known malicious
+  package versions rather than establishing that the dependency graph, artifact URL, and hash came
+  from the configured index.
 
 ## Search and supporting evidence
 
@@ -94,4 +134,7 @@ Repository evidence supports the distinction above: the locking documentation de
 `uv lock --check` as checking whether project metadata makes a lockfile outdated; cache
 documentation defines `--refresh` as forcing cached package metadata to be revalidated; and the
 project sync implementation constructs a verifying hash strategy from the lock resolution before
-installing artifacts.
+installing artifacts. The new source inspection further confirms that registry and Git sources are
+classified as immutable by `Source::is_immutable`; `Lock::satisfies` skips metadata and dependency
+validation for such packages, and a satisfied lock can be returned unchanged without a fresh
+resolution.
