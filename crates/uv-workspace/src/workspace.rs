@@ -776,7 +776,7 @@ impl Workspace {
             // Get the requires-python for each enabled group on this package
             // We need to do full flattening here because include-group can transfer requires-python
             let dependency_groups =
-                FlatDependencyGroups::from_pyproject_toml(member.root(), &member.pyproject_toml)?;
+                FlatDependencyGroups::from_workspace(member.root(), &member.pyproject_toml, self)?;
             let group_requires =
                 dependency_groups
                     .into_iter()
@@ -3455,10 +3455,25 @@ mod tests {
 foo = ["a", {include-group = "bar"}]
 bar = ["b"]
 future = [{include-group = "bar", unknown = "value"}]
+workspace = ["c"]
+
+[tool.uv.dependency-groups]
+workspace = {include-workspace-groups = ["root", {package = "other", group = "test"}]}
 "#;
 
         let result = PyProjectToml::from_string(toml.to_string(), "pyproject.toml")
             .expect("Deserialization should succeed");
+
+        let workspace_group = GroupName::from_str("workspace").unwrap();
+        let root_group = GroupName::from_str("root").unwrap();
+        let other_package = PackageName::from_str("other").unwrap();
+        let test_group = GroupName::from_str("test").unwrap();
+        assert_eq!(
+            result
+                .workspace_group_includes(&workspace_group)
+                .collect::<Vec<_>>(),
+            vec![(None, &root_group), (Some(&other_package), &test_group)]
+        );
 
         let groups = result
             .dependency_groups
@@ -3493,6 +3508,14 @@ future = [{include-group = "bar", unknown = "value"}]
                 ("include-group".to_string(), "bar".to_string()),
                 ("unknown".to_string(), "value".to_string()),
             ]))]
+        );
+
+        let workspace = groups
+            .get(&workspace_group)
+            .expect("Group `workspace` should be present");
+        assert_eq!(
+            workspace,
+            &[DependencyGroupSpecifier::Requirement("c".to_string())]
         );
     }
 
