@@ -1,6 +1,6 @@
 use std::fmt::Write;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use anyhow::Result;
@@ -190,11 +190,13 @@ pub(crate) async fn remove(
     let content = toml.to_string();
 
     // Save the modified `pyproject.toml` or script.
+    let mut snapshot = target.snapshot()?;
     target.write(&content)?;
 
     // If `--frozen`, exit early. There's no reason to lock and sync, since we don't need a `uv.lock`
     // to exist at all.
     if frozen.is_some() {
+        snapshot.commit();
         return Ok(ExitStatus::Success);
     }
 
@@ -206,6 +208,7 @@ pub(crate) async fn remove(
                 "Updated `{}`",
                 script.path.user_display().cyan()
             )?;
+            snapshot.commit();
             return Ok(ExitStatus::Success);
         }
     }
@@ -343,11 +346,13 @@ pub(crate) async fn remove(
 
     let AddTarget::Project(project, environment) = target else {
         // If we're not adding to a project, exit early.
+        snapshot.commit();
         return Ok(ExitStatus::Success);
     };
 
     let PythonTarget::Environment(venv) = &*environment else {
         // If we're not syncing, exit early.
+        snapshot.commit();
         return Ok(ExitStatus::Success);
     };
 
@@ -399,6 +404,7 @@ pub(crate) async fn remove(
         Err(err) => return Err(err.into()),
     }
 
+    snapshot.commit();
     Ok(ExitStatus::Success)
 }
 
@@ -413,6 +419,30 @@ enum RemoveTarget {
 }
 
 impl RemoveTarget {
+    /// Take a snapshot of the target before modifying it.
+    fn snapshot(&self) -> Result<RemoveTargetSnapshot, io::Error> {
+        let (path, lock_path) = match self {
+            Self::Script(script) => (script.path.clone(), LockTarget::from(script).lock_path()),
+            Self::Project(project) => (
+                project.root().join("pyproject.toml"),
+                LockTarget::from(project.workspace()).lock_path(),
+            ),
+        };
+        let content = fs_err::read(&path)?;
+        let lock = match fs_err::read(&lock_path) {
+            Ok(lock) => Some(lock),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => None,
+            Err(err) => return Err(err),
+        };
+        Ok(RemoveTargetSnapshot {
+            path,
+            content,
+            lock_path,
+            lock,
+            committed: false,
+        })
+    }
+
     /// Write the updated content to the target.
     ///
     /// Returns `true` if the content was modified.
@@ -459,6 +489,44 @@ impl RemoveTarget {
                     .ok_or(ProjectError::PyprojectTomlUpdate)?;
                 Ok(Self::Project(project))
             }
+        }
+    }
+}
+
+/// The original content of a removal target.
+struct RemoveTargetSnapshot {
+    path: PathBuf,
+    content: Vec<u8>,
+    lock_path: PathBuf,
+    lock: Option<Vec<u8>>,
+    committed: bool,
+}
+
+impl RemoveTargetSnapshot {
+    /// Restore the original content and lockfile after a failed operation.
+    fn revert(&self) -> Result<(), io::Error> {
+        debug!("Reverting changes to `{}`", self.path.user_display());
+        fs_err::write(&self.path, &self.content)?;
+        if let Some(lock) = &self.lock {
+            fs_err::write(&self.lock_path, lock)?;
+        } else if let Err(err) = fs_err::remove_file(&self.lock_path) {
+            if err.kind() != io::ErrorKind::NotFound {
+                return Err(err);
+            }
+        }
+        Ok(())
+    }
+
+    /// Keep the modified content and lockfile.
+    fn commit(&mut self) {
+        self.committed = true;
+    }
+}
+
+impl Drop for RemoveTargetSnapshot {
+    fn drop(&mut self) {
+        if !self.committed {
+            let _ = self.revert();
         }
     }
 }

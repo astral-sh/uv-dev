@@ -4476,6 +4476,148 @@ fn add_error() -> Result<()> {
     Ok(())
 }
 
+/// Avoid persisting `remove` calls when resolution fails.
+#[test]
+fn remove_error() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["anyio", "xyz"]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.remove().arg("anyio"), @"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+
+    ----- stderr -----
+      × No solution found when resolving dependencies:
+      ╰─▶ Because there are no versions of xyz and your project depends on xyz, we can conclude that your project's requirements are unsatisfiable.
+    ");
+
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("pyproject.toml"), @r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["anyio", "xyz"]
+        "#);
+    });
+
+    Ok(())
+}
+
+/// Revert a removal if interpreter discovery fails after writing the manifest.
+#[test]
+fn remove_discovery_error() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_filtered_python_sources();
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.100"
+        dependencies = ["anyio"]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.remove().arg("anyio"), @"
+    success: false
+    exit_code: 2
+    ----- stdout -----
+
+    ----- stderr -----
+    error: No interpreter found for Python >=3.100 in [PYTHON SOURCES]
+    ");
+
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "0.1.0"
+    requires-python = ">=3.100"
+    dependencies = ["anyio"]
+    "#);
+    assert!(!context.temp_dir.child("uv.lock").exists());
+    Ok(())
+}
+
+/// Revert the manifest and a newly-written lockfile if syncing a removal fails.
+#[test]
+fn remove_sync_error() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["anyio", "broken"]
+
+        [tool.uv.sources]
+        broken = { path = "./broken" }
+    "#})?;
+    context
+        .temp_dir
+        .child("broken/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "broken"
+        version = "0.1.0"
+
+        [build-system]
+        requires = ["setuptools"]
+        build-backend = "setuptools.build_meta"
+    "#})?;
+    context.temp_dir.child("broken/setup.py").write_str("1/0")?;
+
+    uv_snapshot!(context.filters(), context.remove().arg("anyio"), @r#"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+      × Failed to build `broken @ file://[TEMP_DIR]/broken`
+      ├─▶ The build backend returned an error
+      ╰─▶ Call to `setuptools.build_meta.build_wheel` failed (exit status: 1)
+
+          [stderr]
+          Traceback (most recent call last):
+            File "<string>", line 14, in <module>
+            File "[CACHE_DIR]/builds-v0/[TMP]/build_meta.py", line 325, in get_requires_for_build_wheel
+              return self._get_build_requires(config_settings, requirements=['wheel'])
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+            File "[CACHE_DIR]/builds-v0/[TMP]/build_meta.py", line 295, in _get_build_requires
+              self.run_setup()
+            File "[CACHE_DIR]/builds-v0/[TMP]/build_meta.py", line 311, in run_setup
+              exec(code, locals())
+            File "<string>", line 1, in <module>
+          ZeroDivisionError: division by zero
+
+
+    hint: `broken` was included because `project` (v0.1.0) depends on `broken`
+    hint: Build failures usually indicate a problem with the package or the build environment
+    "#);
+
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "0.1.0"
+    requires-python = ">=3.12"
+    dependencies = ["anyio", "broken"]
+
+    [tool.uv.sources]
+    broken = { path = "./broken" }
+    "#);
+    assert!(!context.temp_dir.child("uv.lock").exists());
+    Ok(())
+}
+
 /// Suggest avoiding dependencies for modules in the Python standard library.
 #[test]
 fn add_standard_library_error() -> Result<()> {
