@@ -1,3 +1,4 @@
+use std::fmt::Write;
 use std::str::FromStr;
 use std::sync::{Arc, LazyLock};
 
@@ -398,19 +399,20 @@ fn format_chain(name: &PackageName, version: Option<&Version>, chain: &Derivatio
         format!("`{}` was included because", name.cyan())
     };
     let mut range: Option<Ranges<Version>> = None;
-    for (i, step) in chain.iter().enumerate() {
-        if i > 0 {
-            message = format!("{message} {} which depends on", format_step(step, range));
+    message.reserve(chain.iter().len().saturating_mul(64));
+    for (index, step) in chain.iter().enumerate() {
+        if index > 0 {
+            let _ = write!(message, " {} which depends on", format_step(step, range));
         } else {
-            message = format!("{message} {} depends on", format_step(step, range));
+            let _ = write!(message, " {} depends on", format_step(step, range));
         }
         range = Some(strip_local_version_sentinels(&step.range));
     }
     if let Some(range) = range.filter(|range| *range != Ranges::empty() && *range != Ranges::full())
     {
-        message = format!("{message} `{}{}`", name.cyan(), range.cyan());
+        let _ = write!(message, " `{}{}`", name.cyan(), range.cyan());
     } else {
-        message = format!("{message} `{}`", name.cyan());
+        let _ = write!(message, " `{}`", name.cyan());
     }
     message
 }
@@ -418,10 +420,60 @@ fn format_chain(name: &PackageName, version: Option<&Version>, chain: &Derivatio
 #[cfg(test)]
 mod tests {
     use std::borrow::Cow;
+    use std::str::FromStr;
 
+    use uv_distribution_types::{DerivationChain, DerivationStep};
+    use uv_normalize::{ExtraName, GroupName, PackageName};
+    use uv_pep440::Version;
     use uv_workspace::pyproject::{PyprojectTomlError, SourceError};
+    use version_ranges::Ranges;
 
-    use super::hints_for_error;
+    use super::{format_chain, hints_for_error};
+
+    #[test]
+    fn formats_derivation_chain_with_colors_and_ranges() {
+        let version = |value| Version::from_str(value).unwrap();
+        let chain: DerivationChain = [
+            DerivationStep::new(
+                PackageName::from_str("root").unwrap(),
+                Some(ExtraName::from_str("docs").unwrap()),
+                None,
+                Some(version("0.1.0")),
+                Ranges::from_range_bounds(version("1.2.0")..version("2.0.0")),
+            ),
+            DerivationStep::new(
+                PackageName::from_str("child").unwrap(),
+                None,
+                Some(GroupName::from_str("dev").unwrap()),
+                None,
+                Ranges::full(),
+            ),
+            DerivationStep::new(
+                PackageName::from_str("leaf").unwrap(),
+                None,
+                None,
+                Some(version("1.3.0")),
+                Ranges::singleton(version("4.5.0")),
+            ),
+        ]
+        .into_iter()
+        .collect();
+
+        assert_eq!(
+            format_chain(
+                &PackageName::from_str("failed-package").unwrap(),
+                Some(&version("4.5.0")),
+                &chain,
+            ),
+            concat!(
+                "`\x1b[36mfailed-package\x1b[39m` (\x1b[36mv4.5.0\x1b[39m) was included because ",
+                "`\x1b[36mroot[docs]\x1b[39m` (\x1b[36mv0.1.0\x1b[39m) depends on ",
+                "`\x1b[36mchild:dev\x1b[39m\x1b[36m>=1.2.0, <2.0.0\x1b[39m` which depends on ",
+                "`\x1b[36mleaf\x1b[39m` (\x1b[36mv1.3.0\x1b[39m) which depends on ",
+                "`\x1b[36mfailed-package\x1b[39m\x1b[36m==4.5.0\x1b[39m`",
+            )
+        );
+    }
 
     #[test]
     fn collects_source_hints_through_pyproject_errors() {
