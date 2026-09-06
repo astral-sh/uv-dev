@@ -399,6 +399,14 @@ impl<'a> Planner<'a> {
             // Identify any cached distributions that satisfy the requirement.
             match dist.as_ref() {
                 Dist::Built(BuiltDist::Registry(wheel)) => {
+                    let selected_wheel = wheel.best_wheel();
+                    if selected_wheel.size_is_authoritative && selected_wheel.file.size.is_some() {
+                        // Cached distributions do not retain archive sizes. Let preparation reuse
+                        // the cache only after validating the lockfile's authoritative size.
+                        remote.push(dist.clone());
+                        continue;
+                    }
+
                     if let Some(distribution) = registry_index.wheel(wheel, no_build, no_binary) {
                         debug!("Registry requirement already cached: {distribution}");
                         cached.push(CachedDist::Registry(distribution.clone()));
@@ -422,6 +430,13 @@ impl<'a> Planner<'a> {
                             "A URL dependency points to a wheel which conflicts with `--no-binary`: {}",
                             wheel.url
                         );
+                    }
+
+                    if wheel.size.is_some() {
+                        // The preparation path validates authoritative sizes before reusing a
+                        // cached archive; the planner's cache shortcut cannot perform that check.
+                        remote.push(dist.clone());
+                        continue;
                     }
 
                     // Find the exact wheel from the cache, since we know the filename in
@@ -593,6 +608,12 @@ impl<'a> Planner<'a> {
                     }
                 }
                 Dist::Source(SourceDist::Registry(sdist)) => {
+                    if sdist.size_is_authoritative && sdist.file.size.is_some() {
+                        // Built-wheel cache entries do not include the original archive size.
+                        remote.push(dist.clone());
+                        continue;
+                    }
+
                     if let Some(distribution) = registry_index.source(sdist, no_build, no_binary) {
                         debug!("Registry requirement already cached: {distribution}");
                         cached.push(CachedDist::Registry(distribution.clone()));
@@ -600,6 +621,12 @@ impl<'a> Planner<'a> {
                     }
                 }
                 Dist::Source(SourceDist::DirectUrl(sdist)) => {
+                    if sdist.size.is_some() {
+                        // Built-wheel cache entries do not include the original archive size.
+                        remote.push(dist.clone());
+                        continue;
+                    }
+
                     // Find the most-compatible wheel from the cache, since we don't know
                     // the filename in advance.
                     match built_index.url(sdist) {
