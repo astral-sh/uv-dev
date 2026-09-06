@@ -946,7 +946,7 @@ impl RunSettings {
                 filesystem,
                 &environment,
             )?,
-            env_file: EnvFile::from_args(env_file, no_env_file),
+            env_file: EnvFile::from_args(env_file, environment.env_file.clone(), no_env_file),
             install_mirrors: environment
                 .install_mirrors
                 .combine(filesystem_install_mirrors),
@@ -978,8 +978,7 @@ pub(crate) struct ToolRunSettings {
     pub(crate) refresh: Refresh,
     pub(crate) options: ResolverInstallerOptions,
     pub(crate) settings: ResolverInstallerSettings,
-    pub(crate) env_file: Vec<PathBuf>,
-    pub(crate) no_env_file: bool,
+    pub(crate) env_file: EnvFile,
 }
 
 impl ToolRunSettings {
@@ -1112,8 +1111,7 @@ impl ToolRunSettings {
             install_mirrors: environment
                 .install_mirrors
                 .combine(filesystem_install_mirrors),
-            env_file,
-            no_env_file,
+            env_file: EnvFile::from_args(env_file, environment.env_file.clone(), no_env_file),
         })
     }
 }

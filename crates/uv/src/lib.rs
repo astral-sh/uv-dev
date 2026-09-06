@@ -1623,7 +1623,6 @@ async fn run_with_workspace_cache(
                 workspace_cache,
                 printer,
                 args.env_file,
-                args.no_env_file,
                 globals.preview,
             ))
             .await
