@@ -27,7 +27,9 @@ use windows::Win32::Storage::FileSystem::{BY_HANDLE_FILE_INFORMATION, GetFileInf
 pub use crate::locked_file::*;
 pub use crate::path::*;
 pub use crate::read::ValidatedReader;
-pub use crate::space::{PhysicalSpaceError, physical_space, supports_fine_grained_accounting};
+pub use crate::space::{
+    PhysicalSpaceError, physical_disk_usage, physical_space, supports_fine_grained_accounting,
+};
 
 pub mod cachedir;
 #[cfg(target_os = "macos")]
