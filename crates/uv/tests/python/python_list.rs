@@ -1,7 +1,8 @@
 use uv_platform::{Arch, Os};
 use uv_static::EnvVars;
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
+use serde_json::json;
 use uv_test::uv_snapshot;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
@@ -94,6 +95,59 @@ fn python_list() {
     ----- stdout -----
     cpython-3.11.[X]-[PLATFORM] [PYTHON-3.11]
     ");
+}
+
+/// Array-valued Python listings retain their complete results inside the JSONL envelope.
+#[test]
+fn python_list_jsonl() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+
+    let output = context
+        .python_list()
+        .arg("cpython")
+        .arg("--only-installed")
+        .arg("--output-format")
+        .arg("jsonl")
+        .arg("--preview-features")
+        .arg("jsonl")
+        .output()?;
+    assert!(output.status.success());
+
+    let result = serde_json::from_slice::<serde_json::Value>(&output.stdout)?;
+    let installation = result["data"]
+        .as_array()
+        .and_then(|installations| installations.first())
+        .ok_or_else(|| anyhow!("expected an installed Python in the JSONL result"))?;
+    insta::assert_json_snapshot!(json!({
+        "type": result["type"],
+        "implementation": installation["implementation"],
+        "major": installation["version_parts"]["major"],
+        "minor": installation["version_parts"]["minor"],
+        "installed": installation["path"].is_string(),
+        "download_url": installation["url"],
+    }), @r#"
+    {
+      "download_url": null,
+      "implementation": "cpython",
+      "installed": true,
+      "major": 3,
+      "minor": 12,
+      "type": "result"
+    }
+    "#);
+
+    uv_snapshot!(context.filters(), context.python_list()
+        .arg("pypy")
+        .arg("--only-installed")
+        .arg("--output-format").arg("jsonl")
+        .arg("--preview-features").arg("jsonl"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {"type":"result","data":[]}
+    "#
+    );
+
+    Ok(())
 }
 
 #[cfg(unix)]
