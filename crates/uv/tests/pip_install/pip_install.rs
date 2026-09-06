@@ -8069,6 +8069,37 @@ fn find_links_relative_to_working_directory() -> Result<()> {
     Ok(())
 }
 
+/// Install with multiple global requirements-file options on the same logical line.
+#[test]
+fn find_links_multiple_requirements_options() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let links_dir = context.temp_dir.child("local wheels");
+    links_dir.create_dir_all()?;
+    fs::copy(
+        context
+            .workspace_root
+            .join("test/links/ok-1.0.0-py3-none-any.whl"),
+        links_dir.child("ok-1.0.0-py3-none-any.whl").path(),
+    )?;
+    context.temp_dir.child("requirements.txt").write_str(
+        "--find-links './local\\\r\n wheels' --no-index\r\n--no-binary other --only-binary ok\r\nok==1.0.0\r\n",
+    )?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("-r")
+        .arg("requirements.txt"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + ok==1.0.0
+    "
+    );
+
+    Ok(())
+}
+
 /// Install the latest version across multiple `--find-links` directories.
 #[test]
 fn find_links_multiple() -> Result<()> {

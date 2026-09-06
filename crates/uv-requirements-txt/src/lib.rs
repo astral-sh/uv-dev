@@ -700,11 +700,11 @@ fn parse_entry(
 
     let start = s.cursor();
     Ok(Some(if s.eat_if("-r") || s.eat_if("--requirement") {
-        let filename = parse_value("--requirement", content, s, |c: char| !is_terminal(c))?;
-        let filename = unquote(filename)
+        let filename = parse_option_value("--requirement", content, s)?;
+        let filename = unquote(filename.as_ref())
             .ok()
             .flatten()
-            .unwrap_or_else(|| filename.to_string());
+            .unwrap_or_else(|| filename.into_owned());
         let end = s.cursor();
         RequirementsTxtStatement::Requirements {
             filename,
@@ -712,11 +712,11 @@ fn parse_entry(
             end,
         }
     } else if s.eat_if("-c") || s.eat_if("--constraint") {
-        let filename = parse_value("--constraint", content, s, |c: char| !is_terminal(c))?;
-        let filename = unquote(filename)
+        let filename = parse_option_value("--constraint", content, s)?;
+        let filename = unquote(filename.as_ref())
             .ok()
             .flatten()
-            .unwrap_or_else(|| filename.to_string());
+            .unwrap_or_else(|| filename.into_owned());
         let end = s.cursor();
         RequirementsTxtStatement::Constraint {
             filename,
@@ -760,12 +760,12 @@ fn parse_entry(
             hashes,
         })
     } else if s.eat_if("-i") || s.eat_if("--index-url") {
-        let given = parse_value("--index-url", content, s, |c: char| !is_terminal(c))?;
-        let given = unquote(given)
+        let given = parse_option_value("--index-url", content, s)?;
+        let given = unquote(given.as_ref())
             .ok()
             .flatten()
             .map(Cow::Owned)
-            .unwrap_or(Cow::Borrowed(given));
+            .unwrap_or(given);
         let expanded = expand_env_vars(given.as_ref());
         let url = if let Some(path) = std::path::absolute(expanded.as_ref())
             .ok()
@@ -791,12 +791,12 @@ fn parse_entry(
         };
         RequirementsTxtStatement::IndexUrl(url.with_given(given))
     } else if s.eat_if("--extra-index-url") {
-        let given = parse_value("--extra-index-url", content, s, |c: char| !is_terminal(c))?;
-        let given = unquote(given)
+        let given = parse_option_value("--extra-index-url", content, s)?;
+        let given = unquote(given.as_ref())
             .ok()
             .flatten()
             .map(Cow::Owned)
-            .unwrap_or(Cow::Borrowed(given));
+            .unwrap_or(given);
         let expanded = expand_env_vars(given.as_ref());
         let url = if let Some(path) = std::path::absolute(expanded.as_ref())
             .ok()
@@ -826,12 +826,12 @@ fn parse_entry(
     } else if s.eat_if("--require-hashes") {
         RequirementsTxtStatement::RequireHashes
     } else if s.eat_if("--find-links") || s.eat_if("-f") {
-        let given = parse_value("--find-links", content, s, |c: char| !is_terminal(c))?;
-        let given = unquote(given)
+        let given = parse_option_value("--find-links", content, s)?;
+        let given = unquote(given.as_ref())
             .ok()
             .flatten()
             .map(Cow::Owned)
-            .unwrap_or(Cow::Borrowed(given));
+            .unwrap_or(given);
         let expanded = expand_env_vars(given.as_ref());
         let url = if let Some(path) = std::path::absolute(requirements_dir.join(expanded.as_ref()))
             .ok()
@@ -857,12 +857,12 @@ fn parse_entry(
         };
         RequirementsTxtStatement::FindLinks(url.with_given(given))
     } else if s.eat_if("--no-binary") {
-        let given = parse_value("--no-binary", content, s, |c: char| !is_terminal(c))?;
-        let given = unquote(given)
+        let given = parse_option_value("--no-binary", content, s)?;
+        let given = unquote(given.as_ref())
             .ok()
             .flatten()
             .map(Cow::Owned)
-            .unwrap_or(Cow::Borrowed(given));
+            .unwrap_or(given);
         let specifier = PackageNameSpecifier::from_str(given.as_ref()).map_err(|err| {
             RequirementsTxtParserError::NoBinary {
                 source: err,
@@ -873,12 +873,12 @@ fn parse_entry(
         })?;
         RequirementsTxtStatement::NoBinary(NoBinary::from_pip_arg(specifier))
     } else if s.eat_if("--only-binary") {
-        let given = parse_value("--only-binary", content, s, |c: char| !is_terminal(c))?;
-        let given = unquote(given)
+        let given = parse_option_value("--only-binary", content, s)?;
+        let given = unquote(given.as_ref())
             .ok()
             .flatten()
             .map(Cow::Owned)
-            .unwrap_or(Cow::Borrowed(given));
+            .unwrap_or(given);
         let specifier = PackageNameSpecifier::from_str(given.as_ref()).map_err(|err| {
             RequirementsTxtParserError::NoBinary {
                 source: err,
@@ -1105,6 +1105,80 @@ fn parse_value<'a, T>(
     }
 
     Ok(value)
+}
+
+/// Parse a single shell-quoted value for a global requirements-file option.
+fn parse_option_value<'a>(
+    option: &str,
+    content: &str,
+    s: &mut Scanner<'a>,
+) -> Result<Cow<'a, str>, RequirementsTxtParserError> {
+    if s.eat_if('=') {
+        // Explicit equals sign.
+    } else if !eat_wrappable_whitespace(s).is_empty() {
+        // Key and value are separated by whitespace instead.
+    } else if s.eat_if("\r\n") || s.eat_if('\n') || s.eat_if('\r') || s.peek().is_none() {
+        let (line, column) = calculate_row_column(content, s.cursor());
+        return Err(RequirementsTxtParserError::Parser {
+            message: format!("`{option}` must be followed by an argument"),
+            line,
+            column,
+        });
+    } else {
+        let (line, column) = calculate_row_column(content, s.cursor());
+        return Err(RequirementsTxtParserError::Parser {
+            message: format!("Expected '=' or whitespace, found {:?}", s.peek()),
+            line,
+            column,
+        });
+    }
+
+    let start = s.cursor();
+    let mut quote = None;
+    while let Some(character) = s.peek() {
+        match character {
+            '\\' if s.eat_if("\\\r\n") || s.eat_if("\\\n") || s.eat_if("\\\r") => {}
+            '\\' if quote != Some('\'') => {
+                s.eat();
+                s.eat();
+            }
+            '\'' | '"' if quote.is_none() => {
+                quote = Some(character);
+                s.eat();
+            }
+            character if quote == Some(character) => {
+                quote = None;
+                s.eat();
+            }
+            character if quote.is_none() && character.is_whitespace() => break,
+            _ => {
+                s.eat();
+            }
+        }
+    }
+    let value = s.from(start);
+
+    if value.is_empty() {
+        let (line, column) = calculate_row_column(content, s.cursor());
+        return Err(RequirementsTxtParserError::Parser {
+            message: format!("`{option}` must be followed by an argument"),
+            line,
+            column,
+        });
+    }
+
+    // Requirements-file continuations are joined before shell-style option parsing, including
+    // continuations within quoted values.
+    if value.contains("\\\r") || value.contains("\\\n") {
+        Ok(Cow::Owned(
+            value
+                .replace("\\\r\n", "")
+                .replace("\\\n", "")
+                .replace("\\\r", ""),
+        ))
+    } else {
+        Ok(Cow::Borrowed(value))
+    }
 }
 
 /// Fetch the contents of a URL and return them as a string.
@@ -1600,7 +1674,7 @@ mod test {
 
     use uv_fs::Simplified;
 
-    use crate::{RequirementsTxt, calculate_row_column};
+    use crate::{RequirementsTxt, calculate_row_column, parse_option_value};
 
     fn workspace_test_data_dir() -> PathBuf {
         Path::new("./test-data").simple_canonicalize().unwrap()
@@ -2968,6 +3042,44 @@ mod test {
 
         // Assert line and columns are expected
         assert_eq!(line_column, expected, "Issues with input: {input}");
+    }
+
+    /// Join escaped line endings within option values without leaving a stray CR or LF.
+    #[test_case("\\\n"; "lf")]
+    #[test_case("\\\r\n"; "crlf")]
+    #[test_case("\\\r"; "cr")]
+    fn continued_option_value(continuation: &str) -> Result<()> {
+        for quote in ["", "'", "\""] {
+            let content = format!(
+                "--find-links {quote}https://example.invalid/lo{continuation}cal{quote} --no-index"
+            );
+            let mut scanner = Scanner::new(&content);
+            assert!(scanner.eat_if("--find-links"));
+
+            let value = parse_option_value("--find-links", &content, &mut scanner)?;
+            assert_eq!(
+                value,
+                format!("{quote}https://example.invalid/local{quote}")
+            );
+            assert_eq!(scanner.after(), " --no-index");
+        }
+
+        Ok(())
+    }
+
+    /// Do not join an unescaped line ending into an option value.
+    #[test_case("\n"; "lf")]
+    #[test_case("\r\n"; "crlf")]
+    #[test_case("\r"; "cr")]
+    fn uncontinued_option_value(line_ending: &str) -> Result<()> {
+        let content = format!("--find-links https://example.invalid/lo{line_ending}cal --no-index");
+        let mut scanner = Scanner::new(&content);
+        assert!(scanner.eat_if("--find-links"));
+
+        let value = parse_option_value("--find-links", &content, &mut scanner)?;
+        assert_eq!(value, "https://example.invalid/lo");
+        assert_eq!(scanner.after(), format!("{line_ending}cal --no-index"));
+        Ok(())
     }
 
     /// Test different kinds of recursive inclusions with requirements and constraints
