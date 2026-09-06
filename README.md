@@ -20,6 +20,11 @@ Earlier work added explicit ROCm backend values and Linux AMD GPU auto-detection
 AMD-hosted repositories or Windows ROCm selection. No evidence indicates a previously supported
 Windows path has regressed.
 
+A maintainer has since indicated that the preferred outcome is for AMD's Windows wheels to be
+published on the official PyTorch index instead of adding a separate AMD repository path to uv.
+They also questioned whether uv should special-case the reported `[device-all]` requirement. The
+reason AMD uses this extra and whether it is technically necessary remain unresolved in the issue.
+
 ## Draft response
 
 Thanks. This is the Windows/stable form of the AMD-hosted ROCm-index request already tracked in
@@ -51,6 +56,17 @@ The source confirms this is an unimplemented extension rather than incorrect est
 
 Duplicate takes precedence over `enhancement`. There is no evidence of a regression: the official
 Windows distribution described in astral-sh/uv#21471 is newer than the existing Linux-only support.
+
+## Maintainer direction
+
+A uv maintainer prefers getting the Windows ROCm wheels upstreamed to the official PyTorch index
+rather than teaching uv to select AMD's separate repository. This makes upstream publication the
+current preferred direction; no maintainer approval has been given for the proposed uv change.
+
+The maintainer also expressed reluctance to have uv rewrite `torch` and `torchvision` requirements
+to include `[device-all]` without understanding AMD's packaging choice. Investigation should first
+establish why the extra is required, what dependencies it selects, and whether AMD or PyTorch can
+publish metadata that avoids installer-specific rewriting.
 
 ## Related
 
