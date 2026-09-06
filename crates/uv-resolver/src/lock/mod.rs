@@ -1260,6 +1260,17 @@ impl Lock {
             // Also check that our sources are consistent with whether we have
             // hashes or not.
             if let Some(requires_hash) = dist.id.source.requires_hash() {
+                if let Some(sdist) = &dist.sdist {
+                    if requires_hash != sdist.hash().is_some() {
+                        return Err(LockErrorKind::Hash {
+                            id: dist.id.clone(),
+                            artifact_type: "source distribution",
+                            expected: requires_hash,
+                        }
+                        .into());
+                    }
+                }
+
                 for wheel in &dist.wheels {
                     if requires_hash != wheel.hash.is_some() {
                         return Err(LockErrorKind::Hash {
@@ -8478,6 +8489,34 @@ wheels = [{ url = "file:///foo/bar/anyio-4.3.0-py3-none-any.whl", hash = "sha256
 "#;
         let result: Result<Lock, _> = toml::from_str(data);
         insta::assert_debug_snapshot!(result);
+    }
+
+    #[test]
+    fn hash_required_missing_sdist() {
+        for source in [
+            r#"source = { url = "https://example.com/anyio-4.3.0.tar.gz" }"#,
+            r#"source = { path = "anyio-4.3.0.tar.gz" }"#,
+        ] {
+            let data = format!(
+                r#"
+version = 1
+requires-python = ">=3.12"
+
+[[package]]
+name = "anyio"
+version = "4.3.0"
+{source}
+sdist = {{ hash = "sha256:048e05d0f6caeed70d731f3db756d35dcc1f35747c8c403364a8332c630441b8" }}
+"#
+            );
+            assert!(toml::from_str::<Lock>(&data).is_ok());
+
+            let data = data.replace(
+                r#"sdist = { hash = "sha256:048e05d0f6caeed70d731f3db756d35dcc1f35747c8c403364a8332c630441b8" }"#,
+                "sdist = {}",
+            );
+            assert!(toml::from_str::<Lock>(&data).is_err());
+        }
     }
 
     #[test]
