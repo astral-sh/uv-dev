@@ -295,6 +295,7 @@ pub(crate) struct LockOperation<'env> {
     constraints: Vec<NameRequirementSpecification>,
     refresh: Option<&'env Refresh>,
     check_lockfile_contents: bool,
+    use_existing_lockfile: bool,
     settings: &'env ResolverSettings,
     client_builder: &'env BaseClientBuilder<'env>,
     state: &'env UniversalState,
@@ -325,6 +326,7 @@ impl<'env> LockOperation<'env> {
             constraints: vec![],
             refresh: None,
             check_lockfile_contents: false,
+            use_existing_lockfile: true,
             settings,
             client_builder,
             state,
@@ -351,6 +353,13 @@ impl<'env> LockOperation<'env> {
     #[must_use]
     pub(crate) fn with_refresh(mut self, refresh: &'env Refresh) -> Self {
         self.refresh = Some(refresh);
+        self
+    }
+
+    /// Control whether existing lockfile contents are used during resolution.
+    #[must_use]
+    pub(crate) fn with_existing_lockfile(mut self, enabled: bool) -> Self {
+        self.use_existing_lockfile = enabled;
         self
     }
 
@@ -446,18 +455,22 @@ impl<'env> LockOperation<'env> {
             }
             LockMode::Write(interpreter) | LockMode::DryRun(interpreter) => {
                 // Read the existing lockfile.
-                let (existing, existing_contents) = match target.read_with_contents().await {
-                    Ok(Some((existing, existing_contents))) => {
-                        (Some(existing), Some(existing_contents))
+                let (existing, existing_contents) = if self.use_existing_lockfile {
+                    match target.read_with_contents().await {
+                        Ok(Some((existing, existing_contents))) => {
+                            (Some(existing), Some(existing_contents))
+                        }
+                        Ok(None) => (None, None),
+                        Err(ProjectError::Lock(err)) => {
+                            warn_user!(
+                                "Failed to read existing lockfile; ignoring locked requirements: {err}"
+                            );
+                            (None, None)
+                        }
+                        Err(err) => return Err(err),
                     }
-                    Ok(None) => (None, None),
-                    Err(ProjectError::Lock(err)) => {
-                        warn_user!(
-                            "Failed to read existing lockfile; ignoring locked requirements: {err}"
-                        );
-                        (None, None)
-                    }
-                    Err(err) => return Err(err),
+                } else {
+                    (None, None)
                 };
 
                 let check_lockfile_contents = if self.check_lockfile_contents {
