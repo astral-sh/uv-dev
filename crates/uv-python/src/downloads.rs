@@ -456,6 +456,11 @@ impl PythonDownloadRequest {
         self.implementation.as_ref()
     }
 
+    /// Return the requested build, if any.
+    pub fn build(&self) -> Option<&str> {
+        self.build.as_deref()
+    }
+
     pub(crate) fn version(&self) -> Option<&VersionRequest> {
         self.version.as_ref()
     }

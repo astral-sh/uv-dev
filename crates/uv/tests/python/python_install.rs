@@ -3506,6 +3506,29 @@ fn python_install_build_version() {
     let build_content = fs_err::read_to_string(&build_file_path).unwrap();
     assert_eq!(build_content, "20240814");
 
+    // A matching patch with an outdated build must be re-extracted for an explicit build pin.
+    let stale_file = cpython_dir.child("stale-file");
+    stale_file.touch().unwrap();
+    fs_err::write(&build_file_path, "19000101").unwrap();
+
+    uv_snapshot!(context.filters(), context.python_install()
+        .arg("3.12.5")
+        .env(EnvVars::UV_PYTHON_CPYTHON_BUILD, "20240814"), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Installed Python 3.12.5 in [TIME]
+     ~ cpython-3.12.5-[PLATFORM]
+    ");
+
+    assert!(!stale_file.exists());
+    assert_eq!(
+        fs_err::read_to_string(&build_file_path).unwrap(),
+        "20240814"
+    );
+
     // We should find the build
     uv_snapshot!(context.filters(), context.python_find()
         .arg("3.12")

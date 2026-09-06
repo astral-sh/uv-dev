@@ -547,10 +547,19 @@ async fn perform_install(
                 }
             } else if let Some(installation) = existing_installations
                 .iter()
-                .find(|inst| request.matches_installation(inst))
+                .find(|inst| request.download_request.satisfied_by_key(inst.key()))
             {
-                debug!("Found `{}` for request `{}`", installation.key(), request);
-                satisfied.push(installation);
+                if matches_build(request.download_request.build(), installation.build()) {
+                    debug!("Found `{}` for request `{}`", installation.key(), request);
+                    satisfied.push(installation);
+                } else {
+                    debug!(
+                        "Build version mismatch for `{}`, will reinstall",
+                        installation.key()
+                    );
+                    changelog.existing.insert(installation.key().clone());
+                    unsatisfied.push(Cow::Borrowed(request));
+                }
             } else {
                 debug!("No installation found for request `{}`", request);
                 unsatisfied.push(Cow::Borrowed(request));
@@ -603,6 +612,10 @@ async fn perform_install(
 
     let mut tasks = futures::stream::iter(&downloads)
         .map(async |download| {
+            let reinstall = reinstall
+                || existing_installations
+                    .iter()
+                    .any(|installation| download.key() == installation.key());
             (
                 *download,
                 download
