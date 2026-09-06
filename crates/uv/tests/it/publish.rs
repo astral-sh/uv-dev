@@ -162,6 +162,30 @@ fn no_credentials() {
     );
 }
 
+/// Google Artifact Registry does not support PyPI-style trusted publishing, so missing ADC must not
+/// be obscured by an unrelated GitHub Actions OIDC permissions error.
+#[test]
+fn artifact_registry_no_credentials() {
+    let context = uv_test::test_context!("3.12").with_filtered_sizes();
+
+    uv_snapshot!(context.filters(), context.publish()
+        .arg("--publish-url")
+        .arg("https://us-central1-python.pkg.dev/project/repository/")
+        .arg(dummy_wheel())
+        .env(EnvVars::GITHUB_ACTIONS, "true")
+        .env("GOOGLE_APPLICATION_CREDENTIALS", context.temp_dir.join("missing-credentials.json")), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Publishing 1 file to https://us-central1-python.pkg.dev/project/repository/
+    Hashing ok-1.0.0-py3-none-any.whl ([SIZE]B)
+    Uploading ok-1.0.0-py3-none-any.whl ([SIZE]B)
+    error: Failed to publish `[WORKSPACE]/test/links/ok-1.0.0-py3-none-any.whl` to https://us-central1-python.pkg.dev/project/repository/
+      Caused by: Failed to send POST request
+      Caused by: Missing credentials for https://us-central1-python.pkg.dev/project/repository/
+    "
+    );
+}
+
 /// Hint people that it's not `--skip-existing` but `--check-url`.
 #[test]
 fn skip_existing_redirect() {
