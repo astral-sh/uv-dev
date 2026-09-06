@@ -709,6 +709,52 @@ fn init_script() -> Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
+#[test]
+fn init_script_escapes_filename() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let child = context.temp_dir.child("foo");
+    child.create_dir_all()?;
+
+    let script_name = "say\"; __import__(\"pathlib\").Path(\"PWNED\").touch(); #\nworld.py";
+    context
+        .init()
+        .current_dir(&child)
+        .arg("--script")
+        .arg(script_name)
+        .assert()
+        .success();
+
+    let script = fs_err::read_to_string(child.join(script_name))?;
+    assert_snapshot!(script, @r#"
+    # /// script
+    # requires-python = ">=3.12"
+    # dependencies = []
+    # ///
+
+
+    def main() -> None:
+        print("Hello from say\"; __import__(\"pathlib\").Path(\"PWNED\").touch(); #\nworld.py!")
+
+
+    if __name__ == "__main__":
+        main()
+    "#);
+
+    uv_snapshot!(context.filters(), context.run().current_dir(&child).arg("python").arg(script_name), @r#"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+    Hello from say"; __import__("pathlib").Path("PWNED").touch(); #
+    world.py!
+
+    ----- stderr -----
+    "#);
+    assert!(!child.join("PWNED").exists());
+
+    Ok(())
+}
+
 /// Using `--bare` with `--script` omits the default script content.
 #[test]
 fn init_script_bare() -> Result<()> {
