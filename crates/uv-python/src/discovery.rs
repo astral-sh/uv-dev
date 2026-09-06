@@ -1858,7 +1858,11 @@ impl PythonVariant {
             Self::Default => {
                 // TODO(zanieb): Right now, we allow debug interpreters to be selected by default for
                 // backwards compatibility, but we may want to change this in the future.
-                if (interpreter.python_major(), interpreter.python_minor()) >= (3, 14) {
+                if interpreter.is_virtualenv()
+                    || (interpreter.python_major(), interpreter.python_minor()) >= (3, 14)
+                {
+                    // An existing virtual environment has already opted in to its Python
+                    // variant, so it can satisfy a default-variant request.
                     // For Python 3.14+, the free-threaded build is not considered experimental
                     // and can satisfy the default variant without opt-in
                     true

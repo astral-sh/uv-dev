@@ -1021,8 +1021,8 @@ fn python_find_path() {
     ");
 }
 
-#[test]
 #[cfg(feature = "test-python-managed")]
+#[test]
 fn python_find_freethreaded_313() {
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
@@ -1031,6 +1031,8 @@ fn python_find_freethreaded_313() {
         .with_python_download_cache()
         .with_filtered_python_install_bin()
         .with_filtered_python_names()
+        .with_filtered_virtualenv_bin()
+        .with_filter((r"\[VENV\]/(?:\[BIN\]/)?\[INSTALL-BIN\]/", "[VENV]/[BIN]/"))
         .with_filtered_exe_suffix();
 
     context
@@ -1052,6 +1054,33 @@ fn python_find_freethreaded_313() {
     exit_code: 0 (success)
     ----- stdout -----
     [TEMP_DIR]/managed/cpython-3.13+freethreaded-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
+    ");
+
+    // A `requires-python` constraint should select an existing free-threaded environment.
+    context
+        .venv()
+        .arg("--python")
+        .arg("3.13t")
+        .assert()
+        .success();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+            [project]
+            name = "project"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+        "#})
+        .unwrap();
+
+    uv_snapshot!(context.filters(), context.python_find(), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+    [VENV]/[BIN]/[PYTHON]
+
+    ----- stderr -----
     ");
 }
 
