@@ -785,7 +785,7 @@ jobs:
       - name: "Validate global Python install"
         shell: bash -el {0}
         run: |
-          if [ "${{ matrix.os }}" = "windows" ]; then
+          if [ "${{ matrix.os }}" = "windows" ] && [ -n "${SSL_CERT_FILE:-}" ] && [ ! -f "$SSL_CERT_FILE" ]; then
             # Conda sets SSL_CERT_FILE to a nonexistent path on Windows.
             unset SSL_CERT_FILE
           fi
