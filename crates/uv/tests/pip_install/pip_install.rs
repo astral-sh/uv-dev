@@ -157,7 +157,39 @@ fn install_wheel_cache_incompatible_with_older_uv() -> Result<()> {
         }
         Ok::<(), anyhow::Error>(())
     }?;
+    Ok(())
+}
 
+fn write_incompatible_python_wheel(path: &Path) -> Result<()> {
+    let mut writer = ZipFileWriter::new(Vec::new());
+    let metadata = indoc! {"
+        Metadata-Version: 2.1
+        Name: incompatible-python
+        Version: 1.0.0
+        Requires-Python: >=3.30
+    "};
+    let wheel = indoc! {"
+        Wheel-Version: 1.0
+        Generator: uv-test
+        Root-Is-Purelib: true
+        Tag: py3-none-any
+    "};
+    let record = indoc! {"
+        incompatible_python.py,,
+        incompatible_python-1.0.0.dist-info/METADATA,,
+        incompatible_python-1.0.0.dist-info/WHEEL,,
+        incompatible_python-1.0.0.dist-info/RECORD,,
+    "};
+    for (name, contents) in [
+        ("incompatible_python.py", "VALUE = 1\n"),
+        ("incompatible_python-1.0.0.dist-info/METADATA", metadata),
+        ("incompatible_python-1.0.0.dist-info/WHEEL", wheel),
+        ("incompatible_python-1.0.0.dist-info/RECORD", record),
+    ] {
+        let entry = ZipEntryBuilder::new(name.into(), Compression::Stored);
+        block_on(writer.write_entry_whole(entry, contents.as_bytes()))?;
+    }
+    fs_err::write(path, block_on(writer.close())?)?;
     Ok(())
 }
 
@@ -4189,6 +4221,77 @@ fn no_deps() {
     );
 
     context.assert_command("import flask").failure();
+}
+
+#[test]
+fn no_deps_validates_missing_index_requires_python() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let root = context.temp_dir.child("simple-html");
+    let package = root.child("incompatible-python");
+    package.create_dir_all()?;
+
+    let wheel = package.child("incompatible_python-1.0.0-py3-none-any.whl");
+    write_incompatible_python_wheel(wheel.path())?;
+    package.child("index.html").write_str(indoc! {r#"
+        <!DOCTYPE html>
+        <html>
+          <body>
+            <a href="incompatible_python-1.0.0-py3-none-any.whl">
+              incompatible_python-1.0.0-py3-none-any.whl
+            </a>
+          </body>
+        </html>
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .arg("--no-deps")
+        .arg("--index-url")
+        .arg(root.path())
+        .arg("incompatible-python"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+      × No solution found when resolving dependencies:
+      ╰─▶ Because incompatible-python==1.0.0 requires Python >=3.30 and only incompatible-python==1.0.0 is available, we can conclude that all versions of incompatible-python cannot be used.
+          And because you require incompatible-python, we can conclude that your requirements are unsatisfiable.
+    "
+    );
+    context.assert_not_installed("incompatible_python");
+
+    Ok(())
+}
+
+#[test]
+fn no_deps_does_not_read_installed_metadata() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let dist_info = context.site_packages().join("installed-1.0.0.dist-info");
+    fs::create_dir_all(&dist_info)?;
+    fs::write(
+        dist_info.join("WHEEL"),
+        "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+    )?;
+    fs::write(
+        dist_info.join("METADATA"),
+        "Metadata-Version: 2.1\nName: installed\nVersion: 1.0.0\nRequires-Python: invalid\n",
+    )?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--no-deps")
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg(context.workspace_root.join("test/links"))
+        .arg("installed==1.0.0")
+        .arg("ok==1.0.0"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + ok==1.0.0
+    "
+    );
+
+    Ok(())
 }
 
 /// Install an editable package from the command line into a virtual environment, ignoring its

@@ -4405,7 +4405,7 @@ fn require_hashes_at_least_one() -> Result<()> {
 /// Using `--find-links`, but the registry doesn't provide us with a hash.
 #[test]
 fn require_hashes_find_links_no_hash() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.13");
     let server = FindLinksServer::new(&context.workspace_root.join("test/links"));
     let index = PackseServer::empty();
 
@@ -5311,7 +5311,6 @@ fn incompatible_build_constraint() -> Result<()> {
         .arg("build_constraints.txt"), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    Resolved 1 package in [TIME]
       × Failed to download and build `requests==1.2.0`
       ├─▶ Failed to resolve requirements from `setup.py` build
       ├─▶ No solution found when resolving: `setuptools>=40.8.0`
