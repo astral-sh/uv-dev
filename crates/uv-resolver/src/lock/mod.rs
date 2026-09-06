@@ -6575,13 +6575,6 @@ impl<'de> serde::Deserialize<'de> for Hash {
 impl From<Hash> for Hashes {
     fn from(value: Hash) -> Self {
         match value.0.algorithm {
-            HashAlgorithm::Md5 => Self {
-                md5: Some(value.0.digest),
-                sha256: None,
-                sha384: None,
-                sha512: None,
-                blake2b: None,
-            },
             HashAlgorithm::Sha256 => Self {
                 md5: None,
                 sha256: Some(value.0.digest),
