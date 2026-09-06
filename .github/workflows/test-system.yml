@@ -756,10 +756,14 @@ jobs:
           persist-credentials: false
 
       - uses: conda-incubator/setup-miniconda@8ee1f361103df19b6f8c8655fd3967a8ecb162d5 # v4.0.1
+        env:
+          # Disable the conda-pypi beta advertisement printed during environment setup.
+          CONDA_PLUGINS_CONDA_PYPI_PIP_WARNING: "0"
         with:
           miniconda-version: "latest"
           activate-environment: uv
           python-version: ${{ matrix.python-version }}
+          channels: defaults
 
       - name: Conda info
         shell: bash -el {0}
