@@ -13882,6 +13882,15 @@ fn repacked_wheel_with_entrypoint(
     section: &str,
     entrypoint_name: &str,
 ) -> Result<PathBuf> {
+    repacked_wheel_with_entrypoint_value(context, section, entrypoint_name, "foo:main")
+}
+
+fn repacked_wheel_with_entrypoint_value(
+    context: &TestContext,
+    section: &str,
+    entrypoint_name: &str,
+    entrypoint_value: &str,
+) -> Result<PathBuf> {
     context.init().arg("--lib").arg("foo").assert().success();
     context.build().arg("--wheel").arg("foo").assert().success();
 
@@ -13893,7 +13902,7 @@ fn repacked_wheel_with_entrypoint(
         unpacked.join("foo-0.1.0.dist-info/entry_points.txt"),
         formatdoc! {"
             [{section}]
-            {entrypoint_name} = foo:main
+            {entrypoint_name} = {entrypoint_value}
             ",
         },
     )?;
@@ -13921,6 +13930,35 @@ fn repacked_wheel_with_entrypoint(
     fs_err::write(&repacked_wheel, block_on(writer.close())?)?;
 
     Ok(repacked_wheel)
+}
+
+#[test]
+fn reject_invalid_wheel_entrypoint_object_reference() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let repacked_wheel = repacked_wheel_with_entrypoint_value(
+        &context,
+        "console_scripts",
+        "foo",
+        "foo:main-handler",
+    )?;
+
+    uv_snapshot!(context.filters(), context.pip_install().arg(&repacked_wheel), @"
+    success: false
+    exit_code: 2
+    ----- stdout -----
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    error: Failed to install: foo-0.1.0-py3-none-any.whl (foo==0.1.0 (from file://[TEMP_DIR]/foo-0.1.0-py3-none-any.whl))
+      Caused by: The wheel is invalid: invalid console script: 'foo:main-handler'
+    "
+    );
+
+    assert!(!context.site_packages().join("foo").exists());
+    assert!(!context.site_packages().join("foo-0.1.0.dist-info").exists());
+
+    Ok(())
 }
 
 #[test]
