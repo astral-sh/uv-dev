@@ -4723,6 +4723,16 @@ fn system_certs_config_aliases() -> anyhow::Result<()> {
     "
     );
 
+    assert_eq!(
+        baseline,
+        capture_uv_snapshot!(
+            context.filters(),
+            add_shared_args(context.version())
+                .arg("--show-settings")
+                .env(EnvVars::UV_SYSTEM_CERTS, "0")
+        )
+    );
+
     config.write_str(indoc::indoc! {r"
         system-certs = false
         native-tls = true
