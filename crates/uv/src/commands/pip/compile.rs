@@ -15,7 +15,8 @@ use uv_cache::Cache;
 use uv_client::{BaseClientBuilder, FlatIndexClient, RegistryClientBuilder};
 use uv_configuration::{
     BuildIsolation, BuildOptions, Concurrency, Constraints, ExcludeDependency, ExtrasSpecification,
-    IndexStrategy, NoBinary, NoBuild, NoSources, Override, PipCompileFormat, Reinstall, Upgrade,
+    IndexStrategy, NoBinary, NoBuild, NoSources, OutputFlags, Override, PipCompileFormat,
+    Reinstall, Upgrade,
 };
 use uv_configuration::{KeyringProviderType, TargetTriple};
 use uv_dispatch::{BuildDispatch, SharedState};
@@ -60,7 +61,6 @@ use crate::commands::{ExitStatus, OutputWriter, diagnostics};
 use crate::printer::Printer;
 
 /// Resolve a set of requirements into a set of pinned versions.
-#[expect(clippy::fn_params_excessive_bools)]
 pub(crate) async fn pip_compile(
     requirements: &[RequirementsSource],
     constraints: &[RequirementsSource],
@@ -82,18 +82,9 @@ pub(crate) async fn pip_compile(
     fork_strategy: ForkStrategy,
     dependency_mode: DependencyMode,
     upgrade: Upgrade,
-    generate_hashes: bool,
+    output_flags: OutputFlags,
     no_emit_packages: Vec<PackageName>,
-    include_extras: bool,
-    include_markers: bool,
-    include_annotations: bool,
-    include_header: bool,
     custom_compile_command: Option<String>,
-    include_index_url: bool,
-    include_find_links: bool,
-    include_build_options: bool,
-    include_marker_expression: bool,
-    include_index_annotation: bool,
     index_locations: IndexLocations,
     index_strategy: IndexStrategy,
     torch_backend: Option<TorchMode>,
@@ -413,7 +404,9 @@ pub(crate) async fn pip_compile(
 
     // Generate, but don't enforce hashes for the requirements. PEP 751 _requires_ a hash to be
     // present, but otherwise, we omit them by default.
-    let hasher = if generate_hashes || matches!(format, PipCompileFormat::PylockToml) {
+    let hasher = if output_flags.contains(OutputFlags::HASHES)
+        || matches!(format, PipCompileFormat::PylockToml)
+    {
         HashStrategy::generate(HashGeneration::All)
     } else {
         HashStrategy::default()
@@ -600,14 +593,16 @@ pub(crate) async fn pip_compile(
         }
     };
 
-    if generate_hashes && preview.is_enabled(PreviewFeature::ArtifactHashFiltering) {
+    if output_flags.contains(OutputFlags::HASHES)
+        && preview.is_enabled(PreviewFeature::ArtifactHashFiltering)
+    {
         resolution.retain_allowed_distribution_hashes(&build_options);
     }
 
     // Write the resolved dependencies to the output channel.
     let mut writer = OutputWriter::new(!quiet || output_file.is_none(), output_file);
 
-    if include_header {
+    if output_flags.contains(OutputFlags::HEADER) {
         writeln!(
             writer,
             "{}",
@@ -616,21 +611,13 @@ pub(crate) async fn pip_compile(
         writeln!(
             writer,
             "{}",
-            format!(
-                "#    {}",
-                cmd(
-                    include_index_url,
-                    include_find_links,
-                    custom_compile_command
-                )
-            )
-            .green()
+            format!("#    {}", cmd(output_flags, custom_compile_command)).green()
         )?;
     }
 
     match format {
         PipCompileFormat::RequirementsTxt => {
-            if include_marker_expression {
+            if output_flags.contains(OutputFlags::MARKER_EXPRESSION) {
                 if let Some(marker_env) = resolver_env.marker_environment() {
                     let relevant_markers = resolution.marker_tree(&top_level_index, marker_env)?;
                     if let Some(relevant_markers) = relevant_markers.contents() {
@@ -647,7 +634,7 @@ pub(crate) async fn pip_compile(
             let mut wrote_preamble = false;
 
             // If necessary, include the `--index-url` and `--extra-index-url` locations.
-            if include_index_url {
+            if output_flags.contains(OutputFlags::INDEX_URL) {
                 if let Some(index) = index_locations.default_index() {
                     writeln!(writer, "--index-url {}", index.url().verbatim())?;
                     wrote_preamble = true;
@@ -662,7 +649,7 @@ pub(crate) async fn pip_compile(
             }
 
             // If necessary, include the `--find-links` locations.
-            if include_find_links {
+            if output_flags.contains(OutputFlags::FIND_LINKS) {
                 for flat_index in index_locations.flat_indexes() {
                     writeln!(writer, "--find-links {}", flat_index.url().verbatim())?;
                     wrote_preamble = true;
@@ -670,7 +657,7 @@ pub(crate) async fn pip_compile(
             }
 
             // If necessary, include the `--no-binary` and `--only-binary` options.
-            if include_build_options {
+            if output_flags.contains(OutputFlags::BUILD_OPTIONS) {
                 match build_options.no_binary() {
                     NoBinary::None => {}
                     NoBinary::All => {
@@ -711,37 +698,37 @@ pub(crate) async fn pip_compile(
                     &resolution,
                     &resolver_env,
                     &no_emit_packages,
-                    generate_hashes,
-                    include_extras,
-                    include_markers || universal,
-                    include_annotations,
-                    include_index_annotation,
+                    if universal {
+                        output_flags | OutputFlags::MARKERS
+                    } else {
+                        output_flags
+                    },
                     annotation_style,
                 )
             )?;
         }
         PipCompileFormat::PylockToml => {
-            if include_marker_expression {
+            if output_flags.contains(OutputFlags::MARKER_EXPRESSION) {
                 warn_user!(
                     "The `--emit-marker-expression` option is not supported for `pylock.toml` output"
                 );
             }
-            if include_index_url {
+            if output_flags.contains(OutputFlags::INDEX_URL) {
                 warn_user!(
                     "The `--emit-index-url` option is not supported for `pylock.toml` output"
                 );
             }
-            if include_find_links {
+            if output_flags.contains(OutputFlags::FIND_LINKS) {
                 warn_user!(
                     "The `--emit-find-links` option is not supported for `pylock.toml` output"
                 );
             }
-            if include_build_options {
+            if output_flags.contains(OutputFlags::BUILD_OPTIONS) {
                 warn_user!(
                     "The `--emit-build-options` option is not supported for `pylock.toml` output"
                 );
             }
-            if include_index_annotation {
+            if output_flags.contains(OutputFlags::INDEX_ANNOTATION) {
                 warn_user!(
                     "The `--emit-index-annotation` option is not supported for `pylock.toml` output"
                 );
@@ -772,7 +759,7 @@ pub(crate) async fn pip_compile(
         .into_iter()
         .filter(|name| resolution.contains(name))
         .collect::<Vec<_>>();
-    if include_annotations && !excluded.is_empty() {
+    if output_flags.contains(OutputFlags::ANNOTATIONS) && !excluded.is_empty() {
         writeln!(writer)?;
         writeln!(
             writer,
@@ -794,11 +781,7 @@ pub(crate) async fn pip_compile(
 }
 
 /// Format the uv command used to generate the output file.
-fn cmd(
-    include_index_url: bool,
-    include_find_links: bool,
-    custom_compile_command: Option<String>,
-) -> String {
+fn cmd(output_flags: OutputFlags, custom_compile_command: Option<String>) -> String {
     if let Some(cmd_str) = custom_compile_command {
         return cmd_str;
     }
@@ -813,7 +796,7 @@ fn cmd(
             }
 
             // Skip any index URLs, unless requested.
-            if !include_index_url {
+            if !output_flags.contains(OutputFlags::INDEX_URL) {
                 if arg.starts_with("--extra-index-url=")
                     || arg.starts_with("--index-url=")
                     || arg.starts_with("-i=")
@@ -838,7 +821,7 @@ fn cmd(
             }
 
             // Skip any `--find-links` URLs, unless requested.
-            if !include_find_links {
+            if !output_flags.contains(OutputFlags::FIND_LINKS) {
                 // Always skip the `--find-links` and mark the next item to be skipped
                 if arg == "--find-links" || arg == "-f" {
                     *skip_next = Some(true);

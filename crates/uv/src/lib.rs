@@ -33,7 +33,7 @@ use uv_cli::{
     TopLevelArgs, WorkspaceCommand, WorkspaceNamespace, compat::CompatArgs, options::ArgumentError,
 };
 use uv_client::BaseClientBuilder;
-use uv_configuration::min_stack_size;
+use uv_configuration::{OutputFlags, min_stack_size};
 use uv_flags::EnvironmentFlags;
 use uv_fs::{CWD, Simplified, normalize_path};
 #[cfg(feature = "self-update")]
@@ -773,6 +773,24 @@ async fn run_with_workspace_cache(
                 groups: args.settings.groups,
             };
 
+            let mut output_flags = OutputFlags::empty();
+            output_flags.set(OutputFlags::HASHES, args.settings.generate_hashes);
+            output_flags.set(OutputFlags::EXTRAS, args.settings.no_strip_extras);
+            output_flags.set(OutputFlags::MARKERS, args.settings.no_strip_markers);
+            output_flags.set(OutputFlags::ANNOTATIONS, !args.settings.no_annotate);
+            output_flags.set(OutputFlags::HEADER, !args.settings.no_header);
+            output_flags.set(OutputFlags::INDEX_URL, args.settings.emit_index_url);
+            output_flags.set(OutputFlags::FIND_LINKS, args.settings.emit_find_links);
+            output_flags.set(OutputFlags::BUILD_OPTIONS, args.settings.emit_build_options);
+            output_flags.set(
+                OutputFlags::MARKER_EXPRESSION,
+                args.settings.emit_marker_expression,
+            );
+            output_flags.set(
+                OutputFlags::INDEX_ANNOTATION,
+                args.settings.emit_index_annotation,
+            );
+
             Box::pin(commands::pip_compile(
                 &requirements,
                 &constraints,
@@ -794,18 +812,9 @@ async fn run_with_workspace_cache(
                 args.settings.fork_strategy,
                 args.settings.dependency_mode,
                 args.settings.upgrade,
-                args.settings.generate_hashes,
+                output_flags,
                 args.settings.no_emit_package,
-                args.settings.no_strip_extras,
-                args.settings.no_strip_markers,
-                !args.settings.no_annotate,
-                !args.settings.no_header,
                 args.settings.custom_compile_command,
-                args.settings.emit_index_url,
-                args.settings.emit_find_links,
-                args.settings.emit_build_options,
-                args.settings.emit_marker_expression,
-                args.settings.emit_index_annotation,
                 args.settings.index_locations,
                 args.settings.index_strategy,
                 args.settings.torch_backend,
@@ -2822,7 +2831,7 @@ async fn run_project(
                 args.all_packages,
                 args.package,
                 args.prune,
-                args.hashes,
+                args.output_flags,
                 args.install_options,
                 args.output_file,
                 args.extras,
@@ -2830,10 +2839,6 @@ async fn run_project(
                 args.editable,
                 args.lock_check,
                 args.frozen,
-                args.include_annotations,
-                args.include_header,
-                args.include_index_url,
-                args.include_find_links,
                 script,
                 args.python,
                 args.install_mirrors,

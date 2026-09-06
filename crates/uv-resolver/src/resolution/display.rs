@@ -5,6 +5,7 @@ use petgraph::visit::EdgeRef;
 use petgraph::{Directed, Direction, Graph};
 use rustc_hash::{FxBuildHasher, FxHashMap};
 
+use uv_configuration::OutputFlags;
 use uv_distribution_types::{DistributionMetadata, Name, SourceAnnotation, SourceAnnotations};
 use uv_normalize::PackageName;
 use uv_pep508::MarkerTree;
@@ -21,17 +22,8 @@ pub struct DisplayResolutionGraph<'a> {
     env: &'a ResolverEnvironment,
     /// The packages to exclude from the output.
     no_emit_packages: &'a [PackageName],
-    /// Whether to include hashes in the output.
-    show_hashes: bool,
-    /// Whether to include extras in the output (e.g., `black[colorama]`).
-    include_extras: bool,
-    /// Whether to include environment markers in the output (e.g., `black ; sys_platform == "win32"`).
-    include_markers: bool,
-    /// Whether to include annotations in the output, to indicate which dependency or dependencies
-    /// requested each package.
-    include_annotations: bool,
-    /// Whether to include indexes in the output, to indicate which index was used for each package.
-    include_index_annotation: bool,
+    /// The optional content to include in the output.
+    output_flags: OutputFlags,
     /// The style of annotation comments, used to indicate the dependencies that requested each
     /// package.
     annotation_style: AnnotationStyle,
@@ -50,16 +42,11 @@ impl<'a> DisplayResolutionGraph<'a> {
     /// output contain non-empty conflicting groups. That is, when using `uv
     /// pip compile`, specifying conflicts is not supported because their
     /// conditional logic cannot be encoded into a `requirements.txt`.
-    #[expect(clippy::fn_params_excessive_bools)]
     pub fn new(
         underlying: &'a ResolverOutput,
         env: &'a ResolverEnvironment,
         no_emit_packages: &'a [PackageName],
-        show_hashes: bool,
-        include_extras: bool,
-        include_markers: bool,
-        include_annotations: bool,
-        include_index_annotation: bool,
+        output_flags: OutputFlags,
         annotation_style: AnnotationStyle,
     ) -> Self {
         for fork_marker in &underlying.fork_markers {
@@ -73,11 +60,7 @@ impl<'a> DisplayResolutionGraph<'a> {
             resolution: underlying,
             env,
             no_emit_packages,
-            show_hashes,
-            include_extras,
-            include_markers,
-            include_annotations,
-            include_index_annotation,
+            output_flags,
             annotation_style,
         }
     }
@@ -87,7 +70,7 @@ impl<'a> DisplayResolutionGraph<'a> {
 impl std::fmt::Display for DisplayResolutionGraph<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // Determine the annotation sources for each package.
-        let sources = if self.include_annotations {
+        let sources = if self.output_flags.contains(OutputFlags::ANNOTATIONS) {
             let mut sources = SourceAnnotations::default();
 
             for requirement in self.resolution.requirements.iter().filter(|requirement| {
@@ -184,7 +167,7 @@ impl std::fmt::Display for DisplayResolutionGraph<'_> {
         );
 
         // Reduce the graph, removing or combining extras for a given package.
-        let graph = if self.include_extras {
+        let graph = if self.output_flags.contains(OutputFlags::EXTRAS) {
             combine_extras(&graph)
         } else {
             strip_extras(&graph)
@@ -211,12 +194,15 @@ impl std::fmt::Display for DisplayResolutionGraph<'_> {
         for (index, node) in nodes {
             // Display the node itself.
             let mut line = node
-                .to_requirements_txt(&self.resolution.requires_python, self.include_markers)
+                .to_requirements_txt(
+                    &self.resolution.requires_python,
+                    self.output_flags.contains(OutputFlags::MARKERS),
+                )
                 .to_string();
 
             // Display the distribution hashes, if any.
             let mut has_hashes = false;
-            if self.show_hashes {
+            if self.output_flags.contains(OutputFlags::HASHES) {
                 for hash in node.hashes {
                     has_hashes = true;
                     line.push_str(" \\\n");
@@ -230,7 +216,7 @@ impl std::fmt::Display for DisplayResolutionGraph<'_> {
 
             // If enabled, include annotations to indicate the dependencies that requested each
             // package (e.g., `# via mypy`).
-            if self.include_annotations {
+            if self.output_flags.contains(OutputFlags::ANNOTATIONS) {
                 // Display all dependents (i.e., all packages that depend on the current package).
                 let dependents = {
                     let mut dependents = graph
@@ -312,7 +298,7 @@ impl std::fmt::Display for DisplayResolutionGraph<'_> {
 
             // If enabled, include indexes to indicate which index was used for each package (e.g.,
             // `# from https://pypi.org/simple`).
-            if self.include_index_annotation {
+            if self.output_flags.contains(OutputFlags::INDEX_ANNOTATION) {
                 if let Some(index) = node.dist.index() {
                     let url = index.without_credentials();
                     writeln!(f, "{}", format!("    # from {url}").green())?;
