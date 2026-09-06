@@ -366,15 +366,22 @@ impl<'env> DisplayDependencyGraph<'env> {
         cursor: &Cursor,
         visited: &mut FxHashMap<&'env PackageName, Vec<PackageName>>,
         path: &mut Vec<&'env PackageName>,
-    ) -> Vec<String> {
+        prefix: &mut String,
+        is_last: Option<bool>,
+        lines: &mut Vec<String>,
+    ) {
         // Short-circuit if the current path is longer than the provided depth.
         if path.len() > self.depth {
-            return Vec::new();
+            return;
         }
 
         let metadata = &self.graph[cursor.node()];
         let package_name = &metadata.name;
-        let mut line = format!("{} v{}", package_name, metadata.version);
+        let mut line = match is_last {
+            Some(true) => format!("{prefix}└── {} v{}", package_name, metadata.version),
+            Some(false) => format!("{prefix}├── {} v{}", package_name, metadata.version),
+            None => format!("{} v{}", package_name, metadata.version),
+        };
 
         // If the current package is not top-level (i.e., it has a parent), include the specifiers.
         if self.show_version_specifiers && !cursor.is_root() {
@@ -412,11 +419,12 @@ impl<'env> DisplayDependencyGraph<'env> {
         // 2. The package has been visited and de-duplication is enabled (default).
         if let Some(requirements) = visited.get(package_name) {
             if !self.no_dedupe || path.contains(&package_name) {
-                return if requirements.is_empty() {
-                    vec![line]
+                lines.push(if requirements.is_empty() {
+                    line
                 } else {
-                    vec![format!("{} (*)", line)]
-                };
+                    format!("{line} (*)")
+                });
+                return;
             }
         }
 
@@ -448,7 +456,7 @@ impl<'env> DisplayDependencyGraph<'env> {
             (&metadata.name, &metadata.version)
         });
 
-        let mut lines = vec![line];
+        lines.push(line);
 
         // Keep track of the dependency path to avoid cycles.
         visited.insert(
@@ -463,45 +471,22 @@ impl<'env> DisplayDependencyGraph<'env> {
         );
         path.push(package_name);
 
-        for (index, dep) in dependencies.iter().enumerate() {
-            // For sub-visited packages, add the prefix to make the tree display user-friendly.
-            // The key observation here is you can group the tree as follows when you're at the
-            // root of the tree:
-            // root_package
-            // ├── level_1_0          // Group 1
-            // │   ├── level_2_0      ...
-            // │   │   ├── level_3_0  ...
-            // │   │   └── level_3_1  ...
-            // │   └── level_2_1      ...
-            // ├── level_1_1          // Group 2
-            // │   ├── level_2_2      ...
-            // │   └── level_2_3      ...
-            // └── level_1_2          // Group 3
-            //     └── level_2_4      ...
-            //
-            // The lines in Group 1 and 2 have `├── ` at the top and `|   ` at the rest while
-            // those in Group 3 have `└── ` at the top and `    ` at the rest.
-            // This observation is true recursively even when looking at the subtree rooted
-            // at `level_1_0`.
-            let (prefix_top, prefix_rest) = if dependencies.len() - 1 == index {
-                ("└── ", "    ")
-            } else {
-                ("├── ", "│   ")
-            };
-
-            for (visited_index, visited_line) in self.visit(dep, visited, path).iter().enumerate() {
-                let prefix = if visited_index == 0 {
-                    prefix_top
-                } else {
-                    prefix_rest
-                };
-
-                lines.push(format!("{prefix}{visited_line}"));
-            }
+        let prefix_len = prefix.len();
+        if let Some(is_last) = is_last {
+            prefix.push_str(if is_last { "    " } else { "│   " });
         }
+        for (index, dep) in dependencies.iter().enumerate() {
+            self.visit(
+                dep,
+                visited,
+                path,
+                prefix,
+                Some(dependencies.len() - 1 == index),
+                lines,
+            );
+        }
+        prefix.truncate(prefix_len);
         path.pop();
-
-        lines
     }
 
     /// Aggregate the requirements associated with the incoming edges for a node.
@@ -621,14 +606,23 @@ impl<'env> DisplayDependencyGraph<'env> {
     /// Depth-first traverse the nodes to render the tree.
     fn render(&self) -> Vec<String> {
         let mut path = Vec::new();
+        let mut prefix = String::new();
         let mut lines = Vec::with_capacity(self.graph.node_count());
         let mut visited =
             FxHashMap::with_capacity_and_hasher(self.graph.node_count(), rustc_hash::FxBuildHasher);
 
         for node in &self.roots {
             path.clear();
+            prefix.clear();
             let cursor = Cursor::root(*node);
-            lines.extend(self.visit(&cursor, &mut visited, &mut path));
+            self.visit(
+                &cursor,
+                &mut visited,
+                &mut path,
+                &mut prefix,
+                None,
+                &mut lines,
+            );
         }
 
         lines
