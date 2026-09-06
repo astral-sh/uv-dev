@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
@@ -981,12 +980,21 @@ fn report_missing_lower_bounds(
     constraints: &Constraints,
     overrides: &Overrides,
 ) {
+    let mut lower_bounded_dependencies = FxHashMap::<NodeIndex, FxHashSet<PackageName>>::default();
+
     for node_index in graph.node_indices() {
         let ResolutionGraphNode::Dist(dist) = graph.node_weight(node_index).unwrap() else {
             // Ignore the root package.
             continue;
         };
-        if !has_lower_bound(node_index, dist.name(), graph, constraints, overrides) {
+        if !has_lower_bound(
+            node_index,
+            dist.name(),
+            graph,
+            constraints,
+            overrides,
+            &mut lower_bounded_dependencies,
+        ) {
             diagnostics.push(ResolutionDiagnostic::MissingLowerBound {
                 package_name: dist.name().clone(),
             });
@@ -1001,7 +1009,12 @@ fn has_lower_bound(
     graph: &Graph<ResolutionGraphNode, UniversalMarker>,
     constraints: &Constraints,
     overrides: &Overrides,
+    lower_bounded_dependencies: &mut FxHashMap<NodeIndex, FxHashSet<PackageName>>,
 ) -> bool {
+    let constraint_has_lower_bound = constraints
+        .get(package_name)
+        .is_some_and(|requirements| requirements.iter().any(requirement_has_lower_bound));
+
     for neighbor_index in graph.neighbors_directed(node_index, Direction::Incoming) {
         let neighbor_dist = match graph.node_weight(neighbor_index).unwrap() {
             ResolutionGraphNode::Root => {
@@ -1022,29 +1035,35 @@ fn has_lower_bound(
             return true;
         };
 
-        // Get all individual specifier for the current package and check if any has a lower
-        // bound.
-        for requirement in overrides
-            .apply_for(
-                neighbor_dist.name(),
-                &neighbor_dist.version,
-                metadata.requires_dist.iter(),
-            )
-            .chain(overrides.apply(metadata.dependency_groups.values().flatten()))
-            // Constraints are missing from the graph.
-            .chain(constraints.requirements().map(Cow::Borrowed))
-        {
-            if requirement.name != *package_name {
-                continue;
-            }
-            let Some(specifiers) = requirement.source.version_specifiers() else {
-                // URL requirements are a bound.
-                return true;
-            };
-            if specifiers.iter().any(VersionSpecifier::has_lower_bound) {
-                return true;
-            }
+        // Constraints are missing from the graph.
+        if constraint_has_lower_bound {
+            return true;
+        }
+
+        let lower_bounded = lower_bounded_dependencies
+            .entry(neighbor_index)
+            .or_insert_with(|| {
+                overrides
+                    .apply_for(
+                        neighbor_dist.name(),
+                        &neighbor_dist.version,
+                        metadata.requires_dist.iter(),
+                    )
+                    .chain(overrides.apply(metadata.dependency_groups.values().flatten()))
+                    .filter(|requirement| requirement_has_lower_bound(requirement))
+                    .map(|requirement| requirement.name.clone())
+                    .collect()
+            });
+        if lower_bounded.contains(package_name) {
+            return true;
         }
     }
     false
+}
+
+fn requirement_has_lower_bound(requirement: &Requirement) -> bool {
+    requirement
+        .source
+        .version_specifiers()
+        .is_none_or(|specifiers| specifiers.iter().any(VersionSpecifier::has_lower_bound))
 }
