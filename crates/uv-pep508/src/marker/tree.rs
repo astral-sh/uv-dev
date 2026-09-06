@@ -75,6 +75,8 @@ impl Display for MarkerValueVersion {
 pub enum MarkerValueString {
     /// `implementation_name`
     ImplementationName,
+    /// `implementation_version`
+    ImplementationVersion,
     /// `os_name`
     OsName,
     /// Deprecated `os.name` from <https://peps.python.org/pep-0345/#environment-markers>
@@ -97,6 +99,10 @@ pub enum MarkerValueString {
     PlatformVersion,
     /// Deprecated `platform.version` from <https://peps.python.org/pep-0345/#environment-markers>
     PlatformVersionDeprecated,
+    /// `python_full_version`
+    PythonFullVersion,
+    /// `python_version`
+    PythonVersion,
     /// `sys_platform`
     SysPlatform,
     /// Deprecated `sys.platform` from <https://peps.python.org/pep-0345/#environment-markers>
@@ -108,6 +114,7 @@ impl Display for MarkerValueString {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Self::ImplementationName => f.write_str("implementation_name"),
+            Self::ImplementationVersion => f.write_str("implementation_version"),
             Self::OsName | Self::OsNameDeprecated => f.write_str("os_name"),
             Self::PlatformMachine | Self::PlatformMachineDeprecated => {
                 f.write_str("platform_machine")
@@ -120,6 +127,8 @@ impl Display for MarkerValueString {
             Self::PlatformVersion | Self::PlatformVersionDeprecated => {
                 f.write_str("platform_version")
             }
+            Self::PythonFullVersion => f.write_str("python_full_version"),
+            Self::PythonVersion => f.write_str("python_version"),
             Self::SysPlatform | Self::SysPlatformDeprecated => f.write_str("sys_platform"),
         }
     }
@@ -509,17 +518,17 @@ pub enum MarkerExpression {
         key: MarkerValueVersion,
         specifier: VersionSpecifier,
     },
-    /// A version in list expression, e.g. `<version key> in <quoted list of PEP 440 versions>`.
+    /// A version substring expression, e.g. `<version key> in <quoted string>`.
     ///
     /// A special case of [`MarkerExpression::String`] with the [`MarkerOperator::In`] operator for
     /// [`MarkerValueVersion`] values.
     ///
     /// See [`parse::parse_version_in_expr`] for details on the supported syntax.
     ///
-    /// Negated expressions, using "not in" are represented using `negated = true`.
+    /// Negated expressions use the "not in" operator.
     VersionIn {
         key: MarkerValueVersion,
-        versions: Vec<Version>,
+        value: ArcStr,
         operator: ContainerOperator,
     },
     /// An string marker comparison, e.g. `sys_platform == '...'`.
@@ -547,7 +556,7 @@ pub enum MarkerExpression {
 pub(crate) enum MarkerExpressionKind {
     /// A version expression, e.g. `<version key> <version op> <quoted PEP 440 version>`.
     Version(MarkerValueVersion),
-    /// A version `in` expression, e.g. `<version key> in <quoted list of PEP 440 versions>`.
+    /// A version `in` expression, e.g. `<version key> in <quoted string>`.
     VersionIn(MarkerValueVersion),
     /// A string marker comparison, e.g. `sys_platform == '...'`.
     String(MarkerValueString),
@@ -683,9 +692,9 @@ impl Display for MarkerExpression {
             }
             Self::VersionIn {
                 key,
-                versions,
+                value,
                 operator,
-            } => write!(f, "{key} {operator} '{}'", versions.iter().format(" ")),
+            } => write!(f, "{key} {operator} '{value}'"),
             Self::String {
                 key,
                 operator,
@@ -2128,6 +2137,18 @@ mod test {
         .unwrap();
         let env37 = env37();
 
+        let marker = MarkerTree::from_str("python_version in \"3.7.1\"").unwrap();
+        assert!(marker.evaluate(&env37, &[]));
+
+        let marker = MarkerTree::from_str("python_version not in \"3.7.1\"").unwrap();
+        assert!(!marker.evaluate(&env37, &[]));
+
+        let marker = MarkerTree::from_str("python_full_version in \"x3.7x\"").unwrap();
+        assert!(marker.evaluate(&env37, &[]));
+
+        let marker = MarkerTree::from_str("implementation_version not in \"x3.7x\"").unwrap();
+        assert!(!marker.evaluate(&env37, &[]));
+
         let marker = MarkerTree::from_str("python_version in \"2.7 3.2 3.3\"").unwrap();
         assert!(marker.evaluate(&env27, &[]));
         assert!(!marker.evaluate(&env37, &[]));
@@ -2515,25 +2536,24 @@ mod test {
         assert_false("python_version == '3.9.1'");
         assert_true("python_version != '3.9.1'");
 
-        // This is an edge case that happens to be supported, but is not critical to support.
-        assert_simplifies(
+        // Version membership uses substring semantics and cannot be normalized to a version range.
+        for marker in [
             "python_version in '3.9.0'",
-            "python_full_version == '3.9.*'",
-        );
-        // e.g., using a version that is not PEP 440 compliant is considered arbitrary
-        assert_true("python_version in 'foo'");
-        // e.g., including `*` versions, which would require tracking a version specifier
-        assert_true("python_version in '3.9.*'");
-        // e.g., when non-whitespace separators are present
-        assert_true("python_version in '3.9, 3.10'");
-        assert_true("python_version in '3.9,3.10'");
-        assert_true("python_version in '3.9 or 3.10'");
-
-        // This is an edge case that happens to be supported, but is not critical to support.
-        assert_simplifies(
+            "python_version in 'foo'",
+            "python_version in '3.9.*'",
+            "python_version in '3.9, 3.10'",
+            "python_version in '3.9,3.10'",
+            "python_version in '3.9 or 3.10'",
             "python_version in '3.9 3.10.0 3.11'",
-            "python_full_version >= '3.9' and python_full_version < '3.12'",
-        );
+            "python_version in '3.9 3.11'",
+            "python_version in '3.9 3.10 3.11'",
+            "implementation_version in '3.9 3.11'",
+            "python_version not in '3.9 3.11'",
+            "python_version not in '3.9 3.10 3.11'",
+            "implementation_version not in '3.9 3.11'",
+        ] {
+            assert_simplifies(marker, marker);
+        }
 
         assert_simplifies("python_version == '3.9'", "python_full_version == '3.9.*'");
         assert_simplifies(
@@ -2547,40 +2567,6 @@ mod test {
         assert_simplifies(
             "python_version == '3.*'",
             "python_full_version >= '3' and python_full_version < '4'",
-        );
-
-        // `<version> in`
-        // e.g., when the range is not contiguous
-        assert_simplifies(
-            "python_version in '3.9 3.11'",
-            "python_full_version == '3.9.*' or python_full_version == '3.11.*'",
-        );
-        // e.g., when the range is contiguous
-        assert_simplifies(
-            "python_version in '3.9 3.10 3.11'",
-            "python_full_version >= '3.9' and python_full_version < '3.12'",
-        );
-        // e.g., with `implementation_version` instead of `python_version`
-        assert_simplifies(
-            "implementation_version in '3.9 3.11'",
-            "implementation_version == '3.9' or implementation_version == '3.11'",
-        );
-
-        // '<version> not in'
-        // e.g., when the range is not contiguous
-        assert_simplifies(
-            "python_version not in '3.9 3.11'",
-            "python_full_version < '3.9' or python_full_version == '3.10.*' or python_full_version >= '3.12'",
-        );
-        // e.g, when the range is contiguous
-        assert_simplifies(
-            "python_version not in '3.9 3.10 3.11'",
-            "python_full_version < '3.9' or python_full_version >= '3.12'",
-        );
-        // e.g., with `implementation_version` instead of `python_version`
-        assert_simplifies(
-            "implementation_version not in '3.9 3.11'",
-            "implementation_version != '3.9' and implementation_version != '3.11'",
         );
 
         assert_simplifies("python_version != '3.9'", "python_full_version != '3.9.*'");
