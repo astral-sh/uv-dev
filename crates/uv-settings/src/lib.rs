@@ -423,7 +423,7 @@ fn warn_uv_toml_masked_fields(options: &Options) {
                 link_mode,
                 compile_bytecode,
                 no_sources,
-                no_sources_package: _,
+                no_sources_package,
                 upgrade,
                 upgrade_package,
                 reinstall,
@@ -447,7 +447,7 @@ fn warn_uv_toml_masked_fields(options: &Options) {
                 check_url,
             },
         add: AddOptions { add_bounds },
-        audit: _,
+        audit,
         pip,
         cache_keys,
         override_dependencies,
@@ -588,6 +588,9 @@ fn warn_uv_toml_masked_fields(options: &Options) {
     if no_sources.is_some() {
         masked_fields.push("no-sources");
     }
+    if no_sources_package.is_some() {
+        masked_fields.push("no-sources-package");
+    }
     if upgrade.is_some() {
         masked_fields.push("upgrade");
     }
@@ -636,11 +639,14 @@ fn warn_uv_toml_masked_fields(options: &Options) {
     if add_bounds.is_some() {
         masked_fields.push("add-bounds");
     }
+    if audit.is_some() {
+        masked_fields.push("audit");
+    }
     if pip.is_some() {
         masked_fields.push("pip");
     }
     if cache_keys.is_some() {
-        masked_fields.push("cache_keys");
+        masked_fields.push("cache-keys");
     }
     if override_dependencies.is_some() {
         masked_fields.push("override-dependencies");

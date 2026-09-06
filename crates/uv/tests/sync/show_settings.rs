@@ -2115,7 +2115,12 @@ fn resolve_both() -> anyhow::Result<()> {
 
         [tool.uv]
         offline = true
+        no-sources-package = ["anyio"]
+        cache-keys = [{ file = "pyproject.toml" }]
         dev-dependencies = ["pytest"]
+
+        [tool.uv.audit]
+        ignore = ["PYSEC-2022-43017"]
 
         [tool.uv.pip]
         resolution = "highest"
@@ -2204,7 +2209,10 @@ fn resolve_both() -> anyhow::Result<()> {
     +warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
     +warning: Found both a `uv.toml` file and a `[tool.uv]` section in an adjacent `pyproject.toml`. The following fields from `[tool.uv]` will be ignored in favor of the `uv.toml` file:
     +- offline
+    +- no-sources-package
+    +- audit
     +- pip
+    +- cache-keys
     ...
     "#
     );
