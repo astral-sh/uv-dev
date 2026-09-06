@@ -161,6 +161,375 @@ fn install_wheel_cache_incompatible_with_older_uv() -> Result<()> {
     Ok(())
 }
 
+fn write_data_destination_wheel(
+    path: &Path,
+    name: &str,
+    root: Option<&str>,
+    purelib: &str,
+    platlib: &str,
+    data: Option<&str>,
+    headers: Option<&str>,
+    scripts: Option<&str>,
+) -> Result<()> {
+    let mut writer = ZipFileWriter::new(Vec::new());
+    let metadata = formatdoc! {"
+        Metadata-Version: 2.1
+        Name: {name}
+        Version: 1.0.0
+    "};
+    let wheel = indoc! {"
+        Wheel-Version: 1.0
+        Generator: uv-test
+        Root-Is-Purelib: true
+        Tag: py3-none-any
+    "};
+    let mut entries = vec![
+        (format!("{name}/__init__.py"), "VALUE = 1\n".to_string()),
+        (format!("{name}-1.0.0.dist-info/METADATA"), metadata),
+        (format!("{name}-1.0.0.dist-info/WHEEL"), wheel.to_string()),
+        (
+            format!("{name}-1.0.0.data/purelib/{purelib}"),
+            "VALUE = 'purelib'\n".to_string(),
+        ),
+        (
+            format!("{name}-1.0.0.data/platlib/{platlib}"),
+            "VALUE = 'platlib'\n".to_string(),
+        ),
+    ];
+    if let Some(root) = root {
+        entries.push((root.to_string(), "VALUE = 'root'\n".to_string()));
+    }
+    if let Some(data) = data {
+        entries.push((
+            format!("{name}-1.0.0.data/data/{data}"),
+            "VALUE = 'data'\n".to_string(),
+        ));
+    }
+    if let Some(headers) = headers {
+        entries.push((
+            format!("{name}-1.0.0.data/headers/{headers}"),
+            "VALUE = 'headers'\n".to_string(),
+        ));
+    }
+    if let Some(scripts) = scripts {
+        entries.push((
+            format!("{name}-1.0.0.data/scripts/{scripts}"),
+            "VALUE = 'scripts'\n".to_string(),
+        ));
+    }
+    let mut record = String::new();
+    for (entry_name, contents) in entries {
+        let entry = ZipEntryBuilder::new(entry_name.clone().into(), Compression::Stored);
+        block_on(writer.write_entry_whole(entry, contents.as_bytes()))?;
+        writeln!(record, "{entry_name},,")?;
+    }
+    writeln!(record, "{name}-1.0.0.dist-info/RECORD,,")?;
+    let entry = ZipEntryBuilder::new(
+        format!("{name}-1.0.0.dist-info/RECORD").into(),
+        Compression::Stored,
+    );
+    block_on(writer.write_entry_whole(entry, record.as_bytes()))?;
+    fs_err::write(path, block_on(writer.close())?)?;
+    Ok(())
+}
+
+#[test]
+fn reject_colliding_wheel_data_destinations() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let schemes = context.temp_dir.join("schemes-1.0.0-py3-none-any.whl");
+    write_data_destination_wheel(
+        &schemes,
+        "schemes",
+        None,
+        "collision.py",
+        "collision.py",
+        None,
+        None,
+        None,
+    )?;
+    uv_snapshot!(context.filters(), context.pip_install().arg(&schemes), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    error: Failed to install: schemes-1.0.0-py3-none-any.whl (schemes==1.0.0 (from file://[TEMP_DIR]/schemes-1.0.0-py3-none-any.whl))
+      Caused by: The wheel is invalid: Wheel files `schemes-1.0.0.data/purelib/collision.py` and `schemes-1.0.0.data/platlib/collision.py` install to the same destination
+    ");
+    assert!(!context.site_packages().join("collision.py").exists());
+    assert!(!context.site_packages().join("schemes").exists());
+    assert!(
+        !context
+            .site_packages()
+            .join("schemes-1.0.0.dist-info")
+            .exists()
+    );
+
+    let root = context.temp_dir.join("root-1.0.0-py3-none-any.whl");
+    write_data_destination_wheel(
+        &root,
+        "root",
+        Some("collision.py"),
+        "collision.py",
+        "platlib_only.py",
+        None,
+        None,
+        None,
+    )?;
+    uv_snapshot!(context.filters(), context.pip_install().arg(&root), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    error: Failed to install: root-1.0.0-py3-none-any.whl (root==1.0.0 (from file://[TEMP_DIR]/root-1.0.0-py3-none-any.whl))
+      Caused by: The wheel is invalid: Wheel files `collision.py` and `root-1.0.0.data/purelib/collision.py` install to the same destination
+    ");
+    assert!(!context.site_packages().join("collision.py").exists());
+    assert!(!context.site_packages().join("root").exists());
+    assert!(
+        !context
+            .site_packages()
+            .join("root-1.0.0.dist-info")
+            .exists()
+    );
+
+    let plugin = context.temp_dir.join("plugin-1.0.0-py3-none-any.whl");
+    write_data_destination_wheel(
+        &plugin,
+        "plugin",
+        None,
+        "purelib_only.py",
+        "platlib_only.py",
+        None,
+        None,
+        None,
+    )?;
+    uv_snapshot!(context.filters(), context.pip_install().arg(&plugin), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + plugin==1.0.0 (from file://[TEMP_DIR]/plugin-1.0.0-py3-none-any.whl)
+    ");
+    assert!(context.site_packages().join("purelib_only.py").exists());
+    assert!(context.site_packages().join("platlib_only.py").exists());
+
+    let case = context.temp_dir.join("case-1.0.0-py3-none-any.whl");
+    write_data_destination_wheel(
+        &case,
+        "case",
+        None,
+        "Cöllision.py",
+        "cöllision.py",
+        None,
+        None,
+        None,
+    )?;
+    if cfg!(any(windows, target_os = "macos")) {
+        uv_snapshot!(context.filters(), context.pip_install().arg(&case), @"
+        exit_code: 2 (failure)
+        ----- stderr -----
+        Resolved 1 package in [TIME]
+        Prepared 1 package in [TIME]
+        error: Failed to install: case-1.0.0-py3-none-any.whl (case==1.0.0 (from file://[TEMP_DIR]/case-1.0.0-py3-none-any.whl))
+          Caused by: The wheel is invalid: Wheel files `case-1.0.0.data/purelib/Cöllision.py` and `case-1.0.0.data/platlib/cöllision.py` install to the same destination
+        ");
+    } else {
+        uv_snapshot!(context.filters(), context.pip_install().arg(&case), @"
+        exit_code: 0 (success)
+        ----- stderr -----
+        Resolved 1 package in [TIME]
+        Prepared 1 package in [TIME]
+        Installed 1 package in [TIME]
+         + case==1.0.0 (from file://[TEMP_DIR]/case-1.0.0-py3-none-any.whl)
+        ");
+        assert!(context.site_packages().join("Cöllision.py").exists());
+        assert!(context.site_packages().join("cöllision.py").exists());
+    }
+
+    let data = context.temp_dir.join("data-1.0.0-py3-none-any.whl");
+    write_data_destination_wheel(
+        &data,
+        "data",
+        Some("collision.py"),
+        "purelib_only.py",
+        "platlib_only.py",
+        Some("collision.py"),
+        None,
+        None,
+    )?;
+    let target = context.temp_dir.child("target");
+    if cfg!(windows) {
+        uv_snapshot!(context.filters(), context.pip_install().arg(&data).arg("--target").arg(target.path()), @"
+        exit_code: 2 (failure)
+        ----- stderr -----
+        Using CPython 3.12.[X] interpreter at: .venv/Scripts/python.exe
+        Resolved 1 package in [TIME]
+        Prepared 1 package in [TIME]
+        error: Failed to install: data-1.0.0-py3-none-any.whl (data==1.0.0 (from file://[TEMP_DIR]/data-1.0.0-py3-none-any.whl))
+          Caused by: The wheel is invalid: Wheel files `collision.py` and `data-1.0.0.data/data/collision.py` install to the same destination
+        ");
+    } else {
+        uv_snapshot!(context.filters(), context.pip_install().arg(&data).arg("--target").arg(target.path()), @"
+        exit_code: 2 (failure)
+        ----- stderr -----
+        Using CPython 3.12.[X] interpreter at: .venv/bin/python3
+        Resolved 1 package in [TIME]
+        Prepared 1 package in [TIME]
+        error: Failed to install: data-1.0.0-py3-none-any.whl (data==1.0.0 (from file://[TEMP_DIR]/data-1.0.0-py3-none-any.whl))
+          Caused by: The wheel is invalid: Wheel files `collision.py` and `data-1.0.0.data/data/collision.py` install to the same destination
+        ");
+    }
+    assert!(!target.child("collision.py").exists());
+
+    let headers = context.temp_dir.join("headers-1.0.0-py3-none-any.whl");
+    write_data_destination_wheel(
+        &headers,
+        "headers",
+        Some("include/headers/collision.h"),
+        "purelib_only.py",
+        "platlib_only.py",
+        None,
+        Some("collision.h"),
+        None,
+    )?;
+    if cfg!(windows) {
+        uv_snapshot!(context.filters(), context.pip_install().arg(&headers).arg("--target").arg(target.path()), @"
+        exit_code: 2 (failure)
+        ----- stderr -----
+        Using CPython 3.12.[X] interpreter at: .venv/Scripts/python.exe
+        Resolved 1 package in [TIME]
+        Prepared 1 package in [TIME]
+        error: Failed to install: headers-1.0.0-py3-none-any.whl (headers==1.0.0 (from file://[TEMP_DIR]/headers-1.0.0-py3-none-any.whl))
+          Caused by: The wheel is invalid: Wheel files `include/headers/collision.h` and `headers-1.0.0.data/headers/collision.h` install to the same destination
+        ");
+    } else {
+        uv_snapshot!(context.filters(), context.pip_install().arg(&headers).arg("--target").arg(target.path()), @"
+        exit_code: 2 (failure)
+        ----- stderr -----
+        Using CPython 3.12.[X] interpreter at: .venv/bin/python3
+        Resolved 1 package in [TIME]
+        Prepared 1 package in [TIME]
+        error: Failed to install: headers-1.0.0-py3-none-any.whl (headers==1.0.0 (from file://[TEMP_DIR]/headers-1.0.0-py3-none-any.whl))
+          Caused by: The wheel is invalid: Wheel files `include/headers/collision.h` and `headers-1.0.0.data/headers/collision.h` install to the same destination
+        ");
+    }
+    assert!(!target.child("include/headers/collision.h").exists());
+
+    let scripts = context.temp_dir.join("scripts-1.0.0-py3-none-any.whl");
+    write_data_destination_wheel(
+        &scripts,
+        "scripts",
+        Some("bin/runner"),
+        "purelib_only.py",
+        "platlib_only.py",
+        None,
+        None,
+        Some("runner"),
+    )?;
+    if cfg!(windows) {
+        uv_snapshot!(context.filters(), context.pip_install().arg(&scripts).arg("--target").arg(target.path()), @"
+        exit_code: 2 (failure)
+        ----- stderr -----
+        Using CPython 3.12.[X] interpreter at: .venv/Scripts/python.exe
+        Resolved 1 package in [TIME]
+        Prepared 1 package in [TIME]
+        error: Failed to install: scripts-1.0.0-py3-none-any.whl (scripts==1.0.0 (from file://[TEMP_DIR]/scripts-1.0.0-py3-none-any.whl))
+          Caused by: The wheel is invalid: Wheel files `bin/runner` and `scripts-1.0.0.data/scripts/runner` install to the same destination
+        ");
+    } else {
+        uv_snapshot!(context.filters(), context.pip_install().arg(&scripts).arg("--target").arg(target.path()), @"
+        exit_code: 2 (failure)
+        ----- stderr -----
+        Using CPython 3.12.[X] interpreter at: .venv/bin/python3
+        Resolved 1 package in [TIME]
+        Prepared 1 package in [TIME]
+        error: Failed to install: scripts-1.0.0-py3-none-any.whl (scripts==1.0.0 (from file://[TEMP_DIR]/scripts-1.0.0-py3-none-any.whl))
+          Caused by: The wheel is invalid: Wheel files `bin/runner` and `scripts-1.0.0.data/scripts/runner` install to the same destination
+        ");
+    }
+    assert!(!target.child("bin/runner").exists());
+
+    let data_scripts = context.temp_dir.join("data_scripts-1.0.0-py3-none-any.whl");
+    write_data_destination_wheel(
+        &data_scripts,
+        "data_scripts",
+        None,
+        "purelib_only.py",
+        "platlib_only.py",
+        Some("bin/runner"),
+        None,
+        Some("runner"),
+    )?;
+    if cfg!(windows) {
+        uv_snapshot!(context.filters(), context.pip_install().arg(&data_scripts).arg("--target").arg(target.path()), @"
+        exit_code: 2 (failure)
+        ----- stderr -----
+        Using CPython 3.12.[X] interpreter at: .venv/Scripts/python.exe
+        Resolved 1 package in [TIME]
+        Prepared 1 package in [TIME]
+        error: Failed to install: data_scripts-1.0.0-py3-none-any.whl (data-scripts==1.0.0 (from file://[TEMP_DIR]/data_scripts-1.0.0-py3-none-any.whl))
+          Caused by: The wheel is invalid: Wheel files `data_scripts-1.0.0.data/data/bin/runner` and `data_scripts-1.0.0.data/scripts/runner` install to the same destination
+        ");
+    } else {
+        uv_snapshot!(context.filters(), context.pip_install().arg(&data_scripts).arg("--target").arg(target.path()), @"
+        exit_code: 2 (failure)
+        ----- stderr -----
+        Using CPython 3.12.[X] interpreter at: .venv/bin/python3
+        Resolved 1 package in [TIME]
+        Prepared 1 package in [TIME]
+        error: Failed to install: data_scripts-1.0.0-py3-none-any.whl (data-scripts==1.0.0 (from file://[TEMP_DIR]/data_scripts-1.0.0-py3-none-any.whl))
+          Caused by: The wheel is invalid: Wheel files `data_scripts-1.0.0.data/data/bin/runner` and `data_scripts-1.0.0.data/scripts/runner` install to the same destination
+        ");
+    }
+    assert!(!target.child("bin/runner").exists());
+
+    let nested = context.temp_dir.join("nested-1.0.0-py3-none-any.whl");
+    write_data_destination_wheel(
+        &nested,
+        "nested",
+        Some("collision"),
+        "collision/child.py",
+        "platlib_only.py",
+        None,
+        None,
+        None,
+    )?;
+    uv_snapshot!(context.filters(), context.pip_install().arg(&nested), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    error: Failed to install: nested-1.0.0-py3-none-any.whl (nested==1.0.0 (from file://[TEMP_DIR]/nested-1.0.0-py3-none-any.whl))
+      Caused by: The wheel is invalid: Wheel file `nested-1.0.0.data/purelib/collision/child.py` requires the destination of `collision` to be a directory
+    ");
+    assert!(!context.site_packages().join("collision").exists());
+
+    let reverse = context.temp_dir.join("reverse-1.0.0-py3-none-any.whl");
+    write_data_destination_wheel(
+        &reverse,
+        "reverse",
+        Some("collision/child.py"),
+        "collision",
+        "platlib_only.py",
+        None,
+        None,
+        None,
+    )?;
+    uv_snapshot!(context.filters(), context.pip_install().arg(&reverse), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    error: Failed to install: reverse-1.0.0-py3-none-any.whl (reverse==1.0.0 (from file://[TEMP_DIR]/reverse-1.0.0-py3-none-any.whl))
+      Caused by: The wheel is invalid: Wheel file `collision/child.py` requires the destination of `reverse-1.0.0.data/purelib/collision` to be a directory
+    ");
+    assert!(!context.site_packages().join("collision").exists());
+
+    Ok(())
+}
+
 #[test]
 fn missing_requirements_txt() {
     let context = uv_test::test_context!("3.12");
