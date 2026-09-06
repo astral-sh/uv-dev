@@ -6724,6 +6724,55 @@ fn add_script() -> Result<()> {
     Ok(())
 }
 
+/// Script-edit lock flags affect lock handling and must not be described as no-ops.
+#[test]
+fn script_edit_lock_flags() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let script = context.temp_dir.child("script.py");
+    script.write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["iniconfig"]
+        # ///
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.add().arg("anyio").arg("--script").arg("script.py").arg("--locked"), @"
+    success: false
+    exit_code: 2
+    ----- stdout -----
+
+    ----- stderr -----
+    error: Unable to find lockfile at `script.py.lock`, but `--locked` was provided. To create a lockfile, run `uv lock` or `uv sync` without the flag.
+    ");
+
+    uv_snapshot!(context.filters(), context.add().arg("anyio").arg("--script").arg("script.py").arg("--frozen"), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    ");
+
+    uv_snapshot!(context.filters(), context.remove().arg("anyio").arg("--script").arg("script.py").arg("--locked"), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Updated `script.py`
+    ");
+
+    uv_snapshot!(context.filters(), context.remove().arg("iniconfig").arg("--script").arg("script.py").arg("--frozen"), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    ");
+
+    Ok(())
+}
+
 /// Test that `--bounds` is respected when adding to a script without a lockfile.
 #[test]
 fn add_script_bounds() -> Result<()> {
@@ -10881,7 +10930,6 @@ fn add_index_with_existing_relative_path_in_script() -> Result<()> {
     uv_snapshot!(context.filters(), context.add().arg("iniconfig").arg("--frozen").arg("--script").arg(script.path()).arg("--index").arg("local=./links"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    warning: `--frozen` is a no-op for Python scripts with inline metadata, which always run in isolation
     ");
 
     let script = fs_err::read_to_string(script.path())?;
