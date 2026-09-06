@@ -46,7 +46,7 @@ async fn unzip_seekable(url: &str) -> anyhow::Result<(), uv_extract::Error> {
         .map_err(uv_extract::Error::Io)?;
 
     let archive = tempfile::NamedTempFile::new().map_err(uv_extract::Error::Io)?;
-    fs_err::write(archive.path(), bytes).map_err(uv_extract::Error::Io)?;
+    fs_err::write(archive.path(), &bytes).map_err(uv_extract::Error::Io)?;
     let archive = fs_err::File::open(archive.path()).map_err(uv_extract::Error::Io)?;
 
     let target = tempfile::TempDir::new().map_err(uv_extract::Error::Io)?;
@@ -128,6 +128,20 @@ async fn malo_iffy_8bitcomment() {
 }
 
 #[tokio::test]
+async fn malo_seekable_iffy_8bitcomment() {
+    let result = unzip_seekable("https://pub-c6f28d316acd406eae43501e51ad30fa.r2.dev/0723f54ceb33a4fdc7f2eddc19635cd704d61c84/iffy/8bitcomment.zip").await;
+    insta::assert_debug_snapshot!(result, @r#"
+    Err(
+        AsyncZip(
+            FeatureNotSupported(
+                "Spanned/split files",
+            ),
+        ),
+    )
+    "#);
+}
+
+#[tokio::test]
 async fn malo_iffy_extra3byte() {
     let result = unzip("https://pub-c6f28d316acd406eae43501e51ad30fa.r2.dev/0723f54ceb33a4fdc7f2eddc19635cd704d61c84/iffy/extra3byte.zip").await;
     insta::assert_debug_snapshot!(result, @"
@@ -177,6 +191,16 @@ async fn malo_iffy_prefix() {
 #[tokio::test]
 async fn malo_iffy_suffix_not_comment() {
     let result = unzip("https://pub-c6f28d316acd406eae43501e51ad30fa.r2.dev/0723f54ceb33a4fdc7f2eddc19635cd704d61c84/iffy/suffix_not_comment.zip").await;
+    insta::assert_debug_snapshot!(result, @"
+    Err(
+        TrailingContents,
+    )
+    ");
+}
+
+#[tokio::test]
+async fn malo_seekable_iffy_suffix_not_comment() {
+    let result = unzip_seekable("https://pub-c6f28d316acd406eae43501e51ad30fa.r2.dev/0723f54ceb33a4fdc7f2eddc19635cd704d61c84/iffy/suffix_not_comment.zip").await;
     insta::assert_debug_snapshot!(result, @"
     Err(
         TrailingContents,
