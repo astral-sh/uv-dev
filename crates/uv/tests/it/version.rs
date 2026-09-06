@@ -1459,6 +1459,29 @@ requires-python = ">=3.12"
     Ok(())
 }
 
+#[test]
+fn version_bump_invalid_component_error_format() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let output = context
+        .version()
+        .arg("--bump")
+        .arg("foo")
+        .arg("--color")
+        .arg("always")
+        .output()?;
+
+    assert_eq!(output.status.code(), Some(2));
+    // This error lacks styling and a trailing newline, leaving the terminal prompt on the same
+    // line. This is undesirable behavior tracked in astral-sh/uv#21063.
+    assert_snapshot!(
+        format!("{:?}", String::from_utf8_lossy(&output.stderr)),
+        @r#""error: invalid bump component `foo`""#
+    );
+
+    Ok(())
+}
+
 // --bump stable but it decreases the version
 #[test]
 fn bump_decrease_stable() -> Result<()> {
