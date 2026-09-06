@@ -50,6 +50,28 @@
         "type": "string"
       }
     },
+    "build-policy": {
+      "description": "Control whether packages may be built from source.\n\nThe policy also applies to build dependencies. Existing [`no-build`](#no-build) and\n[`no-binary`](#no-binary) restrictions take precedence over build policies.\n\nSee the [resolution documentation](../concepts/resolution.md#source-build-policies) for details.\n\nThis option is in preview and may change in any future release.",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/BuildPolicy"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "build-policy-package": {
+      "description": "Source-build policies for individual packages.\n\nPackage-specific policies override the global [`build-policy`](#build-policy) setting.\nAccepts a dictionary mapping package names to any supported build policy.\n\nThis option is in preview and may change in any future release.",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/BuildPolicyPackage"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "cache-dir": {
       "description": "Path to the cache directory.\n\nDefaults to `$XDG_CACHE_HOME/uv` or `$HOME/.cache/uv` on Linux and macOS, and\n`%LOCALAPPDATA%\\uv\\cache` on Windows.",
       "type": ["string", "null"]
@@ -774,6 +796,33 @@
         }
       }
     },
+    "BuildPolicy": {
+      "description": "Whether source distributions may be used for a package.",
+      "oneOf": [
+        {
+          "description": "Allow wheels and source distributions.",
+          "type": "string",
+          "const": "allow"
+        },
+        {
+          "description": "Require wheels, even when doing so changes the selected version.\nAs with `--no-build`, uv may reuse cached wheels built from source. Editable requirements\nmay still be built, and their build backends may run arbitrary Python code.",
+          "type": "string",
+          "const": "disallow"
+        },
+        {
+          "description": "Require source distributions instead of pre-built wheels.\nAs with `--no-binary`, uv may still use pre-built wheels to read package metadata and reuse\ncached wheels built from source.",
+          "type": "string",
+          "const": "force"
+        }
+      ]
+    },
+    "BuildPolicyPackage": {
+      "description": "Source-build policies that apply to individual packages.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/BuildPolicy"
+      }
+    },
     "CacheKey": {
       "anyOf": [
         {
@@ -1357,6 +1406,28 @@
           "description": "Allow uv to modify an `EXTERNALLY-MANAGED` Python installation.\n\nWARNING: `--break-system-packages` is intended for use in continuous integration (CI)\nenvironments, when installing into Python installations that are managed by an external\npackage manager, like `apt`. It should be used with caution, as such Python installations\nexplicitly recommend against modifications by other package managers (like uv or pip).",
           "type": ["boolean", "null"]
         },
+        "build-policy": {
+          "description": "Control whether packages may be built from source.\n\nThe policy also applies to build dependencies. Existing [`no-build`](#no-build),\n[`no-binary`](#no-binary), and [`only-binary`](#only-binary) restrictions take precedence over\nbuild policies.\n\nSee the [resolution documentation](../concepts/resolution.md#source-build-policies) for details.\n\nThis option is in preview and may change in any future release.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/BuildPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "build-policy-package": {
+          "description": "Source-build policies for individual packages.\n\nPackage-specific policies override the global [`build-policy`](#build-policy) setting.\nAccepts a dictionary mapping package names to any supported build policy.\n\nThis option is in preview and may change in any future release.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/BuildPolicyPackage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "compile-bytecode": {
           "description": "Compile Python files to bytecode after installation.\n\nBy default, uv does not compile Python (`.py`) files to bytecode (`__pycache__/*.pyc`);\ninstead, compilation is performed lazily the first time a module is imported. For use-cases\nin which start time is critical, such as CLI applications and Docker containers, this option\ncan be enabled to trade longer installation times for faster start times.\n\nWhen enabled, uv will process the entire site-packages directory (including packages that\nare not being modified by the current operation) for consistency. Like pip, it will also\nignore errors.",
           "type": ["boolean", "null"]
@@ -1829,7 +1900,8 @@
             "index-by-name",
             "artifact-hash-filtering",
             "content-addressed-cache",
-            "missing-exclude-newer-package-lock"
+            "missing-exclude-newer-package-lock",
+            "build-policy"
           ]
         },
         {

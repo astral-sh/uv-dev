@@ -216,6 +216,60 @@ required-environments = [
 ]
 ```
 
+## Source build policies
+
+!!! note
+
+    Build policies are in [preview](./preview.md) and may change in any future release. Using a
+    build policy displays a warning. Pass `--preview-features build-policy` or set
+    `preview-features = ["build-policy"]` to disable the warning.
+
+The `build-policy` setting controls whether dependencies may be built from source and which
+artifacts are retained in `uv.lock` and `pylock.toml`:
+
+- `allow` allows both wheels and source distributions. This is the default.
+- `disallow` requires wheels, even if that means selecting a different package version.
+- `force` requires source distributions instead of pre-built wheels.
+
+For example, to require wheels by default while allowing source builds for NumPy:
+
+```toml title="pyproject.toml"
+[tool.uv]
+preview-features = ["build-policy"]
+build-policy = "disallow"
+build-policy-package = { numpy = "allow" }
+```
+
+Package-specific policies override the global policy when the package identity is known before a
+build backend is invoked, such as for a named requirement, an index record, or a lockfile entry. An
+unnamed source cannot run its backend to discover whether a package-specific exception applies. If
+the global policy is `disallow`, uv rejects such a source before generating its metadata. The global
+policy also applies to build dependencies, so use `build-policy-package` to build one known package
+from source without also requiring source builds for its build dependencies.
+
+The same settings can be placed under `[tool.uv.pip]` to apply only to the pip interface. In
+`uv.toml`, use the top level or `[pip]`, respectively. On the command line, use `--build-policy` and
+repeat `--build-policy-package PACKAGE=POLICY` for individual packages:
+
+```console
+$ uv pip compile requirements.in --preview-features build-policy --build-policy disallow --build-policy-package numpy=allow --emit-build-options
+```
+
+For `requirements.txt` output, `--emit-build-options` writes the corresponding pip-compatible build
+restrictions for the selected packages. These package-specific restrictions do not reproduce a
+global policy for build dependencies discovered later during installation.
+
+Invoking a build backend to generate source metadata counts as a source build. Consequently,
+`disallow` rejects unnamed sources before metadata generation; provide a trustworthy package name or
+[static dependency metadata](#dependency-metadata) when a package-specific exception is needed.
+Sandboxed metadata generation and narrower metadata-only authorization are not part of this preview
+feature. Like `--no-build`, `disallow` permits reuse of cached wheels built from source, and
+editable requirements with a known identity may still be built. Like `--no-binary`, `force` permits
+reading metadata from pre-built wheels and reusing cached wheels built from source. Existing
+`--no-build`, `--no-binary`, and `--only-binary` restrictions take precedence over build policies.
+See the [pip compatibility documentation](../pip/compatibility.md#-only-binary-enforcement) for
+details of these restrictions.
+
 ## Common marker values
 
 The `environments` and `required-environments` settings accept

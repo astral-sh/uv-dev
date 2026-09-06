@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
@@ -10,7 +10,7 @@ use petgraph::{
 };
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 
-use uv_configuration::{BuildOptions, Constraints, Overrides};
+use uv_configuration::{BuildOptions, Constraints, NoBinary, NoBuild, Overrides};
 use uv_distribution::Metadata;
 use uv_distribution_types::{
     BuiltDist, Dist, DistributionId, Edge, Identifier, IndexUrl, Name, Node, Requirement,
@@ -611,6 +611,24 @@ impl ResolverOutput {
     /// Return `true` if there are no packages in the graph.
     pub fn is_empty(&self) -> bool {
         self.base_dists().next().is_none()
+    }
+
+    /// Express the selected package versions' artifact restrictions as pip-compatible options.
+    pub fn materialize_build_options(&self, build_options: &BuildOptions) -> BuildOptions {
+        let mut no_binary = BTreeSet::new();
+        let mut no_build = BTreeSet::new();
+        for (_, distribution) in self.base_dists() {
+            if build_options.no_binary_package(&distribution.name) {
+                no_binary.insert(distribution.name.clone());
+            }
+            if build_options.no_build_package(&distribution.name) {
+                no_build.insert(distribution.name.clone());
+            }
+        }
+        BuildOptions::new(
+            NoBinary::from_args(None, no_binary.into_iter().collect()),
+            NoBuild::from_args(None, no_build.into_iter().collect()),
+        )
     }
 
     /// Retain registry hashes only for artifacts permitted by package-specific build options.

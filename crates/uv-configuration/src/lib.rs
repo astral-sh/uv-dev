@@ -1,6 +1,7 @@
 pub use active_environment::*;
 pub use authentication::*;
 pub use build_options::*;
+pub use build_policy::*;
 pub use concurrency::*;
 pub use constraints::*;
 pub use dependency_groups::*;
@@ -29,6 +30,7 @@ pub use vcs::*;
 mod active_environment;
 mod authentication;
 mod build_options;
+mod build_policy;
 mod concurrency;
 mod constraints;
 mod dependency_groups;
