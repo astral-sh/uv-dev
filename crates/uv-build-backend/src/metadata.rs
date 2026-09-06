@@ -81,6 +81,10 @@ pub enum ValidationError {
         "Script entry point name `{0}` must include a non-dot character and consist only of letters, numbers, dots, underscores and dashes"
     )]
     InvalidScriptName(String),
+    #[error("Entrypoint name {0:?} must not contain a newline")]
+    InvalidEntryPointName(String),
+    #[error("Entrypoint object reference {0:?} must not contain a newline")]
+    InvalidEntryPointObjectReference(String),
     #[error("Use `project.scripts` instead of `project.entry-points.console_scripts`")]
     ReservedScripts,
     #[error("Use `project.gui-scripts` instead of `project.entry-points.gui_scripts`")]
@@ -918,6 +922,15 @@ impl PyProjectToml {
 
         let _ = writeln!(writer, "[{group}]");
         for (name, object_reference) in entries {
+            if name.contains(['\r', '\n']) {
+                return Err(ValidationError::InvalidEntryPointName(name.clone()));
+            }
+            if object_reference.contains(['\r', '\n']) {
+                return Err(ValidationError::InvalidEntryPointObjectReference(
+                    object_reference.clone(),
+                ));
+            }
+
             let compliant_name = name.chars().all(|character| {
                 character.is_alphanumeric() || matches!(character, '.' | '-' | '_')
             });
