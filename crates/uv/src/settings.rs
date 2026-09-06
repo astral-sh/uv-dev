@@ -69,7 +69,8 @@ use uv_workspace::pyproject_mut::AddBoundsKind;
 
 use crate::commands::pip::operations::Modifications;
 use crate::commands::{
-    InitKind, InitProjectKind, PythonUpgrade, PythonUpgradeSource, ToolRunCommand,
+    InitDescription, InitKind, InitMode, InitProjectKind, InitPythonPin, InitReadme,
+    InitWorkspaceDiscovery, PythonUpgrade, PythonUpgradeSource, ToolRunCommand,
 };
 
 /// The default publish URL.
@@ -460,15 +461,14 @@ pub(crate) struct InitSettings {
     pub(crate) path: Option<PathBuf>,
     pub(crate) name: Option<PackageName>,
     pub(crate) kind: InitKind,
-    pub(crate) bare: bool,
-    pub(crate) description: Option<String>,
-    pub(crate) no_description: bool,
+    pub(crate) bare: InitMode,
+    pub(crate) description: InitDescription,
     pub(crate) vcs: Option<VersionControlSystem>,
     pub(crate) build_backend: Option<ProjectBuildBackend>,
-    pub(crate) no_readme: bool,
+    pub(crate) readme: InitReadme,
     pub(crate) author_from: Option<AuthorFrom>,
-    pub(crate) pin_python: bool,
-    pub(crate) no_workspace: bool,
+    pub(crate) pin_python: InitPythonPin,
+    pub(crate) workspace_discovery: InitWorkspaceDiscovery,
     pub(crate) python: Option<String>,
     pub(crate) install_mirrors: PythonInstallMirrors,
 }
@@ -572,15 +572,16 @@ impl InitSettings {
             path,
             name,
             kind,
-            bare,
-            description,
-            no_description,
+            bare: InitMode::from_args(bare),
+            description: InitDescription::from_args(description, no_description),
             vcs: vcs.or(bare.then_some(VersionControlSystem::None)),
             build_backend,
-            no_readme,
+            readme: InitReadme::from_args(no_readme),
             author_from,
-            pin_python: flag(pin_python, no_pin_python, "pin-python")?.unwrap_or(!bare),
-            no_workspace,
+            pin_python: InitPythonPin::from_args(
+                flag(pin_python, no_pin_python, "pin-python")?.unwrap_or(!bare),
+            ),
+            workspace_discovery: InitWorkspaceDiscovery::from_args(no_workspace),
             python: python.and_then(Maybe::into_option),
             install_mirrors: environment
                 .install_mirrors
