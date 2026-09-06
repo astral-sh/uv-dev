@@ -2122,6 +2122,54 @@ impl Lock {
         SatisfiesResult::Satisfied
     }
 
+    /// Recover the marker environments in which a locked package is reachable.
+    fn package_reachability_marker(&self, target: &Package) -> MarkerTree {
+        let mut package_markers = FxHashMap::default();
+        let mut pending = VecDeque::new();
+
+        for name in self.members() {
+            let Some(package) = self.find_by_name(name).ok().flatten() else {
+                continue;
+            };
+            package_markers.insert(&package.id, MarkerTree::TRUE);
+            pending.push_back(package);
+        }
+        if let Some(package) = self.root()
+            && package_markers
+                .insert(&package.id, MarkerTree::TRUE)
+                .is_none()
+        {
+            pending.push_back(package);
+        }
+
+        while let Some(package) = pending.pop_front() {
+            let package_marker = package_markers
+                .get(&package.id)
+                .copied()
+                .unwrap_or(MarkerTree::FALSE);
+            for dependency in package.all_dependencies() {
+                let marker = package_marker.and(dependency.complexified_marker.pep508());
+                if marker.is_false() {
+                    continue;
+                }
+
+                let dependency_marker = package_markers
+                    .entry(&dependency.package_id)
+                    .or_insert(MarkerTree::FALSE);
+                let expanded_marker = dependency_marker.or(marker);
+                if expanded_marker != *dependency_marker {
+                    *dependency_marker = expanded_marker;
+                    pending.push_back(self.find_by_id(&dependency.package_id));
+                }
+            }
+        }
+
+        package_markers
+            .get(&target.id)
+            .copied()
+            .unwrap_or(MarkerTree::FALSE)
+    }
+
     /// Return a [`SatisfiesResult`] if the given requirements do not match the [`Package`] metadata.
     fn satisfies_requires_dist<'lock>(
         &self,
@@ -2139,6 +2187,26 @@ impl Lock {
         root: &Path,
         allow_missing_package_metadata: bool,
     ) -> Result<SatisfiesResult<'lock>, LockError> {
+        if let Some(requires_python) = package_requires_python {
+            let package_python_marker =
+                RequiresPython::from_specifiers(requires_python.clone()).to_marker_tree();
+            let unsupported_marker = self
+                .fork_markers_union()
+                .and(package_python_marker.negate());
+            if !unsupported_marker.is_false()
+                && !self
+                    .package_reachability_marker(package)
+                    .and(unsupported_marker)
+                    .is_false()
+            {
+                return Ok(SatisfiesResult::MismatchedPackageRequiresPython(
+                    &package.id.name,
+                    package.id.version.as_ref(),
+                    requires_python.clone(),
+                ));
+            }
+        }
+
         let missing_metadata = allow_missing_package_metadata && !package.has_metadata();
         let indexes = requires_dist
             .iter()
@@ -3439,6 +3507,12 @@ pub enum SatisfiesResult<'lock> {
         Option<&'lock Version>,
         BTreeSet<Requirement>,
         BTreeSet<Requirement>,
+    ),
+    /// A package does not support every Python version for which its locked entry is selected.
+    MismatchedPackageRequiresPython(
+        &'lock PackageName,
+        Option<&'lock Version>,
+        VersionSpecifiers,
     ),
     /// Refreshed declarations regenerate different resolved dependency edges.
     MismatchedPackageDependencies(

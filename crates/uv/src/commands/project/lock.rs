@@ -1543,6 +1543,18 @@ impl ValidatedLock {
                 }
                 Ok(Self::Preferable(lock))
             }
+            SatisfiesResult::MismatchedPackageRequiresPython(name, version, requires_python) => {
+                if let Some(version) = version {
+                    debug!(
+                        "Resolving despite existing lockfile due to incompatible Python requirements for: `{name}=={version}` (requires: `{requires_python}`)"
+                    );
+                } else {
+                    debug!(
+                        "Resolving despite existing lockfile due to incompatible Python requirements for: `{name}` (requires: `{requires_python}`)"
+                    );
+                }
+                Ok(Self::Preferable(lock))
+            }
             SatisfiesResult::MismatchedPackageDependencies(name, version, expected, actual) => {
                 if let Some(version) = version {
                     debug!(
