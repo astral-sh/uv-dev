@@ -23,6 +23,8 @@ use wiremock::{
     matchers::{basic_auth, method, path},
 };
 
+#[cfg(feature = "test-git")]
+use uv_cache_key::{RepositoryUrl, cache_digest};
 use uv_extract::dirhash::{DirectoryDigest, dirhash_path};
 use uv_fs::{PortablePath, Simplified};
 use uv_install_wheel::validate_and_heal_record;
@@ -2827,6 +2829,116 @@ fn install_git_full_commit_ignores_same_named_branch() -> Result<()> {
     ");
 
     context.assert_installed("example", "9.9.9");
+
+    Ok(())
+}
+
+/// Install a package from a Git repository that contains a tracked `.ok` file.
+#[test]
+#[cfg(feature = "test-git")]
+fn install_git_preserves_tracked_checkout_marker() -> Result<()> {
+    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION);
+
+    let repository = context.temp_dir.child("repository");
+    repository.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "example"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = []
+        build-backend = "test_backend"
+        backend-path = ["."]
+    "#})?;
+    repository.child("test_backend.py").write_str(indoc! {r#"
+        import pathlib
+        import zipfile
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            filename = "example-0.1.0-py3-none-any.whl"
+            wheel = pathlib.Path(wheel_directory) / filename
+            with zipfile.ZipFile(wheel, "w") as archive:
+                archive.writestr("example/__init__.py", "__version__ = '0.1.0'\n")
+                archive.writestr(
+                    "example-0.1.0.dist-info/METADATA",
+                    "Metadata-Version: 2.3\nName: example\nVersion: 0.1.0\n",
+                )
+                archive.writestr(
+                    "example-0.1.0.dist-info/WHEEL",
+                    "Wheel-Version: 1.0\nGenerator: test\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+                )
+                archive.writestr("example-0.1.0.dist-info/RECORD", "")
+            return filename
+    "#})?;
+    let marker_contents = "This file is tracked by the package.\n";
+    repository.child(".ok").write_str(marker_contents)?;
+
+    Command::new("git")
+        .arg("init")
+        .arg(repository.path())
+        .assert()
+        .success();
+    Command::new("git")
+        .arg("-C")
+        .arg(repository.path())
+        .arg("add")
+        .arg(".")
+        .assert()
+        .success();
+    Command::new("git")
+        .arg("-C")
+        .arg(repository.path())
+        .arg("-c")
+        .arg("user.name=Example")
+        .arg("-c")
+        .arg("user.email=example@example.com")
+        .arg("commit")
+        .arg("-m")
+        .arg("Initial commit")
+        .env("GIT_AUTHOR_DATE", "2000-01-01T00:00:00Z")
+        .env("GIT_COMMITTER_DATE", "2000-01-01T00:00:00Z")
+        .assert()
+        .success();
+
+    let short_commit = Command::new("git")
+        .arg("-C")
+        .arg(repository.path())
+        .arg("rev-parse")
+        .arg("--short")
+        .arg("HEAD")
+        .output()?;
+    assert!(short_commit.status.success());
+    let short_commit = std::str::from_utf8(&short_commit.stdout)?.trim();
+
+    let repository_url = Url::from_directory_path(repository.path())
+        .map_err(|()| anyhow!("failed to convert repository path to file URL"))?;
+    let repository_url = repository_url.as_str().trim_end_matches('/');
+
+    let mut filters = context.filters();
+    filters.push((r"@[0-9a-f]{40}", "@[COMMIT]"));
+    uv_snapshot!(filters, context
+        .pip_install()
+        .arg(format!("example @ git+{repository_url}")), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + example==0.1.0 (from git+file://[TEMP_DIR]/repository@[COMMIT])
+    ");
+
+    context.assert_installed("example", "0.1.0");
+
+    let checkout = context
+        .cache_dir
+        .child("git-v0/checkouts")
+        .child(cache_digest(&RepositoryUrl::parse(repository_url)?))
+        .child(short_commit);
+    assert_eq!(fs::read_to_string(checkout.child(".ok"))?, marker_contents);
+    checkout
+        .child(".git/.ok")
+        .assert(predicate::path::is_file());
 
     Ok(())
 }
