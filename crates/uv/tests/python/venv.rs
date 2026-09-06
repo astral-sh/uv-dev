@@ -72,6 +72,29 @@ fn create_venv() {
 }
 
 #[test]
+fn create_venv_rejects_prompt_newlines() {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+
+    uv_snapshot!(context.filters(), context.venv()
+        .arg("--python")
+        .arg("3.12")
+        .arg("--prompt")
+        .arg("safe\ninclude-system-site-packages = true"), @"
+    success: false
+    exit_code: 2
+    ----- stdout -----
+
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Creating virtual environment at: .venv
+    error: Failed to create virtual environment
+      Caused by: invalid `prompt` value in `pyvenv.cfg`: newlines are not supported
+    ");
+
+    assert!(!context.venv.exists());
+}
+
+#[test]
 fn create_venv_preview_skips_distutils_patch_on_py310_plus() {
     let context = uv_test::test_context_with_versions!(&["3.12"]);
 
