@@ -13066,7 +13066,7 @@ fn add_unsupported_git_scheme() {
     ----- stderr -----
     error: Failed to parse: `git+fantasy://ferris/dreams/of/urls@7701ffcbae245819b828dc5f885a5201158897ef`
       Caused by: Unsupported Git URL scheme `fantasy:` in `fantasy://ferris/dreams/of/urls` (expected one of `https:`, `ssh:`, or `file:`)
-        git+fantasy://ferris/dreams/of/urls@7701ffcbae245819b828dc5f885a5201158897ef
+        git+fantasy://*********************@7701ffcbae245819b828dc5f885a5201158897ef
         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
     ");
 }

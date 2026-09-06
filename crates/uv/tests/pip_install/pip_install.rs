@@ -2949,7 +2949,7 @@ fn install_git_unescaped_ref() {
     ----- stderr -----
     error: Failed to parse: `example @ git+https://example.com/repository@pkg@1.2.3`
       Caused by: Ambiguous Git URL `https://example.com/repository@pkg@1.2.3`: the path contains multiple `@` characters. If the Git revision contains `@`, percent-encode it as `%40`
-        example @ git+https://example.com/repository@pkg@1.2.3
+        example @ git+https://**************************@1.2.3
                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
     ");
 }
