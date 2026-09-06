@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use itertools::Itertools;
 use owo_colors::OwoColorize;
+use rustc_hash::FxHashSet;
 use tracing::{debug, trace, warn};
 use uv_audit::osv;
 use uv_audit::{Dependency, VulnerabilityID};
@@ -3251,6 +3252,7 @@ pub(crate) fn detect_conflicts(
     // those should result in an error.
     let lock = target.lock();
     let packages = target.packages(extras, groups);
+    let roots = target.roots().collect::<FxHashSet<_>>();
     let conflicts = lock.conflicts();
     for set in conflicts.iter() {
         let mut conflicts: Vec<ConflictItem> = vec![];
@@ -3261,8 +3263,12 @@ pub(crate) fn detect_conflicts(
             }
             let is_conflicting = match item.kind() {
                 ConflictKind::Project => groups.prod(),
-                ConflictKind::Extra(extra) => extras.contains(extra),
-                ConflictKind::Group(group1) => groups.contains(group1),
+                ConflictKind::Extra(extra) => {
+                    roots.contains(item.package()) && extras.contains(extra)
+                }
+                ConflictKind::Group(group1) => {
+                    roots.contains(item.package()) && groups.contains(group1)
+                }
             };
             if is_conflicting {
                 conflicts.push(item.clone());
