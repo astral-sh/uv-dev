@@ -103,16 +103,27 @@ jobs:
 
       - name: "Bloat Check"
         working-directory: ${{ env.UV_WORKSPACE }}/crates/uv-trampoline
+        env:
+          # Omit the inherited `/DEBUG:NONE` so cargo-bloat can read the PDB, while keeping static CRT linking and reproducible builds.
+          RUSTFLAGS: "-C target-feature=+crt-static -C link-arg=/Brepro"
         run: |
-          $output = cargo bloat --release --target x86_64-pc-windows-msvc
-          $filteredOutput = $output | Select-String -Pattern 'core::fmt::write|core::fmt::getcount' -NotMatch
-          $containsPatterns = $filteredOutput | Select-String -Pattern 'core::fmt|std::panicking|std::backtrace_rs'
+          # Check both trampoline binaries since cargo-bloat only accepts one `--bin` at a time.
+          foreach ($binary in @('uv-trampoline-console', 'uv-trampoline-gui')) {
+              $output = cargo bloat --release --target x86_64-pc-windows-msvc --bin $binary
+              # PowerShell assignments do not propagate the native command's failure; preserve cargo-bloat's exit code.
+              if ($LASTEXITCODE -ne 0) {
+                  Exit $LASTEXITCODE
+              }
 
-          if ($containsPatterns) {
-              Exit 1
-          } else {
-              Exit 0
+              $filteredOutput = $output | Select-String -Pattern 'core::fmt::write|core::fmt::getcount' -NotMatch
+              $containsPatterns = $filteredOutput | Select-String -Pattern 'core::fmt|std::panicking|std::backtrace_rs'
+
+              if ($containsPatterns) {
+                  Exit 1
+              }
           }
+
+          Exit 0
 
   # Separate jobs for the nightly crate
   windows-trampoline-test:
