@@ -228,6 +228,21 @@ impl<'env> DisplayDependencyGraph<'env> {
         packages: &'env FxHashMap<&PackageName, Vec<&ResolutionMetadata>>,
         latest: &'env FxHashMap<&PackageName, Version>,
     ) -> Self {
+        let prune_index =
+            (prune.len() > 1).then(|| prune.iter().collect::<FxHashSet<&PackageName>>());
+        let is_pruned = |name: &PackageName| {
+            prune_index
+                .as_ref()
+                .map_or_else(|| prune.contains(name), |prune| prune.contains(name))
+        };
+        let package_index =
+            (package.len() > 1).then(|| package.iter().collect::<FxHashSet<&PackageName>>());
+        let is_selected = |name: &PackageName| {
+            package_index
+                .as_ref()
+                .map_or_else(|| package.contains(name), |package| package.contains(name))
+        };
+
         // Create a graph.
         let mut graph = petgraph::graph::Graph::<
             &ResolutionMetadata,
@@ -238,7 +253,7 @@ impl<'env> DisplayDependencyGraph<'env> {
         // Step 1: Add each installed package.
         let mut inverse: FxHashMap<PackageName, Vec<NodeIndex>> = FxHashMap::default();
         for metadata in packages.values().flatten() {
-            if prune.contains(&metadata.name) {
+            if is_pruned(&metadata.name) {
                 continue;
             }
 
@@ -254,7 +269,7 @@ impl<'env> DisplayDependencyGraph<'env> {
             let metadata = &graph[index];
 
             for requirement in &metadata.requires_dist {
-                if prune.contains(&requirement.name) {
+                if is_pruned(&requirement.name) {
                     continue;
                 }
                 if !requirement.marker.evaluate(markers, &[]) {
@@ -293,7 +308,7 @@ impl<'env> DisplayDependencyGraph<'env> {
             // Perform a DFS from the root nodes to find the reachable nodes.
             let mut reachable = graph
                 .node_indices()
-                .filter(|index| package.contains(&graph[*index].name))
+                .filter(|index| is_selected(&graph[*index].name))
                 .collect::<FxHashSet<_>>();
             let mut stack = reachable.iter().copied().collect::<VecDeque<_>>();
             while let Some(node) = stack.pop_front() {

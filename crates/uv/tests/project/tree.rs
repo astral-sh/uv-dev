@@ -129,6 +129,24 @@ fn nested_dependencies() -> Result<()> {
     let lock = context.read("uv.lock");
     assert!(!lock.is_empty());
 
+    uv_snapshot!(context.filters(), context.tree()
+        .arg("--frozen")
+        .arg("--universal")
+        .arg("--prune")
+        .arg("joblib")
+        .arg("--prune")
+        .arg("numpy"), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+    project v0.1.0
+    └── scikit-learn v1.4.1.post1
+        ├── scipy v1.12.0
+        └── threadpoolctl v3.4.0
+
+    ----- stderr -----
+    ");
+
     Ok(())
 }
 
