@@ -2,7 +2,7 @@ use std::convert::Into;
 use std::fmt::Display;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::{env, io};
 
 use thiserror::Error;
@@ -138,40 +138,6 @@ impl LockedFileMode {
             }
         })
     }
-
-    /// Lock the file, blocking until the lock becomes available if necessary.
-    ///
-    /// On Android, [`std::fs::File::lock`] is not supported
-    /// (see [rust-lang/rust#148325]), so we use [`rustix::fs::flock`] directly.
-    ///
-    /// [rust-lang/rust#148325]: https://github.com/rust-lang/rust/issues/148325
-    #[cfg(not(target_os = "android"))]
-    fn lock(self, file: &fs_err::File) -> Result<(), io::Error> {
-        match self {
-            Self::Exclusive => file.lock()?,
-            Self::Shared => file.lock_shared()?,
-        }
-        Ok(())
-    }
-
-    /// Lock the file, blocking until the lock becomes available if necessary.
-    ///
-    /// Android-specific implementation using [`rustix::fs::flock`] because
-    /// [`std::fs::File::lock`] always returns `Unsupported` on Android
-    /// (see [rust-lang/rust#148325]).
-    ///
-    /// [rust-lang/rust#148325]: https://github.com/rust-lang/rust/issues/148325
-    #[cfg(target_os = "android")]
-    fn lock(self, file: &fs_err::File) -> Result<(), io::Error> {
-        use std::os::fd::AsFd;
-
-        let operation = match self {
-            Self::Exclusive => rustix::fs::FlockOperation::LockExclusive,
-            Self::Shared => rustix::fs::FlockOperation::LockShared,
-        };
-        rustix::fs::flock(file.as_fd(), operation)
-            .map_err(|errno| io::Error::from_raw_os_error(errno.raw_os_error()))
-    }
 }
 
 impl Display for LockedFileMode {
@@ -223,20 +189,46 @@ impl LockedFile {
             file.path().user_display(),
         );
         let path = file.path().to_path_buf();
-        let lock_exclusive = tokio::task::spawn_blocking(move || (mode.lock(&file), file));
-        let (result, file) = tokio::time::timeout(*LOCK_TIMEOUT, lock_exclusive)
-            .await
-            .map_err(|_| LockedFileError::Timeout {
-                timeout: *LOCK_TIMEOUT,
-                resource: resource.to_string(),
-                path: path.clone(),
-            })??;
-        // Not an fs_err method, we need to build our own path context
-        result.map_err(|err| LockedFileError::Lock {
-            resource: resource.to_string(),
-            path,
-            source: err,
-        })?;
+        let deadline = Instant::now() + *LOCK_TIMEOUT;
+        let mut file = file;
+        loop {
+            if Instant::now() >= deadline {
+                return Err(LockedFileError::Timeout {
+                    timeout: *LOCK_TIMEOUT,
+                    resource: resource.to_string(),
+                    path: path.clone(),
+                });
+            }
+
+            let try_lock = tokio::task::spawn_blocking(move || (mode.try_lock(&file), file));
+            file = match try_lock.await? {
+                (Ok(()), acquired_file) => {
+                    file = acquired_file;
+                    break;
+                }
+                (Err(std::fs::TryLockError::WouldBlock), file) => {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    // Continue polling until timeout.
+                    file
+                }
+                (Err(std::fs::TryLockError::Error(source)), file)
+                    if cfg!(windows) && source.raw_os_error() == Some(33) =>
+                {
+                    // Windows can report lock contention as `ERROR_LOCK_VIOLATION` instead of
+                    // `WouldBlock`; keep polling in that case too.
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    file
+                }
+                (Err(std::fs::TryLockError::Error(source)), _file) => {
+                    // Not an fs_err method, we need to build our own path context.
+                    return Err(LockedFileError::Lock {
+                        resource: resource.to_string(),
+                        path: path.clone(),
+                        source,
+                    });
+                }
+            };
+        }
 
         trace!("Acquired {mode} lock for `{resource}`");
         Ok(Self(file))
