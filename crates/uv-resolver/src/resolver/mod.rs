@@ -2,7 +2,7 @@
 
 use std::borrow::Cow;
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Display, Formatter};
 use std::ops::Bound;
 use std::sync::Arc;
@@ -38,7 +38,7 @@ use uv_platform_tags::{IncompatibleTag, Tags};
 use uv_pypi_types::{ConflictItem, ConflictItemRef, ConflictKindRef, Conflicts, VerbatimParsedUrl};
 use uv_static::EnvVars;
 use uv_torch::TorchStrategy;
-use uv_types::{BuildContext, HashStrategy, InstalledPackagesProvider};
+use uv_types::{BuildContext, HashStrategy, InstalledPackagesProvider, OnceQueue};
 use uv_warnings::warn_user_once;
 
 use crate::candidate_selector::{Candidate, CandidateDist, CandidateSelector};
@@ -47,6 +47,7 @@ use crate::error::{NoSolutionError, ResolveError, derivation_tree_packages};
 use crate::fork_indexes::ForkIndexes;
 use crate::fork_strategy::ForkStrategy;
 use crate::fork_urls::ForkUrls;
+use crate::graph_ops::MarkerReachability;
 use crate::manifest::Manifest;
 use crate::pins::FilePins;
 use crate::preferences::{PreferenceSource, Preferences};
@@ -2117,16 +2118,12 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
 
             // Transitively process all extras that are recursively included, starting with the current
             // extra.
-            let mut seen = FxHashSet::<(ExtraName, MarkerTree)>::default();
-            let mut queue: VecDeque<_> = requirements
+            let mut queue: OnceQueue<_> = requirements
                 .iter()
                 .filter(|req| name == Some(&req.name))
                 .flat_map(|req| req.extras.iter().cloned().map(|extra| (extra, req.marker)))
                 .collect();
-            while let Some((extra, marker)) = queue.pop_front() {
-                if !seen.insert((extra.clone(), marker)) {
-                    continue;
-                }
+            while let Some((extra, marker)) = queue.pop() {
                 for requirement in self.requirements_for_extra(
                     dependencies,
                     Some(&extra),
@@ -4456,14 +4453,10 @@ fn find_environments(id: Id<PubGrubPackage>, state: &State<UvDependencyProvider>
 
     // Propagate markers forward from the root through the collected subgraph. This reaches a
     // fixpoint even in the presence of cycles, unlike the recursive reverse walk above.
-    let mut environments = FxHashMap::default();
-    let mut queue = VecDeque::from([root]);
-    environments.insert(root, MarkerTree::TRUE);
+    let mut environments = MarkerReachability::with_capacity(ancestors.len());
+    environments.push(root, MarkerTree::TRUE);
 
-    while let Some(current) = queue.pop_front() {
-        let Some(current_environment) = environments.get(&current).copied() else {
-            continue;
-        };
+    while let Some((current, current_environment)) = environments.pop() {
         let Some(incompatibilities) = state.incompatibilities.get(&current) else {
             continue;
         };
@@ -4480,17 +4473,16 @@ fn find_environments(id: Id<PubGrubPackage>, state: &State<UvDependencyProvider>
             let mut next_environment = state.package_store[*child].marker();
             next_environment = next_environment.and(current_environment);
 
-            let entry = environments.entry(*child).or_insert(MarkerTree::FALSE);
-            let mut combined = *entry;
-            combined = combined.or(next_environment);
-            if combined != *entry {
-                *entry = combined;
-                queue.push_back(*child);
+            if !next_environment.is_false() {
+                environments.push(*child, next_environment);
             }
         }
     }
 
-    environments.remove(&id).unwrap_or(MarkerTree::FALSE)
+    environments
+        .into_markers()
+        .remove(&id)
+        .unwrap_or(MarkerTree::FALSE)
 }
 
 #[derive(Debug, Default, Clone)]
