@@ -4643,6 +4643,16 @@ pub struct RemoveArgs {
 
 #[derive(Args)]
 pub struct TreeArgs {
+    /// Show the version requirement declared by each package for its dependencies.
+    ///
+    /// Requirements are shown independently for each dependency edge, with overrides identified
+    /// separately. They are not combined into a single constraint for each package.
+    ///
+    /// This may download distribution metadata or build source distributions when the requirements
+    /// are not stored in the lockfile. Only supported with the text output format.
+    #[arg(long)]
+    pub show_version_specifiers: bool,
+
     /// Show a platform-independent dependency tree.
     ///
     /// Shows resolved package versions for all Python versions and platforms, rather than filtering

@@ -2,32 +2,40 @@ use std::fmt::Write;
 use std::path::Path;
 
 use anstream::print;
-use anyhow::{Error, Result};
+use anyhow::{Context, Error, Result};
 use futures::StreamExt;
 use uv_cache::{Cache, Refresh};
 use uv_cache_info::Timestamp;
 use uv_cli::TreeFormat;
-use uv_client::{BaseClientBuilder, RegistryClientBuilder};
+use uv_client::{BaseClientBuilder, FlatIndexClient, RegistryClientBuilder};
 use uv_configuration::{ActiveEnvironment, Concurrency, DependencyGroups, TargetTriple};
-use uv_distribution_types::IndexCapabilities;
+use uv_dispatch::BuildDispatch;
+use uv_distribution::{DistributionDatabase, LoweredExtraBuildDependencies, Metadata};
+use uv_distribution_types::{Index, IndexCapabilities};
 use uv_normalize::DefaultGroups;
 use uv_normalize::PackageName;
+use uv_pep508::MarkerEnvironment;
+use uv_platform_tags::Tags;
 use uv_preview::{Preview, PreviewFeature};
-use uv_python::{ConfigDiscovery, PythonDownloads, PythonPreference, PythonRequest, PythonVersion};
-use uv_resolver::{PackageMap, TreeDisplay, TreeJsonTarget};
+use uv_python::{
+    ConfigDiscovery, Interpreter, PythonDownloads, PythonEnvironment, PythonPreference,
+    PythonRequest, PythonVersion,
+};
+use uv_resolver::{FlatIndex, Lock, Package, PackageMap, TreeDisplay, TreeJsonTarget};
 use uv_scripts::Pep723Script;
 use uv_settings::PythonInstallMirrors;
+use uv_types::{BuildIsolation, HashStrategy, SourceTreeEditablePolicy};
 use uv_warnings::warn_user;
 use uv_workspace::{DiscoveryOptions, VirtualProject, WorkspaceCache};
 
 use crate::commands::pip::latest::LatestClient;
 use crate::commands::pip::loggers::DefaultResolveLogger;
-use crate::commands::pip::resolution_markers;
+use crate::commands::pip::{resolution_markers, resolution_tags};
 use crate::commands::project::lock::{LockMode, LockOperation};
 use crate::commands::project::lock_target::LockTarget;
 use crate::commands::project::{
     ProjectEnvironmentPolicy, ProjectError, ProjectInterpreter, ScriptInterpreter, UniversalState,
-    WorkspacePython, default_dependency_groups,
+    WorkspacePython, default_dependency_groups, script_extra_build_requires,
 };
 use crate::commands::reporters::LatestVersionReporter;
 use crate::commands::{ExitStatus, diagnostics};
@@ -40,6 +48,7 @@ use crate::settings::ResolverSettings;
 #[expect(clippy::fn_params_excessive_bools)]
 pub(crate) async fn tree(
     project_dir: &Path,
+    show_version_specifiers: bool,
     groups: DependencyGroups,
     lock_check: LockCheck,
     frozen: Option<FrozenSource>,
@@ -97,11 +106,9 @@ pub(crate) async fn tree(
     };
     let groups = groups.with_defaults(default_groups);
 
-    // Find an interpreter for the project, unless `--frozen` and `--universal` are both set.
-    let interpreter = if frozen.is_some() && universal {
-        None
-    } else {
-        Some(match target {
+    // Find an interpreter only if needed for locking, filtering, or retrieving package metadata.
+    let discover_interpreter = async || {
+        Ok::<_, Error>(match target {
             LockTarget::Script(script) => ScriptInterpreter::discover(
                 script.into(),
                 python.as_deref().map(PythonRequest::parse),
@@ -143,6 +150,11 @@ pub(crate) async fn tree(
                 .into_interpreter()
             }
         })
+    };
+    let mut interpreter = if frozen.is_some() && universal {
+        None
+    } else {
+        Some(discover_interpreter().await?)
     };
 
     // Determine the lock mode.
@@ -299,7 +311,8 @@ pub(crate) async fn tree(
         PackageMap::default()
     };
 
-    // Render the tree.
+    // Construct the tree before retrieving metadata, so pruned or hidden dependencies do not
+    // require downloads or builds just to display their version specifiers.
     let tree = TreeDisplay::new(
         &lock,
         markers.as_ref(),
@@ -313,6 +326,51 @@ pub(crate) async fn tree(
         show_sizes,
     );
 
+    let metadata = if show_version_specifiers {
+        let packages = tree.metadata_packages();
+        if packages.is_empty() {
+            PackageMap::default()
+        } else {
+            if interpreter.is_none() {
+                interpreter = Some(discover_interpreter().await?);
+            }
+            let interpreter = interpreter
+                .as_ref()
+                .context("An interpreter is required to retrieve package metadata")?;
+            let tags = resolution_tags(
+                python_version.as_ref(),
+                python_platform.as_ref(),
+                interpreter,
+            )?;
+            fetch_metadata(
+                target,
+                &lock,
+                packages,
+                interpreter,
+                &tags,
+                markers
+                    .as_ref()
+                    .map_or_else(|| interpreter.markers(), |markers| markers.markers()),
+                &settings,
+                client_builder,
+                &state,
+                &concurrency,
+                cache,
+                workspace_cache,
+                preview,
+            )
+            .await?
+        }
+    } else {
+        PackageMap::default()
+    };
+    let tree = if show_version_specifiers {
+        tree.with_metadata(&metadata)?
+    } else {
+        tree
+    };
+
+    // Render the tree.
     match format {
         TreeFormat::Text => print!("{tree}"),
         TreeFormat::Json => writeln!(
@@ -328,4 +386,152 @@ pub(crate) async fn tree(
     }
 
     Ok(ExitStatus::Success)
+}
+
+/// Retrieve metadata only for the packages whose requirements are displayed in the tree.
+async fn fetch_metadata(
+    target: LockTarget<'_>,
+    lock: &Lock,
+    packages: Vec<&Package>,
+    interpreter: &Interpreter,
+    tags: &Tags,
+    markers: &MarkerEnvironment,
+    settings: &ResolverSettings,
+    client_builder: &BaseClientBuilder<'_>,
+    state: &UniversalState,
+    concurrency: &Concurrency,
+    cache: &Cache,
+    workspace_cache: &WorkspaceCache,
+    preview: Preview,
+) -> Result<PackageMap<Metadata>> {
+    let client_builder = client_builder.clone().keyring(settings.keyring_provider);
+    for index in target.indexes() {
+        if let Some(credentials) = index.credentials()? {
+            if let Some(root_url) = index.root_url() {
+                client_builder.store_credentials(&root_url, credentials.clone());
+            }
+            client_builder.store_credentials(index.raw_url(), credentials);
+        }
+    }
+
+    let client = RegistryClientBuilder::new(client_builder, cache.clone())
+        .index_locations(settings.index_locations.clone())
+        .index_strategy(settings.index_strategy)
+        .markers(interpreter.markers())
+        .platform(interpreter.platform())
+        .build()?;
+
+    let environment;
+    let build_isolation = match &settings.build_isolation {
+        uv_configuration::BuildIsolation::Isolate => BuildIsolation::Isolated,
+        uv_configuration::BuildIsolation::Shared => {
+            environment = PythonEnvironment::from_interpreter(interpreter.clone());
+            BuildIsolation::Shared(&environment)
+        }
+        uv_configuration::BuildIsolation::SharedPackage(packages) => {
+            environment = PythonEnvironment::from_interpreter(interpreter.clone());
+            BuildIsolation::SharedPackage(&environment, packages)
+        }
+    };
+
+    let build_hasher = HashStrategy::default();
+    let flat_index = {
+        let flat_index_client =
+            FlatIndexClient::new(client.cached_client(), client.connectivity(), cache);
+        let entries = flat_index_client
+            .fetch_all(settings.index_locations.flat_indexes().map(Index::url))
+            .await?;
+        FlatIndex::from_entries(
+            entries,
+            Some(interpreter.tags()?),
+            &build_hasher,
+            &settings.build_options,
+        )
+    };
+
+    let extra_build_requires = match target {
+        LockTarget::Workspace(workspace) => {
+            LoweredExtraBuildDependencies::from_workspace(
+                settings.extra_build_dependencies.clone(),
+                workspace,
+                &settings.index_locations,
+                &settings.sources,
+                cache,
+                workspace_cache,
+                client.credentials_cache(),
+            )
+            .await?
+        }
+        LockTarget::Script(script) => {
+            script_extra_build_requires(
+                script.into(),
+                settings,
+                cache,
+                workspace_cache,
+                client.credentials_cache(),
+            )
+            .await?
+        }
+    }
+    .into_inner();
+
+    let build_constraints = lock.build_constraints(target.install_path());
+    let dependency_metadata = lock.dependency_metadata();
+    let build_dispatch = BuildDispatch::new(
+        &client,
+        cache,
+        &build_constraints,
+        interpreter,
+        &settings.index_locations,
+        &flat_index,
+        &dependency_metadata,
+        state.fork().into_inner(),
+        settings.index_strategy,
+        &settings.config_setting,
+        &settings.config_settings_package,
+        build_isolation,
+        &extra_build_requires,
+        &settings.extra_build_variables,
+        settings.link_mode,
+        &settings.build_options,
+        &build_hasher,
+        settings.exclude_newer.clone(),
+        settings.sources.clone(),
+        SourceTreeEditablePolicy::Project,
+        workspace_cache.clone(),
+        concurrency.clone(),
+        preview,
+    );
+    let database = DistributionDatabase::new(
+        &client,
+        &build_dispatch,
+        concurrency.downloads_semaphore.clone(),
+    );
+
+    let mut fetches = futures::stream::iter(packages)
+        .map(async |package| {
+            let metadata = Lock::locked_package_metadata(
+                package,
+                target.install_path(),
+                tags,
+                markers,
+                &settings.build_options,
+                state.index(),
+                &database,
+            )
+            .await
+            .with_context(|| {
+                format!(
+                    "Failed to retrieve version specifiers for `{}`",
+                    package.name()
+                )
+            })?;
+            Ok::<_, Error>((package.clone(), metadata))
+        })
+        .buffer_unordered(concurrency.downloads);
+    let mut metadata = PackageMap::default();
+    while let Some((package, requirements)) = fetches.next().await.transpose()? {
+        metadata.insert(package, requirements);
+    }
+    Ok(metadata)
 }
