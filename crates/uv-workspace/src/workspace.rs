@@ -16,7 +16,9 @@ use rustc_hash::{FxHashSet, FxHasher};
 use tracing::{debug, trace, warn};
 
 use uv_cache::Cache;
-use uv_configuration::{ActiveEnvironment, DependencyGroupsWithDefaults, ExcludeDependency};
+use uv_configuration::{
+    ActiveEnvironment, DependencyGroupsWithDefaults, ExcludeDependency, RequiredEnvironmentsMode,
+};
 use uv_distribution_types::{Index, Requirement, RequirementSource};
 use uv_fs::{CWD, Simplified, normalize_path};
 use uv_normalize::{DEV_DEPENDENCIES, GroupName, PackageName};
@@ -731,6 +733,15 @@ impl Workspace {
             .as_ref()
             .and_then(|tool| tool.uv.as_ref())
             .and_then(|uv| uv.required_environments.as_ref())
+    }
+
+    /// Returns the policy used to satisfy the workspace's required environments.
+    pub fn required_environments_mode(&self) -> Option<RequiredEnvironmentsMode> {
+        self.pyproject_toml
+            .tool
+            .as_ref()
+            .and_then(|tool| tool.uv.as_ref())
+            .and_then(|uv| uv.required_environments_mode)
     }
 
     /// Returns the set of conflicts for the workspace.
@@ -2594,6 +2605,7 @@ mod tests {
                       "build-constraint-dependencies": null,
                       "environments": null,
                       "required-environments": null,
+                      "required-environments-mode": null,
                       "conflicts": null,
                       "build-backend": null
                     }
@@ -2695,6 +2707,7 @@ mod tests {
                       "build-constraint-dependencies": null,
                       "environments": null,
                       "required-environments": null,
+                      "required-environments-mode": null,
                       "conflicts": null,
                       "build-backend": null
                     }
@@ -3030,6 +3043,7 @@ mod tests {
                       "build-constraint-dependencies": null,
                       "environments": null,
                       "required-environments": null,
+                      "required-environments-mode": null,
                       "conflicts": null,
                       "build-backend": null
                     }
@@ -3140,6 +3154,7 @@ mod tests {
                       "build-constraint-dependencies": null,
                       "environments": null,
                       "required-environments": null,
+                      "required-environments-mode": null,
                       "conflicts": null,
                       "build-backend": null
                     }
@@ -3263,6 +3278,7 @@ mod tests {
                       "build-constraint-dependencies": null,
                       "environments": null,
                       "required-environments": null,
+                      "required-environments-mode": null,
                       "conflicts": null,
                       "build-backend": null
                     }
@@ -3360,6 +3376,7 @@ mod tests {
                       "build-constraint-dependencies": null,
                       "environments": null,
                       "required-environments": null,
+                      "required-environments-mode": null,
                       "conflicts": null,
                       "build-backend": null
                     }

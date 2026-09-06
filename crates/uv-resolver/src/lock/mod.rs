@@ -23,7 +23,7 @@ use uv_cache_key::RepositoryUrl;
 use uv_configuration::{
     BuildOptions, Constraints, DependencyGroupsWithDefaults, ExcludeDependency, Excludes,
     ExtrasSpecificationWithDefaults, InstallTarget, Override, Overrides, PackageOverride,
-    ScopedOverrideSourceError,
+    RequiredEnvironmentsMode, ScopedOverrideSourceError,
 };
 use uv_distribution::{
     DistributionDatabase, FlatRequiresDist, Metadata as DistributionMetadata, RequiresDist,
@@ -1117,6 +1117,7 @@ impl Lock {
             prerelease: resolution.options.prerelease.clone(),
             fork_strategy: resolution.options.fork_strategy,
             exclude_newer: resolution.options.exclude_newer.clone(),
+            required_environments_mode: resolution.options.required_environments_mode,
         };
         // Canonicalize the top-level fork markers to match what is persisted in
         // `uv.lock`. In particular, conflict-only fork markers can serialize to
@@ -1423,6 +1424,11 @@ impl Lock {
     /// Returns the multi-version mode used to generate this lock.
     pub fn fork_strategy(&self) -> ForkStrategy {
         self.options.fork_strategy
+    }
+
+    /// Returns the policy used to satisfy required environments when generating this lock.
+    pub fn required_environments_mode(&self) -> Option<RequiredEnvironmentsMode> {
+        self.options.required_environments_mode
     }
 
     /// Returns the exclude newer setting used to generate this lock.
@@ -3476,6 +3482,8 @@ struct ResolverOptions {
     fork_strategy: ForkStrategy,
     /// The [`ExcludeNewer`] setting used to generate this lock.
     exclude_newer: ExcludeNewer,
+    /// The policy used to satisfy required environments when generating this lock.
+    required_environments_mode: Option<RequiredEnvironmentsMode>,
 }
 
 /// The serialized resolver options in the lockfile.
@@ -3494,6 +3502,9 @@ struct ResolverOptionsWire {
     /// The [`ExcludeNewer`] setting used to generate this lock.
     #[serde(flatten)]
     exclude_newer: ExcludeNewerWire,
+    /// The policy used to satisfy required environments when generating this lock.
+    #[serde(default)]
+    required_environments_mode: Option<RequiredEnvironmentsMode>,
 }
 
 #[derive(Clone, Debug, Default, serde::Deserialize)]
@@ -3770,6 +3781,7 @@ impl TryFrom<LockWire> for Lock {
             prerelease: options_wire.prerelease.into(),
             fork_strategy: options_wire.fork_strategy,
             exclude_newer: options_wire.exclude_newer.into(),
+            required_environments_mode: options_wire.required_environments_mode,
         };
         let lock = Self::new(
             wire.version,
@@ -8049,6 +8061,43 @@ mod tests {
         assert!(GitSource::from_url(&url).is_ok());
 
         Ok(())
+    }
+
+    #[test]
+    fn required_environments_mode_round_trips() {
+        let lock = Lock::from_canonical_toml(
+            r#"version = 1
+revision = 3
+requires-python = ">=3.12"
+
+[options]
+required-environments-mode = "require-wheels"
+
+[[package]]
+name = "project"
+version = "0.1.0"
+source = { virtual = "." }
+"#,
+        )
+        .expect("valid lock");
+
+        assert_eq!(
+            lock.required_environments_mode(),
+            Some(RequiredEnvironmentsMode::RequireWheels)
+        );
+        insta::assert_snapshot!(lock.to_toml().expect("lock serializes"), @r###"
+        version = 1
+        revision = 3
+        requires-python = ">=3.12"
+
+        [options]
+        required-environments-mode = "require-wheels"
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        "###);
     }
 
     #[test]

@@ -785,6 +785,7 @@ async fn run_with_workspace_cache(
                 args.build_constraints_from_workspace,
                 args.environments,
                 args.required_environments,
+                args.required_environments_mode,
                 args.settings.extras,
                 groups,
                 args.settings.output_file.as_deref(),
