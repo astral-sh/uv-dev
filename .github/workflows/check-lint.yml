@@ -77,6 +77,30 @@ jobs:
       - name: "Run shellcheck"
         run: find . -name '*.sh' -type f | xargs shellcheck --shell bash --severity style
 
+  credential-broker-policy:
+    timeout-minutes: 10
+    runs-on: ubuntu-slim
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: "Validate credential broker policy"
+        run: |
+          jq --exit-status '
+            . as $policy
+            | .rules
+            | all(
+                if has("targets") then
+                  (.target == null)
+                  and (.targets | type == "array" and length >= 2)
+                  and (.installation | type == "string")
+                  and (.installation as $installation | $policy.installations | has($installation))
+                else
+                  has("installation") | not
+                end
+              )
+          ' .github/ost-simple-sts.json
+
   validate-pyproject:
     timeout-minutes: 10
     runs-on: ubuntu-slim
