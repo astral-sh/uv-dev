@@ -3,8 +3,9 @@ Write an editorialized replacement for only the newest release section in `CHANG
 The newest release section begins at the first release heading (`## `) and ends immediately before
 the next release heading. Read `CHANGELOG.md` and the local Git history, but do not edit any file
 and do not use the network. Compare the new section with several preceding releases and match their
-established section names, ordering, tone, and Markdown style. Inspect the included local changes
-when a generated title is not enough to classify or describe an entry accurately.
+established section names, ordering, tone, and Markdown style. Inspect the source commit and changed
+paths for each entry. Inspect the relevant diff before changing an entry's meaning, direction,
+scope, or category.
 
 In any GitHub-facing output, write issue and pull request references in the canonical
 owner/repository#number form, such as astral-sh/uv#123 or astral-sh/uv-dev#123. This preserves
@@ -19,8 +20,9 @@ Apply these rules:
 - Keep each Markdown paragraph and list item on a single line, including its pull request links. Do
   not hard-wrap changelog prose; wrapping can break rendering on GitHub.
 - Drop entries that are clearly internal-only and have no user-facing effect, including CI or test
-  runner changes, repository reorganization, and agent or developer infrastructure. If the effect is
-  uncertain, keep the entry.
+  runner changes, repository reorganization, agent or developer infrastructure, and changes that
+  only update an earlier release's notes or changelog section. If the effect is uncertain, keep the
+  entry.
 - Existing placement under `Enhancements` or `Bug fixes` is repository metadata. Never move an entry
   between those two sections. Do not move an entry from `Bug fixes` to `Performance`.
 - Apply a feature-area override only when it is unambiguous: keep any change to a preview feature
@@ -33,8 +35,10 @@ Apply these rules:
   downstream integrations.
 - Treat the generated wording as source material, not a preferred baseline. Rewrite retained entries
   to make them clearer, more precise, and more user-facing. Expand internal shorthand and add
-  missing context when supported by the local changes. Preserve the original meaning and do not
-  invent or broaden claims. Avoid purely stylistic synonym changes.
+  missing context only when supported by the source diff. Preserve the original wording when its
+  meaning is already accurate or the source diff does not support a substantive clarification. Never
+  reverse relationships, change the direction of an action, invent or broaden claims, or make purely
+  stylistic synonym changes.
 - Put the most significant user-facing entries first within each section and remove empty sections.
 
 Return only the complete replacement release section, beginning with its `## ` heading. Do not
