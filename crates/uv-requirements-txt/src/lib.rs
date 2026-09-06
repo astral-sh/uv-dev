@@ -700,7 +700,7 @@ fn parse_entry(
 
     let start = s.cursor();
     Ok(Some(if s.eat_if("-r") || s.eat_if("--requirement") {
-        let filename = parse_value("--requirement", content, s, |c: char| !is_terminal(c))?;
+        let filename = parse_option_value("--requirement", content, s)?;
         let filename = unquote(filename)
             .ok()
             .flatten()
@@ -712,7 +712,7 @@ fn parse_entry(
             end,
         }
     } else if s.eat_if("-c") || s.eat_if("--constraint") {
-        let filename = parse_value("--constraint", content, s, |c: char| !is_terminal(c))?;
+        let filename = parse_option_value("--constraint", content, s)?;
         let filename = unquote(filename)
             .ok()
             .flatten()
@@ -760,7 +760,7 @@ fn parse_entry(
             hashes,
         })
     } else if s.eat_if("-i") || s.eat_if("--index-url") {
-        let given = parse_value("--index-url", content, s, |c: char| !is_terminal(c))?;
+        let given = parse_option_value("--index-url", content, s)?;
         let given = unquote(given)
             .ok()
             .flatten()
@@ -791,7 +791,7 @@ fn parse_entry(
         };
         RequirementsTxtStatement::IndexUrl(url.with_given(given))
     } else if s.eat_if("--extra-index-url") {
-        let given = parse_value("--extra-index-url", content, s, |c: char| !is_terminal(c))?;
+        let given = parse_option_value("--extra-index-url", content, s)?;
         let given = unquote(given)
             .ok()
             .flatten()
@@ -826,7 +826,7 @@ fn parse_entry(
     } else if s.eat_if("--require-hashes") {
         RequirementsTxtStatement::RequireHashes
     } else if s.eat_if("--find-links") || s.eat_if("-f") {
-        let given = parse_value("--find-links", content, s, |c: char| !is_terminal(c))?;
+        let given = parse_option_value("--find-links", content, s)?;
         let given = unquote(given)
             .ok()
             .flatten()
@@ -857,7 +857,7 @@ fn parse_entry(
         };
         RequirementsTxtStatement::FindLinks(url.with_given(given))
     } else if s.eat_if("--no-binary") {
-        let given = parse_value("--no-binary", content, s, |c: char| !is_terminal(c))?;
+        let given = parse_option_value("--no-binary", content, s)?;
         let given = unquote(given)
             .ok()
             .flatten()
@@ -873,7 +873,7 @@ fn parse_entry(
         })?;
         RequirementsTxtStatement::NoBinary(NoBinary::from_pip_arg(specifier))
     } else if s.eat_if("--only-binary") {
-        let given = parse_value("--only-binary", content, s, |c: char| !is_terminal(c))?;
+        let given = parse_option_value("--only-binary", content, s)?;
         let given = unquote(given)
             .ok()
             .flatten()
@@ -1105,6 +1105,26 @@ fn parse_value<'a, T>(
     }
 
     Ok(value)
+}
+
+/// Parse an option value, treating `#` as a comment only when it follows whitespace.
+fn parse_option_value<'a>(
+    option: &str,
+    content: &str,
+    s: &mut Scanner<'a>,
+) -> Result<&'a str, RequirementsTxtParserError> {
+    let value = parse_value(option, content, s, |c: char| !matches!(c, '\n' | '\r'))?;
+    let value = value
+        .char_indices()
+        .find(|(index, c)| {
+            *c == '#'
+                && value[..*index]
+                    .chars()
+                    .next_back()
+                    .is_some_and(char::is_whitespace)
+        })
+        .map_or(value, |(index, _)| &value[..index]);
+    Ok(value.trim_end())
 }
 
 /// Fetch the contents of a URL and return them as a string.
@@ -2535,6 +2555,41 @@ mod test {
             }
             "#);
         });
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn hash_in_option_values() -> Result<()> {
+        let temp_dir = assert_fs::TempDir::new()?;
+        let requirements_txt = temp_dir.child("requirements.txt");
+        requirements_txt.write_str(indoc! {r#"
+            -r child#part.txt
+            -r "quoted#part.txt"
+            --index-url https://example.com/simple#primary # comment
+            --extra-index-url "https://example.com/simple#extra" # comment
+            --find-links https://example.com/files#links # comment
+        "#})?;
+        temp_dir.child("child#part.txt").write_str("child\n")?;
+        temp_dir
+            .child("quoted#part.txt")
+            .write_str("quoted-child\n")?;
+
+        let requirements = RequirementsTxt::parse(requirements_txt.path(), temp_dir.path()).await?;
+
+        assert_eq!(requirements.requirements.len(), 2);
+        assert_eq!(
+            requirements.index_url.as_ref().and_then(|url| url.given()),
+            Some("https://example.com/simple#primary")
+        );
+        assert_eq!(
+            requirements.extra_index_urls[0].given(),
+            Some("https://example.com/simple#extra")
+        );
+        assert_eq!(
+            requirements.find_links[0].given(),
+            Some("https://example.com/files#links")
+        );
 
         Ok(())
     }
