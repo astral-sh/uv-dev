@@ -4270,7 +4270,7 @@ pub(crate) struct BuildSettings {
     pub(crate) src: Option<PathBuf>,
     pub(crate) package: Option<PackageName>,
     pub(crate) all_packages: bool,
-    pub(crate) out_dir: Option<PathBuf>,
+    pub(crate) output_dir: Option<PathBuf>,
     pub(crate) sdist: bool,
     pub(crate) wheel: bool,
     pub(crate) list: bool,
@@ -4296,7 +4296,7 @@ impl BuildSettings {
     ) -> anyhow::Result<Self> {
         let BuildArgs {
             src,
-            out_dir,
+            output_dir,
             package,
             all_packages,
             sdist,
@@ -4343,7 +4343,7 @@ impl BuildSettings {
             src,
             package,
             all_packages,
-            out_dir,
+            output_dir,
             sdist,
             wheel,
             list,
