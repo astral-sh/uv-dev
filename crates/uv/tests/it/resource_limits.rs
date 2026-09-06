@@ -52,6 +52,72 @@ fn run_open_file_limit_override() {
 }
 
 #[test]
+fn run_resource_limit_overrides() {
+    let context = uv_test::test_context!("3.12");
+    let python = &context.python_versions[0].1;
+
+    let mut command = Command::new(get_bin!());
+    command
+        .arg("run")
+        .arg("--no-project")
+        .arg("--")
+        .arg(python)
+        .arg("-c")
+        .arg(concat!(
+            "import resource; ",
+            "print(resource.getrlimit(resource.RLIMIT_AS)[0]); ",
+            "print(resource.getrlimit(resource.RLIMIT_CORE)[0]); ",
+            "print(resource.getrlimit(resource.RLIMIT_CPU)[0]); ",
+            "print(resource.getrlimit(resource.RLIMIT_FSIZE)[0]); ",
+            "print(resource.getrlimit(resource.RLIMIT_NOFILE)[0])",
+        ))
+        .current_dir(context.temp_dir.path())
+        .env(EnvVars::UV_CACHE_DIR, context.cache_dir.path())
+        .env(EnvVars::UV_PYTHON_DOWNLOADS, "never")
+        .env(EnvVars::UV_RUN_RLIMIT_AS, "1125899906842624")
+        .env(EnvVars::UV_RUN_RLIMIT_CORE, "0")
+        .env(EnvVars::UV_RUN_RLIMIT_CPU, "60")
+        .env(EnvVars::UV_RUN_RLIMIT_FSIZE, "4294967296")
+        .env(EnvVars::UV_RUN_RLIMIT_NOFILE, "128");
+
+    uv_snapshot!(context.filters(), command, @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    1125899906842624
+    0
+    60
+    4294967296
+    128
+    ");
+}
+
+#[cfg(target_vendor = "apple")]
+#[test]
+fn run_apple_process_limit_override() {
+    let context = uv_test::test_context!("3.12");
+    let python = &context.python_versions[0].1;
+
+    let mut command = Command::new(get_bin!());
+    command
+        .arg("run")
+        .arg("--no-project")
+        .arg("--")
+        .arg(python)
+        .arg("-c")
+        .arg("import resource; print(resource.getrlimit(resource.RLIMIT_NPROC)[0])")
+        .current_dir(context.temp_dir.path())
+        .env(EnvVars::UV_CACHE_DIR, context.cache_dir.path())
+        .env(EnvVars::UV_PYTHON_DOWNLOADS, "never")
+        .env(EnvVars::UV_RUN_RLIMIT_NPROC, "4096");
+
+    uv_snapshot!(context.filters(), command, @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    4096
+    ");
+}
+
+#[test]
 fn run_open_file_limit_override_invalid() {
     let context = uv_test::test_context!("3.12");
     let python = &context.python_versions[0].1;
@@ -69,6 +135,31 @@ fn run_open_file_limit_override_invalid() {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to parse environment variable `UV_RUN_RLIMIT_NOFILE` with invalid value `invalid`: invalid digit found in string
+    ");
+}
+
+#[test]
+fn run_resource_limit_override_invalid() {
+    let context = uv_test::test_context!("3.12");
+    let python = &context.python_versions[0].1;
+
+    let mut command = Command::new(get_bin!());
+    command
+        .arg("run")
+        .arg("--no-project")
+        .arg("--")
+        .arg(python)
+        .arg("-c")
+        .arg("pass")
+        .current_dir(context.temp_dir.path())
+        .env(EnvVars::UV_CACHE_DIR, context.cache_dir.path())
+        .env(EnvVars::UV_PYTHON_DOWNLOADS, "never")
+        .env(EnvVars::UV_RUN_RLIMIT_CPU, "invalid");
+
+    uv_snapshot!(context.filters(), command, @r"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to parse environment variable `UV_RUN_RLIMIT_CPU` with invalid value `invalid`: invalid digit found in string
     ");
 }
 
@@ -96,6 +187,36 @@ fn run_open_file_limit_override_exceeds_hard_limit() {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to apply `UV_RUN_RLIMIT_NOFILE` value `256`
-      Caused by: requested open file limit (256) exceeds the hard limit (128)
+      Caused by: requested RLIMIT_NOFILE limit (256) exceeds the hard limit (128)
+    ");
+}
+
+#[test]
+fn run_resource_limit_override_exceeds_hard_limit() {
+    let context = uv_test::test_context!("3.12");
+    let python = &context.python_versions[0].1;
+
+    let mut command = Command::new("sh");
+    command
+        .arg("-c")
+        .arg("ulimit -S -t 30; ulimit -H -t 30; exec \"$@\"")
+        .arg("sh")
+        .arg(get_bin!())
+        .arg("run")
+        .arg("--no-project")
+        .arg("--")
+        .arg(python)
+        .arg("-c")
+        .arg("pass")
+        .current_dir(context.temp_dir.path())
+        .env(EnvVars::UV_CACHE_DIR, context.cache_dir.path())
+        .env(EnvVars::UV_PYTHON_DOWNLOADS, "never")
+        .env(EnvVars::UV_RUN_RLIMIT_CPU, "60");
+
+    uv_snapshot!(context.filters(), command, @r"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to apply `UV_RUN_RLIMIT_CPU` value `60`
+      Caused by: requested RLIMIT_CPU limit (60) exceeds the hard limit (30)
     ");
 }

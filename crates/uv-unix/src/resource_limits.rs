@@ -16,6 +16,187 @@
 use nix::errno::Errno;
 use nix::sys::resource::{RLIM_INFINITY, Resource, getrlimit, rlim_t, setrlimit};
 use thiserror::Error;
+use uv_static::EnvVars;
+
+/// The resource limits supported by the current Unix platform.
+pub const SUPPORTED_RESOURCE_LIMITS: &[(&str, RunResource)] = &[
+    #[cfg(not(any(target_os = "freebsd", target_os = "netbsd", target_os = "openbsd")))]
+    (
+        EnvVars::UV_RUN_RLIMIT_AS,
+        RunResource::Nix(Resource::RLIMIT_AS),
+    ),
+    #[cfg(target_os = "freebsd")]
+    (
+        EnvVars::UV_RUN_RLIMIT_AS,
+        RunResource::Nix(Resource::RLIMIT_VMEM),
+    ),
+    (
+        EnvVars::UV_RUN_RLIMIT_CORE,
+        RunResource::Nix(Resource::RLIMIT_CORE),
+    ),
+    (
+        EnvVars::UV_RUN_RLIMIT_CPU,
+        RunResource::Nix(Resource::RLIMIT_CPU),
+    ),
+    (
+        EnvVars::UV_RUN_RLIMIT_FSIZE,
+        RunResource::Nix(Resource::RLIMIT_FSIZE),
+    ),
+    (
+        EnvVars::UV_RUN_RLIMIT_NOFILE,
+        RunResource::Nix(Resource::RLIMIT_NOFILE),
+    ),
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd",
+        target_os = "aix"
+    ))]
+    (
+        EnvVars::UV_RUN_RLIMIT_NPROC,
+        RunResource::Nix(Resource::RLIMIT_NPROC),
+    ),
+    #[cfg(target_vendor = "apple")]
+    (
+        EnvVars::UV_RUN_RLIMIT_NPROC,
+        RunResource::Apple(rustix::process::Resource::Nproc),
+    ),
+];
+
+/// A platform-specific resource supported by the available safe Unix wrappers.
+#[derive(Debug, Clone, Copy)]
+pub enum RunResource {
+    Nix(Resource),
+    #[cfg(target_vendor = "apple")]
+    Apple(rustix::process::Resource),
+}
+
+/// A soft resource limit to apply while preserving the corresponding hard limit.
+#[derive(Debug, Clone, Copy)]
+pub struct ResourceLimit {
+    environment_variable: &'static str,
+    resource: RunResource,
+    value: u64,
+}
+
+impl ResourceLimit {
+    /// Create a soft resource limit from its environment variable and parsed value.
+    pub fn new(environment_variable: &'static str, resource: RunResource, value: u64) -> Self {
+        Self {
+            environment_variable,
+            resource,
+            value,
+        }
+    }
+
+    /// Return the environment variable that configured this resource limit.
+    pub fn environment_variable(self) -> &'static str {
+        self.environment_variable
+    }
+
+    /// Return the configured soft resource limit.
+    pub fn value(self) -> u64 {
+        self.value
+    }
+
+    /// Apply the configured soft limit without changing the hard limit.
+    pub fn apply(self) -> Result<(), ResourceLimitError> {
+        let resource_name = self
+            .environment_variable
+            .strip_prefix("UV_RUN_")
+            .unwrap_or(self.environment_variable);
+
+        match self.resource {
+            RunResource::Nix(resource) => {
+                let (_, hard) =
+                    getrlimit(resource).map_err(|source| ResourceLimitError::GetLimitFailed {
+                        resource: resource_name,
+                        source: source.into(),
+                    })?;
+
+                let Some(target) = u64_to_rlim_t(self.value) else {
+                    return Err(ResourceLimitError::InvalidLimit {
+                        resource: resource_name,
+                        value: self.value,
+                    });
+                };
+
+                if hard != RLIM_INFINITY && target > hard {
+                    return Err(ResourceLimitError::ExceedsHardLimit {
+                        resource: resource_name,
+                        target: self.value,
+                        hard: rlim_t_to_u64(hard).unwrap_or(u64::MAX),
+                    });
+                }
+
+                setrlimit(resource, target, hard).map_err(|source| {
+                    ResourceLimitError::SetLimitFailed {
+                        resource: resource_name,
+                        target: self.value,
+                        source: source.into(),
+                    }
+                })?;
+            }
+            #[cfg(target_vendor = "apple")]
+            RunResource::Apple(resource) => {
+                let limit = rustix::process::getrlimit(resource);
+                if let Some(hard) = limit.maximum
+                    && self.value > hard
+                {
+                    return Err(ResourceLimitError::ExceedsHardLimit {
+                        resource: resource_name,
+                        target: self.value,
+                        hard,
+                    });
+                }
+
+                rustix::process::setrlimit(
+                    resource,
+                    rustix::process::Rlimit {
+                        current: Some(self.value),
+                        maximum: limit.maximum,
+                    },
+                )
+                .map_err(|source| ResourceLimitError::SetLimitFailed {
+                    resource: resource_name,
+                    target: self.value,
+                    source: source.into(),
+                })?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+/// Errors that can occur when applying a configured resource limit.
+#[derive(Debug, Error)]
+pub enum ResourceLimitError {
+    #[error("failed to get {resource} limit: {source}")]
+    GetLimitFailed {
+        resource: &'static str,
+        source: std::io::Error,
+    },
+
+    #[error("requested {resource} limit ({value}) is not supported on this platform")]
+    InvalidLimit { resource: &'static str, value: u64 },
+
+    #[error("requested {resource} limit ({target}) exceeds the hard limit ({hard})")]
+    ExceedsHardLimit {
+        resource: &'static str,
+        target: u64,
+        hard: u64,
+    },
+
+    #[error("failed to set {resource} limit to {target}: {source}")]
+    SetLimitFailed {
+        resource: &'static str,
+        target: u64,
+        source: std::io::Error,
+    },
+}
 
 /// Errors that can occur when adjusting resource limits.
 #[derive(Debug, Error)]
@@ -96,23 +277,6 @@ pub fn adjust_open_file_limit() -> Result<u64, OpenFileLimitError> {
     set_open_file_limit_to(soft, target, target_rlim, hard)
 }
 
-/// Set the soft open-file descriptor limit while preserving the hard limit.
-pub fn set_open_file_limit(target: u32) -> Result<u64, OpenFileLimitError> {
-    let (soft, hard) =
-        getrlimit(Resource::RLIMIT_NOFILE).map_err(OpenFileLimitError::GetLimitFailed)?;
-    let Some(soft) = rlim_t_to_u64(soft) else {
-        return Err(OpenFileLimitError::NegativeSoftLimit { value: soft });
-    };
-
-    let target_rlim = rlim_t::from(target);
-    let target = u64::from(target);
-    if hard != RLIM_INFINITY && target_rlim > hard {
-        return Err(OpenFileLimitError::ExceedsHardLimit { target, hard });
-    }
-
-    set_open_file_limit_to(soft, target, target_rlim, hard)
-}
-
 /// Update the soft open-file descriptor limit while preserving the hard limit.
 fn set_open_file_limit_to(
     current: u64,
@@ -138,4 +302,9 @@ fn set_open_file_limit_to(
 #[expect(clippy::useless_conversion)]
 fn rlim_t_to_u64(value: rlim_t) -> Option<u64> {
     u64::try_from(value).ok()
+}
+
+/// Convert `u64` to `rlim_t`, returning `None` if it exceeds a signed platform limit.
+fn u64_to_rlim_t(value: u64) -> Option<rlim_t> {
+    rlim_t::try_from(value).ok()
 }

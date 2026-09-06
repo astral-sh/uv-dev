@@ -1360,6 +1360,24 @@ impl EnvVars {
     #[attr_added_in("0.5.19")]
     pub const UV_GIT_LFS: &'static str = "UV_GIT_LFS";
 
+    /// Sets the soft virtual-address-space limit, in bytes, for commands executed by `uv run`.
+    ///
+    /// Only supported on Unix platforms that provide `RLIMIT_AS`.
+    #[attr_added_in("0.12.2")]
+    pub const UV_RUN_RLIMIT_AS: &'static str = "UV_RUN_RLIMIT_AS";
+
+    /// Sets the soft core-file size limit, in bytes, for commands executed by `uv run`.
+    #[attr_added_in("0.12.2")]
+    pub const UV_RUN_RLIMIT_CORE: &'static str = "UV_RUN_RLIMIT_CORE";
+
+    /// Sets the soft CPU-time limit, in seconds, for commands executed by `uv run`.
+    #[attr_added_in("0.12.2")]
+    pub const UV_RUN_RLIMIT_CPU: &'static str = "UV_RUN_RLIMIT_CPU";
+
+    /// Sets the soft file-size limit, in bytes, for commands executed by `uv run`.
+    #[attr_added_in("0.12.2")]
+    pub const UV_RUN_RLIMIT_FSIZE: &'static str = "UV_RUN_RLIMIT_FSIZE";
+
     /// Sets the soft open-file descriptor limit for commands executed by `uv run`.
     ///
     /// The limit is applied after uv prepares the environment and immediately before the command
@@ -1367,6 +1385,12 @@ impl EnvVars {
     /// applied, uv exits with an error without running the command. Only supported on Unix.
     #[attr_added_in("0.12.3")]
     pub const UV_RUN_RLIMIT_NOFILE: &'static str = "UV_RUN_RLIMIT_NOFILE";
+
+    /// Sets the soft process-count limit for commands executed by `uv run`.
+    ///
+    /// Only supported on Unix platforms that provide `RLIMIT_NPROC`.
+    #[attr_added_in("0.12.2")]
+    pub const UV_RUN_RLIMIT_NPROC: &'static str = "UV_RUN_RLIMIT_NPROC";
 
     /// Number of times that `uv run` has been recursively invoked. Used to guard against infinite
     /// recursion, e.g., when `uv run`` is used in a script shebang.

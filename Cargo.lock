@@ -7442,6 +7442,7 @@ dependencies = [
  "uv-resolver",
  "uv-static",
  "uv-torch",
+ "uv-unix",
  "uv-version",
  "uv-warnings",
  "uv-workspace",
@@ -7641,7 +7642,9 @@ name = "uv-unix"
 version = "0.0.77"
 dependencies = [
  "nix 0.31.3",
+ "rustix 1.1.4",
  "thiserror",
+ "uv-static",
 ]
 
 [[package]]
