@@ -475,10 +475,10 @@ fn get_subdirectory(url: &Url) -> Option<PathBuf> {
 ///   `git+https://git.example.com/MyProject.git@v1.0#egg=pkg&path=path/to/wheel.whl`
 fn get_install_path(url: &Url) -> Option<PathBuf> {
     let fragment = url.fragment()?;
-    let install_path = fragment
-        .split('&')
-        .find_map(|fragment| fragment.strip_prefix("path="))?;
-    Some(PathBuf::from(install_path))
+    // URL fragments do not treat `+` as a space, unlike form-encoded query strings.
+    let fragment = fragment.replace('+', "%2B");
+    url::form_urlencoded::parse(fragment.as_bytes())
+        .find_map(|(key, value)| (key == "path").then(|| PathBuf::from(value.as_ref())))
 }
 
 impl TryFrom<DisplaySafeUrl> for ParsedUrl {
@@ -755,6 +755,39 @@ mod tests {
             let parsed_url = ParsedUrl::try_from(expected.clone())?;
             let actual = DisplaySafeUrl::try_from(&DirectUrl::from(&parsed_url))?;
             assert_eq!(expected, actual);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn direct_url_decodes_git_archive_paths() -> Result<()> {
+        for (fragment, expected) in [
+            (
+                "dist/release%20files/flask-1.0-py3-none-any.whl",
+                "dist/release files/flask-1.0-py3-none-any.whl",
+            ),
+            (
+                "dist/caf%C3%A9/flask-1.0-py3-none-any.whl",
+                "dist/café/flask-1.0-py3-none-any.whl",
+            ),
+            (
+                "dist/release%26candidate/flask-1.0-py3-none-any.whl",
+                "dist/release&candidate/flask-1.0-py3-none-any.whl",
+            ),
+            (
+                "dist/release+candidate/flask-1.0-py3-none-any.whl",
+                "dist/release+candidate/flask-1.0-py3-none-any.whl",
+            ),
+        ] {
+            let url = DisplaySafeUrl::parse(&format!(
+                "git+https://github.com/pallets/flask.git#path={fragment}"
+            ))?;
+            let ParsedUrl::GitPath(parsed) = ParsedUrl::try_from(url)? else {
+                anyhow::bail!("expected a Git archive URL");
+            };
+
+            assert_eq!(parsed.install_path, std::path::Path::new(expected));
         }
 
         Ok(())
