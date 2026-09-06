@@ -13,7 +13,7 @@ use uv_configuration::{
 };
 use uv_configuration::{KeyringProviderType, TargetTriple};
 use uv_dispatch::{BuildDispatch, SharedState};
-use uv_distribution::LoweredExtraBuildDependencies;
+use uv_distribution::{LoweredExtraBuildDependencies, LoweringContext};
 use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, ExtraBuildVariables, Index, IndexLocations, Name, Origin,
     PackageConfigSettings, Resolution,
@@ -99,6 +99,8 @@ pub(crate) async fn pip_sync(
     preview: Preview,
 ) -> Result<ExitStatus> {
     let client_builder = client_builder.clone().keyring(keyring_provider);
+    let lowering_context =
+        LoweringContext::new(&cache, &workspace_cache, client_builder.credentials_cache());
 
     // Initialize a few defaults.
     let overrides = &[];
@@ -135,6 +137,7 @@ pub(crate) async fn pip_sync(
         extras,
         Some(groups),
         &client_builder,
+        lowering_context,
     )
     .await?;
 
@@ -151,7 +154,7 @@ pub(crate) async fn pip_sync(
 
     // Read build constraints.
     let build_constraints =
-        operations::read_constraints(build_constraints, &client_builder).await?;
+        operations::read_constraints(build_constraints, &client_builder, lowering_context).await?;
 
     // Validate that the requirements are non-empty.
     if !allow_empty_requirements {

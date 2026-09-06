@@ -18,7 +18,7 @@ use uv_configuration::{
     DependencyGroupsWithDefaults, HashCheckingMode, IndexStrategy, KeyringProviderType, NoSources,
 };
 use uv_dispatch::{BuildDispatch, SharedState};
-use uv_distribution::LoweredExtraBuildDependencies;
+use uv_distribution::{LoweredExtraBuildDependencies, LoweringContext};
 use uv_distribution_filename::{
     DistFilename, SourceDistExtension, SourceDistFilename, WheelFilename,
 };
@@ -635,8 +635,12 @@ async fn build_package(
     .into_interpreter();
 
     // Read build constraints.
-    let build_constraints =
-        operations::read_constraints(build_constraints, &client_builder).await?;
+    let build_constraints = operations::read_constraints(
+        build_constraints,
+        &client_builder,
+        LoweringContext::new(cache, workspace_cache, client_builder.credentials_cache()),
+    )
+    .await?;
 
     // Collect the set of required hashes.
     let hasher = if let Some(hash_checking) = hash_checking {
