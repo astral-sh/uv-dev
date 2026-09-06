@@ -4336,6 +4336,243 @@ fn add_frozen() -> Result<()> {
     Ok(())
 }
 
+/// Add and update multiple requirements without repeatedly reformatting the dependency array.
+#[test]
+fn add_frozen_batch_dependencies() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = [
+            "alpha>=1",
+            "delta>=1",
+            "zulu>=1",
+        ]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.add().args(["echo", "bravo", "charlie"]).arg("--frozen").arg("--raw"), @"
+    exit_code: 0 (success)
+    ");
+
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "0.1.0"
+    requires-python = ">=3.12"
+    dependencies = [
+        "alpha>=1",
+        "bravo",
+        "charlie",
+        "delta>=1",
+        "echo",
+        "zulu>=1",
+    ]
+    "#);
+
+    uv_snapshot!(context.filters(), context.add().args(["zulu>=2", "alpha[two]>=2", "delta>=3", "alpha[three]"]).arg("--frozen").arg("--raw"), @"
+    exit_code: 0 (success)
+    ");
+
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "0.1.0"
+    requires-python = ">=3.12"
+    dependencies = [
+        "alpha[three,two]>=2",
+        "bravo",
+        "charlie",
+        "delta>=3",
+        "echo",
+        "zulu>=2",
+    ]
+    "#);
+
+    pyproject_toml.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = [
+            "a",
+            "a-c",
+        ]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.add().args(["a-b", "a[z]"]).arg("--frozen").arg("--raw"), @"
+    exit_code: 0 (success)
+    ");
+
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "0.1.0"
+    requires-python = ">=3.12"
+    dependencies = [
+        "a[z]",
+        "a-b",
+        "a-c",
+    ]
+    "#);
+
+    Ok(())
+}
+
+/// Interleaving legacy and standardized development dependencies keeps lower-bound indices valid.
+#[test]
+fn add_batch_dev_dependency_bounds() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_filtered_counts();
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+
+        [dependency-groups]
+        dev = []
+
+        [tool.uv]
+        dev-dependencies = ["idna>=3.6"]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.add().args(["iniconfig", "idna", "anyio"]).arg("--dev"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
+    Resolved [N] packages in [TIME]
+    Prepared [N] packages in [TIME]
+    Installed [N] packages in [TIME]
+     + anyio==4.3.0
+     + idna==3.6
+     + iniconfig==2.0.0
+     + sniffio==1.3.1
+    ");
+
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "0.1.0"
+    requires-python = ">=3.12"
+    dependencies = []
+
+    [dependency-groups]
+    dev = [
+        "anyio>=4.3.0",
+        "iniconfig>=2.0.0",
+    ]
+
+    [tool.uv]
+    dev-dependencies = [
+        "idna>=3.6",
+    ]
+    "#);
+    Ok(())
+}
+
+/// Route a large development batch without scanning unrelated dependency tables for each input.
+#[test]
+fn add_frozen_batch_dev_dependencies() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let production = (0..128)
+        .map(|index| format!("    \"production-{index:04}>=1\","))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let optional = (0..128)
+        .map(|index| format!("extra-{index:04} = [\"optional-{index:04}>=1\"]"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let groups = (0..128)
+        .map(|index| format!("group-{index:04} = [\"group-dependency-{index:04}>=1\"]"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&format!(
+            r#"[project]
+name = "project"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+{production}
+]
+
+[project.optional-dependencies]
+{optional}
+
+[dependency-groups]
+DEV = ["shared_name>=1; python_version >= '3.12'"]
+{groups}
+
+[tool.uv]
+dev-dependencies = ["legacy_only>=1", "shared-name<2; sys_platform == 'linux'"]
+"#
+        ))?;
+
+    let additions = (0..128)
+        .map(|index| format!("new-{index:04}"))
+        .collect::<Vec<_>>();
+    uv_snapshot!(context.filters(), context.add().args(&additions).arg("--dev").arg("--frozen").arg("--raw").arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
+    ");
+
+    let group_additions = (0..128)
+        .map(|index| format!("group-new-{index:04}"))
+        .collect::<Vec<_>>();
+    uv_snapshot!(context.filters(), context.add().args(&group_additions).args(["--group", "dev", "--frozen", "--raw", "--offline"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
+    ");
+
+    uv_snapshot!(context.filters(), context.add().args(["shared-name>=2; python_version >= '3.12'", "legacy-only>=2", "shared_name[two]; python_version >= '3.12'", "legacy_only[three]"]).arg("--dev").arg("--frozen").arg("--raw").arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
+    ");
+
+    let pyproject = context
+        .read("pyproject.toml")
+        .parse::<toml_edit::DocumentMut>()?;
+    let standardized = pyproject["dependency-groups"]["DEV"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("missing standardized dev group"))?
+        .iter()
+        .filter_map(toml_edit::Value::as_str)
+        .collect::<Vec<_>>();
+    let legacy = pyproject["tool"]["uv"]["dev-dependencies"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("missing legacy dev dependencies"))?
+        .iter()
+        .filter_map(toml_edit::Value::as_str)
+        .collect::<Vec<_>>();
+
+    assert_eq!(standardized.len(), 129);
+    assert_eq!(legacy.len(), 130);
+    assert_eq!(
+        standardized[128],
+        "shared-name[two]>=2 ; python_full_version >= '3.12'"
+    );
+    assert_eq!(legacy[0], "legacy-only[three]>=2");
+    assert_eq!(legacy[129], "shared-name<2; sys_platform == 'linux'");
+    assert_eq!(standardized[..128], group_additions);
+    assert_eq!(legacy[1..129], additions);
+
+    Ok(())
+}
+
 /// Add a requirement without updating the environment.
 #[test]
 fn add_no_sync() -> Result<()> {
