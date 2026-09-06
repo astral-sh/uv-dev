@@ -1,7 +1,7 @@
 use std::sync::{Arc, LazyLock};
 
 use anyhow::{anyhow, format_err};
-use http::{Extensions, StatusCode};
+use http::{Extensions, StatusCode, header::AUTHORIZATION};
 use reqwest::{Request, Response};
 use reqwest_middleware::{Error, Middleware, Next};
 use tokio::sync::Mutex;
@@ -337,6 +337,18 @@ impl Middleware for AuthMiddleware {
         extensions: &mut Extensions,
         next: Next<'_>,
     ) -> reqwest_middleware::Result<Response> {
+        let auth_policy = self.indexes.auth_policy_for(request.url());
+        if matches!(auth_policy, AuthPolicy::Never)
+            && (!request.url().username().is_empty()
+                || request.url().password().is_some()
+                || request.headers().contains_key(AUTHORIZATION))
+        {
+            let url = DisplaySafeUrl::from_url(request.url().clone());
+            return Err(Error::Middleware(format_err!(
+                "Credentials are not allowed for {url} because authentication is disabled"
+            )));
+        }
+
         // Check for credentials attached to the request already
         let request_credentials = Credentials::from_request(&request)?.map(Authentication::from);
 
@@ -344,7 +356,6 @@ impl Middleware for AuthMiddleware {
         // to the headers so for display purposes we restore some information
         let url = tracing_url(&request, request_credentials.as_ref());
         let index = self.indexes.index_for(request.url());
-        let auth_policy = self.indexes.auth_policy_for(request.url());
         trace!("Handling request for {url} with authentication policy {auth_policy}");
 
         let credentials: Option<Arc<Authentication>> = if matches!(auth_policy, AuthPolicy::Never) {
@@ -2369,15 +2380,24 @@ mod tests {
         url.set_username(username).unwrap();
         url.set_password(Some(password)).unwrap();
 
+        url.set_path("/foo");
+        let display_url = DisplaySafeUrl::from_url(base_url.join("foo")?);
+        let error = client.get(url).send().await.unwrap_err();
         assert_eq!(
-            client
-                .get(format!("{}/foo", server.uri()))
-                .send()
-                .await?
-                .status(),
-            401,
-            "Requests should not be completed if credentials are required"
+            error.to_string(),
+            format!(
+                "Credentials are not allowed for {display_url} because authentication is disabled"
+            )
         );
+
+        let error = client
+            .get(base_url.join("foo")?)
+            .basic_auth(username, Some(password))
+            .send()
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("authentication is disabled"));
+        assert!(server.received_requests().await.unwrap().is_empty());
 
         Ok(())
     }
@@ -2415,6 +2435,40 @@ mod tests {
             200,
             "Requests should succeed if unauthenticated requests can succeed"
         );
+
+        Ok(())
+    }
+
+    #[test(tokio::test)]
+    async fn test_auth_policy_never_rejects_authorization_headers() -> Result<(), Error> {
+        let server = MockServer::start().await;
+        let base_url = Url::parse(&server.uri())?;
+
+        let indexes = indexes_for(&base_url, AuthPolicy::Never);
+        let client = test_client_builder()
+            .with(
+                AuthMiddleware::new()
+                    .with_cache(CredentialsCache::new())
+                    .with_indexes(indexes),
+            )
+            .build();
+
+        for authorization in [
+            "Custom custom-secret",
+            "Basic invalid-base64",
+            "Basic dXNlcg==",
+        ] {
+            let error = client
+                .get(base_url.join("foo")?)
+                .header(AUTHORIZATION, authorization)
+                .send()
+                .await
+                .unwrap_err();
+            assert!(error.to_string().contains("authentication is disabled"));
+            assert!(!error.to_string().contains(authorization));
+        }
+
+        assert!(server.received_requests().await.unwrap().is_empty());
 
         Ok(())
     }
