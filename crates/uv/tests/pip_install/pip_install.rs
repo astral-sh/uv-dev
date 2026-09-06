@@ -6827,6 +6827,23 @@ fn install_package_basic_auth_invalid_utf8() {
     ");
 }
 
+/// Reject a colon in a URL-provided username.
+#[test]
+fn install_package_basic_auth_username_with_colon() {
+    let context = uv_test::test_context!("3.12");
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("anyio")
+        .arg("--index-url")
+        .arg("https://user%3Aname:password@example.com/simple")
+        .arg("--strict"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to parse credentials in index URL: https://user%3Aname:****@example.com/simple
+      Caused by: HTTP Basic Authentication username cannot contain a colon
+    ");
+}
+
 /// Install a package from an index that requires authentication
 #[tokio::test]
 async fn install_package_basic_auth_from_netrc_default() -> Result<()> {

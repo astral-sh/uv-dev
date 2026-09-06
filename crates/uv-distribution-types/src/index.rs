@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize, Serializer};
 use thiserror::Error;
 use url::Url;
 
-use uv_auth::{AuthPolicy, Credentials, CredentialsFromUrlError};
+use uv_auth::{AuthPolicy, Credentials, CredentialsFromUrlError, InvalidCredentialsError};
 use uv_pypi_types::HashAlgorithm;
 use uv_redacted::DisplaySafeUrl;
 use uv_small_str::SmallString;
@@ -272,11 +272,19 @@ pub struct Index {
 }
 
 #[derive(Debug, Error)]
-#[error("Failed to parse credentials in index URL: {url}")]
-pub struct IndexCredentialsError {
-    url: DisplaySafeUrl,
-    #[source]
-    source: CredentialsFromUrlError,
+pub enum IndexCredentialsError {
+    #[error("Failed to parse credentials in index URL: {url}")]
+    Url {
+        url: DisplaySafeUrl,
+        #[source]
+        source: CredentialsFromUrlError,
+    },
+    #[error("Failed to parse credentials for index `{name}` from the environment")]
+    Environment {
+        name: IndexName,
+        #[source]
+        source: InvalidCredentialsError,
+    },
 }
 
 impl PartialEq for Index {
@@ -527,7 +535,7 @@ impl Index {
         if self
             .name
             .as_ref()
-            .is_some_and(|name| Credentials::from_env(name.to_env_var()).is_some())
+            .is_some_and(|name| Credentials::has_env(name.to_env_var()))
         {
             return true;
         }
@@ -540,13 +548,20 @@ impl Index {
     pub fn credentials(&self) -> Result<Option<Credentials>, IndexCredentialsError> {
         // If the index is named, and credentials are provided via the environment, prefer those.
         if let Some(name) = self.name.as_ref() {
-            if let Some(credentials) = Credentials::from_env(name.to_env_var()) {
+            if let Some(credentials) =
+                Credentials::from_env(name.to_env_var()).map_err(|source| {
+                    IndexCredentialsError::Environment {
+                        name: name.clone(),
+                        source,
+                    }
+                })?
+            {
                 return Ok(Some(credentials));
             }
         }
 
         // Otherwise, extract the credentials from the URL.
-        Credentials::from_url(self.url.url()).map_err(|source| IndexCredentialsError {
+        Credentials::from_url(self.url.url()).map_err(|source| IndexCredentialsError::Url {
             url: self.url.url().clone(),
             source,
         })
