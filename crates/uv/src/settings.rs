@@ -1388,8 +1388,13 @@ impl ToolListSettings {
         let filesystem = ResolverInstallerOptions {
             indexes: IndexOptions {
                 index: top_level.index,
-                ..IndexOptions::default()
+                index_url: top_level.index_url,
+                extra_index_url: top_level.extra_index_url,
+                no_index: top_level.no_index,
+                find_links: top_level.find_links,
             },
+            index_strategy: top_level.index_strategy,
+            keyring_provider: top_level.keyring_provider,
             exclude_newer: top_level.exclude_newer,
             exclude_newer_package: top_level.exclude_newer_package,
             ..ResolverInstallerOptions::default()
