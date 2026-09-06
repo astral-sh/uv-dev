@@ -59,11 +59,12 @@ jobs:
           IS_LOCAL_PR: ${{ github.event.pull_request.head.repo.full_name == 'astral-sh/uv' }}
         id: plan
         run: |
+          # Use a valid PEP 440 placeholder for non-release builds; metadata-action validates disabled tags.
           if [ "${PUSH_DEV}" == "true" ] && [ "${IS_LOCAL_PR}" == "true" ]; then
             echo "login=true" >> "$GITHUB_OUTPUT"
             echo "push=true" >> "$GITHUB_OUTPUT"
             echo "push-version=false" >> "$GITHUB_OUTPUT"
-            echo "tag=sha" >> "$GITHUB_OUTPUT"
+            echo "tag=0.0.0" >> "$GITHUB_OUTPUT"
             echo "action=build and publish to uv-dev" >> "$GITHUB_OUTPUT"
           elif [ "${DRY_RUN}" == "false" ]; then
             echo "login=true" >> "$GITHUB_OUTPUT"
@@ -75,7 +76,7 @@ jobs:
             echo "login=${IS_LOCAL_PR}" >> "$GITHUB_OUTPUT"
             echo "push=false" >> "$GITHUB_OUTPUT"
             echo "push-version=false" >> "$GITHUB_OUTPUT"
-            echo "tag=dry-run" >> "$GITHUB_OUTPUT"
+            echo "tag=0.0.0" >> "$GITHUB_OUTPUT"
             echo "action=build" >> "$GITHUB_OUTPUT"
           fi
 
@@ -295,8 +296,10 @@ jobs:
             if [ "${PUSH_DEV}" == "true" ]; then
               TAG_PATTERNS="${TAG_PATTERNS}type=sha,suffix=-${TAG}\n"
             else
-              TAG_PATTERNS="${TAG_PATTERNS}type=pep440,pattern={{ version }},suffix=-${TAG},value=${VERSION}\n"
-              TAG_PATTERNS="${TAG_PATTERNS}type=pep440,pattern={{ major }}.{{ minor }},suffix=-${TAG},value=${VERSION}\n"
+              if [ "${PUSH_VERSION}" == "true" ]; then
+                TAG_PATTERNS="${TAG_PATTERNS}type=pep440,pattern={{ version }},suffix=-${TAG},value=${VERSION}\n"
+                TAG_PATTERNS="${TAG_PATTERNS}type=pep440,pattern={{ major }}.{{ minor }},suffix=-${TAG},value=${VERSION}\n"
+              fi
               TAG_PATTERNS="${TAG_PATTERNS}type=raw,value=${TAG}\n"
             fi
           done
@@ -313,6 +316,7 @@ jobs:
         env:
           VERSION: ${{ needs.docker-plan.outputs.tag }}
           PUSH_DEV: ${{ inputs.push-dev }}
+          PUSH_VERSION: ${{ needs.docker-plan.outputs.push-version }}
           # Use the tag from the base image we just pushed; fall back to `latest` on dry-runs
           # since the base image isn't pushed to the registry.
           UV_BASE_TAG: ${{ needs.docker-plan.outputs.push == 'true' && needs.docker-publish-base.outputs.image-version || 'latest' }}
