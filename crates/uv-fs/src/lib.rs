@@ -18,6 +18,7 @@ use encoding_rs_io::DecodeReaderBytes;
 #[cfg(target_os = "linux")]
 use rustix::fs::{AtFlags, CWD as RUSTIX_CWD, StatxFlags, statx};
 use tempfile::NamedTempFile;
+use thiserror::Error;
 use tracing::{debug, warn};
 #[cfg(windows)]
 use windows::Win32::Foundation::HANDLE;
@@ -800,6 +801,41 @@ pub fn persist_with_retry_sync(
     {
         fs_err::rename(from, to)
     }
+}
+
+/// An error opening a directory or reading and filtering its entries.
+#[derive(Debug, Error)]
+pub enum ReadDirError {
+    /// The directory could not be opened.
+    #[error(transparent)]
+    Open(io::Error),
+    /// Reading an entry or applying the filter failed.
+    #[error(transparent)]
+    Read(io::Error),
+}
+
+/// Read a directory, returning the accepted paths in ascending [`PathBuf`] order.
+///
+/// The filter runs in directory enumeration order, before collection and sorting. Use `|_| Ok(true)`
+/// to include every entry. Accepted paths are collected into a [`Vec`] and sorted in place; no
+/// deduplication is performed. The first error stops the scan and is returned without partial results.
+///
+/// Opening errors are distinguished from reading and filtering errors so callers can handle a
+/// missing directory without suppressing errors encountered while processing its entries.
+pub fn read_dir_sorted(
+    path: impl AsRef<Path>,
+    mut filter: impl FnMut(&fs_err::DirEntry) -> io::Result<bool>,
+) -> Result<Vec<PathBuf>, ReadDirError> {
+    let entries = fs_err::read_dir(path.as_ref()).map_err(ReadDirError::Open)?;
+    let mut paths = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(ReadDirError::Read)?;
+        if filter(&entry).map_err(ReadDirError::Read)? {
+            paths.push(entry.path());
+        }
+    }
+    paths.sort_unstable();
+    Ok(paths)
 }
 
 /// Iterate over the subdirectories of a directory.

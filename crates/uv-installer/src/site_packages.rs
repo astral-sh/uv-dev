@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use anyhow::{Context, Result};
-use fs_err as fs;
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 
 use uv_configuration::{ExcludeDependency, Excludes, Override, Overrides};
@@ -14,7 +13,7 @@ use uv_distribution_types::{
     InstalledDist, InstalledDistKind, Name, NameRequirementSpecification, PackageConfigSettings,
     Requirement, UnresolvedRequirement, UnresolvedRequirementSpecification,
 };
-use uv_fs::Simplified;
+use uv_fs::{ReadDirError, Simplified};
 use uv_normalize::PackageName;
 use uv_pep440::{Version, VersionSpecifiers};
 use uv_pep508::VersionOrUrl;
@@ -75,18 +74,29 @@ impl SitePackages {
         let mut by_url: FxHashMap<DisplaySafeUrl, Vec<usize>> = FxHashMap::default();
 
         for site_packages in interpreter.site_packages() {
-            // Read the site-packages directory.
-            let site_packages = match fs::read_dir(site_packages.as_ref()) {
-                Ok(read_dir) => sorted_dist_like_paths(read_dir).with_context(|| {
-                    format!(
-                        "Failed to read site-packages directory contents: {}",
-                        site_packages.user_display()
-                    )
-                })?,
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            // Read distribution-like paths in deterministic order.
+            let site_packages = match uv_fs::read_dir_sorted(site_packages.as_ref(), |entry| {
+                Ok(entry.file_type()?.is_dir()
+                    || entry
+                        .path()
+                        .extension()
+                        .is_some_and(|ext| ext == "egg-link" || ext == "egg-info"))
+            }) {
+                Ok(paths) => paths,
+                Err(ReadDirError::Open(err)) if err.kind() == std::io::ErrorKind::NotFound => {
                     continue;
                 }
-                Err(err) => return Err(err).context("Failed to read site-packages directory"),
+                Err(ReadDirError::Open(err)) => {
+                    return Err(err).context("Failed to read site-packages directory");
+                }
+                Err(ReadDirError::Read(err)) => {
+                    return Err(err).with_context(|| {
+                        format!(
+                            "Failed to read site-packages directory contents: {}",
+                            site_packages.user_display()
+                        )
+                    });
+                }
             };
 
             // Index all installed packages by name.
@@ -655,25 +665,6 @@ impl IntoIterator for SitePackages {
     }
 }
 
-fn sorted_dist_like_paths(read_dir: fs::ReadDir) -> Result<Vec<PathBuf>, std::io::Error> {
-    let mut paths = read_dir
-        .filter_map(|read_dir| match read_dir {
-            Ok(entry) => match entry.file_type() {
-                Ok(file_type) => (file_type.is_dir()
-                    || entry
-                        .path()
-                        .extension()
-                        .is_some_and(|ext| ext == "egg-link" || ext == "egg-info"))
-                .then_some(Ok(entry.path())),
-                Err(err) => Some(Err(err)),
-            },
-            Err(err) => Some(Err(err)),
-        })
-        .collect::<Result<Vec<_>, std::io::Error>>()?;
-    paths.sort_unstable();
-    Ok(paths)
-}
-
 #[derive(Debug)]
 pub enum SitePackagesDiagnostic {
     MetadataUnavailable {
@@ -797,64 +788,47 @@ impl InstalledPackagesProvider for SitePackages {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
-    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
     use anyhow::Result;
-    #[cfg(unix)]
     use uv_cache::Cache;
-    #[cfg(unix)]
     use uv_distribution_types::Name;
-    #[cfg(unix)]
     use uv_python::Interpreter;
 
-    #[cfg(unix)]
     use super::SitePackages;
-    use super::sorted_dist_like_paths;
-
-    #[test]
-    fn sorted_dist_like_paths_filters_and_sorts() -> Result<()> {
-        let site_packages = tempfile::tempdir()?;
-        fs_err::create_dir(site_packages.path().join("z_package-1.0.0.dist-info"))?;
-        fs_err::create_dir(site_packages.path().join("a_package"))?;
-        fs_err::write(site_packages.path().join("editable.egg-link"), "")?;
-        fs_err::write(site_packages.path().join("module.py"), "")?;
-        fs_err::write(site_packages.path().join("metadata.egg-info"), "")?;
-
-        let paths = sorted_dist_like_paths(fs_err::read_dir(site_packages.path())?)?;
-        let names = paths
-            .iter()
-            .filter_map(|path| path.file_name())
-            .map(|name| name.to_string_lossy().into_owned())
-            .collect::<Vec<_>>();
-
-        assert_eq!(
-            names,
-            vec![
-                "a_package".to_string(),
-                "editable.egg-link".to_string(),
-                "metadata.egg-info".to_string(),
-                "z_package-1.0.0.dist-info".to_string(),
-            ]
-        );
-
-        Ok(())
-    }
 
     /// A missing `purelib` directory must not prevent indexing an existing, distinct `platlib`.
-    #[cfg(unix)]
     #[tokio::test]
     async fn site_packages_scans_platlib_when_purelib_is_missing() -> Result<()> {
         let temp_dir = tempfile::tempdir()?;
         let purelib = temp_dir.path().join("purelib");
         let platlib = temp_dir.path().join("platlib");
-        let dist_info = platlib.join("demo-1.0.dist-info");
+        let dist_info = platlib.join("z_package-1.0.dist-info");
         fs_err::create_dir_all(&dist_info)?;
         fs_err::write(
             dist_info.join("METADATA"),
-            "Metadata-Version: 2.1\nName: demo\nVersion: 1.0\n",
+            "Metadata-Version: 2.1\nName: z-package\nVersion: 1.0\n",
+        )?;
+
+        // Include both legacy file formats and unrelated entries, created out of sorted order.
+        fs_err::write(platlib.join("module.py"), "")?;
+        fs_err::create_dir(platlib.join("ordinary_package"))?;
+        let editable = temp_dir.path().join("editable");
+        let egg_info = editable.join("b_editable.egg-info");
+        fs_err::create_dir_all(&egg_info)?;
+        fs_err::write(
+            egg_info.join("PKG-INFO"),
+            "Metadata-Version: 2.1\nName: b-editable\nVersion: 1.0\n",
+        )?;
+        fs_err::write(
+            platlib.join("b_editable.egg-link"),
+            format!("{}\n", editable.display()),
+        )?;
+        fs_err::write(
+            platlib.join("a_package.egg-info"),
+            "Metadata-Version: 2.1\nName: a-package\nVersion: 1.0\n",
         )?;
 
         let executable = temp_dir.path().join("python");
@@ -917,7 +891,7 @@ mod tests {
                 .iter()
                 .map(|distribution| distribution.name().as_ref())
                 .collect::<Vec<_>>(),
-            ["demo"]
+            ["a-package", "b-editable", "z-package"]
         );
 
         Ok(())
