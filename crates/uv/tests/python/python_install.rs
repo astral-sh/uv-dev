@@ -197,6 +197,41 @@ fn python_reinstall_patch() {
 }
 
 #[test]
+fn python_install_manual() {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_filtered_python_sources()
+        .with_managed_python_dirs();
+
+    uv_snapshot!(context.filters(), context.run()
+        .env_remove(EnvVars::VIRTUAL_ENV)
+        .env(EnvVars::UV_PYTHON_DOWNLOADS, "manual")
+        .arg("--python")
+        .arg(">=3.13,<3.14")
+        .arg("python")
+        .arg("--version"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: No interpreter found for Python >=3.13, <3.14 in [PYTHON SOURCES]
+
+    hint: A managed Python download is available for Python >=3.13, <3.14, but Python downloads are set to 'manual', use `uv python install >=3.13, <3.14` to install the required version
+    ");
+
+    uv_snapshot!(context.filters(), context.run()
+        .env_remove(EnvVars::VIRTUAL_ENV)
+        .env(EnvVars::UV_PYTHON_DOWNLOADS, "manual")
+        .arg("--python")
+        .arg("3.13")
+        .arg("python")
+        .arg("--version"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: No interpreter found for Python 3.13 in [PYTHON SOURCES]
+
+    hint: A managed Python download is available for Python 3.13, but Python downloads are set to 'manual', use `uv python install 3.13` to install the required version
+    ");
+}
+
+#[test]
 fn python_install_automatic() {
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
