@@ -6021,6 +6021,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uv-cache",
+ "uv-cache-key",
  "uv-client",
  "uv-configuration",
  "uv-distribution-types",

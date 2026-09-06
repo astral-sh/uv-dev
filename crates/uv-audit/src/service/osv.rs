@@ -18,6 +18,7 @@ use futures::{StreamExt as _, TryStreamExt as _};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use uv_cache::{Cache, CacheBucket, CacheEntry};
+use uv_cache_key::cache_digest;
 use uv_client::{CacheControl, CachedClient, CachedClientError};
 use uv_configuration::Concurrency;
 use uv_normalize::PackageName;
@@ -40,6 +41,9 @@ pub enum Error {
     /// An error when constructing the URL for an API request.
     #[error("Invalid API URL: {0}")]
     Url(DisplaySafeUrl, #[source] DisplaySafeUrlError),
+    /// The configured API URL cannot be used as a base URL.
+    #[error("Invalid API base URL: {0}")]
+    BaseUrl(DisplaySafeUrl),
     /// An error when OSV returns an invalid vulnerability record.
     #[error("OSV returned a malformed vulnerability record for `{id}`")]
     MalformedRecord {
@@ -259,7 +263,10 @@ impl Osv {
     /// Return a [`CacheEntry`] for a full vulnerability record.
     fn vuln_cache_entry(&self, id: &str) -> CacheEntry {
         let bucket = self.cache.bucket(CacheBucket::Osv);
-        CacheEntry::new(bucket.join("vulnerability"), format!("{id}.msgpack"))
+        CacheEntry::new(
+            bucket.join("vulnerability"),
+            format!("{}.msgpack", cache_digest(&id)),
+        )
     }
 
     /// Query OSV for vulnerabilities affecting the given dependencies, returning only vulnerability IDs.
@@ -392,10 +399,15 @@ impl Osv {
     /// a synthetic `Cache-Control: max-age=600` header, since OSV itself does
     /// not send caching headers.
     async fn fetch_vuln(&self, id: &str) -> Result<Vulnerability, Error> {
-        let url = self
+        let mut url = self
             .base_url
-            .join(&format!("v1/vulns/{id}"))
+            .join("v1/vulns/")
             .map_err(|e| Error::Url(self.base_url.clone(), e))?;
+        if let Ok(mut segments) = url.path_segments_mut() {
+            segments.pop_if_empty().push(id);
+        } else {
+            return Err(Error::BaseUrl(self.base_url.clone()));
+        }
 
         let cache_entry = self.vuln_cache_entry(id);
         let req = self
@@ -513,10 +525,12 @@ impl Osv {
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsStr;
     use std::str::FromStr;
 
     use serde_json::json;
-    use uv_cache::Cache;
+    use uv_cache::{Cache, CacheBucket};
+    use uv_cache_key::cache_digest;
     use uv_client::{BaseClientBuilder, CachedClient};
     use uv_configuration::Concurrency;
     use uv_normalize::PackageName;
@@ -892,6 +906,53 @@ mod tests {
             3,
             "Expected one querybatch request and two vuln detail requests"
         );
+    }
+
+    /// Ensure that vulnerability IDs are treated as opaque values in URLs and cache paths.
+    #[tokio::test]
+    async fn test_fetch_vuln_opaque_id() {
+        let server = MockServer::start().await;
+        let id = "../../escape\\path?query#fragment";
+
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": id,
+                "modified": "2026-01-01T00:00:00Z",
+            })))
+            .mount(&server)
+            .await;
+
+        let cache = Cache::temp().unwrap();
+        let osv = Osv::new(
+            test_client(),
+            Some(DisplaySafeUrl::parse(&server.uri()).unwrap()),
+            Concurrency::default(),
+            cache.clone(),
+        );
+
+        let vulnerability = osv
+            .fetch_vuln(id)
+            .await
+            .expect("Failed to fetch vulnerability");
+        assert_eq!(vulnerability.id, id);
+
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(
+            requests[0].url.path(),
+            "/v1/vulns/..%2F..%2Fescape%5Cpath%3Fquery%23fragment"
+        );
+        assert_eq!(requests[0].url.query(), None);
+        assert_eq!(requests[0].url.fragment(), None);
+
+        let cache_entry = osv.vuln_cache_entry(id);
+        assert_eq!(
+            cache_entry.dir(),
+            cache.bucket(CacheBucket::Osv).join("vulnerability")
+        );
+        let filename = format!("{}.msgpack", cache_digest(&id));
+        assert_eq!(cache_entry.path().file_name(), Some(OsStr::new(&filename)));
+        assert!(cache_entry.path().is_file());
     }
 
     /// Ensure that `query_batch` correctly handles pagination: only the deps whose results
