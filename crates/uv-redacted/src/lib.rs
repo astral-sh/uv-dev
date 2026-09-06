@@ -71,19 +71,14 @@ pub struct DisplaySafeUrl(Url);
 /// rather than credentials. This is important for handling nested URLs like proxy URLs:
 /// `git+https://proxy.com/https://github.com/user/repo.git@branch`.
 fn has_credential_like_pattern(s: &str) -> bool {
-    let mut remaining = s;
-    while let Some(colon_pos) = remaining.find(':') {
-        let after_colon = &remaining[colon_pos + 1..];
-        // If the colon is followed by "//", consider it a URL scheme.
-        if after_colon.starts_with("//") {
-            remaining = after_colon;
-            continue;
-        }
-        // Check if there's an @ after this colon.
-        if after_colon.contains('@') {
+    let bytes = s.as_bytes();
+    let mut credential_like_colon = false;
+    for (index, byte) in bytes.iter().enumerate() {
+        if *byte == b':' && !bytes[index + 1..].starts_with(b"//") {
+            credential_like_colon = true;
+        } else if *byte == b'@' && credential_like_colon {
             return true;
         }
-        remaining = after_colon;
     }
     false
 }
@@ -716,5 +711,20 @@ mod tests {
 
         assert!(has_credential_like_pattern("/name:password@domain/a/b/c"));
         assert!(has_credential_like_pattern(":password@domain"));
+    }
+
+    #[test]
+    fn credential_like_pattern_many_colons() {
+        let path = format!("/{}", "name:".repeat(32_768));
+        assert!(!has_credential_like_pattern(&path));
+
+        let ambiguous = format!("{path}password@domain/a/b/c");
+        assert!(has_credential_like_pattern(&ambiguous));
+
+        let nested = format!(
+            "/{}repo.git@branch",
+            "https://proxy.example.com/".repeat(512)
+        );
+        assert!(!has_credential_like_pattern(&nested));
     }
 }
