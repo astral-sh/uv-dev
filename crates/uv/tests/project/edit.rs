@@ -3033,9 +3033,10 @@ fn add_relative_and_absolute_paths() -> Result<()> {
      + absolute-dep==0.1.0 (from file://[TEMP_DIR]/absolute_dep)
     ");
 
-    // Add a dependency using a file:// URL (also absolute).
+    // Add a dependency using a mixed-case file:// URL (also absolute).
     let file_url = Url::from_file_path(file_url_dep.path()).unwrap();
-    uv_snapshot!(context.filters(), context.add().arg(file_url.as_str()).current_dir(project.path()), @"
+    let file_url = file_url.as_str().replacen("file:", "FiLe:", 1);
+    uv_snapshot!(context.filters(), context.add().arg(file_url).current_dir(project.path()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 4 packages in [TIME]
