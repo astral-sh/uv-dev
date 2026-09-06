@@ -19344,8 +19344,30 @@ fn lock_regenerates_dependencies_without_metadata() -> Result<()> {
     Resolved 10 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
+    hint: The existing lockfile uses the `lock-without-metadata` preview format, but that preview feature is not enabled. To keep using this format, pass `--preview-features lock-without-metadata`.
+
     hint: To update the lockfile, run `uv lock`.
     ");
+
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--locked")
+        .arg("--only-group")
+        .arg("dev")
+        .arg("--index-url")
+        .arg(server.index_url())
+        .arg("python")
+        .arg("-c")
+        .arg("pass"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 10 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: The existing lockfile uses the `lock-without-metadata` preview format, but that preview feature is not enabled. To keep using this format, pass `--preview-features lock-without-metadata`.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    assert_eq!(context.read("uv.lock"), lock.to_string());
 
     uv_snapshot!(context.filters(), context.lock()
         .arg("--preview-features")
