@@ -1204,7 +1204,19 @@ impl RegistryClient {
             match result {
                 Ok(metadata) => return Ok(metadata),
                 Err(err) => {
-                    if err.is_http_range_requests_unsupported(url, index) {
+                    if err.is_http_range_request_failure() {
+                        if self.metadata_range_request == MetadataRangeRequest::Require {
+                            return Err(ErrorKind::MetadataRangeRequestsRequired(
+                                url.clone(),
+                                Box::new(err),
+                            )
+                            .into());
+                        }
+
+                        // The request failed, but a full GET may still succeed. Do not disable
+                        // ranges for other wheels on this index based on an artifact-level failure.
+                        warn!("Range request failed for {filename}; streaming wheel");
+                    } else if err.is_http_range_requests_unsupported(url, index) {
                         if self.metadata_range_request == MetadataRangeRequest::Require {
                             return Err(ErrorKind::MetadataRangeRequestsRequired(
                                 url.clone(),

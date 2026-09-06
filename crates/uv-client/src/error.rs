@@ -364,6 +364,69 @@ impl Error {
         false
     }
 
+    /// Returns `true` if a range read failed while requesting or receiving bytes.
+    ///
+    /// Such failures can be specific to an artifact or its signed URL and do not establish that
+    /// the entire index lacks range support.
+    pub(crate) fn is_http_range_request_failure(&self) -> bool {
+        let range_error = match &*self.kind {
+            ErrorKind::AsyncHttpRangeReader(_, err) => Some(err),
+            ErrorKind::Zip(_, ZipError::UpstreamReadError(err)) => err
+                .get_ref()
+                .and_then(|err| err.downcast_ref::<AsyncHttpRangeReaderError>()),
+            ErrorKind::InvalidUrl(_)
+            | ErrorKind::Flat(_)
+            | ErrorKind::Git(_)
+            | ErrorKind::MissingWheelGitLfsArtifacts(..)
+            | ErrorKind::NonFileUrl(_)
+            | ErrorKind::CannotBeABase(_)
+            | ErrorKind::Metadata(..)
+            | ErrorKind::NoIndex(_)
+            | ErrorKind::RemotePackageNotFound(_)
+            | ErrorKind::LocalPackageNotFound(_)
+            | ErrorKind::LocalIndexNotFound(_)
+            | ErrorKind::MetadataParseError(..)
+            | ErrorKind::WrappedReqwestError(..)
+            | ErrorKind::BadJson { .. }
+            | ErrorKind::BadHtml { .. }
+            | ErrorKind::MetadataRangeRequestsRequired(..)
+            | ErrorKind::WheelFilename(_)
+            | ErrorKind::NameMismatch { .. }
+            | ErrorKind::Zip(..)
+            | ErrorKind::CacheWrite(_)
+            | ErrorKind::CacheLock(_)
+            | ErrorKind::Io(_)
+            | ErrorKind::Decode(_)
+            | ErrorKind::Encode(_)
+            | ErrorKind::MissingContentType(_)
+            | ErrorKind::InvalidContentTypeHeader(..)
+            | ErrorKind::UnsupportedMediaType(..)
+            | ErrorKind::ArchiveRead(_)
+            | ErrorKind::ArchiveWrite(_)
+            | ErrorKind::Offline(_) => None,
+        };
+        match range_error {
+            Some(
+                AsyncHttpRangeReaderError::HttpError(_)
+                | AsyncHttpRangeReaderError::TransportError(_)
+                | AsyncHttpRangeReaderError::IoError(_),
+            ) => true,
+            Some(
+                AsyncHttpRangeReaderError::HttpRangeRequestUnsupported
+                | AsyncHttpRangeReaderError::ContentRangeMissing
+                | AsyncHttpRangeReaderError::ContentLengthMissing
+                | AsyncHttpRangeReaderError::MemoryMapError(_)
+                | AsyncHttpRangeReaderError::ContentRangeParser(_)
+                | AsyncHttpRangeReaderError::RangeMismatch { .. }
+                | AsyncHttpRangeReaderError::ResponseTooLong { .. }
+                | AsyncHttpRangeReaderError::ResponseTooShort { .. },
+            )
+            | None => false,
+            // The dependency marks `AsyncHttpRangeReaderError` as non-exhaustive.
+            Some(_) => false,
+        }
+    }
+
     /// Returns `true` if the error is due to the server not supporting HTTP streaming. Most
     /// commonly, this is due to serving ZIP files with features that are incompatible with
     /// streaming, like data descriptors.
