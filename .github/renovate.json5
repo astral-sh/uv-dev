@@ -99,6 +99,32 @@
       description: "version-ranges and pubgrub are in the same Git repository",
     },
     {
+      matchFileNames: [
+        ".python-versions",
+        "crates/uv/tests/**/*.rs",
+        "test/scenarios/**/*.toml",
+      ],
+      matchManagers: ["custom.regex"],
+      matchDatasources: ["python-version"],
+      matchDepNames: ["python"],
+      // Roll patches together; adding a new minor is a test coverage decision.
+      allowedVersions: "/^{{{major}}}\\.{{{minor}}}\\.\\d+$/",
+      groupName: "Python test versions",
+    },
+    {
+      // 3.13.0 is needed for `==3.13` tests and as a comparison baseline.
+      // 3.14.0rc2 covers prereleases; neither version should roll.
+      matchFileNames: [
+        ".python-versions",
+        "crates/uv/tests/**/*.rs",
+        "test/scenarios/**/*.toml",
+      ],
+      matchManagers: ["custom.regex"],
+      matchDatasources: ["python-version"],
+      matchCurrentValue: "/^(3\\.13\\.0|3\\.14\\.0rc2)$/",
+      enabled: false,
+    },
+    {
       commitMessageTopic: "MSRV",
       matchManagers: ["custom.regex"],
       matchDepNames: ["msrv"],
@@ -122,6 +148,70 @@
     },
   ],
   customManagers: [
+    {
+      customType: "regex",
+      managerFilePatterns: ["/^\\.python-versions$/"],
+      matchStrings: ["\\n(?<currentValue>3\\.\\d+\\.\\d+\\S*)"],
+      depNameTemplate: "python",
+      datasourceTemplate: "python-version",
+      versioningTemplate: "python",
+    },
+    // Update interpreter requests and their snapshots within the same test.
+    {
+      customType: "regex",
+      managerFilePatterns: [
+        "/^crates/uv/tests/(?:pip_compile/pip_compile|python/venv)\\.rs$/",
+      ],
+      matchStringsStrategy: "recursive",
+      matchStrings: [
+        "fn (?:emit_marker_expression_exciting_linux|emit_marker_expression_direct|emit_marker_expression_pypy|create_venv_python_patch)\\(\\)(?: -> Result<\\(\\)>)? \\{[\\s\\S]*?\\n\\}",
+        "(?<currentValue>3\\.12\\.\\d+)",
+      ],
+      depNameTemplate: "python",
+      datasourceTemplate: "python-version",
+      versioningTemplate: "python",
+    },
+    // Compare fixed 3.13.0 with a rolling 3.13 patch in the lock test.
+    {
+      customType: "regex",
+      managerFilePatterns: ["/^crates/uv/tests/lock/lock\\.rs$/"],
+      matchStringsStrategy: "recursive",
+      matchStrings: [
+        "fn lock_requires_python_empty_lock_file\\(\\) -> Result<\\(\\)> \\{[\\s\\S]*?\\n\\}",
+        "(?<currentValue>3\\.13\\.\\d+)",
+      ],
+      depNameTemplate: "python",
+      datasourceTemplate: "python-version",
+      versioningTemplate: "python",
+    },
+    // Update the selected 3.9 interpreter and the warning that reports it.
+    {
+      customType: "regex",
+      managerFilePatterns: [
+        "/^crates/uv/tests/pip/pip_compile_scenarios\\.rs$/",
+      ],
+      matchStrings: [
+        "python(?<currentValue>3\\.9\\.\\d+)",
+        'test_context!\\("(?<currentValue>3\\.9\\.\\d+)"\\)',
+        "3\\.9\\.0 is not available; (?<currentValue>3\\.9\\.\\d+) will be used",
+      ],
+      depNameTemplate: "python",
+      datasourceTemplate: "python-version",
+      versioningTemplate: "python",
+    },
+    // These environments use the 3.9 interpreter selected by their Rust tests.
+    {
+      customType: "regex",
+      managerFilePatterns: [
+        "/^test/scenarios/requires_python/python-patch-override-(?:no-patch|patch-compatible)\\.toml$/",
+      ],
+      matchStrings: [
+        '\\[environment\\]\\npython = "(?<currentValue>3\\.9\\.\\d+)"',
+      ],
+      depNameTemplate: "python",
+      datasourceTemplate: "python-version",
+      versioningTemplate: "python",
+    },
     // Update major GitHub actions references in documentation.
     {
       customType: "regex",
