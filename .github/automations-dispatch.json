@@ -136,6 +136,24 @@
         "run": "/workflow_run/id",
         "head_sha": "/workflow_run/head_sha"
       }
+    },
+    {
+      "repository": "uv-dev",
+      "on": {
+        "push": []
+      },
+      "conditions": {
+        "/created": false,
+        "/deleted": false,
+        "/forced": true,
+        "/ref": { "not": "refs/heads/main" }
+      },
+      "workflow": "pull-request-conflicts.yml",
+      "inputs": {
+        "base_ref": "/ref",
+        "base_sha": "/after",
+        "base_previous_sha": "/before"
+      }
     }
   ]
 }

@@ -13,19 +13,27 @@ on:
         description: "The expected pull request head SHA"
         required: false
         type: string
+      base_ref:
+        description: "The updated uv-dev base ref whose stacked pull requests should be rebased"
+        required: false
+        type: string
+      base_sha:
+        description: "The expected updated uv-dev base SHA"
+        required: false
+        type: string
       base_previous_ref:
         description: "The previous base branch of a retargeted pull request"
         required: false
         type: string
       base_previous_sha:
-        description: "The previous base SHA from the signed base-change event"
+        description: "The previous uv-dev base SHA from the dispatch event"
         required: false
         type: string
 
 permissions: {}
 
 concurrency:
-  group: pull-request-conflicts-${{ inputs.pull_request || 'main' }}
+  group: pull-request-conflicts-${{ inputs.pull_request || inputs.base_ref || 'main' }}
   # Let an in-progress rebase finish; newer pushes replace the single pending run.
   cancel-in-progress: false
 
@@ -34,7 +42,7 @@ env:
 
 jobs:
   identify:
-    name: Identify conflicted pull requests
+    name: Identify pull requests to rebase
     if: github.repository == 'astral-sh/uv-dev' || github.repository == 'astral-sh/uv'
     runs-on: ubuntu-slim
     timeout-minutes: 5
@@ -49,18 +57,20 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Identify conflicted pull requests
+      - name: Identify pull requests to rebase
         id: identify
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           EXPECTED_HEAD_SHA: ${{ inputs.head_sha }}
+          EXPECTED_BASE_SHA: ${{ inputs.base_sha }}
           BASE_PREVIOUS_REF: ${{ inputs.base_previous_ref }}
           BASE_PREVIOUS_SHA: ${{ inputs.base_previous_sha }}
+          BASE_REF: ${{ inputs.base_ref }}
           PULL_REQUEST_NUMBER: ${{ inputs.pull_request }}
         run: |
           if [ -n "$PULL_REQUEST_NUMBER" ]; then
-            if ! [[ "$PULL_REQUEST_NUMBER" =~ ^[1-9][0-9]*$ ]] || ! [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            if [ -n "$BASE_REF" ] || [ -n "$EXPECTED_BASE_SHA" ] || ! [[ "$PULL_REQUEST_NUMBER" =~ ^[1-9][0-9]*$ ]] || ! [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
               echo "The dispatched pull request context is invalid." >&2
               exit 1
             fi
@@ -93,7 +103,22 @@ jobs:
                 '[{number, url: .html_url, base_ref: .base.ref, base_previous_sha: $base_previous_sha, head_ref: .head.ref, head_sha: .head.sha, head_repository: .head.repo.full_name}]' \
                 <<< "$pull_request"
             )
-          elif [ -n "$EXPECTED_HEAD_SHA" ] || [ -n "$BASE_PREVIOUS_REF" ] || [ -n "$BASE_PREVIOUS_SHA" ]; then
+          elif [ -n "$BASE_REF" ]; then
+            if [[ "$GH_REPO" != "astral-sh/uv-dev" ]] || [ -n "$EXPECTED_HEAD_SHA" ] || [ -n "$BASE_PREVIOUS_REF" ] || [[ "$BASE_REF" != refs/heads/* ]] || ! git check-ref-format "$BASE_REF" || ! [[ "$EXPECTED_BASE_SHA" =~ ^[0-9a-f]{40}$ ]] || ! [[ "$BASE_PREVIOUS_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "The dispatched base context is invalid." >&2
+              exit 1
+            fi
+
+            current_base=$(git ls-remote --exit-code --refs https://github.com/astral-sh/uv-dev.git "$BASE_REF" | cut -f1)
+            if [ "$current_base" != "$EXPECTED_BASE_SHA" ]; then
+              echo "The uv-dev base changed after the push; skipping the stale stack rebase." >&2
+              pull_requests='[]'
+            else
+              base_branch=${BASE_REF#refs/heads/}
+              stacked_pull_requests=$(gh pr list --base "$base_branch" --state open --limit 1000 --json number,url,baseRefName,headRefName,headRefOid,headRepository)
+              pull_requests=$(jq --compact-output --arg base_ref "$base_branch" --arg base_previous_sha "$BASE_PREVIOUS_SHA" '[.[] | select(.baseRefName == $base_ref) | {number, url, base_ref: .baseRefName, base_previous_sha: $base_previous_sha, head_ref: .headRefName, head_sha: .headRefOid, head_repository: (.headRepository.nameWithOwner // "")}]' <<< "$stacked_pull_requests")
+            fi
+          elif [ -n "$EXPECTED_HEAD_SHA" ] || [ -n "$EXPECTED_BASE_SHA" ] || [ -n "$BASE_PREVIOUS_REF" ] || [ -n "$BASE_PREVIOUS_SHA" ]; then
             echo "The dispatched rebase context is incomplete." >&2
             exit 1
           elif [[ "$GH_REPO" == "astral-sh/uv" ]]; then
