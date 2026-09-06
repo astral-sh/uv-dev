@@ -29996,6 +29996,136 @@ fn lock_group_workspace() -> Result<()> {
     Ok(())
 }
 
+/// Workspace lookahead should select each source-tree group once, even when legacy `dev`
+/// dependencies add a duplicate requested group.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_many_workspace_groups() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [tool.uv.workspace]
+        members = ["child"]
+        "#,
+    )?;
+
+    context
+        .temp_dir
+        .child("child")
+        .child("pyproject.toml")
+        .write_str(
+            r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [dependency-groups]
+        alpha-00 = []
+        alpha-01 = []
+        alpha-02 = []
+        alpha-03 = []
+        alpha-04 = []
+        alpha-05 = []
+        alpha-06 = []
+        alpha-07 = []
+        alpha-08 = []
+        alpha-09 = []
+        alpha-10 = []
+        alpha-11 = []
+        alpha-12 = []
+        alpha-13 = []
+        alpha-14 = []
+        alpha-15 = []
+        dev = ["child ; python_version >= '3.12'"]
+        test_tools = ["child ; sys_platform == 'darwin'"]
+        zeta = ["child ; python_version < '3.13'"]
+
+        [tool.uv]
+        dev-dependencies = ["child ; sys_platform == 'linux'"]
+        "#,
+        )?;
+
+    uv_snapshot!(context.filters(), context.lock(), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    warning: The `tool.uv.dev-dependencies` field (used in `child/pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
+    Resolved 1 package in [TIME]
+    ");
+
+    let lock = context.read("uv.lock");
+
+    insta::with_settings!({
+        filters => context.filters(),
+    }, {
+        assert_snapshot!(lock, @r#"
+        version = 1
+        revision = 3
+        requires-python = ">=3.12"
+        resolution-markers = [
+            "sys_platform == 'linux'",
+            "sys_platform != 'linux'",
+        ]
+
+        [options]
+        exclude-newer = "2024-03-25T00:00:00Z"
+
+        [manifest]
+        members = [
+            "child",
+        ]
+
+        [[package]]
+        name = "child"
+        version = "0.1.0"
+        source = { virtual = "child" }
+
+        [package.dev-dependencies]
+        dev = [
+            { name = "child" },
+        ]
+        test-tools = [
+            { name = "child", marker = "sys_platform == 'darwin'" },
+        ]
+        zeta = [
+            { name = "child", marker = "python_full_version < '3.13'" },
+        ]
+
+        [package.metadata]
+
+        [package.metadata.requires-dev]
+        alpha-00 = []
+        alpha-01 = []
+        alpha-02 = []
+        alpha-03 = []
+        alpha-04 = []
+        alpha-05 = []
+        alpha-06 = []
+        alpha-07 = []
+        alpha-08 = []
+        alpha-09 = []
+        alpha-10 = []
+        alpha-11 = []
+        alpha-12 = []
+        alpha-13 = []
+        alpha-14 = []
+        alpha-15 = []
+        dev = [
+            { name = "child", marker = "python_full_version >= '3.12'" },
+            { name = "child", marker = "sys_platform == 'linux'" },
+        ]
+        test-tools = [{ name = "child", marker = "sys_platform == 'darwin'" }]
+        zeta = [{ name = "child", marker = "python_full_version < '3.13'" }]
+        "#);
+    });
+
+    Ok(())
+}
+
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 #[test]
 fn lock_transitive_git() -> Result<()> {

@@ -221,17 +221,19 @@ impl<'a, Context: BuildContext> LookaheadResolver<'a, Context> {
         // Respect recursive extras by propagating the source extras to the dependencies.
         let package = metadata.name.clone();
         let version = metadata.version.clone();
+        let groups = (requirement.groups.len() > 16 && metadata.dependency_groups.len() > 16)
+            .then(|| requirement.groups.iter().collect::<FxHashSet<_>>());
         let requires_dist = Box::into_iter(metadata.requires_dist)
             .chain(
                 metadata
                     .dependency_groups
                     .into_iter()
                     .filter_map(|(group, dependencies)| {
-                        if requirement.groups.contains(&group) {
-                            Some(dependencies)
-                        } else {
-                            None
-                        }
+                        let selected = match groups.as_ref() {
+                            Some(groups) => groups.contains(&group),
+                            None => requirement.groups.contains(&group),
+                        };
+                        if selected { Some(dependencies) } else { None }
                     })
                     .flatten(),
             )
