@@ -1,6 +1,9 @@
 #[cfg(windows)]
 use std::path::PathBuf;
 
+#[cfg(all(unix, not(target_os = "macos")))]
+use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+
 use std::{env, path::Path, process::Command};
 
 use anyhow::Context;
@@ -497,6 +500,70 @@ fn python_install_multiple_patch() {
     //         );
     //     });
     // }
+}
+
+#[test]
+fn python_uninstall_executable_candidates() {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_filtered_python_keys()
+        .with_filtered_exe_suffix()
+        .with_managed_python_dirs()
+        .with_python_download_cache();
+
+    context
+        .python_install()
+        .arg("3.12.8")
+        .arg("3.12.6")
+        .assert()
+        .success();
+
+    let python_minor = context
+        .bin_dir
+        .child(format!("python3.12{}", std::env::consts::EXE_SUFFIX));
+    let foreign_python_major = context
+        .bin_dir
+        .child(format!("python3{}", std::env::consts::EXE_SUFFIX));
+    foreign_python_major.touch().unwrap();
+
+    for index in 0..128 {
+        context
+            .bin_dir
+            .child(format!("unrelated-tool-{index}"))
+            .touch()
+            .unwrap();
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let invalid_name = {
+        let invalid_name = context
+            .bin_dir
+            .path()
+            .join(OsString::from_vec(b"python3.12-\xff".to_vec()));
+        fs_err::File::create(&invalid_name).unwrap();
+        invalid_name
+    };
+
+    uv_snapshot!(context.filters(), context.python_uninstall().arg("3.12"), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Searching for Python versions matching: Python 3.12
+    Uninstalled 2 versions in [TIME]
+     - cpython-3.12.6-[PLATFORM]
+     - cpython-3.12.8-[PLATFORM] (python3.12)
+    ");
+
+    python_minor.assert(predicate::path::missing());
+    foreign_python_major.assert(predicate::path::exists());
+    context
+        .bin_dir
+        .child("unrelated-tool-127")
+        .assert(predicate::path::exists());
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    assert!(invalid_name.exists());
 }
 
 #[test]
