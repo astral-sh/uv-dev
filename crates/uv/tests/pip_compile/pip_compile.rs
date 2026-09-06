@@ -14330,6 +14330,55 @@ fn dynamic_pyproject_toml() -> Result<()> {
     Ok(())
 }
 
+/// Validate explicitly requested extras across multiple dynamic source trees.
+#[test]
+fn dynamic_pyproject_toml_extras_missing() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    for name in ["first", "second"] {
+        let project = context.temp_dir.child(name);
+        project.create_dir_all()?;
+        project
+            .child("pyproject.toml")
+            .write_str(&indoc::formatdoc! {r#"
+            [project]
+            name = "{name}"
+            version = "1.0.0"
+            dynamic = ["dependencies"]
+
+            [project.optional-dependencies]
+            {name}-extra = []
+
+            [build-system]
+            requires = ["hatchling"]
+            build-backend = "hatchling.build"
+        "#})?;
+        project.child(format!("{name}/__init__.py")).write_str("")?;
+    }
+
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .arg("first/pyproject.toml")
+        .arg("second/pyproject.toml")
+        .arg("--extra")
+        .arg("missing-z")
+        .arg("--extra")
+        .arg("second-extra")
+        .arg("--extra")
+        .arg("missing-a")
+        .arg("--extra")
+        .arg("missing-z"), @"
+    success: false
+    exit_code: 2
+    ----- stdout -----
+
+    ----- stderr -----
+    error: Requested extras not found: missing-a, missing-z
+    "
+    );
+
+    Ok(())
+}
+
 /// Accept `file://` URLs as installation sources.
 #[test]
 fn file_url() -> Result<()> {
