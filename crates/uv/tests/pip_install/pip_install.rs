@@ -8069,6 +8069,42 @@ fn find_links_relative_to_working_directory() -> Result<()> {
     Ok(())
 }
 
+/// Expand environment variables in requirements, markers, hashes, and binary-policy options.
+#[test]
+fn requirements_environment_variables() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("requirements.txt").write_str(
+        "--no-binary ${UV_TEST_NO_BINARY_NAME}\n--only-binary ${UV_TEST_ONLY_BINARY_NAME}\n${UV_TEST_REQUIREMENT_NAME}==${UV_TEST_REQUIREMENT_VERSION} ; python_version == '${UV_TEST_PYTHON_VERSION}' --hash=sha256:${UV_TEST_REQUIREMENT_HASH}\n",
+    )?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("-r")
+        .arg("requirements.txt")
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg(context.workspace_root.join("test/links/"))
+        .arg("--require-hashes")
+        .env("UV_TEST_NO_BINARY_NAME", "other")
+        .env("UV_TEST_ONLY_BINARY_NAME", "ok")
+        .env("UV_TEST_REQUIREMENT_NAME", "ok")
+        .env("UV_TEST_REQUIREMENT_VERSION", "1.0.0")
+        .env(
+            "UV_TEST_REQUIREMENT_HASH",
+            "79f0b33e6ce1e09eaa1784c8eee275dfe84d215d9c65c652f07c18e85fdaac5f",
+        )
+        .env("UV_TEST_PYTHON_VERSION", "3.12"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + ok==1.0.0
+    "
+    );
+
+    Ok(())
+}
+
 /// Install the latest version across multiple `--find-links` directories.
 #[test]
 fn find_links_multiple() -> Result<()> {
