@@ -22,7 +22,7 @@ use uv_cli::{ExternalCommand, GlobalArgs};
 use uv_client::BaseClientBuilder;
 use uv_configuration::{
     ActiveEnvironment, Concurrency, Constraints, DependencyGroups, DryRun, EditableMode, EnvFile,
-    ExtrasSpecification, InstallOptions, TargetTriple,
+    ExtrasSpecification, InstallOptions, ProjectDiscovery, TargetTriple,
 };
 use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::Requirement;
@@ -99,7 +99,7 @@ pub(crate) async fn run(
     isolated: bool,
     all_packages: bool,
     package: Option<PackageName>,
-    no_project: bool,
+    project_discovery: ProjectDiscovery,
     config_discovery: ConfigDiscovery,
     extras: ExtrasSpecification,
     groups: DependencyGroups,
@@ -505,7 +505,7 @@ pub(crate) async fn run(
     let temp_dir;
     let base_interpreter = if let Some(script_interpreter) = script_interpreter {
         // If we found a PEP 723 script and the user provided a project-only setting, warn.
-        if no_project {
+        if !project_discovery.enabled() {
             debug!(
                 "`--no-project` is a no-op for Python scripts with inline metadata; ignoring..."
             );
@@ -561,7 +561,7 @@ pub(crate) async fn run(
             .await
             {
                 Ok(project) => {
-                    if no_project {
+                    if !project_discovery.enabled() {
                         debug!("Ignoring discovered project due to `--no-project`");
                         None
                     } else {
@@ -574,13 +574,13 @@ pub(crate) async fn run(
                         WorkspaceErrorKind::MissingPyprojectToml
                             | WorkspaceErrorKind::NonWorkspace(_)
                     ) {
-                        if no_project {
+                        if !project_discovery.enabled() {
                             warn!("`--no-project` was provided, but no project was found");
                         }
                         None
                     } else {
                         // If the user runs with `--no-project`, ignore the error.
-                        if no_project {
+                        if !project_discovery.enabled() {
                             warn!("Ignoring project discovery error due to `--no-project`: {err}");
                             None
                         } else {
@@ -591,7 +591,7 @@ pub(crate) async fn run(
             }
         };
 
-        if no_project {
+        if !project_discovery.enabled() {
             // If the user ran with `--no-project` and provided a project-only setting, warn.
             for flag in extras.history().as_flags_pretty() {
                 warn_user!("`{flag}` has no effect when used alongside `--no-project`");
