@@ -136,6 +136,15 @@
         "run": "/workflow_run/id",
         "head_sha": "/workflow_run/head_sha"
       }
+    },
+    {
+      "repository": "uv-dev",
+      "on": {
+        "issue_comment": ["created", "edited"],
+        "pull_request_review_comment": ["created", "edited"],
+        "pull_request_review": ["submitted", "edited"]
+      },
+      "workflow": "pull-request-comments.yml"
     }
   ]
 }
