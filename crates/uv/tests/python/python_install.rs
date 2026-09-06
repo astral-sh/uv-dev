@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use std::{env, path::Path, process::Command};
 
-use anyhow::Context;
+use anyhow::{Context, Result};
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::{
     assert::PathAssert,
@@ -2258,6 +2258,59 @@ fn python_install_default_from_env() {
 
     For more information, try '--help'.
     ");
+}
+
+#[test]
+fn python_install_preserves_unrelated_toolchains() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    let state = context.temp_dir.child("state");
+    let toolchains = state.child("toolchains");
+    toolchains.create_dir_all()?;
+    toolchains.child("important.txt").write_str("keep me")?;
+    let install_dir = state.child("custom-python");
+
+    context
+        .python_install()
+        .arg("--offline")
+        .arg("--install-dir")
+        .arg(install_dir.path())
+        .arg("3.12")
+        .assert()
+        .failure();
+
+    toolchains.child("important.txt").assert("keep me");
+    install_dir
+        .child("important.txt")
+        .assert(predicate::path::missing());
+
+    Ok(())
+}
+
+#[test]
+fn python_install_migrates_legacy_toolchains() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    let state = if cfg!(windows) {
+        context.home_dir.child("uv").child("data")
+    } else {
+        context.home_dir.child("data").child("uv")
+    };
+    let toolchains = state.child("toolchains");
+    toolchains.create_dir_all()?;
+    toolchains.child("important.txt").write_str("keep me")?;
+    let install_dir = state.child("python");
+
+    context
+        .python_install()
+        .env_remove(EnvVars::UV_PYTHON_INSTALL_DIR)
+        .arg("--offline")
+        .arg("3.12")
+        .assert()
+        .failure();
+
+    toolchains.child("important.txt").assert("keep me");
+    install_dir.child("important.txt").assert("keep me");
+
+    Ok(())
 }
 
 #[cfg(target_os = "macos")]
