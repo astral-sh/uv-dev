@@ -92,6 +92,14 @@
       description: "version-ranges and pubgrub are in the same Git repository",
     },
     {
+      matchFileNames: [".python-versions"],
+      matchManagers: ["custom.regex"],
+      matchDepNames: ["python"],
+      // Keep each test interpreter on its current minor version.
+      allowedVersions: "/^{{{major}}}\\.{{{minor}}}\\.\\d+$/",
+      groupName: "Python test versions",
+    },
+    {
       commitMessageTopic: "MSRV",
       matchManagers: ["custom.regex"],
       matchDepNames: ["msrv"],
@@ -125,6 +133,19 @@
       depNameTemplate: "astral-sh/uv",
       datasourceTemplate: "github-release-attachments",
       versioningTemplate: "semver",
+    },
+    // Update the regular test versions; the versions below that block are fixed test cases.
+    {
+      customType: "regex",
+      managerFilePatterns: ["/^\\.python-versions$/"],
+      matchStringsStrategy: "recursive",
+      matchStrings: [
+        "^# These are versions of Python required[\\s\\S]*?\\n\\n(?:3\\.\\d+\\.\\d+\\n)+",
+        "(?<currentValue>3\\.\\d+\\.\\d+)",
+      ],
+      depNameTemplate: "python",
+      datasourceTemplate: "python-version",
+      versioningTemplate: "python",
     },
     // Update major GitHub actions references in documentation.
     {
