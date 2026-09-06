@@ -24235,6 +24235,47 @@ fn lock_repeat_named_index() -> Result<()> {
     Ok(())
 }
 
+/// Index names that map to the same credential environment variables must be rejected.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_colliding_named_indexes() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+
+        [[tool.uv.index]]
+        name = "private-one"
+        url = "https://first.example.com/simple"
+
+        [[tool.uv.index]]
+        name = "PRIVATE_ONE"
+        url = "https://second.example.com/simple"
+        "#,
+    )?;
+
+    uv_snapshot!(context.filters(), context.lock(), @"
+    success: false
+    exit_code: 2
+    ----- stdout -----
+
+    ----- stderr -----
+    error: Failed to parse: `pyproject.toml`
+      Caused by: TOML parse error at line 8, column 9
+          |
+        8 |         [[tool.uv.index]]
+          |         ^^^^^^^^^^^^^^^^^
+        index names `private-one` and `PRIVATE_ONE` map to the same credential environment variables `UV_INDEX_PRIVATE_ONE_USERNAME` and `UV_INDEX_PRIVATE_ONE_PASSWORD`
+    ");
+
+    Ok(())
+}
+
 /// If multiple indexes are marked as default within a single file, we should raise an error.
 #[cfg(feature = "test-universal")]
 #[test]
