@@ -178,22 +178,84 @@ pub(crate) enum PythonUpgrade {
     Disabled,
 }
 
+/// Whether to reinstall matching Python versions.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum PythonReinstall {
+    /// Reinstall matching Python versions.
+    Enabled,
+    /// Respect existing Python installations.
+    Disabled,
+}
+
+impl PythonReinstall {
+    fn is_enabled(self) -> bool {
+        matches!(self, Self::Enabled)
+    }
+}
+
+impl From<bool> for PythonReinstall {
+    fn from(value: bool) -> Self {
+        if value { Self::Enabled } else { Self::Disabled }
+    }
+}
+
+/// Whether to replace existing Python executables.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum PythonInstallForce {
+    /// Replace existing Python executables.
+    Enabled,
+    /// Respect existing Python executables.
+    Disabled,
+}
+
+impl PythonInstallForce {
+    fn is_enabled(self) -> bool {
+        matches!(self, Self::Enabled)
+    }
+}
+
+impl From<bool> for PythonInstallForce {
+    fn from(value: bool) -> Self {
+        if value { Self::Enabled } else { Self::Disabled }
+    }
+}
+
+/// Whether to create default Python executable links.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum PythonInstallDefault {
+    /// Create default Python executable links.
+    Enabled,
+    /// Only create minor-version Python executable links.
+    Disabled,
+}
+
+impl PythonInstallDefault {
+    fn is_enabled(self) -> bool {
+        matches!(self, Self::Enabled)
+    }
+}
+
+impl From<bool> for PythonInstallDefault {
+    fn from(value: bool) -> Self {
+        if value { Self::Enabled } else { Self::Disabled }
+    }
+}
+
 /// Download and install Python versions.
-#[expect(clippy::fn_params_excessive_bools)]
 pub(crate) async fn install(
     project_dir: &Path,
     install_dir: Option<PathBuf>,
     targets: Vec<String>,
-    reinstall: bool,
+    reinstall: PythonReinstall,
     upgrade: PythonUpgrade,
     bin: Option<bool>,
     registry: Option<bool>,
-    force: bool,
+    force: PythonInstallForce,
     python_install_mirror: Option<String>,
     pypy_install_mirror: Option<String>,
     python_downloads_json_url: Option<String>,
     client_builder: BaseClientBuilder<'_>,
-    default: bool,
+    default: PythonInstallDefault,
     python_downloads: PythonDownloads,
     config_discovery: ConfigDiscovery,
     compile_bytecode: bool,
@@ -290,17 +352,17 @@ async fn perform_install(
     project_dir: &Path,
     install_dir: Option<PathBuf>,
     targets: Vec<String>,
-    reinstall: bool,
+    reinstall: PythonReinstall,
     upgrade: PythonUpgrade,
     bin: Option<bool>,
     registry: Option<bool>,
-    force: bool,
+    force: PythonInstallForce,
     python_install_mirror: Option<String>,
     pypy_install_mirror: Option<String>,
     python_downloads_json_url: Option<String>,
     client_builder: BaseClientBuilder<'_>,
     cache: &Cache,
-    default: bool,
+    default: PythonInstallDefault,
     python_downloads: PythonDownloads,
     config_discovery: ConfigDiscovery,
     bytecode_compilation_sender: Option<mpsc::UnboundedSender<ManagedPythonInstallation>>,
@@ -314,14 +376,14 @@ async fn perform_install(
     // `--default` is used. It's not clear how this overlaps with a global Python pin, but I'd be
     // surprised if `uv python find` returned the "newest" Python version rather than the one I just
     // installed with the `--default` flag.
-    if default && !preview.is_enabled(PreviewFeature::PythonInstallDefault) {
+    if default.is_enabled() && !preview.is_enabled(PreviewFeature::PythonInstallDefault) {
         warn_user!(
             "The `--default` option is experimental and may change without warning. Pass `--preview-features {}` to disable this warning",
             PreviewFeature::PythonInstallDefault
         );
     }
 
-    if default && targets.len() > 1 {
+    if default.is_enabled() && targets.len() > 1 {
         anyhow::bail!("The `--default` flag cannot be used with multiple targets");
     }
 
@@ -391,7 +453,7 @@ async fn perform_install(
                 // TODO(zanieb): We should consider differentiating between a global Python version
                 // file here, allowing a request from there to enable `is_default_install`.
                 is_default_install = true;
-                vec![if reinstall {
+                vec![if reinstall.is_enabled() {
                     // On bare `--reinstall`, reinstall all Python versions
                     PythonRequest::Any
                 } else {
@@ -467,7 +529,7 @@ async fn perform_install(
 
     // Find requests that are already satisfied
     let mut changelog = Changelog::default();
-    let (satisfied, unsatisfied): (Vec<_>, Vec<_>) = if reinstall {
+    let (satisfied, unsatisfied): (Vec<_>, Vec<_>) = if reinstall.is_enabled() {
         // In the reinstall case, we want to iterate over all matching installations instead of
         // stopping at the first match.
 
@@ -611,7 +673,7 @@ async fn perform_install(
                         &retry_policy,
                         installations_dir,
                         &scratch_dir,
-                        reinstall || replacements.contains(download.key()),
+                        reinstall.is_enabled() || replacements.contains(download.key()),
                         python_install_mirror.as_deref(),
                         pypy_install_mirror.as_deref(),
                         Some(&reporter),
@@ -683,7 +745,7 @@ async fn perform_install(
             e.warn_user(installation);
         }
 
-        let upgradeable = (default || is_default_install)
+        let upgradeable = (default.is_enabled() || is_default_install)
             || requested_minor_versions.contains(&installation.key().version().python_version());
 
         if let Some(bin_dir) = bin_dir.as_ref() {
@@ -970,13 +1032,12 @@ async fn perform_install(
 /// Link the binaries of a managed Python installation to the bin directory.
 ///
 /// This function is fallible, but errors are pushed to `errors` instead of being thrown.
-#[expect(clippy::fn_params_excessive_bools)]
 fn create_bin_links(
     installation: &ManagedPythonInstallation,
     bin: &Path,
-    reinstall: bool,
-    force: bool,
-    default: bool,
+    reinstall: PythonReinstall,
+    force: PythonInstallForce,
+    default: PythonInstallDefault,
     upgradeable: bool,
     upgrade: bool,
     is_default_install: bool,
@@ -989,8 +1050,8 @@ fn create_bin_links(
     // TODO(zanieb): We want more feedback on the `is_default_install` behavior before stabilizing
     // it. In particular, it may be confusing because it does not apply when versions are loaded
     // from a `.python-version` file.
-    let should_create_default_links =
-        default || (is_default_install && preview.is_enabled(PreviewFeature::PythonInstallDefault));
+    let should_create_default_links = default.is_enabled()
+        || (is_default_install && preview.is_enabled(PreviewFeature::PythonInstallDefault));
 
     let targets = if should_create_default_links {
         vec![
@@ -1069,7 +1130,7 @@ fn create_bin_links(
 
                         // There's an existing executable we don't manage, require `--force`
                         if valid_link {
-                            if !force {
+                            if !force.is_enabled() {
                                 if upgrade {
                                     warn_user!(
                                         "Executable already exists at `{}` but is not managed by uv; use `uv python install {}.{}{} --force` to replace it",
@@ -1098,7 +1159,7 @@ fn create_bin_links(
                     Some(existing) if existing == installation => {
                         // The existing link points to the same installation, so we're done unless
                         // they requested we reinstall
-                        if !(reinstall || force) {
+                        if !(reinstall.is_enabled() || force.is_enabled()) {
                             debug!(
                                 "Executable at `{}` is already for `{}`",
                                 target.simplified_display(),
@@ -1115,7 +1176,7 @@ fn create_bin_links(
                     Some(existing) => {
                         // The existing link points to a different installation, check if it
                         // is reasonable to replace
-                        if force {
+                        if force.is_enabled() {
                             debug!(
                                 "Replacing existing executable for `{}` at `{}` with executable for `{}` due to `--force` flag",
                                 existing.key(),
@@ -1130,7 +1191,7 @@ fn create_bin_links(
                                     target.simplified_display(),
                                     installation.key(),
                                 );
-                            } else if default {
+                            } else if default.is_enabled() {
                                 debug!(
                                     "Replacing existing executable for `{}` at `{}` with executable for `{}` since `--default` was requested`",
                                     existing.key(),

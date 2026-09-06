@@ -69,7 +69,8 @@ use uv_workspace::pyproject_mut::AddBoundsKind;
 
 use crate::commands::pip::operations::Modifications;
 use crate::commands::{
-    InitKind, InitProjectKind, PythonUpgrade, PythonUpgradeSource, ToolRunCommand,
+    InitKind, InitProjectKind, PythonInstallDefault, PythonInstallForce, PythonReinstall,
+    PythonUpgrade, PythonUpgradeSource, ToolRunCommand,
 };
 
 /// The default publish URL.
@@ -1627,15 +1628,15 @@ impl PythonDirSettings {
 pub(crate) struct PythonInstallSettings {
     pub(crate) install_dir: Option<PathBuf>,
     pub(crate) targets: Vec<String>,
-    pub(crate) reinstall: bool,
-    pub(crate) force: bool,
+    pub(crate) reinstall: PythonReinstall,
+    pub(crate) force: PythonInstallForce,
     pub(crate) upgrade: PythonUpgrade,
     pub(crate) bin: Option<bool>,
     pub(crate) registry: Option<bool>,
     pub(crate) python_install_mirror: Option<String>,
     pub(crate) pypy_install_mirror: Option<String>,
     pub(crate) python_downloads_json_url: Option<String>,
-    pub(crate) default: bool,
+    pub(crate) default: PythonInstallDefault,
     pub(crate) compile_bytecode: bool,
 }
 
@@ -1681,8 +1682,8 @@ impl PythonInstallSettings {
         Ok(Self {
             install_dir,
             targets,
-            reinstall,
-            force,
+            reinstall: reinstall.into(),
+            force: force.into(),
             upgrade: if upgrade {
                 PythonUpgrade::Enabled(PythonUpgradeSource::Install)
             } else {
@@ -1702,7 +1703,7 @@ impl PythonInstallSettings {
             python_install_mirror,
             pypy_install_mirror,
             python_downloads_json_url,
-            default,
+            default: default.into(),
             compile_bytecode: flag(
                 compile_bytecode.compile_bytecode,
                 compile_bytecode.no_compile_bytecode,
@@ -1714,18 +1715,17 @@ impl PythonInstallSettings {
 }
 
 /// The resolved settings to use for a `python upgrade` invocation.
-#[expect(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone)]
 pub(crate) struct PythonUpgradeSettings {
     pub(crate) install_dir: Option<PathBuf>,
     pub(crate) targets: Vec<String>,
-    pub(crate) force: bool,
+    pub(crate) force: PythonInstallForce,
     pub(crate) registry: Option<bool>,
     pub(crate) python_install_mirror: Option<String>,
     pub(crate) pypy_install_mirror: Option<String>,
-    pub(crate) reinstall: bool,
+    pub(crate) reinstall: PythonReinstall,
     pub(crate) python_downloads_json_url: Option<String>,
-    pub(crate) default: bool,
+    pub(crate) default: PythonInstallDefault,
     pub(crate) bin: Option<bool>,
     pub(crate) compile_bytecode: bool,
 }
@@ -1776,13 +1776,13 @@ impl PythonUpgradeSettings {
         Ok(Self {
             install_dir,
             targets,
-            force,
+            force: force.into(),
             registry,
             python_install_mirror,
             pypy_install_mirror,
-            reinstall,
+            reinstall: reinstall.into(),
             python_downloads_json_url,
-            default,
+            default: default.into(),
             bin,
             compile_bytecode: flag(
                 compile_bytecode.compile_bytecode,
