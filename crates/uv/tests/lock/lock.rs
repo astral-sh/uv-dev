@@ -16272,6 +16272,59 @@ fn lock_mismatched_sources() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_rejects_redirected_editable_root() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let root = context.temp_dir.child("root");
+    root.create_dir_all()?;
+    let pyproject = indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = ["hatchling"]
+        build-backend = "hatchling.build"
+    "#};
+    root.child("pyproject.toml").write_str(pyproject)?;
+
+    context
+        .lock()
+        .arg("--offline")
+        .current_dir(&root)
+        .assert()
+        .success();
+
+    let sibling = context.temp_dir.child("editable-evil");
+    sibling.create_dir_all()?;
+    sibling.child("pyproject.toml").write_str(pyproject)?;
+
+    let lock = fs_err::read_to_string(root.child("uv.lock"))?;
+    let redirected = lock.replace(
+        "source = { editable = \".\" }",
+        "source = { editable = \"../editable-evil\" }",
+    );
+    assert_ne!(lock, redirected);
+    root.child("uv.lock").write_str(&redirected)?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline").current_dir(&root), @"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Resolved 1 package in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+
+    Ok(())
+}
+
 /// If a source is provided via `tool.uv.sources`, we don't enforce that the declared dependency
 /// version is satisfied.
 ///
