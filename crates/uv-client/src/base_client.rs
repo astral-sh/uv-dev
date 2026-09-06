@@ -989,14 +989,16 @@ fn request_into_redirect(
     let mut redirect_url = match DisplaySafeUrl::parse(location) {
         Ok(url) => url,
         // Per RFC 7231, URLs should be resolved against the request URL.
-        Err(DisplaySafeUrlError::Url(ParseError::RelativeUrlWithoutBase)) => original_req_url.join(location).map_err(|err| {
-            reqwest_middleware::Error::Middleware(anyhow!(
-                "Invalid HTTP {status} 'Location' value `{location}` relative to `{original_req_url}`: {err}"
-            ))
-        })?,
+        Err(DisplaySafeUrlError::Url(ParseError::RelativeUrlWithoutBase)) => {
+            original_req_url.join(location).map_err(|err| {
+                reqwest_middleware::Error::Middleware(anyhow!(
+                    "Invalid HTTP {status} 'Location' value relative to `{original_req_url}`: {err}"
+                ))
+            })?
+        }
         Err(err) => {
             return Err(reqwest_middleware::Error::Middleware(anyhow!(
-                "Invalid HTTP {status} 'Location' value `{location}`: {err}"
+                "Invalid HTTP {status} 'Location' value: {err}"
             )));
         }
     };
@@ -1350,6 +1352,34 @@ mod tests {
                     .is_some_and(|fragment| fragment == "fragment")
             );
         }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_redirect_redacts_invalid_location() -> Result<()> {
+        let server = MockServer::start().await;
+        let token = "secret-redirect-token";
+        Mock::given(method("GET"))
+            .respond_with(
+                ResponseTemplate::new(302)
+                    .insert_header("location", format!("https://user:{token}@[::1")),
+            )
+            .mount(&server)
+            .await;
+
+        let request = Client::new().get(server.uri()).build()?;
+        let response = Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()?
+            .execute(request.try_clone().unwrap())
+            .await?;
+
+        let error = request_into_redirect(request, &response, CrossOriginCredentialsPolicy::Secure)
+            .unwrap_err()
+            .to_string();
+        assert!(!error.contains(token));
+        insta::assert_snapshot!(error, @"Invalid HTTP 302 Found 'Location' value: invalid IPv6 address");
 
         Ok(())
     }
