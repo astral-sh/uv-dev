@@ -6669,10 +6669,10 @@ pub struct AuthLogoutArgs {
     #[arg(long, short, value_hint = ValueHint::Other)]
     pub username: Option<String>,
 
-    /// The keyring provider to use for storage of credentials.
+    /// The keyring provider to use for authentication.
     ///
-    /// Only `--keyring-provider native` is supported for `logout`, which uses the system keyring
-    /// via an integration built into uv.
+    /// Enable system-native credential storage with `--preview-features native-auth` or
+    /// `UV_PREVIEW_FEATURES=native-auth`.
     #[arg(
         long,
         value_enum,
@@ -6705,10 +6705,10 @@ pub struct AuthLoginArgs {
     #[arg(long, short, conflicts_with = "username", conflicts_with = "password", value_hint = ValueHint::Other)]
     pub token: Option<String>,
 
-    /// The keyring provider to use for storage of credentials.
+    /// The keyring provider to use for authentication.
     ///
-    /// Only `--keyring-provider native` is supported for `login`, which uses the system keyring via
-    /// an integration built into uv.
+    /// Enable system-native credential storage with `--preview-features native-auth` or
+    /// `UV_PREVIEW_FEATURES=native-auth`.
     #[arg(
         long,
         value_enum,

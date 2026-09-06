@@ -46,7 +46,9 @@ edited manually.
     Currently, uv only searches the native store for credentials it has added to the secret store —
     it will not retrieve credentials persisted by other applications.
 
-    Set `UV_PREVIEW_FEATURES=native-auth` to use this storage mechanism.
+    Set `UV_PREVIEW_FEATURES=native-auth` or pass `--preview-features native-auth` to use this
+    storage mechanism. When enabled, uv does not read existing plaintext credentials and warns if a
+    plaintext credentials file exists.
 
 ## Keyring providers
 

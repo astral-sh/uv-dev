@@ -6041,6 +6041,7 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "fs-err",
+ "hex",
  "http",
  "insta",
  "percent-encoding",
@@ -6049,6 +6050,8 @@ dependencies = [
  "rustc-hash",
  "schemars",
  "serde",
+ "serde_json",
+ "sha2 0.11.0",
  "tempfile",
  "test-log",
  "thiserror",
@@ -6056,6 +6059,7 @@ dependencies = [
  "toml",
  "tracing",
  "url",
+ "uv-cache-key",
  "uv-fs",
  "uv-keyring",
  "uv-netrc",
@@ -6067,6 +6071,7 @@ dependencies = [
  "uv-static",
  "uv-warnings",
  "wiremock",
+ "zeroize",
 ]
 
 [[package]]
