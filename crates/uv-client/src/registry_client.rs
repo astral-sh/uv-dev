@@ -16,13 +16,16 @@ use url::Url;
 
 use uv_auth::{CredentialsCache, Indexes};
 use uv_cache::{Cache, CacheBucket, CacheEntry, WheelCache};
+use uv_checksum_authority::{
+    ArtifactId, ChecksumAuthority, Error as ChecksumAuthorityError, VerifiedRecord,
+};
 use uv_configuration::IndexStrategy;
 use uv_configuration::KeyringProviderType;
 use uv_distribution_filename::{DistFilename, WheelFilename};
 use uv_distribution_types::{
     BuiltDist, File, FileLocation, IndexCapabilities, IndexFormat, IndexLocations,
     IndexMetadataRef, IndexStatusCodeDecision, IndexStatusCodeStrategy, IndexUrl, Name,
-    RegistryBuiltWheel, Zstd,
+    RegistryBuiltWheel, RemoteSource, Zstd,
 };
 use uv_git::{GIT_LFS, GitError, GitHttpSettings, GitResolver, Reporter};
 use uv_metadata::{read_metadata_async_seek, read_metadata_async_stream};
@@ -179,6 +182,10 @@ impl<'a> RegistryClientBuilder<'a> {
         existing: Option<&BaseClient>,
     ) -> Result<RegistryClient, ClientBuildError> {
         self.cache_index_credentials()?;
+        let checksum_authority = self
+            .base_client_builder
+            .checksum_authority_config()
+            .cloned();
 
         // Wrap in any relevant middleware and handle connectivity.
         let builder = self
@@ -197,6 +204,7 @@ impl<'a> RegistryClientBuilder<'a> {
         let client = CachedClient::new(client);
 
         Ok(RegistryClient {
+            checksum_authority,
             indexes: self.index_locations,
             index_strategy: self.index_strategy,
             torch_backend: self.torch_backend,
@@ -213,6 +221,7 @@ impl<'a> RegistryClientBuilder<'a> {
 /// A client for fetching packages from a `PyPI`-compatible index.
 #[derive(Debug, Clone)]
 pub struct RegistryClient {
+    checksum_authority: Option<ChecksumAuthority>,
     /// The indexes to use for fetching packages.
     indexes: IndexLocations,
     /// The strategy to use when fetching across multiple indexes.
@@ -263,6 +272,35 @@ pub enum MetadataFormat {
 }
 
 impl RegistryClient {
+    /// Whether remote package archives must be authenticated by a checksum authority.
+    pub fn has_checksum_authority(&self) -> bool {
+        self.checksum_authority.is_some()
+    }
+
+    pub fn checksum_authority(&self) -> Option<&ChecksumAuthority> {
+        self.checksum_authority.as_ref()
+    }
+
+    /// Retrieve the independently authenticated record for an archive, if configured.
+    pub async fn checksum_authority_record(
+        &self,
+        source: &DisplaySafeUrl,
+        archive: &(dyn RemoteSource + Sync),
+    ) -> Result<Option<VerifiedRecord>, ChecksumAuthorityError> {
+        let Some(authority) = &self.checksum_authority else {
+            return Ok(None);
+        };
+        if self.connectivity == Connectivity::Offline {
+            return Err(ChecksumAuthorityError::Offline);
+        }
+        // The signed identity uses the original filename, not a normalized distribution name.
+        let filename = archive
+            .filename()
+            .map_err(|_| ChecksumAuthorityError::InvalidIdentity)?;
+        let artifact = ArtifactId::new(source, &filename)?;
+        authority.lookup(&artifact).await.map(Some)
+    }
+
     /// Return the [`CachedClient`] used by this client.
     pub fn cached_client(&self) -> &CachedClient {
         &self.client

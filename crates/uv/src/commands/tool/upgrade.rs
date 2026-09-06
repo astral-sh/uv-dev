@@ -467,7 +467,7 @@ async fn upgrade_tool(
                 python_platform,
                 environment.environment().interpreter(),
             )?;
-            let plan = Planner::new(&resolution).build(
+            let plan = Planner::new(&resolution, client_builder.has_checksum_authority()).build(
                 site_packages,
                 InstallationStrategy::Permissive,
                 &settings.reinstall,

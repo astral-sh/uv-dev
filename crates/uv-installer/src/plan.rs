@@ -235,12 +235,16 @@ impl uv_errors::Hint for IncompatibleWheelError {
 #[derive(Debug)]
 pub struct Planner<'a> {
     resolution: &'a Resolution,
+    revalidate_remote: bool,
 }
 
 impl<'a> Planner<'a> {
     /// Set the requirements use in the [`Plan`].
-    pub fn new(resolution: &'a Resolution) -> Self {
-        Self { resolution }
+    pub fn new(resolution: &'a Resolution, revalidate_remote: bool) -> Self {
+        Self {
+            resolution,
+            revalidate_remote,
+        }
     }
 
     /// Partition a set of requirements into those that should be linked from the cache, those that
@@ -385,6 +389,20 @@ impl<'a> Planner<'a> {
             let ResolvedDist::Installable { dist, .. } = dist else {
                 unreachable!("Installed distribution could not be found in site-packages: {dist}");
             };
+
+            // Remote cache hits need the distribution database when an independent authority
+            // must approve their original archive. The database can still reuse matching entries.
+            if self.revalidate_remote
+                && (dist.index().is_some()
+                    || matches!(
+                        dist.as_ref(),
+                        Dist::Built(BuiltDist::DirectUrl(_))
+                            | Dist::Source(SourceDist::DirectUrl(_))
+                    ))
+            {
+                remote.push(dist.clone());
+                continue;
+            }
 
             if cache.must_revalidate_package(dist.name())
                 || dist

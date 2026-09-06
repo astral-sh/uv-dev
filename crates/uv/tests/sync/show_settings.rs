@@ -41,6 +41,7 @@ fn pip_compile_baseline() {
     exit_code: 0 (success)
     ----- stdout -----
     GlobalSettings {
+        checksum_authority: None,
         required_version: None,
         quiet: 0,
         verbose: 0,
@@ -246,6 +247,7 @@ fn publish_resolved_settings() -> anyhow::Result<()> {
     exit_code: 0 (success)
     ----- stdout -----
     GlobalSettings {
+        checksum_authority: None,
         required_version: None,
         quiet: 0,
         verbose: 0,
@@ -413,6 +415,7 @@ fn pip_install_baseline() {
     exit_code: 0 (success)
     ----- stdout -----
     GlobalSettings {
+        checksum_authority: None,
         required_version: None,
         quiet: 0,
         verbose: 0,
@@ -601,6 +604,7 @@ fn lock_baseline() {
     exit_code: 0 (success)
     ----- stdout -----
     GlobalSettings {
+        checksum_authority: None,
         required_version: None,
         quiet: 0,
         verbose: 0,
@@ -728,6 +732,7 @@ fn version_baseline() {
     exit_code: 0 (success)
     ----- stdout -----
     GlobalSettings {
+        checksum_authority: None,
         required_version: None,
         quiet: 0,
         verbose: 0,
@@ -870,6 +875,7 @@ fn tool_install_baseline() {
     exit_code: 0 (success)
     ----- stdout -----
     GlobalSettings {
+        checksum_authority: None,
         required_version: None,
         quiet: 0,
         verbose: 0,

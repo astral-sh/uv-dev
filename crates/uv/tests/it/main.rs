@@ -4,6 +4,8 @@ use uv_test::pypi_proxy;
 
 mod auth;
 
+mod checksum_authority;
+
 #[cfg(all(feature = "test-pypi", feature = "test-universal"))]
 mod branching_urls;
 
