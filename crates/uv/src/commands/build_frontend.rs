@@ -27,7 +27,7 @@ use uv_distribution_types::{
     PackageConfigSettings, Requirement, SourceDist,
 };
 use uv_errors::{ErrorOptions, Hint, Hints, write_error_chain_with_options};
-use uv_fs::{Simplified, normalize_path, relative_to};
+use uv_fs::{Simplified, normalize_path, relative_to, rename_with_retry};
 use uv_install_wheel::LinkMode;
 use uv_normalize::PackageName;
 use uv_pep440::Version;
@@ -100,6 +100,10 @@ pub(crate) enum Error {
     NameMismatch(PackageName, PackageName),
     #[error("The source distribution declares version {0}, but the wheel declares version {1}")]
     VersionMismatch(Version, Version),
+    #[error("The project declares name `{0}`, but the wheel declares name `{1}`, which indicates a malformed wheel. If this is intentional, set `{env_var}`.", env_var = "UV_SKIP_WHEEL_FILENAME_CHECK=1".green())]
+    ProjectNameMismatch(PackageName, PackageName),
+    #[error("The project declares version {0}, but the wheel declares version {1}, which indicates a malformed wheel. If this is intentional, set `{env_var}`.", env_var = "UV_SKIP_WHEEL_FILENAME_CHECK=1".green())]
+    ProjectVersionMismatch(Version, Version),
 }
 
 impl From<ProjectError> for Error {
@@ -1203,12 +1207,38 @@ async fn build_wheel(
                 )
                 .await
                 .map_err(|err| Error::BuildDispatch(err.into()))?;
-            let filename = builder.build(output_dir).await?;
+            // Keep the built wheel out of the output directory until its identity is validated.
+            let temp_dir = tempfile::tempdir_in(output_dir)?;
+            let raw_filename = builder.build(temp_dir.path()).await?;
+            let filename =
+                WheelFilename::from_str(&raw_filename).map_err(Error::InvalidBuiltWheelFilename)?;
+            if !uv_flags::contains(uv_flags::EnvironmentFlags::SKIP_WHEEL_FILENAME_CHECK) {
+                if let Some(expected) = builder.project_name()
+                    && expected != &filename.name
+                {
+                    return Err(Error::ProjectNameMismatch(
+                        expected.clone(),
+                        filename.name.clone(),
+                    ));
+                }
+                if let Some(expected) = builder.project_version()
+                    && expected != &filename.version
+                    && expected != &filename.version.clone().without_local()
+                {
+                    return Err(Error::ProjectVersionMismatch(
+                        expected.clone(),
+                        filename.version.clone(),
+                    ));
+                }
+            }
+            rename_with_retry(
+                temp_dir.path().join(&raw_filename),
+                output_dir.join(&raw_filename),
+            )
+            .await?;
             BuildMessage::Build {
-                normalized_filename: DistFilename::WheelFilename(
-                    WheelFilename::from_str(&filename).map_err(Error::InvalidBuiltWheelFilename)?,
-                ),
-                raw_filename: filename,
+                normalized_filename: DistFilename::WheelFilename(filename),
+                raw_filename,
                 output_dir: output_dir.to_path_buf(),
             }
         }
