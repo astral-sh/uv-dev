@@ -2175,6 +2175,149 @@ fn lock_project_with_override_sources() -> Result<()> {
     Ok(())
 }
 
+/// Validate mutable transitive sources below an immutable registry package.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_project_with_override_sources_validates_transitive_source_tree() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["anyio==3.7.0"]
+
+        [tool.uv]
+        override-dependencies = ["idna"]
+
+        [tool.uv.sources]
+        idna = { path = "idna" }
+        "#,
+    )?;
+
+    let transitive = context.temp_dir.child("idna");
+    fs_err::create_dir_all(&transitive)?;
+    let transitive_pyproject_toml = transitive.child("pyproject.toml");
+    transitive_pyproject_toml.write_str(
+        r#"
+        [project]
+        name = "idna"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        "#,
+    )?;
+
+    uv_snapshot!(context.filters(), context.lock(), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+
+    transitive_pyproject_toml.write_str(
+        r#"
+        [project]
+        name = "idna"
+        version = "0.2.0"
+        requires-python = ">=3.12"
+        "#,
+    )?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--check"), @"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--check` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+
+    Ok(())
+}
+
+/// Validate mutable transitive sources for every fork, including one that is inactive on the
+/// current platform.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_non_project_override_source_validates_other_platform() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let marker = if cfg!(windows) {
+        "sys_platform != 'win32'"
+    } else {
+        "sys_platform == 'win32'"
+    };
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(&formatdoc! {r#"
+        [tool.uv.workspace]
+        members = []
+
+        [dependency-groups]
+        dev = ["anyio==3.7.0 ; {marker}"]
+
+        [tool.uv]
+        override-dependencies = ["idna"]
+
+        [tool.uv.sources]
+        idna = {{ path = "idna" }}
+        "#,
+    })?;
+
+    let transitive = context.temp_dir.child("idna");
+    fs_err::create_dir_all(&transitive)?;
+    let transitive_pyproject_toml = transitive.child("pyproject.toml");
+    transitive_pyproject_toml.write_str(
+        r#"
+        [project]
+        name = "idna"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        "#,
+    )?;
+
+    uv_snapshot!(context.filters(), context.lock(), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    warning: No `requires-python` value found in the workspace. Defaulting to `>=3.12`.
+    Resolved 3 packages in [TIME]
+    ");
+
+    transitive_pyproject_toml.write_str(
+        r#"
+        [project]
+        name = "idna"
+        version = "0.2.0"
+        requires-python = ">=3.12"
+        "#,
+    )?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--check"), @"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+
+    ----- stderr -----
+    warning: No `requires-python` value found in the workspace. Defaulting to `>=3.12`.
+    Resolved 3 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--check` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+
+    Ok(())
+}
+
 /// Reject a URL override scoped to a package version.
 #[cfg(feature = "test-universal")]
 #[test]
