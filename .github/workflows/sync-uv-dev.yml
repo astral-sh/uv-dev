@@ -22,6 +22,8 @@ jobs:
     environment: automations
     permissions:
       id-token: write # for the credential broker
+    outputs:
+      main_sha: ${{ steps.sync.outputs.main_sha }}
     steps:
       - name: Get uv-dev token
         id: token
@@ -36,6 +38,7 @@ jobs:
             workflows: write
 
       - name: Sync main
+        id: sync
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
         run: |
@@ -43,3 +46,24 @@ jobs:
             --method POST \
             repos/astral-sh/uv-dev/merge-upstream \
             --field branch=main
+
+          main_sha=$(gh api repos/astral-sh/uv-dev/git/ref/heads/main --jq .object.sha)
+          if ! [[ "$main_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "The synced uv-dev main ref is invalid." >&2
+            exit 1
+          fi
+          echo "main_sha=$main_sha" >> "$GITHUB_OUTPUT"
+
+  retarget-promoted-pull-request-children:
+    name: Retarget children of promoted pull requests
+    needs: sync
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: read
+    uses: ./.github/workflows/retarget-promoted-pull-request-children.yml
+    with:
+      repository: astral-sh/uv-dev
+      repository-id: "1302176231"
+      main-sha: ${{ needs.sync.outputs.main_sha }}
+    secrets: inherit

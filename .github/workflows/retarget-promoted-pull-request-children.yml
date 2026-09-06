@@ -1,0 +1,229 @@
+name: Retarget promoted pull request children
+
+on:
+  workflow_call:
+    inputs:
+      repository:
+        description: "The synchronized source repository"
+        required: true
+        type: string
+      repository-id:
+        description: "The expected source repository ID"
+        required: true
+        type: string
+      main-sha:
+        description: "The synchronized source main SHA"
+        required: true
+        type: string
+
+permissions: {}
+
+env:
+  AUTOMATIONS_BOT_ID: "305554984"
+  UV_REPOSITORY_ID: "699532645"
+
+jobs:
+  retarget:
+    name: Retarget children of promoted pull requests
+    if: github.repository == 'astral-sh/uv'
+    runs-on: ubuntu-slim
+    environment: automations
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: read
+    steps:
+      - name: Get source pull request token
+        id: token
+        uses: open-security-tools/ost-simple-sts@9e012247e07c39080fb6a832dbfbcfeacebc19c4
+        with:
+          exchange-url: ${{ secrets.STS_API_URL }}/exchange
+          audience: ${{ secrets.STS_API_URL }}
+          repository: ${{ inputs.repository }}
+          permissions: |
+            contents: read
+            pull_requests: write
+
+      - name: Retarget children of promoted pull requests
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          MAIN_SHA: ${{ inputs.main-sha }}
+          SOURCE_REPOSITORY: ${{ inputs.repository }}
+          SOURCE_REPOSITORY_ID: ${{ inputs.repository-id }}
+          UPSTREAM_TOKEN: ${{ github.token }}
+        run: |
+          case "$SOURCE_REPOSITORY:$SOURCE_REPOSITORY_ID" in
+            astral-sh/uv-dev:1302176231 | astral-sh/uv-security:1333576902) ;;
+            *)
+              echo "The source repository is not an allowed promotion source." >&2
+              exit 1
+              ;;
+          esac
+          if ! [[ "$MAIN_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "The synchronized main SHA is invalid." >&2
+            exit 1
+          fi
+
+          current_main=$(gh api "repos/$SOURCE_REPOSITORY/git/ref/heads/main" --jq .object.sha)
+          if [ "$current_main" != "$MAIN_SHA" ]; then
+            echo "The source main branch advanced after synchronization; leaving its stacks unchanged."
+            exit 0
+          fi
+
+          open_pull_requests=$(
+            gh api \
+              --method GET \
+              "repos/$SOURCE_REPOSITORY/pulls" \
+              --raw-field state=open \
+              --raw-field per_page=100 \
+              --paginate \
+              --slurp
+          )
+          stacks=$(
+            jq --compact-output \
+              --argjson repository_id "$SOURCE_REPOSITORY_ID" \
+              '[.[][] | select(.base.ref != "main" and .base.repo.id == $repository_id and .head.repo.id == $repository_id)] | group_by([.base.ref, .base.sha])[]' \
+              <<< "$open_pull_requests"
+          )
+
+          while IFS= read -r stack; do
+            [ -n "$stack" ] || continue
+            base_ref=$(jq --raw-output '.[0].base.ref' <<< "$stack")
+            base_sha=$(jq --raw-output '.[0].base.sha' <<< "$stack")
+            git check-ref-format "refs/heads/$base_ref"
+            if ! [[ "$base_sha" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "The stacked base $base_ref has an invalid revision; skipping it." >&2
+              continue
+            fi
+
+            source_parents=$(
+              gh api \
+                --method GET \
+                "repos/$SOURCE_REPOSITORY/pulls" \
+                --raw-field state=closed \
+                --raw-field head="astral-sh:$base_ref" \
+                --raw-field per_page=100 \
+                --paginate \
+                --slurp
+            )
+            source_parent=$(
+              jq --compact-output \
+                --arg base_ref "$base_ref" \
+                --arg base_sha "$base_sha" \
+                --argjson repository_id "$SOURCE_REPOSITORY_ID" \
+                '[.[][] | select(.head.ref == $base_ref and .head.sha == $base_sha and .base.repo.id == $repository_id and .head.repo.id == $repository_id)] | if length == 1 then .[0] else empty end' \
+                <<< "$source_parents"
+            )
+            [ -n "$source_parent" ] || continue
+
+            source_parent_number=$(jq --raw-output '.number' <<< "$source_parent")
+            promotion_numbers=$(
+              gh api \
+                --method GET \
+                "repos/$SOURCE_REPOSITORY/issues/$source_parent_number/comments" \
+                --raw-field per_page=100 \
+                --paginate \
+                --slurp |
+                jq --compact-output \
+                  --argjson bot_id "$AUTOMATIONS_BOT_ID" '
+                    [
+                      .[][]
+                      | select(.user.id == $bot_id and .performed_via_github_app.slug == "astral-automations-bot")
+                      | (.body | try capture("^Promoted to \\[#(?<label>[1-9][0-9]*)\\]\\(https://github\\.com/astral-sh/uv/pull/(?<url>[1-9][0-9]*)\\)\\.$") catch empty)
+                      | select(.label == .url)
+                      | .label
+                    ]
+                    | unique
+                  '
+            )
+            if [ "$(jq 'length' <<< "$promotion_numbers")" != 1 ]; then
+              continue
+            fi
+            upstream_number=$(jq --raw-output '.[0]' <<< "$promotion_numbers")
+            upstream_parent=$(
+              GH_TOKEN="$UPSTREAM_TOKEN" gh api \
+                --method GET \
+                "repos/astral-sh/uv/pulls/$upstream_number"
+            )
+            if ! jq --exit-status \
+              --arg base_ref "$base_ref" \
+              --argjson bot_id "$AUTOMATIONS_BOT_ID" \
+              --argjson repository_id "$UV_REPOSITORY_ID" \
+              '.merged_at != null and .head.ref == $base_ref and .base.repo.id == $repository_id and .head.repo.id == $repository_id and .user.id == $bot_id' \
+              <<< "$upstream_parent" > /dev/null; then
+              continue
+            fi
+
+            upstream_head=$(jq --raw-output '.head.sha' <<< "$upstream_parent")
+            if [ "$upstream_head" != "$base_sha" ]; then
+              history_query=$(cat <<'GRAPHQL'
+          query($number: Int!, $endCursor: String) {
+            repository(owner: "astral-sh", name: "uv") {
+              pullRequest(number: $number) {
+                timelineItems(first: 100, after: $endCursor, itemTypes: [HEAD_REF_FORCE_PUSHED_EVENT]) {
+                  nodes {
+                    ... on HeadRefForcePushedEvent {
+                      beforeCommit { oid }
+                      afterCommit { oid }
+                    }
+                  }
+                  pageInfo { hasNextPage endCursor }
+                }
+              }
+            }
+          }
+          GRAPHQL
+              )
+              history=$(
+                GH_TOKEN="$UPSTREAM_TOKEN" gh api graphql \
+                  --paginate \
+                  --slurp \
+                  --field number="$upstream_number" \
+                  --raw-field query="$history_query"
+              )
+              if ! jq --exit-status --arg base_sha "$base_sha" \
+                'any(.[].data.repository.pullRequest.timelineItems.nodes[]; .beforeCommit.oid == $base_sha or .afterCommit.oid == $base_sha)' \
+                <<< "$history" > /dev/null; then
+                continue
+              fi
+            fi
+
+            merge_sha=$(jq --raw-output '.merge_commit_sha' <<< "$upstream_parent")
+            comparison=$(
+              GH_TOKEN="$UPSTREAM_TOKEN" gh api \
+                --method GET \
+                "repos/astral-sh/uv/compare/$merge_sha...$MAIN_SHA"
+            )
+            if ! jq --exit-status '.status | IN("ahead", "identical")' <<< "$comparison" > /dev/null; then
+              continue
+            fi
+
+            while IFS= read -r child; do
+              number=$(jq --raw-output '.number' <<< "$child")
+              current_pull_request=$(gh api --method GET "repos/$SOURCE_REPOSITORY/pulls/$number")
+              current_main=$(gh api "repos/$SOURCE_REPOSITORY/git/ref/heads/main" --jq .object.sha)
+              if [ "$current_main" != "$MAIN_SHA" ]; then
+                echo "The source main branch advanced while retargeting stacks; stopping."
+                exit 0
+              fi
+              if ! jq --exit-status \
+                --arg base_ref "$base_ref" \
+                --arg base_sha "$base_sha" \
+                --arg head_ref "$(jq --raw-output '.head.ref' <<< "$child")" \
+                --arg head_sha "$(jq --raw-output '.head.sha' <<< "$child")" \
+                --argjson repository_id "$SOURCE_REPOSITORY_ID" \
+                '.state == "open" and .base.ref == $base_ref and .base.sha == $base_sha and .head.ref == $head_ref and .head.sha == $head_sha and .base.repo.id == $repository_id and .head.repo.id == $repository_id' \
+                <<< "$current_pull_request" > /dev/null; then
+                echo "Pull request #$number changed before its promoted parent could be retargeted; skipping it." >&2
+                continue
+              fi
+
+              gh api \
+                --method PATCH \
+                "repos/$SOURCE_REPOSITORY/pulls/$number" \
+                --raw-field base=main \
+                --silent
+              echo "Retargeted $SOURCE_REPOSITORY#$number from merged promoted parent $base_ref to main." >> "$GITHUB_STEP_SUMMARY"
+            done < <(jq --compact-output '.[]' <<< "$stack")
+          done <<< "$stacks"
