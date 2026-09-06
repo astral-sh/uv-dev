@@ -68,24 +68,31 @@ impl<'b, B: 'b + ?Sized + AsRef<[u8]>> FromIterator<&'b B> for CacheControl {
 impl FromIterator<CacheControlDirective> for CacheControl {
     fn from_iter<T: IntoIterator<Item = CacheControlDirective>>(it: T) -> Self {
         fn parse_int(value: &[u8]) -> Option<u64> {
-            if !value.iter().all(u8::is_ascii_digit) {
+            if value.is_empty() || !value.iter().all(u8::is_ascii_digit) {
                 return None;
             }
-            std::str::from_utf8(value).ok()?.parse().ok()
+            Some(value.iter().fold(0_u64, |value, digit| {
+                value
+                    .saturating_mul(10)
+                    .saturating_add(u64::from(digit - b'0'))
+            }))
         }
 
         let mut cc = Self::default();
         for ccd in it {
             // Note that when we see invalid directive values, we follow [RFC
             // 9111 S4.2.1]. It says that invalid cache-control directives
-            // should result in treating the response as stale. (Which we
-            // accomplished by setting `must_revalidate` to `true`.)
+            // should result in treating the response as stale. Invalid
+            // freshness directives use a zero lifetime and require revalidation.
             //
             // [RFC 9111 S4.2.1]: https://www.rfc-editor.org/rfc/rfc9111.html#section-4.2.1
             match &*ccd.name {
                 // request + response directives
                 "max-age" => match parse_int(&ccd.value) {
-                    None => cc.must_revalidate = true,
+                    None => {
+                        cc.max_age_seconds = Some(0);
+                        cc.must_revalidate = true;
+                    }
                     Some(seconds) => cc.max_age_seconds = Some(seconds),
                 },
                 "no-cache" => cc.no_cache = true,
@@ -119,7 +126,10 @@ impl FromIterator<CacheControlDirective> for CacheControl {
                 "proxy-revalidate" => cc.proxy_revalidate = true,
                 "public" => cc.public = true,
                 "s-maxage" => match parse_int(&ccd.value) {
-                    None => cc.must_revalidate = true,
+                    None => {
+                        cc.s_maxage_seconds = Some(0);
+                        cc.must_revalidate = true;
+                    }
                     Some(seconds) => cc.s_maxage_seconds = Some(seconds),
                 },
                 "immutable" => cc.immutable = true,
@@ -394,7 +404,15 @@ impl<'b, B: 'b + ?Sized + AsRef<[u8]>, I: Iterator<Item = &'b B>> Iterator
                     // valid value, then this header value is probably corrupt.
                     // So skip the rest of it.
                     self.cur = b"";
-                    match self.emit_revalidation() {
+                    let directive = if matches!(name.as_str(), "max-age" | "s-maxage") {
+                        self.emit_directive(CacheControlDirective {
+                            name,
+                            value: vec![],
+                        })
+                    } else {
+                        self.emit_revalidation()
+                    };
+                    match directive {
                         None => break,
                         Some(d) => return Some(d),
                     }
@@ -469,8 +487,44 @@ mod tests {
     #[test]
     fn cache_control_max_age_invalid() {
         let cc: CacheControl = CacheControlParser::new(["max-age=6a0"]).collect();
-        assert_eq!(None, cc.max_age_seconds);
+        assert_eq!(Some(0), cc.max_age_seconds);
         assert!(cc.must_revalidate);
+    }
+
+    #[test]
+    fn cache_control_s_maxage_invalid() {
+        let cc: CacheControl = CacheControlParser::new(["s-maxage=6a0"]).collect();
+        assert_eq!(Some(0), cc.s_maxage_seconds);
+        assert!(cc.must_revalidate);
+    }
+
+    #[test]
+    fn cache_control_freshness_directive_missing_value() {
+        for header in ["max-age=", r#"max-age="60"#] {
+            let cc: CacheControl = CacheControlParser::new([header]).collect();
+            assert_eq!(Some(0), cc.max_age_seconds);
+            assert!(cc.must_revalidate);
+        }
+
+        let cc: CacheControl = CacheControlParser::new(["max-age=", "max-age=60"]).collect();
+        assert_eq!(Some(0), cc.max_age_seconds);
+        assert!(cc.must_revalidate);
+
+        let cc: CacheControl = CacheControlParser::new(["s-maxage="]).collect();
+        assert_eq!(Some(0), cc.s_maxage_seconds);
+        assert!(cc.must_revalidate);
+    }
+
+    #[test]
+    fn cache_control_freshness_directive_overflow() {
+        let cc: CacheControl = CacheControlParser::new(["max-age=184467440737095516160"]).collect();
+        assert_eq!(Some(u64::MAX), cc.max_age_seconds);
+        assert!(!cc.must_revalidate);
+
+        let cc: CacheControl =
+            CacheControlParser::new(["s-maxage=184467440737095516160"]).collect();
+        assert_eq!(Some(u64::MAX), cc.s_maxage_seconds);
+        assert!(!cc.must_revalidate);
     }
 
     #[test]
