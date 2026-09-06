@@ -49,7 +49,9 @@ use crate::commands::pip::operations;
 use crate::commands::project::{ProjectError, find_requires_python};
 use crate::commands::reporters::PythonDownloadReporter;
 use crate::printer::Printer;
-use crate::settings::ResolverSettings;
+use crate::settings::{
+    BuildLogs, BuildMode, BuildOutputSelection, BuildPackageSelection, ResolverSettings,
+};
 
 #[derive(Debug, Error)]
 pub(crate) enum Error {
@@ -81,8 +83,6 @@ pub(crate) enum Error {
     Project(#[from] Box<ProjectError>),
     #[error("Failed to write message")]
     Fmt(#[from] fmt::Error),
-    #[error("Can't use `--force-pep517` with `--list`")]
-    ListForcePep517,
     #[error(
         "Can only use `--list` with a compatible uv build backend, but `{name}` is not compatible because {reason}"
     )]
@@ -187,19 +187,15 @@ impl Hint for Error {
 }
 
 /// Build source distributions and wheels.
-#[expect(clippy::fn_params_excessive_bools)]
 pub(crate) async fn build_frontend(
     project_dir: &Path,
     src: Option<PathBuf>,
-    package: Option<PackageName>,
-    all_packages: bool,
+    package: BuildPackageSelection,
     output_dir: Option<PathBuf>,
-    sdist: bool,
-    wheel: bool,
-    list: bool,
-    build_logs: bool,
+    output: BuildOutputSelection,
+    mode: BuildMode,
+    build_logs: BuildLogs,
     gitignore: bool,
-    force_pep517: bool,
     clear: bool,
     build_constraints: Vec<RequirementsSource>,
     build_constraints_from_workspace: Vec<Requirement>,
@@ -220,15 +216,12 @@ pub(crate) async fn build_frontend(
     let build_result = build_impl(
         project_dir,
         src.as_deref(),
-        package.as_ref(),
-        all_packages,
+        &package,
         output_dir.as_deref(),
-        sdist,
-        wheel,
-        list,
+        output,
+        mode,
         build_logs,
         gitignore,
-        force_pep517,
         clear,
         &build_constraints,
         &build_constraints_from_workspace,
@@ -265,19 +258,15 @@ enum BuildResult {
 
 // https://github.com/rust-lang/rust/issues/147648
 #[allow(unused_assignments)]
-#[expect(clippy::fn_params_excessive_bools)]
 async fn build_impl(
     project_dir: &Path,
     src: Option<&Path>,
-    package: Option<&PackageName>,
-    all_packages: bool,
+    package: &BuildPackageSelection,
     output_dir: Option<&Path>,
-    sdist: bool,
-    wheel: bool,
-    list: bool,
-    build_logs: bool,
+    output: BuildOutputSelection,
+    mode: BuildMode,
+    build_logs: BuildLogs,
     gitignore: bool,
-    force_pep517: bool,
     clear: bool,
     build_constraints: &[RequirementsSource],
     build_constraints_from_workspace: &[Requirement],
@@ -365,7 +354,7 @@ async fn build_impl(
     );
 
     // If a `--package` or `--all-packages` was provided, adjust the source directory.
-    let packages = if let Some(package) = package {
+    let packages = if let BuildPackageSelection::Package(package) = package {
         if matches!(src, Source::File(_)) {
             return Err(anyhow::anyhow!(
                 "Cannot specify `--package` when building from a file"
@@ -399,7 +388,7 @@ async fn build_impl(
         vec![AnnotatedSource::from(Source::Directory(Cow::Borrowed(
             package.root(),
         )))]
-    } else if all_packages {
+    } else if matches!(package, BuildPackageSelection::AllPackages) {
         if matches!(src, Source::File(_)) {
             return Err(anyhow::anyhow!(
                 "Cannot specify `--all-packages` when building from a file"
@@ -479,7 +468,6 @@ async fn build_impl(
             hash_checking,
             build_logs,
             gitignore,
-            force_pep517,
             clear,
             build_constraints,
             build_constraints_from_workspace,
@@ -492,9 +480,8 @@ async fn build_impl(
             sources.clone(),
             concurrency,
             build_options,
-            sdist,
-            wheel,
-            list,
+            output,
+            mode,
             dependency_metadata,
             *link_mode,
             config_setting,
@@ -537,7 +524,6 @@ async fn build_impl(
     }
 }
 
-#[expect(clippy::fn_params_excessive_bools)]
 async fn build_package(
     source: AnnotatedSource<'_>,
     output_dir: Option<&Path>,
@@ -553,9 +539,8 @@ async fn build_package(
     index_locations: &IndexLocations,
     client_builder: BaseClientBuilder<'_>,
     hash_checking: Option<HashCheckingMode>,
-    build_logs: bool,
+    build_logs: BuildLogs,
     gitignore: bool,
-    force_pep517: bool,
     clear: bool,
     build_constraints: &[RequirementsSource],
     build_constraints_from_workspace: &[Requirement],
@@ -568,9 +553,8 @@ async fn build_package(
     sources: NoSources,
     concurrency: &Concurrency,
     build_options: &BuildOptions,
-    sdist: bool,
-    wheel: bool,
-    list: bool,
+    output: BuildOutputSelection,
+    mode: BuildMode,
     dependency_metadata: &DependencyMetadata,
     link_mode: LinkMode,
     config_setting: &ConfigSettings,
@@ -728,27 +712,23 @@ async fn build_package(
     prepare_output_directory(&output_dir, gitignore).await?;
 
     // Determine the build plan.
-    let plan = BuildPlan::determine(&source, sdist, wheel).map_err(Error::BuildPlan)?;
+    let plan = BuildPlan::determine(&source, output).map_err(Error::BuildPlan)?;
 
     // Check if the build backend is matching uv version that allows calling in the uv build backend
     // directly.
-    let build_action = if list {
-        if force_pep517 {
-            return Err(Error::ListForcePep517);
-        }
+    let build_action = match mode {
+        BuildMode::List => {
+            if let Err(reason) = check_direct_build(source.path(), uv_version::version()) {
+                return Err(Error::ListNonUv {
+                    name: source.path().user_display().to_string(),
+                    reason: reason.to_string(),
+                });
+            }
 
-        if let Err(reason) = check_direct_build(source.path(), uv_version::version()) {
-            return Err(Error::ListNonUv {
-                name: source.path().user_display().to_string(),
-                reason: reason.to_string(),
-            });
+            BuildAction::List
         }
-
-        BuildAction::List
-    } else if force_pep517 {
-        BuildAction::Pep517
-    } else {
-        match check_direct_build(source.path(), uv_version::version()) {
+        BuildMode::Pep517 => BuildAction::Pep517,
+        BuildMode::Build => match check_direct_build(source.path(), uv_version::version()) {
             Ok(()) => BuildAction::DirectBuild,
             Err(reason) => {
                 debug!(
@@ -758,7 +738,7 @@ async fn build_package(
                 );
                 BuildAction::Pep517
             }
-        }
+        },
     };
 
     if matches!(build_action, BuildAction::DirectBuild | BuildAction::List) {
@@ -775,7 +755,9 @@ async fn build_package(
 
     let build_output = match printer {
         Printer::Default | Printer::NoProgress | Printer::Verbose => {
-            if build_logs && !uv_flags::contains(uv_flags::EnvironmentFlags::HIDE_BUILD_OUTPUT) {
+            if matches!(build_logs, BuildLogs::Show)
+                && !uv_flags::contains(uv_flags::EnvironmentFlags::HIDE_BUILD_OUTPUT)
+            {
                 BuildOutput::Stderr
             } else {
                 BuildOutput::Quiet
@@ -789,7 +771,7 @@ async fn build_package(
         BuildPlan::SdistToWheel => {
             // Even when listing files, we still need to build the source distribution for the wheel
             // build.
-            if list {
+            if matches!(mode, BuildMode::List) {
                 let sdist_list = build_sdist(
                     source.path(),
                     &output_dir,
@@ -1448,18 +1430,18 @@ enum BuildPlan {
 }
 
 impl BuildPlan {
-    fn determine(source: &AnnotatedSource, sdist: bool, wheel: bool) -> Result<Self> {
+    fn determine(source: &AnnotatedSource, output: BuildOutputSelection) -> Result<Self> {
         Ok(match &source.source {
             Source::File(_) => {
                 // We're building from a file, which must be a source distribution.
-                match (sdist, wheel) {
-                    (false, true) => Self::WheelFromSdist,
-                    (false, false) => {
+                match output {
+                    BuildOutputSelection::Wheel => Self::WheelFromSdist,
+                    BuildOutputSelection::Default => {
                         return Err(anyhow::anyhow!(
                             "Pass `--wheel` explicitly to build a wheel from a source distribution"
                         ));
                     }
-                    (true, _) => {
+                    BuildOutputSelection::Sdist | BuildOutputSelection::SdistAndWheel => {
                         return Err(anyhow::anyhow!(
                             "Building an `--sdist` from a source distribution is not supported"
                         ));
@@ -1468,11 +1450,11 @@ impl BuildPlan {
             }
             Source::Directory(_) => {
                 // We're building from a directory.
-                match (sdist, wheel) {
-                    (false, false) => Self::SdistToWheel,
-                    (false, true) => Self::Wheel,
-                    (true, false) => Self::Sdist,
-                    (true, true) => Self::SdistAndWheel,
+                match output {
+                    BuildOutputSelection::Default => Self::SdistToWheel,
+                    BuildOutputSelection::Wheel => Self::Wheel,
+                    BuildOutputSelection::Sdist => Self::Sdist,
+                    BuildOutputSelection::SdistAndWheel => Self::SdistAndWheel,
                 }
             }
         })

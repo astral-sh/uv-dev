@@ -4268,15 +4268,12 @@ impl PipCheckSettings {
 #[derive(Debug, Clone)]
 pub(crate) struct BuildSettings {
     pub(crate) src: Option<PathBuf>,
-    pub(crate) package: Option<PackageName>,
-    pub(crate) all_packages: bool,
+    pub(crate) package: BuildPackageSelection,
     pub(crate) out_dir: Option<PathBuf>,
-    pub(crate) sdist: bool,
-    pub(crate) wheel: bool,
-    pub(crate) list: bool,
-    pub(crate) build_logs: bool,
+    pub(crate) output: BuildOutputSelection,
+    pub(crate) mode: BuildMode,
+    pub(crate) build_logs: BuildLogs,
     pub(crate) gitignore: bool,
-    pub(crate) force_pep517: bool,
     pub(crate) clear: bool,
     pub(crate) build_constraints: Vec<PathBuf>,
     pub(crate) build_constraints_from_workspace: Vec<Requirement>,
@@ -4285,6 +4282,75 @@ pub(crate) struct BuildSettings {
     pub(crate) install_mirrors: PythonInstallMirrors,
     pub(crate) refresh: Refresh,
     pub(crate) settings: ResolverSettings,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum BuildPackageSelection {
+    Source,
+    Package(PackageName),
+    AllPackages,
+}
+
+impl BuildPackageSelection {
+    fn from_args(package: Option<PackageName>, all_packages: bool) -> Self {
+        if let Some(package) = package {
+            Self::Package(package)
+        } else if all_packages {
+            Self::AllPackages
+        } else {
+            Self::Source
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum BuildOutputSelection {
+    Default,
+    Sdist,
+    Wheel,
+    SdistAndWheel,
+}
+
+impl BuildOutputSelection {
+    fn from_args(sdist: bool, wheel: bool) -> Self {
+        match (sdist, wheel) {
+            (false, false) => Self::Default,
+            (true, false) => Self::Sdist,
+            (false, true) => Self::Wheel,
+            (true, true) => Self::SdistAndWheel,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum BuildMode {
+    Build,
+    List,
+    Pep517,
+}
+
+impl BuildMode {
+    fn from_args(list: bool, force_pep517: bool) -> Self {
+        if list {
+            Self::List
+        } else if force_pep517 {
+            Self::Pep517
+        } else {
+            Self::Build
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum BuildLogs {
+    Show,
+    Hide,
+}
+
+impl BuildLogs {
+    fn from_args(build_logs: bool) -> Self {
+        if build_logs { Self::Show } else { Self::Hide }
+    }
 }
 
 impl BuildSettings {
@@ -4341,14 +4407,13 @@ impl BuildSettings {
 
         Ok(Self {
             src,
-            package,
-            all_packages,
+            package: BuildPackageSelection::from_args(package, all_packages),
             out_dir,
-            sdist,
-            wheel,
-            list,
-            build_logs: flag(build_logs, no_build_logs, "build-logs")?.unwrap_or(true),
-            force_pep517,
+            output: BuildOutputSelection::from_args(sdist, wheel),
+            mode: BuildMode::from_args(list, force_pep517),
+            build_logs: BuildLogs::from_args(
+                flag(build_logs, no_build_logs, "build-logs")?.unwrap_or(true),
+            ),
             clear,
             gitignore: flag(create_gitignore, no_create_gitignore, "create-gitignore")?
                 .unwrap_or(true),
