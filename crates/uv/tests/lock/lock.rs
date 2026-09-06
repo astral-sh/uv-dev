@@ -13737,6 +13737,73 @@ fn lock_upgrade_package() -> Result<()> {
     Ok(())
 }
 
+/// Report packages requested for upgrade that are absent from both lockfiles.
+#[test]
+fn lock_upgrade_package_missing() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(indoc! {
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        "#
+    })?;
+
+    // An upgrade can be requested before a lockfile has been written.
+    uv_snapshot!(context.filters(), context.lock().arg("--upgrade-package").arg("missing"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+
+    // Existing packages are valid upgrade targets.
+    uv_snapshot!(context.filters(), context.lock().arg("--upgrade-package").arg("project"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+
+    // Missing packages should be reported in a deterministic order.
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--upgrade-package").arg("zeta")
+        .arg("--upgrade-package").arg("alpha")
+        .arg("--upgrade-package").arg("project"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+
+    // Synchronization also resolves the requested upgrade targets.
+    uv_snapshot!(context.filters(), context.sync().arg("--upgrade-package").arg("missing"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    ");
+
+    // A target from the previous lockfile is valid even when resolution removes it.
+    pyproject_toml.write_str(indoc! {
+        r#"
+        [project]
+        name = "renamed"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        "#
+    })?;
+    uv_snapshot!(context.filters(), context.lock().arg("--upgrade-package").arg("project"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Removed project v0.1.0
+    Added renamed v0.1.0
+    ");
+
+    Ok(())
+}
+
 /// Upgrade all packages in a dependency group with `--upgrade-group`.
 #[cfg(feature = "test-universal")]
 #[test]
