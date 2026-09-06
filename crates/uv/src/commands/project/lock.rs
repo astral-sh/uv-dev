@@ -1512,6 +1512,12 @@ impl ValidatedLock {
                 );
                 Ok(Self::Preferable(lock))
             }
+            SatisfiesResult::MismatchedBuildOptions(name) => {
+                debug!(
+                    "Resolving despite existing lockfile due to incompatible build options for: `{name}`"
+                );
+                Ok(Self::Preferable(lock))
+            }
             SatisfiesResult::MissingRoot(name) => {
                 debug!("Resolving despite existing lockfile due to missing root package: `{name}`");
                 Ok(Self::Preferable(lock))
