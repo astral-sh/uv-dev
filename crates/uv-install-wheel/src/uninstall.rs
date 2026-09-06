@@ -1,12 +1,12 @@
 use std::borrow::Cow;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt::Display;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{LazyLock, Mutex, OnceLock};
 
 use tracing::trace;
 
-use uv_fs::write_atomic_sync;
+use uv_fs::{Simplified, write_atomic_sync};
 use uv_pypi_types::Identifier;
 use uv_warnings::warn_user;
 
@@ -44,12 +44,29 @@ pub fn uninstall_wheel(
     #[cfg(windows)]
     let itself = std::env::current_exe().ok();
 
+    let schemes = [
+        layout.scheme.data.as_path(),
+        layout.scheme.purelib.as_path(),
+        layout.scheme.platlib.as_path(),
+        layout.scheme.scripts.as_path(),
+        layout.scheme.include.as_path(),
+    ];
+    let resolved_schemes = schemes.map(resolve_path_or_normalize);
+    let mut resolved_parents = HashMap::new();
+
     // Uninstall the files, keeping track of any directories that are left empty.
     let mut visited = BTreeSet::new();
     for entry in &record {
         let path = site_packages.join(&entry.path);
 
-        if !is_path_in_scheme(&entry.path, site_packages, &distribution, layout) {
+        if !is_path_in_scheme(
+            &entry.path,
+            site_packages,
+            &distribution,
+            &schemes,
+            &resolved_schemes,
+            &mut resolved_parents,
+        ) {
             continue;
         }
 
@@ -174,9 +191,12 @@ fn is_path_in_scheme(
     path: &str,
     site_packages: &Path,
     distribution: impl Display,
-    layout: &Layout,
+    schemes: &[&Path; 5],
+    resolved_schemes: &[PathBuf; 5],
+    resolved_parents: &mut HashMap<PathBuf, PathBuf>,
 ) -> bool {
-    let normalized = normalize_path(&site_packages.join(path));
+    let joined = site_packages.join(path);
+    let normalized = normalize_path(&joined);
 
     // `purelib` or `platlib` are site-packages (depending on `Root-Is-Purelib`). As
     // `.data/*` goes into the directories of `scheme`, `.dist-info` goes into site-packages
@@ -187,11 +207,18 @@ fn is_path_in_scheme(
     // `.data/data`. For a system environment, wheels are allowed to write to
     // whole system directories, for example `data` is `/usr/local` for system Python on
     // Ubuntu 24.04.
-    if normalized.starts_with(&layout.scheme.data)
-        || normalized.starts_with(&layout.scheme.purelib)
-        || normalized.starts_with(&layout.scheme.platlib)
-        || normalized.starts_with(&layout.scheme.scripts)
-        || normalized.starts_with(&layout.scheme.include)
+    if schemes.iter().any(|scheme| normalized.starts_with(scheme))
+        && joined.parent().is_some_and(|parent| {
+            // Resolve the parent, rather than the final component, so a recorded file symlink can
+            // still be unlinked without following it while directory symlinks cannot escape the
+            // environment. Most RECORD entries share a parent, so avoid resolving it repeatedly.
+            let resolved = resolved_parents
+                .entry(parent.to_path_buf())
+                .or_insert_with(|| resolve_path_or_normalize(parent));
+            resolved_schemes
+                .iter()
+                .any(|scheme| resolved.starts_with(scheme))
+        })
     {
         true
     } else {
@@ -211,6 +238,13 @@ fn is_path_in_scheme(
         }
         false
     }
+}
+
+/// Resolve directory symlinks without a Windows verbatim prefix, falling back to the normalized
+/// path when a parent was already removed by an overlapping distribution.
+fn resolve_path_or_normalize(path: &Path) -> PathBuf {
+    path.simple_canonicalize()
+        .unwrap_or_else(|_| normalize_path(path).simplified().to_path_buf())
 }
 
 /// Check that a `top_level.txt` entry names a single top-level module or package.
@@ -454,12 +488,17 @@ fn normalize_path(path: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use assert_fs::prelude::*;
 
     use uv_pypi_types::Scheme;
 
     use crate::Layout;
-    use crate::uninstall::{is_valid_top_level_entry, uninstall_egg, uninstall_wheel};
+    use crate::uninstall::{
+        is_path_in_scheme, is_valid_top_level_entry, resolve_path_or_normalize, uninstall_egg,
+        uninstall_wheel,
+    };
 
     #[test]
     fn test_top_level_entry_safe_name() {
@@ -539,6 +578,61 @@ mod tests {
         assert!(target_file.exists());
         assert!(!metadata.exists());
         assert!(!init_py.exists());
+    }
+
+    /// A second, overlapping distribution can retain a RECORD entry after the first removed its
+    /// parent. The missing parent is still lexically contained and must not produce an escape.
+    #[test]
+    fn test_uninstall_record_missing_parent_in_scheme() {
+        let venv = assert_fs::TempDir::new().unwrap();
+        let site_packages = venv.child("lib/python3.12/site-packages");
+        site_packages.create_dir_all().unwrap();
+        let package = site_packages.child("package");
+        package.create_dir_all().unwrap();
+        fs_err::remove_dir(package.path()).unwrap();
+
+        let schemes = [
+            venv.path(),
+            site_packages.path(),
+            site_packages.path(),
+            venv.path(),
+            venv.path(),
+        ];
+        let resolved_schemes = schemes.map(resolve_path_or_normalize);
+        let mut resolved_parents = HashMap::new();
+
+        assert!(is_path_in_scheme(
+            "package/__init__.py",
+            site_packages.path(),
+            "package 0.1.0",
+            &schemes,
+            &resolved_schemes,
+            &mut resolved_parents,
+        ));
+
+        #[cfg(windows)]
+        {
+            let venv = fs_err::canonicalize(venv.path()).unwrap();
+            let site_packages = fs_err::canonicalize(site_packages.path()).unwrap();
+            let schemes = [
+                venv.as_path(),
+                site_packages.as_path(),
+                site_packages.as_path(),
+                venv.as_path(),
+                venv.as_path(),
+            ];
+            let resolved_schemes = schemes.map(resolve_path_or_normalize);
+            let mut resolved_parents = HashMap::new();
+
+            assert!(is_path_in_scheme(
+                "package/__init__.py",
+                &site_packages,
+                "package 0.1.0 with verbatim paths",
+                &schemes,
+                &resolved_schemes,
+                &mut resolved_parents,
+            ));
+        }
     }
 
     #[test]
