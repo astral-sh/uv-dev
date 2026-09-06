@@ -161,6 +161,44 @@ fn install_wheel_cache_incompatible_with_older_uv() -> Result<()> {
     Ok(())
 }
 
+fn write_nested_scripts_wheel(path: &Path) -> Result<()> {
+    let mut writer = ZipFileWriter::new(Vec::new());
+    let metadata = indoc! {"
+        Metadata-Version: 2.1
+        Name: nested-scripts
+        Version: 1.0.0
+    "};
+    let wheel = indoc! {"
+        Wheel-Version: 1.0
+        Generator: uv-test
+        Root-Is-Purelib: true
+        Tag: py3-none-any
+    "};
+    let entries = [
+        ("nested_scripts.py", "VALUE = 1\n"),
+        ("nested_scripts-1.0.0.dist-info/METADATA", metadata),
+        ("nested_scripts-1.0.0.dist-info/WHEEL", wheel),
+        (
+            "nested_scripts-1.0.0.data/scripts/nested/script",
+            "#!python\nprint('data script')\n",
+        ),
+    ];
+    let mut record = String::new();
+    for (entry_name, contents) in entries {
+        let entry = ZipEntryBuilder::new(entry_name.into(), Compression::Stored);
+        block_on(writer.write_entry_whole(entry, contents.as_bytes()))?;
+        writeln!(record, "{entry_name},,")?;
+    }
+    record.push_str("nested_scripts-1.0.0.dist-info/RECORD,,\n");
+    let entry = ZipEntryBuilder::new(
+        "nested_scripts-1.0.0.dist-info/RECORD".into(),
+        Compression::Stored,
+    );
+    block_on(writer.write_entry_whole(entry, record.as_bytes()))?;
+    fs_err::write(path, block_on(writer.close())?)?;
+    Ok(())
+}
+
 #[test]
 fn missing_requirements_txt() {
     let context = uv_test::test_context!("3.12");
@@ -13947,6 +13985,41 @@ fn reject_wheel_entrypoint_paths() -> Result<()> {
     );
 
     escaped_entrypoint.assert(predicates::path::missing());
+
+    Ok(())
+}
+
+#[test]
+fn reject_nested_wheel_scripts_before_install() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheel = context
+        .temp_dir
+        .join("nested_scripts-1.0.0-py3-none-any.whl");
+    write_nested_scripts_wheel(&wheel)?;
+
+    uv_snapshot!(context.filters(), context.pip_install().arg(&wheel), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    error: Failed to install: nested_scripts-1.0.0-py3-none-any.whl (nested-scripts==1.0.0 (from file://[TEMP_DIR]/nested_scripts-1.0.0-py3-none-any.whl))
+      Caused by: The wheel is invalid: Wheel contains an invalid entry (directory) in the `scripts` directory: [CACHE_DIR]/archive-v0/[HASH]/nested_scripts-1.0.0.data/scripts/nested
+    "
+    );
+
+    assert!(!context.site_packages().join("nested_scripts.py").exists());
+    assert!(
+        !context
+            .site_packages()
+            .join("nested_scripts-1.0.0.dist-info")
+            .exists()
+    );
+    assert!(
+        !context
+            .site_packages()
+            .join("nested_scripts-1.0.0.data")
+            .exists()
+    );
 
     Ok(())
 }
