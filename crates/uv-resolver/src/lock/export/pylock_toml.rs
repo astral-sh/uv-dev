@@ -325,6 +325,20 @@ struct PylockTomlVcs {
     subdirectory: Option<PortablePathBuf>,
 }
 
+/// Return an unambiguous informational revision for a pylock VCS source.
+///
+/// A branch or tag can have the same 40-hex form as a Git object ID. Qualify those references so
+/// that importing the exported pylock doesn't reinterpret them as exact commit revisions.
+fn requested_revision(reference: &GitReference) -> Option<String> {
+    match reference {
+        GitReference::Branch(branch) if branch.parse::<GitOid>().is_ok() => {
+            Some(format!("refs/heads/{branch}"))
+        }
+        GitReference::Tag(tag) if tag.parse::<GitOid>().is_ok() => Some(format!("refs/tags/{tag}")),
+        _ => reference.as_str().map(ToString::to_string),
+    }
+}
+
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 struct PylockTomlArchive {
@@ -561,7 +575,7 @@ impl<'lock> PylockToml {
                         r#type: VcsKind::Git,
                         url: Some(dist.git.url().clone()),
                         path: None,
-                        requested_revision: dist.git.reference().as_str().map(ToString::to_string),
+                        requested_revision: requested_revision(dist.git.reference()),
                         commit_id: dist.git.precise().unwrap_or_else(|| {
                             panic!("Git distribution is missing a precise hash: {dist}")
                         }),
@@ -863,7 +877,7 @@ impl<'lock> PylockToml {
                     r#type: VcsKind::Git,
                     url: Some(sdist.git.url().clone()),
                     path: None,
-                    requested_revision: sdist.git.reference().as_str().map(ToString::to_string),
+                    requested_revision: requested_revision(sdist.git.reference()),
                     commit_id: sdist.git.precise().unwrap_or_else(|| {
                         panic!("Git distribution is missing a precise hash: {sdist}")
                     }),
