@@ -794,6 +794,7 @@ pub(crate) async fn do_sync<'a>(
         groups,
         build_options,
         &install_options,
+        &sources,
     )?;
 
     // Always skip virtual projects, which shouldn't be built or installed.
