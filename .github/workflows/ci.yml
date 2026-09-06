@@ -113,14 +113,73 @@ jobs:
     needs:
       - plan
       - build-dev-binaries
-    if: ${{ needs.plan.outputs.test-integration == 'true' }}
+    # Pushes to main run these tests separately with read-only cache access.
+    if: ${{ github.event_name != 'push' && needs.plan.outputs.test-integration == 'true' }}
     uses: $/.github/workflows/test-integration.yml
     secrets: inherit
     permissions:
+      actions: read
       contents: read
       id-token: write
     with:
       sha: ${{ github.sha }}
+
+  test-integration-main:
+    name: integration tests
+    needs:
+      - plan
+      - build-dev-binaries
+    if: ${{ github.event_name == 'push' && needs.plan.outputs.test-integration == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    permissions:
+      actions: read
+    steps:
+      - name: Wait for integration tests
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INTEGRATION_RUN_NAME: Integration tests for CI ${{ github.run_id }}, attempt ${{ github.run_attempt }}
+        run: |
+          # The consumer waits for this job to start before downloading binaries.
+          # Correlate the two workflows by run ID and attempt, not a moving branch.
+          started_at=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT" --jq .run_started_at)
+          deadline=$((SECONDS + 1800))
+          run_id=
+          while (( SECONDS < deadline )); do
+            if [[ -z "$run_id" ]]; then
+              run_id=$(gh api --method GET "repos/$GITHUB_REPOSITORY/actions/workflows/test-integration-workflow-run.yml/runs" \
+                -f event=workflow_run -f "created=>=$started_at" -f per_page=100 --paginate --slurp | \
+                jq -r '[.[].workflow_runs[] | select(.display_title == env.INTEGRATION_RUN_NAME) | .id] | min // empty')
+              if [[ -z "$run_id" ]]; then
+                sleep 30
+                continue
+              fi
+              run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$run_id"
+              printf 'Integration tests: [workflow run](%s).\n\n' "$run_url" >> "$GITHUB_STEP_SUMMARY"
+              echo "Waiting for $run_url"
+            fi
+
+            run=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id")
+            if [[ $(jq -r .status <<< "$run") != completed ]]; then
+              sleep 30
+              continue
+            fi
+
+            attempt=$(jq -r .run_attempt <<< "$run")
+            jobs=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/attempts/$attempt/jobs?per_page=100" --paginate --slurp)
+            printf '| Job | Result |\n| --- | --- |\n' >> "$GITHUB_STEP_SUMMARY"
+            jq -r '.[].jobs[] | "| [\(.name)](\(.html_url)) | \(.conclusion) |"' <<< "$jobs" >> "$GITHUB_STEP_SUMMARY"
+
+            if [[ $(jq -r .conclusion <<< "$run") == success ]] && \
+              jq -e '[.[].jobs[] | select(.name | startswith("test-integration /"))] | any(.conclusion == "success") and all(.conclusion == "success" or .conclusion == "skipped")' <<< "$jobs" > /dev/null; then
+              exit 0
+            fi
+            echo '::error::Integration tests did not pass. See the job summary for individual results and logs.'
+            exit 1
+          done
+          echo '::error::Timed out waiting for the integration workflow. Check that the workflow_run listener is enabled on the default branch.'
+          exit 1
 
   test-system:
     needs:
