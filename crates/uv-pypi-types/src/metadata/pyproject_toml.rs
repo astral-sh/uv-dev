@@ -8,6 +8,7 @@ use tracing::instrument;
 
 use uv_normalize::{ExtraName, PackageName};
 use uv_pep440::{Version, VersionSpecifiers};
+use uv_pyproject_toml::{Ignored, OptionalDependencies, ProjectWire as PyProjectProjectWire};
 
 use crate::{LenientVersionSpecifiers, MetadataError};
 
@@ -81,16 +82,15 @@ pub struct Project {
     pub dynamic: Option<Vec<String>>,
 }
 
-#[derive(Deserialize, Debug, Clone)]
-#[serde(rename_all = "kebab-case")]
-struct PyprojectTomlWire {
-    name: Option<PackageName>,
-    version: Option<Version>,
-    requires_python: Option<String>,
-    dependencies: Option<Vec<String>>,
-    optional_dependencies: Option<IndexMap<ExtraName, Vec<String>>>,
-    dynamic: Option<Vec<String>>,
-}
+type PyprojectTomlWire = PyProjectProjectWire<
+    Option<PackageName>,
+    Option<Version>,
+    Option<String>,
+    Option<Vec<String>>,
+    Option<OptionalDependencies<String, IndexMap<ExtraName, Vec<String>>>>,
+    Option<Ignored>,
+    Option<Ignored>,
+>;
 
 impl TryFrom<PyprojectTomlWire> for Project {
     type Error = MetadataError;
@@ -102,7 +102,9 @@ impl TryFrom<PyprojectTomlWire> for Project {
             version: wire.version,
             requires_python: wire.requires_python,
             dependencies: wire.dependencies,
-            optional_dependencies: wire.optional_dependencies,
+            optional_dependencies: wire
+                .optional_dependencies
+                .map(OptionalDependencies::into_inner),
             dynamic: wire.dynamic,
         })
     }

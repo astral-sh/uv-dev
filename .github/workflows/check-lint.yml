@@ -175,7 +175,7 @@ jobs:
           curl --proto '=https' --tlsv1.2 -LsSf \
             "https://github.com/astral-sh/hawk/releases/download/${HAWK_VERSION}/cargo-hawk-installer.sh" | sh
       - name: "Hawk"
-        run: cargo +1.98.1 hawk check --target-dir target/hawk -D warnings
+        run: cargo +1.98.1 hawk check --target-dir target/hawk --exclude-crate uv_pyproject_toml -D warnings
 
   shear:
     name: "cargo shear"

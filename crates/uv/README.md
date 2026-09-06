@@ -59,6 +59,7 @@ The following uv workspace members are also available:
 - [uv-preview](https://crates.io/crates/uv-preview)
 - [uv-publish](https://crates.io/crates/uv-publish)
 - [uv-pypi-types](https://crates.io/crates/uv-pypi-types)
+- [uv-pyproject-toml](https://crates.io/crates/uv-pyproject-toml)
 - [uv-python](https://crates.io/crates/uv-python)
 - [uv-redacted](https://crates.io/crates/uv-redacted)
 - [uv-requirements](https://crates.io/crates/uv-requirements)

@@ -40,6 +40,9 @@ use uv_fs::{PythonExt, Simplified};
 use uv_normalize::PackageName;
 use uv_pep440::Version;
 use uv_pypi_types::VerbatimParsedUrl;
+use uv_pyproject_toml::{
+    BuildSystem as PyProjectBuildSystem, Ignored, ProjectWire as PyProjectProjectWire,
+};
 use uv_python::{Interpreter, PythonEnvironment};
 use uv_static::EnvVars;
 use uv_types::{
@@ -71,33 +74,16 @@ struct PyProjectToml {
     tool: Option<Tool>,
 }
 
-/// The `[project]` section of a pyproject.toml as specified in PEP 621.
-///
-/// This representation only includes a subset of the fields defined in PEP 621 necessary for
-/// informing wheel builds.
-#[derive(Deserialize, Debug)]
-#[serde(rename_all = "kebab-case")]
-struct Project {
-    /// The name of the project
-    name: PackageName,
-    /// The version of the project as supported by PEP 440
-    version: Option<Version>,
-    /// Specifies which fields listed by PEP 621 were intentionally unspecified so another tool
-    /// can/will provide such metadata dynamically.
-    dynamic: Option<Vec<String>>,
-}
-
-/// The `[build-system]` section of a pyproject.toml as specified in PEP 517.
-#[derive(Deserialize, Debug)]
-#[serde(rename_all = "kebab-case")]
-struct BuildSystem {
-    /// PEP 508 dependencies required to execute the build system.
-    requires: Vec<uv_pep508::Requirement<VerbatimParsedUrl>>,
-    /// A string naming a Python object that will be used to perform the build.
-    build_backend: Option<String>,
-    /// Specifies that backend code is hosted in-tree, this key contains a list of directories.
-    backend_path: Option<BackendPath>,
-}
+type Project = PyProjectProjectWire<
+    PackageName,
+    Option<Version>,
+    Option<Ignored>,
+    Option<Ignored>,
+    Option<Ignored>,
+    Option<Ignored>,
+    Option<Ignored>,
+>;
+type BuildSystem = PyProjectBuildSystem<uv_pep508::Requirement<VerbatimParsedUrl>, BackendPath>;
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "kebab-case")]
