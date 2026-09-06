@@ -70,7 +70,7 @@ jobs:
       contents: read
       issues: read
     outputs:
-      issue-number: ${{ steps.issue.outputs.number }}
+      issue-number: ${{ steps.issue.outputs.issue-number }}
       result: ${{ steps.reproduce.outputs.final-message }}
       thread-artifact-id: ${{ steps.upload-thread.outputs.artifact-id }}
     steps:
@@ -85,15 +85,13 @@ jobs:
 
       - name: "Collect issue context"
         id: issue
-        run: |
-          gh issue view "$ISSUE" \
-            --repo "$GITHUB_REPOSITORY" \
-            --json number,title,body,author \
-            > .issue-triage-event.json
+        uses: ./.github/actions/fetch-issue
+        with:
+          issue: ${{ inputs.issue }}
 
+      - name: "Prepare issue reproduction prompt"
+        run: |
           issue_number="$(jq --raw-output '.number' .issue-triage-event.json)"
-          jq --raw-output '"number=\(.number)"' \
-            .issue-triage-event.json >> "$GITHUB_OUTPUT"
 
           git init --quiet "$RUNNER_TEMP/issue-context"
           git -C "$RUNNER_TEMP/issue-context" fetch --quiet --depth 1 \
@@ -107,9 +105,6 @@ jobs:
               "$(jq -r '.title | gsub("[\r\n]+"; " ")' .issue-triage-event.json)"
             cat agents/prompts/reproduce-bug.md
           } > "$RUNNER_TEMP/reproduce-bug-prompt.md"
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ISSUE: ${{ inputs.issue }}
 
       - name: "Reproduce issue behavior"
         id: reproduce
@@ -133,7 +128,7 @@ jobs:
         if: steps.reproduce.outputs.final-message != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: issue-context-${{ steps.issue.outputs.number }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: issue-context-${{ steps.issue.outputs.issue-number }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/issue-context/README.md
           if-no-files-found: error
           retention-days: 1
@@ -249,16 +244,16 @@ jobs:
       - name: "Install required Python versions"
         run: uv python install
 
-      - name: "Collect reproduction context"
+      - name: "Collect issue context"
+        uses: ./.github/actions/fetch-issue
+        with:
+          issue: ${{ inputs.issue }}
+          path: ${{ runner.temp }}/issue-triage-event.json
+
+      - name: "Prepare reproduction context"
         run: |
-          gh issue view "$ISSUE" \
-            --repo "$GITHUB_REPOSITORY" \
-            --json number,title,body,author \
-            > "$RUNNER_TEMP/issue-triage-event.json"
           printf '%s\n' "$REPRODUCTION_RESULT" > "$RUNNER_TEMP/bug-reproduction-result.json"
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ISSUE: ${{ inputs.issue }}
           REPRODUCTION_RESULT: ${{ needs.reproduce.outputs.result }}
 
       - name: "Create integration test"
