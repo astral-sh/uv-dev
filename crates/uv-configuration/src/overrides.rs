@@ -215,15 +215,17 @@ impl Overrides {
         })
     }
 
-    /// Return the scoped [`Requirement`]s that apply to a specific package version.
-    pub fn scoped_requirements_for(
+    /// Return the scoped [`Requirement`]s for a dependency of a specific package version.
+    pub fn scoped_requirements_for_dependency(
         &self,
         package: &PackageName,
         version: &Version,
+        dependency: &PackageName,
     ) -> impl Iterator<Item = &Requirement> {
         self.scoped_for(package, version)
+            .and_then(|scoped| scoped.overrides.get(dependency))
             .into_iter()
-            .flat_map(|scoped| scoped.overrides.values().flatten())
+            .flatten()
     }
 
     /// Return whether a package has overrides for an exact version.
@@ -364,5 +366,119 @@ impl Overrides {
                 })
             },
         )))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+    use std::str::FromStr;
+
+    use anyhow::Result;
+
+    use uv_pep440::VersionSpecifiers;
+    use uv_pep508::RequirementOrigin;
+
+    use super::*;
+
+    fn requirement(name: &str, specifier: &str, marker: &str, origin: &str) -> Result<Requirement> {
+        Ok(Requirement {
+            name: PackageName::from_str(name)?,
+            extras: Box::new([]),
+            groups: Box::new([]),
+            marker: if marker.is_empty() {
+                MarkerTree::TRUE
+            } else {
+                MarkerTree::from_str(marker)?
+            },
+            source: RequirementSource::Registry {
+                specifier: VersionSpecifiers::from_str(specifier)?,
+                index: None,
+                conflict: None,
+            },
+            origin: Some(RequirementOrigin::File(PathBuf::from(origin))),
+        })
+    }
+
+    #[test]
+    fn scoped_requirements_for_dependency_preserves_annotations() -> Result<()> {
+        let parent = PackageName::from_str("parent")?;
+        let other_parent = PackageName::from_str("other-parent")?;
+        let target = PackageName::from_str("target")?;
+        let other = PackageName::from_str("other")?;
+        let unrelated = PackageName::from_str("unrelated")?;
+        let version1 = Version::from_str("1.0.0")?;
+        let version2 = Version::from_str("2.0.0")?;
+        let version3 = Version::from_str("3.0.0")?;
+
+        let overrides = Overrides::from_entries(vec![
+            Override::Package(PackageOverride {
+                package: PackageOverrideTarget {
+                    name: parent.clone(),
+                    version: None,
+                },
+                dependencies: vec![
+                    requirement("target", "==1", "python_version < '3.12'", "fallback.in")?,
+                    requirement("unrelated", "==1", "", "unrelated.in")?,
+                ]
+                .into_boxed_slice(),
+            }),
+            Override::Package(PackageOverride {
+                package: PackageOverrideTarget {
+                    name: parent.clone(),
+                    version: Some(version1.clone()),
+                },
+                dependencies: vec![
+                    requirement("target", "==2", "python_version >= '3.12'", "exact-a.in")?,
+                    requirement("target", "==2", "sys_platform == 'win32'", "exact-b.in")?,
+                    requirement("target", "==2", "extra == 'unused'", "inactive.in")?,
+                    requirement("other", "==1", "", "other.in")?,
+                ]
+                .into_boxed_slice(),
+            }),
+            Override::Package(PackageOverride {
+                package: PackageOverrideTarget {
+                    name: parent.clone(),
+                    version: Some(version2.clone()),
+                },
+                dependencies: vec![requirement("target", "==3", "", "exact-v2.in")?]
+                    .into_boxed_slice(),
+            }),
+        ])?;
+
+        let edges = [
+            (&parent, &version1, &target),
+            (&parent, &version1, &target),
+            (&parent, &version1, &other),
+            (&parent, &version1, &unrelated),
+            (&parent, &version2, &target),
+            (&parent, &version3, &target),
+            (&parent, &version3, &unrelated),
+            (&other_parent, &version1, &target),
+        ];
+        let annotations = edges
+            .into_iter()
+            .flat_map(|(package, version, dependency)| {
+                overrides.scoped_requirements_for_dependency(package, version, dependency)
+            })
+            .filter(|requirement| requirement.evaluate_markers(None, &[]))
+            .map(|requirement| requirement.origin.as_ref().map(RequirementOrigin::path))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            annotations,
+            [
+                Some(Path::new("exact-a.in")),
+                Some(Path::new("exact-b.in")),
+                Some(Path::new("exact-a.in")),
+                Some(Path::new("exact-b.in")),
+                Some(Path::new("other.in")),
+                Some(Path::new("exact-v2.in")),
+                Some(Path::new("fallback.in")),
+                Some(Path::new("unrelated.in")),
+            ]
+        );
+
+        Ok(())
     }
 }
