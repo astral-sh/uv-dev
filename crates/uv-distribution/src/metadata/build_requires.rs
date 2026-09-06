@@ -13,7 +13,7 @@ use uv_workspace::{
     DiscoveryOptions, MemberDiscovery, ProjectWorkspace, Workspace, WorkspaceCache,
 };
 
-use crate::metadata::{LoweredRequirement, MetadataError};
+use crate::metadata::{IndexLookup, LoweredRequirement, MetadataError};
 
 /// Lowered requirements from a `[build-system.requires]` field in a `pyproject.toml` file.
 #[derive(Debug, Clone)]
@@ -123,6 +123,12 @@ impl BuildRequires {
                 .unwrap_or(&empty)
         };
 
+        let indexes = IndexLookup::new(
+            locations,
+            project_indexes,
+            project_workspace.workspace().indexes(),
+        );
+
         // Lower the requirements.
         let mut requires_dist = Vec::new();
         for requirement in metadata.requires_dist {
@@ -139,10 +145,9 @@ impl BuildRequires {
                     metadata.name.as_ref(),
                     project_workspace.project_root(),
                     project_sources,
-                    project_indexes,
+                    &indexes,
                     extra.as_deref(),
                     None,
-                    locations,
                     project_workspace.workspace(),
                     None,
                     editable,
@@ -199,6 +204,8 @@ impl BuildRequires {
             .map(ToolUvSources::inner)
             .unwrap_or(&empty);
 
+        let indexes = IndexLookup::new(locations, project_indexes, workspace.indexes());
+
         // Lower the requirements.
         let mut requires_dist = Vec::new();
         for requirement in metadata.requires_dist {
@@ -215,10 +222,9 @@ impl BuildRequires {
                     None,
                     workspace.install_path(),
                     project_sources,
-                    project_indexes,
+                    &indexes,
                     extra.as_deref(),
                     None,
-                    locations,
                     workspace,
                     None,
                     true,
@@ -289,6 +295,9 @@ impl LoweredExtraBuildDependencies {
                     .map(ToolUvSources::inner)
                     .unwrap_or(&empty_sources);
 
+                let indexes =
+                    IndexLookup::new(index_locations, project_indexes, workspace.indexes());
+
                 // Lower each package's extra build dependencies
                 let mut build_requires = ExtraBuildRequires::default();
                 for (package_name, requirements) in extra_build_dependencies {
@@ -306,10 +315,9 @@ impl LoweredExtraBuildDependencies {
                                 None,
                                 workspace.install_path(),
                                 project_sources,
-                                project_indexes,
+                                &indexes,
                                 extra.as_deref(),
                                 None,
-                                index_locations,
                                 workspace,
                                 None,
                                 true,

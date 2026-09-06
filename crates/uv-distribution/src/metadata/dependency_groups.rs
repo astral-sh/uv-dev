@@ -13,7 +13,7 @@ use uv_workspace::{
     WorkspaceErrorKind,
 };
 
-use crate::metadata::{GitWorkspaceMember, LoweredRequirement, MetadataError};
+use crate::metadata::{GitWorkspaceMember, IndexLookup, LoweredRequirement, MetadataError};
 
 /// Like [`crate::RequiresDist`] but only supporting dependency-groups.
 ///
@@ -140,6 +140,8 @@ impl SourcedDependencyGroups {
         // a valid extra or group, if present.
         Self::validate_sources(project_sources, &dependency_groups)?;
 
+        let indexes = IndexLookup::new(locations, project_indexes, project.workspace().indexes());
+
         // Lower the dependency groups.
         let mut lowered_dependency_groups = BTreeMap::new();
         for (name, group) in dependency_groups {
@@ -157,10 +159,9 @@ impl SourcedDependencyGroups {
                         project.project_name(),
                         project.root(),
                         project_sources,
-                        project_indexes,
+                        &indexes,
                         None,
                         Some(&name),
-                        locations,
                         project.workspace(),
                         git_member,
                         true,
