@@ -827,6 +827,7 @@ async fn do_lock(
         .index_strategy(*index_strategy)
         .build_options(build_options.clone())
         .artifact_environments(artifact_environments.clone())
+        .required_environments(lock_required_environments.clone())
         .build();
     let hasher = HashStrategy::generate(HashGeneration::Url);
 
