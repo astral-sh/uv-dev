@@ -1571,6 +1571,18 @@ impl ValidatedLock {
                 }
                 Ok(Self::Preferable(lock))
             }
+            SatisfiesResult::UncoveredPackageDependency(name, version, requirement) => {
+                if let Some(version) = version {
+                    debug!(
+                        "Resolving despite existing lockfile due to an uncovered dependency for: `{name}=={version}`\n  Requested: {requirement:?}"
+                    );
+                } else {
+                    debug!(
+                        "Resolving despite existing lockfile due to an uncovered dependency for: `{name}`\n  Requested: {requirement:?}"
+                    );
+                }
+                Ok(Self::Preferable(lock))
+            }
             SatisfiesResult::MismatchedPackageProvidesExtra(name, version, expected, actual) => {
                 if let Some(version) = version {
                     debug!(

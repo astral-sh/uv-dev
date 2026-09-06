@@ -2549,6 +2549,79 @@ fn lock_project_with_excludes() -> Result<()> {
     Ok(())
 }
 
+/// Relative path and editable sources, including a source replacement from an override, must not
+/// cause an immediately re-locked project to be considered stale.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_dependency_edges_accept_source_replacement() -> Result<()> {
+    let context = uv_test::test_context!("3.13");
+
+    let wheel = context
+        .temp_dir
+        .child("wheels/basic_package-0.1.0-py3-none-any.whl");
+    fs_err::create_dir_all(wheel.parent().expect("wheel parent"))?;
+    fs_err::copy(
+        context
+            .workspace_root
+            .join("test/links/basic_package-0.1.0-py3-none-any.whl"),
+        &wheel,
+    )?;
+
+    let library = context.temp_dir.child("library");
+    library.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "library"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        dependencies = []
+
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+        "#,
+    )?;
+    library.child("src/library/__init__.py").touch()?;
+
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        dependencies = ["anyio==3.7.0", "basic-package", "library"]
+
+        [tool.uv]
+        override-dependencies = ["idna==3.2"]
+
+        [tool.uv.sources]
+        basic-package = { path = "wheels/basic_package-0.1.0-py3-none-any.whl" }
+        idna = { url = "https://files.pythonhosted.org/packages/d7/77/ff688d1504cdc4db2a938e2b7b9adee5dd52e34efbd2431051efc9984de9/idna-3.2-py3-none-any.whl" }
+        library = { path = "library", editable = true }
+        "#,
+    )?;
+
+    uv_snapshot!(context.filters(), context.lock(), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Resolved 6 packages in [TIME]
+    ");
+
+    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Resolved 6 packages in [TIME]
+    ");
+
+    Ok(())
+}
+
 /// Lock a project with `uv.tool.constraint-dependencies`.
 #[cfg(feature = "test-universal")]
 #[test]
@@ -16958,6 +17031,96 @@ fn check_unformatted_lock() -> Result<()> {
     ");
 
     assert_eq!(context.read("uv.lock"), unformatted);
+
+    Ok(())
+}
+
+/// A lock with unchanged metadata but missing, narrowed, or incomplete dependency edges is stale.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_rejects_incomplete_dependency_edges() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["requests[socks]; sys_platform == 'darwin'"]
+
+        [project.optional-dependencies]
+        test = ["idna"]
+
+        [dependency-groups]
+        dev = ["iniconfig"]
+        "#,
+    )?;
+
+    uv_snapshot!(context.filters(), context.lock(), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Resolved 8 packages in [TIME]
+    ");
+
+    // An unchanged lock remains valid before the dependency edges are modified.
+    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Resolved 8 packages in [TIME]
+    ");
+
+    let lockfile = context.temp_dir.child("uv.lock");
+    let lock = context.read("uv.lock");
+    let incomplete = [
+        // The group metadata is present, but its resolved edge has been removed.
+        lock.replace(
+            "[package.dev-dependencies]\ndev = [\n    { name = \"iniconfig\" },\n]",
+            "[package.dev-dependencies]\ndev = []",
+        ),
+        // The optional-dependency metadata is present, but its resolved edge has been removed.
+        lock.replace(
+            "[package.optional-dependencies]\ntest = [\n    { name = \"idna\" },\n]",
+            "[package.optional-dependencies]\ntest = []",
+        ),
+        // The resolved edge no longer activates the requested downstream extra.
+        lock.replace(
+            "{ name = \"requests\", extra = [\"socks\"], marker = \"sys_platform == 'darwin'\" }",
+            "{ name = \"requests\", marker = \"sys_platform == 'darwin'\" }",
+        ),
+        // The resolved edge covers a narrower environment than the metadata requirement.
+        lock.replace(
+            "{ name = \"requests\", extra = [\"socks\"], marker = \"sys_platform == 'darwin'\" }",
+            "{ name = \"requests\", extra = [\"socks\"], marker = \"sys_platform == 'win32'\" }",
+        ),
+    ];
+
+    insta::allow_duplicates! {
+        for incomplete in incomplete {
+            assert_ne!(lock, incomplete);
+            lockfile
+                .write_str(&incomplete)
+                .expect("write incomplete lockfile");
+
+            uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
+            success: false
+            exit_code: 1
+            ----- stdout -----
+
+            ----- stderr -----
+            Resolved 8 packages in [TIME]
+            error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+            hint: To update the lockfile, run `uv lock`.
+            ");
+        }
+    }
 
     Ok(())
 }
