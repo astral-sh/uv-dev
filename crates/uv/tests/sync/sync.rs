@@ -2608,6 +2608,68 @@ fn sync_extra_build_dependencies_setuptools_legacy() -> Result<()> {
 }
 
 #[test]
+fn sync_extra_build_dependencies_with_dynamic_requirements() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_filtered_counts();
+
+    let child = context.temp_dir.child("child");
+    child.create_dir_all()?;
+    child.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = ["hatchling==1.22.4"]
+        backend-path = ["."]
+        build-backend = "build_backend"
+    "#})?;
+    child.child("build_backend.py").write_str(indoc! {r#"
+        from importlib.metadata import version
+
+        from hatchling.build import *
+
+        if version("packaging") != "23.2":
+            raise RuntimeError(f"Expected packaging 23.2, found {version('packaging')}")
+
+        def get_requires_for_build_wheel(config_settings=None):
+            return ["anyio==4.3.0"]
+    "#})?;
+    child.child("src/child/__init__.py").touch()?;
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["child"]
+
+        [tool.uv.sources]
+        child = { path = "child" }
+
+        [tool.uv.extra-build-dependencies]
+        child = ["packaging==23.2; python_version >= '3.12'"]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.sync(), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Resolved [N] packages in [TIME]
+    Prepared [N] packages in [TIME]
+    Installed [N] packages in [TIME]
+     + child==0.1.0 (from file://[TEMP_DIR]/child)
+    ");
+
+    Ok(())
+}
+
+#[test]
 fn sync_extra_build_dependencies_setuptools() -> Result<()> {
     let context = uv_test::test_context!("3.12").with_filtered_counts();
 

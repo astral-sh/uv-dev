@@ -398,7 +398,7 @@ impl SourceBuild {
                 build_context,
                 source_build_context.clone(),
                 &pep517_backend,
-                extra_build_dependencies,
+                &extra_build_dependencies,
                 build_stack,
             )
             .await?;
@@ -455,6 +455,7 @@ impl SourceBuild {
                 &venv,
                 &pep517_backend,
                 build_context,
+                &extra_build_dependencies,
                 package_name.as_ref(),
                 package_version.as_ref(),
                 version_id,
@@ -526,7 +527,7 @@ impl SourceBuild {
         build_context: &impl BuildContext,
         source_build_context: SourceBuildContext,
         pep517_backend: &Pep517Backend,
-        extra_build_dependencies: Vec<Requirement>,
+        extra_build_dependencies: &[Requirement],
         build_stack: &BuildStack,
     ) -> Result<ResolvedRequirements, Error> {
         Ok(
@@ -556,7 +557,7 @@ impl SourceBuild {
                     // If there are extra build dependencies, we need to resolve them together with
                     // the backend requirements.
                     let mut requirements = pep517_backend.requirements.clone();
-                    requirements.extend(extra_build_dependencies);
+                    requirements.extend(extra_build_dependencies.iter().cloned());
                     (
                         Cow::Owned(requirements),
                         "`build-system.requires` and `extra-build-dependencies`",
@@ -1020,6 +1021,7 @@ async fn create_pep517_build_environment(
     venv: &PythonEnvironment,
     pep517_backend: &Pep517Backend,
     build_context: &impl BuildContext,
+    extra_build_dependencies: &[Requirement],
     package_name: Option<&PackageName>,
     package_version: Option<&Version>,
     version_id: Option<&str>,
@@ -1155,6 +1157,7 @@ async fn create_pep517_build_environment(
             .requirements
             .iter()
             .cloned()
+            .chain(extra_build_dependencies.iter().cloned())
             .chain(extra_requires)
             .collect();
         let resolution = build_context
