@@ -6954,7 +6954,7 @@ pub struct SourcesArgs {
         value_parser = clap::builder::BoolishValueParser::new(),
         help_heading = "Resolver options",
     )]
-    no_sources: bool,
+    pub no_sources: bool,
 
     /// Don't use sources from the `tool.uv.sources` table for the specified packages [env: `UV_NO_SOURCES_PACKAGE`=]
     #[arg(long, help_heading = "Resolver options", value_delimiter = ' ')]
@@ -7470,7 +7470,7 @@ pub struct ResolverArgs {
         overrides_with("no_upgrade"),
         help_heading = "Resolver options"
     )]
-    upgrade: bool,
+    pub upgrade: bool,
 
     #[arg(
         long,
@@ -7539,7 +7539,7 @@ pub struct ResolverArgs {
     link_mode: Option<uv_install_wheel::LinkMode>,
 
     #[command(flatten)]
-    sources: SourcesArgs,
+    pub sources: SourcesArgs,
 }
 
 /// Arguments that are used by commands that need to resolve and install packages.
