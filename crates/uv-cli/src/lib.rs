@@ -7682,7 +7682,7 @@ pub struct DisplayTreeArgs {
     pub show_sizes: bool,
 }
 
-#[derive(Args, Debug)]
+#[derive(Args)]
 pub struct PublishArgs {
     /// Paths to the files to upload. Accepts glob expressions.
     ///
@@ -7814,6 +7814,52 @@ pub struct PublishArgs {
     /// that is published.
     #[arg(long, env = EnvVars::UV_PUBLISH_NO_ATTESTATIONS)]
     pub no_attestations: bool,
+}
+
+impl fmt::Debug for PublishArgs {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PublishArgs")
+            .field("files", &self.files)
+            .field("index", &self.index)
+            .field("username", &self.username)
+            .field("password", &self.password.as_ref().map(|_| "****"))
+            .field("token", &self.token.as_ref().map(|_| "****"))
+            .field("trusted_publishing", &self.trusted_publishing)
+            .field("keyring_provider", &self.keyring_provider)
+            .field("publish_url", &self.publish_url)
+            .field("check_url", &self.check_url)
+            .field("skip_existing", &self.skip_existing)
+            .field("dry_run", &self.dry_run)
+            .field("no_attestations", &self.no_attestations)
+            .field("direct", &self.direct)
+            .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PublishArgs;
+
+    #[test]
+    fn publish_args_redacts_credentials() {
+        let args = PublishArgs {
+            files: vec![],
+            index: None,
+            username: Some("ferris".to_string()),
+            password: Some("publish-password".to_string()),
+            token: Some("publish-token".to_string()),
+            trusted_publishing: None,
+            keyring_provider: None,
+            publish_url: None,
+            check_url: None,
+            skip_existing: false,
+            dry_run: false,
+            no_attestations: false,
+            direct: false,
+        };
+
+        insta::assert_compact_debug_snapshot!(args, @r#"PublishArgs { files: [], index: None, username: Some("ferris"), password: Some("****"), token: Some("****"), trusted_publishing: None, keyring_provider: None, publish_url: None, check_url: None, skip_existing: false, dry_run: false, no_attestations: false, direct: false }"#);
+    }
 }
 
 #[derive(Args)]

@@ -5373,12 +5373,23 @@ impl AuthTokenSettings {
 }
 
 /// The resolved settings to use for an invocation of the `uv auth set` CLI.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub(crate) struct AuthLoginSettings {
     pub(crate) service: Service,
     pub(crate) username: Option<String>,
     pub(crate) password: Option<String>,
     pub(crate) token: Option<String>,
+}
+
+impl fmt::Debug for AuthLoginSettings {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AuthLoginSettings")
+            .field("service", &self.service)
+            .field("username", &self.username)
+            .field("password", &self.password.as_ref().map(|_| "****"))
+            .field("token", &self.token.as_ref().map(|_| "****"))
+            .finish()
+    }
 }
 
 impl AuthLoginSettings {
@@ -5447,6 +5458,19 @@ mod tests {
 
         assert!(!settings.settings.upgrade.is_all());
         assert_eq!(settings.settings.upgrade.packages(), Some(&expected));
+        Ok(())
+    }
+
+    #[test]
+    fn auth_login_settings_redacts_credentials() -> anyhow::Result<()> {
+        let settings = AuthLoginSettings {
+            service: Service::from_str("https://example.com")?,
+            username: Some("ferris".to_string()),
+            password: Some("auth-password".to_string()),
+            token: Some("auth-token".to_string()),
+        };
+
+        insta::assert_compact_debug_snapshot!(settings, @r#"AuthLoginSettings { service: Service(DisplaySafeUrl { scheme: "https", cannot_be_a_base: false, username: "", password: None, host: Some(Domain("example.com")), port: None, path: "/", query: None, fragment: None }), username: Some("ferris"), password: Some("****"), token: Some("****") }"#);
         Ok(())
     }
 }
