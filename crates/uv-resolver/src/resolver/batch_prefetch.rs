@@ -13,7 +13,9 @@ use crate::resolver::Request;
 use crate::{
     InMemoryIndex, PythonRequirement, ResolveError, ResolverEnvironment, VersionsResponse,
 };
-use uv_distribution_types::{CompatibleDist, Identifier, IndexCapabilities, IndexMetadata};
+use uv_distribution_types::{
+    CompatibleDist, DistInfoMetadata, Identifier, IndexCapabilities, IndexMetadata,
+};
 use uv_normalize::PackageName;
 use uv_pep440::Version;
 use uv_pep508::MarkerTree;
@@ -287,9 +289,10 @@ impl BatchPrefetcherRunner {
 
             // Avoid prefetching built distributions that don't support _either_ PEP 658 (`.metadata`)
             // or range requests.
-            if !(wheel.file.dist_info_metadata
-                || self.capabilities.supports_range_requests(&wheel.index))
-            {
+            if !can_prefetch_metadata(
+                wheel.file.dist_info_metadata,
+                self.capabilities.supports_range_requests(&wheel.index),
+            ) {
                 debug!("Abandoning prefetch for {wheel} due to missing registry capabilities");
                 return Ok(());
             }
@@ -328,6 +331,12 @@ impl BatchPrefetcherRunner {
     }
 }
 
+fn can_prefetch_metadata(metadata: DistInfoMetadata, supports_range_requests: bool) -> bool {
+    // An unadvertised sidecar can be missing. Without ranges, probing it could turn prefetch
+    // into a full download of a wheel that is never selected.
+    metadata == DistInfoMetadata::Available || supports_range_requests
+}
+
 fn satisfies_python(dist: &CompatibleDist, python_requirement: &PythonRequirement) -> bool {
     match dist {
         CompatibleDist::InstalledDist(_) => {}
@@ -358,4 +367,22 @@ fn satisfies_python(dist: &CompatibleDist, python_requirement: &PythonRequiremen
     }
 
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use uv_distribution_types::DistInfoMetadata;
+
+    use super::can_prefetch_metadata;
+
+    #[test]
+    fn unadvertised_metadata_does_not_enable_full_wheel_prefetch() {
+        assert!(!can_prefetch_metadata(
+            DistInfoMetadata::Unadvertised,
+            false
+        ));
+        assert!(can_prefetch_metadata(DistInfoMetadata::Available, false));
+        assert!(can_prefetch_metadata(DistInfoMetadata::Unadvertised, true));
+        assert!(!can_prefetch_metadata(DistInfoMetadata::Unavailable, false));
+    }
 }
