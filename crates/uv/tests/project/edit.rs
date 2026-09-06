@@ -11393,6 +11393,74 @@ fn add_index_comments() -> Result<()> {
     Ok(())
 }
 
+/// Renaming an equivalent index must update every existing source reference.
+#[test]
+fn add_index_renames_existing_sources() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = uv_test::packse::PackseServer::new("simple/dependency-groups.toml");
+    let index_url = server.index_url();
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["sniffio==1.3.1"]
+
+        [[tool.uv.index]]
+        name = "old"
+        url = "{index_url}"
+        explicit = true
+
+        [tool.uv.sources]
+        sniffio = [{{ index = "old", marker = "sys_platform == 'linux'" }}, {{ index = "old", marker = "sys_platform != 'linux'" }}]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.add().arg("iniconfig==2.0.0").arg("--index").arg(format!("new={}", index_url.trim_end_matches('/'))).arg("--frozen"), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    ");
+
+    insta::with_settings!({filters => context.filters()}, {
+        assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "0.1.0"
+    requires-python = ">=3.12"
+    dependencies = [
+        "iniconfig==2.0.0",
+        "sniffio==1.3.1",
+    ]
+
+    [[tool.uv.index]]
+    name = "new"
+    url = "http://[LOCALHOST]/simple"
+    explicit = true
+
+    [tool.uv.sources]
+    sniffio = [{ index = "new", marker = "sys_platform == 'linux'" }, { index = "new", marker = "sys_platform != 'linux'" }]
+    iniconfig = { index = "new" }
+    "#);
+    });
+
+    uv_snapshot!(context.filters(), context.lock(), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+
+    Ok(())
+}
+
 /// Accidentally add a dependency on the project itself.
 #[test]
 fn add_self() -> Result<()> {
