@@ -7255,6 +7255,7 @@ fn lock_requires_python_not_equal() -> Result<()> {
 }
 
 /// Lock a requirement from PyPI when `Requires-Python` excludes consecutive minor versions.
+/// See astral-sh/uv#21036.
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_requires_python_not_equal_consecutive_wildcards() -> Result<()> {
