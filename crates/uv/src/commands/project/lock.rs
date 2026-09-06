@@ -1529,6 +1529,12 @@ impl ValidatedLock {
                 );
                 Ok(Self::Preferable(lock))
             }
+            SatisfiesResult::ExcludedNewerArtifact(name, version, timestamp) => {
+                debug!(
+                    "Resolving despite existing lockfile due to an excluded artifact: `{name}` `{version}` is newer than `{timestamp}`"
+                );
+                Ok(Self::Preferable(lock))
+            }
             SatisfiesResult::MismatchedPackageRequirements(name, version, expected, actual) => {
                 if let Some(version) = version {
                     debug!(
