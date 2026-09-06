@@ -1189,6 +1189,48 @@ pub(crate) fn parse_scripts(
     Ok((console_scripts, gui_scripts))
 }
 
+/// Return the paths at which a wheel's console, GUI, and data scripts will be installed.
+pub fn script_paths(layout: &Layout, wheel: impl AsRef<Path>) -> Result<Vec<PathBuf>, Error> {
+    let wheel = wheel.as_ref();
+    let dist_info_prefix = find_dist_info(wheel)?;
+    let (console_scripts, gui_scripts) =
+        parse_scripts(wheel, &dist_info_prefix, None, layout.python_version.1)?;
+
+    let mut paths = console_scripts
+        .iter()
+        .chain(&gui_scripts)
+        .map(|script| ValidatedScript::try_from_script(script, layout).map(|script| script.path))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let data_scripts = wheel.join(format!("{dist_info_prefix}.data/scripts"));
+    if data_scripts.is_dir() {
+        for entry in fs::read_dir(data_scripts)? {
+            let entry = entry?;
+            paths.push(layout.scheme.scripts.join(entry.file_name()));
+        }
+    }
+
+    // `.data/data` is moved to the environment root and can also write into the scripts
+    // directory when the latter is nested under the data scheme (as it is in a virtualenv).
+    if let Ok(scripts_relative) = layout.scheme.scripts.strip_prefix(&layout.scheme.data) {
+        let data_scripts = wheel
+            .join(format!("{dist_info_prefix}.data/data"))
+            .join(scripts_relative);
+        if data_scripts.is_dir() {
+            for entry in WalkDir::new(&data_scripts).min_depth(1) {
+                let entry = entry?;
+                if entry.file_type().is_dir() {
+                    continue;
+                }
+                let relative = relative_to(entry.path(), &data_scripts)?;
+                paths.push(layout.scheme.scripts.join(relative));
+            }
+        }
+    }
+
+    Ok(paths)
+}
+
 /// Rename a file with a fallback to copy that switches over on the first failure.
 #[derive(Default, Copy, Clone)]
 enum RenameOrCopy {
