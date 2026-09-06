@@ -1288,6 +1288,74 @@ impl Lock {
         Ok(lock)
     }
 
+    /// Make local package sources independent of their original lockfile location.
+    ///
+    /// Project locks describe local sources relative to the project root. Tool locks live next to
+    /// their receipts instead, so those sources must be made absolute before copying a project lock
+    /// into a tool environment. The provided manifest replaces the project manifest.
+    pub fn into_absolute_paths(
+        mut self,
+        root: &Path,
+        project_name: &PackageName,
+        editable: bool,
+        required_members: &BTreeMap<PackageName, Editability>,
+        manifest: ResolverManifest,
+    ) -> Result<Self, LockError> {
+        for package in &mut self.packages {
+            let package_editable = if &package.id.name == project_name {
+                Some(editable)
+            } else {
+                required_members
+                    .get(&package.id.name)
+                    .map(|explicit| explicit.unwrap_or(editable))
+            };
+            package.id.source.make_absolute(root, package_editable)?;
+
+            for dependency in package
+                .dependencies
+                .iter_mut()
+                .chain(package.optional_dependencies.values_mut().flatten())
+                .chain(package.dependency_groups.values_mut().flatten())
+            {
+                let dependency_editable = if &dependency.package_id.name == project_name {
+                    Some(editable)
+                } else {
+                    required_members
+                        .get(&dependency.package_id.name)
+                        .map(|explicit| explicit.unwrap_or(editable))
+                };
+                dependency
+                    .package_id
+                    .source
+                    .make_absolute(root, dependency_editable)?;
+            }
+
+            package.metadata.requires_dist = std::mem::take(&mut package.metadata.requires_dist)
+                .into_iter()
+                .map(|requirement| requirement.to_absolute(root))
+                .collect();
+            for requirements in package.metadata.dependency_groups.values_mut() {
+                *requirements = std::mem::take(requirements)
+                    .into_iter()
+                    .map(|requirement| requirement.to_absolute(root))
+                    .collect();
+            }
+        }
+
+        Self::new(
+            self.version,
+            self.revision,
+            self.packages,
+            self.requires_python,
+            self.options,
+            manifest,
+            self.conflicts,
+            self.supported_environments,
+            self.required_environments,
+            self.fork_markers,
+        )
+    }
+
     /// Record the conflicting groups that were used to generate this lock.
     #[must_use]
     pub fn with_conflicts(mut self, conflicts: Conflicts) -> Self {
@@ -1684,6 +1752,48 @@ impl Lock {
             }
         }
         Ok(selected)
+    }
+
+    /// Returns the constraints that were used to generate this lock.
+    pub fn constraints(&self, root: &Path) -> Constraints {
+        Constraints::from_requirements(
+            self.manifest
+                .constraints
+                .iter()
+                .cloned()
+                .map(|requirement| requirement.to_absolute(root)),
+        )
+    }
+
+    /// Returns the overrides that were used to generate this lock.
+    pub fn overrides<'a>(
+        &'a self,
+        root: &'a Path,
+    ) -> impl Iterator<Item = Override<Requirement>> + 'a {
+        self.manifest
+            .overrides
+            .iter()
+            .cloned()
+            .map(move |entry| match entry {
+                Override::Requirement(requirement) => {
+                    Override::Requirement(requirement.to_absolute(root))
+                }
+                Override::Package(package) => Override::Package(PackageOverride {
+                    package: package.package,
+                    dependencies: package
+                        .dependencies
+                        .into_vec()
+                        .into_iter()
+                        .map(|requirement| requirement.to_absolute(root))
+                        .collect::<Vec<_>>()
+                        .into_boxed_slice(),
+                }),
+            })
+    }
+
+    /// Returns the excludes that were used to generate this lock.
+    pub fn excludes(&self) -> impl Iterator<Item = &ExcludeDependency> {
+        self.manifest.excludes.iter()
     }
 
     /// Returns the build constraints that were used to generate this lock.
@@ -4855,6 +4965,36 @@ enum Source {
 }
 
 impl Source {
+    /// Resolve local sources against the root of their original lockfile.
+    fn make_absolute(&mut self, root: &Path, editable: Option<bool>) -> Result<(), LockError> {
+        match self {
+            Self::Registry(RegistrySource::Path(path)) | Self::Path(path) => {
+                *path = absolute_path(root, path)?.into_boxed_path();
+            }
+            Self::Directory(path) => match editable {
+                Some(true) => {
+                    *self = Self::Editable(absolute_path(root, path)?.into_boxed_path());
+                }
+                Some(false) | None => {
+                    *path = absolute_path(root, path)?.into_boxed_path();
+                }
+            },
+            Self::Editable(path) => match editable {
+                Some(false) => {
+                    *self = Self::Directory(absolute_path(root, path)?.into_boxed_path());
+                }
+                Some(true) | None => {
+                    *path = absolute_path(root, path)?.into_boxed_path();
+                }
+            },
+            Self::Virtual(path) => {
+                *path = absolute_path(root, path)?.into_boxed_path();
+            }
+            Self::Registry(RegistrySource::Url(_)) | Self::Git(..) | Self::Direct(..) => {}
+        }
+        Ok(())
+    }
+
     fn from_resolved_dist(resolved_dist: &ResolvedDist, root: &Path) -> Result<Self, LockError> {
         match *resolved_dist {
             // We pass empty installed packages for locking.

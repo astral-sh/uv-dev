@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use serde::Deserialize;
 use toml_edit::{Array, Item, Table, Value, value};
 
-use uv_configuration::ExcludeDependency;
+use uv_configuration::{ExcludeDependency, Override};
 use uv_distribution_types::Requirement;
 use uv_fs::{PortablePath, Simplified};
 use uv_pypi_types::VerbatimParsedUrl;
@@ -23,7 +23,7 @@ pub struct Tool {
     /// The constraints requested by the user during installation.
     constraints: Vec<Requirement>,
     /// The overrides requested by the user during installation.
-    overrides: Vec<Requirement>,
+    overrides: Vec<Override<Requirement>>,
     /// The excludes requested by the user during installation.
     excludes: Vec<ExcludeDependency>,
     /// The build constraints requested by the user during installation.
@@ -44,7 +44,7 @@ struct ToolWire {
     #[serde(default)]
     constraints: Vec<Requirement>,
     #[serde(default)]
-    overrides: Vec<Requirement>,
+    overrides: Vec<Override<Requirement>>,
     #[serde(default)]
     excludes: Vec<ExcludeDependency>,
     #[serde(default)]
@@ -174,7 +174,7 @@ impl Tool {
     pub fn new(
         requirements: Vec<Requirement>,
         constraints: Vec<Requirement>,
-        overrides: Vec<Requirement>,
+        overrides: Vec<Override<Requirement>>,
         excludes: Vec<ExcludeDependency>,
         build_constraints: Vec<Requirement>,
         python: Option<PythonRequest>,
@@ -363,7 +363,7 @@ impl Tool {
         &self.constraints
     }
 
-    pub fn overrides(&self) -> &[Requirement] {
+    pub fn overrides(&self) -> &[Override<Requirement>] {
         &self.overrides
     }
 
