@@ -16,6 +16,7 @@ use reqwest::{
 use reqwest_middleware::{ClientWithMiddleware, Middleware};
 use reqwest_retry::policies::ExponentialBackoff;
 use reqwest_retry::{Jitter, RetryTransientMiddleware};
+use rustc_hash::{FxBuildHasher, FxHashMap};
 use thiserror::Error;
 use tracing::{debug, warn};
 use url::ParseError;
@@ -48,6 +49,9 @@ pub const DEFAULT_RETRIES: u32 = 3;
 ///
 /// This is the default used by [`reqwest`].
 pub const DEFAULT_MAX_REDIRECTS: u32 = 10;
+
+/// The number of trusted hosts above which host lookups are indexed.
+const TRUSTED_HOST_INDEX_THRESHOLD: usize = 8;
 
 /// The maximum time between two reads.
 pub const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(30);
@@ -487,7 +491,7 @@ impl<'a> BaseClientBuilder<'a> {
 
         Ok(BaseClient {
             connectivity: self.connectivity,
-            allow_insecure_host: self.allow_insecure_host.clone(),
+            allow_insecure_host: TrustedHosts::new(self.allow_insecure_host.clone()),
             retries: self.retries,
             no_retry_delay: self.no_retry_delay,
             client,
@@ -518,7 +522,7 @@ impl<'a> BaseClientBuilder<'a> {
 
         BaseClient {
             connectivity: self.connectivity,
-            allow_insecure_host: self.allow_insecure_host.clone(),
+            allow_insecure_host: TrustedHosts::new(self.allow_insecure_host.clone()),
             retries: self.retries,
             no_retry_delay: self.no_retry_delay,
             client,
@@ -736,7 +740,7 @@ pub struct BaseClient {
     /// Configured client connect timeout.
     connect_timeout: Duration,
     /// Hosts that are trusted to use the insecure client.
-    allow_insecure_host: Vec<TrustedHost>,
+    allow_insecure_host: TrustedHosts,
     /// The number of retries to attempt on transient errors.
     retries: u32,
     /// Whether to disable retry delays (for testing).
@@ -770,6 +774,76 @@ enum Security {
     Insecure,
 }
 
+/// Hosts that are trusted to use the insecure client, indexed by host when the list is large.
+#[derive(Clone)]
+struct TrustedHosts {
+    hosts: Vec<TrustedHost>,
+    by_host: FxHashMap<String, Vec<usize>>,
+    wildcard: bool,
+}
+
+impl TrustedHosts {
+    fn new(hosts: Vec<TrustedHost>) -> Self {
+        if hosts.len() <= TRUSTED_HOST_INDEX_THRESHOLD {
+            return Self {
+                hosts,
+                by_host: FxHashMap::default(),
+                wildcard: false,
+            };
+        }
+
+        if hosts
+            .iter()
+            .any(|trusted_host| matches!(trusted_host, TrustedHost::Wildcard))
+        {
+            return Self {
+                hosts,
+                by_host: FxHashMap::default(),
+                wildcard: true,
+            };
+        }
+
+        let mut by_host = FxHashMap::with_capacity_and_hasher(hosts.len(), FxBuildHasher);
+        for (index, trusted_host) in hosts.iter().enumerate() {
+            if let TrustedHost::Host { host, .. } = trusted_host {
+                by_host
+                    .entry(host.clone())
+                    .or_insert_with(Vec::new)
+                    .push(index);
+            }
+        }
+
+        Self {
+            hosts,
+            by_host,
+            wildcard: false,
+        }
+    }
+
+    fn matches(&self, url: &DisplaySafeUrl) -> bool {
+        if self.wildcard {
+            return true;
+        }
+
+        if self.hosts.len() <= TRUSTED_HOST_INDEX_THRESHOLD {
+            return self
+                .hosts
+                .iter()
+                .any(|trusted_host| trusted_host.matches(url));
+        }
+
+        url.host_str()
+            .and_then(|host| self.by_host.get(host))
+            .is_some_and(|indices| indices.iter().any(|index| self.hosts[*index].matches(url)))
+    }
+}
+
+impl Debug for TrustedHosts {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.hosts.fmt(f)
+    }
+}
+
 impl BaseClient {
     pub(crate) fn cache_read_runtime(&self) -> &tokio::runtime::Runtime {
         self.cache_read_runtime.get()
@@ -792,9 +866,7 @@ impl BaseClient {
 
     /// Returns `true` if the host is trusted to use the insecure client.
     fn disable_ssl(&self, url: &DisplaySafeUrl) -> bool {
-        self.allow_insecure_host
-            .iter()
-            .any(|allow_insecure_host| allow_insecure_host.matches(url))
+        self.allow_insecure_host.matches(url)
     }
 
     /// Return the [`GitHttpSettings`] for fetching from the given URL.
@@ -1230,6 +1302,109 @@ mod tests {
     use reqwest::{Client, Method};
     use wiremock::matchers::method;
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[test]
+    fn trusted_host_index_preserves_matching() -> Result<()> {
+        let mut configured = (0..=TRUSTED_HOST_INDEX_THRESHOLD)
+            .map(|index| format!("index-{index}.example").parse())
+            .collect::<Result<Vec<TrustedHost>, _>>()?;
+        configured.extend([
+            "packages.example".parse()?,
+            "https://mirror.example:8443".parse()?,
+            "http://mirror.example:8080".parse()?,
+            "https://mirror.example:443".parse()?,
+        ]);
+        let indexed = TrustedHosts::new(configured.clone());
+
+        for url in [
+            "https://packages.example/simple",
+            "http://packages.example/simple",
+            "https://mirror.example:8443/simple",
+            "http://mirror.example:8080/simple",
+            "https://mirror.example:443/simple",
+            "https://mirror.example/simple",
+            "http://mirror.example:8443/simple",
+            "https://missing.example/simple",
+            "file:///tmp/simple",
+        ] {
+            let url = url.parse::<DisplaySafeUrl>()?;
+            assert_eq!(
+                indexed.matches(&url),
+                configured
+                    .iter()
+                    .any(|trusted_host| trusted_host.matches(&url)),
+                "{url}"
+            );
+        }
+
+        // Keep the original ordered representation in debug output.
+        assert_eq!(format!("{indexed:?}"), format!("{configured:?}"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn trusted_host_index_preserves_wildcard_and_threshold() -> Result<()> {
+        for size in [
+            0,
+            TRUSTED_HOST_INDEX_THRESHOLD,
+            TRUSTED_HOST_INDEX_THRESHOLD + 1,
+        ] {
+            let configured = (0..size)
+                .map(|index| format!("index-{index}.example").parse())
+                .collect::<Result<Vec<TrustedHost>, _>>()?;
+            let indexed = TrustedHosts::new(configured);
+            let missing = "https://missing.example/simple".parse::<DisplaySafeUrl>()?;
+            assert!(!indexed.matches(&missing));
+
+            let mut configured = (0..size)
+                .map(|index| format!("index-{index}.example").parse())
+                .collect::<Result<Vec<TrustedHost>, _>>()?;
+            configured.push(TrustedHost::Wildcard);
+            let indexed = TrustedHosts::new(configured);
+            assert!(indexed.matches(&missing));
+            assert!(indexed.by_host.is_empty());
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn trusted_host_index_selects_http_and_git_clients() -> Result<()> {
+        let mut configured = (0..=TRUSTED_HOST_INDEX_THRESHOLD)
+            .map(|index| format!("index-{index}.example").parse())
+            .collect::<Result<Vec<TrustedHost>, _>>()?;
+        configured.push("https://git.example:8443".parse()?);
+        let client = BaseClientBuilder::default()
+            .allow_insecure_host(configured)
+            .build()?;
+
+        let trusted = "https://git.example:8443/repository.git".parse::<DisplaySafeUrl>()?;
+        let untrusted = "https://git.example/repository.git".parse::<DisplaySafeUrl>()?;
+
+        assert!(std::ptr::eq(
+            client.for_host(&trusted),
+            &raw const client.dangerous_client
+        ));
+        assert!(std::ptr::eq(
+            client.for_host(&untrusted),
+            &raw const client.client
+        ));
+        insta::assert_debug_snapshot!(client.git_http_settings(&trusted), @r"
+        GitHttpSettings {
+            disable_ssl: true,
+            offline: false,
+        }
+        ");
+        insta::assert_debug_snapshot!(client.git_http_settings(&untrusted), @r"
+        GitHttpSettings {
+            disable_ssl: false,
+            offline: false,
+        }
+        ");
+
+        Ok(())
+    }
 
     #[tokio::test]
     async fn cache_read_runtime_can_be_dropped_from_an_async_context() {
