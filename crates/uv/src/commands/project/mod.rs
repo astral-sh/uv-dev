@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use itertools::Itertools;
 use owo_colors::OwoColorize;
+use rustc_hash::FxHashSet;
 use tracing::{debug, trace, warn};
 use uv_audit::osv;
 use uv_audit::{Dependency, VulnerabilityID};
@@ -3511,23 +3512,46 @@ fn warn_on_requirements_txt_setting(spec: &RequirementsSpecification, settings: 
                 );
             }
         }
-        for extra_index_url in extra_index_urls {
-            if !settings
+        let implicit_indexes = (extra_index_urls.len() > 4).then(|| {
+            settings
                 .index_locations
                 .implicit_indexes()
-                .any(|index| index.url() == extra_index_url)
-            {
+                .map(Index::url)
+                .collect::<FxHashSet<_>>()
+        });
+        for extra_index_url in extra_index_urls {
+            let present = if let Some(implicit_indexes) = implicit_indexes.as_ref() {
+                implicit_indexes.contains(extra_index_url)
+            } else {
+                settings
+                    .index_locations
+                    .implicit_indexes()
+                    .any(|index| index.url() == extra_index_url)
+            };
+            if !present {
                 warn_user_once!(
                     "Ignoring `--extra-index-url` from requirements file: `{extra_index_url}`. Instead, use the `--extra-index-url` command-line argument, or set `extra-index-url` in a `uv.toml` or `pyproject.toml` file.`"
                 );
             }
         }
-        for find_link in find_links {
-            if !settings
+
+        let flat_indexes = (find_links.len() > 4).then(|| {
+            settings
                 .index_locations
                 .flat_indexes()
-                .any(|index| index.url() == find_link)
-            {
+                .map(Index::url)
+                .collect::<FxHashSet<_>>()
+        });
+        for find_link in find_links {
+            let present = if let Some(flat_indexes) = flat_indexes.as_ref() {
+                flat_indexes.contains(find_link)
+            } else {
+                settings
+                    .index_locations
+                    .flat_indexes()
+                    .any(|index| index.url() == find_link)
+            };
+            if !present {
                 warn_user_once!(
                     "Ignoring `--find-links` from requirements file: `{find_link}`. Instead, use the `--find-links` command-line argument, or set `find-links` in a `uv.toml` or `pyproject.toml` file.`"
                 );
