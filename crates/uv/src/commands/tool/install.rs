@@ -45,8 +45,8 @@ use crate::commands::project::{
     resolve_environment, resolve_names, sync_environment, update_environment,
 };
 use crate::commands::tool::common::{
-    ToolLock, ToolPython, finalize_tool_install, refine_interpreter, remove_entrypoints,
-    tool_environment_spec,
+    ToolLock, ToolPython, check_tool_entrypoint_conflicts, finalize_tool_install,
+    refine_interpreter, remove_entrypoints, tool_environment_spec,
 };
 use crate::commands::tool::{Target, ToolRequest};
 use crate::commands::{diagnostics, reporters::PythonDownloadReporter};
@@ -818,6 +818,34 @@ pub(crate) async fn install(
             let environment = if plan.is_empty() && !settings.compile_bytecode {
                 environment
             } else {
+                if !force && let Some(existing_receipt) = existing_tool_receipt.as_ref() {
+                    let (_temp_dir, preflight) =
+                        create_preflight_environment(environment.interpreter().clone(), &cache)?;
+                    let preflight = sync_environment(
+                        preflight,
+                        &resolution,
+                        hash_strategy.clone(),
+                        Modifications::Exact,
+                        Constraints::from_requirements(receipt_build_constraints.iter().cloned()),
+                        (&settings).into(),
+                        &client_builder,
+                        &state,
+                        Box::new(DefaultInstallLogger),
+                        installer_metadata,
+                        &concurrency,
+                        &cache,
+                        Printer::Silent,
+                        preview,
+                    )
+                    .await?;
+                    check_tool_entrypoint_conflicts(
+                        &preflight,
+                        package_name,
+                        entrypoints,
+                        existing_receipt,
+                    )?;
+                }
+
                 sync_environment(
                     environment,
                     &resolution,
@@ -838,6 +866,48 @@ pub(crate) async fn install(
             };
             (environment, Some(tool_lock))
         } else {
+            if !force && let Some(existing_receipt) = existing_tool_receipt.as_ref() {
+                let (_temp_dir, preflight) =
+                    create_preflight_environment(environment.interpreter().clone(), &cache)?;
+                let preflight = match update_environment(
+                    preflight,
+                    spec.clone(),
+                    Modifications::Exact,
+                    python_platform.as_ref(),
+                    SourceTreeEditablePolicy::Tool,
+                    Constraints::from_requirements(receipt_build_constraints.iter().cloned()),
+                    ExtraBuildRequires::default(),
+                    &settings,
+                    &client_builder,
+                    &state,
+                    Box::new(DefaultResolveLogger),
+                    Box::new(DefaultInstallLogger),
+                    installer_metadata,
+                    &concurrency,
+                    &cache,
+                    workspace_cache,
+                    DryRun::Disabled,
+                    Printer::Silent,
+                    preview,
+                )
+                .await
+                {
+                    Ok(update) => update.environment,
+                    Err(ProjectError::Operation(err)) => {
+                        return diagnostics::OperationDiagnostic::default()
+                            .report(err)
+                            .map_or(Ok(ExitStatus::Failure), |err| Err(err.into()));
+                    }
+                    Err(err) => return Err(err.into()),
+                };
+                check_tool_entrypoint_conflicts(
+                    &preflight,
+                    package_name,
+                    entrypoints,
+                    existing_receipt,
+                )?;
+            }
+
             let update = match update_environment(
                 environment,
                 spec,
@@ -1022,6 +1092,33 @@ pub(crate) async fn install(
         } else {
             HashStrategy::default()
         };
+        if !force && let Some(existing_receipt) = existing_tool_receipt.as_ref() {
+            let (_temp_dir, preflight) = create_preflight_environment(interpreter.clone(), &cache)?;
+            let preflight = sync_environment(
+                preflight,
+                &resolution,
+                hash_strategy.clone(),
+                Modifications::Exact,
+                Constraints::from_requirements(receipt_build_constraints.iter().cloned()),
+                (&settings).into(),
+                &client_builder,
+                &state,
+                Box::new(DefaultInstallLogger),
+                installer_metadata,
+                &concurrency,
+                &cache,
+                Printer::Silent,
+                preview,
+            )
+            .await?;
+            check_tool_entrypoint_conflicts(
+                &preflight,
+                package_name,
+                entrypoints,
+                existing_receipt,
+            )?;
+        }
+
         let environment = installed_tools.create_environment(package_name, interpreter)?;
 
         // At this point, we removed any existing environment, so we should remove any of its
@@ -1086,6 +1183,25 @@ pub(crate) async fn install(
     )?;
 
     Ok(ExitStatus::Success)
+}
+
+/// Create a temporary environment for checking tool entrypoint conflicts before updating a tool.
+fn create_preflight_environment(
+    interpreter: Interpreter,
+    cache: &Cache,
+) -> Result<(tempfile::TempDir, PythonEnvironment)> {
+    let temp_dir = cache.venv_dir()?;
+    let environment = uv_virtualenv::create_venv(
+        temp_dir.path(),
+        interpreter,
+        uv_virtualenv::Prompt::None,
+        false,
+        uv_virtualenv::OnExisting::Remove(uv_virtualenv::RemovalReason::TemporaryEnvironment),
+        true,
+        uv_virtualenv::Seed::Disabled,
+        false,
+    )?;
+    Ok((temp_dir, environment))
 }
 
 fn existing_environment_usable(
