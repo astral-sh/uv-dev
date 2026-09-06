@@ -15,7 +15,7 @@ use jiff::Timestamp;
 use owo_colors::OwoColorize;
 use petgraph::graph::NodeIndex;
 use petgraph::visit::EdgeRef;
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 use tracing::{debug, instrument, trace};
 use url::Url;
 
@@ -85,6 +85,8 @@ mod installable;
 mod map;
 mod serialize;
 mod tree;
+
+type RootPackagesByName<'lock> = FxHashMap<&'lock PackageName, Vec<(PackageIndex, MarkerTree)>>;
 
 /// The current version of the lockfile format.
 const VERSION: u32 = 1;
@@ -1461,23 +1463,48 @@ impl Lock {
         &self.manifest.requirements
     }
 
+    /// Index the locked packages needed by root requirements, caching the PEP 508 marker space
+    /// covered by each package's forks.
+    fn root_packages_by_name<'lock>(
+        &'lock self,
+        names: &FxHashSet<&PackageName>,
+        include: impl Fn(&Package) -> bool,
+    ) -> RootPackagesByName<'lock> {
+        if names.is_empty() {
+            return FxHashMap::default();
+        }
+
+        self.packages.iter().enumerate().fold(
+            FxHashMap::with_capacity_and_hasher(names.len(), FxBuildHasher),
+            |mut by_name, (index, package)| {
+                if names.contains(&package.id.name) && include(package) {
+                    let fork_marker = if package.fork_markers.is_empty() {
+                        MarkerTree::TRUE
+                    } else {
+                        let mut combined = MarkerTree::FALSE;
+                        for fork_marker in &package.fork_markers {
+                            combined = combined.or(fork_marker.pep508());
+                        }
+                        combined
+                    };
+                    by_name
+                        .entry(&package.id.name)
+                        .or_default()
+                        .push((PackageIndex(index), fork_marker));
+                }
+                by_name
+            },
+        )
+    }
+
     /// Intersect a requirement marker with the forks that contain a package, then simplify it
     /// under the lockfile's Python requirement.
     fn root_requirement_marker(
         &self,
         requirement: &Requirement,
-        package: &Package,
+        fork_marker: MarkerTree,
     ) -> Option<MarkerTree> {
-        let marker = if package.fork_markers.is_empty() {
-            requirement.marker
-        } else {
-            let mut combined = MarkerTree::FALSE;
-            for fork_marker in &package.fork_markers {
-                combined = combined.or(fork_marker.pep508());
-            }
-            combined = combined.and(requirement.marker);
-            combined
-        };
+        let marker = fork_marker.and(requirement.marker);
 
         (!marker.is_false()).then(|| self.simplify_environment(marker))
     }
@@ -2697,22 +2724,20 @@ impl Lock {
         }
 
         if !root_requirements.is_empty() {
-            for requirement in root_requirements {
-                for package in self.packages_for_name(&requirement.name) {
-                    if !package.id.source.is_source_tree() {
-                        continue;
-                    }
+            let names = root_requirements
+                .iter()
+                .map(|requirement| &requirement.name)
+                .collect::<FxHashSet<_>>();
+            let by_name =
+                self.root_packages_by_name(&names, |package| package.id.source.is_source_tree());
 
-                    let marker = if package.fork_markers.is_empty() {
-                        requirement.marker
-                    } else {
-                        let mut combined = MarkerTree::FALSE;
-                        for fork_marker in &package.fork_markers {
-                            combined = combined.or(fork_marker.pep508());
-                        }
-                        combined = combined.and(requirement.marker);
-                        combined
-                    };
+            for requirement in root_requirements {
+                for (package_index, fork_marker) in
+                    by_name.get(&requirement.name).into_iter().flatten()
+                {
+                    let package_index = *package_index;
+                    let package = self.package(package_index);
+                    let marker = fork_marker.and(requirement.marker);
                     if marker.is_false() {
                         continue;
                     }
@@ -2725,7 +2750,6 @@ impl Lock {
                         .or_default()
                         .extend(requirement.extras.iter().cloned());
 
-                    let package_index = self.by_id[&package.id];
                     if seen.insert(package_index) {
                         queue.push_back(package_index);
                     }
@@ -8076,6 +8100,129 @@ mod tests {
             marker.try_to_string().as_deref(),
             Some("python_full_version >= '3.12' and extra != 'extra-1-x-foo'")
         );
+    }
+
+    #[test]
+    fn root_packages_by_name_caches_distinct_fork_markers() {
+        let lock: Lock = toml::from_str(
+            r#"
+version = 1
+revision = 3
+requires-python = ">=3.12"
+resolution-markers = [
+    "sys_platform == 'win32'",
+    "sys_platform == 'linux'",
+    "sys_platform != 'linux' and sys_platform != 'win32'",
+]
+
+[manifest]
+requirements = [
+    { name = "plain", marker = "python_full_version >= '3.12'" },
+    { name = "split", marker = "sys_platform == 'win32'" },
+    { name = "split", marker = "sys_platform != 'win32'" },
+]
+
+[manifest.dependency-groups]
+dev = [
+    { name = "split", marker = "sys_platform == 'linux'" },
+    { name = "split", marker = "sys_platform != 'linux'" },
+]
+
+[[package]]
+name = "plain"
+version = "1.0.0"
+source = { registry = "https://example.com/simple" }
+
+[[package]]
+name = "split"
+version = "1.0.0"
+source = { registry = "https://example.com/simple" }
+resolution-markers = ["sys_platform == 'win32'"]
+
+[[package]]
+name = "split"
+version = "2.0.0"
+source = { registry = "https://example.com/simple" }
+resolution-markers = [
+    "sys_platform == 'linux'",
+    "sys_platform != 'linux' and sys_platform != 'win32'",
+]
+"#,
+        )
+        .expect("valid lock");
+
+        assert!(
+            lock.root_packages_by_name(&FxHashSet::default(), |_| true)
+                .is_empty()
+        );
+
+        let requirements = lock
+            .requirements()
+            .iter()
+            .chain(lock.dependency_groups().values().flatten())
+            .collect::<Vec<_>>();
+        let names = requirements
+            .iter()
+            .map(|requirement| &requirement.name)
+            .collect::<FxHashSet<_>>();
+        let by_name = lock.root_packages_by_name(&names, |_| true);
+        assert!(
+            lock.root_packages_by_name(&names, |package| package.id.source.is_source_tree())
+                .is_empty()
+        );
+
+        let plain = by_name
+            .get(&PackageName::from_str("plain").expect("valid package name"))
+            .expect("plain package");
+        assert_eq!(plain.len(), 1);
+        assert!(plain[0].1.is_true());
+
+        let split = by_name
+            .get(&PackageName::from_str("split").expect("valid package name"))
+            .expect("split packages");
+        assert_eq!(split.len(), 2);
+        assert_eq!(
+            split
+                .iter()
+                .map(|(package_index, marker)| {
+                    let package = lock.package(*package_index);
+                    (
+                        package.id.version.as_ref().map(ToString::to_string),
+                        marker.try_to_string(),
+                    )
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    Some("1.0.0".to_string()),
+                    Some("python_full_version >= '3.12' and sys_platform == 'win32'".to_string())
+                ),
+                (
+                    Some("2.0.0".to_string()),
+                    Some("python_full_version >= '3.12' and sys_platform != 'win32'".to_string())
+                ),
+            ]
+        );
+
+        for requirement in requirements {
+            for (package_index, fork_marker) in by_name.get(&requirement.name).into_iter().flatten()
+            {
+                let package = lock.package(*package_index);
+                let expected = if package.fork_markers.is_empty() {
+                    requirement.marker
+                } else {
+                    let mut combined = MarkerTree::FALSE;
+                    for fork_marker in &package.fork_markers {
+                        combined = combined.or(fork_marker.pep508());
+                    }
+                    combined.and(requirement.marker)
+                };
+                assert_eq!(
+                    lock.root_requirement_marker(requirement, *fork_marker),
+                    (!expected.is_false()).then(|| lock.simplify_environment(expected))
+                );
+            }
+        }
     }
 
     #[test]
