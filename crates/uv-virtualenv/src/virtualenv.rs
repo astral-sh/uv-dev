@@ -7,14 +7,12 @@ use std::io;
 use std::io::{BufWriter, Write};
 use std::path::Path;
 
-use console::Term;
 use fs_err::File;
 use itertools::Itertools;
-use owo_colors::OwoColorize;
 
-use tracing::{debug, trace};
+use tracing::debug;
 
-use crate::{Error, Prompt};
+use crate::{CreationAction, CreationEvent, Error, OnExisting, Prompt};
 use uv_fs::{CWD, PythonExt, Simplified, cachedir};
 use uv_platform_tags::Os;
 use uv_preview::PreviewFeature;
@@ -71,7 +69,8 @@ pub(crate) fn create(
     relocatable: bool,
     seed: Seed,
     upgradeable: bool,
-) -> Result<VirtualEnvironment, Error> {
+    reporter: &mut impl FnMut(CreationEvent) -> io::Result<()>,
+) -> Result<(VirtualEnvironment, CreationAction), Error> {
     // Determine the base Python executable; that is, the Python executable that should be
     // considered the "base" for the virtual environment.
     //
@@ -106,92 +105,7 @@ pub(crate) fn create(
         return Err(Error::NonUtf8Path { path: absolute });
     }
 
-    // Validate the existing location.
-    match location.metadata() {
-        Ok(metadata) if metadata.is_file() => {
-            return Err(Error::Io(io::Error::new(
-                io::ErrorKind::AlreadyExists,
-                format!("File exists at `{}`", location.user_display()),
-            )));
-        }
-        Ok(metadata)
-            if metadata.is_dir()
-                && location
-                    .read_dir()
-                    .is_ok_and(|mut dir| dir.next().is_none()) =>
-        {
-            // If it's an empty directory, we can proceed
-            trace!(
-                "Using empty directory at `{}` for virtual environment",
-                location.user_display()
-            );
-        }
-        Ok(metadata) if metadata.is_dir() => {
-            let is_virtualenv = uv_fs::is_virtualenv_base(location);
-            let name = if is_virtualenv {
-                "virtual environment"
-            } else {
-                "directory"
-            };
-            // TODO(zanieb): We may want to consider omitting the hint in some of these cases, e.g.,
-            // when `--no-clear` is used do we want to suggest `--clear`?
-            let err = Err(Error::Exists {
-                name,
-                path: location.to_path_buf(),
-            });
-            match on_existing {
-                OnExisting::Allow => {
-                    debug!("Allowing existing {name} due to `--allow-existing`");
-                }
-                OnExisting::Remove(reason) => {
-                    if !is_virtualenv
-                        && let RemovalReason::UserRequest(clear_non_virtualenv) = reason
-                    {
-                        match clear_non_virtualenv {
-                            ClearNonVirtualenv::Allow => {}
-                            ClearNonVirtualenv::Error => {
-                                return Err(Error::ClearNonVirtualenv {
-                                    path: location.to_path_buf(),
-                                });
-                            }
-                        }
-                    }
-                    debug!("Removing existing {name} ({reason})");
-                    uv_fs::clear_virtualenv(location)?;
-                }
-                OnExisting::Fail => return err,
-                // If not a virtual environment, fail without prompting.
-                OnExisting::Prompt if !is_virtualenv => return err,
-                OnExisting::Prompt => {
-                    match confirm_clear(location, name)? {
-                        Some(true) => {
-                            debug!("Removing existing {name} due to confirmation");
-                            uv_fs::clear_virtualenv(location)?;
-                        }
-                        Some(false) => return err,
-                        // When we don't have a TTY, require `--clear` explicitly.
-                        None => {
-                            return Err(Error::Exists {
-                                name,
-                                path: location.to_path_buf(),
-                            });
-                        }
-                    }
-                }
-            }
-        }
-        Ok(_) => {
-            // It's not a file or a directory
-            return Err(Error::Io(io::Error::new(
-                io::ErrorKind::AlreadyExists,
-                format!("Object already exists at `{}`", location.user_display()),
-            )));
-        }
-        Err(err) if err.kind() == io::ErrorKind::NotFound => {
-            fs_err::create_dir_all(location)?;
-        }
-        Err(err) => return Err(Error::Io(err)),
-    }
+    let action = on_existing.prepare(&absolute, reporter)?;
 
     // Use the absolute path for all further operations.
     let location = absolute;
@@ -622,106 +536,21 @@ pub(crate) fn create(
         fs_err::write(site_packages.join("_virtualenv.pth"), "import _virtualenv")?;
     }
 
-    Ok(VirtualEnvironment {
-        scheme: Scheme {
-            purelib: location.join(&interpreter.virtualenv().purelib),
-            platlib: location.join(&interpreter.virtualenv().platlib),
-            scripts: location.join(&interpreter.virtualenv().scripts),
-            data: location.join(&interpreter.virtualenv().data),
-            include: location.join(&interpreter.virtualenv().include),
+    Ok((
+        VirtualEnvironment {
+            scheme: Scheme {
+                purelib: location.join(&interpreter.virtualenv().purelib),
+                platlib: location.join(&interpreter.virtualenv().platlib),
+                scripts: location.join(&interpreter.virtualenv().scripts),
+                data: location.join(&interpreter.virtualenv().data),
+                include: location.join(&interpreter.virtualenv().include),
+            },
+            root: location,
+            executable,
+            base_executable: base_python,
         },
-        root: location,
-        executable,
-        base_executable: base_python,
-    })
-}
-
-/// Prompt a confirmation that the virtual environment should be cleared.
-///
-/// If not a TTY, returns `None`.
-fn confirm_clear(location: &Path, name: &'static str) -> Result<Option<bool>, io::Error> {
-    let term = Term::stderr();
-    if term.is_term() {
-        let prompt = format!(
-            "A {name} already exists at `{}`. Do you want to replace it?",
-            location.user_display(),
-        );
-        let hint = format!(
-            "Use the `{}` flag or set `{}` to skip this prompt",
-            "--clear".green(),
-            "UV_VENV_CLEAR=1".green()
-        );
-        Ok(Some(uv_console::confirm_with_hint(
-            &prompt, &hint, &term, true,
-        )?))
-    } else {
-        Ok(None)
-    }
-}
-
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
-pub enum ClearNonVirtualenv {
-    /// Allow clearing a non-virtual environment directory.
-    Allow,
-    /// Refuse to clear a non-virtual environment directory.
-    Error,
-}
-
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
-pub enum RemovalReason {
-    /// The removal was explicitly requested, i.e., with `--clear`.
-    UserRequest(ClearNonVirtualenv),
-    /// The environment can be removed because it is considered temporary, e.g., a build
-    /// environment.
-    TemporaryEnvironment,
-    /// The environment can be removed because it is managed by uv, e.g., a project or tool
-    /// environment.
-    ManagedEnvironment,
-}
-
-impl std::fmt::Display for RemovalReason {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::UserRequest(_) => f.write_str("requested with `--clear`"),
-            Self::ManagedEnvironment => f.write_str("environment is managed by uv"),
-            Self::TemporaryEnvironment => f.write_str("environment is temporary"),
-        }
-    }
-}
-
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Default)]
-pub enum OnExisting {
-    /// Prompt before removing an existing directory.
-    ///
-    /// If a TTY is not available, fail.
-    #[default]
-    Prompt,
-    /// Fail if the directory already exists and is non-empty.
-    Fail,
-    /// Allow an existing directory, overwriting virtual environment files while retaining other
-    /// files in the directory.
-    Allow,
-    /// Remove an existing directory.
-    Remove(RemovalReason),
-}
-
-impl OnExisting {
-    pub fn from_args(
-        allow_existing: bool,
-        clear: bool,
-        no_clear: bool,
-        clear_non_virtualenv: ClearNonVirtualenv,
-    ) -> Self {
-        if allow_existing {
-            Self::Allow
-        } else if clear {
-            Self::Remove(RemovalReason::UserRequest(clear_non_virtualenv))
-        } else if no_clear {
-            Self::Fail
-        } else {
-            Self::Prompt
-        }
-    }
+        action,
+    ))
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Default)]

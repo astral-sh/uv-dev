@@ -19,7 +19,7 @@ use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, ExtraBuildRequires, Index, IndexLocations,
     PackageConfigSettings, Requirement,
 };
-use uv_fs::Simplified;
+use uv_fs::{ClearNonVirtualenv, Simplified};
 use uv_install_wheel::LinkMode;
 use uv_normalize::DefaultGroups;
 use uv_preview::Preview;
@@ -251,28 +251,36 @@ pub(crate) async fn venv(
         None
     };
 
+    let centralized_reference = is_centralized_environment_reference(&path, cache);
+    let owned_destination = centralized_workspace.is_some() || centralized_reference;
     let on_existing = match on_existing {
-        OnExisting::Prompt | OnExisting::Remove(_) if centralized_workspace.is_some() => {
+        OnExisting::Prompt if owned_destination => {
             // Centralized environments are managed by uv, so replace them without prompting.
-            OnExisting::Remove(RemovalReason::ManagedEnvironment)
+            OnExisting::Replace {
+                reason: RemovalReason::ManagedEnvironment,
+                clear_non_virtualenv: ClearNonVirtualenv::Allow,
+            }
         }
-        OnExisting::Prompt | OnExisting::Remove(_)
-            if is_centralized_environment_reference(&path, cache) =>
-        {
-            // Remove `.venv` without following it into the cache.
-            uv_fs::remove_virtualenv(&path).map_err(|err| VenvError::Creation(err.into()))?;
-            on_existing
-        }
+        OnExisting::Clear { reason, .. } if owned_destination => OnExisting::Replace {
+            reason,
+            clear_non_virtualenv: ClearNonVirtualenv::Allow,
+        },
         OnExisting::Allow
             if fs_err::symlink_metadata(&path).is_ok_and(|metadata| metadata.is_file())
-                && is_centralized_environment_reference(&path, cache) =>
+                && centralized_reference =>
         {
             // TODO(tk): Revisit after PEP 832.
             // Ignore uv-owned path files when creating a local environment.
-            uv_fs::remove_virtualenv(&path).map_err(|err| VenvError::Creation(err.into()))?;
-            on_existing
+            OnExisting::Replace {
+                reason: RemovalReason::ManagedEnvironment,
+                clear_non_virtualenv: ClearNonVirtualenv::Allow,
+            }
         }
-        _ => on_existing,
+        OnExisting::Prompt
+        | OnExisting::Fail
+        | OnExisting::Allow
+        | OnExisting::Clear { .. }
+        | OnExisting::Replace { .. } => on_existing,
     };
 
     // Create the virtual environment.
