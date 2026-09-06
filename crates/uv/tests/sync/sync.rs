@@ -12732,6 +12732,64 @@ fn locked_version_coherence() -> Result<()> {
     Ok(())
 }
 
+/// Test that incoherence in the names in a package entry of the lockfile is caught.
+#[test]
+fn locked_name_coherence() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["foo"]
+
+        [tool.uv]
+        package = false
+        "#,
+    )?;
+
+    context.temp_dir.child("uv.lock").write_str(
+        r#"
+        version = 1
+        revision = 3
+        requires-python = ">=3.12"
+
+        [[package]]
+        name = "foo"
+        version = "2.0.0"
+        source = { registry = "https://pypi.org/simple" }
+        wheels = [
+            { url = "https://example.com/bar-2.0.0-py3-none-any.whl" },
+        ]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "foo" },
+        ]
+
+        [package.metadata]
+        requires-dist = [{ name = "foo" }]
+        "#,
+    )?;
+
+    uv_snapshot!(context.filters(), context.sync().arg("--locked"), @"
+    success: false
+    exit_code: 2
+    ----- stdout -----
+
+    ----- stderr -----
+    error: Failed to parse `uv.lock`
+      Caused by: The entry for package `foo` has wheel `bar-2.0.0-py3-none-any.whl` with inconsistent package name (`bar`), which indicates a malformed wheel. If this is intentional, set `UV_SKIP_WHEEL_FILENAME_CHECK=1`.
+    ");
+
+    Ok(())
+}
+
 /// `uv sync` should respect build constraints. In this case, `json-merge-patch` should _not_ fail
 /// to build, despite the fact that `setuptools==78.0.1` is the most recent version and _does_ fail
 /// to build that package.
