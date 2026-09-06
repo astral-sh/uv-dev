@@ -16962,8 +16962,8 @@ fn check_unformatted_lock() -> Result<()> {
     Ok(())
 }
 
-/// Checks that a later `exclude-newer` cutoff does not invalidate a lock until a refresh occurs,
-/// while a more restrictive cutoff still requires an update.
+/// Checks that changing `exclude-newer` does not invalidate a lock whose artifacts satisfy the
+/// cutoff until a refresh occurs.
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_reuses_newer_exclude_newer_timestamp() -> Result<()> {
@@ -16999,13 +16999,9 @@ fn lock_reuses_newer_exclude_newer_timestamp() -> Result<()> {
     uv_snapshot!(context.filters(), context.lock()
         .env(EnvVars::UV_EXCLUDE_NEWER, "2024-03-24T00:00:00Z")
         .arg("--check"), @"
-    exit_code: 1 (failure)
+    exit_code: 0 (success)
     ----- stderr -----
-    Resolving despite existing lockfile due to change of exclude newer timestamp from `2024-03-25T00:00:00Z` to `2024-03-24T00:00:00Z`
     Resolved 1 package in [TIME]
-    error: The lockfile at `uv.lock` needs to be updated, but `--check` was provided.
-
-    hint: To update the lockfile, run `uv lock`.
     ");
 
     uv_snapshot!(context.filters(), context.lock()
@@ -17047,7 +17043,7 @@ fn lock_reuses_newer_exclude_newer_timestamp() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_check_allows_relaxed_exclude_newer_package() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_exclude_newer("2024-03-25T00:00:00Z");
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2024-04-12T00:00:00Z");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -17056,61 +17052,61 @@ fn lock_check_allows_relaxed_exclude_newer_package() -> Result<()> {
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.11"
-        dependencies = []
+        dependencies = ["idna"]
         "#,
     )?;
 
     uv_snapshot!(context.filters(), context.lock()
         .arg("--exclude-newer-package")
-        .arg("project=2024-03-25T00:00:00Z"), @"
+        .arg("idna=2024-04-12T00:00:00Z"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 1 package in [TIME]
+    Resolved 2 packages in [TIME]
     ");
 
-    // Exempting `project` from the cutoff relaxes the constraint, so the existing lockfile remains
+    // Exempting `idna` from the cutoff relaxes the constraint, so the existing lockfile remains
     // valid.
     uv_snapshot!(context.filters(), context.lock()
         .arg("--exclude-newer-package")
-        .arg("project=false")
+        .arg("idna=false")
         .arg("--check"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 1 package in [TIME]
+    Resolved 2 packages in [TIME]
     ");
 
-    // Exempting another package does not change the cutoff for `project`, so the existing lockfile
+    // Exempting another package does not change the cutoff for `idna`, so the existing lockfile
     // remains valid.
     uv_snapshot!(context.filters(), context.lock()
         .arg("--exclude-newer-package")
-        .arg("project=2024-03-25T00:00:00Z")
+        .arg("idna=2024-04-12T00:00:00Z")
         .arg("--exclude-newer-package")
         .arg("iniconfig=false")
         .arg("--check"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 1 package in [TIME]
+    Resolved 2 packages in [TIME]
     ");
 
     uv_snapshot!(context.filters(), context.lock()
-        .env(EnvVars::UV_EXCLUDE_NEWER, "2024-03-26T00:00:00Z")
+        .env(EnvVars::UV_EXCLUDE_NEWER, "2024-04-13T00:00:00Z")
         .arg("--exclude-newer-package")
-        .arg("project=2024-03-26T00:00:00Z")
+        .arg("idna=2024-04-13T00:00:00Z")
         .arg("--check"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 1 package in [TIME]
+    Resolved 2 packages in [TIME]
     ");
 
     uv_snapshot!(context.filters(), context.lock()
-        .env(EnvVars::UV_EXCLUDE_NEWER, "2024-03-26T00:00:00Z")
+        .env(EnvVars::UV_EXCLUDE_NEWER, "2024-04-13T00:00:00Z")
         .arg("--exclude-newer-package")
-        .arg("project=2024-03-24T00:00:00Z")
+        .arg("idna=2024-04-10T00:00:00Z")
         .arg("--check"), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    Resolving despite existing lockfile due to change of exclude newer timestamp from `2024-03-25T00:00:00Z` to `2024-03-24T00:00:00Z` for package `project`
-    Resolved 1 package in [TIME]
+    Resolving despite existing lockfile because package `idna` contains artifacts that do not satisfy the `exclude-newer` cutoff of `2024-04-10T00:00:00Z`
+    Resolved 2 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--check` was provided.
 
     hint: To update the lockfile, run `uv lock`.
@@ -36348,6 +36344,31 @@ fn lock_omit_wheels_exclude_newer() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
+    // A more restrictive cutoff can still reuse the lock when every locked artifact satisfies it.
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--locked")
+        .arg("--offline")
+        .arg("--no-cache")
+        .env(EnvVars::UV_EXCLUDE_NEWER, "2024-07-17T00:00:00Z"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    assert_eq!(context.read("uv.lock"), lock);
+
+    // Moving the cutoff past a locked artifact requires updating the lockfile.
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--locked")
+        .env(EnvVars::UV_EXCLUDE_NEWER, "2024-07-16T18:22:00Z"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolving despite existing lockfile because package `pillow-avif-plugin` contains artifacts that do not satisfy the `exclude-newer` cutoff of `2024-07-16T18:22:00Z`
+    Resolved 2 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+
     Ok(())
 }
 
@@ -37564,38 +37585,6 @@ fn lock_exclude_newer_package_absent() -> Result<()> {
     Resolved 1 package in [TIME]
     ");
 
-    // Recreate the lock with a global timestamp and a package-specific exemption.
-    fs_err::remove_file(context.temp_dir.child("uv.lock"))?;
-    uv_snapshot!(context.filters(), context
-        .lock()
-        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
-        .arg("--exclude-newer")
-        .arg("2022-04-04T12:00:00Z")
-        .arg("--exclude-newer-package")
-        .arg("idna=false"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    ");
-
-    // Inverting the settings still invalidates the lock because the global setting is relevant.
-    uv_snapshot!(context.filters(), context
-        .lock()
-        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
-        .arg("--locked")
-        .arg("--exclude-newer")
-        .arg("false")
-        .arg("--exclude-newer-package")
-        .arg("idna=2022-04-04T12:00:00Z"), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    Resolving despite existing lockfile due to removal of global exclude newer
-    Resolved 1 package in [TIME]
-    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-
-    hint: To update the lockfile, run `uv lock`.
-    ");
-
     Ok(())
 }
 
@@ -37997,6 +37986,74 @@ async fn lock_exclude_newer_index_value() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
+    ");
+
+    Ok(())
+}
+
+/// Test that lockfile validation uses the current index-specific `exclude-newer` value.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_exclude_newer_index_validation() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["idna"]
+
+        [tool.uv.sources]
+        idna = { index = "pypi" }
+
+        [[tool.uv.index]]
+        name = "pypi"
+        url = "https://pypi.org/simple"
+        explicit = true
+        exclude-newer = "2024-04-12T00:00:00Z"
+        "#,
+    )?;
+
+    // idna 3.7 was uploaded on 2024-04-11.
+    uv_snapshot!(context.filters(), context.lock(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: Setting `exclude-newer` on configured indexes is experimental and may change without warning. Pass `--preview-features index-exclude-newer` to disable this warning.
+    Resolved 2 packages in [TIME]
+    ");
+
+    // Moving the index cutoff before the locked artifact requires updating the lockfile.
+    pyproject_toml.write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["idna"]
+
+        [tool.uv.sources]
+        idna = { index = "pypi" }
+
+        [[tool.uv.index]]
+        name = "pypi"
+        url = "https://pypi.org/simple"
+        explicit = true
+        exclude-newer = "2024-04-10T00:00:00Z"
+        "#,
+    )?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    warning: Setting `exclude-newer` on configured indexes is experimental and may change without warning. Pass `--preview-features index-exclude-newer` to disable this warning.
+    Resolving despite existing lockfile because package `idna` contains artifacts that do not satisfy the `exclude-newer` cutoff of `2024-04-10T00:00:00Z`
+    Resolved 2 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     Ok(())
