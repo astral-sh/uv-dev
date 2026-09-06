@@ -8385,7 +8385,6 @@ fn lock_relative_and_absolute_paths_disjoint_markers() -> Result<()> {
 
 /// Poetry's generated URLs must not override authored relative or absolute source paths.
 ///
-/// Note: Currently broken.
 /// See: <https://github.com/astral-sh/uv/issues/20477>
 #[test]
 fn lock_relative_transitive_poetry_paths() -> Result<()> {
@@ -8494,14 +8493,7 @@ fn lock_relative_transitive_poetry_paths() -> Result<()> {
         assert_snapshot!(diff, @r#"
         --- old
         +++ new
-        @@ -13,12 +13,22 @@
-         [[package]]
-         name = "editable-child"
-         version = "0.1.0"
-        -source = { editable = "../editable-child" }
-        +source = { editable = "[TEMP_DIR]/editable-child" }
-
-         [[package]]
+        @@ -19,6 +19,16 @@
          name = "parent"
          version = "0.1.0"
          source = { editable = "../parent" }
@@ -8513,7 +8505,7 @@ fn lock_relative_transitive_poetry_paths() -> Result<()> {
         +[package.metadata]
         +requires-dist = [
         +    { name = "absolute-child", directory = "[TEMP_DIR]/absolute-child" },
-        +    { name = "editable-child", directory = "[TEMP_DIR]/editable-child" },
+        +    { name = "editable-child", directory = "../editable-child" },
         +]
 
          [[package]]
@@ -8560,7 +8552,7 @@ fn lock_relative_transitive_poetry_paths() -> Result<()> {
          [[package]]
          name = "editable-child"
          version = "0.1.0"
-        -source = { editable = "[TEMP_DIR]/editable-child" }
+        -source = { editable = "../editable-child" }
         +source = { directory = "[TEMP_DIR]/editable-child" }
 
          [[package]]
