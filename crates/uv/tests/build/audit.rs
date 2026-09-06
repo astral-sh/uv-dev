@@ -1036,6 +1036,75 @@ async fn audit_ignore_by_alias() {
     ");
 }
 
+/// `--ignore` uses the first matching rule across aliases and takes precedence over
+/// `--ignore-until-fixed`.
+#[tokio::test]
+async fn audit_ignore_first_matching_rule() {
+    let context = uv_test::test_context!("3.12");
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig==2.0.0"]
+    "#})
+        .unwrap();
+
+    context.lock().assert().success();
+
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/querybatch"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "results": [{"vulns": [{"id": "OSV-2023-0001"}]}]
+        })))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/v1/vulns/OSV-2023-0001"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "OSV-2023-0001",
+            "modified": "2026-01-01T00:00:00Z",
+            "summary": "A vulnerability with aliases",
+            "aliases": ["PYSEC-2023-0042", "CVE-2023-9999", "GHSA-xxxx-yyyy-zzzz"]
+        })))
+        .mount(&server)
+        .await;
+
+    uv_snapshot!(context.filters(), context
+        .audit()
+        .arg("--preview-features")
+        .arg("audit")
+        .arg("--ignore")
+        .arg("CVE-2023-9999")
+        .arg("--ignore")
+        .arg("PYSEC-2023-0042")
+        .arg("--ignore")
+        .arg("CVE-2023-9999")
+        .arg("--ignore")
+        .arg("CVE-DOES-NOT-EXIST")
+        .arg("--ignore-until-fixed")
+        .arg("GHSA-xxxx-yyyy-zzzz")
+        .arg("--service-url")
+        .arg(server.uri()), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    warning: Ignored vulnerability `PYSEC-2023-0042` does not match any vulnerability in the project
+    warning: Ignored vulnerability `CVE-DOES-NOT-EXIST` does not match any vulnerability in the project
+    warning: Ignored vulnerability `GHSA-xxxx-yyyy-zzzz` does not match any vulnerability in the project
+    Found no known vulnerabilities and no adverse project statuses in 1 package
+    ");
+}
+
 /// `--ignore-until-fixed` suppresses a vulnerability only when no fix versions are available.
 #[tokio::test]
 async fn audit_ignore_until_fixed() {

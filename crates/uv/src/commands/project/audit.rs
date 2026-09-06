@@ -19,7 +19,7 @@ use crate::printer::Printer;
 use crate::settings::{FrozenSource, LockCheck, ResolverSettings};
 
 use anyhow::Result;
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::trace;
 use uv_audit::{
     AdverseStatus, Dependency, Finding, ProjectStatus, ProjectStatusAudit, Vulnerability,
@@ -335,19 +335,22 @@ pub(crate) async fn audit_lock(
     findings.extend(status_findings);
     reporter.on_audit_complete();
 
+    // Filter out ignored vulnerabilities, tracking how many were ignored
+    // and which ignore rules actually matched.
+    let ignore_indices = index_ignores(ignore);
+    let ignore_until_fixed_indices = index_ignores(ignore_until_fixed);
     let mut matched_ignores = FxHashSet::default();
     let findings = findings
         .into_iter()
         .filter(|finding| match finding {
             Finding::Vulnerability(vulnerability) => {
-                if let Some(id) = ignore.iter().find(|id| vulnerability.matches(id)) {
+                if let Some(index) = matching_ignore(vulnerability, &ignore_indices) {
+                    let id = &ignore[index];
                     matched_ignores.insert(id.clone());
                     return false;
                 }
-                if let Some(id) = ignore_until_fixed
-                    .iter()
-                    .find(|id| vulnerability.matches(id))
-                {
+                if let Some(index) = matching_ignore(vulnerability, &ignore_until_fixed_indices) {
+                    let id = &ignore_until_fixed[index];
                     matched_ignores.insert(id.clone());
                     if vulnerability.fix_versions.is_empty() {
                         return false;
@@ -381,6 +384,26 @@ pub(crate) fn warn_unmatched_ignores(
             );
         }
     }
+}
+
+/// Index ignore rules by their first position, preserving first-match precedence for aliases.
+fn index_ignores(ignore: &[VulnerabilityID]) -> FxHashMap<&VulnerabilityID, usize> {
+    let mut indices = FxHashMap::default();
+    for (index, id) in ignore.iter().enumerate() {
+        indices.entry(id).or_insert(index);
+    }
+    indices
+}
+
+/// Return the first ignore rule that matches a vulnerability's primary ID or aliases.
+fn matching_ignore(
+    vulnerability: &Vulnerability,
+    indices: &FxHashMap<&VulnerabilityID, usize>,
+) -> Option<usize> {
+    std::iter::once(&vulnerability.id)
+        .chain(vulnerability.aliases.iter())
+        .filter_map(|id| indices.get(id).copied())
+        .min()
 }
 
 /// Resolve a lockfile path into the URI used by SARIF consumers.
