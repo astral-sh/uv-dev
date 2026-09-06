@@ -70,6 +70,15 @@ pub enum SyncFormat {
 }
 
 #[derive(Debug, Default, Clone, Copy, clap::ValueEnum)]
+pub enum LockFormat {
+    /// Display the result in a human-readable format.
+    #[default]
+    Text,
+    /// Display the lock operation result as JSON.
+    Json,
+}
+
+#[derive(Debug, Default, Clone, Copy, clap::ValueEnum)]
 pub enum AuditOutputFormat {
     /// Display the result in a human-readable format.
     #[default]
@@ -4091,6 +4100,12 @@ pub struct LockArgs {
     /// Equivalent to `--locked`.
     #[arg(long, value_parser = clap::builder::BoolishValueParser::new(), conflicts_with_all = ["check_exists", "upgrade"], overrides_with_all = ["check", "no_locked"])]
     pub check: bool,
+
+    /// Select the output format.
+    ///
+    /// The JSON schema is experimental and may change without warning.
+    #[arg(long, value_enum, default_value_t = LockFormat::default())]
+    pub output_format: LockFormat,
 
     /// Check if the lockfile is up-to-date [env: UV_LOCKED=]
     ///

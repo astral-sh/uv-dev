@@ -6881,6 +6881,15 @@ impl LockError {
         matches!(&*self.kind, LockErrorKind::Resolution { .. })
     }
 
+    /// Return the package whose metadata could not be resolved.
+    pub fn resolution_package(&self) -> Option<&PackageName> {
+        if let LockErrorKind::Resolution { id, .. } = &*self.kind {
+            Some(&id.name)
+        } else {
+            None
+        }
+    }
+
     /// Returns true if the [`LockError`] is caused by disabled builds.
     pub fn is_no_build(&self) -> bool {
         matches!(

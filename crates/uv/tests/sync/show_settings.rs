@@ -642,6 +642,7 @@ fn lock_baseline() {
     }
     LockSettings {
         lock_check: Disabled,
+        output_format: Text,
         frozen: None,
         dry_run: Disabled,
         script: None,
