@@ -809,7 +809,7 @@ dependencies = ["flask==1.0.x"]
     ----- stderr -----
       × Failed to build `project @ file://[TEMP_DIR]/path_dep`
       ├─▶ The build backend returned an error
-      ╰─▶ Call to `setuptools.build_meta:__legacy__.build_wheel` failed (exit status: 1)
+      ╰─▶ Call to `setuptools.build_meta:__legacy__.get_requires_for_build_wheel` failed (exit status: 1)
 
           [stdout]
           configuration error: `project.dependencies[0]` must be pep508
@@ -10505,7 +10505,7 @@ fn sklearn() {
     ----- stderr -----
       × Failed to build `sklearn==0.0.post12`
       ├─▶ The build backend returned an error
-      ╰─▶ Call to `setuptools.build_meta:__legacy__.build_wheel` failed (exit status: 1)
+      ╰─▶ Call to `setuptools.build_meta:__legacy__.get_requires_for_build_wheel` failed (exit status: 1)
 
           [stderr]
           The 'sklearn' PyPI package is deprecated, use 'scikit-learn'
@@ -10552,7 +10552,7 @@ fn resolve_derivation_chain() -> Result<()> {
     ----- stderr -----
       × Failed to build `wsgiref==0.1.2`
       ├─▶ The build backend returned an error
-      ╰─▶ Call to `setuptools.build_meta:__legacy__.build_wheel` failed (exit status: 1)
+      ╰─▶ Call to `setuptools.build_meta:__legacy__.get_requires_for_build_wheel` failed (exit status: 1)
 
           [stderr]
           Traceback (most recent call last):
@@ -14925,7 +14925,7 @@ fn pip_install_build_dependencies_respect_locked_versions() -> Result<()> {
     Resolved [N] packages in [TIME]
       × Failed to build `child @ file://[TEMP_DIR]/child`
       ├─▶ The build backend returned an error
-      ╰─▶ Call to `build_backend.build_wheel` failed (exit status: 1)
+      ╰─▶ Call to `build_backend.get_requires_for_build_wheel` failed (exit status: 1)
 
           [stderr]
           Expected `a` version 0.1 but got 0.3.0
@@ -14985,7 +14985,7 @@ fn pip_install_build_dependencies_respect_locked_versions() -> Result<()> {
     Resolved [N] packages in [TIME]
       × Failed to build `child @ file://[TEMP_DIR]/child`
       ├─▶ The build backend returned an error
-      ╰─▶ Call to `build_backend.build_wheel` failed (exit status: 1)
+      ╰─▶ Call to `build_backend.get_requires_for_build_wheel` failed (exit status: 1)
 
           [stderr]
           Expected `a` version 0.2 but got 0.1.0

@@ -8415,7 +8415,7 @@ fn fail_to_add_revert_project() -> Result<()> {
     Resolved 3 packages in [TIME]
       × Failed to build `child @ file://[TEMP_DIR]/child`
       ├─▶ The build backend returned an error
-      ╰─▶ Call to `setuptools.build_meta.build_wheel` failed (exit status: 1)
+      ╰─▶ Call to `setuptools.build_meta.get_requires_for_build_wheel` failed (exit status: 1)
 
           [stderr]
           Traceback (most recent call last):
@@ -8513,7 +8513,7 @@ fn fail_to_edit_revert_project() -> Result<()> {
     Resolved 3 packages in [TIME]
       × Failed to build `child @ file://[TEMP_DIR]/child`
       ├─▶ The build backend returned an error
-      ╰─▶ Call to `setuptools.build_meta.build_wheel` failed (exit status: 1)
+      ╰─▶ Call to `setuptools.build_meta.get_requires_for_build_wheel` failed (exit status: 1)
 
           [stderr]
           Traceback (most recent call last):
@@ -8622,7 +8622,7 @@ fn fail_to_add_revert_workspace_root() -> Result<()> {
     Resolved 3 packages in [TIME]
       × Failed to build `broken @ file://[TEMP_DIR]/broken`
       ├─▶ The build backend returned an error
-      ╰─▶ Call to `setuptools.build_meta.build_editable` failed (exit status: 1)
+      ╰─▶ Call to `setuptools.build_meta.get_requires_for_build_editable` failed (exit status: 1)
 
           [stderr]
           Traceback (most recent call last):
@@ -8736,7 +8736,7 @@ fn fail_to_add_revert_workspace_member() -> Result<()> {
     Resolved 4 packages in [TIME]
       × Failed to build `broken @ file://[TEMP_DIR]/broken`
       ├─▶ The build backend returned an error
-      ╰─▶ Call to `setuptools.build_meta.build_editable` failed (exit status: 1)
+      ╰─▶ Call to `setuptools.build_meta.get_requires_for_build_editable` failed (exit status: 1)
 
           [stderr]
           Traceback (most recent call last):
