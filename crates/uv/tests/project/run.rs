@@ -5594,6 +5594,53 @@ fn run_groups_requires_python_errors() -> Result<()> {
     Ok(())
 }
 
+/// Projectless workspace-root groups participate in interpreter compatibility checks.
+#[test]
+fn run_workspace_root_group_requires_python() -> Result<()> {
+    let context =
+        uv_test::test_context_with_versions!(&["3.12", "3.13"]).with_filtered_python_sources();
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! { r#"
+            [dependency-groups]
+            dev = []
+
+            [tool.uv.dependency-groups]
+            dev = { requires-python = ">=3.13" }
+
+            [tool.uv.workspace]
+            members = ["child"]
+            "#
+        })?;
+
+    context
+        .temp_dir
+        .child("child")
+        .child("pyproject.toml")
+        .write_str(indoc! { r#"
+            [project]
+            name = "child"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = []
+            "#
+        })?;
+
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--python").arg("3.12")
+        .arg("--only-group").arg("dev")
+        .arg("python").arg("--version"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    error: The requested interpreter resolved to Python 3.12.[X], which is incompatible with the project's Python requirement: `>=3.13` (from `tool.uv.dependency-groups.dev.requires-python`).
+    ");
+
+    Ok(())
+}
+
 #[test]
 fn run_groups_include_requires_python() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12", "3.13"]);
