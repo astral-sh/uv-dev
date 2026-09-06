@@ -331,18 +331,16 @@ fn help_subcommand() {
     ----- stdout -----
     Manage Python versions and installations
 
-    Generally, uv first searches for Python in a virtual environment, either active or in a
-    `.venv` directory in the current working directory or any parent directory. If a virtual
-    environment is not required, uv will then search for a Python interpreter. Python
-    interpreters are found by searching for Python executables in the `PATH` environment
-    variable.
+    uv first searches for Python in an active virtual environment or a `.venv` directory. The
+    `.venv` directory can be in the current working directory or a parent directory. If a virtual
+    environment is not required, uv then searches `PATH` for a Python executable.
 
-    On Windows, the registry is also searched for Python executables.
+    On Windows, uv also searches the registry for Python executables.
 
-    By default, uv will download Python if a version cannot be found. This behavior can be
-    disabled with the `--no-python-downloads` flag or the `python-downloads` setting.
+    By default, uv downloads Python if it cannot find the requested version. Use
+    `--no-python-downloads` or the `python-downloads` setting to disable downloads.
 
-    The `--python` option allows requesting a different interpreter.
+    Use `--python` to request a different interpreter.
 
     The following Python version request formats are supported:
 
@@ -356,20 +354,18 @@ fn help_subcommand() {
     - `<implementation><version-specifier>` e.g. `cpython>=3.12,<3.13`
     - `<implementation>-<version>-<os>-<arch>-<libc>` e.g. `cpython-3.12.3-macos-aarch64-none`
 
-    Additionally, a specific system Python interpreter can often be requested with:
+    You can also request a specific system Python interpreter with:
 
     - `<executable-path>` e.g. `/opt/homebrew/bin/python3`
     - `<executable-name>` e.g. `mypython3`
     - `<install-dir>` e.g. `/some/environment/`
 
-    When the `--python` option is used, normal discovery rules apply but discovered interpreters
-    are checked for compatibility with the request, e.g., if `pypy` is requested, uv will first
-    check if the virtual environment contains a PyPy interpreter then check if each executable
-    in the path is a PyPy interpreter.
+    When you use `--python`, uv follows the normal discovery rules and checks each interpreter
+    against the request. For example, if you request `pypy`, uv first checks the virtual
+    environment for a PyPy interpreter. It then checks each executable in `PATH`.
 
-    uv supports discovering CPython, PyPy, and GraalPy interpreters. Unsupported interpreters
-    will be skipped during discovery. If an unsupported interpreter implementation is requested,
-    uv will exit with an error.
+    uv finds CPython, PyPy, and GraalPy interpreters and skips unsupported interpreters. If you
+    request an unsupported interpreter implementation, uv exits with an error.
 
     Usage: uv python [OPTIONS] <COMMAND>
 
@@ -404,16 +400,16 @@ fn help_subcommand() {
           --managed-python
               Require use of uv-managed Python versions.
 
-              By default, uv prefers using Python versions it manages. However, it will use system
-              Python versions if a uv-managed Python is not installed. This option disables use of
-              system Python versions.
+              By default, uv prefers Python versions that it manages. If no managed version is
+              installed, uv uses a system Python version. This option prevents uv from using system
+              Python versions.
 
               [env: UV_MANAGED_PYTHON=]
 
           --no-managed-python
               Disable use of uv-managed Python versions.
 
-              Instead, uv will search for a suitable Python version on the system.
+              Instead, uv searches the system for a suitable Python version.
 
               [env: UV_NO_MANAGED_PYTHON=]
 
@@ -424,19 +420,18 @@ fn help_subcommand() {
       -q, --quiet...
               Use quiet output.
 
-              Repeating this option, e.g., `-qq`, will enable a silent mode in which uv will write no
-              output to stdout.
+              Repeat this option, such as `-qq`, to prevent uv from writing output to stdout.
 
       -v, --verbose...
               Use verbose output.
 
-              You can configure fine-grained logging using the `RUST_LOG` environment variable.
+              Use the `RUST_LOG` environment variable to configure detailed logging.
               (<https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html#directives>)
 
           --color <COLOR_CHOICE>
               Control the use of color in output.
 
-              By default, uv will automatically detect support for colors when writing to a terminal.
+              By default, uv detects whether the terminal supports color.
 
               Possible values:
               - auto:   Enables colored output only when the output is going to a terminal or TTY with
@@ -448,31 +443,30 @@ fn help_subcommand() {
               Whether to load TLS certificates from the platform's native certificate store [env:
               UV_SYSTEM_CERTS=]
 
-              By default, uv uses bundled Mozilla root certificates, which improves portability and
-              performance (especially on macOS).
+              By default, uv uses bundled Mozilla root certificates. This improves portability and
+              performance, especially on macOS.
 
-              However, in some cases, you may want to use the platform's native certificate store,
-              especially if you're relying on a corporate trust root (e.g., for a mandatory proxy)
-              that's included in your system's certificate store.
+              Use the platform's native certificate store if you need a certificate that is in the
+              system store. For example, a corporate proxy may require a corporate trust root.
 
           --offline
               Disable network access.
 
-              When disabled, uv will only use locally cached data and locally available files.
+              When network access is disabled, uv uses only cached data and local files.
 
               [env: UV_OFFLINE=]
 
           --allow-insecure-host <ALLOW_INSECURE_HOST>
               Allow insecure connections to a host.
 
-              Can be provided multiple times.
+              Use this option multiple times to add multiple hosts.
 
-              Expects to receive either a hostname (e.g., `localhost`), a host-port pair (e.g.,
-              `localhost:8080`), or a URL (e.g., `https://localhost`).
+              Accepts a hostname, such as `localhost`; a host-port pair, such as `localhost:8080`; or a
+              URL, such as `https://localhost`.
 
-              WARNING: Hosts included in this list will not be verified against the system's certificate
-              store. Only use `--allow-insecure-host` in a secure network with verified sources, as it
-              bypasses SSL verification and could expose you to MITM attacks.
+              WARNING: uv does not verify these hosts against the system's certificate store. This
+              option bypasses SSL verification and can expose you to MITM attacks. Use
+              `--allow-insecure-host` only on a secure network with verified sources.
 
               [env: UV_INSECURE_HOST=]
 
@@ -486,7 +480,7 @@ fn help_subcommand() {
           --directory <DIRECTORY>
               Change to the given directory prior to running the command.
 
-              Relative paths are resolved with the given directory as the base.
+              uv resolves relative paths from the specified directory.
 
               See `--project` to only change the project root directory.
 
@@ -495,12 +489,12 @@ fn help_subcommand() {
           --project <PROJECT>
               Discover a project in the given directory.
 
-              All `pyproject.toml`, `uv.toml`, and `.python-version` files will be discovered by walking
-              up the directory tree from the project root, as will the project's virtual environment
+              uv searches the project root and its parent directories for `pyproject.toml`, `uv.toml`,
+              and `.python-version` files. It also searches for the project's virtual environment
               (`.venv`).
 
-              Other command-line arguments (such as relative paths) will be resolved relative to the
-              current working directory.
+              uv resolves other command-line arguments, such as relative paths, from the current working
+              directory.
 
               See `--directory` to change the working directory entirely.
 
@@ -511,16 +505,15 @@ fn help_subcommand() {
           --config-file <CONFIG_FILE>
               The path to a `uv.toml` file to use for configuration.
 
-              While uv configuration can be included in a `pyproject.toml` file, it is not allowed in
-              this context.
+              A `pyproject.toml` file can contain uv configuration, but this option does not accept one.
 
               [env: UV_CONFIG_FILE=]
 
           --no-config
               Avoid discovering configuration files (`pyproject.toml`, `uv.toml`).
 
-              Normally, configuration files are discovered in the current directory, parent directories,
-              or user configuration directories.
+              By default, uv searches the current directory, parent directories, and user configuration
+              directories for configuration files.
 
               [env: UV_NO_CONFIG=]
 
@@ -540,19 +533,17 @@ fn help_subsubcommand() {
     ----- stdout -----
     Download and install Python versions.
 
-    Supports CPython and PyPy. CPython distributions are downloaded from the Astral
-    `python-build-standalone` project. PyPy distributions are downloaded from `python.org`. The
-    available Python versions are bundled with each uv release. To install new Python versions, you may
-    need upgrade uv.
+    uv supports CPython and PyPy. It downloads CPython from Astral's `python-build-standalone` project
+    and PyPy from `python.org`. Each uv release includes a list of available Python versions. You may
+    need to upgrade uv to install a newer Python version.
 
-    Python versions are installed into the uv Python directory, which can be retrieved with `uv python
-    dir`.
+    uv installs Python into its Python directory. Use `uv python dir` to display that directory.
 
-    By default, Python executables are added to a directory on the path with a minor version suffix,
-    e.g., `python3.13`. To install `python3` and `python`, use the `--default` flag. Use `uv python dir
-    --bin` to see the target directory.
+    By default, uv adds Python executables with a minor-version suffix, such as `python3.13`, to a
+    directory on `PATH`. Use `--default` to also install `python3` and `python`. Use `uv python dir
+    --bin` to display the target directory.
 
-    Multiple Python versions may be requested.
+    You can request multiple Python versions.
 
     See `uv help python` to view supported request formats.
 
@@ -562,10 +553,9 @@ fn help_subsubcommand() {
       [TARGETS]...
               The Python version(s) to install.
 
-              If not provided, the requested Python version(s) will be read from the `UV_PYTHON`
-              environment variable then `.python-versions` or `.python-version` files. If none of the
-              above are present, uv will check if it has installed any Python versions. If not, it will
-              install the latest stable version of Python.
+              If you do not specify a version, uv checks `UV_PYTHON`, then `.python-versions` or
+              `.python-version` files. If none exist, uv checks for an installed Python version. If it
+              finds none, it installs the latest stable Python version.
 
               See `uv help python` to view supported request formats.
 
@@ -575,8 +565,8 @@ fn help_subsubcommand() {
       -i, --install-dir <INSTALL_DIR>
               The directory to store the Python installation in.
 
-              If provided, `UV_PYTHON_INSTALL_DIR` will need to be set for subsequent operations for uv
-              to discover the Python installation.
+              If you set this option, set `UV_PYTHON_INSTALL_DIR` for later commands so uv can find the
+              Python installation.
 
               See `uv python dir` to view the current Python installation directory. Defaults to
               `~/.local/share/uv/python`.
@@ -600,7 +590,7 @@ fn help_subsubcommand() {
               `https://github.com/astral-sh/python-build-standalone/releases/download` in, e.g.,
               `https://github.com/astral-sh/python-build-standalone/releases/download/20240713/cpython-3.12.4%2B20240713-aarch64-apple-darwin-install_only.tar.gz`.
 
-              Distributions can be read from a local directory by using the `file://` URL scheme.
+              Use a `file://` URL to read distributions from a local directory.
 
           --pypy-mirror <PYPY_MIRROR>
               Set the URL to use as the source for downloading PyPy installations.
@@ -608,7 +598,7 @@ fn help_subsubcommand() {
               The provided URL will replace `https://downloads.python.org/pypy` in, e.g.,
               `https://downloads.python.org/pypy/pypy3.8-v7.3.7-osx64.tar.bz2`.
 
-              Distributions can be read from a local directory by using the `file://` URL scheme.
+              Use a `file://` URL to read distributions from a local directory.
 
           --python-downloads-json-url <PYTHON_DOWNLOADS_JSON_URL>
               URL pointing to JSON of custom Python installations
@@ -616,53 +606,48 @@ fn help_subsubcommand() {
       -r, --reinstall
               Reinstall the requested Python version, if it's already installed.
 
-              If a minor version is requested, all matching installed patch versions are reinstalled.
+              If you request a minor version, uv reinstalls all matching installed patch versions.
 
-              By default, uv will exit successfully if the version is already installed.
+              By default, uv exits successfully if the version is already installed.
 
       -f, --force
               Replace existing Python executables during installation.
 
-              By default, uv will refuse to replace executables that it does not manage.
+              By default, uv does not replace executables that it does not manage.
 
               Implies `--reinstall`.
 
       -U, --upgrade
               Upgrade existing Python installations to the latest patch version.
 
-              By default, uv will not upgrade already-installed Python versions to newer patch releases.
-              With `--upgrade`, uv will upgrade to the latest available patch version for the specified
-              minor version(s).
+              By default, uv does not upgrade installed Python versions to newer patch releases. With
+              `--upgrade`, uv installs the latest patch for each specified minor version.
 
-              If the requested versions are not yet installed, uv will install them.
+              If a requested version is not installed, uv installs it.
 
-              This option is only supported for minor version requests, e.g., `3.12`; uv will exit with
-              an error if a patch version, e.g., `3.12.2`, is requested.
+              This option accepts only minor versions, such as `3.12`. If you request a patch version,
+              such as `3.12.2`, uv exits with an error.
 
           --default
               Use as the default Python version.
 
-              By default, only a `python{major}.{minor}` executable is installed, e.g., `python3.10`.
-              When the `--default` flag is used, `python{major}`, e.g., `python3`, and `python`
-              executables are also installed.
+              By default, uv installs only `python{major}.{minor}`, such as `python3.10`. With
+              `--default`, it also installs `python{major}`, such as `python3`, and `python`.
 
-              Alternative Python variants will still include their tag. For example, installing
-              3.13+freethreaded with `--default` will include `python3t` and `pythont` instead of
-              `python3` and `python`.
+              Other Python variants retain their tag. For example, `3.13+freethreaded` with `--default`
+              installs `python3t` and `pythont` instead of `python3` and `python`.
 
-              If multiple Python versions are requested, uv will exit with an error.
+              If you request multiple Python versions, uv exits with an error.
 
           --compile-bytecode
               Compile Python's standard library to bytecode after installation.
 
-              By default, uv does not compile Python (`.py`) files to bytecode (`__pycache__/*.pyc`);
-              instead, compilation is performed lazily the first time a module is imported. For
-              use-cases in which start time is important, such as CLI applications and Docker
-              containers, this option can be enabled to trade longer installation times and some
-              additional disk space for faster start times.
+              By default, Python compiles `.py` files to bytecode (`__pycache__/*.pyc`) when a module is
+              first imported. Enable this option to compile during installation instead. This increases
+              installation time and disk use, but can improve startup time for CLI applications and
+              Docker containers.
 
-              When enabled, uv will process the Python version's `stdlib` directory. It will ignore any
-              compilation errors.
+              uv processes the Python version's `stdlib` directory and ignores compilation errors.
 
               [env: UV_COMPILE_BYTECODE=]
 
@@ -687,16 +672,16 @@ fn help_subsubcommand() {
           --managed-python
               Require use of uv-managed Python versions.
 
-              By default, uv prefers using Python versions it manages. However, it will use system
-              Python versions if a uv-managed Python is not installed. This option disables use of
-              system Python versions.
+              By default, uv prefers Python versions that it manages. If no managed version is
+              installed, uv uses a system Python version. This option prevents uv from using system
+              Python versions.
 
               [env: UV_MANAGED_PYTHON=]
 
           --no-managed-python
               Disable use of uv-managed Python versions.
 
-              Instead, uv will search for a suitable Python version on the system.
+              Instead, uv searches the system for a suitable Python version.
 
               [env: UV_NO_MANAGED_PYTHON=]
 
@@ -707,19 +692,18 @@ fn help_subsubcommand() {
       -q, --quiet...
               Use quiet output.
 
-              Repeating this option, e.g., `-qq`, will enable a silent mode in which uv will write no
-              output to stdout.
+              Repeat this option, such as `-qq`, to prevent uv from writing output to stdout.
 
       -v, --verbose...
               Use verbose output.
 
-              You can configure fine-grained logging using the `RUST_LOG` environment variable.
+              Use the `RUST_LOG` environment variable to configure detailed logging.
               (<https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html#directives>)
 
           --color <COLOR_CHOICE>
               Control the use of color in output.
 
-              By default, uv will automatically detect support for colors when writing to a terminal.
+              By default, uv detects whether the terminal supports color.
 
               Possible values:
               - auto:   Enables colored output only when the output is going to a terminal or TTY with
@@ -731,31 +715,30 @@ fn help_subsubcommand() {
               Whether to load TLS certificates from the platform's native certificate store [env:
               UV_SYSTEM_CERTS=]
 
-              By default, uv uses bundled Mozilla root certificates, which improves portability and
-              performance (especially on macOS).
+              By default, uv uses bundled Mozilla root certificates. This improves portability and
+              performance, especially on macOS.
 
-              However, in some cases, you may want to use the platform's native certificate store,
-              especially if you're relying on a corporate trust root (e.g., for a mandatory proxy)
-              that's included in your system's certificate store.
+              Use the platform's native certificate store if you need a certificate that is in the
+              system store. For example, a corporate proxy may require a corporate trust root.
 
           --offline
               Disable network access.
 
-              When disabled, uv will only use locally cached data and locally available files.
+              When network access is disabled, uv uses only cached data and local files.
 
               [env: UV_OFFLINE=]
 
           --allow-insecure-host <ALLOW_INSECURE_HOST>
               Allow insecure connections to a host.
 
-              Can be provided multiple times.
+              Use this option multiple times to add multiple hosts.
 
-              Expects to receive either a hostname (e.g., `localhost`), a host-port pair (e.g.,
-              `localhost:8080`), or a URL (e.g., `https://localhost`).
+              Accepts a hostname, such as `localhost`; a host-port pair, such as `localhost:8080`; or a
+              URL, such as `https://localhost`.
 
-              WARNING: Hosts included in this list will not be verified against the system's certificate
-              store. Only use `--allow-insecure-host` in a secure network with verified sources, as it
-              bypasses SSL verification and could expose you to MITM attacks.
+              WARNING: uv does not verify these hosts against the system's certificate store. This
+              option bypasses SSL verification and can expose you to MITM attacks. Use
+              `--allow-insecure-host` only on a secure network with verified sources.
 
               [env: UV_INSECURE_HOST=]
 
@@ -769,7 +752,7 @@ fn help_subsubcommand() {
           --directory <DIRECTORY>
               Change to the given directory prior to running the command.
 
-              Relative paths are resolved with the given directory as the base.
+              uv resolves relative paths from the specified directory.
 
               See `--project` to only change the project root directory.
 
@@ -778,12 +761,12 @@ fn help_subsubcommand() {
           --project <PROJECT>
               Discover a project in the given directory.
 
-              All `pyproject.toml`, `uv.toml`, and `.python-version` files will be discovered by walking
-              up the directory tree from the project root, as will the project's virtual environment
+              uv searches the project root and its parent directories for `pyproject.toml`, `uv.toml`,
+              and `.python-version` files. It also searches for the project's virtual environment
               (`.venv`).
 
-              Other command-line arguments (such as relative paths) will be resolved relative to the
-              current working directory.
+              uv resolves other command-line arguments, such as relative paths, from the current working
+              directory.
 
               See `--directory` to change the working directory entirely.
 
@@ -794,16 +777,15 @@ fn help_subsubcommand() {
           --config-file <CONFIG_FILE>
               The path to a `uv.toml` file to use for configuration.
 
-              While uv configuration can be included in a `pyproject.toml` file, it is not allowed in
-              this context.
+              A `pyproject.toml` file can contain uv configuration, but this option does not accept one.
 
               [env: UV_CONFIG_FILE=]
 
           --no-config
               Avoid discovering configuration files (`pyproject.toml`, `uv.toml`).
 
-              Normally, configuration files are discovered in the current directory, parent directories,
-              or user configuration directories.
+              By default, uv searches the current directory, parent directories, and user configuration
+              directories for configuration files.
 
               [env: UV_NO_CONFIG=]
 

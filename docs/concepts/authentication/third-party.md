@@ -2,7 +2,7 @@
 
 ## Authentication with alternative package indexes
 
-See the dedicated guides for authentication with popular alternative Python package indexes:
+See these guides to authenticate with alternative Python package indexes:
 
 - [Azure Artifacts](../../guides/integration/azure.md)
 - [Google Artifact Registry](../../guides/integration/google.md)
@@ -11,15 +11,13 @@ See the dedicated guides for authentication with popular alternative Python pack
 
 ## Hugging Face support
 
-uv supports automatic authentication for the Hugging Face Hub. Specifically, if the `HF_TOKEN`
-environment variable is set, uv will propagate it to requests to `huggingface.co`.
+uv automatically authenticates requests to the Hugging Face Hub. If the `HF_TOKEN` environment
+variable is set, uv includes its value in requests to `huggingface.co`.
 
-This is particularly useful for accessing private scripts in Hugging Face Datasets. For example, you
-can run the following command to execute the script `main.py` script from a private dataset:
+For example, run this command to execute `main.py` from a private Hugging Face dataset:
 
 ```console
 $ HF_TOKEN=hf_... uv run https://huggingface.co/datasets/<user>/<name>/resolve/<branch>/main.py
 ```
 
-You can disable automatic Hugging Face authentication by setting the `UV_NO_HF_TOKEN=1` environment
-variable.
+`UV_NO_HF_TOKEN=1` disables automatic Hugging Face authentication.

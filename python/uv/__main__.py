@@ -5,16 +5,14 @@ from uv import find_uv_bin
 
 
 def _detect_virtualenv() -> str:
-    """
-    Find the virtual environment path for the current Python executable.
-    """
+    """Return the virtual environment path, or an empty string if none exists."""
 
-    # If it's already set, then just use it
+    # Use `VIRTUAL_ENV` when it is already set.
     value = os.getenv("VIRTUAL_ENV")
     if value:
         return value
 
-    # Otherwise, check if we're in a venv
+    # Check whether the current Python prefix contains `pyvenv.cfg`.
     venv_marker = os.path.join(sys.prefix, "pyvenv.cfg")
 
     if os.path.exists(venv_marker):
@@ -24,6 +22,7 @@ def _detect_virtualenv() -> str:
 
 
 def _run() -> None:
+    """Run `uv` with the current Python interpreter and virtual environment."""
     uv = find_uv_bin()
 
     env = os.environ.copy()
@@ -31,13 +30,13 @@ def _run() -> None:
     if venv:
         env.setdefault("VIRTUAL_ENV", venv)
 
-    # Let `uv` know that it was spawned by this Python interpreter
+    # Tell `uv` which Python interpreter started it.
     env["UV_INTERNAL__PARENT_INTERPRETER"] = sys.executable
 
     if sys.platform == "win32":
         import subprocess
 
-        # Avoid emitting a traceback on interrupt
+        # Exit without a traceback when the user interrupts the process.
         try:
             completed_process = subprocess.run(
                 [uv, *sys.argv[1:]], env=env, check=False

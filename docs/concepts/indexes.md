@@ -1,13 +1,12 @@
 # Package indexes
 
-By default, uv uses the [Python Package Index (PyPI)](https://pypi.org) for dependency resolution
-and package installation. However, uv can be configured to use other package indexes, including
-private indexes, via the `[[tool.uv.index]]` configuration option (and `--index`, the analogous
-command-line option).
+By default, uv uses the [Python Package Index (PyPI)](https://pypi.org) to resolve and install
+packages. The `[[tool.uv.index]]` setting and `--index` option also support other package indexes,
+including private indexes.
 
 ## Defining an index
 
-To include an additional index when resolving dependencies, add a `[[tool.uv.index]]` entry to your
+To include another index when uv resolves dependencies, add a `[[tool.uv.index]]` entry to
 `pyproject.toml`:
 
 ```toml
@@ -18,13 +17,11 @@ name = "pytorch"
 url = "https://download.pytorch.org/whl/cpu"
 ```
 
-Indexes are prioritized in the order in which they’re defined, such that the first index listed in
-the configuration file is the first index consulted when resolving dependencies, with indexes
-provided via the command line taking precedence over those in the configuration file.
+uv searches indexes in their defined order. The first index in the configuration file has the
+highest priority. Command-line indexes take precedence over indexes in the configuration file.
 
-By default, uv includes the Python Package Index (PyPI) as the "default" index, i.e., the index used
-when a package is not found on any other index. To exclude PyPI from the list of indexes, set
-`default = true` on another index entry (or use the `--default-index` command-line option):
+By default, PyPI is the "default" index. uv searches this index when it cannot find a package on any
+other index. To exclude PyPI, set `default = true` on another index or use `--default-index`:
 
 ```toml
 [[tool.uv.index]]
@@ -33,15 +30,13 @@ url = "https://download.pytorch.org/whl/cpu"
 default = true
 ```
 
-The default index is always treated as lowest priority, regardless of its position in the list of
-indexes.
+The default index always has the lowest priority, regardless of its position in the list.
 
-Index names may only contain alphanumeric characters, dashes, underscores, and periods, and must be
-valid ASCII.
+Index names must contain only ASCII letters, numbers, dashes, underscores, and periods.
 
-When providing an index on the command line (with `--index` or `--default-index`) or through an
-environment variable (`UV_INDEX` or `UV_DEFAULT_INDEX`), use its URL, a configured name, or the
-`<name>=<url>` syntax:
+The `--index` and `--default-index` options accept an index URL, a configured index name, or the
+`<name>=<url>` syntax. The `UV_INDEX` and `UV_DEFAULT_INDEX` environment variables accept the same
+values:
 
 ```shell
 # On the command line.
@@ -54,9 +49,8 @@ With `--preview-features index-by-name`, configured index names take precedence 
 
 ## Pinning a package to an index
 
-A package can be pinned to a specific index by specifying the index in its `tool.uv.sources` entry.
-For example, to ensure that `torch` is _always_ installed from the `pytorch` index, add the
-following to your `pyproject.toml`:
+To pin a package to an index, specify that index in its `tool.uv.sources` entry. For example, the
+following `pyproject.toml` entries ensure that `torch` _always_ comes from the `pytorch` index:
 
 ```toml
 [tool.uv.sources]
@@ -67,8 +61,8 @@ name = "pytorch"
 url = "https://download.pytorch.org/whl/cpu"
 ```
 
-Similarly, to pull from a different index based on the platform, you can provide a list of sources
-disambiguated by environment markers:
+To select different indexes for different platforms, specify a list of sources with environment
+markers:
 
 ```toml title="pyproject.toml"
 [project]
@@ -89,9 +83,9 @@ name = "pytorch-cu130"
 url = "https://download.pytorch.org/whl/cu130"
 ```
 
-An index can be marked as `explicit = true` to prevent packages from being installed from that index
-unless explicitly pinned to it. For example, to ensure that `torch` is installed from the `pytorch`
-index, but all other packages are installed from PyPI, add the following to your `pyproject.toml`:
+Set `explicit = true` to restrict an index to packages explicitly pinned to it. In the following
+`pyproject.toml` example, `torch` comes from the `pytorch` index, and all other packages come from
+PyPI:
 
 ```toml
 [tool.uv.sources]
@@ -103,48 +97,44 @@ url = "https://download.pytorch.org/whl/cpu"
 explicit = true
 ```
 
-Named indexes referenced via `tool.uv.sources` must be defined within the project's `pyproject.toml`
-file; indexes provided via the command-line, environment variables, or user-level configuration will
-not be recognized.
+Define any named index that `tool.uv.sources` references in the project `pyproject.toml` file. uv
+does not recognize indexes from the command line, environment variables, or user-level configuration
+for these references.
 
-If an index is marked as both `default = true` and `explicit = true`, it will be treated as an
-explicit index (i.e., only usable via `tool.uv.sources`) while also removing PyPI as the default
-index.
+If an index sets both `default = true` and `explicit = true`, uv uses it only through
+`tool.uv.sources`. This index also removes PyPI as the default index.
 
 ## Searching across multiple indexes
 
-By default, uv will stop at the first index on which a given package is available, and limit
-resolutions to those present on that first index (`first-index`).
+By default, uv stops at the first index that contains a package. It considers only versions on that
+index. This strategy is `first-index`.
 
-For example, if an internal index is specified via `[[tool.uv.index]]`, uv's behavior is such that
-if a package exists on that internal index, it will _always_ be installed from that internal index,
-and never from PyPI. The intent is to prevent "dependency confusion" attacks, in which an attacker
-publishes a malicious package on PyPI with the same name as an internal package, thus causing the
-malicious package to be installed instead of the internal package. See, for example,
+For example, if an internal `[[tool.uv.index]]` contains a package, uv _always_ installs that
+package from the internal index. It never installs that package from PyPI. This behavior prevents
+"dependency confusion" attacks. In these attacks, a malicious PyPI package uses the same name as an
+internal package. See
 [the `torchtriton` attack](https://pytorch.org/blog/compromised-nightly-dependency/) from
 December 2022.
 
-To opt in to alternate index behaviors, use the`--index-strategy` command-line option, or the
-`UV_INDEX_STRATEGY` environment variable, which supports the following values:
+To select another index strategy, set `--index-strategy` or `UV_INDEX_STRATEGY` to one of these
+values:
 
-- `first-index` (default): Search for each package across all indexes, limiting the candidate
-  versions to those present in the first index that contains the package.
-- `unsafe-first-match`: Search for each package across all indexes, but prefer the first index with
-  a compatible version, even if newer versions are available on other indexes.
-- `unsafe-best-match`: Search for each package across all indexes, and select the best version from
-  the combined set of candidate versions.
+- `first-index` (default): Search each index. Consider only versions on the first index that
+  contains the package.
+- `unsafe-first-match`: Search each index. Prefer the first index with a compatible version, even if
+  other indexes contain newer versions.
+- `unsafe-best-match`: Search all indexes and select the best version from all available versions.
 
-While `unsafe-best-match` is the closest to pip's behavior, it exposes users to the risk of
+The `unsafe-best-match` strategy most closely matches pip behavior. However, it exposes users to
 "dependency confusion" attacks.
 
 ## Authentication
 
-Most private package indexes require authentication to access packages, typically via a username and
-password (or access token).
+Most private package indexes require a username and password or an access token.
 
 !!! tip
 
-    See the dedicated guides for authenticating with specific private index providers:
+    These guides explain authentication for specific private index providers:
     [Azure Artifacts](../guides/integration/azure.md),
     [Google Artifact Registry](../guides/integration/google.md),
     [AWS CodeArtifact](../guides/integration/aws.md), and
@@ -152,10 +142,10 @@ password (or access token).
 
 ### Providing credentials directly
 
-Credentials can be provided directly via environment variables or by embedding them in the URL.
+Provide credentials in environment variables or directly in the index URL.
 
-For example, given an index named `internal-proxy` that requires a username (`public`) and password
-(`koala`), define the index (without credentials) in your `pyproject.toml`:
+For example, an index named `internal-proxy` requires the username `public` and password `koala`.
+Define the index without credentials in `pyproject.toml`:
 
 ```toml
 [[tool.uv.index]]
@@ -163,19 +153,18 @@ name = "internal-proxy"
 url = "https://example.com/simple"
 ```
 
-From there, you can set the `UV_INDEX_INTERNAL_PROXY_USERNAME` and
-`UV_INDEX_INTERNAL_PROXY_PASSWORD` environment variables, where `INTERNAL_PROXY` is the uppercase
-version of the index name, with non-alphanumeric characters replaced by underscores:
+Then set `UV_INDEX_INTERNAL_PROXY_USERNAME` and `UV_INDEX_INTERNAL_PROXY_PASSWORD`. In these
+variable names, `INTERNAL_PROXY` is the uppercase index name. Underscores replace non-alphanumeric
+characters:
 
 ```sh
 export UV_INDEX_INTERNAL_PROXY_USERNAME=public
 export UV_INDEX_INTERNAL_PROXY_PASSWORD=koala
 ```
 
-By providing credentials via environment variables, you can avoid storing sensitive information in
-the plaintext `pyproject.toml` file.
+Environment variables keep sensitive credentials out of the plaintext `pyproject.toml` file.
 
-Alternatively, credentials can be embedded directly in the index definition:
+Alternatively, include credentials directly in the index definition:
 
 ```toml
 [[tool.uv.index]]
@@ -183,26 +172,25 @@ name = "internal"
 url = "https://public:koala@pypi-proxy.corp.dev/simple"
 ```
 
-For security purposes, credentials are _never_ stored in the `uv.lock` file; as such, uv _must_ have
-access to the authenticated URL at installation time.
+uv _never_ stores credentials in `uv.lock`. It _must_ have access to the authenticated URL when it
+installs packages.
 
 ### Using credential providers
 
-In addition to providing credentials directly, uv supports discovery of credentials from netrc and
-keyring. See the [HTTP authentication](./authentication/http.md) documentation for details on
-setting up specific credential providers.
+uv can also find credentials in netrc and keyring. See the
+[HTTP authentication](./authentication/http.md) documentation to configure specific credential
+providers.
 
-By default, uv will attempt an unauthenticated request before querying providers. If the request
-fails, uv will search for credentials. If credentials are found, an authenticated request will be
-attempted.
+By default, uv first sends a request without credentials. If the request fails, uv searches for
+credentials. If it finds credentials, uv sends an authenticated request.
 
 !!! note
 
-    If a username is set, uv will search for credentials before making an unauthenticated request.
+    If a username is set, uv searches for credentials before it sends an unauthenticated request.
 
-Some indexes (e.g., GitLab) will forward unauthenticated requests to a public index, like PyPI —
-which means that uv will not search for credentials. This behavior can be changed per-index, using
-the `authenticate` setting. For example, to always search for credentials:
+Some indexes, such as GitLab, forward unauthenticated requests to public indexes such as PyPI. When
+this happens, uv does not search for credentials. Set `authenticate` for an index to change this
+behavior. For example, always search for credentials:
 
 ```toml hl_lines="4"
 [[tool.uv.index]]
@@ -211,22 +199,21 @@ url = "https://example.com/simple"
 authenticate = "always"
 ```
 
-When `authenticate` is set to `always`, uv will eagerly search for credentials and error if
-credentials cannot be found.
+If `authenticate` is `always`, uv searches for credentials immediately and fails if it cannot find
+them.
 
 ### Ignoring error codes
 
-When using the [first-index strategy](#searching-across-multiple-indexes), uv will stop searching
-across indexes if an HTTP 401 Unauthorized or HTTP 403 Forbidden status code is encountered. The one
-exception is that uv will ignore 403s when searching the `pytorch` index (since this index returns a
-403 when a package is not present).
+With the [first-index strategy](#searching-across-multiple-indexes), uv stops if an index returns
+HTTP 401 Unauthorized or HTTP 403 Forbidden. The `pytorch` index is an exception. uv ignores HTTP
+403 responses from this index because it returns that status when a package does not exist.
 
-By default, uv will also stop resolution if an HTTP error is encountered when fetching distribution
-metadata or an archive from an index. Ignoring that error marks the affected package version as
-unavailable, allowing the resolver to try another version.
+By default, uv also stops resolution if an HTTP error occurs while it retrieves distribution
+metadata or an archive. If uv ignores the error, the affected version becomes unavailable and the
+resolver can try another version.
 
-To configure which error codes are ignored for an index, use the `ignore-error-codes` setting. For
-example, to ignore 403s (but not 401s) for a private index:
+Use `ignore-error-codes` to select which errors uv ignores for an index. For example, ignore HTTP
+403 but not HTTP 401 for a private index:
 
 ```toml
 [[tool.uv.index]]
@@ -236,12 +223,11 @@ authenticate = "always"
 ignore-error-codes = [403]
 ```
 
-uv will always continue searching across indexes when it encounters a `404 Not Found`. This cannot
-be overridden.
+If an index returns `404 Not Found`, uv always searches the next index. This behavior cannot change.
 
 ### Disabling authentication
 
-To prevent leaking credentials, authentication can be disabled for an index:
+To prevent credential leaks, disable authentication for an index:
 
 ```toml hl_lines="4"
 [[tool.uv.index]]
@@ -250,15 +236,14 @@ url = "https://example.com/simple"
 authenticate = "never"
 ```
 
-When `authenticate` is set to `never`, uv will never search for credentials for the given index and
-will error if credentials are provided directly.
+If `authenticate` is `never`, uv does not search for credentials for that index. It fails if the
+user provides credentials directly.
 
 ### Customizing cache control headers
 
-By default, uv will respect the cache control headers provided by the index. For example, PyPI
-serves package metadata with a `max-age=600` header, thereby allowing uv to cache package metadata
-for 10 minutes; and wheels and source distributions with a `max-age=365000000, immutable` header,
-thereby allowing uv to cache artifacts indefinitely.
+By default, uv follows the cache control headers from each index. PyPI serves package metadata with
+`max-age=600`, so uv caches metadata for 10 minutes. PyPI serves wheels and source distributions
+with `max-age=365000000, immutable`, so uv can cache those artifacts indefinitely.
 
 To override the cache control headers for an index, use the `cache-control` setting:
 
@@ -274,9 +259,9 @@ The `cache-control` setting accepts an object with two optional keys:
 - `api`: Controls caching for Simple API requests (package metadata).
 - `files`: Controls caching for artifact downloads (wheels and source distributions).
 
-The values for these keys are strings that follow the
+The values use
 [HTTP Cache-Control](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Cache-Control)
-syntax. For example, to force uv to always revalidate package metadata, set `api = "no-cache"`:
+syntax. To make uv always revalidate package metadata, set `api = "no-cache"`:
 
 ```toml
 [[tool.uv.index]]
@@ -285,16 +270,13 @@ url = "https://example.com/simple"
 cache-control = { api = "no-cache" }
 ```
 
-This setting is most commonly used to override the default cache control headers for private indexes
-that otherwise disable caching, often unintentionally. We typically recommend following PyPI's
-approach to caching headers, i.e., setting `api = "max-age=600"` and
-`files = "max-age=365000000, immutable"`.
+This setting can override private indexes that unintentionally disable caching. The recommended
+values match PyPI: `api = "max-age=600"` and `files = "max-age=365000000, immutable"`.
 
 ### Requiring a hash algorithm
 
-When an index advertises multiple hashes for a distribution, uv selects a single hash to record in
-the lockfile. To require a specific algorithm for distributions resolved from an index, use the
-`hash-algorithm` setting:
+If an index advertises multiple hashes for a distribution, uv records one hash in the lockfile. To
+require a specific algorithm for an index, use `hash-algorithm`:
 
 ```toml
 [tool.uv]
@@ -306,13 +288,13 @@ url = "https://private-index.com/simple"
 hash-algorithm = "sha256"
 ```
 
-If a locked distribution does not advertise the required algorithm, uv will fail instead of falling
-back to another hash algorithm.
+If a locked distribution does not advertise the required algorithm, uv fails. It does not use
+another hash algorithm.
 
 ### Configuring `exclude-newer` for an index
 
-If you're using [`exclude-newer`](./resolution.md#reproducible-resolutions), you can configure a
-different cutoff for a specific index:
+If [`exclude-newer`](./resolution.md#reproducible-resolutions) is configured, an index can specify a
+different cutoff:
 
 ```toml
 [[tool.uv.index]]
@@ -321,11 +303,10 @@ url = "https://internal.example.com/simple"
 exclude-newer = "7 days"
 ```
 
-Index-specific values only affect packages served from that index. Package-specific
-`exclude-newer-package` overrides still take precedence.
+An index-specific cutoff affects only packages from that index. Package-specific
+`exclude-newer-package` settings still take precedence.
 
-If an index does not provide `upload-time` metadata, you can disable the cutoff for that index
-entirely:
+If an index does not provide `upload-time` metadata, disable the cutoff for that index:
 
 ```toml
 [[tool.uv.index]]
@@ -336,12 +317,12 @@ exclude-newer = false
 
 ## "Flat" indexes
 
-By default, `[[tool.uv.index]]` entries are assumed to be PyPI-style registries that implement the
-[PEP 503](https://peps.python.org/pep-0503/) Simple Repository API. However, uv also supports "flat"
-indexes, which are local directories or HTML pages that contain flat lists of wheels and source
-distributions. In pip, such indexes are specified using the `--find-links` option.
+By default, uv treats `[[tool.uv.index]]` entries as PyPI-style registries that implement the
+[PEP 503](https://peps.python.org/pep-0503/) Simple Repository API. uv also supports "flat" indexes.
+These indexes are local directories or HTML pages that list wheels and source distributions. In pip,
+the `--find-links` option specifies these indexes.
 
-To define a flat index in your `pyproject.toml`, use the `format = "flat"` option:
+The `format = "flat"` option defines a flat index in `pyproject.toml`:
 
 ```toml
 [[tool.uv.index]]
@@ -350,24 +331,22 @@ url = "/path/to/directory"
 format = "flat"
 ```
 
-Flat indexes support the same feature set as Simple Repository API indexes (e.g.,
-`explicit = true`); you can also pin a package to a flat index using `tool.uv.sources`.
+Flat indexes support the same features as Simple Repository API indexes, including
+`explicit = true`. The `tool.uv.sources` setting can also pin a package to a flat index.
 
 ## `--index-url` and `--extra-index-url`
 
-In addition to the `[[tool.uv.index]]` configuration option, uv supports pip-style `--index-url` and
-`--extra-index-url` command-line options for compatibility, where `--index-url` defines the default
-index and `--extra-index-url` defines additional indexes.
+uv also supports the pip-style `--index-url` and `--extra-index-url` options for compatibility. The
+`--index-url` option defines the default index. The `--extra-index-url` option defines additional
+indexes.
 
-These options can be used in conjunction with the `[[tool.uv.index]]` configuration option, and
-follow the same prioritization rules:
+These options work with `[[tool.uv.index]]` and follow the same priority rules:
 
-- The default index is always treated as lowest priority, whether defined via the legacy
-  `--index-url` argument, the recommended `--default-index` argument, or a `[[tool.uv.index]]` entry
-  with `default = true`.
-- Indexes are consulted in the order in which they’re defined, either via the legacy
-  `--extra-index-url` argument, the recommended `--index` argument, or `[[tool.uv.index]]` entries.
+- The default index always has the lowest priority. Define it with legacy `--index-url`, recommended
+  `--default-index`, or a `[[tool.uv.index]]` entry with `default = true`.
+- uv searches indexes in their defined order. Define them with legacy `--extra-index-url`,
+  recommended `--index`, or `[[tool.uv.index]]` entries.
 
-In effect, `--index-url` and `--extra-index-url` can be thought of as unnamed `[[tool.uv.index]]`
-entries, with `default = true` enabled for the former. In that context, `--index-url` maps to
-`--default-index`, and `--extra-index-url` maps to `--index`.
+The `--index-url` and `--extra-index-url` options behave like unnamed `[[tool.uv.index]]` entries.
+The `--index-url` entry also sets `default = true`. Thus, `--index-url` corresponds to
+`--default-index`, and `--extra-index-url` corresponds to `--index`.

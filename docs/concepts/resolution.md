@@ -1,17 +1,15 @@
 # Resolution
 
-Resolution is the process of taking a list of requirements and converting them to a list of package
-versions that fulfill the requirements. Resolution requires recursively searching for compatible
-versions of packages, ensuring that the requested requirements are fulfilled and that the
-requirements of the requested packages are compatible.
+Resolution converts a list of requirements into a compatible set of package versions. A resolver
+searches for package versions that satisfy the requested requirements and each package's own
+dependencies.
 
 ## Dependencies
 
-Most projects and packages have dependencies. Dependencies are other packages that are necessary in
-order for the current package to work. A package defines its dependencies as _requirements_, roughly
-a combination of a package name and acceptable versions. The dependencies defined by the current
-project are called _direct dependencies_. The dependencies added by each dependency of the current
-project are called _indirect_ or _transitive dependencies_.
+Most projects and packages depend on other packages to work. A package declares each dependency as a
+_requirement_, which includes a package name and acceptable versions. The current project's own
+requirements are its _direct dependencies_. Dependencies of those packages are _indirect_ or
+_transitive dependencies_.
 
 !!! note
 
@@ -21,7 +19,7 @@ project are called _indirect_ or _transitive dependencies_.
 
 ## Basic examples
 
-To help demonstrate the resolution process, consider the following dependencies:
+Consider the following dependencies:
 
 <!-- prettier-ignore -->
 - The project depends on `foo` and `bar`.
@@ -31,13 +29,12 @@ To help demonstrate the resolution process, consider the following dependencies:
     - `bar 1.0.0` depends on `lib>=2.0.0`.
 - `lib` has two versions, 1.0.0 and 2.0.0. Both versions have no dependencies.
 
-In this example, the resolver must find a set of package versions which satisfies the project
-requirements. Since there is only one version of both `foo` and `bar`, those will be used. The
-resolution must also include the transitive dependencies, so a version of `lib` must be chosen.
-`foo 1.0.0` allows all available versions of `lib`, but `bar 1.0.0` requires `lib>=2.0.0` so
-`lib 2.0.0` must be used.
+The resolver must select package versions that satisfy the project requirements. Because `foo` and
+`bar` each have one version, it selects those versions. It must also select a version of the
+transitive dependency `lib`. `foo 1.0.0` accepts both versions of `lib`, but `bar 1.0.0` requires
+`lib>=2.0.0`. Therefore, the resolver selects `lib 2.0.0`.
 
-In some resolutions, there may be more than one valid solution. Consider the following dependencies:
+Some requirements have more than one valid solution. Consider these dependencies:
 
 <!-- prettier-ignore -->
 - The project depends on `foo` and `bar`.
@@ -49,21 +46,18 @@ In some resolutions, there may be more than one valid solution. Consider the fol
     - `bar 2.0.0` depends on `lib==1.0.0`
 - `lib` has two versions, 1.0.0 and 2.0.0. Both versions have no dependencies.
 
-In this example, some version of both `foo` and `bar` must be selected; however, determining which
-version requires considering the dependencies of each version of `foo` and `bar`. `foo 2.0.0` and
-`bar 2.0.0` cannot be installed together as they conflict on their required version of `lib`, so the
-resolver must select either `foo 1.0.0` (along with `bar 2.0.0`) or `bar 1.0.0` (along with
-`foo 2.0.0`). Both are valid solutions, and different resolution algorithms may yield either result.
+The resolver must select one version each of `foo` and `bar`. `foo 2.0.0` and `bar 2.0.0` require
+different versions of `lib`, so they cannot coexist. The resolver can select `foo 1.0.0` with
+`bar 2.0.0`, or `bar 1.0.0` with `foo 2.0.0`. Both results are valid. Different resolution
+algorithms might select different results.
 
 ## Platform markers
 
-Markers allow attaching an expression to requirements that indicate when the dependency should be
-used. For example `bar ; python_version < "3.9"` indicates that `bar` should only be installed on
-Python 3.8 and earlier.
+Markers attach a condition to a requirement. For example, `bar ; python_version < "3.9"` installs
+`bar` only on Python 3.8 and earlier.
 
-Markers are used to adjust a package's dependencies based on the current environment or platform.
-For example, markers can be used to modify dependencies by operating system, CPU architecture,
-Python version, Python implementation, and more.
+Markers adjust package dependencies for the current environment or platform. For example, they can
+select dependencies by operating system, CPU architecture, Python version, or Python implementation.
 
 !!! note
 
@@ -71,84 +65,72 @@ Python version, Python implementation, and more.
     markers](https://packaging.python.org/en/latest/specifications/dependency-specifiers/#environment-markers)
     section in the Python Packaging documentation for more details about markers.
 
-Markers are important for resolution because their values change the required dependencies.
-Typically, Python package resolvers use the markers of the _current_ platform to determine which
-dependencies to use since the package is often being _installed_ on the current platform. However,
-for _locking_ dependencies this is problematic — the lockfile would only work for developers using
-the same platform the lockfile was created on. To solve this problem, platform-independent, or
-"universal" resolvers exist.
+Markers affect resolution because their values change the required dependencies. Most Python
+resolvers evaluate markers for the _current_ platform, where they install the packages. However, a
+lockfile created this way works only on that platform. Platform-independent, or "universal",
+resolvers avoid this limitation.
 
 uv supports both [platform-specific](#platform-specific-resolution) and
 [universal](#universal-resolution) resolution.
 
 ## Platform-specific resolution
 
-By default, uv's pip interface, i.e., [`uv pip compile`](../pip/compile.md), produces a resolution
-that is platform-specific, like `pip-tools`. There is no way to use platform-specific resolution in
-the uv's project interface.
+By default, uv's pip interface, such as [`uv pip compile`](../pip/compile.md), produces a
+platform-specific resolution. This matches `pip-tools`. The uv project interface does not support
+platform-specific resolution.
 
-uv also supports resolving for specific, alternate platforms and Python versions with the
-`--python-platform` and `--python-version` options. For example, if using Python 3.12 on macOS,
-`uv pip compile --python-platform linux --python-version 3.10 requirements.in` can be used to
-produce a resolution for Python 3.10 on Linux instead. Unlike universal resolution, during
-platform-specific resolution, the provided `--python-version` is the exact python version to use,
-not a lower bound.
+The `--python-platform` and `--python-version` options select another platform or Python version.
+For example, `uv pip compile --python-platform linux --python-version 3.10 requirements.in` resolves
+for Python 3.10 on Linux, even when run on macOS. During platform-specific resolution,
+`--python-version` sets the exact Python version, not a lower bound.
 
 !!! note
 
-    Python's environment markers expose far more information about the current machine
-    than can be expressed by a simple `--python-platform` argument. For example, the `platform_version` marker
-    on macOS includes the time at which the kernel was built, which can (in theory) be encoded in
-    package requirements. uv's resolver makes a best-effort attempt to generate a resolution that is
-    compatible with any machine running on the target `--python-platform`, which should be sufficient for
-    most use cases, but may lose fidelity for complex package and platform combinations.
+    Python environment markers describe more machine details than `--python-platform` can express.
+    For example, the macOS `platform_version` marker includes the kernel build time. Package
+    requirements can depend on these details. uv attempts to create a resolution for every machine
+    on the target platform. This works for most packages, but complex requirements can reduce
+    accuracy.
 
 ## Universal resolution
 
-uv's lockfile (`uv.lock`) is created with a universal resolution and is portable across platforms.
-This ensures that dependencies are locked for everyone working on the project, regardless of
-operating system, architecture, and Python version. The uv lockfile is created and modified by
-[project](../concepts/projects/index.md) commands such as `uv lock`, `uv sync`, and `uv add`.
+uv creates its lockfile (`uv.lock`) with universal resolution. The lockfile works across operating
+systems, architectures, and supported Python versions. [Project](../concepts/projects/index.md)
+commands such as `uv lock`, `uv sync`, and `uv add` create and update this file.
 
-Universal resolution is also available in uv's pip interface, i.e.,
-[`uv pip compile`](../pip/compile.md), with the `--universal` flag. The resulting requirements file
-will contain markers to indicate which platform each dependency is relevant for.
+To use universal resolution with [`uv pip compile`](../pip/compile.md), pass `--universal`. The
+resulting requirements file contains markers that identify the platforms for each dependency.
 
-During universal resolution, a package may be listed multiple times with different versions or URLs
-if different versions are needed for different platforms — the markers determine which version will
-be used. A universal resolution is often more constrained than a platform-specific resolution, since
-we need to take the requirements for all markers into account.
+Universal resolution can include a package more than once if different platforms need different
+versions or URLs. Markers select the appropriate version. Because it considers every marker,
+universal resolution is often more constrained than platform-specific resolution.
 
-During universal resolution, all required packages must be compatible with the _entire_ range of
-`requires-python` declared in the `pyproject.toml`. For example, if a project's `requires-python` is
-`>=3.8`, resolution will fail if all versions of given dependency require Python 3.9 or later, since
-the dependency lacks a usable version for (e.g.) Python 3.8, the lower bound of the project's
-supported range. In other words, the project's `requires-python` must be a subset of the
-`requires-python` of all its dependencies.
+Every required package must support the _entire_ `requires-python` range in `pyproject.toml`. For
+example, a project with `requires-python = ">=3.8"` must have dependencies that support Python 3.8.
+Resolution fails if every version of a dependency requires Python 3.9 or later. The project's
+`requires-python` range must be a subset of each dependency's `requires-python` range.
 
-When selecting the compatible version for a given dependency, uv will
-([by default](#multi-version-resolution)) attempt to choose the latest compatible version for each
-supported Python version. For example, if a project's `requires-python` is `>=3.8`, and the latest
-version of a dependency requires Python 3.9 or later, while all prior versions supporting Python
-3.8, the resolver will select the latest version for users running Python 3.9 or later, and previous
-versions for users running Python 3.8.
+By [default](#multi-version-resolution), uv selects the latest compatible dependency version for
+each supported Python version. For example, a project can support Python 3.8 and later while its
+latest dependency version requires Python 3.9. uv selects the latest dependency for Python 3.9 and
+later, and an older compatible version for Python 3.8.
 
-When evaluating `requires-python` ranges for dependencies, uv only considers lower bounds and
-ignores upper bounds entirely. For example, `>=3.8, <4` is treated as `>=3.8`. Respecting upper
-bounds on `requires-python` often leads to formally correct but practically incorrect resolutions,
-as, e.g., resolvers will backtrack to the first published version that omits the upper bound (see:
-[`Requires-Python` upper limits](https://discuss.python.org/t/requires-python-upper-limits/12663)).
+For dependency `requires-python` ranges, uv considers lower bounds and ignores upper bounds. For
+example, it treats `>=3.8, <4` as `>=3.8`. Upper bounds often cause formally correct but impractical
+resolutions. For example, a resolver can backtrack to the first published version without an upper
+bound. See
+[`Requires-Python` upper limits](https://discuss.python.org/t/requires-python-upper-limits/12663).
 
 ## Limited resolution environments
 
-By default, the universal resolver attempts to solve for all platforms and Python versions.
+By default, the universal resolver considers all platforms and Python versions.
 
-If your project supports only a limited set of platforms or Python versions, you can constrain the
-set of solved platforms via the `environments` setting, which accepts a list of
+To limit resolution to specific platforms or Python versions, use the `environments` setting. It
+accepts a list of
 [PEP 508 environment markers](https://packaging.python.org/en/latest/specifications/dependency-specifiers/#environment-markers).
-In other words, you can use the `environments` setting to _reduce_ the set of supported platforms.
+The `environments` setting _reduces_ the set of supported platforms.
 
-For example, to constrain the lockfile to macOS and Linux, and avoid solving for Windows:
+For example, limit the lockfile to macOS and Linux:
 
 ```toml title="pyproject.toml"
 [tool.uv]
@@ -158,7 +140,7 @@ environments = [
 ]
 ```
 
-Or, to avoid solving for alternative Python implementations:
+To exclude alternative Python implementations:
 
 ```toml title="pyproject.toml"
 [tool.uv]
@@ -167,47 +149,38 @@ environments = [
 ]
 ```
 
-Entries in the `environments` setting must be disjoint (i.e., they must not overlap). For example,
-`sys_platform == 'darwin'` and `sys_platform == 'linux'` are disjoint, but
-`sys_platform == 'darwin'` and `python_version >= '3.9'` are not, since both could be true at the
-same time.
+Entries in `environments` must be disjoint: they cannot overlap. For example,
+`sys_platform == 'darwin'` and `sys_platform == 'linux'` are disjoint. However,
+`sys_platform == 'darwin'` and `python_version >= '3.9'` overlap because both can be true.
 
 ## Required environments
 
-In the Python ecosystem, packages can be published as source distributions, built distributions
-(wheels), or both; but to install a package, a built distribution is required. If a package lacks a
-built distribution, or lacks a distribution for the current platform or Python version (built
-distributions are often platform-specific), uv will attempt to build the package from source, then
-install the resulting built distribution.
+Python packages can provide source distributions, built distributions (wheels), or both.
+Installation requires a wheel. If no wheel supports the current platform or Python version, uv
+builds a wheel from the source distribution and installs it.
 
-Some packages (like PyTorch) publish built distributions, but omit a source distribution. Such
-packages are _only_ installable on platforms for which a built distribution is available. For
-example, if a package publishes built distributions for Linux, but not macOS or Windows, then that
-package will _only_ be installable on Linux.
+Some packages, such as PyTorch, publish wheels without a source distribution. These packages work
+_only_ on platforms with an available wheel. For example, a package that publishes only Linux wheels
+cannot install on macOS or Windows.
 
-Packages that lack source distributions cause problems for universal resolution, since there will
-typically be at least one platform or Python version for which the package is not installable.
+Packages without source distributions complicate universal resolution because some platforms or
+Python versions might not have a compatible wheel.
 
-By default, uv requires each such package to include at least one wheel that is compatible with the
-target Python version. The `required-environments` setting can be used to ensure that the resulting
-resolution contains wheels for specific platforms, or fails if no such wheels are available. The
-setting accepts a list of
+By default, each package without a source distribution must provide at least one wheel for the
+target Python version. Use `required-environments` to require wheels for specific platforms. If no
+matching wheel exists, resolution fails. This setting accepts a list of
 [PEP 508 environment markers](https://packaging.python.org/en/latest/specifications/dependency-specifiers/#environment-markers).
 
-While the `environments` setting _limits_ the set of environments that uv will consider when
-resolving dependencies, `required-environments` _expands_ the set of platforms that uv _must_
-support when resolving dependencies.
+The `environments` setting _limits_ the environments that uv considers. In contrast,
+`required-environments` _expands_ the platforms that the resolution _must_ support.
 
-For example, `environments = ["sys_platform == 'darwin'"]` would limit uv to solving for macOS (and
-ignoring Linux and Windows). On the other hand,
-`required-environments = ["sys_platform == 'darwin'"]` would _require_ that any package without a
-source distribution include a wheel for macOS in order to be installable (and would fail if no such
-wheel is available).
+For example, `environments = ["sys_platform == 'darwin'"]` limits resolution to macOS and excludes
+Linux and Windows. In contrast, `required-environments = ["sys_platform == 'darwin'"]` requires a
+macOS wheel for each package without a source distribution. Resolution fails if a required wheel is
+missing.
 
-In practice, `required-environments` can be useful for declaring explicit support for non-latest
-platforms, since this often requires backtracking past the latest published versions of those
-packages. For example, to guarantee that any built distribution-only packages includes support for
-Intel macOS:
+Use `required-environments` to support older platforms that might require older package versions.
+For example, require every wheel-only package to support Intel macOS:
 
 ```toml title="pyproject.toml"
 [tool.uv]
@@ -220,13 +193,13 @@ required-environments = [
 
 The `environments` and `required-environments` settings accept
 [PEP 508 environment markers](https://packaging.python.org/en/latest/specifications/dependency-specifiers/#environment-markers).
-The values for these markers are derived from the Python runtime (e.g.,
+The Python runtime provides these marker values through functions such as
 [`sys.platform`](https://docs.python.org/3/library/sys.html#sys.platform),
 [`platform.machine()`](https://docs.python.org/3/library/platform.html#platform.machine),
 [`platform.system()`](https://docs.python.org/3/library/platform.html#platform.system), and
-[`os.name`](https://docs.python.org/3/library/os.html#os.name)).
+[`os.name`](https://docs.python.org/3/library/os.html#os.name).
 
-For quick reference, the most common marker values by platform are:
+Common marker values include:
 
 | Marker                      | Linux       | macOS      | Windows     |
 | --------------------------- | ----------- | ---------- | ----------- |
@@ -240,7 +213,7 @@ For quick reference, the most common marker values by platform are:
 
     On Windows, `sys_platform` is always `'win32'`, even on 64-bit systems.
 
-You can check the values for your current platform by running:
+To check the values for the current platform, run:
 
 ```console
 $ uvx python -c "import sysconfig; print(sysconfig.get_config_vars())"
@@ -248,33 +221,28 @@ $ uvx python -c "import sysconfig; print(sysconfig.get_config_vars())"
 
 ## Dependency preferences
 
-If resolution output file exists, i.e., a uv lockfile (`uv.lock`) or a requirements output file
-(`requirements.txt`), uv will _prefer_ the dependency versions listed there. Similarly, if
-installing a package into a virtual environment, uv will prefer the already installed version if
-present. This means that locked or installed versions will not change unless an incompatible version
-is requested or an upgrade is explicitly requested with `--upgrade`.
+If `uv.lock` or `requirements.txt` already exists, uv _prefers_ its listed dependency versions. When
+installing into a virtual environment, uv also prefers installed versions. These versions change
+only if a requirement is incompatible or the command includes `--upgrade`.
 
 ## Resolution strategy
 
-By default, uv tries to use the latest version of each package. For example,
-`uv pip install flask>=2.0.0` will install the latest version of Flask, e.g., 3.0.0. If
-`flask>=2.0.0` is a dependency of the project, only `flask` 3.0.0 will be used. This is important,
-for example, because running tests will not check that the project is actually compatible with its
-stated lower bound of `flask` 2.0.0.
+By default, uv selects the latest compatible version of each package. For example,
+`uv pip install flask>=2.0.0` installs the latest Flask version, such as 3.0.0. Tests then run with
+Flask 3.0.0 only. They do not verify compatibility with the declared lower bound of Flask 2.0.0.
 
-With `--resolution lowest`, uv will install the lowest possible version for all dependencies, both
-direct and indirect (transitive). Alternatively, `--resolution lowest-direct` will use the lowest
-compatible versions for all direct dependencies, while using the latest compatible versions for all
-other dependencies. uv will always use the latest versions for build dependencies.
+With `--resolution lowest`, uv installs the lowest compatible version of every direct and transitive
+dependency. With `--resolution lowest-direct`, uv selects the lowest compatible direct dependencies
+and the latest compatible transitive dependencies. uv always uses the latest compatible build
+dependencies.
 
-For example, given the following `requirements.in` file:
+For example, consider this `requirements.in` file:
 
 ```requirements title="requirements.in"
 flask>=2.0.0
 ```
 
-Running `uv pip compile requirements.in -o requirements.txt` would produce the following
-`requirements.txt` file:
+`uv pip compile requirements.in -o requirements.txt` produces this `requirements.txt` file:
 
 ```requirements title="requirements.txt"
 # This file was autogenerated by uv via the following command:
@@ -296,8 +264,7 @@ werkzeug==3.0.1
     # via flask
 ```
 
-However, `uv pip compile --resolution lowest requirements.in -o requirements.txt` would instead
-produce:
+In contrast, `uv pip compile --resolution lowest requirements.in -o requirements.txt` produces:
 
 ```requirements title="requirements.txt"
 # This file was autogenerated by uv via the following command:
@@ -315,21 +282,19 @@ werkzeug==2.0.0
     # via flask
 ```
 
-When publishing libraries, it is recommended to separately run tests with `--resolution lowest` or
-`--resolution lowest-direct` in continuous integration to ensure compatibility with the declared
-lower bounds.
+For published libraries, run separate continuous integration tests with `--resolution lowest` or
+`--resolution lowest-direct`. These tests verify compatibility with declared lower bounds.
 
 ## Pre-release handling
 
-By default (`if-necessary`), uv prefers stable versions over pre-releases, falling back to
-pre-releases only if every stable candidate that satisfies the active constraints is rejected during
-resolution.
+By default (`if-necessary`), uv prefers stable versions. It considers pre-releases only after it
+rejects every stable candidate that satisfies the active constraints.
 
 Use `--prerelease allow` to consider pre-releases for every package without preferring stable
 candidates first, or `--prerelease disallow` to exclude them entirely.
 
-Use `--prerelease-package foo=allow` to override the global pre-release strategy for a specific
-package. Package-specific strategies can also be configured in `[tool.uv]`:
+Use `--prerelease-package foo=allow` to override the global strategy for one package. Alternatively,
+set package-specific strategies in `[tool.uv]`:
 
 ```toml
 [tool.uv]
@@ -337,30 +302,26 @@ prerelease = "disallow"
 prerelease-package = { foo = "allow", bar = "if-necessary" }
 ```
 
-The `explicit` mode considers pre-releases only for first-party requirements that contain a
-pre-release identifier (preferring stable versions and falling back to pre-releases only if
-necessary), while disallowing pre-releases for all other packages.
+The `explicit` mode considers pre-releases only for first-party requirements with a pre-release
+identifier. It prefers stable versions and uses pre-releases only when necessary. It rejects
+pre-releases for all other packages.
 
 For more details, see
 [Pre-release compatibility](../pip/compatibility.md#pre-release-compatibility).
 
 ## Multi-version resolution
 
-During universal resolution, a package may be listed multiple times with different versions or URLs
-within the same lockfile, since different versions may be needed for different platforms or Python
-versions.
+Universal resolution can list a package more than once in a lockfile. Different platforms or Python
+versions might require different package versions or URLs.
 
-The `--fork-strategy` setting can be used to control how uv trades off between (1) minimizing the
-number of selected versions and (2) selecting the latest-possible version for each platform. The
-former leads to greater consistency across platforms, while the latter leads to use of newer package
-versions where possible.
+The `--fork-strategy` setting controls whether uv prefers fewer package versions or newer versions
+for each platform. Fewer versions improve consistency across platforms. Newer versions provide more
+recent package releases when possible.
 
-By default (`--fork-strategy requires-python`), uv will optimize for selecting the latest version of
-each package for each supported Python version, while minimizing the number of selected versions
-across platforms.
+By default (`--fork-strategy requires-python`), uv selects the latest compatible package for each
+supported Python version. It also minimizes the number of versions across platforms.
 
-For example, when resolving `numpy` with a Python requirement of `>=3.8`, uv would select the
-following versions:
+For example, with a Python requirement of `>=3.8`, uv selects these `numpy` versions:
 
 ```txt
 numpy==1.24.4 ; python_version == "3.8"
@@ -368,55 +329,42 @@ numpy==2.0.2 ; python_version == "3.9"
 numpy==2.2.0 ; python_version >= "3.10"
 ```
 
-This resolution reflects the fact that NumPy 2.2.0 and later require at least Python 3.10, while
-earlier versions are compatible with Python 3.8 and 3.9.
+NumPy 2.2.0 and later require Python 3.10 or later. Older NumPy versions support Python 3.8 and 3.9.
 
-Under `--fork-strategy fewest`, uv will instead minimize the number of selected versions for each
-package, preferring older versions that are compatible with a wider range of supported Python
-versions or platforms.
+With `--fork-strategy fewest`, uv minimizes the number of versions for each package. It prefers
+older versions that support more Python versions or platforms.
 
-For example, when in the scenario above, uv would select `numpy==1.24.4` for all Python versions,
-rather than upgrading to `numpy==2.0.2` for Python 3.9 and `numpy==2.2.0` for Python 3.10 and later.
+In the previous example, uv selects `numpy==1.24.4` for all Python versions. It does not select
+newer NumPy versions for Python 3.9 or later.
 
 ## Dependency constraints
 
-Like pip, uv supports constraint files (`--constraint constraints.txt`) which narrow the set of
-acceptable versions for the given packages. Constraint files are similar to requirements files, but
-being listed as a constraint alone will not cause a package to be included to the resolution.
-Instead, constraints only take effect if a requested package is already pulled in as a direct or
-transitive dependency. Constraints are useful for reducing the range of available versions for a
-transitive dependency. They can also be used to keep a resolution in sync with some other set of
-resolved versions, regardless of which packages are overlapping between the two.
+Like pip, uv supports constraint files through `--constraint constraints.txt`. These files restrict
+the acceptable versions of specific packages. Unlike requirements, a constraint does not add a
+package to the resolution. It applies only when the package is already a direct or transitive
+dependency. Constraints can restrict transitive dependency versions or keep shared packages aligned
+with another resolution.
 
 ## Dependency overrides
 
-Dependency overrides allow bypassing unsuccessful or undesirable resolutions by overriding a
-package's declared dependencies. Overrides are a useful last resort for cases in which you _know_
-that a dependency is compatible with a certain version of a package, despite the metadata indicating
-otherwise.
+Dependency overrides replace a package's declared dependencies to avoid failed or unwanted
+resolutions. Use them only when a package is _known_ to be compatible despite its declared metadata.
 
-For example, if a transitive dependency declares the requirement `pydantic>=1.0,<2.0`, but _does_
-work with `pydantic>=2.0`, the user can override the declared dependency by including
-`pydantic>=1.0,<3` in the overrides, thereby allowing the resolver to choose a newer version of
-`pydantic`.
+For example, a transitive dependency might declare `pydantic>=1.0,<2.0` but still work with
+`pydantic>=2.0`. Add `pydantic>=1.0,<3` as an override to let the resolver select a newer version.
 
-Concretely, if `pydantic>=1.0,<3` is included as an override, uv will ignore all declared
-requirements on `pydantic`, replacing them with the override. In the above example, the
-`pydantic>=1.0,<2.0` requirement would be ignored completely, and would instead be replaced with
-`pydantic>=1.0,<3`.
+An override of `pydantic>=1.0,<3` replaces every declared requirement on `pydantic`. In this
+example, uv ignores `pydantic>=1.0,<2.0` and uses `pydantic>=1.0,<3` instead.
 
-While constraints can only _reduce_ the set of acceptable versions for a package, overrides can
-_expand_ the set of acceptable versions, providing an escape hatch for erroneous upper version
-bounds. As with constraints, global overrides do not add a dependency on the package and only take
-effect if the package is requested in a direct or transitive dependency.
+Constraints can only _reduce_ the set of acceptable package versions. Overrides can also _expand_
+that set to work around incorrect upper bounds. Like constraints, global overrides do not add a
+dependency. They apply only to existing direct or transitive dependencies.
 
-In a `pyproject.toml`, use `tool.uv.override-dependencies` to define a list of overrides. In the
-pip-compatible interface, the `--override` option can be used to pass files with the same format as
-constraints files.
+In `pyproject.toml`, set `tool.uv.override-dependencies` to a list of overrides. In the
+pip-compatible interface, use `--override` with files in the constraints format.
 
 By default, an override applies to every requirement for the named dependency, including direct
-requirements. An override can instead be scoped to the dependencies of a particular package version
-by using an inline table:
+requirements. Use an inline table to limit an override to one package version:
 
 ```toml
 [tool.uv]
@@ -426,24 +374,22 @@ override-dependencies = [
 ]
 ```
 
-In this example, `foo>1` is the global override, while `foo>2` replaces requirements for `foo`
-declared by `bar==0.0.5`. If `bar` does not declare a dependency on `foo`, the scoped override adds
-it. Other dependencies declared by `bar` are unchanged. The `version` field in `package` can be
-omitted to apply the scoped overrides to all versions of `bar`. A version-specific entry takes
-precedence over an all-versions entry, and a scoped override takes precedence over a global override
-for the same dependency.
+In this example, `foo>1` is the global override. `foo>2` replaces requirements for `foo` declared by
+`bar==0.0.5`. If `bar` does not depend on `foo`, the scoped override adds that dependency. Other
+dependencies of `bar` do not change. Omit the `version` field to apply a scoped override to every
+version of `bar`. A version-specific entry takes precedence over an all-versions entry. A scoped
+override takes precedence over a global override for the same dependency.
 
-Scoped overrides currently support registry version specifiers only. Direct URL and path sources,
-including Git sources, and explicit indexes are not supported.
+Scoped overrides support registry version specifiers only. They do not support direct URLs, paths,
+Git sources, or explicit indexes.
 
-Under the `explicit` pre-release mode, an explicit pre-release specifier in any scoped override
-permits stable-first pre-release fallback for that package for the entire resolution. Similarly, an
-exact yanked-version pin in any scoped override opts that package into yanked-version candidate
-selection for the entire resolution, even if the scope is not selected.
+In `explicit` pre-release mode, a pre-release specifier in any scoped override permits pre-release
+fallback for that package throughout the resolution. Stable candidates remain preferred. Similarly,
+an exact yanked-version pin permits yanked candidates throughout the resolution. This applies even
+when uv does not select the override's scope.
 
-If multiple overrides are provided for the same package, they must be differentiated with
-[markers](#platform-markers). If a package has a dependency with a marker, it is replaced
-unconditionally when using overrides — it does not matter if the marker evaluates to true or false.
+Multiple overrides for the same package must use different [markers](#platform-markers). An override
+replaces a dependency with a marker regardless of whether that marker evaluates to true or false.
 
 ## Dependency exclusions
 
@@ -455,7 +401,7 @@ every requirement for the named dependency, including direct requirements:
 exclude-dependencies = ["foo"]
 ```
 
-An exclusion can instead be scoped to the dependencies of a particular package version:
+Use an inline table to limit an exclusion to one package version:
 
 ```toml
 [tool.uv]
@@ -464,12 +410,11 @@ exclude-dependencies = [
 ]
 ```
 
-In this example, requirements for `foo` declared by `bar==0.0.5` are removed, while requirements for
-`foo` from other packages are unchanged. The `version` field in `package` can be omitted to apply
-the scoped exclusions to all versions of `bar`. A version-specific entry takes precedence over an
-all-versions entry.
+In this example, uv removes requirements for `foo` from `bar==0.0.5`. Requirements for `foo` from
+other packages do not change. Omit the `version` field to apply the exclusion to every version of
+`bar`. A version-specific entry takes precedence over an all-versions entry.
 
-Scoped exclusions can be combined with scoped overrides to replace one dependency with another:
+Combine scoped exclusions and overrides to replace one dependency with another:
 
 ```toml
 [tool.uv]
@@ -486,24 +431,20 @@ precedence.
 
 ## Dependency metadata
 
-During resolution, uv needs to resolve the metadata for each package it encounters, in order to
-determine its dependencies. This metadata is often available as a static file in the package index;
-however, for packages that only provide source distributions, the metadata may not be available
-upfront.
+During resolution, uv reads each package's metadata to identify its dependencies. A package index
+often provides this metadata as a static file. However, packages with only source distributions
+might not provide metadata in advance.
 
-In such cases, uv has to build the package to determine its metadata (e.g., by invoking `setup.py`).
-This can introduce a performance penalty during resolution. Further, it imposes the requirement that
-the package can be built on all platforms, which may not be true.
+If metadata is unavailable, uv must build the package to determine its dependencies. For example, it
+might run `setup.py`. This slows resolution and requires the package to build on every platform.
 
-For example, you may have a package that should only be built and installed on Linux, but doesn't
-build successfully on macOS or Windows. While uv can construct a perfectly valid lockfile for this
-scenario, doing so would require building the package, which would fail on non-Linux platforms.
+For example, a Linux-only package might not build on macOS or Windows. A valid lockfile can still
+include that package. However, building the package for its metadata fails on non-Linux platforms.
 
-The `tool.uv.dependency-metadata` table can be used to provide static metadata for such dependencies
-upfront, thereby allowing uv to skip the build step and use the provided metadata instead.
+Use `tool.uv.dependency-metadata` to provide static metadata for these dependencies. uv can then
+skip the build and use the supplied metadata.
 
-For example, to provide metadata for `chumpy` upfront, include its `dependency-metadata` in the
-`pyproject.toml`:
+For example, add `dependency-metadata` for `chumpy` to `pyproject.toml`:
 
 ```toml
 [[tool.uv.dependency-metadata]]
@@ -512,15 +453,12 @@ version = "0.70"
 requires-dist = ["numpy>=1.8.1", "scipy>=0.13.0", "six>=1.11.0"]
 ```
 
-These declarations are intended for cases in which a package does _not_ declare static metadata
-upfront, though they are also useful for packages that require
-[disabling build isolation](./projects/config.md#build-isolation) In such cases, it may be easier to
-declare the package metadata upfront, rather than creating a custom build environment prior to
-resolving the package.
+These declarations help when a package does _not_ provide static metadata. They also help when a
+package requires [disabling build isolation](./projects/config.md#build-isolation). Providing the
+metadata can be easier than creating a custom build environment before resolution.
 
-For example, past versions of `flash-attn` did not declare static metadata. By declaring metadata
-for `flash-attn` upfront, uv can resolve `flash-attn` without building the package from source
-(which itself requires installing `torch`):
+For example, older `flash-attn` versions did not declare static metadata. Provide that metadata so
+uv can resolve `flash-attn` without building it or installing `torch` first:
 
 ```toml
 [project]
@@ -538,32 +476,30 @@ version = "2.6.3"
 requires-dist = ["torch", "einops"]
 ```
 
-Like dependency overrides, `tool.uv.dependency-metadata` can also be used for cases in which a
-package's metadata is incorrect or incomplete, or when a package is not available in the package
-index. While dependency overrides allow overriding the allowed versions of a package globally,
-metadata overrides allow overriding the declared metadata of a _specific package_.
+`tool.uv.dependency-metadata` also helps when package metadata is incorrect or incomplete. It can
+also provide metadata for a package that is absent from the index. Dependency overrides change
+allowed package versions globally. Metadata overrides replace the declared metadata of a _specific
+package_.
 
 !!! note
 
-    The `version` field in `tool.uv.dependency-metadata` is optional for registry-based
-    dependencies (when omitted, uv will assume the metadata applies to all versions of the package),
-    but _required_ for direct URL dependencies (like Git dependencies).
+    For registry dependencies, the `version` field is optional. Without it, uv applies the metadata
+    to every version of the package. Direct URL dependencies, including Git dependencies,
+    _require_ `version`.
 
-Entries in the `tool.uv.dependency-metadata` table follow the
-[Metadata 2.3](https://packaging.python.org/en/latest/specifications/core-metadata/) specification,
-though only `name`, `version`, `requires-dist`, `requires-python`, and `provides-extra` are read by
-uv. The `version` field is also considered optional. If omitted, the metadata will be used for all
-versions of the specified package.
+Entries in `tool.uv.dependency-metadata` follow the
+[Metadata 2.3](https://packaging.python.org/en/latest/specifications/core-metadata/) specification.
+uv reads only `name`, `version`, `requires-dist`, `requires-python`, and `provides-extra`. If an
+entry omits the optional `version` field, the metadata applies to every version of that package.
 
 ## Conflicting dependencies
 
-uv requires that all dependencies declared by a project are compatible with each other and resolves
-all dependencies together when creating the lockfile. This includes project dependencies, optional
-dependencies ("extras"), and dependency groups (development dependencies).
+When uv creates a lockfile, it resolves all project dependencies together. These dependencies must
+be compatible. They include project dependencies, optional dependencies ("extras"), and development
+dependency groups.
 
-If dependencies declared in one extra are not compatible with those in another extra, uv will fail
-to resolve the requirements of the project with an error. For example, consider two sets of optional
-dependencies that conflict with one another:
+If two extras require incompatible dependencies, resolution fails. For example, these optional
+dependencies conflict:
 
 ```toml title="pyproject.toml"
 [project.optional-dependencies]
@@ -571,7 +507,7 @@ extra1 = ["numpy==2.1.2"]
 extra2 = ["numpy==2.0.0"]
 ```
 
-If you run `uv lock` with the above dependencies, resolution will fail:
+With these dependencies, `uv lock` fails:
 
 ```console
 $ uv lock
@@ -581,9 +517,8 @@ $ uv lock
       And because your project requires myproject[extra1] and myproject[extra2], we can conclude that your projects's requirements are unsatisfiable.
 ```
 
-To work around this, uv supports explicit declaration of conflicts. If you specify that `extra1` and
-`extra2` are conflicting, uv will resolve them separately. Specify conflicts in the `tool.uv`
-section:
+Declare conflicts explicitly to resolve incompatible extras separately. Add the conflict to the
+`tool.uv` section:
 
 ```toml title="pyproject.toml"
 [tool.uv]
@@ -595,8 +530,7 @@ conflicts = [
 ]
 ```
 
-Now, running `uv lock` will succeed. However, now you cannot install both `extra1` and `extra2` at
-the same time:
+`uv lock` now succeeds. However, `extra1` and `extra2` cannot install together:
 
 ```console
 $ uv sync --extra extra1 --extra extra2
@@ -604,11 +538,9 @@ Resolved 3 packages in 14ms
 error: extra `extra1`, extra `extra2` are incompatible with the declared conflicts: {`myproject[extra1]`, `myproject[extra2]`}
 ```
 
-This error occurs because installing both `extra1` and `extra2` would result in installing two
-different versions of a package into the same environment.
+Installing both extras would require two versions of the same package in one environment.
 
-The above strategy for dealing with conflicting optional dependencies also works with dependency
-groups:
+The same approach works for conflicting dependency groups:
 
 ```toml title="pyproject.toml"
 [dependency-groups]
@@ -624,12 +556,10 @@ conflicts = [
 ]
 ```
 
-The only difference from conflicting extras is that you need to use the `group` key instead of
-`extra`.
+Use the `group` key instead of `extra`.
 
-When using a workspace with multiple projects, the same restrictions apply — uv requires all
-workspace members to be compatible with each other. Similarly, conflicts can be declared across
-workspace members.
+The same restrictions apply to workspaces with multiple projects. All workspace members must be
+compatible unless a conflict is declared.
 
 For example, consider the following workspace:
 
@@ -649,7 +579,7 @@ name = "member2"
 extra2 = ["numpy==2.0.0"]
 ```
 
-To declare a conflict between extras in these different workspace members, use the `package` key:
+To declare a conflict between extras in different workspace members, use the `package` key:
 
 ```toml title="pyproject.toml"
 [tool.uv]
@@ -661,8 +591,7 @@ conflicts = [
 ]
 ```
 
-It's also possible for the project dependencies (i.e., `project.dependencies`) of one workspace
-member to conflict with the extra of another member, for example:
+The `project.dependencies` of one workspace member can also conflict with another member's extra:
 
 ```toml title="member1/pyproject.toml"
 [project]
@@ -678,7 +607,7 @@ name = "member2"
 extra2 = ["numpy==2.0.0"]
 ```
 
-This conflict can also be declared using the `package` key:
+Use the `package` key to declare this conflict:
 
 ```toml title="pyproject.toml"
 [tool.uv]
@@ -690,7 +619,7 @@ conflicts = [
 ]
 ```
 
-Similarly, it's possible for some workspace members to have conflicting project dependencies:
+Workspace members can also have conflicting project dependencies:
 
 ```toml title="member1/pyproject.toml"
 [project]
@@ -704,7 +633,7 @@ name = "member2"
 dependencies = ["numpy==2.0.0"]
 ```
 
-This conflict can also be declared using the `package` key:
+Use the `package` key to declare this conflict:
 
 ```toml title="pyproject.toml"
 [tool.uv]
@@ -716,7 +645,7 @@ conflicts = [
 ]
 ```
 
-These workspace members will not be installable together, e.g., the workspace root cannot define:
+These workspace members cannot install together. For example, the workspace root cannot define:
 
 ```toml title="pyproject.toml"
 [project]
@@ -726,57 +655,46 @@ dependencies = ["member1", "member2"]
 
 ## Lower bounds
 
-By default, `uv add` adds lower bounds to dependencies and, when using uv to manage projects, uv
-will warn if direct dependencies don't have lower bounds.
+By default, `uv add` adds lower bounds to dependencies. When managing a project, uv warns if a
+direct dependency has no lower bound.
 
-Lower bounds are not critical in the "happy path", but they are important for cases where there are
-dependency conflicts. For example, consider a project that requires two packages and those packages
-have conflicting dependencies. The resolver needs to check all combinations of all versions within
-the constraints for the two packages — if all of them conflict, an error is reported because the
-dependencies are not satisfiable. If there are no lower bounds, the resolver can (and often will)
-backtrack down to the oldest version of a package. This isn't only problematic because it's slow,
-the old version of the package often fails to build, or the resolver can end up picking a version
-that's old enough that it doesn't depend on the conflicting package, but also doesn't work with your
-code.
+Lower bounds matter when dependencies conflict. For example, two required packages might have
+incompatible dependencies. The resolver checks package versions within their allowed ranges. If all
+combinations conflict, resolution fails. Without lower bounds, the resolver can backtrack to the
+oldest available package versions. This slows resolution. Older versions might also fail to build or
+remove the conflicting dependency while remaining incompatible with the project.
 
-Lower bounds are particularly critical when writing a library. It's important to declare the lowest
-version for each dependency that your library works with, and to validate that the bounds are
-correct — testing with
-[`--resolution lowest` or `--resolution lowest-direct`](#resolution-strategy). Otherwise, a user may
-receive an old, incompatible version of one of your library's dependencies and the library will fail
-with an unexpected error.
+Libraries especially need accurate lower bounds. Declare the oldest compatible version of each
+dependency. Test those bounds with
+[`--resolution lowest` or `--resolution lowest-direct`](#resolution-strategy). Otherwise, users
+might receive an incompatible dependency version and encounter unexpected errors.
 
 ## Reproducible resolutions
 
-uv supports an `--exclude-newer` option to limit resolution to distributions uploaded before a
-specific date, allowing reproduction of installations regardless of new package releases. The date
-is compared against the upload time of each individual distribution artifact (i.e., when each file
-was uploaded to the package index), not the release date of the package version. The date may be
-specified as an [RFC 3339](https://www.rfc-editor.org/rfc/rfc3339.html) timestamp (e.g.,
-`2006-12-02T02:07:43Z`) or a local date in the same format (e.g., `2006-12-02`) in your system's
-configured time zone.
+Use `--exclude-newer` to limit resolution to distributions uploaded before a specific date. This
+makes installations reproducible even after new package releases. uv compares the cutoff with each
+distribution file's upload time, not the package version's release date. Specify an
+[RFC 3339](https://www.rfc-editor.org/rfc/rfc3339.html) timestamp, such as `2006-12-02T02:07:43Z`,
+or a local date, such as `2006-12-02`. Local dates use the system's configured time zone.
 
 !!! important
 
-    The package index must support the `upload-time` field as specified in
-    [`PEP 700`](https://peps.python.org/pep-0700/). If the field is not present for a given
-    distribution, the distribution will be treated as unavailable unless the package is opted out
-    via `--exclude-newer-package <package>=false`, or the index is configured with its own
-    `exclude-newer` value, or the index is opted out via `[[tool.uv.index]] exclude-newer = false`.
-    PyPI provides `upload-time` for all packages.
+    The package index must support the [`PEP 700`](https://peps.python.org/pep-0700/) `upload-time`
+    field. If a distribution lacks this field, uv treats it as unavailable. To exempt a package, use
+    `--exclude-newer-package <package>=false`. An index can also set its own `exclude-newer` value or
+    disable the cutoff with `[[tool.uv.index]] exclude-newer = false`. PyPI provides `upload-time`
+    for every package.
 
-To ensure reproducibility, messages for unsatisfiable resolutions will not mention that
-distributions were excluded due to the `--exclude-newer` flag — newer distributions will be treated
-as if they do not exist.
+To preserve reproducibility, error messages do not mention distributions excluded by
+`--exclude-newer`. uv treats newer distributions as if they do not exist.
 
 !!! note
 
-    The `--exclude-newer` option is only applied to packages that are read from a registry (as
-    opposed to, e.g., Git dependencies). Further, when using the `uv pip` interface, uv will not
-    downgrade previously installed packages unless the `--reinstall` flag is provided, in which case
-    uv will perform a new resolution.
+    `--exclude-newer` applies only to packages from registries, not Git dependencies. In the
+    `uv pip` interface, uv does not downgrade installed packages unless the command includes
+    `--reinstall`. That option triggers a new resolution.
 
-This option is also supported in the `pyproject.toml`, e.g.:
+Set this option in `pyproject.toml` as follows:
 
 ```pyproject.toml
 [tool.uv]
@@ -787,30 +705,27 @@ To disable a global cutoff from a lower-priority configuration source, pass `--e
 set `UV_EXCLUDE_NEWER=false`, or set `exclude-newer = false` in a higher-priority configuration
 file.
 
-When specified in persistent configuration, local date times are not allowed.
+Persistent configuration does not accept local date times.
 
-Values may also be specified for specific packages, e.g.,
-`--exclude-newer-package setuptools=2006-12-02`, or:
+To set a package-specific cutoff, use `--exclude-newer-package setuptools=2006-12-02` or:
 
 ```pyproject.toml
 [tool.uv]
 exclude-newer-package = { setuptools = "2006-12-02T02:07:43Z" }
 ```
 
-The package option also accepts `<package>=false` to opt a package out of the restriction, e.g.,
-`--exclude-newer-package setuptools=false`, or:
+To exempt a package from the cutoff, use `--exclude-newer-package setuptools=false` or:
 
 ```pyproject.toml
 [tool.uv]
 exclude-newer-package = { setuptools = false }
 ```
 
-This is useful to temporarily use a newer version of package or to allow resolving a package from an
-index that does not publish upload times.
+This supports newer package versions and indexes that do not publish upload times.
 
-Package-specific values will take precedence over both global and index-specific values.
+Package-specific values take precedence over global and index-specific values.
 
-Likewise, an individual index can override the global cutoff:
+An individual index can also override the global cutoff:
 
 ```pyproject.toml
 [tool.uv]
@@ -822,7 +737,7 @@ url = "https://internal.example.com/simple"
 exclude-newer = "7 days"
 ```
 
-Or disable it entirely for that index:
+To disable the cutoff for an index:
 
 ```pyproject.toml
 [[tool.uv.index]]
@@ -831,42 +746,39 @@ url = "https://internal.example.com/simple"
 exclude-newer = false
 ```
 
-This is useful for private indexes that don't publish `upload-time`, or for applying a different
-reproducibility window to a specific index while preserving the global behavior elsewhere.
+This supports private indexes that do not publish `upload-time`. It also lets an index use a
+different cutoff without changing the global setting.
 
 ## Dependency cooldowns
 
-uv also supports dependency "cooldowns" in which resolution will ignore packages newer than a
-duration. This is a good way to improve security posture by delaying package updates until the
-community has had the opportunity to vet new versions of packages.
+Dependency "cooldowns" exclude packages newer than a specified duration. They improve security by
+delaying package updates until the community can review new versions.
 
-This feature is available via the [`exclude-newer` option](#reproducible-resolutions) and shares the
-same semantics.
+Cooldowns use the same [`exclude-newer` option](#reproducible-resolutions) and follow the same
+rules.
 
-Define a dependency cooldown by specifying a duration instead of an absolute value. Either a
-"friendly" duration (e.g., `24 hours`, `1 week`, `30 days`) or an ISO 8601 duration (e.g., `PT24H`,
-`P7D`, `P30D`) can be used.
+To define a cooldown, specify a duration instead of a date. Use a plain-language duration, such as
+`24 hours`, `1 week`, or `30 days`. Alternatively, use an ISO 8601 duration, such as `PT24H`, `P7D`,
+or `P30D`.
 
 !!! note
 
-    Durations do not respect semantics of the local time zone and are always resolved to a fixed
-    number of seconds assuming that a day is 24 hours (e.g., DST transitions are ignored). Calendar
-    units such as months and years are not allowed since they are inherently inconsistent lengths.
+    Durations use a fixed number of seconds and treat each day as 24 hours. They ignore local time
+    zones and daylight saving transitions. Months and years are not valid because their lengths
+    vary.
 
-When a duration is used for resolution, a timestamp is calculated relative to the current time. When
-using a `uv.lock` file, the timestamp is included in the lockfile. uv will not update the lockfile
-when the current time changes, instead, uv will update the timestamp when a new resolution is
-performed, e.g., when `--upgrade` or `--refresh` is used.
+For a duration-based cutoff, uv calculates a timestamp relative to the current time. It stores that
+timestamp in `uv.lock`. The timestamp does not change as time passes. uv updates it only during a
+new resolution, such as one triggered by `--upgrade` or `--refresh`.
 
-This option is also supported in the `pyproject.toml`, e.g.:
+Set this option in `pyproject.toml` as follows:
 
 ```pyproject.toml
 [tool.uv]
 exclude-newer = "1 week"
 ```
 
-Values may also be specified for specific packages, e.g.,
-`--exclude-newer-package "setuptools=30 days"`, or:
+To set a package-specific cooldown, use `--exclude-newer-package "setuptools=30 days"` or:
 
 ```pyproject.toml
 [tool.uv]
@@ -876,37 +788,31 @@ exclude-newer-package = { setuptools = "30 days" }
 
 ## Source distribution
 
-[PEP 625](https://peps.python.org/pep-0625/) specifies that packages must distribute source
-distributions as gzip tarball (`.tar.gz`) archives. Prior to this specification, other archive
-formats, which need to be supported for backward compatibility, were also allowed.
+[PEP 625](https://peps.python.org/pep-0625/) requires source distributions to use gzip tarball
+(`.tar.gz`) archives. Older specifications also permitted other archive formats, which some tools
+still support for backward compatibility.
 
 !!! important
 
-    As of 0.12, uv rejects source distributions that do not confirm to
-    [PEP 625]'s extension requirements with the exception of `.zip` archives,
-    which are still accepted for backward compatibility.
+    Since version 0.12, uv rejects source distributions that do not conform to [PEP 625]'s extension
+    requirements. It still accepts `.zip` archives for backward compatibility.
 
 ## Lockfile versioning
 
-The `uv.lock` file uses a versioned schema. The schema version is included in the `version` field of
-the lockfile.
+The `version` field in `uv.lock` identifies its lockfile schema version.
 
-Any given version of uv can read and write lockfiles with the same schema version, but will reject
-lockfiles with a greater schema version. For example, if your uv version supports schema v1,
-`uv lock` will error if it encounters an existing lockfile with schema v2.
+uv reads and writes lockfiles with a supported schema version. It rejects lockfiles with a newer
+schema. For example, if uv supports schema v1, `uv lock` rejects a lockfile with schema v2.
 
-uv versions that support schema v2 _may_ be able to read lockfiles with schema v1 if the schema
-update was backwards-compatible. However, this is not guaranteed, and uv may exit with an error if
-it encounters a lockfile with an outdated schema version.
+A uv version that supports schema v2 _might_ also read schema v1 if the update was
+backwards-compatible. However, uv can reject an outdated schema version.
 
-The schema version is considered part of the public API, and so is only bumped in minor releases, as
-a breaking change (see [Versioning](../reference/policies/versioning.md)). As such, all uv patch
-versions within a given minor uv release are guaranteed to have full lockfile compatibility. In
-other words, lockfiles may only be rejected across minor releases.
+The schema version is part of uv's public API. Breaking schema changes occur only in minor releases.
+See [Versioning](../reference/policies/versioning.md). All patch versions within the same minor
+release support the same lockfiles. A lockfile can become incompatible only across minor releases.
 
-The `revision` field of the lockfile is used to track backwards compatible changes to the lockfile.
-For example, adding a new field to distributions. Changes to the revision will not cause older
-versions of uv to error.
+The `revision` field tracks backwards-compatible lockfile changes, such as a new distribution field.
+Revision changes do not cause older uv versions to fail.
 
 ## Learn more
 

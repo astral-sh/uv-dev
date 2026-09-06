@@ -46,7 +46,7 @@ use crate::{
     BaseClient, CachedClient, Error, ErrorKind, FlatIndexClient, RedirectClientWithMiddleware,
 };
 
-/// A builder for an [`RegistryClient`].
+/// A builder for a [`RegistryClient`].
 #[derive(Debug, Clone)]
 pub struct RegistryClientBuilder<'a> {
     index_locations: IndexLocations,
@@ -130,11 +130,10 @@ impl<'a> RegistryClientBuilder<'a> {
         self
     }
 
-    /// Allows credentials to be propagated on cross-origin redirects.
+    /// Allow credentials to be sent during cross-origin redirects.
     ///
-    /// WARNING: This should only be available for tests. In production code, propagating credentials
-    /// during cross-origin redirects can lead to security vulnerabilities including credential
-    /// leakage to untrusted domains.
+    /// WARNING: Use this setting only in tests. In production, cross-origin redirects can expose
+    /// credentials to untrusted domains.
     #[cfg(test)]
     #[must_use]
     fn allow_cross_origin_credentials(mut self) -> Self {
@@ -169,7 +168,7 @@ impl<'a> RegistryClientBuilder<'a> {
         self.build_inner(None)
     }
 
-    /// Share the underlying client between two different middleware configurations.
+    /// Share the underlying client between two middleware configurations.
     pub fn wrap_existing(self, existing: &BaseClient) -> Result<RegistryClient, ClientBuildError> {
         self.build_inner(Some(existing))
     }
@@ -180,7 +179,7 @@ impl<'a> RegistryClientBuilder<'a> {
     ) -> Result<RegistryClient, ClientBuildError> {
         self.cache_index_credentials()?;
 
-        // Wrap in any relevant middleware and handle connectivity.
+        // Apply the required middleware and connectivity settings.
         let builder = self
             .base_client_builder
             .indexes(Indexes::from(&self.index_locations));
@@ -193,7 +192,7 @@ impl<'a> RegistryClientBuilder<'a> {
         let read_timeout = client.read_timeout();
         let connectivity = client.connectivity();
 
-        // Wrap in the cache middleware.
+        // Apply the cache middleware.
         let client = CachedClient::new(client);
 
         Ok(RegistryClient {
@@ -210,22 +209,22 @@ impl<'a> RegistryClientBuilder<'a> {
     }
 }
 
-/// A client for fetching packages from a `PyPI`-compatible index.
+/// A client that fetches packages from a `PyPI`-compatible index.
 #[derive(Debug, Clone)]
 pub struct RegistryClient {
-    /// The indexes to use for fetching packages.
+    /// The indexes from which to fetch packages.
     indexes: IndexLocations,
-    /// The strategy to use when fetching across multiple indexes.
+    /// The strategy for fetching packages from multiple indexes.
     index_strategy: IndexStrategy,
-    /// The strategy to use when selecting a PyTorch backend, if any.
+    /// The strategy for selecting a PyTorch backend, if any.
     torch_backend: Option<TorchStrategy>,
     /// The underlying HTTP client.
     client: CachedClient,
-    /// Used for the remote wheel METADATA cache.
+    /// The cache for remote wheel metadata.
     cache: Cache,
-    /// The connectivity mode to use.
+    /// The connectivity mode.
     connectivity: Connectivity,
-    /// Client HTTP read timeout.
+    /// The HTTP read timeout.
     read_timeout: Duration,
     /// The flat index entries for each `--find-links`-style index URL, with one slot per index.
     flat_indexes: Arc<Mutex<FlatIndexCache>>,
@@ -253,12 +252,12 @@ impl From<bool> for MetadataRangeRequest {
     }
 }
 
-/// The format of the package metadata returned by querying an index.
+/// The format of package metadata from an index.
 #[derive(Debug)]
 pub enum MetadataFormat {
-    /// The metadata adheres to the Simple Repository API format.
+    /// The metadata uses the Simple Repository API format.
     Simple(OwnedArchive<SimpleDetailMetadata>),
-    /// The metadata consists of a list of distributions from a "flat" index.
+    /// The metadata lists distributions from a flat index.
     Flat(Vec<FlatIndexEntry>),
 }
 
@@ -283,7 +282,7 @@ impl RegistryClient {
         self.connectivity
     }
 
-    /// Return the timeout this client is configured with, in seconds.
+    /// Return the client's configured read timeout.
     pub fn read_timeout(&self) -> Duration {
         self.read_timeout
     }
@@ -292,7 +291,7 @@ impl RegistryClient {
         self.client.uncached().credentials_cache()
     }
 
-    /// Return the appropriate index URLs for the given [`PackageName`].
+    /// Return the index URLs for the given [`PackageName`].
     fn index_urls_for(
         &self,
         package_name: &PackageName,
@@ -311,7 +310,7 @@ impl RegistryClient {
             })
     }
 
-    /// Return the appropriate [`IndexStrategy`] for the given [`PackageName`].
+    /// Return the [`IndexStrategy`] for the given [`PackageName`].
     fn index_strategy_for(&self, package_name: &PackageName) -> IndexStrategy {
         self.torch_backend
             .as_ref()
@@ -325,11 +324,11 @@ impl RegistryClient {
 
     /// Fetch package metadata from an index.
     ///
-    /// Supports both the "Simple" API and `--find-links`-style flat indexes.
+    /// This method supports the Simple API and `--find-links`-style flat indexes.
     ///
-    /// "Simple" here refers to [PEP 503 – Simple Repository API](https://peps.python.org/pep-0503/)
-    /// and [PEP 691 – JSON-based Simple API for Python Package Indexes](https://peps.python.org/pep-0691/),
-    /// which the PyPI JSON API implements.
+    /// The Simple API follows [PEP 503 – Simple Repository API](https://peps.python.org/pep-0503/)
+    /// and [PEP 691 – JSON-based Simple API for Python Package Indexes](https://peps.python.org/pep-0691/).
+    /// The PyPI JSON API implements these specifications.
     #[instrument(skip_all, fields(package = % package_name))]
     pub async fn simple_detail<'index>(
         &'index self,
@@ -338,8 +337,7 @@ impl RegistryClient {
         capabilities: &IndexCapabilities,
         download_concurrency: &Semaphore,
     ) -> Result<Vec<(&'index IndexUrl, MetadataFormat)>, Error> {
-        // If `--no-index` is specified, avoid fetching regardless of whether the index is implicit,
-        // explicit, etc.
+        // If `--no-index` is set, do not fetch from implicit or explicit indexes.
         if self.indexes.no_index() {
             return Err(ErrorKind::NoIndex(package_name.to_string()).into());
         }
@@ -353,7 +351,7 @@ impl RegistryClient {
         let mut results = Vec::new();
 
         match self.index_strategy_for(package_name) {
-            // If we're searching for the first index that contains the package, fetch serially.
+            // Search indexes one at a time until one contains the package.
             IndexStrategy::FirstIndex => {
                 for index in indexes {
                     let _permit = download_concurrency.acquire().await;
@@ -374,10 +372,10 @@ impl RegistryClient {
                                     results.push((index.url, MetadataFormat::Simple(metadata)));
                                     break;
                                 }
-                                // Package not found, so we will continue on to the next index (if there is one)
+                                // Continue to the next index if one exists.
                                 SimpleMetadataSearchOutcome::NotFound => {}
-                                // The search failed because of an HTTP status code that we don't ignore for
-                                // this index. We end our search here.
+                                // Stop when this index returns an HTTP status code that we cannot
+                                // ignore.
                                 SimpleMetadataSearchOutcome::StatusCodeFailure(status_code) => {
                                     debug!(
                                         "Indexes search failed because of status code failure: {status_code}"
@@ -477,8 +475,8 @@ impl RegistryClient {
         package_name: &PackageName,
         index: &IndexUrl,
     ) -> Result<Vec<FlatIndexEntry>, Error> {
-        // Each flat index gets its own slot, so lookups for the same index share a fetch while
-        // unrelated indexes can proceed concurrently.
+        // Give each flat index its own slot. Requests for one index share a fetch, while other
+        // indexes can proceed concurrently.
         let flat_index_slot = {
             let mut cache = self.flat_indexes.lock().await;
             cache.get_or_insert(index.clone())
@@ -520,8 +518,8 @@ impl RegistryClient {
 
     /// Fetch the [`SimpleDetailMetadata`] from a single index for a given package.
     ///
-    /// The index can either be a PEP 503-compatible remote repository, or a local directory laid
-    /// out in the same format.
+    /// The index is a PEP 503-compatible remote repository or a local directory with the same
+    /// structure.
     async fn simple_detail_single_index(
         &self,
         package_name: &PackageName,
@@ -535,8 +533,8 @@ impl RegistryClient {
             .map_err(|()| ErrorKind::CannotBeABase(index.url().clone()))?
             .pop_if_empty()
             .push(package_name.as_ref())
-            // The URL *must* end in a trailing slash for proper relative path behavior
-            // ref https://github.com/servo/rust-url/issues/333
+            // The URL must end with a slash so relative paths resolve correctly.
+            // See https://github.com/servo/rust-url/issues/333.
             .push("");
 
         trace!("Fetching metadata for {package_name} from {url}");
@@ -560,7 +558,7 @@ impl RegistryClient {
             Connectivity::Offline => CacheControl::AllowStale,
         };
 
-        // Acquire an advisory lock, to guard against concurrent writes.
+        // Acquire an advisory lock to prevent concurrent writes.
         #[cfg(windows)]
         let _lock = {
             let lock_entry = cache_entry.with_file(format!("{package_name}.lock"));
@@ -577,7 +575,7 @@ impl RegistryClient {
         match result {
             Ok(metadata) => Ok(SimpleMetadataSearchOutcome::Found(metadata)),
             Err(err) => match err.kind() {
-                // The package could not be found in the remote index.
+                // The remote index does not contain the package.
                 ErrorKind::WrappedReqwestError(.., reqwest_err) => {
                     let Some(status_code) = reqwest_err.status() else {
                         return Err(err);
@@ -595,10 +593,10 @@ impl RegistryClient {
                     Ok(SimpleMetadataSearchOutcome::from(decision))
                 }
 
-                // The package is unavailable due to a lack of connectivity.
+                // The package is unavailable because the client is offline.
                 ErrorKind::Offline(_) => Ok(SimpleMetadataSearchOutcome::NotFound),
 
-                // The package could not be found in the local index.
+                // The local index does not contain the package.
                 ErrorKind::LocalPackageNotFound(_) => Ok(SimpleMetadataSearchOutcome::NotFound),
 
                 _ => Err(err),
@@ -625,8 +623,8 @@ impl RegistryClient {
             })?;
         let parse_simple_response = |response: Response| {
             async {
-                // Use the response URL, rather than the request URL, as the base for relative URLs.
-                // This ensures that we handle redirects and other URL transformations correctly.
+                // Resolve relative URLs from the response URL. This handles redirects and other
+                // URL changes correctly.
                 let url = DisplaySafeUrl::from_url(response.url().clone());
 
                 let content_type = response
@@ -720,8 +718,8 @@ impl RegistryClient {
 
     /// Fetch the list of projects from a Simple API index at a remote URL.
     ///
-    /// This fetches the root of a Simple API index (e.g., `https://pypi.org/simple/`)
-    /// which returns a list of all available projects.
+    /// Fetch the root of a Simple API index, such as `https://pypi.org/simple/`.
+    /// The root returns all available projects.
     pub async fn fetch_simple_index(
         &self,
         index_url: &IndexUrl,
@@ -731,8 +729,8 @@ impl RegistryClient {
         url.path_segments_mut()
             .map_err(|()| ErrorKind::CannotBeABase(index_url.url().clone()))?
             .pop_if_empty()
-            // The URL *must* end in a trailing slash for proper relative path behavior
-            // ref https://github.com/servo/rust-url/issues/333
+            // The URL must end with a slash so relative paths resolve correctly.
+            // See https://github.com/servo/rust-url/issues/333.
             .push("");
 
         if url.scheme() == "file" {
@@ -771,8 +769,8 @@ impl RegistryClient {
 
         let parse_simple_response = |response: Response| {
             async {
-                // Use the response URL, rather than the request URL, as the base for relative URLs.
-                // This ensures that we handle redirects and other URL transformations correctly.
+                // Resolve relative URLs from the response URL. This handles redirects and other
+                // URL changes correctly.
                 let url = DisplaySafeUrl::from_url(response.url().clone());
 
                 let content_type = response
@@ -866,10 +864,10 @@ impl RegistryClient {
 
     /// Fetch the metadata for a remote wheel file.
     ///
-    /// For a remote wheel, we try the following ways to fetch the metadata:
-    /// 1. From a [PEP 658](https://peps.python.org/pep-0658/) data-dist-info-metadata url
-    /// 2. From a remote wheel by partial zip reading
-    /// 3. From a (temp) download of a remote wheel (this is a fallback, the webserver should support range requests)
+    /// Try these methods in order:
+    /// 1. Fetch the [PEP 658](https://peps.python.org/pep-0658/) `data-dist-info-metadata` URL.
+    /// 2. Read part of the remote wheel archive.
+    /// 3. Download the wheel to a temporary location if the server does not support range requests.
     #[instrument(skip_all, fields(% built_dist))]
     pub async fn wheel_metadata(
         &self,
@@ -1024,7 +1022,7 @@ impl RegistryClient {
             ..
         } = wheel;
 
-        // If the metadata file is available at its own url (PEP 658), download it from there.
+        // If PEP 658 provides a separate metadata URL, download the metadata from that URL.
         if file.dist_info_metadata {
             let mut url = url.clone();
             let path = format!("{}.metadata", url.path());
@@ -1049,7 +1047,7 @@ impl RegistryClient {
                 Connectivity::Offline => CacheControl::AllowStale,
             };
 
-            // Acquire an advisory lock, to guard against concurrent writes.
+            // Acquire an advisory lock to prevent concurrent writes.
             #[cfg(windows)]
             let _lock = {
                 let lock_entry = cache_entry.with_file(format!("{}.lock", filename.stem()));
@@ -1083,9 +1081,8 @@ impl RegistryClient {
                 .get_serde_with_retry(req, &cache_entry, cache_control, response_callback)
                 .await?)
         } else {
-            // If we lack PEP 658 support, try using HTTP range requests to read only the
-            // `.dist-info/METADATA` file from the zip, and if that also fails, download the whole wheel
-            // into the cache and read from there
+            // If the index does not support PEP 658, read `.dist-info/METADATA` with HTTP range
+            // requests. If that fails, download the complete wheel into the cache.
             self.wheel_metadata_no_pep658(
                 filename,
                 url,
@@ -1097,7 +1094,7 @@ impl RegistryClient {
         }
     }
 
-    /// Get the wheel metadata if it isn't available in an index through PEP 658
+    /// Get wheel metadata when the index does not provide it through PEP 658.
     async fn wheel_metadata_no_pep658<'data>(
         &self,
         filename: &'data WheelFilename,
@@ -1126,14 +1123,14 @@ impl RegistryClient {
             Connectivity::Offline => CacheControl::AllowStale,
         };
 
-        // Acquire an advisory lock, to guard against concurrent writes.
+        // Acquire an advisory lock to prevent concurrent writes.
         #[cfg(windows)]
         let _lock = {
             let lock_entry = cache_entry.with_file(format!("{}.lock", filename.stem()));
             lock_entry.lock().await.map_err(ErrorKind::CacheLock)?
         };
 
-        // Attempt to fetch via a range request.
+        // Try to fetch the metadata with a range request.
         if index.is_none_or(|index| capabilities.supports_range_requests(index)) {
             let req = self
                 .uncached_client(url)
@@ -1147,16 +1144,15 @@ impl RegistryClient {
                     ErrorKind::from_reqwest(url.clone(), err, self.client.certificate_source())
                 })?;
 
-            // Copy authorization headers from the HEAD request to subsequent requests
+            // Copy authorization headers from the HEAD request to subsequent requests.
             let mut headers = HeaderMap::default();
             if let Some(authorization) = req.headers().get("authorization") {
                 headers.append("authorization", authorization.clone());
             }
-            // These range requests need the bytes from the wheel archive itself.
-            // After `reqwest` moved decompression to tower-http[1], this path could receive
-            // transparently decompressed responses. That breaks the byte offsets used by
-            // `AsyncHttpRangeReader` and results in us incorrectly trying to double-decompress gzip streams[2].
-            // We request with `Accept: identity` so that the range reader always sees the compressed wheel bytes.
+            // Range requests need the original wheel archive bytes. After `reqwest` moved
+            // decompression to tower-http[1], responses could be decompressed automatically.
+            // This breaks `AsyncHttpRangeReader` byte offsets and can decompress gzip streams
+            // twice[2]. Request `Accept-Encoding: identity` to preserve the compressed wheel bytes.
             //
             // [1]: https://github.com/seanmonstar/reqwest/pull/2840
             // [2]: https://github.com/astral-sh/async_http_range_reader/pull/3#discussion_r2700194798
@@ -1164,8 +1160,7 @@ impl RegistryClient {
                 reqwest::header::ACCEPT_ENCODING,
                 reqwest::header::HeaderValue::from_static("identity"),
             );
-            // This response callback is special, we actually make a number of subsequent requests to
-            // fetch the file from the remote zip.
+            // This callback sends additional requests to fetch the file from the remote archive.
             let read_metadata_range_request = |response: Response| {
                 async {
                     let mut reader = AsyncHttpRangeReader::from_head_response(
@@ -1213,8 +1208,7 @@ impl RegistryClient {
                             .into());
                         }
 
-                        // The range request version failed. Fall back to streaming the file to search
-                        // for the METADATA file.
+                        // The range request failed. Stream the file to find its metadata instead.
                         warn!("Range requests not supported for {filename}; streaming wheel");
 
                         // Mark the index as not supporting range requests.
@@ -1233,9 +1227,9 @@ impl RegistryClient {
             .uncached_client(url)
             .get(Url::from(url.clone()))
             .header(
-                // `reqwest` defaults to accepting compressed responses.
-                // Specify identity encoding to get consistent .whl downloading
-                // behavior from servers. ref: https://github.com/pypa/pip/pull/1688
+                // `reqwest` accepts compressed responses by default. Request identity encoding
+                // so servers download wheel files consistently.
+                // See https://github.com/pypa/pip/pull/1688.
                 "accept-encoding",
                 reqwest::header::HeaderValue::from_static("identity"),
             )
@@ -1244,7 +1238,7 @@ impl RegistryClient {
                 ErrorKind::from_reqwest(url.clone(), err, self.client.certificate_source())
             })?;
 
-        // Stream the file, searching for the METADATA.
+        // Stream the file and search for its metadata.
         let read_metadata_stream = |response: Response| {
             async {
                 let reader = response
@@ -1265,10 +1259,10 @@ impl RegistryClient {
             .map_err(crate::Error::from)
     }
 
-    /// Handle a specific `reqwest` error, and convert it to [`io::Error`].
+    /// Convert a specific `reqwest` error to [`io::Error`].
     fn handle_response_errors(&self, err: reqwest::Error) -> std::io::Error {
         if err.is_timeout() {
-            // Assumption: The connect timeout with the 10s default is not the culprit.
+            // Assume the default 10-second connection timeout did not cause the error.
             std::io::Error::new(
                 std::io::ErrorKind::TimedOut,
                 format!(
@@ -1284,12 +1278,11 @@ impl RegistryClient {
 
 #[derive(Debug)]
 enum SimpleMetadataSearchOutcome {
-    /// Simple metadata was found
+    /// The index contains Simple API metadata.
     Found(OwnedArchive<SimpleDetailMetadata>),
-    /// Simple metadata was not found
+    /// The index does not contain Simple API metadata.
     NotFound,
-    /// A status code failure was encountered when searching for
-    /// simple metadata and our strategy did not ignore it
+    /// The index returned an HTTP status code that the current strategy does not ignore.
     StatusCodeFailure(StatusCode),
 }
 
@@ -1308,7 +1301,7 @@ impl From<IndexStatusCodeDecision> for SimpleMetadataSearchOutcome {
 struct FlatIndexCache(FxHashMap<IndexUrl, FlatIndexSlot>);
 
 impl FlatIndexCache {
-    /// Return the per-index slot for this flat index, creating it on first access.
+    /// Return this flat index's slot. Create the slot on first access.
     fn get_or_insert(&mut self, index: IndexUrl) -> FlatIndexSlot {
         self.0
             .entry(index)
@@ -1350,9 +1343,9 @@ impl VersionFiles {
 
 /// A compact, cache-local representation of a registry file from the Simple API.
 ///
-/// Filenames recoverable from the URL and false `yanked` markers are omitted, while optional
-/// scalar values use presence bits. Converting back to [`File`] restores equivalent Simple API
-/// metadata.
+/// Omit filenames that the URL can provide and `yanked` markers that are false.
+/// Use presence bits for optional scalar values. Conversion to [`File`] restores equivalent
+/// Simple API metadata.
 #[derive(Debug, rkyv::Archive, rkyv::Deserialize, rkyv::Serialize)]
 #[rkyv(derive(Debug))]
 pub struct CachedFile {
@@ -1376,7 +1369,7 @@ pub struct CachedFile {
 }
 
 impl ArchivedCachedFile {
-    /// Returns the upload time in UTC milliseconds, if it was present in the index metadata.
+    /// Return the upload time in UTC milliseconds if the index metadata contains it.
     pub fn upload_time_utc_ms(&self) -> Option<i64> {
         self.has_upload_time
             .then_some(self.upload_time_utc_ms.to_native())
@@ -1384,14 +1377,14 @@ impl ArchivedCachedFile {
 }
 
 impl CachedFile {
-    /// Returns the stored filename or reconstructs it from the file URL.
+    /// Return the stored filename or reconstruct it from the file URL.
     pub fn filename(&self) -> &str {
         self.filename
             .as_deref()
             .map_or_else(|| self.url.raw_filename(), SmallString::as_ref)
     }
 
-    /// Reconstructs the file's hash digests from their compact cache representation.
+    /// Reconstruct the file's hash digests from their compact cache representation.
     pub fn hashes(&self) -> HashDigests {
         HashDigests::from(&self.hashes)
     }
@@ -1438,10 +1431,9 @@ impl From<CachedFile> for File {
 
 /// A compact representation of a single, canonical hash digest.
 ///
-/// Only lowercase hexadecimal digests of the expected length use the packed variants. Multiple
-/// hashes and non-canonical spellings remain in [`Self::Other`] so conversion back to
-/// [`HashDigests`] is lossless. The larger digests are boxed to keep the common archived layout
-/// small.
+/// Use packed variants only for lowercase hexadecimal digests of the expected length.
+/// Keep multiple hashes and non-canonical spellings in [`Self::Other`] to preserve their values.
+/// Box larger digests to keep the common archived layout small.
 #[derive(rkyv::Archive, rkyv::Deserialize, rkyv::Serialize)]
 #[rkyv(derive(Debug))]
 enum CachedHashDigests {
@@ -1520,10 +1512,9 @@ impl From<&CachedHashDigests> for HashDigests {
     }
 }
 
-/// Decodes a lowercase hexadecimal digest of exactly `N` bytes.
+/// Decode a lowercase hexadecimal digest of exactly `N` bytes.
 ///
-/// Rejecting non-canonical spellings lets [`CachedHashDigests::Other`] preserve their original
-/// text.
+/// Reject non-canonical spellings so [`CachedHashDigests::Other`] can preserve the original text.
 fn decode_digest<const N: usize>(hash: &HashDigest) -> Option<[u8; N]> {
     if hash.digest.len() != N * 2
         || !hash
@@ -1539,7 +1530,7 @@ fn decode_digest<const N: usize>(hash: &HashDigest) -> Option<[u8; N]> {
     Some(digest)
 }
 
-/// Reconstructs the canonical lowercase spelling of a packed digest.
+/// Reconstruct the canonical lowercase spelling of a packed digest.
 fn hash_digest(algorithm: HashAlgorithm, digest: &[u8]) -> HashDigest {
     let mut encoded = [0; 128];
     let length = digest.len() * 2;
@@ -1590,7 +1581,7 @@ impl SimpleIndexMetadata {
 
 /// Detail response for a Python package from a Simple API index.
 ///
-/// Abstracts over both HTML and JSON index formats.
+/// This response supports HTML and JSON index formats.
 #[derive(Default, Debug, rkyv::Archive, rkyv::Deserialize, rkyv::Serialize)]
 #[rkyv(derive(Debug))]
 pub struct SimpleDetailMetadata {
@@ -1623,7 +1614,7 @@ impl SimpleDetailMetadata {
         // Convert to a reference-counted string.
         let base = SmallString::from(base.as_str());
 
-        // Group the distributions by version and kind
+        // Group distributions by version and kind.
         for file in files {
             let filename =
                 match DistFilename::try_from_filename_with_reason(&file.filename, package_name) {
@@ -1639,7 +1630,7 @@ impl SimpleDetailMetadata {
             let file = match File::try_from_pypi(file, &base) {
                 Ok(file) => file,
                 Err(err) => {
-                    // Ignore files with unparsable version specifiers.
+                    // Ignore files with invalid version specifiers.
                     debug!("Skipping file for {package_name}: {err}");
                     continue;
                 }
@@ -1735,7 +1726,7 @@ enum MediaType {
 }
 
 impl MediaType {
-    /// Parse a media type from a string, returning `None` if the media type is not supported.
+    /// Parse a media type from a string. Return `None` if the media type is not supported.
     fn from_str(s: &str) -> Option<Self> {
         match s {
             "application/vnd.pypi.simple.v1+json" => Some(Self::PypiV1Json),
@@ -1948,7 +1939,7 @@ mod tests {
 
         let redirect_server = MockServer::start().await;
 
-        // Configure the redirect server to respond with a 302 to the auth server
+        // Configure the redirect server to return a 302 response to the authentication server.
         Mock::given(method("GET"))
             .respond_with(
                 ResponseTemplate::new(302).insert_header("Location", format!("{auth_base_url}")),
@@ -2001,7 +1992,7 @@ mod tests {
 
         let redirect_server = MockServer::start().await;
 
-        // Configure the redirect server to respond with a 307 with a relative URL.
+        // Configure the redirect server to return a 307 response with a relative URL.
         Mock::given(method("GET"))
             .and(path_regex("/foo/"))
             .respond_with(
@@ -2051,7 +2042,7 @@ mod tests {
 
         let redirect_server = MockServer::start().await;
 
-        // Configure the redirect server to respond with a 307 with a relative URL.
+        // Configure the redirect server to return a 307 response with a relative URL.
         Mock::given(method("GET"))
             .and(path_regex("/foo/bar/baz/"))
             .and(basic_auth(username, password))
@@ -2096,7 +2087,7 @@ mod tests {
 
     #[test]
     fn ignore_failing_files() {
-        // 1.7.7 has an invalid requires-python field (double comma), 1.7.8 is valid
+        // Version 1.7.7 has an invalid `requires-python` field. Version 1.7.8 is valid.
         let response = r#"
     {
         "files": [
@@ -2206,10 +2197,10 @@ mod tests {
         Ok(())
     }
 
-    /// Test for project statuses from PyPI's JSON detail response.
+    /// Test project statuses from a PyPI JSON detail response.
     #[test]
     fn project_status_pypi_json() {
-        // Minimized from https://pypi.org/simple/pepy/
+        // Reduced from https://pypi.org/simple/pepy/.
         let json = r#"
         {
           "alternate-locations": [],
@@ -2301,10 +2292,10 @@ mod tests {
         "#);
     }
 
-    /// Test for project statuses from PyPI's HTML detail response.
+    /// Test project statuses from a PyPI HTML detail response.
     #[test]
     fn project_status_pypi_html() {
-        // Minimized from https://pypi.org/simple/pepy/
+        // Reduced from https://pypi.org/simple/pepy/.
         let html = r#"
         <!DOCTYPE html>
         <html lang="en">
@@ -2373,7 +2364,7 @@ mod tests {
         "#);
     }
 
-    /// Test for AWS Code Artifact registry
+    /// Test an AWS `CodeArtifact` registry.
     ///
     /// See: <https://github.com/astral-sh/uv/issues/1388>
     #[test]
@@ -2396,7 +2387,7 @@ mod tests {
         </html>
     "#;
 
-        // Note the lack of a trailing `/` here is important for coverage of url-join behavior
+        // Omit the trailing `/` to test how URL joining handles this case.
         let base = DisplaySafeUrl::parse("https://account.d.codeartifact.us-west-2.amazonaws.com/pypi/shared-packages-pypi/simple/flask")
             .unwrap();
         let SimpleDetailHTML {
@@ -2406,7 +2397,7 @@ mod tests {
         } = SimpleDetailHTML::parse(text, &base).unwrap();
         let base = SmallString::from(base.as_str());
 
-        // Test parsing of the file urls
+        // Test how file URLs are parsed.
         let urls = files
             .into_iter()
             .map(|file| FileLocation::new(file.url, &base).to_url())

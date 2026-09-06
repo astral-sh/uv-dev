@@ -1,110 +1,102 @@
 ---
 title: Using uv with Jupyter
 description:
-  A complete guide to using uv with Jupyter notebooks for interactive computing, data analysis, and
-  visualization, including kernel management and virtual environment integration.
+  Use uv with Jupyter notebooks for interactive computing, data analysis, visualization, and
+  environment management.
 ---
 
 # Using uv with Jupyter
 
-The [Jupyter](https://jupyter.org/) notebook is a popular tool for interactive computing, data
-analysis, and visualization. You can use Jupyter with uv in a few different ways, either to interact
-with a project, or as a standalone tool.
+[Jupyter](https://jupyter.org/) notebooks support interactive computing, data analysis, and
+visualization. Use Jupyter with uv to work in a project or run Jupyter as a standalone tool.
 
 ## Using Jupyter within a project
 
-If you're working within a [project](../../concepts/projects/index.md), you can start a Jupyter
-server with access to the project's virtual environment via the following:
+If you work in a [project](../../concepts/projects/index.md), start a Jupyter server with access to
+the project environment:
 
 ```console
 $ uv run --with jupyter jupyter lab
 ```
 
-By default, `jupyter lab` will start the server at
+By default, `jupyter lab` starts the server at
 [http://localhost:8888/lab](http://localhost:8888/lab).
 
-Within a notebook, you can import your project's modules as you would in any other file in the
-project. For example, if your project depends on `requests`, `import requests` will import
-`requests` from the project's virtual environment.
+In a notebook, import project modules as you would in other project files. For example, if the
+project depends on `requests`, `import requests` imports the package from the project environment.
 
-If you're looking for read-only access to the project's virtual environment, then there's nothing
-more to it. However, if you need to install additional packages from within the notebook, there are
-a few extra details to consider.
+These steps are sufficient if you only need to read from the project environment. To install more
+packages from the notebook, follow the guidance in the next sections.
 
 ### Creating a kernel
 
-If you need to install packages from within the notebook, we recommend creating a dedicated kernel
-for your project. Kernels enable the Jupyter server to run in one environment, with individual
-notebooks running in their own, separate environments.
+If you need to install packages from a notebook, create a dedicated kernel for your project. A
+kernel lets the Jupyter server run in one environment while a notebook runs in another environment.
 
-In the context of uv, we can create a kernel for a project while installing Jupyter itself in an
-isolated environment, as in `uv run --with jupyter jupyter lab`. Creating a kernel for the project
-ensures that the notebook is hooked up to the correct environment, and that any packages installed
-from within the notebook are installed into the project's virtual environment.
+With uv, you can create a project kernel and install Jupyter in an isolated environment. For
+example, use `uv run --with jupyter jupyter lab` to start Jupyter. The project kernel connects the
+notebook to the correct environment. Packages that you install from the notebook go into the project
+environment.
 
-To create a kernel, you'll need to install `ipykernel` as a development dependency:
+To create a kernel, add `ipykernel` as a development dependency:
 
 ```console
 $ uv add --dev ipykernel
 ```
 
-Then, you can create the kernel for `project` with:
+Create a kernel named `project`:
 
 ```console
 $ uv run ipython kernel install --user --env VIRTUAL_ENV $(pwd)/.venv --name=project
 ```
 
-From there, start the server with:
+Start the server:
 
 ```console
 $ uv run --with jupyter jupyter lab
 ```
 
-When creating a notebook, select the `project` kernel from the dropdown. Then use `!uv add pydantic`
-to add `pydantic` to the project's dependencies, or `!uv pip install pydantic` to install `pydantic`
-into the project's virtual environment without persisting the change to the project `pyproject.toml`
-or `uv.lock` files. Either command will make `import pydantic` work within the notebook.
+When you create a notebook, select the `project` kernel from the list. Use `!uv add pydantic` to add
+`pydantic` to the project dependencies. Alternatively, use `!uv pip install pydantic` to install it
+in the project environment without changing `pyproject.toml` or `uv.lock`. After either command, you
+can run `import pydantic` in the notebook.
 
 ### Installing packages without a kernel
 
-If you don't want to create a kernel, you can still install packages from within the notebook.
-However, there are a few caveats to consider.
+You can install packages from a notebook without a dedicated kernel. However, the installation
+command determines which environment receives the package.
 
-Though `uv run --with jupyter` runs in an isolated environment, within the notebook itself,
-`!uv add` and related commands will modify the _project's_ environment, even without a kernel.
+Although `uv run --with jupyter` runs in an isolated environment, `!uv add` modifies the _project_
+environment. This behavior does not require a dedicated kernel.
 
-For example, running `!uv add pydantic` from within a notebook will add `pydantic` to the project's
-dependencies and virtual environment, such that `import pydantic` will work immediately, without
-further configuration or a server restart.
+For example, `!uv add pydantic` adds `pydantic` to the project dependencies and virtual environment.
+You can then run `import pydantic` without more configuration or a server restart.
 
-However, since the Jupyter server is the "active" environment, `!uv pip install` will install
-package's into _Jupyter's_ environment, not the project environment. Such dependencies will persist
-for the lifetime of the Jupyter server, but may disappear on subsequent `jupyter` invocations.
+However, the Jupyter server provides the active environment for `!uv pip install`. This command
+installs packages in _Jupyter's_ environment, not the project environment. These packages remain
+available while the Jupyter server runs. They might not be available the next time you start it.
 
-If you're working with a notebook that relies on pip (e.g., via the `%pip` magic), you can include
-pip in your project's virtual environment by running `uv venv --seed` prior to starting the Jupyter
-server. For example, given:
+If a notebook requires pip, such as through the `%pip` magic, add pip to the project environment.
+Run `uv venv --seed` before you start the Jupyter server:
 
 ```console
 $ uv venv --seed
 $ uv run --with jupyter jupyter lab
 ```
 
-Subsequent `%pip install` invocations within the notebook will install packages into the project's
-virtual environment. However, such modifications will _not_ be reflected in the project's
-`pyproject.toml` or `uv.lock` files.
+In the notebook, `%pip install` now installs packages in the project environment. However, these
+changes do _not_ update `pyproject.toml` or `uv.lock`.
 
 ## Using Jupyter as a standalone tool
 
-If you ever need ad hoc access to a notebook (i.e., to run a Python snippet interactively), you can
-start a Jupyter server at any time with `uv tool run jupyter lab`. This will run a Jupyter server in
-an isolated environment.
+To use a notebook without a project, run `uv tool run jupyter lab`. This command starts a Jupyter
+server in an isolated environment. You can use the notebook to run Python code interactively.
 
 ## Using Jupyter with a non-project environment
 
-If you need to run Jupyter in a virtual environment that isn't associated with a
-[project](../../concepts/projects/index.md) (e.g., has no `pyproject.toml` or `uv.lock`), you can do
-so by adding Jupyter to the environment directly. For example:
+To run Jupyter in a virtual environment without a [project](../../concepts/projects/index.md),
+install Jupyter directly in the environment. A non-project environment does not require
+`pyproject.toml` or `uv.lock`:
 
 === "macOS and Linux"
 
@@ -124,14 +116,13 @@ so by adding Jupyter to the environment directly. For example:
     PS> .venv\Scripts\jupyter lab
     ```
 
-From here, `import pydantic` will work within the notebook, and you can install additional packages
-via `!uv pip install`, or even `!pip install`.
+You can now run `import pydantic` in the notebook. Install more packages with `!uv pip install` or
+`!pip install`.
 
 ## Using Jupyter from VS Code
 
-You can also engage with Jupyter notebooks from within an editor like VS Code. To connect a
-uv-managed project to a Jupyter notebook within VS Code, we recommend creating a kernel for the
-project, as in the following:
+You can use Jupyter notebooks in an editor such as VS Code. To connect a uv-managed project to a
+Jupyter notebook in VS Code, create a project kernel:
 
 ```console
 # Create a project.
@@ -147,24 +138,22 @@ $ uv add --dev ipykernel
 $ code .
 ```
 
-Once the project directory is open in VS Code, you can create a new Jupyter notebook by selecting
-"Create: New Jupyter Notebook" from the command palette. When prompted to select a kernel, choose
-"Python Environments" and select the virtual environment you created earlier (e.g.,
-`.venv/bin/python` on macOS and Linux, or `.venv\Scripts\python` on Windows).
+After you open the project in VS Code, select "Create: New Jupyter Notebook" from the command
+palette. When VS Code prompts you to select a kernel, choose "Python Environments". Select the
+project environment: `.venv/bin/python` on macOS and Linux, or `.venv\Scripts\python` on Windows.
 
 !!! note
 
-    VS Code requires `ipykernel` to be present in the project environment. If you'd prefer to avoid
-    adding `ipykernel` as a dev dependency, you can install it directly into the project environment
-    with `uv pip install ipykernel`.
+    VS Code requires `ipykernel` in the project environment. To install it without adding a
+    development dependency, run `uv pip install ipykernel`.
 
-If you need to manipulate the project's environment from within the notebook, you may need to add
-`uv` as an explicit development dependency:
+To modify the project environment from the notebook, you might need to add `uv` as a development
+dependency:
 
 ```console
 $ uv add --dev uv
 ```
 
-From there, you can use `!uv add pydantic` to add `pydantic` to the project's dependencies, or
-`!uv pip install pydantic` to install `pydantic` into the project's virtual environment without
-updating the project's `pyproject.toml` or `uv.lock` files.
+Use `!uv add pydantic` to add `pydantic` to the project dependencies. Alternatively, use
+`!uv pip install pydantic` to install it in the project environment without changing
+`pyproject.toml` or `uv.lock`.

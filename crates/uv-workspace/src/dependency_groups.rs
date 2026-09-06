@@ -13,7 +13,7 @@ use uv_pypi_types::{DependencyGroupSpecifier, VerbatimParsedUrl};
 
 use crate::pyproject::{DependencyGroupSettings, PyProjectToml, ToolUvDependencyGroups};
 
-/// PEP 735 dependency groups, with any `include-group` entries resolved.
+/// PEP 735 dependency groups with resolved `include-group` entries.
 #[derive(Debug, Default, Clone)]
 pub struct FlatDependencyGroups(BTreeMap<GroupName, FlatDependencyGroup>);
 
@@ -24,28 +24,28 @@ pub struct FlatDependencyGroup {
 }
 
 impl FlatDependencyGroups {
-    /// Gather and flatten all the dependency-groups defined in the given pyproject.toml
+    /// Collect and flatten all dependency groups in the given `pyproject.toml`.
     ///
-    /// The path is only used in diagnostics.
+    /// Use the path only for diagnostics.
     pub fn from_pyproject_toml(
         path: &Path,
         pyproject_toml: &PyProjectToml,
     ) -> Result<Self, DependencyGroupError> {
-        // First, collect `tool.uv.dev_dependencies`
+        // Collect `tool.uv.dev-dependencies`.
         let dev_dependencies = pyproject_toml
             .tool
             .as_ref()
             .and_then(|tool| tool.uv.as_ref())
             .and_then(|uv| uv.dev_dependencies.as_ref());
 
-        // Then, collect `dependency-groups`
+        // Collect `dependency-groups`.
         let dependency_groups = pyproject_toml
             .dependency_groups
             .iter()
             .flatten()
             .collect::<BTreeMap<_, _>>();
 
-        // Get additional settings
+        // Get additional group settings.
         let empty_settings = ToolUvDependencyGroups::default();
         let group_settings = pyproject_toml
             .tool
@@ -68,13 +68,11 @@ impl FlatDependencyGroups {
                 },
             )?;
 
-        // Add the `dev` group, if the legacy `dev-dependencies` is defined.
+        // Add the `dev` group if legacy `dev-dependencies` are defined.
         //
-        // NOTE: the fact that we do this out here means that nothing can inherit from
-        // the legacy dev-dependencies group (or define a group requires-python for it).
-        // This is intentional, we want groups to be defined in a standard interoperable
-        // way, and letting things include-group a group that isn't defined would be a
-        // mess for other python tools.
+        // Add legacy dependencies after resolving standard groups. This prevents groups from
+        // inheriting legacy dependencies or defining `requires-python` for them. Other Python
+        // tools can only resolve groups that use the standard dependency group format.
         if let Some(dev_dependencies) = dev_dependencies {
             dependency_groups
                 .entry(DEV_DEPENDENCIES.clone())
@@ -86,8 +84,7 @@ impl FlatDependencyGroups {
         Ok(dependency_groups)
     }
 
-    /// Resolve the dependency groups (which may contain references to other groups) into concrete
-    /// lists of requirements.
+    /// Resolve dependency groups and their included groups into lists of requirements.
     fn from_dependency_groups(
         groups: &BTreeMap<&GroupName, &Vec<DependencyGroupSpecifier>>,
         settings: &BTreeMap<GroupName, DependencyGroupSettings>,
@@ -100,7 +97,7 @@ impl FlatDependencyGroups {
             parents: &mut Vec<&'data GroupName>,
         ) -> Result<(), DependencyGroupErrorInner> {
             let Some(specifiers) = groups.get(name) else {
-                // Missing group
+                // Report the missing group and its parent.
                 let parent_name = parents
                     .iter()
                     .last()
@@ -119,7 +116,7 @@ impl FlatDependencyGroups {
                 )));
             }
 
-            // If we already resolved this group, short-circuit.
+            // Return early if this group is already resolved.
             if resolved.contains_key(name) {
                 return Ok(());
             }
@@ -146,7 +143,7 @@ impl FlatDependencyGroups {
                         if let Some(included) = resolved.get(include_group) {
                             requirements.extend(included.requirements.iter().cloned());
 
-                            // Intersect the requires-python for this group with the included group's
+                            // Intersect this group's `requires-python` with the included group's.
                             requires_python_intersection = requires_python_intersection
                                 .into_iter()
                                 .chain(included.requires_python.clone().into_iter().flatten())
@@ -168,16 +165,15 @@ impl FlatDependencyGroups {
             let DependencyGroupSettings { requires_python } =
                 settings.get(name).unwrap_or(&empty_settings);
             if let Some(requires_python) = requires_python {
-                // Intersect the requires-python for this group to get the final requires-python
-                // that will be used by interpreter discovery and checking.
+                // Combine the group's `requires-python` with included group constraints.
+                // Interpreter discovery and validation use the resulting intersection.
                 requires_python_intersection = requires_python_intersection
                     .into_iter()
                     .chain(requires_python.clone())
                     .collect();
 
-                // Add the group requires-python as a marker to each requirement
-                // We don't use `requires_python_intersection` because each `include-group`
-                // should already have its markers applied to these.
+                // Add the group's `requires-python` as a marker on each requirement.
+                // Do not use `requires_python_intersection`: included groups already have markers.
                 for requirement in &mut requirements {
                     let extra_markers =
                         RequiresPython::from_specifiers(requires_python.clone()).to_marker_tree();
@@ -201,7 +197,7 @@ impl FlatDependencyGroups {
             Ok(())
         }
 
-        // Validate the settings
+        // Validate the group settings.
         for (group_name, ..) in settings {
             if !groups.contains_key(group_name) {
                 return Err(DependencyGroupErrorInner::SettingsGroupNotFound(
@@ -293,7 +289,7 @@ enum DependencyGroupErrorInner {
 }
 
 impl DependencyGroupErrorInner {
-    /// Enrich a [`DependencyGroupError`] with the `tool.uv.dev-dependencies` metadata, if applicable.
+    /// Add `tool.uv.dev-dependencies` metadata to a [`DependencyGroupError`], if present.
     #[must_use]
     fn with_dev_dependencies(
         self,
@@ -319,7 +315,7 @@ impl DependencyGroupErrorInner {
 #[derive(Debug)]
 struct Cycle(Vec<GroupName>);
 
-/// Display a cycle, e.g., `a -> b -> c -> a`.
+/// Display a cycle such as `a -> b -> c -> a`.
 impl std::fmt::Display for Cycle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let [first, rest @ ..] = self.0.as_slice() else {

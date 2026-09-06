@@ -1,19 +1,19 @@
 //! ## Type hierarchy
 //!
-//! When we receive the requirements from `pip sync`, we check which requirements already fulfilled
-//! in the users environment ([`InstalledDist`]), whether the matching package is in our wheel cache
-//! ([`CachedDist`]) or whether we need to download, (potentially build) and install it ([`Dist`]).
+//! For each `pip sync` requirement, check the installed environment and the wheel cache.
+//! [`InstalledDist`] represents an installed package. [`CachedDist`] represents a cached wheel.
+//! [`Dist`] represents a package that uv must download, optionally build, and install.
 //!
 //! ## `Dist`
-//! A [`Dist`] is either a built distribution (a wheel), or a source distribution that exists at
-//! some location. We translate every PEP 508 requirement e.g. from `requirements.txt` or from
-//! `pyproject.toml`'s `[project] dependencies` into a [`Dist`] by checking each index.
-//! * [`BuiltDist`]: A wheel, with its four possible origins:
+//! A [`Dist`] represents a built distribution, or wheel, or a source distribution.
+//! Check each index to convert a PEP 508 requirement into a [`Dist`]. Requirements can come from
+//! `requirements.txt` or `[project] dependencies` in `pyproject.toml`.
+//! * [`BuiltDist`]: A wheel with one of four origins:
 //!   * [`RegistryBuiltDist`]
 //!   * [`DirectUrlBuiltDist`]
 //!   * [`PathBuiltDist`]
 //!   * [`GitPathBuiltDist`]
-//! * [`SourceDist`]: A source distribution, with its six possible origins:
+//! * [`SourceDist`]: A source distribution with one of six origins:
 //!   * [`RegistrySourceDist`]
 //!   * [`DirectUrlSourceDist`]
 //!   * [`GitDirectorySourceDist`]
@@ -22,23 +22,22 @@
 //!   * [`DirectorySourceDist`]
 //!
 //! ## `CachedDist`
-//! A [`CachedDist`] is a built distribution (wheel) that exists in the local cache, with the two
-//! possible origins we currently track:
+//! A [`CachedDist`] represents a wheel in the local cache. It has one of two origins:
 //! * [`CachedRegistryDist`]
 //! * [`CachedDirectUrlDist`]
 //!
 //! ## `InstalledDist`
-//! An [`InstalledDist`] is a distribution installed in a Python environment, with the five kinds
-//! we currently track:
+//! An [`InstalledDist`] represents a distribution in a Python environment.
+//! It has one of five types:
 //! * [`InstalledRegistryDist`]
 //! * [`InstalledDirectUrlDist`]
 //! * [`InstalledEggInfoFile`]
 //! * [`InstalledEggInfoDirectory`]
 //! * [`InstalledLegacyEditable`]
 //!
-//! Direct URL information for an [`InstalledDirectUrlDist`] comes from
+//! [`InstalledDirectUrlDist`] gets direct URL information from
 //! [`direct_url.json`](https://packaging.python.org/en/latest/specifications/direct-url-data-structure/)
-//! and may not match the original [`Dist`] exactly.
+//! and might not match the original [`Dist`] exactly.
 use std::borrow::Cow;
 use std::ffi::OsStr;
 use std::fmt::Display;
@@ -130,9 +129,9 @@ mod traits;
 
 #[derive(Debug, Clone)]
 pub enum VersionOrUrlRef<'a, T: Pep508Url = VerbatimUrl> {
-    /// A PEP 440 version specifier, used to identify a distribution in a registry.
+    /// A PEP 440 version specifier that identifies a registry distribution.
     Version(&'a Version),
-    /// A URL, used to identify a distribution at an arbitrary location.
+    /// A URL that identifies a distribution.
     Url(&'a T),
 }
 
@@ -156,15 +155,14 @@ impl std::fmt::Display for VersionOrUrlRef<'_> {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum InstalledVersion<'a> {
-    /// A PEP 440 version specifier, used to identify a distribution in a registry.
+    /// A PEP 440 version specifier that identifies a registry distribution.
     Version(&'a Version),
-    /// A URL, used to identify a distribution at an arbitrary location, along with the version
-    /// specifier to which it resolved.
+    /// A distribution URL and its resolved version.
     Url(&'a DisplaySafeUrl, &'a Version),
 }
 
 impl<'a> InstalledVersion<'a> {
-    /// If it is a version, return its value.
+    /// Return the resolved version.
     pub fn version(&self) -> &'a Version {
         match self {
             Self::Version(version) => version,
@@ -182,9 +180,9 @@ impl std::fmt::Display for InstalledVersion<'_> {
     }
 }
 
-/// Either a built distribution (a wheel) or a source distribution that exists at some location.
+/// A built distribution, or wheel, or a source distribution.
 ///
-/// The location can be an index, URL, path, or Git repository (wheel or source distribution).
+/// The distribution can come from an index, URL, path, or Git repository.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum Dist {
     Built(BuiltDist),
@@ -207,7 +205,7 @@ impl Display for DistRef<'_> {
     }
 }
 
-/// A wheel, with its four possible origins (index, URL, path, or Git path)
+/// A wheel from an index, URL, path, or Git path.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum BuiltDist {
     Registry(RegistryBuiltDist),
@@ -216,8 +214,7 @@ pub enum BuiltDist {
     GitPath(GitPathBuiltDist),
 }
 
-/// A source distribution, with its six possible origins (index, URL, Git directory, Git path,
-/// path, or directory).
+/// A source distribution from an index, URL, Git directory, Git path, path, or directory.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum SourceDist {
     Registry(RegistrySourceDist),
@@ -228,158 +225,146 @@ pub enum SourceDist {
     Directory(DirectorySourceDist),
 }
 
-/// A built distribution (wheel) that exists in a registry, like `PyPI`.
+/// A wheel in a registry, such as `PyPI`.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct RegistryBuiltWheel {
     pub filename: WheelFilename,
     pub file: Box<File>,
     pub index: IndexUrl,
-    /// Whether the recorded size must be validated when the wheel is downloaded.
+    /// Whether to validate the recorded size when downloading the wheel.
     pub size_is_authoritative: bool,
 }
 
-/// A built distribution (wheel) that exists in a registry, like `PyPI`.
+/// A wheel in a registry, such as `PyPI`.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct RegistryBuiltDist {
-    /// All wheels associated with this distribution. It is guaranteed
-    /// that there is at least one wheel.
+    /// All wheels for this distribution. This list always contains at least one wheel.
     pub wheels: Vec<RegistryBuiltWheel>,
-    /// The "best" wheel selected based on the current wheel tag
-    /// environment.
+    /// The best wheel for the current wheel tag environment.
     ///
-    /// This is guaranteed to point into a valid entry in `wheels`.
+    /// This index always points to a valid entry in `wheels`.
     pub best_wheel_index: usize,
-    /// A source distribution if one exists for this distribution.
+    /// The source distribution, if one is available and compatible.
     ///
-    /// It is possible for this to be `None`. For example, when a distribution
-    /// has no source distribution, or if it does have one but isn't compatible
-    /// with the user configuration. (e.g., If `Requires-Python` isn't
-    /// compatible with the installed/target Python versions, or if something
-    /// like `--exclude-newer` was used.)
+    /// This value is `None` if no source distribution exists or the user configuration excludes it.
+    /// For example, `Requires-Python` or `--exclude-newer` can exclude a source distribution.
     pub sdist: Option<RegistrySourceDist>,
-    // Ideally, this type would have an index URL on it, and the
-    // `RegistryBuiltDist` and `RegistrySourceDist` types would *not* have an
-    // index URL on them. Alas, the --find-links feature makes it technically
-    // possible for the indexes to diverge across wheels/sdists in the same
-    // distribution.
+    // Ideally, this type would contain the index URL instead of `RegistryBuiltDist` and
+    // `RegistrySourceDist`. However, `--find-links` can give wheels and source distributions
+    // different index URLs for the same distribution.
     //
-    // Note though that at time of writing, when generating a universal lock
-    // file, we require that all index URLs across wheels/sdists for a single
-    // distribution are equivalent.
+    // A universal lockfile still requires all wheels and source distributions for a distribution
+    // to use equivalent index URLs.
 }
 
-/// A built distribution (wheel) that exists at an arbitrary URL.
+/// A wheel at a URL.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct DirectUrlBuiltDist {
-    /// We require that wheel urls end in the full wheel filename, e.g.
-    /// `https://example.org/packages/flask-3.0.0-py3-none-any.whl`
+    /// Wheel URLs must end with the complete wheel filename.
+    /// For example: `https://example.org/packages/flask-3.0.0-py3-none-any.whl`.
     pub filename: WheelFilename,
     /// The URL without the subdirectory fragment.
     pub location: Box<DisplaySafeUrl>,
-    /// The URL as it was provided by the user.
+    /// The URL that the user provided.
     pub url: VerbatimUrl,
-    /// The expected size of the archive, if provided by a lockfile.
+    /// The archive size from the lockfile, if available.
     pub size: Option<u64>,
 }
 
-/// A built distribution (wheel) that exists in a local directory.
+/// A wheel in a local directory.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct PathBuiltDist {
     pub filename: WheelFilename,
-    /// The absolute path to the wheel which we use for installing.
+    /// The absolute path to the wheel to install.
     pub install_path: Box<Path>,
-    /// The URL as it was provided by the user.
+    /// The URL that the user provided.
     pub url: VerbatimUrl,
 }
 
-/// A built distribution (wheel) that exists in a Git repository.
+/// A wheel in a Git repository.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct GitPathBuiltDist {
     pub filename: WheelFilename,
     /// The URL without the revision and path fragment.
     pub git: Box<GitUrl>,
-    /// The path within the Git repository to the distribution which we use for installing.
+    /// The path to the distribution to install in the Git repository.
     pub install_path: PathBuf,
-    /// The URL as it was provided by the user, including the revision and path fragment.
+    /// The user-provided URL, including the revision and path fragment.
     pub url: VerbatimUrl,
 }
 
-/// A source distribution that exists in a registry, like `PyPI`.
+/// A source distribution in a registry, such as `PyPI`.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct RegistrySourceDist {
     pub name: PackageName,
     pub version: Version,
     pub file: Box<File>,
-    /// The file extension, e.g. `tar.gz`, `zip`, etc.
+    /// The file extension, such as `tar.gz` or `zip`.
     pub ext: SourceDistExtension,
     pub index: IndexUrl,
-    /// When an sdist is selected, it may be the case that there were
-    /// available wheels too. There are many reasons why a wheel might not
-    /// have been chosen (maybe none available are compatible with the
-    /// current environment), but we still want to track that they exist. In
-    /// particular, for generating a universal lockfile, we do not want to
-    /// skip emitting wheels to the lockfile just because the host generating
-    /// the lockfile didn't have any compatible wheels available.
+    /// Available wheels for this source distribution.
+    ///
+    /// Record these wheels even if none match the current environment. A universal lockfile must
+    /// include wheels that are compatible with other environments.
     pub wheels: Vec<RegistryBuiltWheel>,
-    /// Whether the recorded size must be validated when the source distribution is downloaded.
+    /// Whether to validate the recorded size when downloading the source distribution.
     pub size_is_authoritative: bool,
 }
 
-/// A source distribution that exists at an arbitrary URL.
+/// A source distribution at a URL.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct DirectUrlSourceDist {
-    /// Unlike [`DirectUrlBuiltDist`], we can't require a full filename with a version here, people
-    /// like using e.g. `foo @ https://github.com/org/repo/archive/master.zip`
+    /// Unlike [`DirectUrlBuiltDist`], a source URL does not need a versioned filename.
+    /// For example: `foo @ https://github.com/org/repo/archive/master.zip`.
     pub name: PackageName,
     /// The URL without the subdirectory fragment.
     pub location: Box<DisplaySafeUrl>,
-    /// The subdirectory within the archive in which the source distribution is located.
+    /// The archive subdirectory that contains the source distribution.
     pub subdirectory: Option<Box<Path>>,
-    /// The file extension, e.g. `tar.gz`, `zip`, etc.
+    /// The file extension, such as `tar.gz` or `zip`.
     pub ext: SourceDistExtension,
-    /// The URL as it was provided by the user, including the subdirectory fragment.
+    /// The user-provided URL, including the subdirectory fragment.
     pub url: VerbatimUrl,
-    /// The expected size of the archive, if provided by a lockfile.
+    /// The archive size from the lockfile, if available.
     pub size: Option<u64>,
 }
 
-/// A source distribution that exists at the root or in a subdirectory of a Git repository.
+/// A source distribution at the root of a Git repository or in a subdirectory.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct GitDirectorySourceDist {
     pub name: PackageName,
     /// The URL without the revision and subdirectory fragment.
     pub git: Box<GitUrl>,
-    /// The subdirectory within the Git repository in which the source distribution is located.
+    /// The Git repository subdirectory that contains the source distribution.
     pub subdirectory: Option<Box<Path>>,
-    /// The URL as it was provided by the user, including the revision and subdirectory fragment.
+    /// The user-provided URL, including the revision and subdirectory fragment.
     pub url: VerbatimUrl,
 }
 
-/// A source distribution that exists in a local archive (e.g., a `.tar.gz` file) within a Git
-/// repository.
+/// A source distribution in an archive, such as a `.tar.gz` file, in a Git repository.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct GitPathSourceDist {
     pub name: PackageName,
     /// The URL without the revision and subdirectory fragment.
     pub git: Box<GitUrl>,
-    /// The path within the Git repository to the distribution which we use for installing.
+    /// The path to the distribution to install in the Git repository.
     pub install_path: PathBuf,
-    /// The file extension, e.g. `tar.gz`, `zip`, etc.
+    /// The file extension, such as `tar.gz` or `zip`.
     pub ext: SourceDistExtension,
-    /// The URL as it was provided by the user, including the revision and subdirectory fragment.
+    /// The user-provided URL, including the revision and subdirectory fragment.
     pub url: VerbatimUrl,
 }
 
-/// A source distribution that exists in a local archive (e.g., a `.tar.gz` file).
+/// A source distribution in a local archive, such as a `.tar.gz` file.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct PathSourceDist {
     pub name: PackageName,
     pub version: Option<Version>,
-    /// The absolute path to the distribution which we use for installing.
+    /// The absolute path to the distribution to install.
     pub install_path: Box<Path>,
-    /// The file extension, e.g. `tar.gz`, `zip`, etc.
+    /// The file extension, such as `tar.gz` or `zip`.
     pub ext: SourceDistExtension,
-    /// The URL as it was provided by the user.
+    /// The URL that the user provided.
     pub url: VerbatimUrl,
 }
 
@@ -390,25 +375,24 @@ pub enum FirstParty {
     No,
 }
 
-/// A source distribution that exists in a local directory.
+/// A source distribution in a local directory.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct DirectorySourceDist {
     pub name: PackageName,
-    /// The absolute path to the distribution which we use for installing.
+    /// The absolute path to the distribution to install.
     pub install_path: Box<Path>,
-    /// Whether the package should be installed in editable mode.
+    /// Whether to install the package in editable mode.
     pub editable: Option<bool>,
-    /// Whether the package should be built and installed.
+    /// Whether to build and install the package.
     pub r#virtual: Option<bool>,
     /// Whether the package is a first-party workspace member.
     pub first_party: FirstParty,
-    /// The URL as it was provided by the user.
+    /// The URL that the user provided.
     pub url: VerbatimUrl,
 }
 
 impl Dist {
-    /// A remote built distribution (`.whl`) or source distribution from a `http://` or `https://`
-    /// URL.
+    /// Create a built or source distribution from an `http://` or `https://` URL.
     pub fn from_http_url(
         name: PackageName,
         url: VerbatimUrl,
@@ -418,7 +402,7 @@ impl Dist {
     ) -> Result<Self, Error> {
         match ext {
             DistExtension::Wheel => {
-                // Validate that the name in the wheel matches that of the requirement.
+                // Check that the wheel name matches the requirement name.
                 let filename = WheelFilename::from_str(&url.filename()?)?;
                 if filename.name != name {
                     return Err(Error::PackageNameMismatch(
@@ -451,7 +435,7 @@ impl Dist {
         }
     }
 
-    /// A local built or source distribution from a `file://` URL.
+    /// Create a local built or source distribution from a `file://` URL.
     pub fn from_file_url(
         name: PackageName,
         url: VerbatimUrl,
@@ -464,15 +448,15 @@ impl Dist {
         // Normalize the path.
         let install_path = normalize_absolute_path(&install_path)?;
 
-        // Validate that the path exists.
+        // Check that the path exists.
         if !install_path.exists() {
             return Err(Error::NotFound(url.to_url()));
         }
 
-        // Determine whether the path represents a built or source distribution.
+        // Check whether the path represents a built or source distribution.
         match ext {
             DistExtension::Wheel => {
-                // Validate that the name in the wheel matches that of the requirement.
+                // Check that the wheel name matches the requirement name.
                 let filename = install_path
                     .file_name()
                     .and_then(OsStr::to_str)
@@ -496,7 +480,7 @@ impl Dist {
                     return Err(Error::NotPep625Filename(url.verbatim().to_string()));
                 }
 
-                // If there is a version in the filename, record it.
+                // Record the version in the filename, if present.
                 let version = url
                     .filename()
                     .ok()
@@ -516,7 +500,7 @@ impl Dist {
         }
     }
 
-    /// A local source tree from a `file://` URL.
+    /// Create a local source tree from a `file://` URL.
     pub fn from_directory_url(
         name: PackageName,
         url: VerbatimUrl,
@@ -530,12 +514,12 @@ impl Dist {
         // Normalize the path.
         let install_path = normalize_absolute_path(&install_path)?;
 
-        // Validate that the path exists.
+        // Check that the path exists.
         if !install_path.exists() {
             return Err(Error::NotFound(url.to_url()));
         }
 
-        // Determine whether the path represents an archive or a directory.
+        // Create a directory source distribution.
         Ok(Self::Source(SourceDist::Directory(DirectorySourceDist {
             name,
             install_path: install_path.into_boxed_path(),
@@ -546,7 +530,9 @@ impl Dist {
         })))
     }
 
-    /// Create a [`Dist`] for a source tree within a Git repository (i.e., a `git+https://` or `git+ssh://` URL).
+    /// Create a [`Dist`] for a source tree in a Git repository.
+    ///
+    /// The URL can use `git+https://` or `git+ssh://`.
     pub fn from_git_directory_url(
         name: PackageName,
         url: VerbatimUrl,
@@ -563,7 +549,9 @@ impl Dist {
         )))
     }
 
-    /// Create a [`Dist`] for a source archive within a Git repository (i.e., a `git+https://` or `git+ssh://` URL).
+    /// Create a [`Dist`] for a source archive in a Git repository.
+    ///
+    /// The URL can use `git+https://` or `git+ssh://`.
     pub fn from_git_path_url(
         name: PackageName,
         url: VerbatimUrl,
@@ -573,7 +561,7 @@ impl Dist {
     ) -> Result<Self, Error> {
         match ext {
             DistExtension::Wheel => {
-                // Validate that the name in the wheel matches that of the requirement.
+                // Check that the wheel name matches the requirement name.
                 let filename = install_path
                     .file_name()
                     .and_then(OsStr::to_str)
@@ -635,7 +623,7 @@ impl Dist {
         }
     }
 
-    /// Return true if the distribution is editable.
+    /// Return `true` if the distribution is editable.
     fn is_editable(&self) -> bool {
         match self {
             Self::Source(dist) => dist.is_editable(),
@@ -643,7 +631,7 @@ impl Dist {
         }
     }
 
-    /// Return true if the distribution refers to a local file or directory.
+    /// Return `true` if the distribution refers to a local file or directory.
     fn is_local(&self) -> bool {
         match self {
             Self::Source(dist) => dist.is_local(),
@@ -651,7 +639,7 @@ impl Dist {
         }
     }
 
-    /// Returns the [`IndexUrl`], if the distribution is from a registry.
+    /// Return the [`IndexUrl`] if the distribution comes from a registry.
     pub fn index(&self) -> Option<&IndexUrl> {
         match self {
             Self::Built(dist) => dist.index(),
@@ -659,7 +647,7 @@ impl Dist {
         }
     }
 
-    /// Returns the [`File`] instance, if this dist is from a registry with simple json api support
+    /// Return the [`File`] if the registry supports the simple JSON API.
     pub fn file(&self) -> Option<&File> {
         match self {
             Self::Built(built) => built.file(),
@@ -675,7 +663,7 @@ impl Dist {
         }
     }
 
-    /// Returns the version of the distribution, if it is known.
+    /// Return the distribution version, if known.
     pub fn version(&self) -> Option<&Version> {
         match self {
             Self::Built(wheel) => Some(wheel.version()),
@@ -706,12 +694,12 @@ impl<'a> From<&'a BuiltDist> for DistRef<'a> {
 }
 
 impl BuiltDist {
-    /// Return true if the distribution refers to a local file or directory.
+    /// Return `true` if the distribution refers to a local file or directory.
     fn is_local(&self) -> bool {
         matches!(self, Self::Path(_))
     }
 
-    /// Returns the [`IndexUrl`], if the distribution is from a registry.
+    /// Return the [`IndexUrl`] if the distribution comes from a registry.
     pub fn index(&self) -> Option<&IndexUrl> {
         match self {
             Self::Registry(registry) => Some(&registry.best_wheel().index),
@@ -721,7 +709,7 @@ impl BuiltDist {
         }
     }
 
-    /// Returns the [`File`] instance, if this distribution is from a registry.
+    /// Return the [`File`] if the distribution comes from a registry.
     fn file(&self) -> Option<&File> {
         match self {
             Self::Registry(registry) => Some(&registry.best_wheel().file),
@@ -740,7 +728,7 @@ impl BuiltDist {
 }
 
 impl SourceDist {
-    /// Returns the [`IndexUrl`], if the distribution is from a registry.
+    /// Return the [`IndexUrl`] if the distribution comes from a registry.
     fn index(&self) -> Option<&IndexUrl> {
         match self {
             Self::Registry(registry) => Some(&registry.index),
@@ -752,7 +740,7 @@ impl SourceDist {
         }
     }
 
-    /// Returns the [`File`] instance, if this dist is from a registry with simple json api support
+    /// Return the [`File`] if the registry supports the simple JSON API.
     fn file(&self) -> Option<&File> {
         match self {
             Self::Registry(registry) => Some(&registry.file),
@@ -764,7 +752,7 @@ impl SourceDist {
         }
     }
 
-    /// Returns the [`Version`] of the distribution, if it is known.
+    /// Return the distribution [`Version`], if known.
     pub fn version(&self) -> Option<&Version> {
         match self {
             Self::Registry(source_dist) => Some(&source_dist.version),
@@ -776,7 +764,7 @@ impl SourceDist {
         }
     }
 
-    /// Returns `true` if the distribution is editable.
+    /// Return `true` if the distribution is editable.
     pub fn is_editable(&self) -> bool {
         match self {
             Self::Directory(DirectorySourceDist { editable, .. }) => editable.unwrap_or(false),
@@ -784,7 +772,7 @@ impl SourceDist {
         }
     }
 
-    /// Returns `true` if the distribution is virtual.
+    /// Return `true` if the distribution is virtual.
     pub fn is_virtual(&self) -> bool {
         match self {
             Self::Directory(DirectorySourceDist { r#virtual, .. }) => r#virtual.unwrap_or(false),
@@ -792,7 +780,7 @@ impl SourceDist {
         }
     }
 
-    /// Returns `true` if the distribution is a first-party workspace member.
+    /// Return `true` if the distribution is a first-party workspace member.
     pub fn is_first_party(&self) -> bool {
         match self {
             Self::Directory(DirectorySourceDist {
@@ -811,12 +799,12 @@ impl SourceDist {
         }
     }
 
-    /// Returns `true` if the distribution refers to a local file or directory.
+    /// Return `true` if the distribution refers to a local file or directory.
     fn is_local(&self) -> bool {
         matches!(self, Self::Directory(_) | Self::Path(_))
     }
 
-    /// Returns the path to the source distribution, if it's a local distribution.
+    /// Return the path if the source distribution is local.
     pub fn as_path(&self) -> Option<&Path> {
         match self {
             Self::Path(dist) => Some(&dist.install_path),
@@ -825,7 +813,7 @@ impl SourceDist {
         }
     }
 
-    /// Returns the source tree of the distribution, if available.
+    /// Return the source tree of the distribution, if available.
     fn source_tree(&self) -> Option<&Path> {
         match self {
             Self::Directory(dist) => Some(&dist.install_path),
@@ -835,7 +823,7 @@ impl SourceDist {
 }
 
 impl RegistryBuiltDist {
-    /// Returns the best or "most compatible" wheel in this distribution.
+    /// Return the most compatible wheel in this distribution.
     pub fn best_wheel(&self) -> &RegistryBuiltWheel {
         &self.wheels[self.best_wheel_index]
     }
@@ -1219,12 +1207,12 @@ impl RemoteSource for File {
 
 impl RemoteSource for Url {
     fn filename(&self) -> Result<Cow<'_, str>, Error> {
-        // Identify the last segment of the URL as the filename.
+        // Use the last URL segment as the filename.
         let mut path_segments = self
             .path_segments()
             .ok_or_else(|| Error::MissingPathSegments(self.to_string()))?;
 
-        // This is guaranteed by the contract of `Url::path_segments`.
+        // `Url::path_segments` guarantees that this segment exists.
         let last = path_segments
             .next_back()
             .expect("path segments is non-empty");
@@ -1249,7 +1237,7 @@ impl RemoteSource for UrlString {
             return Ok(Cow::Borrowed(filename));
         }
 
-        // Take the last segment, stripping any query or fragment.
+        // Get the last segment without the query or fragment.
         let last = self
             .base_str()
             .split('/')
@@ -1786,7 +1774,7 @@ mod test {
     use crate::{BuiltDist, Dist, RemoteSource, SourceDist, UrlString};
     use uv_redacted::DisplaySafeUrl;
 
-    /// Ensure that we don't accidentally grow the `Dist` sizes.
+    /// Check that the `Dist` types do not grow.
     #[test]
     fn dist_size() {
         assert!(size_of::<Dist>() <= 200, "{}", size_of::<Dist>());

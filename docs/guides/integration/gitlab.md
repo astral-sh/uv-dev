@@ -1,34 +1,32 @@
 ---
 title: Using uv in GitLab CI/CD
-description: A guide to using uv in GitLab CI/CD, including installation, setting up Python,
-  installing dependencies, and more.
+description: Install uv, set up Python, and install dependencies in GitLab CI/CD.
 ---
 
 # Using uv in GitLab CI/CD
 
 ## Using the uv image
 
-Astral provides [Docker images](docker.md#available-images) with uv preinstalled.
-Select a variant that is suitable for your workflow.
+Astral provides [Docker images](docker.md#available-images) with uv preinstalled. Select an image
+that meets the requirements of your workflow.
 
 ```yaml title=".gitlab-ci.yml"
 variables:
   UV_VERSION: "0.12.10"
   PYTHON_VERSION: "3.12"
   BASE_LAYER: trixie-slim
-  # GitLab CI creates a separate mountpoint for the build directory,
-  # so we need to copy instead of using hard links.
+  # GitLab CI mounts the build directory separately. Copy files instead of using hard links.
   UV_LINK_MODE: copy
 
 uv:
   image: ghcr.io/astral-sh/uv:$UV_VERSION-python$PYTHON_VERSION-$BASE_LAYER
   script:
-    # your `uv` commands
+    # Add your uv commands.
 ```
 
 !!! note
 
-    If you are using a distroless image, you have to specify the entrypoint:
+    If you use a distroless image, specify the entrypoint:
     ```yaml
     uv:
       image:
@@ -39,7 +37,7 @@ uv:
 
 ## Caching
 
-Persisting the uv cache between workflow runs can improve performance.
+Save the uv cache between workflow runs to improve performance.
 
 ```yaml
 uv-install:
@@ -52,27 +50,27 @@ uv-install:
       paths:
         - $UV_CACHE_DIR
   script:
-    # Your `uv` commands
+    # Add your uv commands.
   after_script:
     - uv cache prune --ci
 ```
 
-See the [GitLab caching documentation](https://docs.gitlab.com/ee/ci/caching/) for more details on
-configuring caching.
+For instructions on how to configure caching, see the
+[GitLab caching documentation](https://docs.gitlab.com/ee/ci/caching/).
 
-Using `uv cache prune --ci` at the end of the job is recommended to reduce cache size. See the [uv
-cache documentation](../../concepts/cache.md#caching-in-continuous-integration) for more details.
+Run `uv cache prune --ci` at the end of the job to reduce the cache size. For more information, see
+the [uv cache documentation](../../concepts/cache.md#caching-in-continuous-integration).
 
 ## Using `uv pip`
 
-If using the `uv pip` interface instead of the uv project interface, uv requires a virtual
-environment by default. To allow installing packages into the system environment, use the `--system`
-flag on all uv invocations or set the `UV_SYSTEM_PYTHON` variable.
+When you use the `uv pip` interface, uv requires a virtual environment by default. To install
+packages in the system environment, add `--system` to each uv command or set the `UV_SYSTEM_PYTHON`
+variable.
 
-The `UV_SYSTEM_PYTHON` variable can be defined in at different scopes. You can read more about
-how [variables and their precedence works in GitLab here](https://docs.gitlab.com/ee/ci/variables/)
+You can set `UV_SYSTEM_PYTHON` at different scopes. For information about variables and their
+precedence, see the [GitLab CI/CD variables documentation](https://docs.gitlab.com/ee/ci/variables/).
 
-Opt-in for the entire workflow by defining it at the top level:
+To use the system environment for the entire workflow, set the variable at the top level:
 
 ```yaml title=".gitlab-ci.yml"
 variables:
@@ -81,7 +79,7 @@ variables:
 # [...]
 ```
 
-To opt-out again, the `--no-system` flag can be used in any uv invocation.
+Add `--no-system` to an individual uv command to disable this setting.
 
-When persisting the cache, you may want to use `requirements.txt` or `pyproject.toml` as
-your cache key files instead of `uv.lock`.
+When you save the cache, use `requirements.txt` or `pyproject.toml` as the cache key files if you do
+not use `uv.lock`.

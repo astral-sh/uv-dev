@@ -1,1087 +1,1077 @@
-//! Environment variables used or supported by uv.
-//! Used to generate `docs/reference/environment.md`.
+//! Environment variables that uv supports.
+//! Generates `docs/reference/environment.md`.
 use uv_macros::{attr_added_in, attr_env_var_pattern, attr_hidden, attribute_env_vars_metadata};
 
-/// Declares all environment variable used throughout `uv` and its crates.
+/// Declares the environment variables that `uv` and its crates use.
 pub struct EnvVars;
 
 #[attribute_env_vars_metadata]
 impl EnvVars {
-    /// The path to the binary that was used to invoke uv.
+    /// The path to the binary that started uv.
     ///
-    /// This is propagated to all subprocesses spawned by uv.
+    /// uv passes this path to each subprocess.
     ///
-    /// If the executable was invoked through a symbolic link, some platforms will return the path
-    /// of the symbolic link and other platforms will return the path of the symbolic link’s target.
+    /// If the executable is a symbolic link, the returned path depends on the platform.
+    /// Some platforms return the symbolic link. Others return its target.
     ///
     /// See <https://doc.rust-lang.org/std/env/fn.current_exe.html#security> for security
     /// considerations.
     #[attr_added_in("0.6.0")]
     pub const UV: &'static str = "UV";
 
-    /// The path to the Ruff binary used by `uv format`.
+    /// The path to the Ruff binary that `uv format` uses.
     #[attr_added_in("0.11.22")]
     pub const RUFF: &'static str = "RUFF";
 
-    /// The path to the ty binary used by `uv check`.
+    /// The path to the ty binary that `uv check` uses.
     #[attr_added_in("0.11.22")]
     pub const TY: &'static str = "TY";
 
-    /// Equivalent to the `--offline` command-line argument. If set, uv will disable network access.
+    /// Matches the `--offline` command-line option. When set, uv disables network access.
     #[attr_added_in("0.5.9")]
     pub const UV_OFFLINE: &'static str = "UV_OFFLINE";
 
-    /// Equivalent to the `--default-index` command-line argument. If set, uv will use
-    /// this index as the default index when searching for packages.
+    /// Matches the `--default-index` command-line option.
+    /// When set, uv searches this index as the default package index.
     #[attr_added_in("0.4.23")]
     pub const UV_DEFAULT_INDEX: &'static str = "UV_DEFAULT_INDEX";
 
-    /// Equivalent to the `--index` command-line argument. If set, uv will use this
-    /// space-separated list of additional indexes when searching for packages.
+    /// Matches the `--index` command-line option.
+    /// When set, uv searches these space-separated indexes as additional package indexes.
     #[attr_added_in("0.4.23")]
     pub const UV_INDEX: &'static str = "UV_INDEX";
 
-    /// Equivalent to the `--index-url` command-line argument. If set, uv will use this
-    /// URL as the default index when searching for packages.
-    /// (Deprecated: use `UV_DEFAULT_INDEX` instead.)
+    /// Matches the `--index-url` command-line option.
+    /// When set, uv searches this URL as the default package index.
+    /// Deprecated: use `UV_DEFAULT_INDEX` instead.
     #[attr_added_in("0.0.5")]
     pub const UV_INDEX_URL: &'static str = "UV_INDEX_URL";
 
-    /// Equivalent to the `--extra-index-url` command-line argument. If set, uv will
-    /// use this space-separated list of URLs as additional indexes when searching for packages.
-    /// (Deprecated: use `UV_INDEX` instead.)
+    /// Matches the `--extra-index-url` command-line option.
+    /// When set, uv searches these space-separated URLs as additional package indexes.
+    /// Deprecated: use `UV_INDEX` instead.
     #[attr_added_in("0.1.3")]
     pub const UV_EXTRA_INDEX_URL: &'static str = "UV_EXTRA_INDEX_URL";
 
-    /// Equivalent to the `--find-links` command-line argument. If set, uv will use this
-    /// comma-separated list of additional locations to search for packages.
+    /// Matches the `--find-links` command-line option.
+    /// When set, uv searches these additional comma-separated locations for packages.
     #[attr_added_in("0.4.19")]
     pub const UV_FIND_LINKS: &'static str = "UV_FIND_LINKS";
 
-    /// Equivalent to the `--no-sources` command-line argument. If set, uv will ignore
-    /// `[tool.uv.sources]` annotations when resolving dependencies.
+    /// Matches the `--no-sources` command-line option.
+    /// When set, uv ignores `[tool.uv.sources]` annotations during dependency resolution.
     #[attr_added_in("0.9.8")]
     pub const UV_NO_SOURCES: &'static str = "UV_NO_SOURCES";
 
-    /// Equivalent to the `--cache-dir` command-line argument. If set, uv will use this
-    /// directory for caching instead of the default cache directory.
+    /// Matches the `--cache-dir` command-line option.
+    /// When set, uv uses this directory instead of the default cache directory.
     #[attr_added_in("0.0.5")]
     pub const UV_CACHE_DIR: &'static str = "UV_CACHE_DIR";
 
-    /// The directory for storage of credentials when using a plain text backend.
+    /// The directory that stores credentials for a plain-text backend.
     #[attr_added_in("0.8.15")]
     pub const UV_CREDENTIALS_DIR: &'static str = "UV_CREDENTIALS_DIR";
 
-    /// Equivalent to the `--no-cache` command-line argument. If set, uv will not use the
-    /// cache for any operations.
+    /// Matches the `--no-cache` command-line option.
+    /// When set, uv does not use the cache.
     #[attr_added_in("0.1.2")]
     pub const UV_NO_CACHE: &'static str = "UV_NO_CACHE";
 
-    /// Equivalent to the `--resolution` command-line argument. For example, if set to
-    /// `lowest-direct`, uv will install the lowest compatible versions of all direct dependencies.
+    /// Matches the `--resolution` command-line option.
+    /// When set to `lowest-direct`, uv installs the lowest compatible version of each direct
+    /// dependency.
     #[attr_added_in("0.1.27")]
     pub const UV_RESOLUTION: &'static str = "UV_RESOLUTION";
 
-    /// Equivalent to the `--prerelease` command-line argument. For example, if set to
-    /// `allow`, uv will allow pre-release versions for all dependencies.
+    /// Matches the `--prerelease` command-line option.
+    /// When set to `allow`, uv permits pre-release versions for all dependencies.
     #[attr_added_in("0.1.16")]
     pub const UV_PRERELEASE: &'static str = "UV_PRERELEASE";
 
-    /// Equivalent to the `--fork-strategy` argument. Controls version selection during universal
-    /// resolution.
+    /// Matches the `--fork-strategy` option.
+    /// Controls version selection during universal resolution.
     #[attr_added_in("0.5.9")]
     pub const UV_FORK_STRATEGY: &'static str = "UV_FORK_STRATEGY";
 
-    /// Equivalent to the `--system` command-line argument. If set to `true`, uv will
-    /// use the first Python interpreter found in the system `PATH`.
+    /// Matches the `--system` command-line option.
+    /// When set to `true`, uv uses the first Python interpreter in the system `PATH`.
     ///
-    /// WARNING: `UV_SYSTEM_PYTHON=true` is intended for use in continuous integration (CI)
-    /// or containerized environments and should be used with caution, as modifying the system
-    /// Python can lead to unexpected behavior.
+    /// WARNING: Use `UV_SYSTEM_PYTHON=true` carefully.
+    /// It is intended for continuous integration (CI) or container environments.
+    /// Changes to the system Python can cause unexpected behavior.
     #[attr_added_in("0.1.18")]
     pub const UV_SYSTEM_PYTHON: &'static str = "UV_SYSTEM_PYTHON";
 
-    /// Equivalent to the `--python` command-line argument. If set to a path, uv will use
-    /// this Python interpreter for all operations.
+    /// Matches the `--python` command-line option.
+    /// When set to a path, uv uses this Python interpreter for all operations.
     #[attr_added_in("0.1.40")]
     pub const UV_PYTHON: &'static str = "UV_PYTHON";
 
-    /// Equivalent to the `--break-system-packages` command-line argument. If set to `true`,
-    /// uv will allow the installation of packages that conflict with system-installed packages.
+    /// Matches the `--break-system-packages` command-line option.
+    /// When set to `true`, uv can install packages that conflict with system packages.
     ///
-    /// WARNING: `UV_BREAK_SYSTEM_PACKAGES=true` is intended for use in continuous integration
-    /// (CI) or containerized environments and should be used with caution, as modifying the system
-    /// Python can lead to unexpected behavior.
+    /// WARNING: Use `UV_BREAK_SYSTEM_PACKAGES=true` carefully.
+    /// It is intended for continuous integration (CI) or container environments.
+    /// Changes to the system Python can cause unexpected behavior.
     #[attr_added_in("0.1.32")]
     pub const UV_BREAK_SYSTEM_PACKAGES: &'static str = "UV_BREAK_SYSTEM_PACKAGES";
 
-    /// Equivalent to the `--native-tls` command-line argument. If set to `true`, uv will
-    /// load TLS certificates from the platform's native certificate store instead of the
-    /// bundled Mozilla root certificates.
-    /// (Deprecated: use `UV_SYSTEM_CERTS` instead.)
+    /// Matches the `--native-tls` command-line option.
+    /// When set to `true`, uv loads TLS certificates from the platform certificate store.
+    /// It does not use the bundled Mozilla root certificates.
+    /// Deprecated: use `UV_SYSTEM_CERTS` instead.
     #[attr_added_in("0.1.19")]
     pub const UV_NATIVE_TLS: &'static str = "UV_NATIVE_TLS";
 
-    /// Equivalent to the `--system-certs` command-line argument. If set to `true`, uv will
-    /// load TLS certificates from the platform's native certificate store instead of the
-    /// bundled Mozilla root certificates.
+    /// Matches the `--system-certs` command-line option.
+    /// When set to `true`, uv loads TLS certificates from the platform certificate store.
+    /// It does not use the bundled Mozilla root certificates.
     #[attr_added_in("0.11.0")]
     pub const UV_SYSTEM_CERTS: &'static str = "UV_SYSTEM_CERTS";
 
-    /// Equivalent to the `--index-strategy` command-line argument.
+    /// Matches the `--index-strategy` command-line option.
     ///
-    /// For example, if set to `unsafe-best-match`, uv will consider versions of a given package
-    /// available across all index URLs, rather than limiting its search to the first index URL
-    /// that contains the package.
+    /// When set to `unsafe-best-match`, uv considers package versions from all index URLs.
+    /// It does not limit the search to the first index that contains the package.
     #[attr_added_in("0.1.29")]
     pub const UV_INDEX_STRATEGY: &'static str = "UV_INDEX_STRATEGY";
 
-    /// Equivalent to the `--require-hashes` command-line argument. If set to `true`,
-    /// uv will require that all dependencies have a hash specified in the requirements file.
+    /// Matches the `--require-hashes` command-line option.
+    /// When set to `true`, uv requires a hash for each dependency in the requirements file.
     #[attr_added_in("0.1.34")]
     pub const UV_REQUIRE_HASHES: &'static str = "UV_REQUIRE_HASHES";
 
-    /// Require wheel metadata to be fetched with HTTP range requests when separate metadata is
-    /// unavailable. If set to `true`, uv will fail instead of downloading the entire wheel.
+    /// Requires HTTP range requests to fetch wheel metadata when separate metadata is unavailable.
+    /// When set to `true`, uv fails instead of downloading the entire wheel.
     #[attr_hidden]
     #[attr_added_in("0.12.8")]
     pub const UV_REQUIRE_METADATA_RANGE_REQUESTS: &'static str =
         "UV_REQUIRE_METADATA_RANGE_REQUESTS";
 
-    /// Equivalent to the `--constraints` command-line argument. If set, uv will use this
-    /// file as the constraints file. Uses space-separated list of files.
+    /// Matches the `--constraints` command-line option.
+    /// When set, uv uses these space-separated files as constraints files.
     #[attr_added_in("0.1.36")]
     pub const UV_CONSTRAINT: &'static str = "UV_CONSTRAINT";
 
-    /// Equivalent to the `--build-constraints` command-line argument. If set, uv will use this file
-    /// as constraints for any source distribution builds. Uses space-separated list of files.
+    /// Matches the `--build-constraints` command-line option.
+    /// When set, uv uses these space-separated files as constraints for source distribution builds.
     #[attr_added_in("0.2.34")]
     pub const UV_BUILD_CONSTRAINT: &'static str = "UV_BUILD_CONSTRAINT";
 
-    /// Equivalent to the `--overrides` command-line argument. If set, uv will use this file
-    /// as the overrides file. Uses space-separated list of files.
+    /// Matches the `--overrides` command-line option.
+    /// When set, uv uses these space-separated files as overrides files.
     #[attr_added_in("0.2.22")]
     pub const UV_OVERRIDE: &'static str = "UV_OVERRIDE";
 
-    /// Equivalent to the `--excludes` command-line argument. If set, uv will use this
-    /// as the excludes file. Uses space-separated list of files.
+    /// Matches the `--excludes` command-line option.
+    /// When set, uv uses these space-separated files as excludes files.
     #[attr_added_in("0.9.8")]
     pub const UV_EXCLUDE: &'static str = "UV_EXCLUDE";
 
-    /// Equivalent to the `--link-mode` command-line argument. If set, uv will use this as
-    /// a link mode.
+    /// Matches the `--link-mode` command-line option.
+    /// When set, uv uses this link mode.
     #[attr_added_in("0.1.40")]
     pub const UV_LINK_MODE: &'static str = "UV_LINK_MODE";
 
-    /// Equivalent to the `--no-build-isolation` command-line argument. If set, uv will
-    /// skip isolation when building source distributions.
+    /// Matches the `--no-build-isolation` command-line option.
+    /// When set, uv skips isolation for source distribution builds.
     #[attr_added_in("0.1.40")]
     pub const UV_NO_BUILD_ISOLATION: &'static str = "UV_NO_BUILD_ISOLATION";
 
-    /// Equivalent to the `--custom-compile-command` command-line argument.
+    /// Matches the `--custom-compile-command` command-line option.
     ///
-    /// Used to override uv in the output header of the `requirements.txt` files generated by
-    /// `uv pip compile`. Intended for use-cases in which `uv pip compile` is called from within a wrapper
-    /// script, to include the name of the wrapper script in the output file.
+    /// Replaces uv in the header of `requirements.txt` files that `uv pip compile` generates.
+    /// Use this option when a wrapper script runs `uv pip compile`.
+    /// The output file then includes the wrapper script name.
     #[attr_added_in("0.1.23")]
     pub const UV_CUSTOM_COMPILE_COMMAND: &'static str = "UV_CUSTOM_COMPILE_COMMAND";
 
-    /// Equivalent to the `--keyring-provider` command-line argument. If set, uv
-    /// will use this value as the keyring provider.
+    /// Matches the `--keyring-provider` command-line option.
+    /// When set, uv uses this keyring provider.
     #[attr_added_in("0.1.19")]
     pub const UV_KEYRING_PROVIDER: &'static str = "UV_KEYRING_PROVIDER";
 
-    /// Equivalent to the `--config-file` command-line argument. Expects a path to a
-    /// local `uv.toml` file to use as the configuration file.
+    /// Matches the `--config-file` command-line option.
+    /// Requires the path to a local `uv.toml` configuration file.
     #[attr_added_in("0.1.34")]
     pub const UV_CONFIG_FILE: &'static str = "UV_CONFIG_FILE";
 
-    /// Equivalent to the `--no-config` command-line argument. If set, uv will not read
-    /// any configuration files from the current directory, parent directories, or user configuration
-    /// directories.
+    /// Matches the `--no-config` command-line option.
+    /// When set, uv does not read configuration files from the current directory or its parents.
+    /// It also ignores user configuration directories.
     #[attr_added_in("0.2.30")]
     pub const UV_NO_CONFIG: &'static str = "UV_NO_CONFIG";
 
-    /// If set, uv will not read system-level configuration files.
+    /// When set, uv does not read system-level configuration files.
     #[attr_added_in("0.11.16")]
     pub const UV_NO_SYSTEM_CONFIG: &'static str = "UV_NO_SYSTEM_CONFIG";
 
-    /// Equivalent to the `--isolated` command-line argument. If set, uv will avoid discovering
-    /// a `pyproject.toml` or `uv.toml` file.
+    /// Matches the `--isolated` command-line option.
+    /// When set, uv does not discover `pyproject.toml` or `uv.toml` files.
     #[attr_added_in("0.8.14")]
     pub const UV_ISOLATED: &'static str = "UV_ISOLATED";
 
-    /// Equivalent to the `--exclude-newer` command-line argument. If set, uv will
-    /// exclude distributions published after the specified date. Set to `false` to disable
-    /// `exclude-newer`.
+    /// Matches the `--exclude-newer` command-line option.
+    /// When set, uv excludes distributions published after the specified date.
+    /// Set the value to `false` to disable `exclude-newer`.
     #[attr_added_in("0.2.12")]
     pub const UV_EXCLUDE_NEWER: &'static str = "UV_EXCLUDE_NEWER";
 
-    /// Whether uv should prefer system or managed Python versions.
+    /// Controls whether uv prefers system or managed Python versions.
     #[attr_added_in("0.3.2")]
     pub const UV_PYTHON_PREFERENCE: &'static str = "UV_PYTHON_PREFERENCE";
 
-    /// Require use of uv-managed Python versions.
+    /// Requires uv-managed Python versions.
     #[attr_added_in("0.6.8")]
     pub const UV_MANAGED_PYTHON: &'static str = "UV_MANAGED_PYTHON";
 
-    /// Disable use of uv-managed Python versions.
+    /// Disables uv-managed Python versions.
     #[attr_added_in("0.6.8")]
     pub const UV_NO_MANAGED_PYTHON: &'static str = "UV_NO_MANAGED_PYTHON";
 
-    /// Equivalent to the
-    /// [`python-downloads`](../reference/settings.md#python-downloads) setting and, when disabled, the
-    /// `--no-python-downloads` option. Whether uv should allow Python downloads.
+    /// Matches the [`python-downloads`](../reference/settings.md#python-downloads) setting.
+    /// When disabled, it matches the `--no-python-downloads` option.
+    /// Controls whether uv allows Python downloads.
     #[attr_added_in("0.3.2")]
     pub const UV_PYTHON_DOWNLOADS: &'static str = "UV_PYTHON_DOWNLOADS";
 
-    /// Overrides the environment-determined libc on linux systems when filling in the current platform
-    /// within Python version requests. Options are: `gnu`, `gnueabi`, `gnueabihf`, `musl`,
-    /// `musleabi`, `musleabihf`, and `none`.
+    /// Overrides the libc that uv detects on Linux for Python version requests.
+    /// Valid values are `gnu`, `gnueabi`, `gnueabihf`, `musl`, `musleabi`, `musleabihf`, and
+    /// `none`.
     #[attr_added_in("0.7.22")]
     pub const UV_LIBC: &'static str = "UV_LIBC";
 
-    /// Equivalent to the `--compile-bytecode` command-line argument. If set, uv
-    /// will compile Python source files to bytecode after installation.
+    /// Matches the `--compile-bytecode` command-line option.
+    /// When set, uv compiles Python source files to bytecode after installation.
     #[attr_added_in("0.3.3")]
     pub const UV_COMPILE_BYTECODE: &'static str = "UV_COMPILE_BYTECODE";
 
-    /// Timeout (in seconds) for bytecode compilation.
+    /// The bytecode compilation timeout, in seconds.
     #[attr_added_in("0.7.22")]
     pub const UV_COMPILE_BYTECODE_TIMEOUT: &'static str = "UV_COMPILE_BYTECODE_TIMEOUT";
 
-    /// Equivalent to the `--no-editable` command-line argument. If set, uv
-    /// installs or exports any editable dependencies, including the project and any workspace
-    /// members, as non-editable.
+    /// Matches the `--no-editable` command-line option.
+    /// When set, uv installs or exports editable dependencies as non-editable.
+    /// This includes the project and workspace members.
     #[attr_added_in("0.6.15")]
     pub const UV_NO_EDITABLE: &'static str = "UV_NO_EDITABLE";
 
-    /// Equivalent to the `--dev` command-line argument. If set, uv will include
-    /// development dependencies.
+    /// Matches the `--dev` command-line option.
+    /// When set, uv includes development dependencies.
     #[attr_added_in("0.8.7")]
     pub const UV_DEV: &'static str = "UV_DEV";
 
-    /// Equivalent to the `--no-dev` command-line argument. If set, uv will exclude
-    /// development dependencies.
+    /// Matches the `--no-dev` command-line option.
+    /// When set, uv excludes development dependencies.
     #[attr_added_in("0.8.7")]
     pub const UV_NO_DEV: &'static str = "UV_NO_DEV";
 
-    /// Equivalent to the `--no-group` command-line argument. If set, uv will disable
-    /// the specified dependency groups for the given space-delimited list of packages.
+    /// Matches the `--no-group` command-line option.
+    /// When set, uv disables the specified dependency groups for these space-separated packages.
     #[attr_added_in("0.9.8")]
     pub const UV_NO_GROUP: &'static str = "UV_NO_GROUP";
 
-    /// Equivalent to the `--no-default-groups` command-line argument. If set, uv will
-    /// not select the default dependency groups defined in `tool.uv.default-groups`.
+    /// Matches the `--no-default-groups` command-line option.
+    /// When set, uv does not select the default groups in `tool.uv.default-groups`.
     #[attr_added_in("0.9.9")]
     pub const UV_NO_DEFAULT_GROUPS: &'static str = "UV_NO_DEFAULT_GROUPS";
 
-    /// Equivalent to the `--no-install-project` command-line argument. If set, uv will
-    /// install the project's dependencies but not the project itself.
+    /// Matches the `--no-install-project` command-line option.
+    /// When set, uv installs the project dependencies but not the project.
     #[attr_added_in("0.11.20")]
     pub const UV_NO_INSTALL_PROJECT: &'static str = "UV_NO_INSTALL_PROJECT";
 
-    /// Equivalent to the `--no-install-workspace` command-line argument. If set, uv will
-    /// install workspace dependencies but not workspace members (including the current
-    /// project).
+    /// Matches the `--no-install-workspace` command-line option.
+    /// When set, uv installs workspace dependencies but not workspace members.
+    /// This includes the current project.
     #[attr_added_in("0.11.20")]
     pub const UV_NO_INSTALL_WORKSPACE: &'static str = "UV_NO_INSTALL_WORKSPACE";
 
-    /// Equivalent to the `--no-install-local` command-line argument. If set, uv will skip
-    /// the current project, workspace members, and any other local (path or editable)
-    /// packages, installing only remote dependencies.
+    /// Matches the `--no-install-local` command-line option.
+    /// When set, uv installs only remote dependencies.
+    /// It skips the current project, workspace members, and other local path or editable packages.
     #[attr_added_in("0.11.20")]
     pub const UV_NO_INSTALL_LOCAL: &'static str = "UV_NO_INSTALL_LOCAL";
 
-    /// Equivalent to the hidden `--only-install-project` command-line argument.
+    /// Matches the hidden `--only-install-project` command-line option.
     #[attr_hidden]
     #[attr_added_in("0.11.20")]
     pub const UV_ONLY_INSTALL_PROJECT: &'static str = "UV_ONLY_INSTALL_PROJECT";
 
-    /// Equivalent to the hidden `--only-install-workspace` command-line argument.
+    /// Matches the hidden `--only-install-workspace` command-line option.
     #[attr_hidden]
     #[attr_added_in("0.11.20")]
     pub const UV_ONLY_INSTALL_WORKSPACE: &'static str = "UV_ONLY_INSTALL_WORKSPACE";
 
-    /// Equivalent to the hidden `--only-install-local` command-line argument.
+    /// Matches the hidden `--only-install-local` command-line option.
     #[attr_hidden]
     #[attr_added_in("0.11.20")]
     pub const UV_ONLY_INSTALL_LOCAL: &'static str = "UV_ONLY_INSTALL_LOCAL";
 
-    /// Equivalent to the `--no-binary` command-line argument. If set, uv will install
-    /// all packages from source. The resolver will still use pre-built wheels to
-    /// extract package metadata, if available.
+    /// Matches the `--no-binary` command-line option.
+    /// When set, uv installs all packages from source.
+    /// The resolver can still extract metadata from available pre-built wheels.
     #[attr_added_in("0.5.30")]
     pub const UV_NO_BINARY: &'static str = "UV_NO_BINARY";
 
-    /// Equivalent to the `--no-binary-package` command line argument. If set, uv will
-    /// not use pre-built wheels for the given space-delimited list of packages.
+    /// Matches the `--no-binary-package` command-line option.
+    /// When set, uv does not use pre-built wheels for these space-separated packages.
     #[attr_added_in("0.5.30")]
     pub const UV_NO_BINARY_PACKAGE: &'static str = "UV_NO_BINARY_PACKAGE";
 
-    /// Equivalent to the `--no-build` command-line argument. If set, uv will not build source
-    /// distributions. First-party packages, such as projects in the workspace, will still be
-    /// built.
+    /// Matches the `--no-build` command-line option.
+    /// When set, uv does not build source distributions. uv still builds first-party packages,
+    /// such as projects in the workspace.
     #[attr_added_in("0.1.40")]
     pub const UV_NO_BUILD: &'static str = "UV_NO_BUILD";
 
-    /// Equivalent to the `--no-build-package` command line argument. If set, uv will not build
-    /// source distributions for the given space-delimited list of packages. First-party packages,
-    /// such as projects in the workspace, will still be built.
+    /// Matches the `--no-build-package` command-line option.
+    /// When set, uv does not build source distributions for these space-separated packages. uv
+    /// still builds first-party packages, such as projects in the workspace.
     #[attr_added_in("0.6.5")]
     pub const UV_NO_BUILD_PACKAGE: &'static str = "UV_NO_BUILD_PACKAGE";
 
-    /// Equivalent to the `--no-sources-package` command line argument. If set, uv will
-    /// ignore the `tool.uv.sources` table for the given space-delimited list of packages.
+    /// Matches the `--no-sources-package` command-line option.
+    /// When set, uv ignores `tool.uv.sources` for these space-separated packages.
     #[attr_added_in("0.9.26")]
     pub const UV_NO_SOURCES_PACKAGE: &'static str = "UV_NO_SOURCES_PACKAGE";
 
-    /// Equivalent to the `--publish-url` command-line argument. The URL of the upload
-    /// endpoint of the index to use with `uv publish`.
+    /// Matches the `--publish-url` command-line option.
+    /// Sets the index upload URL for `uv publish`.
     #[attr_added_in("0.4.16")]
     pub const UV_PUBLISH_URL: &'static str = "UV_PUBLISH_URL";
 
-    /// Equivalent to the `--token` command-line argument in `uv publish`. If set, uv
-    /// will use this token (with the username `__token__`) for publishing.
+    /// Matches the `--token` option for `uv publish`.
+    /// When set, uv publishes with this token and the username `__token__`.
     #[attr_added_in("0.4.16")]
     pub const UV_PUBLISH_TOKEN: &'static str = "UV_PUBLISH_TOKEN";
 
-    /// Equivalent to the `--index` command-line argument in `uv publish`. If
-    /// set, uv will use the index with this name in the configuration for publishing.
+    /// Matches the `--index` option for `uv publish`.
+    /// When set, uv publishes to the configured index with this name.
     #[attr_added_in("0.5.8")]
     pub const UV_PUBLISH_INDEX: &'static str = "UV_PUBLISH_INDEX";
 
-    /// Equivalent to the `--username` command-line argument in `uv publish`. If
-    /// set, uv will use this username for publishing.
+    /// Matches the `--username` option for `uv publish`.
+    /// When set, uv publishes with this username.
     #[attr_added_in("0.4.16")]
     pub const UV_PUBLISH_USERNAME: &'static str = "UV_PUBLISH_USERNAME";
 
-    /// Equivalent to the `--password` command-line argument in `uv publish`. If
-    /// set, uv will use this password for publishing.
+    /// Matches the `--password` option for `uv publish`.
+    /// When set, uv publishes with this password.
     #[attr_added_in("0.4.16")]
     pub const UV_PUBLISH_PASSWORD: &'static str = "UV_PUBLISH_PASSWORD";
 
-    /// Equivalent to the `--check-url` command-line argument in `uv publish`.
-    /// Don't upload a file if it already exists on the index. The value is the URL of the index.
+    /// Matches the `--check-url` option for `uv publish`.
+    /// Do not upload a file that already exists on the index.
+    /// The value is the index URL.
     #[attr_added_in("0.4.30")]
     pub const UV_PUBLISH_CHECK_URL: &'static str = "UV_PUBLISH_CHECK_URL";
 
-    /// Equivalent to the `--no-attestations` command-line argument in `uv publish`. If set,
-    /// uv will skip uploading any collected attestations for the published distributions.
+    /// Matches the `--no-attestations` option for `uv publish`.
+    /// When set, uv does not upload attestations for published distributions.
     #[attr_added_in("0.9.12")]
     pub const UV_PUBLISH_NO_ATTESTATIONS: &'static str = "UV_PUBLISH_NO_ATTESTATIONS";
 
-    /// Equivalent to the `--no-sync` command-line argument. If set, uv will skip updating
-    /// the environment.
+    /// Matches the `--no-sync` command-line option.
+    /// When set, uv does not update the environment.
     #[attr_added_in("0.4.18")]
     pub const UV_NO_SYNC: &'static str = "UV_NO_SYNC";
 
-    /// Equivalent to the `--locked` command-line argument. If set, uv will assert that the
-    /// `uv.lock` remains unchanged.
+    /// Matches the `--locked` command-line option.
+    /// When set, uv requires `uv.lock` to remain unchanged.
     #[attr_added_in("0.4.25")]
     pub const UV_LOCKED: &'static str = "UV_LOCKED";
 
-    /// Equivalent to the `--frozen` command-line argument. If set, uv will run without
-    /// updating the `uv.lock` file.
+    /// Matches the `--frozen` command-line option.
+    /// When set, uv does not update `uv.lock`.
     #[attr_added_in("0.4.25")]
     pub const UV_FROZEN: &'static str = "UV_FROZEN";
 
-    /// Equivalent to the `--preview` argument. Enables preview mode.
+    /// Matches the `--preview` option. Enables preview mode.
     #[attr_added_in("0.1.37")]
     pub const UV_PREVIEW: &'static str = "UV_PREVIEW";
 
-    /// Equivalent to the `--preview-features` argument. Enables specific preview features.
+    /// Matches the `--preview-features` option. Enables specific preview features.
     #[attr_added_in("0.8.4")]
     pub const UV_PREVIEW_FEATURES: &'static str = "UV_PREVIEW_FEATURES";
 
-    /// Equivalent to the `--token` argument for self update. A GitHub token for authentication.
+    /// Matches the `--token` option for self update.
+    /// Sets the GitHub authentication token.
     #[attr_added_in("0.4.10")]
     pub const UV_GITHUB_TOKEN: &'static str = "UV_GITHUB_TOKEN";
 
-    /// Equivalent to the `--no-verify-hashes` argument. Disables hash verification for
-    /// `requirements.txt` files.
+    /// Matches the `--no-verify-hashes` option.
+    /// Disables hash checks for `requirements.txt` files.
     #[attr_added_in("0.5.3")]
     pub const UV_NO_VERIFY_HASHES: &'static str = "UV_NO_VERIFY_HASHES";
 
-    /// Equivalent to the `--allow-insecure-host` argument.
+    /// Matches the `--allow-insecure-host` option.
     #[attr_added_in("0.3.5")]
     pub const UV_INSECURE_HOST: &'static str = "UV_INSECURE_HOST";
 
-    /// Disable ZIP validation for streamed wheels and ZIP-based source distributions.
+    /// Disables ZIP validation for streamed wheels and ZIP-based source distributions.
     ///
-    /// WARNING: Disabling ZIP validation can expose your system to security risks by bypassing
-    /// integrity checks and allowing uv to install potentially malicious ZIP files. If uv rejects
-    /// a ZIP file due to failing validation, it is likely that the file is malformed; consider
-    /// filing an issue with the package maintainer.
+    /// WARNING: Do not disable ZIP validation unless necessary.
+    /// This skips integrity checks and can let uv install malicious ZIP files.
+    /// A ZIP file that fails validation is likely malformed.
+    /// Report the issue to the package maintainer.
     #[attr_added_in("0.8.6")]
     pub const UV_INSECURE_NO_ZIP_VALIDATION: &'static str = "UV_INSECURE_NO_ZIP_VALIDATION";
 
-    /// Sets the maximum number of in-flight concurrent downloads that uv will
-    /// perform at any given time.
+    /// Sets the maximum number of concurrent downloads.
     #[attr_added_in("0.1.43")]
     pub const UV_CONCURRENT_DOWNLOADS: &'static str = "UV_CONCURRENT_DOWNLOADS";
 
-    /// Sets the maximum number of source distributions that uv will build
-    /// concurrently at any given time.
+    /// Sets the maximum number of concurrent source distribution builds.
     #[attr_added_in("0.1.43")]
     pub const UV_CONCURRENT_BUILDS: &'static str = "UV_CONCURRENT_BUILDS";
 
-    /// Controls the number of threads used when installing and unzipping
-    /// packages.
+    /// Sets the number of threads that install and extract packages.
     #[attr_added_in("0.1.45")]
     pub const UV_CONCURRENT_INSTALLS: &'static str = "UV_CONCURRENT_INSTALLS";
 
-    /// Controls the number of threads used to read cached HTTP responses.
+    /// Sets the number of threads that read cached HTTP responses.
     #[attr_added_in("0.11.29")]
     pub const UV_CONCURRENT_CACHE_READS: &'static str = "UV_CONCURRENT_CACHE_READS";
 
-    /// Equivalent to the `--no-progress` command-line argument. Disables all progress output. For
-    /// example, spinners and progress bars.
+    /// Matches the `--no-progress` command-line option.
+    /// Disables all progress output, including spinners and progress bars.
     #[attr_added_in("0.2.28")]
     pub const UV_NO_PROGRESS: &'static str = "UV_NO_PROGRESS";
 
-    /// Specifies the directory where uv stores managed tools.
+    /// Sets the directory where uv stores managed tools.
     #[attr_added_in("0.2.16")]
     pub const UV_TOOL_DIR: &'static str = "UV_TOOL_DIR";
 
-    /// Specifies the "bin" directory for installing tool executables.
+    /// Sets the `bin` directory for installed tool executables.
     #[attr_added_in("0.3.0")]
     pub const UV_TOOL_BIN_DIR: &'static str = "UV_TOOL_BIN_DIR";
 
-    /// Equivalent to the `--bare` argument for `uv init`. If set, uv will only create a
-    /// `pyproject.toml`.
+    /// Matches the `--bare` option for `uv init`.
+    /// When set, uv creates only `pyproject.toml`.
     #[attr_added_in("0.10.7")]
     pub const UV_INIT_BARE: &'static str = "UV_INIT_BARE";
 
-    /// Equivalent to the `--build-backend` argument for `uv init`. Determines the default backend
-    /// to use when creating a new project.
+    /// Matches the `--build-backend` option for `uv init`.
+    /// Sets the default build backend for new projects.
     #[attr_added_in("0.8.2")]
     pub const UV_INIT_BUILD_BACKEND: &'static str = "UV_INIT_BUILD_BACKEND";
 
-    /// Specifies the path to the directory to use for a project virtual environment.
+    /// Sets the directory for the project virtual environment.
     ///
     /// See the [project documentation](../concepts/projects/config.md#project-environment-path)
-    /// for more details.
+    /// for details.
     #[attr_added_in("0.4.4")]
     pub const UV_PROJECT_ENVIRONMENT: &'static str = "UV_PROJECT_ENVIRONMENT";
 
-    /// Specifies the directory to place links to installed, managed Python executables.
+    /// Sets the directory for links to installed managed Python executables.
     #[attr_added_in("0.4.29")]
     pub const UV_PYTHON_BIN_DIR: &'static str = "UV_PYTHON_BIN_DIR";
 
-    /// Specifies the directory for storing managed Python installations.
+    /// Sets the directory for managed Python installations.
     #[attr_added_in("0.2.22")]
     pub const UV_PYTHON_INSTALL_DIR: &'static str = "UV_PYTHON_INSTALL_DIR";
 
-    /// Whether to install the Python executable into the `UV_PYTHON_BIN_DIR` directory.
+    /// Controls whether uv installs the Python executable into `UV_PYTHON_BIN_DIR`.
     #[attr_added_in("0.8.0")]
     pub const UV_PYTHON_INSTALL_BIN: &'static str = "UV_PYTHON_INSTALL_BIN";
 
-    /// Whether to install the Python executable into the Windows registry.
+    /// Controls whether uv adds the Python executable to the Windows registry.
     #[attr_added_in("0.8.0")]
     pub const UV_PYTHON_INSTALL_REGISTRY: &'static str = "UV_PYTHON_INSTALL_REGISTRY";
 
-    /// Disable use of the Windows registry for Python discovery and registration.
+    /// Disables the Windows registry for Python discovery and registration.
     ///
-    /// When set, uv will not discover Python interpreters from the Windows registry or Microsoft
-    /// Store locations, and managed Python installations will not be registered in the Windows
-    /// registry.
+    /// When set, uv does not discover Python interpreters from the registry or Microsoft Store.
+    /// It does not add managed Python installations to the Windows registry.
     #[attr_added_in("0.11.8")]
     pub const UV_PYTHON_NO_REGISTRY: &'static str = "UV_PYTHON_NO_REGISTRY";
 
-    /// Managed Python installations information is hardcoded in the `uv` binary.
+    /// The `uv` binary contains a fixed list of managed Python installations.
     ///
-    /// This variable can be set to a local path or URL pointing to
-    /// a JSON list of Python installations to override the hardcoded list.
+    /// Set this variable to the local path or URL of a JSON installation list.
+    /// This list replaces the built-in list.
     ///
-    /// This allows customizing the URLs for downloads or using slightly older or newer versions
-    /// of Python than the ones hardcoded into this build of `uv`.
+    /// Use it to change download URLs or select Python versions outside the built-in list.
     #[attr_added_in("0.6.13")]
     pub const UV_PYTHON_DOWNLOADS_JSON_URL: &'static str = "UV_PYTHON_DOWNLOADS_JSON_URL";
 
-    /// Specifies the directory for caching the archives of managed Python installations before
-    /// installation.
+    /// Sets the directory that caches managed Python archives before installation.
     #[attr_added_in("0.7.0")]
     pub const UV_PYTHON_CACHE_DIR: &'static str = "UV_PYTHON_CACHE_DIR";
 
-    /// Managed Python installations are downloaded from the Astral
+    /// uv downloads managed Python installations from the Astral
     /// [`python-build-standalone`](https://github.com/astral-sh/python-build-standalone) project.
     ///
-    /// This variable can be set to a mirror URL to use a different source for Python installations.
-    /// The provided URL will replace `https://github.com/astral-sh/python-build-standalone/releases/download` in, e.g.,
+    /// Set this variable to a mirror URL to use a different Python source.
+    /// The URL replaces
+    /// `https://github.com/astral-sh/python-build-standalone/releases/download` in URLs such as
     /// `https://github.com/astral-sh/python-build-standalone/releases/download/20240713/cpython-3.12.4%2B20240713-aarch64-apple-darwin-install_only.tar.gz`.
-    /// Distributions can be read from a local directory by using the `file://` URL scheme.
+    /// Use a `file://` URL to read distributions from a local directory.
     ///
-    /// This more-specific mirror takes precedence over
+    /// This specific mirror takes precedence over
     /// [`UV_ASTRAL_MIRROR_URL`](Self::UV_ASTRAL_MIRROR_URL) for CPython downloads.
     #[attr_added_in("0.2.35")]
     pub const UV_PYTHON_INSTALL_MIRROR: &'static str = "UV_PYTHON_INSTALL_MIRROR";
 
-    /// Managed PyPy installations are downloaded from [python.org](https://downloads.python.org/).
+    /// uv downloads managed PyPy installations from [python.org](https://downloads.python.org/).
     ///
-    /// This variable can be set to a mirror URL to use a
-    /// different source for PyPy installations. The provided URL will replace
-    /// `https://downloads.python.org/pypy` in, e.g.,
+    /// Set this variable to a mirror URL to use a different PyPy source.
+    /// The URL replaces `https://downloads.python.org/pypy` in URLs such as
     /// `https://downloads.python.org/pypy/pypy3.8-v7.3.7-osx64.tar.bz2`.
-    /// Distributions can be read from a local directory by using the `file://` URL scheme.
+    /// Use a `file://` URL to read distributions from a local directory.
     #[attr_added_in("0.2.35")]
     pub const UV_PYPY_INSTALL_MIRROR: &'static str = "UV_PYPY_INSTALL_MIRROR";
 
-    /// Replaces the `https://releases.astral.sh` base URL for all Astral-mirrored
-    /// metadata and artifact downloads.
+    /// Replaces `https://releases.astral.sh` for Astral-mirrored metadata and artifact downloads.
     ///
-    /// When set, uv uses only the configured mirror URL and does not fall back to
-    /// GitHub or raw GitHub. Path components in the URL are preserved: only
-    /// trailing slashes are trimmed before appending the normal path suffix
-    /// (e.g., `/github/versions/main/v1/uv.ndjson`).
+    /// When set, uv uses only the configured mirror URL.
+    /// It does not fall back to GitHub or raw GitHub.
+    /// uv preserves URL path components and removes only trailing slashes.
+    /// It then adds the normal path suffix, such as `/github/versions/main/v1/uv.ndjson`.
     ///
-    /// This is useful for proxy repositories (e.g., Artifactory, Nexus) that
-    /// mirror `releases.astral.sh`.
+    /// Use this option with proxy repositories, such as Artifactory or Nexus.
+    /// These repositories mirror `releases.astral.sh`.
     ///
-    /// More-specific sources take precedence:
+    /// More specific sources take precedence.
     /// [`UV_PYTHON_INSTALL_MIRROR`](Self::UV_PYTHON_INSTALL_MIRROR) and
-    /// `python-install-mirror` override this variable for CPython downloads, while
+    /// `python-install-mirror` override this variable for CPython downloads.
     /// [`UV_INSTALLER_GITHUB_BASE_URL`](Self::UV_INSTALLER_GITHUB_BASE_URL) and
     /// [`UV_INSTALLER_GHE_BASE_URL`](Self::UV_INSTALLER_GHE_BASE_URL) override this
     /// variable for `uv self update`.
     #[attr_added_in("0.11.14")]
     pub(crate) const UV_ASTRAL_MIRROR_URL: &'static str = "UV_ASTRAL_MIRROR_URL";
 
-    /// Pin managed CPython versions to a specific build version.
+    /// Pins managed CPython versions to a specific build.
     ///
-    /// For CPython, this should be the build date (e.g., "20250814").
+    /// For CPython, use the build date, such as `20250814`.
     #[attr_added_in("0.8.14")]
     pub const UV_PYTHON_CPYTHON_BUILD: &'static str = "UV_PYTHON_CPYTHON_BUILD";
 
-    /// Pin managed PyPy versions to a specific build version.
+    /// Pins managed PyPy versions to a specific build.
     ///
-    /// For PyPy, this should be the PyPy version (e.g., "7.3.20").
+    /// For PyPy, use the PyPy version, such as `7.3.20`.
     #[attr_added_in("0.8.14")]
     pub const UV_PYTHON_PYPY_BUILD: &'static str = "UV_PYTHON_PYPY_BUILD";
 
-    /// Pin managed GraalPy versions to a specific build version.
+    /// Pins managed GraalPy versions to a specific build.
     ///
-    /// For GraalPy, this should be the GraalPy version (e.g., "24.2.2").
+    /// For GraalPy, use the GraalPy version, such as `24.2.2`.
     #[attr_added_in("0.8.14")]
     pub const UV_PYTHON_GRAALPY_BUILD: &'static str = "UV_PYTHON_GRAALPY_BUILD";
 
-    /// Pin managed Pyodide versions to a specific build version.
+    /// Pins managed Pyodide versions to a specific build.
     ///
-    /// For Pyodide, this should be the Pyodide version (e.g., "0.28.1").
+    /// For Pyodide, use the Pyodide version, such as `0.28.1`.
     #[attr_added_in("0.8.14")]
     pub const UV_PYTHON_PYODIDE_BUILD: &'static str = "UV_PYTHON_PYODIDE_BUILD";
 
-    /// Equivalent to the `--clear` command-line argument. If set, uv will remove any
-    /// existing files or directories at the target path.
+    /// Matches the `--clear` command-line option.
+    /// When set, uv removes existing files or directories at the target path.
     #[attr_added_in("0.8.0")]
     pub const UV_VENV_CLEAR: &'static str = "UV_VENV_CLEAR";
 
-    /// Equivalent to the `--relocatable` command-line argument. If set, the virtual
-    /// environment will be relocatable.
+    /// Matches the `--relocatable` command-line option.
+    /// When set, uv creates a relocatable virtual environment.
     #[attr_added_in("0.10.8")]
     pub const UV_VENV_RELOCATABLE: &'static str = "UV_VENV_RELOCATABLE";
 
-    /// Install seed packages (one or more of: `pip`, `setuptools`, and `wheel`) into the virtual environment
-    /// created by `uv venv`.
+    /// Installs seed packages into the virtual environment that `uv venv` creates.
+    /// Seed packages include `pip`, `setuptools`, and `wheel`.
     ///
-    /// Note that `setuptools` and `wheel` are not included in Python 3.12+ environments.
+    /// Python 3.12 and later environments do not include `setuptools` or `wheel`.
     #[attr_added_in("0.5.21")]
     pub const UV_VENV_SEED: &'static str = "UV_VENV_SEED";
 
-    /// Used to override `PATH` for Python executable discovery.
+    /// Overrides `PATH` for Python executable discovery.
     ///
-    /// When set, uv will search for Python interpreters in the directories specified by this
-    /// variable instead of `PATH`.
+    /// When set, uv searches these directories for Python interpreters instead of `PATH`.
     #[attr_added_in("0.11.8")]
     pub const UV_PYTHON_SEARCH_PATH: &'static str = "UV_PYTHON_SEARCH_PATH";
 
-    /// Include resolver and installer output related to environment modifications.
+    /// Includes resolver and installer output about environment changes.
     #[attr_hidden]
     #[attr_added_in("0.2.32")]
     pub const UV_SHOW_RESOLUTION: &'static str = "UV_SHOW_RESOLUTION";
 
-    /// Use to update the json schema files.
+    /// Updates JSON schema files.
     #[attr_hidden]
     #[attr_added_in("0.1.34")]
     pub const UV_UPDATE_SCHEMA: &'static str = "UV_UPDATE_SCHEMA";
 
-    /// Use to disable line wrapping for diagnostics.
+    /// Disables line wrapping for diagnostics.
     #[attr_added_in("0.0.5")]
     pub const UV_NO_WRAP: &'static str = "UV_NO_WRAP";
 
     /// Set to `1` to enable the automatic malware check that runs after `uv sync`.
     ///
-    /// When enabled, uv performs a lightweight check against the OSV database for known
-    /// malware advisories after every lockfile sync. Set this variable to `0` to opt out.
+    /// When enabled, uv checks the OSV database for known malware advisories after each lockfile
+    /// sync.
+    /// Set this variable to `0` to disable the check.
     #[attr_added_in("0.11.16")]
     pub const UV_MALWARE_CHECK: &'static str = "UV_MALWARE_CHECK";
 
-    /// Override the vulnerability service URL for the automatic malware check.
+    /// Overrides the vulnerability service URL for the automatic malware check.
     ///
-    /// Defaults to the OSV API endpoint (`https://api.osv.dev/`).
+    /// The default is the OSV API endpoint, `https://api.osv.dev/`.
     #[attr_added_in("0.11.16")]
     pub const UV_MALWARE_CHECK_URL: &'static str = "UV_MALWARE_CHECK_URL";
 
-    /// Provides the HTTP Basic authentication username for a named index.
+    /// Sets the HTTP Basic authentication username for a named index.
     ///
-    /// The `name` parameter is the name of the index. For example, given an index named `foo`,
-    /// the environment variable key would be `UV_INDEX_FOO_USERNAME`.
+    /// The `name` parameter identifies the index.
+    /// For an index named `foo`, the variable is `UV_INDEX_FOO_USERNAME`.
     #[attr_added_in("0.4.23")]
     #[attr_env_var_pattern("UV_INDEX_{name}_USERNAME")]
     pub fn index_username(name: &str) -> String {
         format!("UV_INDEX_{name}_USERNAME")
     }
 
-    /// Provides the HTTP Basic authentication password for a named index.
+    /// Sets the HTTP Basic authentication password for a named index.
     ///
-    /// The `name` parameter is the name of the index. For example, given an index named `foo`,
-    /// the environment variable key would be `UV_INDEX_FOO_PASSWORD`.
+    /// The `name` parameter identifies the index.
+    /// For an index named `foo`, the variable is `UV_INDEX_FOO_PASSWORD`.
     #[attr_added_in("0.4.23")]
     #[attr_env_var_pattern("UV_INDEX_{name}_PASSWORD")]
     pub fn index_password(name: &str) -> String {
         format!("UV_INDEX_{name}_PASSWORD")
     }
 
-    /// Used to set the uv commit hash at build time via `build.rs`.
+    /// Sets the uv commit hash through `build.rs` at build time.
     #[attr_hidden]
     #[attr_added_in("0.1.11")]
     pub const UV_COMMIT_HASH: &'static str = "UV_COMMIT_HASH";
 
-    /// Used to set the uv commit short hash at build time via `build.rs`.
+    /// Sets the short uv commit hash through `build.rs` at build time.
     #[attr_hidden]
     #[attr_added_in("0.1.11")]
     pub const UV_COMMIT_SHORT_HASH: &'static str = "UV_COMMIT_SHORT_HASH";
 
-    /// Used to set the uv commit date at build time via `build.rs`.
+    /// Sets the uv commit date through `build.rs` at build time.
     #[attr_hidden]
     #[attr_added_in("0.1.11")]
     pub const UV_COMMIT_DATE: &'static str = "UV_COMMIT_DATE";
 
-    /// Used to set the uv tag at build time via `build.rs`.
+    /// Sets the uv tag through `build.rs` at build time.
     #[attr_hidden]
     #[attr_added_in("0.1.11")]
     pub const UV_LAST_TAG: &'static str = "UV_LAST_TAG";
 
-    /// Used to set the uv tag distance from head at build time via `build.rs`.
+    /// Sets the distance from the uv tag to the head through `build.rs` at build time.
     #[attr_hidden]
     #[attr_added_in("0.1.11")]
     pub const UV_LAST_TAG_DISTANCE: &'static str = "UV_LAST_TAG_DISTANCE";
 
-    /// Used to set the spawning/parent interpreter when using --system in the test suite.
+    /// Sets the parent interpreter for `--system` in the test suite.
     #[attr_hidden]
     #[attr_added_in("0.2.0")]
     pub const UV_INTERNAL__PARENT_INTERPRETER: &'static str = "UV_INTERNAL__PARENT_INTERPRETER";
 
-    /// Used to identify the source tree when invoking PEP 517 build hooks.
+    /// Identifies the source tree for PEP 517 build hooks.
     #[attr_hidden]
     #[attr_added_in("0.11.22")]
     pub const UV_INTERNAL__BUILD_DIR: &'static str = "UV_INTERNAL__BUILD_DIR";
 
-    /// Used to force showing the derivation tree during resolver error reporting.
+    /// Shows the derivation tree in resolver errors.
     #[attr_hidden]
     #[attr_added_in("0.3.0")]
     pub const UV_INTERNAL__SHOW_DERIVATION_TREE: &'static str = "UV_INTERNAL__SHOW_DERIVATION_TREE";
 
-    /// Used to set a temporary directory for some tests.
+    /// Sets a temporary directory for some tests.
     #[attr_hidden]
     #[attr_added_in("0.3.4")]
     pub const UV_INTERNAL__TEST_DIR: &'static str = "UV_INTERNAL__TEST_DIR";
 
-    /// Path to a directory on a filesystem that supports copy-on-write, e.g., btrfs or APFS.
+    /// The path to a directory on a filesystem that supports copy-on-write, such as btrfs or APFS.
     ///
-    /// When populated, uv will run additional tests that require this functionality.
+    /// When set, uv runs additional tests that require copy-on-write.
     #[attr_hidden]
     #[attr_added_in("0.10.5")]
     pub const UV_INTERNAL__TEST_COW_FS: &'static str = "UV_INTERNAL__TEST_COW_FS";
 
-    /// Path to a directory on a filesystem that does **not** support copy-on-write.
+    /// The path to a directory on a filesystem that does **not** support copy-on-write.
     ///
-    /// When populated, uv will run additional tests that verify fallback behavior
-    /// when copy-on-write is unavailable.
+    /// When set, uv runs additional tests that check behavior without copy-on-write.
     #[attr_hidden]
     #[attr_added_in("0.10.5")]
     pub const UV_INTERNAL__TEST_NOCOW_FS: &'static str = "UV_INTERNAL__TEST_NOCOW_FS";
 
-    /// Path to a directory on an alternative filesystem for testing.
+    /// The path to a test directory on a different filesystem.
     ///
-    /// This filesystem must be a different device than the default for the test suite.
+    /// This filesystem must use a different device than the default test filesystem.
     ///
-    /// When populated, uv will run additional tests that cover cross-filesystem linking.
+    /// When set, uv runs additional tests for links between filesystems.
     #[attr_hidden]
     #[attr_added_in("0.10.5")]
     pub const UV_INTERNAL__TEST_ALT_FS: &'static str = "UV_INTERNAL__TEST_ALT_FS";
 
-    /// Network path to a directory on an SMB filesystem for testing.
+    /// The network path to a test directory on an SMB filesystem.
     ///
-    /// When populated, uv will run additional tests that cover SMB-specific filesystem behavior.
+    /// When set, uv runs additional tests for SMB-specific filesystem behavior.
     #[attr_hidden]
     #[attr_added_in("0.11.16")]
     pub const UV_INTERNAL__TEST_SMB_FS: &'static str = "UV_INTERNAL__TEST_SMB_FS";
 
-    /// Path to a directory on a filesystem with a low hardlink limit (e.g., minix with ~250).
+    /// The path to a filesystem with a low hardlink limit, such as minix with approximately 250.
     ///
-    /// When populated, uv will run additional tests that exercise EMLINK recovery.
+    /// When set, uv runs additional tests for EMLINK recovery.
     #[attr_hidden]
     #[attr_added_in("0.10.9")]
     pub const UV_INTERNAL__TEST_LOWLINKS_FS: &'static str = "UV_INTERNAL__TEST_LOWLINKS_FS";
 
-    /// Used to force treating an interpreter as "managed" during tests.
+    /// Forces tests to treat an interpreter as managed.
     #[attr_hidden]
     #[attr_added_in("0.8.0")]
     pub const UV_INTERNAL__TEST_PYTHON_MANAGED: &'static str = "UV_INTERNAL__TEST_PYTHON_MANAGED";
 
-    /// Used to force ignoring Git LFS commands as `git-lfs` detection cannot be overridden via PATH.
+    /// Forces tests to ignore Git LFS commands.
+    /// `PATH` cannot override `git-lfs` detection.
     #[attr_hidden]
     #[attr_added_in("0.9.15")]
     pub const UV_INTERNAL__TEST_LFS_DISABLED: &'static str = "UV_INTERNAL__TEST_LFS_DISABLED";
 
-    /// Path to system-level configuration directory on Unix systems.
+    /// The path to the system configuration directory on Unix.
     #[attr_added_in("0.4.26")]
     pub const XDG_CONFIG_DIRS: &'static str = "XDG_CONFIG_DIRS";
 
-    /// Path to system-level configuration directory on Windows systems.
+    /// The path to the system configuration directory on Windows.
     #[attr_added_in("0.4.26")]
     pub const SYSTEMDRIVE: &'static str = "SYSTEMDRIVE";
 
-    /// Path to user-level configuration directory on Windows systems.
+    /// The path to the user configuration directory on Windows.
     #[attr_added_in("0.1.42")]
     pub const APPDATA: &'static str = "APPDATA";
 
-    /// Path to root directory of user's profile on Windows systems.
+    /// The path to the user profile root directory on Windows.
     #[attr_added_in("0.0.5")]
     pub const USERPROFILE: &'static str = "USERPROFILE";
 
-    /// Path to user-level configuration directory on Unix systems.
+    /// The path to the user configuration directory on Unix.
     #[attr_added_in("0.1.34")]
     pub const XDG_CONFIG_HOME: &'static str = "XDG_CONFIG_HOME";
 
-    /// Path to cache directory on Unix systems.
+    /// The path to the cache directory on Unix.
     #[attr_added_in("0.1.17")]
     pub const XDG_CACHE_HOME: &'static str = "XDG_CACHE_HOME";
 
-    /// Path to directory for storing managed Python installations and tools.
+    /// The path to the directory for managed Python installations and tools.
     #[attr_added_in("0.2.16")]
     pub const XDG_DATA_HOME: &'static str = "XDG_DATA_HOME";
 
-    /// Path to directory where executables are installed.
+    /// The path to the directory for installed executables.
     #[attr_added_in("0.2.16")]
     pub const XDG_BIN_HOME: &'static str = "XDG_BIN_HOME";
 
-    /// Path to a CA certificate bundle file for TLS connections.
+    /// The path to a CA certificate bundle for TLS connections.
     ///
-    /// Requires a PEM-encoded certificate file (e.g., `certs.pem`, `ca-bundle.crt`). DER-encoded
-    /// files are not supported.
+    /// Use a PEM-encoded certificate file, such as `certs.pem` or `ca-bundle.crt`.
+    /// uv does not support DER-encoded files.
     ///
-    /// When set, this overrides the default certificate source (bundled Mozilla roots or system
-    /// certificates). Only the certificates in this file will be trusted.
+    /// When set, this replaces the bundled Mozilla roots or system certificates.
+    /// uv trusts only the certificates in this file.
     #[attr_added_in("0.1.14")]
     pub const SSL_CERT_FILE: &'static str = "SSL_CERT_FILE";
 
-    /// Path to a directory containing PEM-encoded CA certificate files for TLS connections.
+    /// The path to a directory of PEM-encoded CA certificates for TLS connections.
     ///
-    /// Multiple entries are supported, separated using a platform-specific delimiter (`:` on Unix,
-    /// `;` on Windows).
+    /// To add multiple directories, separate entries with `:` on Unix or `;` on Windows.
     ///
-    /// Certificates are usually stored with `.pem`, `.crt`, or `.cer` extensions, but uv will
-    /// attempt to read a certificate from any regular file in the provided `SSL_CERT_DIR`.
+    /// Certificates usually use `.pem`, `.crt`, or `.cer` extensions.
+    /// uv tries to read a certificate from each regular file in `SSL_CERT_DIR`.
     ///
-    /// Files that cannot be parsed as PEM certificates are ignored. uv resolves symlinks and
-    /// ignores dangling symlinks.
+    /// uv ignores files that are not valid PEM certificates.
+    /// It resolves symbolic links and ignores links without targets.
     ///
-    /// Only PEM-encoded files are supported, i.e., DER-encoded files are not supported.
+    /// uv supports only PEM-encoded files. It does not support DER-encoded files.
     ///
-    /// When set, this overrides the default certificate source (bundled Mozilla roots or system
-    /// certificates). Only the certificates in this directory will be trusted.
+    /// When set, this replaces the bundled Mozilla roots or system certificates.
+    /// uv trusts only the certificates in this directory.
     #[attr_added_in("0.9.10")]
     pub const SSL_CERT_DIR: &'static str = "SSL_CERT_DIR";
 
-    /// If set, uv will use this file for mTLS authentication.
-    /// This should be a single file containing both the certificate and the private key in PEM format.
+    /// When set, uv uses this file for mTLS authentication.
+    /// The PEM-encoded file must contain the certificate and the private key.
     #[attr_added_in("0.2.11")]
     pub const SSL_CLIENT_CERT: &'static str = "SSL_CLIENT_CERT";
 
-    /// Proxy for HTTP requests.
+    /// Sets the proxy for HTTP requests.
     #[attr_added_in("0.1.38")]
     pub const HTTP_PROXY: &'static str = "HTTP_PROXY";
 
-    /// Proxy for HTTPS requests.
+    /// Sets the proxy for HTTPS requests.
     #[attr_added_in("0.1.38")]
     pub const HTTPS_PROXY: &'static str = "HTTPS_PROXY";
 
-    /// General proxy for all network requests.
+    /// Sets the proxy for all network requests.
     #[attr_added_in("0.1.38")]
     pub const ALL_PROXY: &'static str = "ALL_PROXY";
 
-    /// Comma-separated list of hostnames (e.g., `example.com`) and/or patterns (e.g., `192.168.1.0/24`) that should bypass the proxy.
+    /// Lists comma-separated hostnames or patterns that bypass the proxy.
+    /// Examples include `example.com` and `192.168.1.0/24`.
     #[attr_added_in("0.1.38")]
     pub const NO_PROXY: &'static str = "NO_PROXY";
 
-    /// Timeout (in seconds) for only upload HTTP requests. (default: 900 s)
+    /// The HTTP upload timeout, in seconds. The default is 900 seconds.
     #[attr_added_in("0.9.1")]
     pub const UV_UPLOAD_HTTP_TIMEOUT: &'static str = "UV_UPLOAD_HTTP_TIMEOUT";
 
-    /// Timeout (in seconds) for HTTP reads. (default: 30 s)
+    /// The HTTP read timeout, in seconds. The default is 30 seconds.
     #[attr_added_in("0.1.7")]
     pub const UV_HTTP_TIMEOUT: &'static str = "UV_HTTP_TIMEOUT";
 
-    /// Timeout (in seconds) to connect to a server. (default: 10 s)
+    /// The server connection timeout, in seconds. The default is 10 seconds.
     ///
-    /// If `UV_HTTP_TIMEOUT` is lower than this value, `UV_HTTP_TIMEOUT` will be used instead.
+    /// If `UV_HTTP_TIMEOUT` is lower, uv uses that value instead.
     #[attr_added_in("0.10.0")]
     pub const UV_HTTP_CONNECT_TIMEOUT: &'static str = "UV_HTTP_CONNECT_TIMEOUT";
 
-    /// The number of retries for HTTP requests. (default: 3)
+    /// The number of retries for HTTP requests. The default is 3.
     #[attr_added_in("0.7.21")]
     pub const UV_HTTP_RETRIES: &'static str = "UV_HTTP_RETRIES";
 
-    /// Timeout (in seconds) for HTTP requests. Equivalent to `UV_HTTP_TIMEOUT`.
+    /// The HTTP request timeout, in seconds. Matches `UV_HTTP_TIMEOUT`.
     #[attr_added_in("0.1.6")]
     pub const UV_REQUEST_TIMEOUT: &'static str = "UV_REQUEST_TIMEOUT";
 
-    /// Timeout (in seconds) for HTTP requests. Equivalent to `UV_HTTP_TIMEOUT`.
+    /// The HTTP request timeout, in seconds. Matches `UV_HTTP_TIMEOUT`.
     #[attr_added_in("0.1.7")]
     pub const HTTP_TIMEOUT: &'static str = "HTTP_TIMEOUT";
 
-    /// The validation modes to use when run with `--compile`.
+    /// Sets the validation modes for `--compile`.
     ///
     /// See [`PycInvalidationMode`](https://docs.python.org/3/library/py_compile.html#py_compile.PycInvalidationMode).
     #[attr_added_in("0.1.7")]
     pub const PYC_INVALIDATION_MODE: &'static str = "PYC_INVALIDATION_MODE";
 
-    /// Used to detect an activated virtual environment.
+    /// Detects an active virtual environment.
     #[attr_added_in("0.0.5")]
     pub const VIRTUAL_ENV: &'static str = "VIRTUAL_ENV";
 
-    /// Used to detect the path of an active Conda environment.
+    /// Detects the path to the active Conda environment.
     #[attr_added_in("0.0.5")]
     pub const CONDA_PREFIX: &'static str = "CONDA_PREFIX";
 
-    /// Used to determine the name of the active Conda environment.
+    /// Identifies the active Conda environment.
     #[attr_added_in("0.5.0")]
     pub const CONDA_DEFAULT_ENV: &'static str = "CONDA_DEFAULT_ENV";
 
-    /// Used to determine the root install path of Conda.
+    /// Identifies the Conda installation root.
     #[attr_added_in("0.8.18")]
     pub const CONDA_ROOT: &'static str = "_CONDA_ROOT";
 
-    /// Used to determine if we're running in Dependabot.
+    /// Detects whether uv runs in Dependabot.
     #[attr_added_in("0.9.11")]
     pub const DEPENDABOT: &'static str = "DEPENDABOT";
 
-    /// If set to `1` before a virtual environment is activated, then the
-    /// virtual environment name will not be prepended to the terminal prompt.
+    /// Set to `1` before virtual environment activation to hide its name from the terminal prompt.
     #[attr_added_in("0.0.5")]
     pub const VIRTUAL_ENV_DISABLE_PROMPT: &'static str = "VIRTUAL_ENV_DISABLE_PROMPT";
 
-    /// Used to detect the use of the Windows Command Prompt (as opposed to PowerShell).
+    /// Detects Windows Command Prompt instead of PowerShell.
     #[attr_added_in("0.1.16")]
     pub const PROMPT: &'static str = "PROMPT";
 
-    /// Used to detect `NuShell` usage.
+    /// Detects `NuShell`.
     #[attr_added_in("0.1.16")]
     pub const NU_VERSION: &'static str = "NU_VERSION";
 
-    /// Used to detect Fish shell usage.
+    /// Detects the Fish shell.
     #[attr_added_in("0.1.28")]
     pub const FISH_VERSION: &'static str = "FISH_VERSION";
 
-    /// Used to detect Bash shell usage.
+    /// Detects the Bash shell.
     #[attr_added_in("0.1.28")]
     pub const BASH_VERSION: &'static str = "BASH_VERSION";
 
-    /// Used to detect Zsh shell usage.
+    /// Detects the Zsh shell.
     #[attr_added_in("0.1.28")]
     pub const ZSH_VERSION: &'static str = "ZSH_VERSION";
 
-    /// Used to determine which `.zshenv` to use when Zsh is being used.
+    /// Identifies the `.zshenv` file for Zsh.
     #[attr_added_in("0.2.25")]
     pub const ZDOTDIR: &'static str = "ZDOTDIR";
 
-    /// Used to detect Ksh shell usage.
+    /// Detects the Ksh shell.
     #[attr_added_in("0.2.33")]
     pub const KSH_VERSION: &'static str = "KSH_VERSION";
 
-    /// Used to detect PowerShell usage (set by PowerShell on all platforms).
+    /// Detects PowerShell. PowerShell sets this variable on all platforms.
     #[attr_added_in("0.10.0")]
     pub const PS_MODULE_PATH: &'static str = "PSModulePath";
 
-    /// Used with `--python-platform macos` and related variants to set the
-    /// deployment target (i.e., the minimum supported macOS version).
+    /// Sets the minimum supported macOS version for `--python-platform macos` and related variants.
     ///
-    /// Defaults to `13.0`, the least-recent non-EOL macOS version at time of writing.
+    /// The default is `13.0`.
+    /// This was the oldest macOS version that had not reached end of life.
     #[attr_added_in("0.1.42")]
     pub const MACOSX_DEPLOYMENT_TARGET: &'static str = "MACOSX_DEPLOYMENT_TARGET";
 
-    /// Used with `--python-platform arm64-apple-ios` and related variants to set the
-    /// deployment target (i.e., the minimum supported iOS version).
+    /// Sets the minimum supported iOS version for `--python-platform arm64-apple-ios` and related
+    /// variants.
     ///
-    /// Defaults to `13.0`.
+    /// The default is `13.0`.
     #[attr_added_in("0.8.16")]
     pub const IPHONEOS_DEPLOYMENT_TARGET: &'static str = "IPHONEOS_DEPLOYMENT_TARGET";
 
-    /// Used with `--python-platform aarch64-linux-android` and related variants to set the
-    /// Android API level. (i.e., the minimum supported Android API level).
+    /// Sets the minimum Android API level for `--python-platform aarch64-linux-android` and related
+    /// variants.
     ///
-    /// Defaults to `24`.
+    /// The default is `24`.
     #[attr_added_in("0.8.16")]
     pub const ANDROID_API_LEVEL: &'static str = "ANDROID_API_LEVEL";
 
-    /// Disables colored output (takes precedence over `FORCE_COLOR`).
+    /// Disables colored output. Takes precedence over `FORCE_COLOR`.
     ///
     /// See [no-color.org](https://no-color.org).
     #[attr_added_in("0.2.7")]
     pub const NO_COLOR: &'static str = "NO_COLOR";
 
-    /// Forces colored output regardless of terminal support.
+    /// Forces colored output even when the terminal does not support it.
     ///
     /// See [force-color.org](https://force-color.org).
     #[attr_added_in("0.2.7")]
     pub const FORCE_COLOR: &'static str = "FORCE_COLOR";
 
-    /// Use to control color via `anstyle`.
+    /// Controls color through `anstyle`.
     #[attr_added_in("0.1.32")]
     pub const CLICOLOR_FORCE: &'static str = "CLICOLOR_FORCE";
 
-    /// The standard `PATH` env var.
+    /// The standard `PATH` environment variable.
     #[attr_added_in("0.0.5")]
     pub const PATH: &'static str = "PATH";
 
-    /// The standard `HOME` env var.
+    /// The standard `HOME` environment variable.
     #[attr_added_in("0.0.5")]
     pub const HOME: &'static str = "HOME";
 
-    /// The standard `SHELL` posix env var.
+    /// The standard POSIX `SHELL` environment variable.
     #[attr_added_in("0.1.16")]
     pub const SHELL: &'static str = "SHELL";
 
-    /// The standard `PWD` posix env var.
+    /// The standard POSIX `PWD` environment variable.
     #[attr_added_in("0.0.5")]
     pub const PWD: &'static str = "PWD";
 
-    /// Used to look for Microsoft Store Pythons installations.
+    /// Locates Python installations from the Microsoft Store.
     #[attr_added_in("0.3.3")]
     pub const LOCALAPPDATA: &'static str = "LOCALAPPDATA";
 
-    /// Path to the `.git` directory. Ignored by `uv` when performing fetch.
+    /// The path to the `.git` directory. uv ignores this variable during fetches.
     #[attr_hidden]
     #[attr_added_in("0.0.5")]
     pub const GIT_DIR: &'static str = "GIT_DIR";
 
-    /// Path to the git working tree. Ignored by `uv` when performing fetch.
+    /// The path to the Git working tree. uv ignores this variable during fetches.
     #[attr_hidden]
     #[attr_added_in("0.0.5")]
     pub const GIT_WORK_TREE: &'static str = "GIT_WORK_TREE";
 
-    /// Path to the index file for staged changes. Ignored by `uv` when performing fetch.
+    /// The path to the index of staged changes. uv ignores this variable during fetches.
     #[attr_hidden]
     #[attr_added_in("0.0.5")]
     pub const GIT_INDEX_FILE: &'static str = "GIT_INDEX_FILE";
 
-    /// Path to where git object files are located. Ignored by `uv` when performing fetch.
+    /// The path to Git objects. uv ignores this variable during fetches.
     #[attr_hidden]
     #[attr_added_in("0.0.5")]
     pub const GIT_OBJECT_DIRECTORY: &'static str = "GIT_OBJECT_DIRECTORY";
 
-    /// Alternate locations for git objects. Ignored by `uv` when performing fetch.
+    /// Alternate locations for Git objects. uv ignores this variable during fetches.
     #[attr_hidden]
     #[attr_added_in("0.0.5")]
     pub const GIT_ALTERNATE_OBJECT_DIRECTORIES: &'static str = "GIT_ALTERNATE_OBJECT_DIRECTORIES";
 
-    /// Disables SSL verification for git operations.
+    /// Disables SSL verification for Git operations.
     #[attr_hidden]
     #[attr_added_in("0.5.28")]
     pub const GIT_SSL_NO_VERIFY: &'static str = "GIT_SSL_NO_VERIFY";
 
-    /// Sets allowed protocols for git operations.
+    /// Sets the allowed protocols for Git operations.
     ///
-    /// When uv is in "offline" mode, only the "file" protocol is allowed.
+    /// In offline mode, uv allows only the `file` protocol.
     #[attr_hidden]
     #[attr_added_in("0.6.13")]
     pub const GIT_ALLOW_PROTOCOL: &'static str = "GIT_ALLOW_PROTOCOL";
 
-    /// Sets the SSH command used when Git tries to establish a connection using SSH.
+    /// Sets the SSH command that Git uses for SSH connections.
     #[attr_hidden]
     #[attr_added_in("0.7.11")]
     pub const GIT_SSH_COMMAND: &'static str = "GIT_SSH_COMMAND";
 
-    /// Disable interactive git prompts in terminals, e.g., for credentials. Does not disable
-    /// GUI prompts.
+    /// Disables interactive Git terminal prompts, including credential prompts.
+    /// Does not disable graphical prompts.
     #[attr_hidden]
     #[attr_added_in("0.6.4")]
     pub const GIT_TERMINAL_PROMPT: &'static str = "GIT_TERMINAL_PROMPT";
 
-    /// Skip Smudge LFS Filter.
+    /// Skips the Git LFS smudge filter.
     #[attr_hidden]
     #[attr_added_in("0.9.15")]
     pub const GIT_LFS_SKIP_SMUDGE: &'static str = "GIT_LFS_SKIP_SMUDGE";
 
-    /// Used in tests to set the user global git config location.
+    /// Sets the global user Git configuration path for tests.
     #[attr_hidden]
     #[attr_added_in("0.9.15")]
     pub const GIT_CONFIG_GLOBAL: &'static str = "GIT_CONFIG_GLOBAL";
 
-    /// Used in tests for better git isolation.
+    /// Isolates Git repositories during tests.
     ///
-    /// For example, we run some tests in ~/.local/share/uv/tests.
-    /// And if the user's `$HOME` directory is a git repository,
-    /// this will change the behavior of some tests. Setting
-    /// `GIT_CEILING_DIRECTORIES=/home/andrew/.local/share/uv/tests` will
-    /// prevent git from crawling up the directory tree past that point to find
-    /// parent git repositories.
+    /// Some tests run in `~/.local/share/uv/tests`.
+    /// If `$HOME` is a Git repository, it can change those tests.
+    /// Set `GIT_CEILING_DIRECTORIES=/home/andrew/.local/share/uv/tests`
+    /// to stop Git from searching parent directories for repositories.
     #[attr_hidden]
     #[attr_added_in("0.4.29")]
     pub const GIT_CEILING_DIRECTORIES: &'static str = "GIT_CEILING_DIRECTORIES";
 
-    /// Cleared for uv's git invocations to ensure git behaves correctly in
-    /// spite of an odd environment.
+    /// uv clears this variable for Git commands to prevent unexpected behavior.
     #[attr_hidden]
     #[attr_added_in("0.11.8")]
     pub const GIT_COMMON_DIR: &'static str = "GIT_COMMON_DIR";
 
-    /// Indicates that the current process is running in GitHub Actions.
+    /// Identifies a process that runs in GitHub Actions.
     ///
-    /// `uv publish` may attempt trusted publishing flows when set
-    /// to `true`.
+    /// When set to `true`, `uv publish` can attempt trusted publishing.
     #[attr_added_in("0.4.16")]
     pub const GITHUB_ACTIONS: &'static str = "GITHUB_ACTIONS";
 
-    /// Indicates that the current process is running in GitLab CI.
+    /// Identifies a process that runs in GitLab CI.
     ///
-    /// `uv publish` may attempt trusted publishing flows when set
-    /// to `true`.
+    /// When set to `true`, `uv publish` can attempt trusted publishing.
     #[attr_added_in("0.8.18")]
     pub const GITLAB_CI: &'static str = "GITLAB_CI";
 
-    /// Used for testing GitLab CI trusted publishing.
+    /// Tests trusted publishing through GitLab CI.
     #[attr_hidden]
     #[attr_added_in("0.8.18")]
     pub const PYPI_ID_TOKEN: &'static str = "PYPI_ID_TOKEN";
 
-    /// Used for testing GitLab CI trusted publishing.
+    /// Tests trusted publishing through GitLab CI.
     #[attr_hidden]
     #[attr_added_in("0.8.18")]
     pub const TESTPYPI_ID_TOKEN: &'static str = "TESTPYPI_ID_TOKEN";
 
-    /// Sets the encoding for standard I/O streams (e.g., PYTHONIOENCODING=utf-8).
+    /// Sets the encoding for standard I/O streams, such as `PYTHONIOENCODING=utf-8`.
     #[attr_hidden]
     #[attr_added_in("0.4.18")]
     pub const PYTHONIOENCODING: &'static str = "PYTHONIOENCODING";
 
-    /// Forces unbuffered I/O streams, equivalent to `-u` in Python.
+    /// Forces unbuffered I/O streams. Matches the Python `-u` option.
     #[attr_hidden]
     #[attr_added_in("0.1.15")]
     pub const PYTHONUNBUFFERED: &'static str = "PYTHONUNBUFFERED";
 
-    /// Enables UTF-8 mode for Python, equivalent to `-X utf8`.
+    /// Enables UTF-8 mode for Python. Matches the `-X utf8` option.
     #[attr_hidden]
     #[attr_added_in("0.4.19")]
     pub const PYTHONUTF8: &'static str = "PYTHONUTF8";
 
-    /// Adds directories to Python module search path (e.g., `PYTHONPATH=/path/to/modules`).
+    /// Adds directories to the Python module search path.
+    /// For example, set `PYTHONPATH=/path/to/modules`.
     #[attr_added_in("0.1.22")]
     pub const PYTHONPATH: &'static str = "PYTHONPATH";
 
-    /// Used to set the location of Python stdlib when using trampolines.
+    /// Sets the Python standard library location for trampolines.
     #[attr_hidden]
     #[attr_added_in("0.7.13")]
     pub const PYTHONHOME: &'static str = "PYTHONHOME";
@@ -1091,429 +1081,427 @@ impl EnvVars {
     #[attr_added_in("0.12.4")]
     pub const PYTHONEXECUTABLE: &'static str = "PYTHONEXECUTABLE";
 
-    /// Used to correctly detect virtual environments when using trampolines.
+    /// Detects virtual environments when uv uses trampolines.
     #[attr_hidden]
     #[attr_added_in("0.7.13")]
     pub const PYVENV_LAUNCHER: &'static str = "__PYVENV_LAUNCHER__";
 
-    /// Used in tests to enforce a consistent locale setting.
+    /// Sets a consistent locale for tests.
     #[attr_hidden]
     #[attr_added_in("0.4.28")]
     pub const LC_ALL: &'static str = "LC_ALL";
 
-    /// Typically set by CI runners, used to detect a CI runner.
+    /// Detects a CI runner. CI runners usually set this variable.
     #[attr_hidden]
     #[attr_added_in("0.0.5")]
     pub const CI: &'static str = "CI";
 
-    /// Azure DevOps build identifier, used to detect CI environments.
+    /// The Azure DevOps build identifier. Detects a CI environment.
     #[attr_hidden]
     #[attr_added_in("0.1.22")]
     pub const BUILD_BUILDID: &'static str = "BUILD_BUILDID";
 
-    /// Generic build identifier, used to detect CI environments.
+    /// A generic build identifier. Detects a CI environment.
     #[attr_hidden]
     #[attr_added_in("0.1.22")]
     pub const BUILD_ID: &'static str = "BUILD_ID";
 
-    /// Pip environment variable to indicate CI environment.
+    /// The pip environment variable that identifies a CI environment.
     #[attr_hidden]
     #[attr_added_in("0.1.22")]
     pub const PIP_IS_CI: &'static str = "PIP_IS_CI";
 
-    /// Use to set the .netrc file location.
+    /// Sets the `.netrc` file location.
     #[attr_added_in("0.1.16")]
     pub const NETRC: &'static str = "NETRC";
 
-    /// The standard `PAGER` posix env var. Used by `uv` to configure the appropriate pager.
+    /// The standard POSIX `PAGER` environment variable. uv uses it to select a pager.
     #[attr_added_in("0.4.18")]
     pub const PAGER: &'static str = "PAGER";
 
-    /// Used to detect when running inside a Jupyter notebook.
+    /// Detects whether uv runs in a Jupyter notebook.
     #[attr_added_in("0.2.6")]
     pub const JPY_SESSION_NAME: &'static str = "JPY_SESSION_NAME";
 
-    /// Use to create the tracing root directory via the `tracing-durations-export` feature.
+    /// Creates the tracing root directory for the `tracing-durations-export` feature.
     #[attr_hidden]
     #[attr_added_in("0.1.32")]
     pub const TRACING_DURATIONS_TEST_ROOT: &'static str = "TRACING_DURATIONS_TEST_ROOT";
 
-    /// Use to create the tracing durations file via the `tracing-durations-export` feature.
+    /// Creates the tracing durations file for the `tracing-durations-export` feature.
     #[attr_added_in("0.0.5")]
     pub const TRACING_DURATIONS_FILE: &'static str = "TRACING_DURATIONS_FILE";
 
-    /// Used to set `RUST_HOST_TARGET` at build time via `build.rs`.
+    /// Sets `RUST_HOST_TARGET` through `build.rs` at build time.
     #[attr_hidden]
     #[attr_added_in("0.1.11")]
     pub const TARGET: &'static str = "TARGET";
 
-    /// If set, uv will use this value as the log level for its `--verbose` output. Accepts
-    /// any filter compatible with the `tracing_subscriber` crate.
+    /// When set, uv uses this value as the log level for `--verbose` output.
+    /// Accepts any filter that the `tracing_subscriber` crate supports.
     ///
     /// For example:
     ///
-    /// * `RUST_LOG=uv=debug` is the equivalent of adding `--verbose` to the command line
-    /// * `RUST_LOG=trace` will enable trace-level logging.
+    /// * `RUST_LOG=uv=debug` matches the `--verbose` command-line option.
+    /// * `RUST_LOG=trace` enables trace-level logging.
     ///
     /// See the [tracing documentation](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html#example-syntax)
-    /// for more.
+    /// for details.
     #[attr_added_in("0.0.5")]
     pub const RUST_LOG: &'static str = "RUST_LOG";
 
-    /// If set, it can be used to display more stack trace details when a panic occurs.
-    /// This is used by uv particularly on windows to show more details during a platform exception.
+    /// When set, displays more stack trace details after a panic.
+    /// On Windows, uv uses this variable to show details about platform exceptions.
     ///
     /// For example:
     ///
-    /// * `RUST_BACKTRACE=1` will print a short backtrace.
-    /// * `RUST_BACKTRACE=full` will print a full backtrace.
+    /// * `RUST_BACKTRACE=1` prints a short backtrace.
+    /// * `RUST_BACKTRACE=full` prints a full backtrace.
     ///
     /// See the [Rust backtrace documentation](https://doc.rust-lang.org/std/backtrace/index.html)
-    /// for more.
+    /// for details.
     #[attr_added_in("0.7.22")]
     pub const RUST_BACKTRACE: &'static str = "RUST_BACKTRACE";
 
-    /// Add additional context and structure to log messages.
+    /// Adds context and structure to log messages.
     ///
-    /// If logging is not enabled, e.g., with `RUST_LOG` or `-v`, this has no effect.
+    /// This has no effect unless `RUST_LOG`, `-v`, or another option enables logging.
     #[attr_added_in("0.6.4")]
     pub const UV_LOG_CONTEXT: &'static str = "UV_LOG_CONTEXT";
 
-    /// Use to set the stack size used by uv.
+    /// Sets the stack size that uv uses, in bytes.
     ///
-    /// The value is in bytes, and if both `UV_STACK_SIZE` are `RUST_MIN_STACK` unset, uv uses a 4MB
-    /// (4194304) stack. `UV_STACK_SIZE` takes precedence over `RUST_MIN_STACK`.
+    /// If `UV_STACK_SIZE` and `RUST_MIN_STACK` are unset, uv uses a 4 MB (4194304 byte) stack.
+    /// `UV_STACK_SIZE` takes precedence over `RUST_MIN_STACK`.
     ///
-    /// Unlike the normal `RUST_MIN_STACK` semantics, this can affect main thread
-    /// stack size, because we actually spawn our own main2 thread to work around
-    /// the fact that Windows' real main thread is only 1MB. That thread has size
-    /// `max(UV_STACK_SIZE, 1MB)`.
+    /// This variable can also change the main thread stack size.
+    /// uv starts a separate `main2` thread because the Windows main thread has only 1 MB.
+    /// The `main2` stack size is `max(UV_STACK_SIZE, 1MB)`.
     #[attr_added_in("0.0.5")]
     pub const UV_STACK_SIZE: &'static str = "UV_STACK_SIZE";
 
-    /// Use to set the stack size used by uv.
+    /// Sets the stack size that uv uses, in bytes.
     ///
-    /// The value is in bytes, and if both `UV_STACK_SIZE` are `RUST_MIN_STACK` unset, uv uses a 4MB
-    /// (4194304) stack. `UV_STACK_SIZE` takes precedence over `RUST_MIN_STACK`.
+    /// If `UV_STACK_SIZE` and `RUST_MIN_STACK` are unset, uv uses a 4 MB (4194304 byte) stack.
+    /// `UV_STACK_SIZE` takes precedence over `RUST_MIN_STACK`.
     ///
-    /// Prefer setting `UV_STACK_SIZE`, since `RUST_MIN_STACK` also affects subprocesses, such as
-    /// build backends that use Rust code.
+    /// Prefer `UV_STACK_SIZE` because `RUST_MIN_STACK` also affects subprocesses.
+    /// This includes build backends that use Rust.
     ///
-    /// Unlike the normal `RUST_MIN_STACK` semantics, this can affect main thread
-    /// stack size, because we actually spawn our own main2 thread to work around
-    /// the fact that Windows' real main thread is only 1MB. That thread has size
-    /// `max(RUST_MIN_STACK, 1MB)`.
+    /// This variable can also change the main thread stack size.
+    /// uv starts a separate `main2` thread because the Windows main thread has only 1 MB.
+    /// The `main2` stack size is `max(RUST_MIN_STACK, 1MB)`.
     #[attr_added_in("0.5.19")]
     pub const RUST_MIN_STACK: &'static str = "RUST_MIN_STACK";
 
-    /// The directory containing the `Cargo.toml` manifest for a package.
+    /// The directory that contains a package `Cargo.toml` manifest.
     #[attr_hidden]
     #[attr_added_in("0.1.11")]
     pub const CARGO_MANIFEST_DIR: &'static str = "CARGO_MANIFEST_DIR";
 
-    /// Specifies the directory where Cargo stores build artifacts (target directory).
+    /// Sets the target directory where Cargo stores build artifacts.
     #[attr_hidden]
     #[attr_added_in("0.0.5")]
     pub const CARGO_TARGET_DIR: &'static str = "CARGO_TARGET_DIR";
 
-    /// Set by cargo when compiling for Windows-like platforms.
+    /// Cargo sets this variable for Windows-like build targets.
     #[attr_hidden]
     #[attr_added_in("0.0.5")]
     pub const CARGO_CFG_WINDOWS: &'static str = "CARGO_CFG_WINDOWS";
 
-    /// Specifies the directory where Cargo stores intermediate build artifacts.
+    /// Sets the directory where Cargo stores intermediate build artifacts.
     #[attr_hidden]
     #[attr_added_in("0.8.25")]
     pub const OUT_DIR: &'static str = "OUT_DIR";
 
-    /// Used in tests for environment substitution testing in `requirements.in`.
+    /// Tests environment variable substitution in `requirements.in`.
     #[attr_hidden]
     #[attr_added_in("0.1.18")]
     pub const URL: &'static str = "URL";
 
-    /// Used in tests for environment substitution testing in `requirements.in`.
+    /// Tests environment variable substitution in `requirements.in`.
     #[attr_hidden]
     #[attr_added_in("0.1.18")]
     pub const FILE_PATH: &'static str = "FILE_PATH";
 
-    /// Used in tests for environment substitution testing in `requirements.in`.
+    /// Tests environment variable substitution in `requirements.in`.
     #[attr_hidden]
     #[attr_added_in("0.1.25")]
     pub const HATCH_PATH: &'static str = "HATCH_PATH";
 
-    /// Used in tests for environment substitution testing in `requirements.in`.
+    /// Tests environment variable substitution in `requirements.in`.
     #[attr_hidden]
     #[attr_added_in("0.1.25")]
     pub const BLACK_PATH: &'static str = "BLACK_PATH";
 
-    /// Used in testing Hatch's root.uri feature
+    /// Tests the Hatch `root.uri` feature.
     ///
-    /// See: <https://hatch.pypa.io/dev/config/dependency/#local>.
+    /// See <https://hatch.pypa.io/dev/config/dependency/#local>.
     #[attr_hidden]
     #[attr_added_in("0.1.22")]
     pub const ROOT_PATH: &'static str = "ROOT_PATH";
 
-    /// Used in testing extra build dependencies.
+    /// Tests extra build dependencies.
     #[attr_hidden]
     #[attr_added_in("0.8.5")]
     pub const EXPECTED_ANYIO_VERSION: &'static str = "EXPECTED_ANYIO_VERSION";
 
-    /// Used to set test credentials for keyring tests.
+    /// Sets credentials for keyring tests.
     #[attr_hidden]
     #[attr_added_in("0.1.34")]
     pub const KEYRING_TEST_CREDENTIALS: &'static str = "KEYRING_TEST_CREDENTIALS";
 
-    /// Used to disable delay for HTTP retries in tests.
+    /// Disables HTTP retry delays in tests.
     #[attr_added_in("0.7.21")]
     pub const UV_TEST_NO_HTTP_RETRY_DELAY: &'static str = "UV_TEST_NO_HTTP_RETRY_DELAY";
 
-    /// Used for testing named indexes in tests.
+    /// Tests authentication for named indexes.
     #[attr_hidden]
     #[attr_added_in("0.5.21")]
     pub const UV_INDEX_MY_INDEX_USERNAME: &'static str = "UV_INDEX_MY_INDEX_USERNAME";
 
-    /// Used for testing named indexes in tests.
+    /// Tests authentication for named indexes.
     #[attr_hidden]
     #[attr_added_in("0.5.21")]
     pub const UV_INDEX_MY_INDEX_PASSWORD: &'static str = "UV_INDEX_MY_INDEX_PASSWORD";
 
-    /// Used to set the GitHub fast-path url for tests.
+    /// Sets the GitHub fast-path URL for tests.
     #[attr_hidden]
     #[attr_added_in("0.7.15")]
     pub const UV_GITHUB_FAST_PATH_URL: &'static str = "UV_GITHUB_FAST_PATH_URL";
 
-    /// Hide progress messages with non-deterministic order in tests.
+    /// Hides progress messages with non-deterministic order in tests.
     #[attr_hidden]
     #[attr_added_in("0.5.29")]
     pub const UV_TEST_NO_CLI_PROGRESS: &'static str = "UV_TEST_NO_CLI_PROGRESS";
 
-    /// Used to mock the current timestamp for relative `--exclude-newer` times in tests.
-    /// Should be set to an RFC 3339 timestamp (e.g., `2025-11-21T12:00:00Z`).
+    /// Mocks the current time for relative `--exclude-newer` values in tests.
+    /// Set an RFC 3339 timestamp, such as `2025-11-21T12:00:00Z`.
     #[attr_hidden]
     #[attr_added_in("0.9.8")]
     pub const UV_TEST_CURRENT_TIMESTAMP: &'static str = "UV_TEST_CURRENT_TIMESTAMP";
 
-    /// When set to a timestamp, applies an `exclude-newer` filter to the versions
-    /// considered available from indexes.
+    /// Applies an `exclude-newer` timestamp to versions that indexes make available.
     ///
-    /// This is used for reproducible resolver error messages. When `exclude-newer`
-    /// is used, we retain information about the available versions to improve error
-    /// messages. In contrast, versions published after this cutoff are considered
-    /// non-existent.
+    /// Use this variable to make resolver errors reproducible.
+    /// `exclude-newer` retains available version information for better errors.
+    /// Versions published after this cutoff do not exist to the resolver.
     ///
-    /// Should be set to an RFC 3339 timestamp (e.g., `2024-03-25T00:00:00Z`).
+    /// Set an RFC 3339 timestamp, such as `2024-03-25T00:00:00Z`.
     #[attr_hidden]
     #[attr_added_in("0.11.7")]
     pub const UV_TEST_AVAILABLE_VERSION_CUTOFF: &'static str = "UV_TEST_AVAILABLE_VERSION_CUTOFF";
 
-    /// `.env` files from which to load environment variables when executing `uv run` commands.
+    /// Sets the `.env` files that provide environment variables for `uv run`.
     #[attr_added_in("0.4.30")]
     pub const UV_ENV_FILE: &'static str = "UV_ENV_FILE";
 
-    /// Ignore `.env` files when executing `uv run` commands.
+    /// Ignores `.env` files for `uv run`.
     #[attr_added_in("0.4.30")]
     pub const UV_NO_ENV_FILE: &'static str = "UV_NO_ENV_FILE";
 
-    /// The URL from which to download uv using the standalone installer and `self update` feature,
-    /// in lieu of the default GitHub URL.
+    /// Sets the download URL for the standalone installer and `self update`.
+    /// Replaces the default GitHub URL.
     ///
-    /// This more-specific installer source takes precedence over
+    /// This specific installer source takes precedence over
     /// [`UV_ASTRAL_MIRROR_URL`](Self::UV_ASTRAL_MIRROR_URL) for `uv self update`.
     #[attr_added_in("0.5.0")]
     pub const UV_INSTALLER_GITHUB_BASE_URL: &'static str = "UV_INSTALLER_GITHUB_BASE_URL";
 
-    /// The URL from which to download uv using the standalone installer and `self update` feature,
-    /// in lieu of the default GitHub Enterprise URL.
+    /// Sets the download URL for the standalone installer and `self update`.
+    /// Replaces the default GitHub Enterprise URL.
     ///
-    /// This more-specific installer source takes precedence over
+    /// This specific installer source takes precedence over
     /// [`UV_ASTRAL_MIRROR_URL`](Self::UV_ASTRAL_MIRROR_URL) for `uv self update`.
     #[attr_added_in("0.5.0")]
     pub const UV_INSTALLER_GHE_BASE_URL: &'static str = "UV_INSTALLER_GHE_BASE_URL";
 
-    /// The directory in which to install uv using the standalone installer and `self update` feature.
-    /// Defaults to `~/.local/bin`.
+    /// Sets the installation directory for the standalone installer and `self update`.
+    /// The default is `~/.local/bin`.
     #[attr_added_in("0.5.0")]
     pub const UV_INSTALL_DIR: &'static str = "UV_INSTALL_DIR";
 
-    /// Used ephemeral environments like CI to install uv to a specific path while preventing
-    /// the installer from modifying shell profiles or environment variables.
+    /// Installs uv to a specific path in temporary environments, such as CI.
+    /// Prevents the installer from changing shell profiles or environment variables.
     #[attr_added_in("0.5.0")]
     pub const UV_UNMANAGED_INSTALL: &'static str = "UV_UNMANAGED_INSTALL";
 
-    /// The URL from which to download uv using the standalone installer. By default, installs from
-    /// uv's GitHub Releases. `INSTALLER_DOWNLOAD_URL` is also supported as an alias, for backwards
-    /// compatibility.
+    /// Sets the download URL for the standalone installer.
+    /// By default, the installer downloads uv from GitHub Releases.
+    /// `INSTALLER_DOWNLOAD_URL` remains available as a compatibility alias.
     #[attr_added_in("0.8.4")]
     pub const UV_DOWNLOAD_URL: &'static str = "UV_DOWNLOAD_URL";
 
-    /// Avoid modifying the `PATH` environment variable when installing uv using the standalone
-    /// installer and `self update` feature. `INSTALLER_NO_MODIFY_PATH` is also supported as an
-    /// alias, for backwards compatibility.
+    /// Prevents the standalone installer and `self update` from changing `PATH`.
+    /// `INSTALLER_NO_MODIFY_PATH` remains available as a compatibility alias.
     #[attr_added_in("0.8.4")]
     pub const UV_NO_MODIFY_PATH: &'static str = "UV_NO_MODIFY_PATH";
 
-    /// Skip writing `uv` installer metadata files (e.g., `INSTALLER`, `REQUESTED`, and `direct_url.json`) to site-packages `.dist-info` directories.
+    /// Skips installer metadata files in site-packages `.dist-info` directories.
+    /// These files include `INSTALLER`, `REQUESTED`, and `direct_url.json`.
     #[attr_added_in("0.5.7")]
     pub const UV_NO_INSTALLER_METADATA: &'static str = "UV_NO_INSTALLER_METADATA";
 
-    /// Enables fetching files stored in Git LFS when installing a package from a Git repository.
+    /// Fetches Git LFS files when uv installs a package from a Git repository.
     #[attr_added_in("0.5.19")]
     pub const UV_GIT_LFS: &'static str = "UV_GIT_LFS";
 
-    /// Sets the soft open-file descriptor limit for commands executed by `uv run`.
+    /// Sets the soft open-file descriptor limit for commands that `uv run` executes.
     ///
-    /// The limit is applied after uv prepares the environment and immediately before the command
-    /// is spawned. The hard open-file descriptor limit remains unchanged. If the limit cannot be
-    /// applied, uv exits with an error without running the command. Only supported on Unix.
+    /// uv applies the limit after it prepares the environment and before it starts the command.
+    /// The hard open-file descriptor limit does not change.
+    /// If uv cannot apply the limit, it exits with an error and does not start the command.
+    /// Only Unix supports this option.
     #[attr_added_in("0.12.3")]
     pub const UV_RUN_RLIMIT_NOFILE: &'static str = "UV_RUN_RLIMIT_NOFILE";
 
-    /// Number of times that `uv run` has been recursively invoked. Used to guard against infinite
-    /// recursion, e.g., when `uv run`` is used in a script shebang.
+    /// Counts recursive `uv run` calls.
+    /// Prevents infinite recursion when a script shebang uses `uv run`.
     #[attr_hidden]
     #[attr_added_in("0.5.31")]
     pub const UV_RUN_RECURSION_DEPTH: &'static str = "UV_RUN_RECURSION_DEPTH";
 
-    /// Number of times that `uv run` will allow recursive invocations, before exiting with an
-    /// error.
+    /// Sets the maximum number of recursive `uv run` calls before uv exits with an error.
     #[attr_hidden]
     #[attr_added_in("0.5.31")]
     pub const UV_RUN_MAX_RECURSION_DEPTH: &'static str = "UV_RUN_MAX_RECURSION_DEPTH";
 
-    /// Overrides terminal width used for wrapping. This variable is not read by uv directly.
+    /// Overrides the terminal width for line wrapping.
+    /// uv does not read this variable directly.
     ///
-    /// This is a quasi-standard variable, described, e.g., in `ncurses(3x)`.
+    /// `ncurses(3x)` describes this common variable.
     #[attr_added_in("0.6.2")]
     pub const COLUMNS: &'static str = "COLUMNS";
 
-    /// The CUDA driver version to assume when inferring the PyTorch backend (e.g., `550.144.03`).
+    /// Sets the CUDA driver version for PyTorch backend detection, such as `550.144.03`.
     #[attr_hidden]
     #[attr_added_in("0.6.9")]
     pub const UV_CUDA_DRIVER_VERSION: &'static str = "UV_CUDA_DRIVER_VERSION";
 
-    /// The AMD GPU architecture to assume when inferring the PyTorch backend (e.g., `gfx1100`).
+    /// Sets the AMD GPU architecture for PyTorch backend detection, such as `gfx1100`.
     #[attr_hidden]
     #[attr_added_in("0.7.14")]
     pub const UV_AMD_GPU_ARCHITECTURE: &'static str = "UV_AMD_GPU_ARCHITECTURE";
 
-    /// Equivalent to the `--torch-backend` command-line argument (e.g., `cpu`, `cu126`, or `auto`).
+    /// Matches the `--torch-backend` command-line option.
+    /// Examples include `cpu`, `cu126`, and `auto`.
     #[attr_added_in("0.6.9")]
     pub const UV_TORCH_BACKEND: &'static str = "UV_TORCH_BACKEND";
 
-    /// Equivalent to the `--project` command-line argument.
+    /// Matches the `--project` command-line option.
     #[attr_added_in("0.4.4")]
     pub const UV_PROJECT: &'static str = "UV_PROJECT";
 
-    /// Equivalent to the `--no-project` command-line argument.
+    /// Matches the `--no-project` command-line option.
     #[attr_added_in("0.11.8")]
     pub const UV_NO_PROJECT: &'static str = "UV_NO_PROJECT";
 
-    /// Equivalent to the `--directory` command-line argument. `UV_WORKING_DIRECTORY` (added in
-    /// v0.9.1) is also supported for backwards compatibility.
+    /// Matches the `--directory` command-line option.
+    /// `UV_WORKING_DIRECTORY`, added in v0.9.1, remains available for compatibility.
     #[attr_added_in("0.9.14")]
     pub const UV_WORKING_DIR: &'static str = "UV_WORKING_DIR";
 
-    /// Equivalent to the `--directory` command-line argument.
+    /// Matches the `--directory` command-line option.
     #[attr_hidden]
     #[attr_added_in("0.9.1")]
     pub const UV_WORKING_DIRECTORY: &'static str = "UV_WORKING_DIRECTORY";
 
-    /// Disable GitHub-specific requests that allow uv to skip `git fetch` in some circumstances.
+    /// Disables GitHub-specific requests that can let uv skip `git fetch`.
     #[attr_added_in("0.7.13")]
     pub const UV_NO_GITHUB_FAST_PATH: &'static str = "UV_NO_GITHUB_FAST_PATH";
 
-    /// Authentication token for Hugging Face requests. When set, uv will use this token
-    /// when making requests to `https://huggingface.co/` and any subdomains.
+    /// Sets the authentication token for Hugging Face requests.
+    /// uv uses this token for `https://huggingface.co/` and its subdomains.
     #[attr_added_in("0.8.1")]
     pub const HF_TOKEN: &'static str = "HF_TOKEN";
 
-    /// Disable Hugging Face authentication, even if `HF_TOKEN` is set.
+    /// Disables Hugging Face authentication, even when `HF_TOKEN` is set.
     #[attr_added_in("0.8.1")]
     pub const UV_NO_HF_TOKEN: &'static str = "UV_NO_HF_TOKEN";
 
-    /// The URL to treat as an S3-compatible storage endpoint. Requests to this endpoint
-    /// will be signed using AWS Signature Version 4 based on the `AWS_ACCESS_KEY_ID`,
-    /// `AWS_SECRET_ACCESS_KEY`, `AWS_PROFILE`, and `AWS_CONFIG_FILE` environment variables.
+    /// Sets the URL of an S3-compatible storage endpoint.
+    /// uv signs requests with AWS Signature Version 4.
+    /// It uses `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_PROFILE`, and `AWS_CONFIG_FILE`.
     #[attr_added_in("0.8.21")]
     pub const UV_S3_ENDPOINT_URL: &'static str = "UV_S3_ENDPOINT_URL";
 
-    /// The URL to treat as a GCS-compatible storage endpoint. Requests to this endpoint
-    /// will be signed using Google Cloud authentication based on the `GOOGLE_APPLICATION_CREDENTIALS`
-    /// environment variable or Application Default Credentials.
+    /// Sets the URL of a GCS-compatible storage endpoint.
+    /// uv signs requests with Google Cloud authentication.
+    /// It uses `GOOGLE_APPLICATION_CREDENTIALS` or Application Default Credentials.
     #[attr_added_in("0.9.26")]
     pub const UV_GCS_ENDPOINT_URL: &'static str = "UV_GCS_ENDPOINT_URL";
 
-    /// The URL to treat as an Azure Blob Storage endpoint. Requests to this endpoint will be signed
-    /// using Azure credentials from the default credential chain, including Azure CLI credentials
-    /// and workload identity.
+    /// Sets the URL of an Azure Blob Storage endpoint.
+    /// uv signs requests with the default Azure credential chain.
+    /// This chain includes Azure CLI credentials and workload identity.
     #[attr_added_in("0.11.14")]
     pub const UV_AZURE_ENDPOINT_URL: &'static str = "UV_AZURE_ENDPOINT_URL";
 
-    /// The pyx API key (e.g., `sk-pyx-...`).
+    /// Sets the pyx API key, such as `sk-pyx-...`.
     #[attr_added_in("0.8.15")]
     pub const PYX_API_KEY: &'static str = "PYX_API_KEY";
 
-    /// The pyx API key, for backwards compatibility.
+    /// Sets the pyx API key for compatibility.
     #[attr_hidden]
     #[attr_added_in("0.8.15")]
     pub const UV_API_KEY: &'static str = "UV_API_KEY";
 
-    /// The pyx authentication token (e.g., `eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...`), as output by `uv auth token`.
+    /// Sets the pyx authentication token from `uv auth token`.
+    /// For example, `eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...`.
     #[attr_added_in("0.8.15")]
     pub const PYX_AUTH_TOKEN: &'static str = "PYX_AUTH_TOKEN";
 
-    /// The pyx authentication token, for backwards compatibility.
+    /// Sets the pyx authentication token for compatibility.
     #[attr_hidden]
     #[attr_added_in("0.8.15")]
     pub const UV_AUTH_TOKEN: &'static str = "UV_AUTH_TOKEN";
 
-    /// The AWS region to use when signing S3 requests.
+    /// Sets the AWS region for S3 request signatures.
     #[attr_added_in("0.8.21")]
     pub const AWS_REGION: &'static str = "AWS_REGION";
 
-    /// The default AWS region to use when signing S3 requests, if `AWS_REGION` is not set.
+    /// Sets the default AWS region for S3 request signatures when `AWS_REGION` is unset.
     #[attr_added_in("0.8.21")]
     pub const AWS_DEFAULT_REGION: &'static str = "AWS_DEFAULT_REGION";
 
-    /// The AWS access key ID to use when signing S3 requests.
+    /// Sets the AWS access key ID for S3 request signatures.
     #[attr_added_in("0.8.21")]
     pub const AWS_ACCESS_KEY_ID: &'static str = "AWS_ACCESS_KEY_ID";
 
-    /// The AWS secret access key to use when signing S3 requests.
+    /// Sets the AWS secret access key for S3 request signatures.
     #[attr_added_in("0.8.21")]
     pub const AWS_SECRET_ACCESS_KEY: &'static str = "AWS_SECRET_ACCESS_KEY";
 
-    /// The AWS session token to use when signing S3 requests.
+    /// Sets the AWS session token for S3 request signatures.
     #[attr_added_in("0.8.21")]
     pub const AWS_SESSION_TOKEN: &'static str = "AWS_SESSION_TOKEN";
 
-    /// The AWS profile to use when signing S3 requests.
+    /// Sets the AWS profile for S3 request signatures.
     #[attr_added_in("0.8.21")]
     pub const AWS_PROFILE: &'static str = "AWS_PROFILE";
 
-    /// The AWS config file to use when signing S3 requests.
+    /// Sets the AWS configuration file for S3 request signatures.
     #[attr_added_in("0.8.21")]
     pub const AWS_CONFIG_FILE: &'static str = "AWS_CONFIG_FILE";
 
-    /// The AWS shared credentials file to use when signing S3 requests.
+    /// Sets the AWS shared credentials file for S3 request signatures.
     #[attr_added_in("0.8.21")]
     pub const AWS_SHARED_CREDENTIALS_FILE: &'static str = "AWS_SHARED_CREDENTIALS_FILE";
 
-    /// Avoid verifying that wheel filenames match their contents when installing wheels. This
-    /// is not recommended, as wheels with inconsistent filenames should be considered invalid and
-    /// corrected by the relevant package maintainers; however, this option can be used to work
-    /// around invalid artifacts in rare cases.
+    /// Skips the check that wheel filenames match their contents.
+    /// Do not use this option unless necessary.
+    /// Wheels with inconsistent filenames are invalid and their maintainers must correct them.
+    /// Use this option only to work around an invalid wheel.
     #[attr_added_in("0.8.23")]
     pub const UV_SKIP_WHEEL_FILENAME_CHECK: &'static str = "UV_SKIP_WHEEL_FILENAME_CHECK";
 
-    /// Suppress output from the build backend when building source distributions, even in the event
-    /// of build failures.
+    /// Hides build backend output for source distribution builds, even when a build fails.
     #[attr_added_in("0.9.15")]
     pub const UV_HIDE_BUILD_OUTPUT: &'static str = "UV_HIDE_BUILD_OUTPUT";
 
-    /// The time in seconds uv waits for a file lock to become available.
+    /// The time uv waits for a file lock, in seconds.
     ///
-    /// Defaults to 300s (5 min).
+    /// The default is 300 seconds, or 5 minutes.
     #[attr_added_in("0.9.4")]
     pub const UV_LOCK_TIMEOUT: &'static str = "UV_LOCK_TIMEOUT";
 }

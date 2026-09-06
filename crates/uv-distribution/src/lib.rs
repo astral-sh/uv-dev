@@ -1,3 +1,5 @@
+//! Fetch, cache, and build Python package distributions.
+
 pub use distribution_database::{DistributionDatabase, HttpArchivePointer, PathArchivePointer};
 pub use download::LocalWheel;
 pub use error::Error;
