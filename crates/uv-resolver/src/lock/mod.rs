@@ -549,7 +549,14 @@ impl<'a> LockedDependencyBuilder<'a> {
             {
                 // Self-requirements do not create graph edges, but their source and version
                 // constraints must still be satisfied by the locked parent package.
-                if !expected.package_satisfies_requirement(expected.package, requirement)? {
+                let source_marker =
+                    expected.package_satisfies_requirement(expected.package, requirement)?;
+                if source_marker.is_none_or(|source_marker| {
+                    !required_marker
+                        .combined()
+                        .and(source_marker.negate())
+                        .is_false()
+                }) {
                     complete = false;
                 }
                 continue;
@@ -559,11 +566,14 @@ impl<'a> LockedDependencyBuilder<'a> {
 
             let mut covered_marker = MarkerTree::FALSE;
             for dependency in expected.lock.packages_for_name(&requirement.name) {
-                if !expected.package_satisfies_requirement(dependency, requirement)? {
+                let Some(source_marker) =
+                    expected.package_satisfies_requirement(dependency, requirement)?
+                else {
                     continue;
-                }
+                };
 
                 let mut marker = UniversalMarker::from_combined(required_marker);
+                marker.and(UniversalMarker::from_combined(source_marker));
                 if !dependency.fork_markers.is_empty() {
                     let dependency_marker = dependency
                         .fork_markers
@@ -761,16 +771,25 @@ impl<'lock> ExpectedPackageDependencies<'lock> {
         &self,
         package: &Package,
         requirement: &Requirement,
-    ) -> Result<bool, LockError> {
-        let mut source_matches = package
+    ) -> Result<Option<MarkerTree>, LockError> {
+        let source_matches = package
             .id
             .source
-            .satisfies_requirement_source(&requirement.source, self.workspace_root)?;
+            .satisfies_requirement_source(&requirement.source, self.workspace_root)?
+            || package.id == self.package.id
+                && matches!(
+                    requirement.source,
+                    RequirementSource::Registry { index: None, .. }
+                );
+        let mut source_marker = if source_matches {
+            MarkerTree::TRUE
+        } else {
+            MarkerTree::FALSE
+        };
 
-        // A constraint or another first-party requirement can select a direct source for an
-        // otherwise unqualified registry requirement. Source selections apply globally, even
-        // across disjoint marker environments, but the locked source must match exactly.
-        if !source_matches
+        // A direct source can be selected by both constraints and explicit requirements. Preserve
+        // the union of their markers so another requirement can widen a conditional constraint.
+        if source_marker.is_false()
             && matches!(
                 requirement.source,
                 RequirementSource::Registry { index: None, .. }
@@ -783,17 +802,11 @@ impl<'lock> ExpectedPackageDependencies<'lock> {
                     .source
                     .satisfies_requirement_source(&source_requirement.source, self.workspace_root)?
                 {
-                    source_matches = true;
-                    break;
+                    source_marker = source_marker.or(source_requirement.marker);
                 }
             }
         }
 
-        source_matches |= package.id == self.package.id
-            && matches!(
-                requirement.source,
-                RequirementSource::Registry { index: None, .. }
-            );
         let version_matches = requirement
             .source
             .version_specifiers()
@@ -801,7 +814,7 @@ impl<'lock> ExpectedPackageDependencies<'lock> {
             // Dynamic local packages intentionally omit their version from the lockfile.
             .is_none_or(|(specifiers, version)| specifiers.contains(version));
 
-        Ok(source_matches && version_matches)
+        Ok((!source_marker.is_false() && version_matches).then_some(source_marker))
     }
 
     /// Include locked-only contexts too, so stale extra and group sections cannot be retained.
