@@ -28,7 +28,9 @@ use uv_distribution_types::{
 use uv_distribution_types::{DistributionMetadata, InstalledMetadata, Name, Resolution};
 use uv_fs::{CWD, Simplified, normalize_path_under};
 use uv_install_wheel::{LinkMode, installed_dist_info_path, read_record_into_iter};
-use uv_installer::{InstallationStrategy, Plan, Planner, Preparer, SitePackages};
+use uv_installer::{
+    InstallationStrategy, Plan, Planner, Preparer, SitePackages, SitePackagesDiagnostic,
+};
 use uv_normalize::PackageName;
 use uv_pep440::Version;
 use uv_pep508::{MarkerEnvironment, RequirementOrigin, VerbatimUrl};
@@ -1352,10 +1354,24 @@ pub(crate) fn diagnose_environment<'a>(
     let relevant_packages = relevant_packages.collect::<HashSet<_>>();
     for diagnostic in site_packages.diagnostics(markers, tags, dependency_metadata)? {
         // Only surface diagnostics that are "relevant" to the current resolution.
-        if relevant_packages
-            .iter()
-            .any(|name| diagnostic.includes(name))
-        {
+        let is_relevant = match &diagnostic {
+            SitePackagesDiagnostic::IncompatibleDependency {
+                package,
+                requirement,
+                ..
+            } => {
+                relevant_packages.contains(package) || relevant_packages.contains(&requirement.name)
+            }
+            SitePackagesDiagnostic::MetadataUnavailable { package, .. }
+            | SitePackagesDiagnostic::TagsUnavailable { package, .. }
+            | SitePackagesDiagnostic::IncompatiblePythonVersion { package, .. }
+            | SitePackagesDiagnostic::IncompatiblePlatform { package }
+            | SitePackagesDiagnostic::MissingDependency { package, .. }
+            | SitePackagesDiagnostic::DuplicatePackage { package, .. } => {
+                relevant_packages.contains(package)
+            }
+        };
+        if is_relevant {
             writeln!(
                 printer.stderr(),
                 "{}{} {}",
