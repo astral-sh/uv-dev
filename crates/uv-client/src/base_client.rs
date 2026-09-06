@@ -179,11 +179,31 @@ pub enum RedirectPolicy {
 impl RedirectPolicy {
     fn reqwest_policy(self) -> reqwest::redirect::Policy {
         match self {
-            Self::BypassMiddleware => reqwest::redirect::Policy::default(),
+            Self::BypassMiddleware => {
+                let default = reqwest::redirect::Policy::default();
+                reqwest::redirect::Policy::custom(move |attempt| {
+                    if redirect_url_has_credentials(attempt.url()) {
+                        let status = attempt.status();
+                        attempt.error(RedirectLocationCredentialsError { status })
+                    } else {
+                        default.redirect(attempt)
+                    }
+                })
+            }
             Self::RetriggerMiddleware => reqwest::redirect::Policy::none(),
             Self::NoRedirect => reqwest::redirect::Policy::none(),
         }
     }
+}
+
+#[derive(Debug, Error)]
+#[error("Invalid HTTP {status} 'Location' value: credentials are not allowed")]
+struct RedirectLocationCredentialsError {
+    status: StatusCode,
+}
+
+fn redirect_url_has_credentials(url: &Url) -> bool {
+    !url.username().is_empty() || url.password().is_some()
 }
 
 /// A list of user-defined middlewares to be applied to the client.
@@ -1000,6 +1020,13 @@ fn request_into_redirect(
             )));
         }
     };
+
+    if redirect_url_has_credentials(&redirect_url) {
+        return Err(reqwest_middleware::Error::Middleware(anyhow!(
+            RedirectLocationCredentialsError { status }
+        )));
+    }
+
     // Per RFC 7231, fragments must be propagated
     if let Some(fragment) = original_req_url.fragment() {
         redirect_url.set_fragment(Some(fragment));
@@ -1035,23 +1062,6 @@ fn request_into_redirect(
     } else if headers.contains_key(REFERER) {
         if let Some(referer) = make_referer(&redirect_url, &original_req_url) {
             headers.insert(REFERER, referer);
-        }
-    }
-
-    // Check if there are credentials on the redirect location itself.
-    // If so, move them to Authorization header.
-    if !redirect_url.username().is_empty() {
-        if let Some(credentials) =
-            Credentials::from_url(&redirect_url).map_err(reqwest_middleware::Error::middleware)?
-        {
-            let _ = redirect_url.set_username("");
-            let _ = redirect_url.set_password(None);
-            headers.insert(
-                AUTHORIZATION,
-                credentials
-                    .to_header_value()
-                    .map_err(reqwest_middleware::Error::middleware)?,
-            );
         }
     }
 
@@ -1226,6 +1236,8 @@ pub enum RetryParsingError {
 mod tests {
     use super::*;
 
+    use std::error::Error as _;
+
     use anyhow::{Context, Result};
     use reqwest::{Client, Method};
     use wiremock::matchers::method;
@@ -1236,6 +1248,73 @@ mod tests {
         let runtime = CacheReadRuntime::new(1);
         runtime.get().spawn_blocking(|| {}).await.unwrap();
         drop(runtime);
+    }
+
+    #[tokio::test]
+    async fn test_redirect_rejects_credentials() -> Result<()> {
+        let locations = [
+            "https://username@example.com/simple",
+            "https://:password@example.com/simple",
+        ];
+        let mut errors = Vec::with_capacity(locations.len());
+
+        for location in locations {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .respond_with(ResponseTemplate::new(302).insert_header("location", location))
+                .mount(&server)
+                .await;
+
+            let request = Client::new().get(server.uri()).build().unwrap();
+            let response = Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .unwrap()
+                .execute(request.try_clone().unwrap())
+                .await
+                .unwrap();
+
+            errors.push(
+                request_into_redirect(request, &response, CrossOriginCredentialsPolicy::Secure)
+                    .unwrap_err()
+                    .to_string(),
+            );
+        }
+
+        insta::assert_debug_snapshot!(errors, @r#"
+        [
+            "Invalid HTTP 302 Found 'Location' value: credentials are not allowed",
+            "Invalid HTTP 302 Found 'Location' value: credentials are not allowed",
+        ]
+        "#);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_bypass_middleware_redirect_rejects_credentials() -> Result<()> {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(
+                ResponseTemplate::new(302)
+                    .insert_header("location", "https://username@example.com/simple"),
+            )
+            .mount(&server)
+            .await;
+
+        let error = Client::builder()
+            .redirect(RedirectPolicy::BypassMiddleware.reqwest_policy())
+            .build()
+            .unwrap()
+            .get(server.uri())
+            .send()
+            .await
+            .unwrap_err();
+
+        insta::assert_snapshot!(
+            error.source().expect("redirect error should have a source"),
+            @"Invalid HTTP 302 Found 'Location' value: credentials are not allowed"
+        );
+        Ok(())
     }
 
     #[tokio::test]
