@@ -475,7 +475,9 @@ async fn perform_install(
             Vec::with_capacity(existing_installations.len() + requests.len());
 
         for request in &requests {
-            let mut matching_installations = existing_installations
+            let mut matching_installations = request
+                .download_request
+                .narrow_sorted(&existing_installations, ManagedPythonInstallation::key)
                 .iter()
                 .filter(|installation| request.matches_installation(installation))
                 .peekable();
@@ -526,8 +528,11 @@ async fn perform_install(
                 // requested download is the highest patch for that minor version. We need to
                 // install it unless an exact match is found (including build version).
                 if let Some(installation) = existing_installations
-                    .iter()
-                    .find(|inst| request.download.key() == inst.key())
+                    .binary_search_by(|installation| {
+                        installation.key().cmp(request.download.key()).reverse()
+                    })
+                    .ok()
+                    .and_then(|index| existing_installations.get(index))
                 {
                     if matches_build(request.download.build(), installation.build()) {
                         debug!("Found `{}` for request `{}`", installation.key(), request);
@@ -545,7 +550,9 @@ async fn perform_install(
                     debug!("No installation found for request `{}`", request);
                     unsatisfied.push(Cow::Borrowed(request));
                 }
-            } else if let Some(installation) = existing_installations
+            } else if let Some(installation) = request
+                .download_request
+                .narrow_sorted(&existing_installations, ManagedPythonInstallation::key)
                 .iter()
                 .find(|inst| request.matches_installation(inst))
             {
@@ -624,6 +631,18 @@ async fn perform_install(
     let mut errors = vec![];
     let mut downloaded = Vec::with_capacity(downloads.len());
     let mut requests_by_new_installation = BTreeMap::new();
+    let mut requests_by_minor = FxHashMap::<(u8, u8), Vec<usize>>::default();
+    let mut broad_requests = Vec::new();
+    for (index, request) in requests.iter().enumerate() {
+        if let Some(minor_version) = request.download_request.minor_version() {
+            requests_by_minor
+                .entry(minor_version)
+                .or_default()
+                .push(index);
+        } else {
+            broad_requests.push(index);
+        }
+    }
     while let Some((download, result)) = tasks.next().await {
         match result {
             Ok(download_result) => {
@@ -640,7 +659,12 @@ async fn perform_install(
                         .map_err(|err| anyhow::anyhow!(err))?;
                 }
                 changelog.installed.insert(installation.key().clone());
-                for request in &requests {
+                let minor_version = (installation.key().major(), installation.key().minor());
+                let matching_requests = broad_requests
+                    .iter()
+                    .merge(requests_by_minor.get(&minor_version).into_iter().flatten());
+                for index in matching_requests {
+                    let request = &requests[*index];
                     // Take note of which installations satisfied which requests
                     if request.matches_installation(&installation) {
                         requests_by_new_installation
