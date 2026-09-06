@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, anyhow};
 use itertools::Itertools;
 use owo_colors::OwoColorize;
+use rustc_hash::FxHashSet;
 use tracing::debug;
 
 use uv_cache::Cache;
@@ -796,13 +797,22 @@ impl InstallationPlan {
         // Partition into two sets: those that require build isolation, and those that disable it. This
         // is effectively a heuristic to make `--no-build-isolation` work "more often" by way of giving
         // `--no-build-isolation` packages "access" to the rest of the environment.
-        let (isolated_phase, shared_phase) = Plan {
+        let plan = Plan {
             cached,
             remote,
             reinstalls,
             extraneous,
-        }
-        .partition(|name| build_dispatch.build_isolation().is_isolated(Some(name)));
+        };
+        let build_isolation = build_dispatch.build_isolation();
+        let (isolated_phase, shared_phase) = match build_isolation {
+            uv_types::BuildIsolation::SharedPackage(_, packages)
+                if packages.len() > 8 && plan.remote.len() > 32 =>
+            {
+                let packages = packages.iter().collect::<FxHashSet<_>>();
+                plan.partition(|name| !packages.contains(name))
+            }
+            _ => plan.partition(|name| build_isolation.is_isolated(Some(name))),
+        };
 
         let has_isolated_phase = !isolated_phase.is_empty();
         let has_shared_phase = !shared_phase.is_empty();
