@@ -6,7 +6,7 @@ use std::sync::Arc;
 use indexmap::IndexSet;
 use petgraph::{
     Directed, Direction,
-    graph::{Graph, NodeIndex},
+    graph::{EdgeIndex, Graph, NodeIndex},
 };
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 
@@ -139,6 +139,8 @@ impl ResolverOutput {
             Graph::with_capacity(size_guess, size_guess);
         let mut inverse: FxHashMap<PackageRef, NodeIndex<u32>> =
             FxHashMap::with_capacity_and_hasher(size_guess, FxBuildHasher);
+        let mut edge_indices: FxHashMap<(NodeIndex, NodeIndex), EdgeIndex> =
+            FxHashMap::with_capacity_and_hasher(size_guess, FxBuildHasher);
         let mut diagnostics = Vec::new();
 
         // Add the root node.
@@ -178,7 +180,14 @@ impl ResolverOutput {
                     continue;
                 }
 
-                Self::add_edge(&mut graph, &mut inverse, root_index, edge, marker);
+                Self::add_edge(
+                    &mut graph,
+                    &mut inverse,
+                    &mut edge_indices,
+                    root_index,
+                    edge,
+                    marker,
+                );
             }
         }
 
@@ -279,6 +288,7 @@ impl ResolverOutput {
     fn add_edge(
         graph: &mut Graph<ResolutionGraphNode, UniversalMarker>,
         inverse: &mut FxHashMap<PackageRef<'_>, NodeIndex>,
+        edge_indices: &mut FxHashMap<(NodeIndex, NodeIndex), EdgeIndex>,
         root_index: NodeIndex,
         edge: &ResolutionDependencyEdge,
         marker: UniversalMarker,
@@ -308,15 +318,15 @@ impl ResolverOutput {
             edge_marker
         };
 
-        if let Some(weight) = graph
-            .find_edge(from_index, to_index)
-            .and_then(|edge| graph.edge_weight_mut(edge))
-        {
-            // If either the existing marker or new marker is `true`, then the dependency is
-            // included unconditionally, and so the combined marker is `true`.
-            weight.or(edge_marker);
-        } else {
-            graph.update_edge(from_index, to_index, edge_marker);
+        match edge_indices.entry((from_index, to_index)) {
+            std::collections::hash_map::Entry::Occupied(entry) => {
+                // If either the existing marker or new marker is `true`, then the dependency is
+                // included unconditionally, and so the combined marker is `true`.
+                graph[*entry.get()].or(edge_marker);
+            }
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(graph.add_edge(from_index, to_index, edge_marker));
+            }
         }
     }
 
@@ -917,6 +927,7 @@ impl From<ResolverOutput> for uv_distribution_types::Resolution {
 
         let mut transformed = Graph::with_capacity(graph.node_count(), graph.edge_count());
         let mut inverse = FxHashMap::with_capacity_and_hasher(graph.node_count(), FxBuildHasher);
+        let mut root_edges = FxHashSet::with_capacity_and_hasher(graph.node_count(), FxBuildHasher);
 
         // Create the root node.
         let root = transformed.add_node(Node::Root);
@@ -945,7 +956,9 @@ impl From<ResolverOutput> for uv_distribution_types::Resolution {
             match (&graph[source], &graph[target]) {
                 (ResolutionGraphNode::Root, ResolutionGraphNode::Dist(target_dist)) => {
                     let target = inverse[&target_dist.name()];
-                    transformed.update_edge(root, target, Edge::Prod);
+                    if root_edges.insert(target) {
+                        transformed.add_edge(root, target, Edge::Prod);
+                    }
                 }
                 (
                     ResolutionGraphNode::Dist(source_dist),
@@ -1047,4 +1060,153 @@ fn has_lower_bound(
         }
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use uv_distribution_filename::DistExtension;
+    use uv_pep508::VerbatimUrl;
+    use uv_redacted::DisplaySafeUrl;
+
+    use super::*;
+
+    #[test]
+    fn wide_resolution_edges_merge_markers() {
+        let edges: Vec<_> = (0..2_048)
+            .map(|index| ResolutionDependencyEdge {
+                from: None,
+                from_version: Version::from_str("0").expect("valid version"),
+                from_url: None,
+                from_index: None,
+                from_extra: None,
+                from_group: None,
+                to: PackageName::from_str(&format!("package-{index}")).expect("valid name"),
+                to_version: Version::from_str("1").expect("valid version"),
+                to_url: None,
+                to_index: None,
+                to_extra: None,
+                to_group: None,
+                marker: MarkerTree::TRUE,
+            })
+            .collect();
+
+        let mut graph = Graph::with_capacity(edges.len() + 1, edges.len());
+        let root = graph.add_node(ResolutionGraphNode::Root);
+        let mut inverse = FxHashMap::with_capacity_and_hasher(edges.len(), FxBuildHasher);
+        for edge in &edges {
+            let target = graph.add_node(ResolutionGraphNode::Root);
+            inverse.insert(
+                PackageRef {
+                    package_name: &edge.to,
+                    version: &edge.to_version,
+                    url: None,
+                    index: None,
+                    extra: None,
+                    group: None,
+                },
+                target,
+            );
+        }
+
+        let first = UniversalMarker::from_combined(
+            MarkerTree::from_str("sys_platform == 'darwin'").expect("valid marker"),
+        );
+        let second = UniversalMarker::from_combined(
+            MarkerTree::from_str("sys_platform == 'win32'").expect("valid marker"),
+        );
+        let mut expected = first;
+        expected.or(second);
+        let mut edge_indices = FxHashMap::with_capacity_and_hasher(edges.len(), FxBuildHasher);
+
+        for edge in &edges {
+            ResolverOutput::add_edge(
+                &mut graph,
+                &mut inverse,
+                &mut edge_indices,
+                root,
+                edge,
+                first,
+            );
+        }
+        for edge in &edges {
+            ResolverOutput::add_edge(
+                &mut graph,
+                &mut inverse,
+                &mut edge_indices,
+                root,
+                edge,
+                second,
+            );
+        }
+
+        assert_eq!(graph.edge_count(), edges.len());
+        assert_eq!(edge_indices.len(), edges.len());
+        assert!(graph.edge_weights().all(|marker| *marker == expected));
+    }
+
+    #[test]
+    fn root_edges_are_deduplicated_when_extras_are_collapsed() {
+        let name = PackageName::from_str("package").expect("valid name");
+        let version = Version::from_str("1").expect("valid version");
+        let url = DisplaySafeUrl::parse("https://example.com/package-1.0.0-py3-none-any.whl")
+            .expect("valid URL");
+        let dist = ResolvedDist::Installable {
+            dist: Arc::new(
+                Dist::from_http_url(
+                    name.clone(),
+                    VerbatimUrl::from_url(url.clone()),
+                    url,
+                    None,
+                    DistExtension::Wheel,
+                )
+                .expect("valid distribution"),
+            ),
+            version: Some(version.clone()),
+        };
+
+        let base = AnnotatedDist {
+            dist,
+            name,
+            version,
+            extra: None,
+            group: None,
+            hashes: HashDigests::empty(),
+            metadata: None,
+            marker: UniversalMarker::TRUE,
+        };
+        let extra = AnnotatedDist {
+            extra: Some(ExtraName::from_str("extra").expect("valid extra")),
+            ..base.clone()
+        };
+
+        let mut graph = Graph::with_capacity(3, 2);
+        let root = graph.add_node(ResolutionGraphNode::Root);
+        let base = graph.add_node(ResolutionGraphNode::Dist(base));
+        let extra = graph.add_node(ResolutionGraphNode::Dist(extra));
+        graph.add_edge(root, base, UniversalMarker::TRUE);
+        graph.add_edge(root, extra, UniversalMarker::TRUE);
+
+        let output = ResolverOutput {
+            graph,
+            requires_python: RequiresPython::greater_than_equal_version(
+                &Version::from_str("3.12").expect("valid version"),
+            ),
+            fork_markers: Vec::new(),
+            diagnostics: Vec::new(),
+            requirements: Vec::new(),
+            constraints: Constraints::default(),
+            overrides: Overrides::default(),
+            options: Options::default(),
+        };
+        let resolution = uv_distribution_types::Resolution::from(output);
+
+        assert_eq!(resolution.graph().node_count(), 2);
+        assert_eq!(resolution.graph().edge_count(), 1);
+        assert!(matches!(
+            resolution.graph().edge_weights().next(),
+            Some(Edge::Prod)
+        ));
+    }
 }
