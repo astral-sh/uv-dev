@@ -1,4 +1,5 @@
 use uv_platform::{Arch, Os};
+use uv_python::managed::platform_key_from_env;
 use uv_static::EnvVars;
 
 use anyhow::Result;
@@ -421,6 +422,34 @@ fn python_list_downloads_installed() {
     cpython-3.10.[LATEST]-[PLATFORM]    managed/cpython-3.10-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
     pypy-3.10.16-[PLATFORM]       <download available>
     graalpy-3.10.0-[PLATFORM]     <download available>
+    ");
+}
+
+#[test]
+fn python_list_ignores_unknown_managed_implementation() {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_filtered_python_keys()
+        .with_filtered_python_sources()
+        .with_managed_python_dirs();
+
+    fs_err::create_dir_all(context.temp_dir.path().join("managed").join(format!(
+        "mystery-3.12.0-{}",
+        platform_key_from_env().unwrap()
+    )))
+    .unwrap();
+
+    uv_snapshot!(context.filters(), context.python_list()
+        .arg("--only-installed")
+        .arg("--managed-python")
+        .env(EnvVars::UV_PYTHON_INSTALL_DIR, context.temp_dir.path().join("managed"))
+        .env(EnvVars::RUST_LOG, "warn"), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    WARN Ignoring malformed managed Python entry:
+        Unknown Python implementation `mystery`
     ");
 }
 
