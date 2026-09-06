@@ -10,6 +10,7 @@ use rustc_hash::{FxBuildHasher, FxHashMap};
 use tracing::debug;
 
 use uv_cache::{Cache, Refresh};
+use uv_cache_key::cache_digest;
 use uv_client::{BaseClientBuilder, FlatIndexClient, RegistryClientBuilder};
 use uv_configuration::{
     Concurrency, Constraints, DependencyGroupsWithDefaults, DryRun, ExcludeDependency,
@@ -18,8 +19,9 @@ use uv_configuration::{
 use uv_dispatch::BuildDispatch;
 use uv_distribution::{DistributionDatabase, LoweredExtraBuildDependencies};
 use uv_distribution_types::{
-    DependencyMetadata, HashGeneration, Index, IndexLocations, NameRequirementSpecification,
-    Requirement, RequiresPython, UnresolvedRequirementSpecification,
+    ConfigSettings, DependencyMetadata, HashGeneration, Index, IndexLocations,
+    NameRequirementSpecification, PackageConfigSettings, Requirement, RequiresPython,
+    UnresolvedRequirementSpecification,
 };
 use uv_git::ResolvedRepositoryReference;
 use uv_git_types::GitOid;
@@ -543,6 +545,8 @@ async fn do_lock(
         amd_gpu_architecture: _,
     } = settings;
 
+    let config_settings_digest = config_settings_digest(config_setting, config_settings_package);
+
     // Collect the requirements, etc.
     let members = target.members();
     let packages = target.packages();
@@ -933,6 +937,7 @@ async fn do_lock(
             upgrade,
             refresh,
             &options,
+            config_settings_digest.as_ref(),
             &hasher,
             state.index(),
             &database,
@@ -1107,7 +1112,8 @@ async fn do_lock(
                 index_locations,
             )?
             .with_conflicts(conflicts)
-            .with_required_environments(lock_required_environments.into_markers());
+            .with_required_environments(lock_required_environments.into_markers())
+            .with_config_settings_digest(config_settings_digest);
 
             let lock = if preview.is_enabled(PreviewFeature::MissingExcludeNewerPackageLock) {
                 lock.without_unused_exclude_newer_packages()
@@ -1174,6 +1180,7 @@ impl ValidatedLock {
         upgrade: &Upgrade,
         refresh: Option<&Refresh>,
         options: &Options,
+        config_settings_digest: Option<&String>,
         hasher: &HashStrategy,
         index: &InMemoryIndex,
         database: &DistributionDatabase<'_, Context>,
@@ -1267,6 +1274,11 @@ impl ValidatedLock {
                     .unwrap_or("true".to_string()),
             );
             return Ok(Self::Versions(lock));
+        }
+
+        if lock.config_settings_digest() != config_settings_digest.map(String::as_str) {
+            debug!("Resolving despite existing lockfile due to change in build config settings");
+            return Ok(Self::Preferable(lock));
         }
 
         // If the set of supported environments has changed, we have to perform a clean resolution.
@@ -1614,6 +1626,16 @@ impl ValidatedLock {
             Self::Versions(lock) => lock,
         }
     }
+}
+
+/// Return a stable digest for non-empty PEP 517 build config settings.
+pub(crate) fn config_settings_digest(
+    config_setting: &ConfigSettings,
+    config_settings_package: &PackageConfigSettings,
+) -> Option<String> {
+    (config_setting != &ConfigSettings::default()
+        || config_settings_package != &PackageConfigSettings::default())
+        .then(|| cache_digest(&(config_setting, config_settings_package)))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
