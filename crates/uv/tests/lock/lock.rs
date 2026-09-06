@@ -2322,6 +2322,106 @@ fn lock_project_with_scoped_override_yank() -> Result<()> {
     Ok(())
 }
 
+/// Lock a project when only one wheel in a release is yanked.
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn lock_partially_yanked_release() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/simple/basic-package/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            indoc! {r#"
+                <!DOCTYPE html>
+                <html>
+                  <body>
+                    <a
+                      href="/files/basic_package-0.1.0-1-py3-none-any.whl#sha256=1111111111111111111111111111111111111111111111111111111111111111"
+                      data-core-metadata="true"
+                    >
+                      basic_package-0.1.0-1-py3-none-any.whl
+                    </a>
+                    <a
+                      href="/files/basic_package-0.1.0-2-py3-none-any.whl#sha256=2222222222222222222222222222222222222222222222222222222222222222"
+                      data-core-metadata="true"
+                      data-yanked="broken wheel"
+                    >
+                      basic_package-0.1.0-2-py3-none-any.whl
+                    </a>
+                  </body>
+                </html>
+            "#},
+            "text/html",
+        ))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(
+            "/files/basic_package-0.1.0-1-py3-none-any.whl.metadata",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_string(indoc! {"
+            Metadata-Version: 2.1
+            Name: basic-package
+            Version: 0.1.0
+        "}))
+        .mount(&server)
+        .await;
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+            [project]
+            name = "project"
+            version = "0.1.0"
+            requires-python = ">=3.12,<3.13"
+            dependencies = ["basic-package>=0.1.0"]
+        "#})?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index-url")
+        .arg(format!("{}/simple", server.uri()))
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    // The yanked wheel is undesirably retained in the lockfile; see astral-sh/uv#21430.
+    insta::with_settings!({
+        filters => context.filters(),
+    }, {
+        assert_snapshot!(context.read("uv.lock"), @r#"
+        version = 1
+        revision = 3
+        requires-python = "==3.12.*"
+
+        [[package]]
+        name = "basic-package"
+        version = "0.1.0"
+        source = { registry = "http://[LOCALHOST]/simple" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/basic_package-0.1.0-1-py3-none-any.whl", hash = "sha256:1111111111111111111111111111111111111111111111111111111111111111" },
+            { url = "http://[LOCALHOST]/files/basic_package-0.1.0-2-py3-none-any.whl", hash = "sha256:2222222222222222222222222222222222222222222222222222222222222222" },
+        ]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "basic-package" },
+        ]
+
+        [package.metadata]
+        requires-dist = [{ name = "basic-package", specifier = ">=0.1.0" }]
+        "#);
+    });
+
+    Ok(())
+}
+
 /// Reject a scoped override from an explicit index.
 #[cfg(feature = "test-universal")]
 #[test]
