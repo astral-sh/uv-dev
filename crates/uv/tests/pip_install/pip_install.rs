@@ -8069,6 +8069,137 @@ fn find_links_relative_to_working_directory() -> Result<()> {
     Ok(())
 }
 
+/// Rebuilt wheels in a local flat index must be reinstalled on upgrade, whether selected directly
+/// or transitively, even if their version and filename are unchanged.
+#[test]
+fn upgrade_rebuilt_find_links_wheels() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let links = context.temp_dir.child("links");
+    links.create_dir_all()?;
+
+    let write_wheel = |path: &Path,
+                       name: &str,
+                       requires_dist: Option<&str>,
+                       value: &str|
+     -> Result<()> {
+        let metadata = if let Some(requires_dist) = requires_dist {
+            format!(
+                "Metadata-Version: 2.1\nName: {name}\nVersion: 1.0.0\nRequires-Dist: {requires_dist}\n"
+            )
+        } else {
+            format!("Metadata-Version: 2.1\nName: {name}\nVersion: 1.0.0\n")
+        };
+        let record = format!(
+            "{name}/__init__.py,,\n{name}-1.0.0.dist-info/METADATA,,\n{name}-1.0.0.dist-info/WHEEL,,\n{name}-1.0.0.dist-info/RECORD,,\n"
+        );
+        let mut writer = ZipFileWriter::new(Vec::new());
+        for (entry_path, contents) in [
+            (
+                format!("{name}/__init__.py"),
+                format!("VALUE = {value:?}\n"),
+            ),
+            (format!("{name}-1.0.0.dist-info/METADATA"), metadata),
+            (
+                format!("{name}-1.0.0.dist-info/WHEEL"),
+                "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n".to_string(),
+            ),
+            (format!("{name}-1.0.0.dist-info/RECORD"), record),
+        ] {
+            let entry = ZipEntryBuilder::new(entry_path.into(), Compression::Stored);
+            block_on(writer.write_entry_whole(entry, contents.as_bytes()))?;
+        }
+        fs_err::write(path, block_on(writer.close())?)?;
+        Ok(())
+    };
+
+    let root = context.temp_dir.child("root-1.0.0-py3-none-any.whl");
+    let direct = links.child("direct-1.0.0-py3-none-any.whl");
+    let transitive = links.child("transitive-1.0.0-py3-none-any.whl");
+    write_wheel(root.path(), "root", Some("transitive==1.0.0"), "root")?;
+    write_wheel(direct.path(), "direct", None, "before")?;
+    write_wheel(transitive.path(), "transitive", None, "before")?;
+    filetime::set_file_mtime(
+        direct.path(),
+        filetime::FileTime::from_unix_time(1_700_000_000, 0),
+    )?;
+    filetime::set_file_mtime(
+        transitive.path(),
+        filetime::FileTime::from_unix_time(1_700_000_000, 0),
+    )?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg(root.path())
+        .arg("direct")
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg(links.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Prepared 3 packages in [TIME]
+    Installed 3 packages in [TIME]
+     + direct==1.0.0
+     + root==1.0.0 (from file://[TEMP_DIR]/root-1.0.0-py3-none-any.whl)
+     + transitive==1.0.0
+    ");
+    context
+        .assert_command("from direct import VALUE; assert VALUE == 'before'")
+        .success();
+    context
+        .assert_command("from transitive import VALUE; assert VALUE == 'before'")
+        .success();
+
+    write_wheel(direct.path(), "direct", None, "after")?;
+    write_wheel(transitive.path(), "transitive", None, "after")?;
+    filetime::set_file_mtime(
+        direct.path(),
+        filetime::FileTime::from_unix_time(1_800_000_000, 0),
+    )?;
+    filetime::set_file_mtime(
+        transitive.path(),
+        filetime::FileTime::from_unix_time(1_800_000_000, 0),
+    )?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg(root.path())
+        .arg("direct")
+        .arg("--upgrade")
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg(links.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Uninstalled 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     ~ direct==1.0.0
+     ~ transitive==1.0.0
+    ");
+    context
+        .assert_command("from direct import VALUE; assert VALUE == 'after'")
+        .success();
+    context
+        .assert_command("from transitive import VALUE; assert VALUE == 'after'")
+        .success();
+
+    // Keep an unchanged wheel installed on subsequent upgrades.
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg(root.path())
+        .arg("direct")
+        .arg("--upgrade")
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg(links.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Checked 3 packages in [TIME]
+    ");
+
+    Ok(())
+}
+
 /// Install the latest version across multiple `--find-links` directories.
 #[test]
 fn find_links_multiple() -> Result<()> {
