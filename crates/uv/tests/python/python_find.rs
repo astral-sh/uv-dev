@@ -1436,6 +1436,38 @@ fn python_find_search_path() {
     ");
 }
 
+#[cfg(unix)]
+#[test]
+fn python_find_implementation_range_search_path() {
+    let context = uv_test::test_context_with_versions!(&["3.12"]).with_filtered_python_sources();
+
+    let search_path = context.temp_dir.child("search-path");
+    search_path.create_dir_all().unwrap();
+    fs_err::os::unix::fs::symlink(
+        &context.python_versions.first().unwrap().1,
+        search_path.join("cpython3.12"),
+    )
+    .unwrap();
+
+    uv_snapshot!(context.filters(), context
+        .python_find()
+        .arg("cpython@3.12")
+        .env(EnvVars::UV_PYTHON_SEARCH_PATH, search_path.path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/search-path/cpython3.12
+    ");
+
+    uv_snapshot!(context.filters(), context
+        .python_find()
+        .arg("cpython@>=3.12,<3.13")
+        .env(EnvVars::UV_PYTHON_SEARCH_PATH, search_path.path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/search-path/cpython3.12
+    ");
+}
+
 /// When `requires-python` constrains to a minor version, we should find the correct interpreter
 /// even when only a version-specific executable (e.g., `python3.12`) is available.
 ///
