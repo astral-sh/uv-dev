@@ -1107,6 +1107,7 @@ async fn do_lock(
                 index_locations,
             )?
             .with_conflicts(conflicts)
+            .with_index_locations(index_locations, target.install_path())?
             .with_required_environments(lock_required_environments.into_markers());
 
             let lock = if preview.is_enabled(PreviewFeature::MissingExcludeNewerPackageLock) {
@@ -1202,6 +1203,14 @@ impl ValidatedLock {
             );
             return Ok(Self::Unusable(lock));
         }
+        if !lock.satisfies_index_locations(index_locations, install_path)? {
+            let _ = writeln!(
+                printer.stderr(),
+                "Ignoring existing lockfile due to change in index configuration"
+            );
+            return Ok(Self::Unusable(lock));
+        }
+
         // Ignore package-specific settings that cannot affect the existing resolution. If the
         // package is added to the requirements, the requirement checks below will invalidate the
         // lockfile instead.

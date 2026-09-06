@@ -1433,6 +1433,7 @@ fn lock_sdist_url() -> Result<()> {
 
         [options]
         exclude-newer = "2024-03-25T00:00:00Z"
+        indexes = [{ url = "http://[LOCALHOST]/simple/", default = true }]
 
         [[package]]
         name = "a"
@@ -1455,7 +1456,7 @@ fn lock_sdist_url() -> Result<()> {
     });
 
     // Re-run with `--locked`.
-    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()).arg("--locked"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
@@ -1463,23 +1464,24 @@ fn lock_sdist_url() -> Result<()> {
 
     // Re-run with `--check --offline`. We cannot refresh direct URL metadata without network
     // access, so preserve the metadata in the already-correct lockfile.
-    uv_snapshot!(context.filters(), context.lock().arg("--check").arg("--offline").arg("--no-cache"), @"
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()).arg("--check").arg("--offline").arg("--no-cache"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
     ");
 
     // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--index-url").arg(server.index_url()).arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    WARN Range requests not supported for hatchling-1.20.0-py3-none-any.whl; streaming wheel
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
      + a==1.0.0 (from http://[LOCALHOST]/files/a-1.0.0.tar.gz)
     ");
 
     // Re-install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--index-url").arg(server.index_url()).arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Checked 1 package in [TIME]
@@ -23559,6 +23561,317 @@ fn lock_explicit_index() -> Result<()> {
         "#
         );
     });
+
+    Ok(())
+}
+
+/// Changes to explicit, priority, or default index policy must invalidate an existing lock.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_index_policy() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let first = PackseServer::new("extras/missing-extra.toml");
+    let priority = PackseServer::new("simple/single-package.toml");
+    let default = PackseServer::new("simple/single-package.toml");
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+
+    pyproject_toml.write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a"]
+
+        [[tool.uv.index]]
+        name = "test"
+        url = "{first}"
+        "#,
+        first = first.index_url(),
+    })?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--default-index").arg(default.index_url()), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    WARN Range requests not supported for a-1.0.0-py3-none-any.whl; streaming wheel
+    Resolved 2 packages in [TIME]
+    ");
+
+    let lock = context.read("uv.lock");
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(lock.lines().filter(|line| line.starts_with("indexes = ") || line.starts_with("source = { registry = ")).collect::<Vec<_>>().join("\n"), @r#"
+        indexes = [{ url = "http://[LOCALHOST]/simple/" }, { url = "http://[LOCALHOST]/simple/", default = true }]
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        "#);
+    });
+
+    // The formerly implicit index can no longer satisfy an unpinned dependency.
+    pyproject_toml.write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a"]
+
+        [[tool.uv.index]]
+        name = "test"
+        url = "{first}"
+        explicit = true
+        "#,
+        first = first.index_url(),
+    })?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--default-index").arg(default.index_url()).arg("--locked"), @"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+
+    ----- stderr -----
+    Ignoring existing lockfile due to change in index configuration
+    WARN Range requests not supported for a-2.0.0-py3-none-any.whl; streaming wheel
+    Resolved 2 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+
+    // Adding a higher-priority index must also prevent the old selection from being reused.
+    pyproject_toml.write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a"]
+
+        [[tool.uv.index]]
+        name = "priority"
+        url = "{priority}"
+
+        [[tool.uv.index]]
+        name = "test"
+        url = "{first}"
+        "#,
+        priority = priority.index_url(),
+        first = first.index_url(),
+    })?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--default-index").arg(default.index_url()).arg("--locked"), @"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+
+    ----- stderr -----
+    Ignoring existing lockfile due to change in index configuration
+    WARN Range requests not supported for a-2.0.0-py3-none-any.whl; streaming wheel
+    Resolved 2 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+
+    // Replacing the default index changes the fallback set even when the URLs still overlap.
+    pyproject_toml.write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a"]
+
+        [[tool.uv.index]]
+        name = "test"
+        url = "{first}"
+        default = true
+        "#,
+        first = first.index_url(),
+    })?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+
+    ----- stderr -----
+    Ignoring existing lockfile due to change in index configuration
+    WARN Range requests not supported for a-1.0.0-py3-none-any.whl; streaming wheel
+    Resolved 2 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+
+    Ok(())
+}
+
+/// Index policy in a lockfile must preserve relative paths and all resolution-affecting fields.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_index_policy_relative_url() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let default = PackseServer::new("simple/single-package.toml");
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    fs_err::create_dir_all(context.temp_dir.child("links"))?;
+
+    pyproject_toml.write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a"]
+
+        [[tool.uv.index]]
+        name = "local"
+        url = "./links"
+        explicit = true
+        format = "flat"
+        ignore-error-codes = [403]
+        "#,
+    )?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--default-index").arg(default.index_url()), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    WARN Range requests not supported for a-2.0.0-py3-none-any.whl; streaming wheel
+    Resolved 2 packages in [TIME]
+    ");
+
+    let lock = context.read("uv.lock");
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(lock.lines().find(|line| line.starts_with("indexes = ")).unwrap_or_default(), @r#"
+        indexes = [{ url = "links", explicit = true, format = "flat", ignore-error-codes = [403] }, { url = "http://[LOCALHOST]/simple/", default = true }]
+        "#);
+    });
+
+    // Copy the project to a different root; the local index must remain valid there.
+    let relocated = uv_test::test_context!("3.12");
+    fs_err::create_dir_all(relocated.temp_dir.child("links"))?;
+    fs_err::copy(&pyproject_toml, relocated.temp_dir.child("pyproject.toml"))?;
+    fs_err::copy(
+        context.temp_dir.child("uv.lock"),
+        relocated.temp_dir.child("uv.lock"),
+    )?;
+
+    uv_snapshot!(relocated.filters(), relocated.lock().arg("--default-index").arg(default.index_url()).arg("--locked"), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    // Changing only the index format must invalidate the lock.
+    let relocated_pyproject = relocated.temp_dir.child("pyproject.toml");
+    relocated_pyproject.write_str(
+        &fs_err::read_to_string(&pyproject_toml)?
+            .replace("format = \"flat\"", "format = \"simple\""),
+    )?;
+
+    uv_snapshot!(relocated.filters(), relocated.lock().arg("--default-index").arg(default.index_url()).arg("--locked"), @"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+
+    ----- stderr -----
+    Ignoring existing lockfile due to change in index configuration
+    WARN Range requests not supported for a-2.0.0-py3-none-any.whl; streaming wheel
+    Resolved 2 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+
+    // Changing only the ignored status codes must also invalidate the lock.
+    relocated_pyproject.write_str(&fs_err::read_to_string(&pyproject_toml)?.replace(
+        "ignore-error-codes = [403]",
+        "ignore-error-codes = [401, 403]",
+    ))?;
+
+    uv_snapshot!(relocated.filters(), relocated.lock().arg("--default-index").arg(default.index_url()).arg("--locked"), @"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+
+    ----- stderr -----
+    Ignoring existing lockfile due to change in index configuration
+    WARN Range requests not supported for a-2.0.0-py3-none-any.whl; streaming wheel
+    Resolved 2 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+
+    Ok(())
+}
+
+/// Credentials on an unused index must not be persisted in the lockfile's index policy.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_index_policy_credentials() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let default = PackseServer::new("simple/single-package.toml");
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a"]
+
+        [[tool.uv.index]]
+        name = "signed"
+        url = "https://user:password@example.invalid/simple?token=secret&X-Amz-Credential=credential&X-Amz-Signature=signature&X-Amz-Security-Token=session#secret"
+        explicit = true
+        "#,
+    )?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--default-index").arg(default.index_url()), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    WARN Range requests not supported for a-2.0.0-py3-none-any.whl; streaming wheel
+    Resolved 2 packages in [TIME]
+    ");
+
+    let lock = context.read("uv.lock");
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(lock.lines().find(|line| line.starts_with("indexes = ")).unwrap_or_default(), @r#"
+        indexes = [{ url = "https://example.invalid/simple", explicit = true }, { url = "http://[LOCALHOST]/simple/", default = true }]
+        "#);
+    });
+
+    // Rotating credentials must not change the policy identity or invalidate the lock.
+    pyproject_toml.write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a"]
+
+        [[tool.uv.index]]
+        name = "signed"
+        url = "https://other:rotated@example.invalid/simple?token=rotated&X-Amz-Credential=other&X-Amz-Signature=rotated&X-Amz-Security-Token=rotated#rotated"
+        explicit = true
+        "#,
+    )?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--default-index").arg(default.index_url()).arg("--locked"), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
 
     Ok(())
 }
