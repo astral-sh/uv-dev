@@ -114,6 +114,15 @@ pub struct RequirementEntry {
     pub hashes: Vec<String>,
 }
 
+/// A named constraint with additional metadata from the `requirements.txt`.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct ConstraintEntry {
+    /// The actual PEP 508 constraint.
+    pub requirement: uv_pep508::Requirement<VerbatimParsedUrl>,
+    /// Hashes of the downloadable packages.
+    pub hashes: Vec<String>,
+}
+
 // We place the impl here instead of next to `UnresolvedRequirementSpecification` because
 // `UnresolvedRequirementSpecification` is defined in `distribution-types` and `requirements-txt`
 // depends on `distribution-types`.
@@ -148,7 +157,7 @@ pub struct RequirementsTxt {
     /// The actual requirements with the hashes.
     pub requirements: Vec<RequirementEntry>,
     /// Constraints included with `-c`.
-    pub constraints: Vec<uv_pep508::Requirement<VerbatimParsedUrl>>,
+    pub constraints: Vec<ConstraintEntry>,
     /// Editables with `-e`.
     pub editables: Vec<RequirementEntry>,
     /// The index URL, specified with `--index-url`.
@@ -511,7 +520,10 @@ impl RequirementsTxt {
                     for entry in sub_constraints.requirements {
                         match entry.requirement {
                             RequirementsTxtRequirement::Named(requirement) => {
-                                data.constraints.push(requirement);
+                                data.constraints.push(ConstraintEntry {
+                                    requirement,
+                                    hashes: entry.hashes,
+                                });
                             }
                             RequirementsTxtRequirement::Unnamed(_) => {
                                 return Err(RequirementsTxtParserError::UnnamedConstraint {
@@ -3035,8 +3047,11 @@ mod test {
             .iter()
             .map(|entry| entry.requirement.to_string())
             .collect();
-        let constraints: BTreeSet<String> =
-            parsed.constraints.iter().map(ToString::to_string).collect();
+        let constraints: BTreeSet<String> = parsed
+            .constraints
+            .iter()
+            .map(|entry| entry.requirement.to_string())
+            .collect();
 
         assert_debug_snapshot!(requirements, @r#"
         {

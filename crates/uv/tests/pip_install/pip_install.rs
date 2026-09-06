@@ -8630,6 +8630,42 @@ fn require_hashes_constraint() -> Result<()> {
     Ok(())
 }
 
+/// Include a hash in a constraint nested from the requirements file.
+#[test]
+fn require_hashes_nested_constraint() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let requirements_txt = context.temp_dir.child("requirements.txt");
+    requirements_txt.write_str("ok==1.0.0\n-c constraints.txt")?;
+
+    let constraints_txt = context.temp_dir.child("constraints.txt");
+    constraints_txt.write_str(
+        "ok==1.0.0 --hash=sha256:79f0b33e6ce1e09eaa1784c8eee275dfe84d215d9c65c652f07c18e85fdaac5f",
+    )?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("-r")
+        .arg(requirements_txt.path())
+        .arg("--no-deps")
+        .arg("--require-hashes")
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg(context.workspace_root.join("test/links")), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + ok==1.0.0
+    "
+    );
+
+    Ok(())
+}
+
 /// We allow `--require-hashes` for unnamed URL dependencies.
 #[test]
 fn require_hashes_unnamed() -> Result<()> {
