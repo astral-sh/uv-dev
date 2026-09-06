@@ -79,6 +79,26 @@ enabled = true
 "api.github.com" = "allow"
 "github.com" = "allow"
 
+[permissions.pull-request-qa]
+description = "Quality assurance with a built dev binary and temporary test projects."
+extends = ":read-only"
+
+[permissions.pull-request-qa.filesystem]
+":tmpdir" = "write"
+":slash_tmp" = "write"
+
+[permissions.pull-request-qa.network]
+enabled = true
+
+[permissions.pull-request-qa.network.domains]
+"127.0.0.1" = "allow"
+"localhost" = "allow"
+"api.github.com" = "allow"
+"files.pythonhosted.org" = "allow"
+"github.com" = "allow"
+"pypi.org" = "allow"
+"release-assets.githubusercontent.com" = "allow"
+
 [permissions.workflow-failure]
 description = "Read-only workflow failure diagnosis with GitHub API access."
 extends = ":read-only"
