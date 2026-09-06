@@ -834,24 +834,67 @@ impl ResolverOutput {
         }
         let mut dupes = vec![];
         for (name, marker_trees) in name_to_markers {
-            for (i, (version1, marker1)) in marker_trees.iter().enumerate() {
-                for (version2, marker2) in &marker_trees[i + 1..] {
-                    if version1 == version2 {
-                        continue;
-                    }
-                    if !marker1.is_disjoint(**marker2) {
-                        dupes.push(ConflictingDistributionError {
-                            name: name.clone(),
-                            version1: (*version1).clone(),
-                            version2: (*version2).clone(),
-                            marker1: **marker1,
-                            marker2: **marker2,
-                        });
-                    }
-                }
-            }
+            find_conflicting_distribution_pairs(name, &marker_trees, &mut dupes);
         }
         dupes
+    }
+}
+
+/// Find every pair of distinct versions that is installable in the same marker environment.
+fn find_conflicting_distribution_pairs(
+    name: &PackageName,
+    marker_trees: &[(&Version, &UniversalMarker)],
+    dupes: &mut Vec<ConflictingDistributionError>,
+) {
+    let Some((first_version, _)) = marker_trees.first() else {
+        return;
+    };
+    if marker_trees
+        .iter()
+        .all(|(version, _)| version == first_version)
+    {
+        return;
+    }
+
+    let mut version_to_markers = BTreeMap::new();
+    for (version, marker) in marker_trees {
+        version_to_markers
+            .entry(*version)
+            .and_modify(|markers: &mut UniversalMarker| markers.or(**marker))
+            .or_insert(**marker);
+    }
+
+    let mut markers = version_to_markers.into_values();
+    let Some(mut previous_markers) = markers.next() else {
+        return;
+    };
+    let mut has_overlap = false;
+    for marker in markers {
+        if !previous_markers.is_disjoint(marker) {
+            has_overlap = true;
+            break;
+        }
+        previous_markers.or(marker);
+    }
+    if !has_overlap {
+        return;
+    }
+
+    for (i, (version1, marker1)) in marker_trees.iter().enumerate() {
+        for (version2, marker2) in &marker_trees[i + 1..] {
+            if version1 == version2 {
+                continue;
+            }
+            if !marker1.is_disjoint(**marker2) {
+                dupes.push(ConflictingDistributionError {
+                    name: name.clone(),
+                    version1: (*version1).clone(),
+                    version2: (*version2).clone(),
+                    marker1: **marker1,
+                    marker2: **marker2,
+                });
+            }
+        }
     }
 }
 
@@ -1047,4 +1090,105 @@ fn has_lower_bound(
         }
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::str::FromStr;
+
+    fn find_conflicts(distributions: &[(&str, &str)]) -> Vec<ConflictingDistributionError> {
+        let name = PackageName::from_str("example").expect("valid package name");
+        let distributions = distributions
+            .iter()
+            .map(|(version, marker)| {
+                (
+                    Version::from_str(version).expect("valid version"),
+                    UniversalMarker::from_combined(
+                        MarkerTree::from_str(marker).expect("valid marker expression"),
+                    ),
+                )
+            })
+            .collect::<Vec<_>>();
+        let marker_trees = distributions
+            .iter()
+            .map(|(version, marker)| (version, marker))
+            .collect::<Vec<_>>();
+        let mut conflicts = vec![];
+        find_conflicting_distribution_pairs(&name, &marker_trees, &mut conflicts);
+        conflicts
+    }
+
+    #[test]
+    fn disjoint_distribution_versions() {
+        let conflicts = find_conflicts(&[
+            ("1.0", "python_full_version == '3.8.0'"),
+            ("2.0", "python_full_version == '3.9.0'"),
+            ("3.0", "python_full_version == '3.10.0'"),
+            ("4.0", "python_full_version == '3.11.0'"),
+        ]);
+        assert!(conflicts.is_empty());
+    }
+
+    #[test]
+    fn repeated_distribution_versions() {
+        let conflicts = find_conflicts(&[
+            ("1", "python_full_version == '3.8.0'"),
+            ("1.0", "python_full_version == '3.9.0'"),
+            ("1.0.0", "python_full_version == '3.9.0'"),
+            ("2.0", "python_full_version == '3.10.0'"),
+            ("2.0", "python_full_version == '3.11.0'"),
+            ("2.0", "python_full_version == '3.11.0'"),
+        ]);
+        assert!(conflicts.is_empty());
+    }
+
+    #[test]
+    fn equivalent_distribution_versions() {
+        let conflicts = find_conflicts(&[
+            ("1", "python_full_version >= '3.8.0'"),
+            ("1.0", "python_full_version >= '3.9.0'"),
+            ("1.0.0", "python_full_version >= '3.10.0'"),
+        ]);
+        assert!(conflicts.is_empty());
+    }
+
+    #[test]
+    fn late_distribution_version_overlap() {
+        let conflicts = find_conflicts(&[
+            ("1.0", "python_full_version == '3.8.0'"),
+            ("2.0", "python_full_version == '3.9.0'"),
+            ("3.0", "python_full_version == '3.10.0'"),
+            ("4.0", "python_full_version == '3.11.0'"),
+            ("5.0", "python_full_version == '3.8.0'"),
+        ]);
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(
+            conflicts[0].version1,
+            Version::from_str("1.0").expect("valid version")
+        );
+        assert_eq!(
+            conflicts[0].version2,
+            Version::from_str("5.0").expect("valid version")
+        );
+    }
+
+    #[test]
+    fn distribution_version_overlap_preserves_pair_order() {
+        let conflicts = find_conflicts(&[
+            ("1.0", "sys_platform == 'linux'"),
+            ("2.0", "sys_platform == 'win32'"),
+            ("1.0", "sys_platform == 'win32'"),
+            ("3.0", "sys_platform == 'win32'"),
+            ("2.0", "sys_platform == 'linux'"),
+        ]);
+        let versions = conflicts
+            .iter()
+            .map(|conflict| format!("{} -> {}", conflict.version1, conflict.version2))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            versions,
+            ["1.0 -> 2.0", "2.0 -> 1.0", "2.0 -> 3.0", "1.0 -> 3.0"]
+        );
+    }
 }
