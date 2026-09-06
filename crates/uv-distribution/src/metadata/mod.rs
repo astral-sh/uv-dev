@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use rustc_hash::{FxHashMap, FxHashSet};
 use thiserror::Error;
 
 use uv_auth::CredentialsCache;
@@ -10,7 +11,8 @@ use uv_distribution_types::{GitDirectorySourceUrl, IndexLocations, Requirement};
 use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep440::{Version, VersionSpecifiers};
 use uv_pypi_types::{HashDigests, ResolutionMetadata};
-use uv_workspace::dependency_groups::DependencyGroupError;
+use uv_workspace::dependency_groups::{DependencyGroupError, FlatDependencyGroups};
+use uv_workspace::pyproject::Sources;
 use uv_workspace::{WorkspaceCache, WorkspaceError};
 
 pub use crate::metadata::build_requires::{BuildRequires, LoweredExtraBuildDependencies};
@@ -23,6 +25,32 @@ mod build_requires;
 mod dependency_groups;
 mod lowering;
 mod requires_dist;
+
+/// Index the requirements for each dependency group referenced by a source.
+fn source_group_requirements<'a>(
+    sources: &'a BTreeMap<PackageName, Sources>,
+    dependency_groups: &'a FlatDependencyGroups,
+) -> FxHashMap<&'a GroupName, FxHashSet<&'a PackageName>> {
+    sources
+        .values()
+        .flat_map(Sources::iter)
+        .filter_map(|source| source.group())
+        .collect::<FxHashSet<_>>()
+        .into_iter()
+        .filter_map(|group| {
+            dependency_groups.get(group).map(|flat_group| {
+                (
+                    group,
+                    flat_group
+                        .requirements
+                        .iter()
+                        .map(|requirement| &requirement.name)
+                        .collect(),
+                )
+            })
+        })
+        .collect()
+}
 
 #[derive(Debug, Error)]
 pub enum MetadataError {
