@@ -3862,14 +3862,16 @@ fn tool_install_requirements_txt() {
     let tool_dir = context.temp_dir.child("tools");
     let bin_dir = context.temp_dir.child("bin");
 
-    let requirements_txt = context.temp_dir.child("requirements.txt");
+    let requirements_dir = context.temp_dir.child("has,comma");
+    requirements_dir.create_dir_all().unwrap();
+    let requirements_txt = requirements_dir.child("requirements.txt");
     requirements_txt.write_str("iniconfig").unwrap();
 
     // Install `black`
     uv_snapshot!(context.filters(), context.tool_install()
         .arg("black")
         .arg("--with-requirements")
-        .arg("requirements.txt")
+        .arg(requirements_txt.path())
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -3913,7 +3915,7 @@ fn tool_install_requirements_txt() {
     uv_snapshot!(context.filters(), context.tool_install()
         .arg("black")
         .arg("--with-requirements")
-        .arg("requirements.txt")
+        .arg(requirements_txt.path())
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stderr -----
