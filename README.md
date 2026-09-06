@@ -12,11 +12,18 @@ that satisfies a broad major-version request. The desired selector would work wi
 install`, `uv sync --python`, and `.python-version`; today `3.x` is rejected as an invalid download
 request, while `3` does not express the requested newest-release policy.
 
-A maintainer has pointed out that bare `uv python install` is already the documented way to install
-the latest stable Python. This supplies an existing solution for the install-only case and asks the
-reporter to confirm whether it meets their needs. It does not by itself provide a persistent or
-argument-level latest selector for `uv sync --python` or `.python-version`, so the key remaining
-scope is whether those consumers should accept an explicit rolling request.
+A maintainer pointed out that bare `uv python install` is already the documented way to install the
+latest stable Python. The reporter confirmed that this covers the original CI use case: on a fresh
+runner, the command installs the newest managed interpreter and a subsequent `uv sync` selects it.
+The remaining feature request is therefore narrower: support a declarative latest selector in
+`.python-version` or `--python` without requiring a preceding install step.
+
+The reporter also found a separate input-handling discrepancy while testing uv 0.10.4. In their
+macOS x86_64 environment, unsatisfiable version-shaped `.python-version` values failed explicitly,
+but `3.x` and an arbitrary non-version string were silently ignored and uv selected the same Python
+as when no version file existed. By contrast, `uv python find 3.x` rejected the CLI input. This is a
+user-reported reproduction, not yet independently confirmed. The suggested explanation involving
+compatibility with pyenv virtualenv names is only a hypothesis.
 
 The same underlying capability is already tracked by astral-sh/uv#13535. Although that issue's
 example is `uvx python@latest`, it points to uv's generic Python request parser, where current source
@@ -30,9 +37,29 @@ that canonical discussion.
 ## Maintainer follow-up
 
 The maintainer asked whether bare `uv python install` works for the reporter and cited the
-documented “install the latest Python version” behavior. A reporter response would help establish
-whether the request is satisfied by a two-step workflow or specifically requires a selector that
-can be passed through `uv sync --python` and stored in `.python-version`.
+documented “install the latest Python version” behavior. The reporter confirmed that it does, so no
+further clarification is needed for the original fresh-runner workflow. A maintainer decision is
+still needed on the narrowed declarative-selector request and on whether the `.python-version`
+parsing discrepancy should be tracked separately as incorrect behavior or documentation work.
+
+## Reported reproduction: `.python-version` parsing
+
+Environment reported by the user: uv 0.10.4 on macOS x86_64. With only `.python-version` changed,
+the observed outcomes were:
+
+| `.python-version` content | Reported result |
+| --- | --- |
+| `3.99` | Error: no interpreter found for Python 3.99 |
+| `>=3.99` | Error: no interpreter found for Python >=3.99 |
+| `3.x` | Silently selected an existing managed Python 3.12 |
+| `notapython` | Silently selected the same managed Python 3.12 |
+| No file | Selected the same managed Python 3.12 |
+
+The reporter additionally observed that `uv python find 3.x` errors rather than silently falling
+back. Investigation should first confirm these results on the current uv version, then determine
+whether unrecognized `.python-version` contents are intentionally ignored for interoperability. If
+intentional, the behavior may need documentation; if not, the file and CLI parsing paths should be
+made consistent.
 
 ## Classification
 
@@ -47,6 +74,11 @@ This is not a regression or a correctness bug: current broad version requests in
 an existing satisfying interpreter, and current source explicitly reports that a latest request is
 not yet supported. Bare `uv python install` already handles installing the latest stable Python; the
 requested reusable rolling selector remains new functionality.
+
+The newly reported silent fallback for invalid `.python-version` values may be a correctness or
+documentation issue, but it is distinct from the latest-selector enhancement and has not been
+confirmed against the current version. It does not currently change the duplicate classification
+for the primary request.
 
 ## Related
 
