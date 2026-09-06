@@ -3964,6 +3964,62 @@ fn no_prerelease_hint_source_builds() -> Result<()> {
     Ok(())
 }
 
+/// `--prerelease=allow` is not propagated to build requirements.
+#[test]
+fn prerelease_allow_does_not_apply_to_build_requirements() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("prereleases/package-prerelease-specified-mixed-available.toml");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+            [project]
+            name = "project"
+            version = "0.1.0"
+
+            [build-system]
+            requires = ["a>=0.1.0"]
+            backend-path = ["."]
+            build-backend = "build_backend"
+        "#})?;
+    context
+        .temp_dir
+        .child("build_backend.py")
+        .write_str(indoc! {r#"
+            from importlib.metadata import version
+
+            def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+                raise RuntimeError(f"selected build requirement a=={version('a')}")
+        "#})?;
+
+    // This should select a==1.0.0a1; selecting the older stable release is astral-sh/uv#20875.
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--index-url")
+        .arg(server.index_url())
+        .arg("--prerelease=allow")
+        .arg("."), @r###"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+      × Failed to build `project @ file://[TEMP_DIR]/`
+      ├─▶ The build backend returned an error
+      ╰─▶ Call to `build_backend.build_wheel` failed (exit status: 1)
+
+          [stderr]
+          Traceback (most recent call last):
+            File "<string>", line 11, in <module>
+            File "[TEMP_DIR]/build_backend.py", line 4, in build_wheel
+              raise RuntimeError(f"selected build requirement a=={version('a')}")
+          RuntimeError: selected build requirement a==0.3.0
+
+
+    hint: Build failures usually indicate a problem with the package or the build environment
+    "###);
+
+    Ok(())
+}
+
 #[test]
 fn cache_priority() {
     let context = uv_test::test_context!("3.12");
