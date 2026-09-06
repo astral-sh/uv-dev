@@ -326,6 +326,114 @@ fn lock_rejects_mismatched_exact_git_revision() -> Result<()> {
     Ok(())
 }
 
+/// Reject a locked Git package when its built version differs from the locked version.
+#[cfg(all(feature = "test-universal", feature = "test-git"))]
+#[test]
+fn lock_rejects_mismatched_git_version() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["uv-public-pypackage"]
+
+        [tool.uv.sources]
+        uv-public-pypackage = { git = "https://github.com/astral-test/uv-public-pypackage", rev = "0dacfd662c64cb4ceb16e6cf65a157a8b715b979" }
+    "#})?;
+
+    let lock = context.temp_dir.child("uv.lock");
+    lock.write_str(indoc! {r#"
+        version = 1
+        revision = 3
+        requires-python = ">=3.12"
+
+        [options]
+        exclude-newer = "2024-03-25T00:00:00Z"
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [{ name = "uv-public-pypackage" }]
+
+        [package.metadata]
+        requires-dist = [{ name = "uv-public-pypackage", git = "https://github.com/astral-test/uv-public-pypackage?rev=0dacfd662c64cb4ceb16e6cf65a157a8b715b979" }]
+
+        [[package]]
+        name = "uv-public-pypackage"
+        version = "9.9.9"
+        source = { git = "https://github.com/astral-test/uv-public-pypackage?rev=0dacfd662c64cb4ceb16e6cf65a157a8b715b979#0dacfd662c64cb4ceb16e6cf65a157a8b715b979" }
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--frozen")
+        .arg("--reinstall-package")
+        .arg("uv-public-pypackage")
+        .arg("--no-cache"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+      × Failed to download and build `uv-public-pypackage @ git+https://github.com/astral-test/uv-public-pypackage@0dacfd662c64cb4ceb16e6cf65a157a8b715b979`
+      ╰─▶ Package metadata version `0.1.0` does not match given version `9.9.9`
+
+    hint: `uv-public-pypackage` was included because `project` (v0.1.0) depends on `uv-public-pypackage`
+    ");
+
+    // A second, correctly-versioned distribution with the same name must not hide the mismatch.
+    fs_err::remove_dir_all(&context.venv)?;
+    lock.write_str(indoc! {r#"
+        version = 1
+        revision = 3
+        requires-python = ">=3.12"
+
+        [options]
+        exclude-newer = "2024-03-25T00:00:00Z"
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "uv-public-pypackage", version = "0.0.1", source = { git = "https://github.com/astral-test/uv-public-pypackage?rev=0dacfd662c64cb4ceb16e6cf65a157a8b715b979#0dacfd662c64cb4ceb16e6cf65a157a8b715b979" } },
+            { name = "uv-public-pypackage", version = "0.1.0", source = { git = "https://github.com/astral-test/uv-public-pypackage?rev=b270df1a2fb5d012294e9aaf05e7e0bab1e6a389#b270df1a2fb5d012294e9aaf05e7e0bab1e6a389" } },
+        ]
+
+        [package.metadata]
+        requires-dist = [{ name = "uv-public-pypackage", git = "https://github.com/astral-test/uv-public-pypackage?rev=0dacfd662c64cb4ceb16e6cf65a157a8b715b979" }]
+
+        [[package]]
+        name = "uv-public-pypackage"
+        version = "0.0.1"
+        source = { git = "https://github.com/astral-test/uv-public-pypackage?rev=0dacfd662c64cb4ceb16e6cf65a157a8b715b979#0dacfd662c64cb4ceb16e6cf65a157a8b715b979" }
+
+        [[package]]
+        name = "uv-public-pypackage"
+        version = "0.1.0"
+        source = { git = "https://github.com/astral-test/uv-public-pypackage?rev=b270df1a2fb5d012294e9aaf05e7e0bab1e6a389#b270df1a2fb5d012294e9aaf05e7e0bab1e6a389" }
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--frozen")
+        .arg("--reinstall-package")
+        .arg("uv-public-pypackage")
+        .arg("--no-cache"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Creating virtual environment at: .venv
+      × Failed to download and build `uv-public-pypackage @ git+https://github.com/astral-test/uv-public-pypackage@0dacfd662c64cb4ceb16e6cf65a157a8b715b979`
+      ╰─▶ Package metadata version `0.1.0` does not match given version `0.0.1`
+
+    hint: `uv-public-pypackage` was included because `project` (v0.1.0) depends on `uv-public-pypackage`
+    ");
+
+    Ok(())
+}
+
 /// Lock a Git requirement using `tool.uv.sources`.
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 #[test]
