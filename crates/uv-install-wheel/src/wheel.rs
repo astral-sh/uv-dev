@@ -4,17 +4,19 @@ use std::io;
 use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 
+use blake2::{Blake2b512, Blake2s256};
 use data_encoding::BASE64URL_NOPAD;
 use fs_err as fs;
 use fs_err::{DirEntry, File};
 use itertools::Itertools;
 use mailparse::parse_headers;
 use rustc_hash::FxHashMap;
-use sha2::{Digest, Sha256};
+use sha2::{Digest, Sha256, Sha384, Sha512};
+use tiny_keccak::{Hasher, Sha3};
 use tracing::{debug, instrument, trace, warn};
 use walkdir::WalkDir;
 
-use uv_fs::{PortablePath, Simplified, normalize_path_under, persist_with_retry_sync, relative_to};
+use uv_fs::{Simplified, normalize_path_under, persist_with_retry_sync, relative_to};
 use uv_normalize::PackageName;
 use uv_pypi_types::DirectUrl;
 use uv_shell::escape_posix_for_single_quotes;
@@ -982,7 +984,97 @@ pub(crate) fn write_record(
     Ok(())
 }
 
-/// Validate the RECORD and heal invalid RECORD files.
+fn validate_record_entry(
+    wheel_dir: &Path,
+    path: &Path,
+    size: u64,
+    entry: &RecordEntry,
+    hash_required: bool,
+) -> Result<(), Error> {
+    if let Some(expected) = entry.size
+        && expected != size
+    {
+        return Err(Error::InvalidWheel(format!(
+            "Size mismatch for `{}` in RECORD (expected {expected}, got {size})",
+            entry.path
+        )));
+    }
+
+    let Some(expected) = entry.hash.as_deref() else {
+        if hash_required {
+            return Err(Error::InvalidWheel(format!(
+                "Missing hash for `{}` in RECORD",
+                entry.path
+            )));
+        }
+        return Ok(());
+    };
+    let Some((algorithm, _)) = expected.split_once('=') else {
+        return Err(Error::InvalidWheel(format!(
+            "Invalid hash for `{}` in RECORD: `{expected}`",
+            entry.path
+        )));
+    };
+
+    let mut file = File::open(wheel_dir.join(path))?;
+    let actual = match algorithm {
+        "sha256" => hash_record_file::<Sha256>(&mut file)?,
+        "sha384" => hash_record_file::<Sha384>(&mut file)?,
+        "sha512" => hash_record_file::<Sha512>(&mut file)?,
+        "sha3_256" => hash_record_file_sha3(&mut file, Sha3::v256(), 32)?,
+        "sha3_384" => hash_record_file_sha3(&mut file, Sha3::v384(), 48)?,
+        "sha3_512" => hash_record_file_sha3(&mut file, Sha3::v512(), 64)?,
+        "blake2b" => hash_record_file::<Blake2b512>(&mut file)?,
+        "blake2s" => hash_record_file::<Blake2s256>(&mut file)?,
+        _ => {
+            return Err(Error::InvalidWheel(format!(
+                "Unsupported hash algorithm `{algorithm}` for `{}` in RECORD",
+                entry.path
+            )));
+        }
+    };
+    if format!("{algorithm}={}", BASE64URL_NOPAD.encode(&actual)) != expected {
+        return Err(Error::InvalidWheel(format!(
+            "Hash mismatch for `{}` in RECORD",
+            entry.path
+        )));
+    }
+
+    Ok(())
+}
+
+fn hash_record_file<D: Digest>(file: &mut File) -> Result<Vec<u8>, Error> {
+    let mut digest = D::new();
+    let mut buffer = [0; 8 * 1024];
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+    }
+    Ok(digest.finalize().to_vec())
+}
+
+fn hash_record_file_sha3(
+    file: &mut File,
+    mut digest: Sha3,
+    output_length: usize,
+) -> Result<Vec<u8>, Error> {
+    let mut buffer = [0; 8 * 1024];
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+    }
+    let mut output = vec![0; output_length];
+    digest.finalize(&mut output);
+    Ok(output)
+}
+
+/// Validate the RECORD and remove entries that do not belong to the wheel.
 ///
 /// This ensures that all unpacked wheels have record that matches the contents, and uninstall can't
 /// remove files that don't belong to the wheel.
@@ -1002,34 +1094,49 @@ pub fn validate_and_heal_record<'a>(
     // In the record: The files we expect in the wheel.
     let dist_info_prefix = find_dist_info(wheel_dir)?;
     let dist_info_dir = format!("{dist_info_prefix}.dist-info");
+    let record_relative = Path::new(&dist_info_dir).join("RECORD");
+    let record_jws_relative = Path::new(&dist_info_dir).join("RECORD.jws");
+    let record_p7s_relative = Path::new(&dist_info_dir).join("RECORD.p7s");
     let record_path = wheel_dir.join(&dist_info_dir).join("RECORD");
     let mut record_file = File::open(&record_path)?;
-    let mut record = read_record(&mut record_file)?;
+    let record = read_record(&mut record_file)?;
 
-    // Remove matching files from both collections.
+    // Remove matching files from both collections and validate their hashes and sizes.
     let mut extra_record_entries = Vec::new();
-    record.retain(|entry| {
+    let mut valid_record = Vec::with_capacity(record.len());
+    for entry in record {
         let path = Path::new(&entry.path);
-        if files.remove(path).is_some() {
-            return true;
+        let matching_file = files.remove_entry(path).or_else(|| {
+            // Allow non-canonical spellings such as `./foo`.
+            files.remove_entry(uv_fs::normalize_path(path).as_ref())
+        });
+        if let Some((path, size)) = matching_file {
+            let hash_required = path != record_relative.as_path()
+                && path != record_jws_relative.as_path()
+                && path != record_p7s_relative.as_path();
+            validate_record_entry(wheel_dir, path, size, &entry, hash_required)?;
+            valid_record.push(entry);
+        } else {
+            extra_record_entries.push(path.to_path_buf());
         }
-        // Allow non-canonical spellings such as `./foo`.
-        if files.remove(uv_fs::normalize_path(path).as_ref()).is_some() {
-            return true;
-        }
-        extra_record_entries.push(path.to_path_buf());
-        false
-    });
+    }
+    let record = valid_record;
 
-    if !files.is_empty() {
-        // Deprecated, but not listed in RECORD if used.
-        files.remove(Path::new(&dist_info_dir).join("RECORD.jws").as_path());
-        files.remove(Path::new(&dist_info_dir).join("RECORD.p7s").as_path());
+    // RECORD and the deprecated signature files are the only wheel files that may be omitted.
+    files.remove(record_relative.as_path());
+    files.remove(record_jws_relative.as_path());
+    files.remove(record_p7s_relative.as_path());
+
+    if let Some(path) = files.keys().next() {
+        return Err(Error::InvalidWheel(format!(
+            "File `{}` is missing from RECORD",
+            path.simplified_display()
+        )));
     }
 
-    // If the RECORD was correct, there were no extra entries in the record and no missing entries
-    // that weren't removed from files.
-    if !extra_record_entries.is_empty() {
+    // Remove entries that do not correspond to files in the wheel archive.
+    let healed = !extra_record_entries.is_empty();
+    if healed {
         debug!(
             "RECORD contains files not in wheel archive for {}: `{}`",
             dist,
@@ -1038,34 +1145,7 @@ pub fn validate_and_heal_record<'a>(
                 .map(Simplified::simplified_display)
                 .join("`, `")
         );
-    }
-    if !files.is_empty() {
-        debug!(
-            "Wheel archive contains files not in RECORD for {}: `{}`",
-            dist,
-            files
-                .keys()
-                .map(Simplified::simplified_display)
-                .join("`, `")
-        );
-    }
-    let healed = !extra_record_entries.is_empty() || !files.is_empty();
-    if healed {
         debug!("Rewriting RECORD to match actual wheel contents for {dist}");
-        // We already removed RECORD entries with no matching unpacked file, now add files that
-        // were unpacked but not listed in the archive.
-        for (path, size) in files {
-            record.push(RecordEntry {
-                // RECORD entries always use forward slashes, even on Windows.
-                path: PortablePath::from(path).to_string(),
-                // We don't heal the hash. It's not validated anyway (pip doesn't), and by rules of
-                // the spec the wheel would have been rejected anyway (if the spec would have been
-                // enforced).
-                hash: None,
-                size: Some(size),
-            });
-        }
-
         write_record(wheel_dir, &dist_info_prefix, record)?;
     }
 
