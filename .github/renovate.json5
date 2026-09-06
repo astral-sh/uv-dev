@@ -101,14 +101,11 @@
     {
       matchFileNames: [
         ".python-versions",
-        "crates/uv/tests/lock/lock.rs",
-        "crates/uv/tests/pip/pip_compile_scenarios.rs",
-        "crates/uv/tests/pip_compile/pip_compile.rs",
-        "crates/uv/tests/python/venv.rs",
-        "test/scenarios/requires_python/python-patch-override-no-patch.toml",
-        "test/scenarios/requires_python/python-patch-override-patch-compatible.toml",
+        "crates/uv/tests/**/*.rs",
+        "test/scenarios/**/*.toml",
       ],
       matchManagers: ["custom.regex"],
+      matchDatasources: ["python-version"],
       matchDepNames: ["python"],
       // Keep each test interpreter on its current minor version.
       allowedVersions: "/^{{{major}}}\\.{{{minor}}}\\.\\d+$/",
