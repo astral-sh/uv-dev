@@ -1799,13 +1799,8 @@ impl Lock {
 
         // Seed from requirements attached directly to the lock (e.g., PEP 723 scripts).
         for requirement in self.requirements() {
-            for (index, _) in self
-                .packages
-                .iter()
-                .enumerate()
-                .filter(|(_, package)| package.id.name == requirement.name)
-            {
-                let index = PackageIndex(index);
+            for package in self.packages_for_name(&requirement.name) {
+                let index = self.by_id[&package.id];
                 if seen.insert((index, None)) {
                     queue.push_back((index, None));
                 }
@@ -1824,13 +1819,8 @@ impl Lock {
                 continue;
             }
             for requirement in requirements {
-                for (index, _) in self
-                    .packages
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, package)| package.id.name == requirement.name)
-                {
-                    let index = PackageIndex(index);
+                for package in self.packages_for_name(&requirement.name) {
+                    let index = self.by_id[&package.id];
                     if seen.insert((index, None)) {
                         queue.push_back((index, None));
                     }
@@ -2043,16 +2033,11 @@ impl Lock {
     /// matching packages, then an error is returned. If there are no
     /// matching packages, then `Ok(None)` is returned.
     pub fn find_by_name(&self, name: &PackageName) -> Result<Option<&Package>, String> {
-        let mut found_dist = None;
-        for dist in &self.packages {
-            if &dist.id.name == name {
-                if found_dist.is_some() {
-                    return Err(format!("found multiple packages matching `{name}`"));
-                }
-                found_dist = Some(dist);
-            }
+        match self.packages_for_name(name) {
+            [] => Ok(None),
+            [dist] => Ok(Some(dist)),
+            _ => Err(format!("found multiple packages matching `{name}`")),
         }
-        Ok(found_dist)
     }
 
     /// Returns the package with the given name.
@@ -2070,19 +2055,17 @@ impl Lock {
         marker_env: &MarkerEnvironment,
     ) -> Result<Option<&Package>, String> {
         let mut found_dist = None;
-        for dist in &self.packages {
-            if &dist.id.name == name {
-                if dist.fork_markers.is_empty()
-                    || dist
-                        .fork_markers
-                        .iter()
-                        .any(|marker| marker.evaluate_no_extras(marker_env))
-                {
-                    if found_dist.is_some() {
-                        return Err(format!("found multiple packages matching `{name}`"));
-                    }
-                    found_dist = Some(dist);
+        for dist in self.packages_for_name(name) {
+            if dist.fork_markers.is_empty()
+                || dist
+                    .fork_markers
+                    .iter()
+                    .any(|marker| marker.evaluate_no_extras(marker_env))
+            {
+                if found_dist.is_some() {
+                    return Err(format!("found multiple packages matching `{name}`"));
                 }
+                found_dist = Some(dist);
             }
         }
         Ok(found_dist)
@@ -7988,6 +7971,8 @@ pub(crate) fn is_wheel_unreachable(
 
 #[cfg(test)]
 mod tests {
+    use uv_configuration::{DependencyGroups, ExtrasSpecification};
+    use uv_normalize::{DefaultExtras, DefaultGroups};
     use uv_pep440::VersionSpecifiers;
     use uv_pep508::MarkerEnvironmentBuilder;
     use uv_warnings::anstream;
@@ -8049,6 +8034,175 @@ mod tests {
         assert!(GitSource::from_url(&url).is_ok());
 
         Ok(())
+    }
+
+    #[test]
+    fn find_by_name_handles_name_boundaries_and_duplicates() {
+        let empty: Lock = toml::from_str(
+            r#"
+version = 1
+requires-python = ">=3.12"
+"#,
+        )
+        .expect("valid empty lock");
+        let absent = PackageName::from_str("absent").expect("valid package name");
+        assert!(empty.find_by_name(&absent).expect("no package").is_none());
+
+        let lock: Lock = toml::from_str(
+            r#"
+version = 1
+requires-python = ">=3.12"
+package = [
+    { name = "zulu", version = "1.0.0", source = { registry = "https://example.com/simple" } },
+    { name = "middle", version = "2.0.0", source = { registry = "https://example.com/simple" } },
+    { name = "alpha", version = "1.0.0", source = { registry = "https://example.com/simple" } },
+    { name = "middle", version = "1.0.0", source = { registry = "https://example.com/simple" } },
+]
+"#,
+        )
+        .expect("valid lock");
+
+        for name in ["aaa", "between", "zzzz"] {
+            let name = PackageName::from_str(name).expect("valid package name");
+            assert!(lock.find_by_name(&name).expect("no package").is_none());
+        }
+
+        for name in ["alpha", "zulu"] {
+            let name = PackageName::from_str(name).expect("valid package name");
+            let package = lock
+                .find_by_name(&name)
+                .expect("unique package")
+                .expect("package is present");
+            assert_eq!(package.name(), &name);
+        }
+
+        let middle = PackageName::from_str("middle").expect("valid package name");
+        assert_eq!(
+            lock.find_by_name(&middle)
+                .expect_err("multiple matching packages"),
+            "found multiple packages matching `middle`"
+        );
+    }
+
+    #[test]
+    fn find_by_markers_handles_name_boundaries_and_forks() {
+        let lock: Lock = toml::from_str(
+            r#"
+version = 1
+requires-python = ">=3.12"
+package = [
+    { name = "zulu", version = "1.0.0", source = { registry = "https://example.com/simple" } },
+    { name = "middle", version = "2.0.0", source = { registry = "https://example.com/simple" }, resolution-markers = ["sys_platform == 'linux'"] },
+    { name = "overlap", version = "2.0.0", source = { registry = "https://example.com/simple" }, resolution-markers = ["sys_platform == 'darwin'"] },
+    { name = "alpha", version = "1.0.0", source = { registry = "https://example.com/simple" }, resolution-markers = ["sys_platform == 'linux'"] },
+    { name = "middle", version = "1.0.0", source = { registry = "https://example.com/simple" }, resolution-markers = ["sys_platform == 'darwin'"] },
+    { name = "overlap", version = "1.0.0", source = { registry = "https://example.com/simple" }, resolution-markers = ["sys_platform == 'darwin'"] },
+]
+"#,
+        )
+        .expect("valid lock");
+        let marker_environment = marker_environment();
+
+        for name in ["aaa", "between", "zzzz", "alpha"] {
+            let name = PackageName::from_str(name).expect("valid package name");
+            assert!(
+                lock.find_by_markers(&name, &marker_environment)
+                    .expect("no matching package")
+                    .is_none()
+            );
+        }
+
+        let zulu = PackageName::from_str("zulu").expect("valid package name");
+        assert_eq!(
+            lock.find_by_markers(&zulu, &marker_environment)
+                .expect("unique package")
+                .expect("package is present")
+                .name(),
+            &zulu
+        );
+
+        let middle = PackageName::from_str("middle").expect("valid package name");
+        assert_eq!(
+            lock.find_by_markers(&middle, &marker_environment)
+                .expect("unique package")
+                .expect("package is present")
+                .version()
+                .expect("package version")
+                .to_string(),
+            "1.0.0"
+        );
+
+        let overlap = PackageName::from_str("overlap").expect("valid package name");
+        assert_eq!(
+            lock.find_by_markers(&overlap, &marker_environment)
+                .expect_err("multiple matching packages"),
+            "found multiple packages matching `overlap`"
+        );
+    }
+
+    #[test]
+    fn auditable_seeds_all_forks_from_lock_requirements_and_groups() {
+        let lock: Lock = toml::from_str(
+            r#"
+version = 1
+requires-python = ">=3.12"
+
+[manifest]
+requirements = [{ name = "direct" }]
+
+[manifest.dependency-groups]
+dev = [{ name = "grouped" }]
+
+[[package]]
+name = "unused"
+version = "1.0.0"
+source = { registry = "https://example.com/simple" }
+
+[[package]]
+name = "grouped"
+version = "2.0.0"
+source = { registry = "https://example.com/simple" }
+resolution-markers = ["sys_platform == 'linux'"]
+
+[[package]]
+name = "direct"
+version = "2.0.0"
+source = { registry = "https://example.com/simple" }
+resolution-markers = ["sys_platform == 'linux'"]
+
+[[package]]
+name = "grouped"
+version = "1.0.0"
+source = { registry = "https://example.com/simple" }
+resolution-markers = ["sys_platform == 'darwin'"]
+
+[[package]]
+name = "direct"
+version = "1.0.0"
+source = { registry = "https://example.com/simple" }
+resolution-markers = ["sys_platform == 'darwin'"]
+"#,
+        )
+        .expect("valid lock");
+        let extras = ExtrasSpecification::default().with_defaults(DefaultExtras::default());
+        let groups = DependencyGroups::from_group(GroupName::from_str("dev").expect("valid group"))
+            .with_defaults(DefaultGroups::default());
+
+        let packages: Vec<_> = lock
+            .auditable(&extras, &groups, |_| true)
+            .packages()
+            .map(|(name, version)| format!("{name}=={version}"))
+            .collect();
+
+        assert_eq!(
+            packages,
+            [
+                "direct==1.0.0",
+                "direct==2.0.0",
+                "grouped==1.0.0",
+                "grouped==2.0.0"
+            ]
+        );
     }
 
     #[test]
