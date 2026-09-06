@@ -1822,24 +1822,25 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
 
         // Read the existing metadata from the cache.
         let revision_entry = cache_shard.entry(HASHES);
+        let source_entry = cache_shard.entry(SOURCE);
 
         // If the revision already exists, return it. There's no need to check for freshness, since
-        // everything is scoped to a Git commit.
+        // everything is scoped to a Git commit. The extracted source can be missing, however, even
+        // when its cached hashes remain.
         if let Some(revision) = RevisionHashes::read_from(&revision_entry)? {
-            if revision.has_digests(hashes) {
+            if revision.has_digests(hashes) && source_entry.path().is_dir() {
                 return Ok(revision);
             }
         }
 
         // Otherwise, we need to unzip the archive, or at least compute the hashes.
         debug!("Unpacking source distribution: {source}");
-        let entry = cache_shard.entry(SOURCE);
         let hashes = self
             .persist_archive(
                 source,
                 &install_path,
                 resource.ext,
-                entry.path(),
+                source_entry.path(),
                 hashes,
                 &[],
             )
@@ -1880,6 +1881,9 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             CacheBucket::SourceDistributions,
             WheelCache::Git(resource.url, git_sha.as_short_str()).root(),
         );
+
+        // Acquire the advisory lock before reading or updating the shared cache shard.
+        let _lock = cache_shard.lock().await.map_err(Error::CacheLock)?;
 
         // Fetch the revision for the source distribution.
         let revision = self
@@ -1990,6 +1994,9 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             CacheBucket::SourceDistributions,
             WheelCache::Git(resource.url, git_sha.as_short_str()).root(),
         );
+
+        // Acquire the advisory lock before reading or updating the shared cache shard.
+        let _lock = cache_shard.lock().await.map_err(Error::CacheLock)?;
 
         // Fetch the revision for the source distribution.
         let revision = self
