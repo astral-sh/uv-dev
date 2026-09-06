@@ -44,6 +44,12 @@ on:
       pull-request:
         description: "The draft stacked bug-fix pull request URL"
         value: ${{ jobs.publish.outputs.pull-request }}
+      head-ref:
+        description: "The published bug-fix branch"
+        value: ${{ jobs.publish.outputs.head-ref }}
+      head-sha:
+        description: "The verified published bug-fix commit"
+        value: ${{ jobs.publish.outputs.head-sha }}
 
 permissions: {}
 
@@ -458,6 +464,8 @@ jobs:
       id-token: write # for the existing uv-dev credential broker
     outputs:
       pull-request: ${{ steps.open-pr.outputs.url }}
+      head-ref: ${{ steps.open-pr.outputs.head_ref }}
+      head-sha: ${{ steps.verify.outputs.head_sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -664,7 +672,10 @@ jobs:
                 --body-file "$RUNNER_TEMP/bug-fix-pull-request.md"
             )"
           fi
-          echo "url=$pull_request" >> "$GITHUB_OUTPUT"
+          {
+            echo "url=$pull_request"
+            echo "head_ref=$branch"
+          } >> "$GITHUB_OUTPUT"
           printf 'Stacked fix pull request: %s\n' "$pull_request" >> "$GITHUB_STEP_SUMMARY"
 
   context:
