@@ -314,7 +314,7 @@ impl KeyringProvider {
 
             let (username, password) = if let Some(username) = username {
                 // We're only expecting a password
-                let password = output.trim_end();
+                let password = Self::strip_line_ending(&output);
                 (username, password)
             } else {
                 // We're expecting a username and password
@@ -352,6 +352,13 @@ impl KeyringProvider {
             }
             None
         }
+    }
+
+    fn strip_line_ending(output: &str) -> &str {
+        output
+            .strip_suffix("\r\n")
+            .or_else(|| output.strip_suffix('\n'))
+            .unwrap_or(output)
     }
 
     #[instrument(skip(self))]
@@ -424,6 +431,22 @@ impl KeyringProvider {
 mod tests {
     use super::*;
     use url::Url;
+
+    #[test]
+    fn subprocess_password_preserves_trailing_whitespace() {
+        assert_eq!(
+            KeyringProvider::strip_line_ending("password \t\n"),
+            "password \t"
+        );
+        assert_eq!(
+            KeyringProvider::strip_line_ending("password \t\r\n"),
+            "password \t"
+        );
+        assert_eq!(
+            KeyringProvider::strip_line_ending("password \t\r"),
+            "password \t\r"
+        );
+    }
 
     #[tokio::test]
     #[cfg_attr(

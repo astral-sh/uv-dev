@@ -6998,6 +6998,55 @@ async fn install_package_basic_auth_from_keyring() {
     context.assert_command("import anyio").success();
 }
 
+/// Keyring passwords can end in whitespace; only the emitted line ending should be removed.
+#[tokio::test]
+async fn install_package_basic_auth_from_keyring_trailing_whitespace() {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .respond_with(
+            ResponseTemplate::new(401).insert_header("WWW-Authenticate", r#"Basic realm="test""#),
+        )
+        .mount(&server)
+        .await;
+
+    context
+        .pip_install()
+        .arg(
+            context
+                .workspace_root
+                .join("test")
+                .join("packages")
+                .join("keyring_test_plugin"),
+        )
+        .assert()
+        .success();
+
+    context
+        .pip_install()
+        .arg("anyio")
+        .arg("--index-url")
+        .arg(format!("http://public@{}/simple", server.address()))
+        .arg("--keyring-provider")
+        .arg("subprocess")
+        .env(
+            EnvVars::KEYRING_TEST_CREDENTIALS,
+            format!(r#"{{"{}": {{"public": "heron \t"}}}}"#, server.address()),
+        )
+        .env(EnvVars::PATH, venv_bin_path(&context.venv))
+        .assert()
+        .failure();
+
+    let requests = server.received_requests().await.unwrap();
+    assert!(requests.iter().any(|request| {
+        request
+            .headers
+            .get("authorization")
+            .is_some_and(|header| header.as_bytes() == b"Basic cHVibGljOmhlcm9uIAk=")
+    }));
+}
+
 /// Install a package from an index that requires authentication
 /// but the keyring has the wrong password
 #[tokio::test]
