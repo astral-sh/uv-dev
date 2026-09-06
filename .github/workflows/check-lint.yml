@@ -72,8 +72,15 @@ jobs:
         run: |
           # renovate: datasource=github-releases depName=koalaman/shellcheck
           SHELLCHECK_VERSION="v0.11.0"
-          curl -sSL "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz" | tar -xJf -
-          sudo mv "shellcheck-${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/
+          SHELLCHECK_ARCHIVE="shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+          SHELLCHECK_SHA256="8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198"
+          TMPDIR="$(mktemp -d)"
+          trap 'rm -rf "$TMPDIR"' EXIT
+          curl -fsSL "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/${SHELLCHECK_ARCHIVE}" -o "$TMPDIR/$SHELLCHECK_ARCHIVE"
+          printf '%s  %s\n' "$SHELLCHECK_SHA256" "$SHELLCHECK_ARCHIVE" > "$TMPDIR/shellcheck.sha256"
+          (cd "$TMPDIR" && sha256sum --check shellcheck.sha256)
+          tar -xJf "$TMPDIR/$SHELLCHECK_ARCHIVE" -C "$TMPDIR"
+          sudo mv "$TMPDIR/shellcheck-${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/
       - name: "Run shellcheck"
         run: find . -name '*.sh' -type f | xargs shellcheck --shell bash --severity style
 
