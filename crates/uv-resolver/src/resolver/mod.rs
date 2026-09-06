@@ -1,7 +1,7 @@
 //! Given a set of requirements, find a set of compatible packages.
 
 use std::borrow::Cow;
-use std::cmp::Ordering;
+use std::cmp::{Ordering, Reverse};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::{Display, Formatter};
 use std::ops::Bound;
@@ -30,7 +30,9 @@ use uv_distribution_types::{
 };
 use uv_git::GitResolver;
 use uv_normalize::{ExtraName, GroupName, PackageName};
-use uv_pep440::{MIN_VERSION, Version, VersionSpecifiers, release_specifiers_to_ranges};
+use uv_pep440::{
+    LowerBound, MIN_VERSION, Version, VersionSpecifiers, release_specifiers_to_ranges,
+};
 use uv_pep508::{
     MarkerEnvironment, MarkerExpression, MarkerOperator, MarkerTree, MarkerValueString,
 };
@@ -745,19 +747,16 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                                 // Prefer solving forks with lower Python bounds, since they're more
                                 // likely to produce solutions that work for forks with higher
                                 // Python bounds (whereas the inverse is not true).
-                                forks.sort_by(|a, b| {
-                                    a.cmp_requires_python(b)
-                                        .reverse()
-                                        .then_with(|| a.cmp_upper_bounds(b))
+                                forks.sort_by_cached_key(|fork| {
+                                    let (requires_python, upper_bounds) = fork.sort_key();
+                                    (Reverse(requires_python), upper_bounds)
                                 });
                             }
                             (ForkStrategy::RequiresPython, _) => {
                                 // Otherwise, prefer solving forks with higher Python bounds, since
                                 // we want to prioritize choosing the latest-compatible package
                                 // version for each Python version.
-                                forks.sort_by(|a, b| {
-                                    a.cmp_requires_python(b).then_with(|| a.cmp_upper_bounds(b))
-                                });
+                                forks.sort_by_cached_key(Fork::sort_key);
                             }
                         }
 
@@ -4330,18 +4329,24 @@ impl Fork {
         Some(self)
     }
 
-    /// Compare forks by their lower `requires-python` bounds.
-    fn cmp_requires_python(&self, other: &Self) -> Ordering {
-        cmp_requires_python(&self.env, &other.env)
-    }
+    /// Return the lower Python bound and number of upper bounds for sorting this fork.
+    fn sort_key(&self) -> (LowerBound, usize) {
+        // A higher `requires-python` requirement indicates a _higher-priority_ fork.
+        //
+        // This ordering ensures that we prefer choosing the highest version for each fork based on
+        // its `requires-python` requirement.
+        //
+        // The reverse would prefer choosing fewer versions, at the cost of using older package
+        // versions on newer Python versions. For example, if reversed, we'd prefer to solve `<3.7
+        // before solving `>=3.7`, since the resolution produced by the former might work for the
+        // latter, but the inverse is unlikely to be true.
+        let requires_python = self.env.requires_python().unwrap_or_default();
 
-    /// Compare forks, preferring forks with upper bounds.
-    fn cmp_upper_bounds(&self, other: &Self) -> Ordering {
         // We'd prefer to solve `numpy <= 2` before solving `numpy >= 1`, since the resolution
         // produced by the former might work for the latter, but the inverse is unlikely to be true
         // due to maximum version selection. (Selecting `numpy==2.0.0` would satisfy both forks, but
         // selecting the latest `numpy` would not.)
-        let self_upper_bounds = self
+        let upper_bounds = self
             .dependencies
             .iter()
             .filter(|dep| {
@@ -4350,17 +4355,7 @@ impl Fork {
                     .is_some_and(|(_, upper)| !matches!(upper, Bound::Unbounded))
             })
             .count();
-        let other_upper_bounds = other
-            .dependencies
-            .iter()
-            .filter(|dep| {
-                dep.version
-                    .bounding_range()
-                    .is_some_and(|(_, upper)| !matches!(upper, Bound::Unbounded))
-            })
-            .count();
-
-        self_upper_bounds.cmp(&other_upper_bounds)
+        (requires_python.lower().clone(), upper_bounds)
     }
 }
 
