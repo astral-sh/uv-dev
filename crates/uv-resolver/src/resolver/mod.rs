@@ -4112,6 +4112,8 @@ impl ForkedDependencies {
         // For example, if we have conflicting groups {x1, x2} and {x3,
         // x4}, we need to make sure the forks generated from one set
         // also account for the other set.
+        let mut conflict_sets_by_item: Option<FxHashMap<_, Vec<_>>> = None;
+
         for set in conflicts.iter() {
             let mut new = vec![];
             for fork in std::mem::take(&mut forks) {
@@ -4145,24 +4147,42 @@ impl ForkedDependencies {
                     .filter(|item| fork.env.included_by_group(item.as_ref()))
                     .collect();
                 if non_excluded.len() < 2 {
+                    // Most dependency queries never reach the dominance check, so avoid building
+                    // the index until the first relevant fork.
+                    let conflict_sets_by_item = conflict_sets_by_item.get_or_insert_with(|| {
+                        let mut conflict_sets_by_item: FxHashMap<_, Vec<_>> = FxHashMap::default();
+                        for other_set in conflicts.iter() {
+                            for item in other_set.iter() {
+                                conflict_sets_by_item
+                                    .entry(item.as_ref())
+                                    .or_default()
+                                    .push(other_set);
+                            }
+                        }
+                        conflict_sets_by_item
+                    });
+
                     // Check if any non-excluded item still has a live conflict in another set —
                     // i.e., another set where this item AND at least one other non-excluded item
                     // both appear. If so, we still need to fork to create the "excluded" variant
                     // for that item.
                     let dominated = non_excluded.iter().all(|item| {
-                        !conflicts.iter().any(|other_set| {
-                            !std::ptr::eq(set, other_set)
-                                && other_set.contains(item.package(), item.kind().as_ref())
-                                && other_set
-                                    .iter()
-                                    .filter(|other_item| {
-                                        other_item.package() != item.package()
-                                            || other_item.kind() != item.kind()
-                                    })
-                                    .any(|other_item| {
-                                        fork.env.included_by_group(other_item.as_ref())
-                                    })
-                        })
+                        conflict_sets_by_item
+                            .get(&item.as_ref())
+                            .is_none_or(|other_sets| {
+                                !other_sets.iter().copied().any(|other_set| {
+                                    !std::ptr::eq(set, other_set)
+                                        && other_set
+                                            .iter()
+                                            .filter(|other_item| {
+                                                other_item.package() != item.package()
+                                                    || other_item.kind() != item.kind()
+                                            })
+                                            .any(|other_item| {
+                                                fork.env.included_by_group(other_item.as_ref())
+                                            })
+                                })
+                            })
                     });
                     if dominated {
                         // When dependencies are added to forks, we check `included_by_marker` but
