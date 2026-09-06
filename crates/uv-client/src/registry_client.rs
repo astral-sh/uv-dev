@@ -9,6 +9,7 @@ use futures::{FutureExt, StreamExt, TryStreamExt};
 use http::{HeaderMap, StatusCode};
 use itertools::Either;
 use reqwest::{Proxy, Response};
+use reqwest_middleware::ClientWithMiddleware;
 use rustc_hash::FxHashMap;
 use tokio::sync::{Mutex, Semaphore};
 use tracing::{Instrument, debug, info_span, instrument, trace, warn};
@@ -42,9 +43,7 @@ use crate::flat_index::FlatIndexEntry;
 use crate::html::SimpleDetailHTML;
 use crate::remote_metadata::wheel_metadata_from_remote_zip;
 use crate::rkyvutil::OwnedArchive;
-use crate::{
-    BaseClient, CachedClient, Error, ErrorKind, FlatIndexClient, RedirectClientWithMiddleware,
-};
+use crate::{BaseClient, CachedClient, Error, ErrorKind, FlatIndexClient};
 
 /// A builder for an [`RegistryClient`].
 #[derive(Debug, Clone)]
@@ -268,8 +267,8 @@ impl RegistryClient {
         &self.client
     }
 
-    /// Return the [`BaseClient`] used by this client.
-    pub fn uncached_client(&self, url: &DisplaySafeUrl) -> &RedirectClientWithMiddleware {
+    /// Return the uncached HTTP client for the given URL.
+    pub fn uncached_client(&self, url: &DisplaySafeUrl) -> &ClientWithMiddleware {
         self.client.uncached().for_host(url)
     }
 

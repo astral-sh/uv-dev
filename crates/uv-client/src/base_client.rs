@@ -9,10 +9,8 @@ use http::header::{
     AUTHORIZATION, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE, COOKIE, LOCATION,
     PROXY_AUTHORIZATION, REFERER, TRANSFER_ENCODING, WWW_AUTHENTICATE,
 };
-use http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
-use reqwest::{
-    Certificate, Client, ClientBuilder, IntoUrl, NoProxy, Proxy, Request, Response, multipart,
-};
+use http::{HeaderMap, HeaderValue, Method, StatusCode};
+use reqwest::{Certificate, Client, ClientBuilder, NoProxy, Proxy, Request, Response};
 use reqwest_middleware::{ClientWithMiddleware, Middleware};
 use reqwest_retry::policies::ExponentialBackoff;
 use reqwest_retry::{Jitter, RetryTransientMiddleware};
@@ -474,16 +472,8 @@ impl<'a> BaseClientBuilder<'a> {
         };
 
         // Wrap in any relevant middleware and handle connectivity.
-        let client = RedirectClientWithMiddleware {
-            client: self.apply_middleware(raw_client.clone()),
-            redirect_policy: self.redirect_policy,
-            cross_origin_credentials_policy: self.cross_origin_credential_policy,
-        };
-        let dangerous_client = RedirectClientWithMiddleware {
-            client: self.apply_middleware(raw_dangerous_client.clone()),
-            redirect_policy: self.redirect_policy,
-            cross_origin_credentials_policy: self.cross_origin_credential_policy,
-        };
+        let client = self.apply_middleware(raw_client.clone());
+        let dangerous_client = self.apply_middleware(raw_dangerous_client.clone());
 
         Ok(BaseClient {
             connectivity: self.connectivity,
@@ -505,16 +495,8 @@ impl<'a> BaseClientBuilder<'a> {
     /// Share the underlying client between two different middleware configurations.
     pub(crate) fn wrap_existing(&self, existing: &BaseClient) -> BaseClient {
         // Wrap in any relevant middleware and handle connectivity.
-        let client = RedirectClientWithMiddleware {
-            client: self.apply_middleware(existing.raw_client.clone()),
-            redirect_policy: self.redirect_policy,
-            cross_origin_credentials_policy: self.cross_origin_credential_policy,
-        };
-        let dangerous_client = RedirectClientWithMiddleware {
-            client: self.apply_middleware(existing.raw_dangerous_client.clone()),
-            redirect_policy: self.redirect_policy,
-            cross_origin_credentials_policy: self.cross_origin_credential_policy,
-        };
+        let client = self.apply_middleware(existing.raw_client.clone());
+        let dangerous_client = self.apply_middleware(existing.raw_dangerous_client.clone());
 
         BaseClient {
             connectivity: self.connectivity,
@@ -664,6 +646,17 @@ impl<'a> BaseClientBuilder<'a> {
             Connectivity::Online => {
                 let mut client = reqwest_middleware::ClientBuilder::new(client);
 
+                // Redirect handling must come first so each hop reruns retries, extra middleware,
+                // and authentication. Middleware before it would not be rerun for each redirect.
+                match self.redirect_policy {
+                    RedirectPolicy::RetriggerMiddleware => {
+                        client = client.with(RedirectMiddleware {
+                            cross_origin_credentials_policy: self.cross_origin_credential_policy,
+                        });
+                    }
+                    RedirectPolicy::BypassMiddleware | RedirectPolicy::NoRedirect => {}
+                }
+
                 // Avoid uncloneable errors with a streaming body during publish.
                 if self.retries > 0 {
                     // Initialize the retry strategy.
@@ -722,9 +715,9 @@ impl<'a> BaseClientBuilder<'a> {
 #[derive(Debug, Clone)]
 pub struct BaseClient {
     /// The underlying HTTP client that enforces valid certificates.
-    client: RedirectClientWithMiddleware,
+    client: ClientWithMiddleware,
     /// The underlying HTTP client that accepts invalid certificates.
-    dangerous_client: RedirectClientWithMiddleware,
+    dangerous_client: ClientWithMiddleware,
     /// The HTTP client without middleware.
     raw_client: Client,
     /// The HTTP client that accepts invalid certificates without middleware.
@@ -776,7 +769,7 @@ impl BaseClient {
     }
 
     /// Selects the appropriate client based on the host's trustworthiness.
-    pub fn for_host(&self, url: &DisplaySafeUrl) -> &RedirectClientWithMiddleware {
+    pub fn for_host(&self, url: &DisplaySafeUrl) -> &ClientWithMiddleware {
         if self.disable_ssl(url) {
             &self.dangerous_client
         } else {
@@ -836,11 +829,9 @@ impl BaseClient {
     }
 }
 
-/// Wrapper around [`ClientWithMiddleware`] that manages redirects.
-#[derive(Debug, Clone)]
-pub struct RedirectClientWithMiddleware {
-    client: ClientWithMiddleware,
-    redirect_policy: RedirectPolicy,
+/// Follows redirects through the remaining middleware, including retries and authentication.
+#[derive(Debug)]
+struct RedirectMiddleware {
     /// Whether credentials should be preserved during cross-origin redirects.
     ///
     /// WARNING: This should only be available for tests. In production code, preserving credentials
@@ -849,56 +840,36 @@ pub struct RedirectClientWithMiddleware {
     cross_origin_credentials_policy: CrossOriginCredentialsPolicy,
 }
 
-impl RedirectClientWithMiddleware {
-    /// Convenience method to make a `GET` request to a URL.
-    pub fn get<U: IntoUrl>(&self, url: U) -> RequestBuilder<'_> {
-        RequestBuilder::new(self.client.get(url), self)
-    }
-
-    /// Convenience method to make a `POST` request to a URL.
-    pub fn post<U: IntoUrl>(&self, url: U) -> RequestBuilder<'_> {
-        RequestBuilder::new(self.client.post(url), self)
-    }
-
-    /// Convenience method to make a `HEAD` request to a URL.
-    pub(crate) fn head<U: IntoUrl>(&self, url: U) -> RequestBuilder<'_> {
-        RequestBuilder::new(self.client.head(url), self)
-    }
-
-    /// Executes a request, applying the redirect policy.
-    async fn execute(&self, req: Request) -> reqwest_middleware::Result<Response> {
-        match self.redirect_policy {
-            RedirectPolicy::BypassMiddleware => self.client.execute(req).await,
-            RedirectPolicy::RetriggerMiddleware => self.execute_with_redirect_handling(req).await,
-            RedirectPolicy::NoRedirect => self.client.execute(req).await,
-        }
-    }
-
+#[async_trait::async_trait]
+impl Middleware for RedirectMiddleware {
     /// Executes a request. If the response is a redirect (one of HTTP 301, 302, 303, 307, or 308), the
     /// request is executed again with the redirect location URL (up to a maximum number of
     /// redirects).
     ///
     /// Unlike the built-in reqwest redirect policies, this sends the redirect request through the
-    /// entire middleware pipeline again.
+    /// remaining middleware pipeline again. This middleware must be installed first so each
+    /// redirect reruns all other middleware, including retries and authentication.
     ///
     /// See RFC 7231 7.1.2 <https://www.rfc-editor.org/rfc/rfc7231#section-7.1.2> for details on
     /// redirect semantics.
-    async fn execute_with_redirect_handling(
+    async fn handle(
         &self,
         req: Request,
+        extensions: &mut http::Extensions,
+        next: reqwest_middleware::Next<'_>,
     ) -> reqwest_middleware::Result<Response> {
         let mut request = req;
         let mut redirects = 0;
         let max_redirects = DEFAULT_MAX_REDIRECTS;
 
         loop {
-            let result = self
-                .client
-                .execute(request.try_clone().expect("HTTP request must be cloneable"))
-                .await;
-            let Ok(response) = result else {
-                return result;
-            };
+            let response = next
+                .clone()
+                .run(
+                    request.try_clone().expect("HTTP request must be cloneable"),
+                    extensions,
+                )
+                .await?;
 
             if redirects >= max_redirects {
                 return Ok(response);
@@ -913,16 +884,6 @@ impl RedirectClientWithMiddleware {
             redirects += 1;
             request = redirect_request;
         }
-    }
-
-    pub fn raw_client(&self) -> &ClientWithMiddleware {
-        &self.client
-    }
-}
-
-impl From<RedirectClientWithMiddleware> for ClientWithMiddleware {
-    fn from(item: RedirectClientWithMiddleware) -> Self {
-        item.client
     }
 }
 
@@ -1094,59 +1055,6 @@ pub(crate) enum CrossOriginCredentialsPolicy {
     /// leakage to untrusted domains.
     #[cfg(test)]
     Insecure,
-}
-
-/// A builder to construct the properties of a `Request`.
-///
-/// This wraps [`reqwest_middleware::RequestBuilder`] to ensure that the [`BaseClient`]
-/// redirect policy is respected if `send()` is called.
-#[derive(Debug)]
-#[must_use]
-pub struct RequestBuilder<'a> {
-    builder: reqwest_middleware::RequestBuilder,
-    client: &'a RedirectClientWithMiddleware,
-}
-
-impl<'a> RequestBuilder<'a> {
-    fn new(
-        builder: reqwest_middleware::RequestBuilder,
-        client: &'a RedirectClientWithMiddleware,
-    ) -> Self {
-        Self { builder, client }
-    }
-
-    /// Add a `Header` to this Request.
-    pub fn header<K, V>(mut self, key: K, value: V) -> Self
-    where
-        HeaderName: TryFrom<K>,
-        <HeaderName as TryFrom<K>>::Error: Into<http::Error>,
-        HeaderValue: TryFrom<V>,
-        <HeaderValue as TryFrom<V>>::Error: Into<http::Error>,
-    {
-        self.builder = self.builder.header(key, value);
-        self
-    }
-
-    #[cfg_attr(docsrs, doc(cfg(feature = "multipart")))]
-    pub fn multipart(mut self, multipart: multipart::Form) -> Self {
-        self.builder = self.builder.multipart(multipart);
-        self
-    }
-
-    /// Build a `Request`.
-    pub fn build(self) -> reqwest::Result<Request> {
-        self.builder.build()
-    }
-
-    /// Constructs the Request and sends it to the target URL, returning a
-    /// future Response.
-    pub async fn send(self) -> reqwest_middleware::Result<Response> {
-        self.client.execute(self.build()?).await
-    }
-
-    pub fn raw_builder(&self) -> &reqwest_middleware::RequestBuilder {
-        &self.builder
-    }
 }
 
 /// Create a [`RetryPolicy`] with the given number of retries.
