@@ -1203,20 +1203,33 @@ impl RenameOrCopy {
     /// Usually, source and target are on the same device, so we can rename, but if that fails, we
     /// have to copy. If renaming failed once, we switch to copy permanently.
     fn rename_or_copy(&mut self, from: impl AsRef<Path>, to: impl AsRef<Path>) -> io::Result<()> {
+        let from = from.as_ref();
+        let to = to.as_ref();
+
         match self {
-            Self::Rename => match fs_err::rename(from.as_ref(), to.as_ref()) {
+            Self::Rename => match fs_err::rename(from, to) {
                 Ok(()) => {}
                 Err(err) => {
                     *self = Self::Copy;
                     debug!("Failed to rename, falling back to copy: {err}");
-                    fs_err::copy(from.as_ref(), to.as_ref())?;
+                    Self::copy(from, to)?;
                 }
             },
             Self::Copy => {
-                fs_err::copy(from.as_ref(), to.as_ref())?;
+                Self::copy(from, to)?;
             }
         }
         Ok(())
+    }
+
+    /// Copy through a temporary file so an existing destination symlink is replaced, not followed.
+    fn copy(from: &Path, to: &Path) -> io::Result<()> {
+        let parent = to.parent().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "Destination has no parent")
+        })?;
+        let tempfile = uv_fs::tempfile_in(parent)?;
+        fs_err::copy(from, tempfile.path())?;
+        persist_with_retry_sync(tempfile, to)
     }
 }
 
@@ -1230,10 +1243,39 @@ mod test {
     use assert_fs::prelude::*;
     use indoc::{formatdoc, indoc};
 
+    #[cfg(unix)]
+    use super::RenameOrCopy;
     use super::{
         Error, RecordEntry, Script, WheelFile, format_shebang, get_script_executable,
         parse_email_message_file, parse_scripts, read_record, write_installer_metadata,
     };
+
+    #[cfg(unix)]
+    #[test]
+    fn rename_or_copy_does_not_follow_destination_symlink() -> Result<()> {
+        let temp_dir = assert_fs::TempDir::new()?;
+        let source = temp_dir.child("source");
+        let destination = temp_dir.child("destination");
+        let external = temp_dir.child("external");
+        source.write_str("wheel payload")?;
+        external.write_str("external contents")?;
+        fs_err::os::unix::fs::symlink(external.path(), destination.path())?;
+
+        RenameOrCopy::Copy.rename_or_copy(source.path(), destination.path())?;
+
+        assert_eq!(
+            fs_err::read_to_string(external.path())?,
+            "external contents"
+        );
+        assert_eq!(fs_err::read_to_string(destination.path())?, "wheel payload");
+        assert!(
+            !fs_err::symlink_metadata(destination.path())?
+                .file_type()
+                .is_symlink()
+        );
+
+        Ok(())
+    }
 
     #[test]
     fn test_parse_email_message_file() {
