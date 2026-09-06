@@ -5696,6 +5696,51 @@ fn exit_status_signal() -> Result<()> {
     Ok(())
 }
 
+/// A signaled child must remain distinguishable from a process that exits with the mapped code.
+#[cfg(unix)]
+#[test]
+fn exit_status_signal_diagnostic() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let terminated = context.temp_dir.child("terminated.py");
+    terminated.write_str(indoc! {r"
+        import os
+        import signal
+
+        os.kill(os.getpid(), signal.SIGTERM)
+    "})?;
+
+    uv_snapshot!(context.filters(), context.run().arg(terminated.path()), @"
+    exit_code: 143 (failure)
+    ");
+
+    let exited = context.temp_dir.child("exited.py");
+    exited.write_str(indoc! {r"
+        import sys
+
+        sys.exit(143)
+    "})?;
+
+    uv_snapshot!(context.filters(), context.run().arg(exited.path()), @"
+    exit_code: 143 (failure)
+    ");
+
+    let interrupted = context.temp_dir.child("interrupted.py");
+    interrupted.write_str(indoc! {r"
+        import os
+        import signal
+
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
+        os.kill(os.getpid(), signal.SIGINT)
+    "})?;
+
+    uv_snapshot!(context.filters(), context.run().arg(interrupted.path()), @"
+    exit_code: 130 (failure)
+    ");
+
+    Ok(())
+}
+
 #[test]
 fn run_repeated() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.13", "3.12"]);
