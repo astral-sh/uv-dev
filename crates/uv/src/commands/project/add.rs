@@ -28,6 +28,7 @@ use uv_distribution_types::{
 };
 use uv_fs::{LockedFile, LockedFileError, Simplified};
 use uv_git::store_credentials;
+use uv_install_wheel::InstallerMetadata;
 use uv_normalize::{DEV_DEPENDENCIES, DefaultExtras, DefaultGroups, ExtraName, PackageName};
 use uv_pep508::{MarkerTree, VersionOrUrl};
 use uv_preview::Preview;
@@ -104,7 +105,7 @@ pub(crate) async fn add(
     script: Option<ScriptPath>,
     python_preference: PythonPreference,
     python_downloads: PythonDownloads,
-    installer_metadata: bool,
+    installer_metadata: InstallerMetadata,
     concurrency: Concurrency,
     config_discovery: ConfigDiscovery,
     cache: &Cache,
@@ -1065,7 +1066,7 @@ async fn lock_and_sync(
     constraints: Vec<NameRequirementSpecification>,
     settings: &ResolverInstallerSettings,
     client_builder: &BaseClientBuilder<'_>,
-    installer_metadata: bool,
+    installer_metadata: InstallerMetadata,
     concurrency: &Concurrency,
     cache: &Cache,
     printer: Printer,

@@ -12,6 +12,7 @@ use uv_configuration::{
     InstallOptions,
 };
 use uv_fs::normalize_path;
+use uv_install_wheel::InstallerMetadata;
 use uv_normalize::{DEV_DEPENDENCIES, DefaultExtras, PackageName};
 use uv_preview::{Preview, PreviewFeature};
 use uv_python::{
@@ -66,7 +67,7 @@ pub(crate) async fn check(
     client_builder: BaseClientBuilder<'_>,
     python_preference: PythonPreference,
     python_downloads: PythonDownloads,
-    installer_metadata: bool,
+    installer_metadata: InstallerMetadata,
     concurrency: Concurrency,
     cache: &Cache,
     workspace_cache: &WorkspaceCache,

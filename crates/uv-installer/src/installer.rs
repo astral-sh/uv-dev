@@ -9,7 +9,7 @@ use tracing::{instrument, warn};
 use uv_cache::Cache;
 use uv_configuration::initialize_rayon_once;
 use uv_distribution_types::CachedDist;
-use uv_install_wheel::{Layout, LinkMode};
+use uv_install_wheel::{InstallerMetadata, Layout, LinkMode};
 use uv_preview::Preview;
 use uv_python::PythonEnvironment;
 
@@ -21,7 +21,7 @@ pub struct Installer<'a> {
     /// The name of the [`Installer`].
     name: Option<String>,
     /// The metadata associated with the [`Installer`].
-    metadata: bool,
+    metadata: InstallerMetadata,
     /// Preview settings for the installer.
     preview: Preview,
 }
@@ -35,7 +35,7 @@ impl<'a> Installer<'a> {
             cache: None,
             reporter: None,
             name: Some("uv".to_string()),
-            metadata: true,
+            metadata: InstallerMetadata::Enabled,
             preview,
         }
     }
@@ -75,7 +75,7 @@ impl<'a> Installer<'a> {
 
     /// Set whether to install uv-specifier files in the dist-info directory.
     #[must_use]
-    pub fn with_installer_metadata(self, installer_metadata: bool) -> Self {
+    pub fn with_installer_metadata(self, installer_metadata: InstallerMetadata) -> Self {
         Self {
             metadata: installer_metadata,
             ..self
@@ -163,7 +163,7 @@ fn install(
     link_mode: LinkMode,
     reporter: Option<&Arc<dyn Reporter>>,
     relocatable: bool,
-    installer_metadata: bool,
+    installer_metadata: InstallerMetadata,
     preview: Preview,
 ) -> Result<Vec<CachedDist>> {
     // Initialize the threadpool with the user settings.
