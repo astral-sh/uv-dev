@@ -12383,6 +12383,279 @@ fn remove_all_with_comments() -> Result<()> {
     Ok(())
 }
 
+/// Removing a batch of dependencies should preserve comments and sources that remain in use.
+#[test]
+fn remove_batch_preserves_comments_and_sources() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = [
+            # leading comment
+            "alpha-pkg==1.0", # alpha comment
+            "beta-pkg==1.0", # beta comment
+            "gamma-pkg==1.0",
+            # delta comment
+            "delta-pkg==1.0",
+        ]
+
+        [project.optional-dependencies]
+        keep = ["beta-pkg==1.0"]
+
+        [tool.uv.sources]
+        alpha_pkg = { index = "custom" }
+        beta_pkg = { index = "custom" }
+        gamma_pkg = { index = "custom" }
+        delta_pkg = { index = "custom" }
+
+        [[tool.uv.index]]
+        name = "custom"
+        url = "https://example.com/simple"
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.remove().args(["delta-pkg", "alpha-pkg", "gamma-pkg", "--frozen"]), @"
+    exit_code: 0 (success)
+    ");
+
+    let pyproject_toml = context.read("pyproject.toml");
+    assert_snapshot!(
+        pyproject_toml, @r#"
+    [project]
+    name = "project"
+    version = "0.1.0"
+    requires-python = ">=3.12"
+    dependencies = [
+        # leading comment
+        # alpha comment
+        "beta-pkg==1.0", # beta comment
+        # delta comment
+    ]
+
+    [project.optional-dependencies]
+    keep = ["beta-pkg==1.0"]
+
+    [tool.uv.sources]
+    beta_pkg = { index = "custom" }
+
+    [[tool.uv.index]]
+    name = "custom"
+    url = "https://example.com/simple"
+    "#
+    );
+
+    Ok(())
+}
+
+/// Batch development removals should update both development arrays and retain cross-type sources.
+#[test]
+fn remove_batch_both_dev_preserves_cross_type_source() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["shared-pkg==1.0"]
+
+        [dependency-groups]
+        dev = ["group-pkg==1.0", "shared-pkg==1.0"]
+
+        [tool.uv]
+        dev-dependencies = ["legacy-pkg==1.0", "shared-pkg==1.0"]
+
+        [tool.uv.sources]
+        legacy_pkg = { index = "custom" }
+        group_pkg = { index = "custom" }
+        shared_pkg = { index = "custom" }
+
+        [[tool.uv.index]]
+        name = "custom"
+        url = "https://example.com/simple"
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.remove().args(["group-pkg", "legacy-pkg", "shared-pkg", "--dev", "--frozen"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
+    ");
+
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "0.1.0"
+    requires-python = ">=3.12"
+    dependencies = ["shared-pkg==1.0"]
+
+    [dependency-groups]
+    dev = []
+
+    [tool.uv]
+    dev-dependencies = []
+
+    [tool.uv.sources]
+    shared_pkg = { index = "custom" }
+
+    [[tool.uv.index]]
+    name = "custom"
+    url = "https://example.com/simple"
+    "#);
+
+    Ok(())
+}
+
+/// Batch optional and dependency-group removals should honor normalized group spellings.
+#[test]
+fn remove_batch_normalized_optional_and_group() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["shared-pkg==1.0"]
+
+        [project.optional-dependencies]
+        cloud_export_to_parquet = ["optional-pkg==1.0", "shared-pkg==1.0"]
+
+        [dependency-groups]
+        cloud_export_to_parquet = ["group-pkg==1.0", "shared-pkg==1.0"]
+
+        [tool.uv.sources]
+        optional_pkg = { index = "custom" }
+        group_pkg = { index = "custom" }
+        shared_pkg = { index = "custom" }
+
+        [[tool.uv.index]]
+        name = "custom"
+        url = "https://example.com/simple"
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.remove().args(["optional-pkg", "shared-pkg", "--optional", "cloud-export-to-parquet", "--frozen"]), @"
+    exit_code: 0 (success)
+    ");
+
+    uv_snapshot!(context.filters(), context.remove().args(["group-pkg", "shared-pkg", "--group", "cloud-export-to-parquet", "--frozen"]), @"
+    exit_code: 0 (success)
+    ");
+
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "0.1.0"
+    requires-python = ">=3.12"
+    dependencies = ["shared-pkg==1.0"]
+
+    [project.optional-dependencies]
+    cloud_export_to_parquet = []
+
+    [dependency-groups]
+    cloud_export_to_parquet = []
+
+    [tool.uv.sources]
+    shared_pkg = { index = "custom" }
+
+    [[tool.uv.index]]
+    name = "custom"
+    url = "https://example.com/simple"
+    "#);
+
+    Ok(())
+}
+
+/// Duplicate and missing batch-removal arguments should fail without writing partial edits.
+#[test]
+fn remove_batch_duplicate_and_missing_leave_file_unchanged() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["present-pkg==1.0"]
+
+        [project.optional-dependencies]
+        extra = ["hint-pkg==1.0"]
+
+        [tool.uv.sources]
+        present_pkg = { index = "custom" }
+        hint_pkg = { index = "custom" }
+
+        [[tool.uv.index]]
+        name = "custom"
+        url = "https://example.com/simple"
+    "#})?;
+    let original = context.read("pyproject.toml");
+
+    uv_snapshot!(context.filters(), context.remove().args(["present-pkg", "present-pkg", "--frozen"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: The dependency `present-pkg` could not be found in `project.dependencies`
+    ");
+    assert_eq!(context.read("pyproject.toml"), original);
+
+    uv_snapshot!(context.filters(), context.remove().args(["present-pkg", "hint-pkg", "--frozen"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: The dependency `hint-pkg` could not be found in `project.dependencies`
+
+    hint: `hint-pkg` is an optional dependency (try: `uv remove hint-pkg --optional extra`)
+    ");
+    assert_eq!(context.read("pyproject.toml"), original);
+
+    Ok(())
+}
+
+/// Missing dependency arrays should be reported before attempting to edit inline sources.
+#[test]
+fn remove_batch_absent_array_preserves_missing_diagnostic() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [dependency-groups]
+        other = []
+
+        [tool.uv]
+        sources = { missing_pkg = { index = "custom" } }
+
+        [[tool.uv.index]]
+        name = "custom"
+        url = "https://example.com/simple"
+    "#})?;
+    let original = context.read("pyproject.toml");
+
+    uv_snapshot!(context.filters(), context.remove().args(["missing-pkg", "--frozen"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: The dependency `missing-pkg` could not be found in `project.dependencies`
+    ");
+    assert_eq!(context.read("pyproject.toml"), original);
+
+    uv_snapshot!(context.filters(), context.remove().args(["missing-pkg", "--group", "absent", "--frozen"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: The dependency `missing-pkg` could not be found in `dependency-groups.absent`
+    ");
+    assert_eq!(context.read("pyproject.toml"), original);
+
+    Ok(())
+}
+
 /// Removing a dependency should preserve end-of-line comments on nearby lines.
 ///
 /// See: <https://github.com/astral-sh/uv/issues/18555>
