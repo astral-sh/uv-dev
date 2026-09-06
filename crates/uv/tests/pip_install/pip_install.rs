@@ -78,6 +78,137 @@ fn write_many_files_wheel(path: &Path, source_files: usize) -> Result<()> {
     Ok(())
 }
 
+fn write_pyvenv_cfg_wheel(path: &Path, name: &str, data_path: &str) -> Result<()> {
+    let mut writer = ZipFileWriter::new(Vec::new());
+    let metadata = formatdoc! {"
+        Metadata-Version: 2.1
+        Name: {name}
+        Version: 1.0.0
+    "};
+    let wheel = indoc! {"
+        Wheel-Version: 1.0
+        Generator: uv-test
+        Root-Is-Purelib: true
+        Tag: py3-none-any
+    "};
+    let data_path = format!("{name}-1.0.0.data/data/{data_path}");
+    let entries = [
+        (format!("{name}/__init__.py"), "VALUE = 1\n".to_string()),
+        (format!("{name}-1.0.0.dist-info/METADATA"), metadata),
+        (format!("{name}-1.0.0.dist-info/WHEEL"), wheel.to_string()),
+        (
+            data_path,
+            "home = /does/not/exist\ninclude-system-site-packages = true\n".to_string(),
+        ),
+    ];
+    let mut record = String::new();
+    for (entry_name, contents) in entries {
+        let entry = ZipEntryBuilder::new(entry_name.clone().into(), Compression::Stored);
+        block_on(writer.write_entry_whole(entry, contents.as_bytes()))?;
+        writeln!(record, "{entry_name},,")?;
+    }
+    writeln!(record, "{name}-1.0.0.dist-info/RECORD,,")?;
+    let entry = ZipEntryBuilder::new(
+        format!("{name}-1.0.0.dist-info/RECORD").into(),
+        Compression::Stored,
+    );
+    block_on(writer.write_entry_whole(entry, record.as_bytes()))?;
+    fs_err::write(path, block_on(writer.close())?)?;
+    Ok(())
+}
+
+#[test]
+fn reject_wheel_data_pyvenv_cfg() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let pyvenv_cfg = context.venv.child("pyvenv.cfg");
+    let original = fs_err::read_to_string(&pyvenv_cfg)?;
+    let overwrite = context.temp_dir.join("overwrite-1.0.0-py3-none-any.whl");
+    write_pyvenv_cfg_wheel(&overwrite, "overwrite", "pyvenv.cfg")?;
+
+    uv_snapshot!(context.filters(), context.pip_install().arg(&overwrite), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    error: Failed to install: overwrite-1.0.0-py3-none-any.whl (overwrite==1.0.0 (from file://[TEMP_DIR]/overwrite-1.0.0-py3-none-any.whl))
+      Caused by: The wheel is invalid: Wheel data must not overwrite `pyvenv.cfg`
+    ");
+
+    assert_eq!(fs_err::read_to_string(&pyvenv_cfg)?, original);
+    assert!(!context.site_packages().join("overwrite").exists());
+    assert!(
+        !context
+            .site_packages()
+            .join("overwrite-1.0.0.dist-info")
+            .exists()
+    );
+
+    let plugin = context.temp_dir.join("plugin-1.0.0-py3-none-any.whl");
+    write_pyvenv_cfg_wheel(&plugin, "plugin", "share/plugin/pyvenv.cfg")?;
+    uv_snapshot!(context.filters(), context.pip_install().arg(&plugin), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + plugin==1.0.0 (from file://[TEMP_DIR]/plugin-1.0.0-py3-none-any.whl)
+    ");
+
+    assert_eq!(fs_err::read_to_string(pyvenv_cfg)?, original);
+    assert!(context.venv.child("share/plugin/pyvenv.cfg").exists());
+
+    let case = context.temp_dir.join("case-1.0.0-py3-none-any.whl");
+    write_pyvenv_cfg_wheel(&case, "case", "PyVenv.CFG")?;
+    if context.venv.child("PyVenv.CFG").exists() {
+        uv_snapshot!(context.filters(), context.pip_install().arg(&case), @"
+        exit_code: 2 (failure)
+        ----- stderr -----
+        Resolved 1 package in [TIME]
+        Prepared 1 package in [TIME]
+        error: Failed to install: case-1.0.0-py3-none-any.whl (case==1.0.0 (from file://[TEMP_DIR]/case-1.0.0-py3-none-any.whl))
+          Caused by: The wheel is invalid: Wheel data must not overwrite `pyvenv.cfg`
+        ");
+    } else {
+        uv_snapshot!(context.filters(), context.pip_install().arg(&case), @"
+        exit_code: 0 (success)
+        ----- stderr -----
+        Resolved 1 package in [TIME]
+        Prepared 1 package in [TIME]
+        Installed 1 package in [TIME]
+         + case==1.0.0 (from file://[TEMP_DIR]/case-1.0.0-py3-none-any.whl)
+        ");
+        assert!(context.venv.child("PyVenv.CFG").exists());
+    }
+
+    let target = context.temp_dir.child("target");
+    if cfg!(windows) {
+        uv_snapshot!(context.filters(), context.pip_install().arg(&overwrite).arg("--target").arg(target.path()), @"
+        exit_code: 0 (success)
+        ----- stderr -----
+        Using CPython 3.12.[X] interpreter at: .venv/Scripts/python.exe
+        Resolved 1 package in [TIME]
+        Installed 1 package in [TIME]
+         + overwrite==1.0.0 (from file://[TEMP_DIR]/overwrite-1.0.0-py3-none-any.whl)
+        ");
+    } else {
+        uv_snapshot!(context.filters(), context.pip_install().arg(&overwrite).arg("--target").arg(target.path()), @"
+        exit_code: 0 (success)
+        ----- stderr -----
+        Using CPython 3.12.[X] interpreter at: .venv/bin/python3
+        Resolved 1 package in [TIME]
+        Installed 1 package in [TIME]
+         + overwrite==1.0.0 (from file://[TEMP_DIR]/overwrite-1.0.0-py3-none-any.whl)
+        ");
+    }
+    assert!(target.child("pyvenv.cfg").exists());
+    assert_eq!(
+        fs_err::read_to_string(context.venv.child("pyvenv.cfg"))?,
+        original
+    );
+
+    Ok(())
+}
+
 /// Hash the entire HTTP response even when extraction stops before trailing bytes.
 #[test]
 fn install_http_wheel_hashes_trailing_bytes() -> Result<()> {
