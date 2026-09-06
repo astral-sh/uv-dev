@@ -10,7 +10,7 @@ pub use flat_index::{FlatDistributions, FlatIndex};
 pub use fork_strategy::ForkStrategy;
 pub use lock::{
     CanonicalLockError, DependencySelection, Installable, InstallableRootKind, Lock, LockError,
-    LockParseError, Metadata, Package, PackageMap, PylockToml, PylockTomlError,
+    LockParseError, LockedArtifact, Metadata, Package, PackageMap, PylockToml, PylockTomlError,
     PylockTomlErrorKind, PythonReport, RequirementsTxtExport, ResolverManifest, SatisfiesResult,
     SelectedDependency, TreeDisplay, TreeJsonTarget, cyclonedx_json, implicit_constraints_marker,
 };

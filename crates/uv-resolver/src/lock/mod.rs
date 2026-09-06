@@ -20,6 +20,7 @@ use tracing::{debug, instrument, trace};
 use url::Url;
 
 use uv_cache_key::RepositoryUrl;
+use uv_client::PackedArchiveEntry;
 use uv_configuration::{
     BuildOptions, Constraints, DependencyGroupsWithDefaults, ExcludeDependency, Excludes,
     ExtrasSpecificationWithDefaults, InstallTarget, Override, Overrides, PackageOverride,
@@ -3825,7 +3826,84 @@ pub struct Package {
     metadata: PackageMetadata,
 }
 
+/// A distribution archive recorded in a lockfile, independent of platform compatibility.
+#[derive(Debug, Clone)]
+pub struct LockedArtifact {
+    pub index: Option<IndexUrl>,
+    pub cache_key: String,
+    pub url: DisplaySafeUrl,
+    pub hash: Option<HashDigest>,
+    pub size: Option<u64>,
+}
+
 impl Package {
+    /// Return every wheel and source archive recorded for this package.
+    pub fn artifacts(&self, root: &Path) -> Result<Vec<LockedArtifact>, LockError> {
+        let mut artifacts = Vec::new();
+        for wheel in &self.wheels {
+            let mut index = None;
+            let url = match (&self.id.source, &wheel.url) {
+                (Source::Registry(source), _) => {
+                    let wheel = wheel.to_registry_wheel(source, root)?;
+                    index = Some(wheel.index);
+                    wheel.file.url.to_url().map_err(LockErrorKind::InvalidUrl)?
+                }
+                (_, WheelWireSource::Url { url }) => {
+                    url.to_url().map_err(LockErrorKind::InvalidUrl)?
+                }
+                (Source::Direct(url, _), _) => url.to_url().map_err(LockErrorKind::InvalidUrl)?,
+                (Source::Path(path), _) => {
+                    let path = absolute_path(root, path)?;
+                    DisplaySafeUrl::from_file_path(&path).map_err(|()| {
+                        LockErrorKind::PathToUrl {
+                            path: path.into_boxed_path(),
+                        }
+                    })?
+                }
+                _ => continue,
+            };
+            artifacts.push(LockedArtifact {
+                index,
+                cache_key: PackedArchiveEntry::wheel_key(&wheel.filename),
+                url,
+                hash: wheel.hash.as_ref().map(|hash| hash.0.clone()),
+                size: wheel.size,
+            });
+        }
+        if let Some(sdist) = &self.sdist
+            && let Some(dist) = self.to_source_dist(root, FirstParty::No)?
+        {
+            let artifact = match dist {
+                uv_distribution_types::SourceDist::Registry(dist) => Some((
+                    dist.file.url.to_url().map_err(LockErrorKind::InvalidUrl)?,
+                    Some(dist.index),
+                    PackedArchiveEntry::source_key(Some(&dist.version), dist.ext),
+                )),
+                uv_distribution_types::SourceDist::DirectUrl(dist) => Some((
+                    *dist.location,
+                    None,
+                    PackedArchiveEntry::source_key(None, dist.ext),
+                )),
+                uv_distribution_types::SourceDist::Path(dist) => Some((
+                    dist.url.to_url(),
+                    None,
+                    PackedArchiveEntry::source_key(None, dist.ext),
+                )),
+                _ => None,
+            };
+            if let Some((url, index, cache_key)) = artifact {
+                artifacts.push(LockedArtifact {
+                    url,
+                    index,
+                    cache_key,
+                    hash: sdist.hash().map(|hash| hash.0.clone()),
+                    size: sdist.size(),
+                });
+            }
+        }
+        Ok(artifacts)
+    }
+
     pub fn is_from_pypi_registry(&self) -> bool {
         self.id.source.is_pypi_registry()
     }

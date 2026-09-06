@@ -43,7 +43,8 @@ use crate::html::SimpleDetailHTML;
 use crate::remote_metadata::wheel_metadata_from_remote_zip;
 use crate::rkyvutil::OwnedArchive;
 use crate::{
-    BaseClient, CachedClient, Error, ErrorKind, FlatIndexClient, RedirectClientWithMiddleware,
+    BaseClient, CachedClient, Error, ErrorKind, FlatIndexClient, PackedArchiveEntry,
+    RedirectClientWithMiddleware,
 };
 
 /// A builder for an [`RegistryClient`].
@@ -263,6 +264,11 @@ pub enum MetadataFormat {
 }
 
 impl RegistryClient {
+    /// Return an index's configured artifact cache policy override.
+    pub(crate) fn artifact_cache_control(&self, index: &IndexUrl) -> Option<http::HeaderValue> {
+        self.indexes.artifact_cache_control_for(index)
+    }
+
     /// Return the [`CachedClient`] used by this client.
     pub fn cached_client(&self) -> &CachedClient {
         &self.client
@@ -1011,6 +1017,50 @@ impl RegistryClient {
     }
 
     /// Fetch the metadata from a wheel file.
+    async fn packed_wheel_metadata(
+        &self,
+        filename: &WheelFilename,
+        url: &DisplaySafeUrl,
+        index: Option<&IndexUrl>,
+    ) -> Result<Option<ResolutionMetadata>, Error> {
+        let entry = PackedArchiveEntry::new(
+            &self.cache,
+            index,
+            &filename.name,
+            url,
+            &PackedArchiveEntry::wheel_key(filename),
+        );
+        let request = self
+            .uncached_client(url)
+            .get(url.as_str())
+            .header(reqwest::header::ACCEPT_ENCODING, "identity")
+            .build()
+            .map_err(|err| {
+                ErrorKind::from_reqwest(url.clone(), err, self.client.certificate_source())
+            })?;
+        let control = entry
+            .cache_control(self)
+            .map_err(|err| ErrorKind::Io(std::io::Error::other(err)))?;
+        let Some((archive, _)) = entry
+            .read_http(&request, &control)
+            .await
+            .map_err(|err| ErrorKind::Io(std::io::Error::other(err)))?
+        else {
+            return Ok(None);
+        };
+        let contents =
+            read_metadata_async_seek(filename, tokio::io::BufReader::new(archive.into_file()))
+                .await
+                .map_err(|err| ErrorKind::Metadata(url.to_string(), err))?;
+        ResolutionMetadata::parse_metadata(&contents)
+            .map(Some)
+            .map_err(|err| {
+                ErrorKind::MetadataParseError(filename.clone(), url.to_string(), Box::new(err))
+                    .into()
+            })
+    }
+
+    /// Fetch the metadata from a wheel file.
     async fn wheel_metadata_registry(
         &self,
         wheel: &RegistryBuiltWheel,
@@ -1023,6 +1073,13 @@ impl RegistryClient {
             index,
             ..
         } = wheel;
+
+        if let Some(metadata) = self
+            .packed_wheel_metadata(filename, url, Some(index))
+            .await?
+        {
+            return Ok(metadata);
+        }
 
         // If the metadata file is available at its own url (PEP 658), download it from there.
         if file.dist_info_metadata {
@@ -1106,6 +1163,9 @@ impl RegistryClient {
         cache_shard: WheelCache<'data>,
         capabilities: &'data IndexCapabilities,
     ) -> Result<ResolutionMetadata, Error> {
+        if let Some(metadata) = self.packed_wheel_metadata(filename, url, index).await? {
+            return Ok(metadata);
+        }
         let cache_entry = self.cache.entry(
             CacheBucket::Wheels,
             cache_shard.wheel_dir(filename.name.as_ref()),

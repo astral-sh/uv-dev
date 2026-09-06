@@ -26,7 +26,7 @@ use uv_cache::{Cache, CacheBucket, CacheEntry, CacheShard, Removal, WheelCache};
 use uv_cache_info::CacheInfo;
 use uv_client::{
     BaseClientBuilder, CacheControl, CachedClientError, Connectivity, DataWithCachePolicy,
-    RegistryClient,
+    PackedArchiveEntry, RegistryClient,
 };
 use uv_configuration::{BuildKind, BuildOutput, NoSources};
 use uv_distribution_filename::{SourceDistExtension, WheelFilename};
@@ -993,22 +993,6 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .boxed_local()
             .instrument(info_span!("download", source_dist = %source))
         };
-        let req = Self::request(url.clone(), client.unmanaged)?;
-        let revision = client
-            .managed(|client| {
-                client.cached_client().get_serde_with_retry(
-                    req,
-                    &cache_entry,
-                    cache_control.clone(),
-                    download,
-                )
-            })
-            .await
-            .map_err(|err| match err {
-                CachedClientError::Callback { err, .. } => err,
-                CachedClientError::Client(err) => Error::Client(err),
-            })?;
-
         let expected_size = match source {
             BuildableSource::Dist(SourceDist::Registry(dist)) if dist.size_is_authoritative => {
                 dist.size()
@@ -1016,6 +1000,41 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             BuildableSource::Dist(SourceDist::DirectUrl(dist)) => dist.size(),
             _ => None,
         };
+        let req = Self::request(url.clone(), client.unmanaged)?;
+        let packed_entry = source.name().map(|name| {
+            PackedArchiveEntry::new(
+                self.build_context.cache(),
+                index,
+                name,
+                url,
+                &PackedArchiveEntry::source_key(index.and(source.version()), ext),
+            )
+        });
+        let revision = client
+            .managed(|client| {
+                client
+                    .cached_client()
+                    .get_serde_with_retry_and_packed_fallback(
+                        req,
+                        &cache_entry,
+                        cache_control.clone(),
+                        packed_entry.as_ref(),
+                        |revision: &Revision| {
+                            revision.satisfies(hashes)
+                                && expected_size
+                                    .zip(revision.size())
+                                    .is_none_or(|(expected, actual)| expected == actual)
+                        },
+                        download,
+                    )
+                    .boxed_local()
+            })
+            .await
+            .map_err(|err| match err {
+                CachedClientError::Callback { err, .. } => err,
+                CachedClientError::Client(err) => Error::Client(err),
+            })?;
+
         if let (Some(expected), Some(actual)) = (expected_size, revision.size())
             && expected != actual
         {
@@ -1034,6 +1053,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 .managed(async |client| {
                     client
                         .cached_client()
+                        .with_packed_entry(packed_entry.as_ref())
                         .skip_cache_with_retry(
                             Self::request(url.clone(), client)?,
                             &cache_entry,
@@ -2787,10 +2807,20 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .boxed_local()
             .instrument(info_span!("download", source_dist = %source))
         };
+        let packed_entry = source.name().map(|name| {
+            PackedArchiveEntry::new(
+                self.build_context.cache(),
+                index,
+                name,
+                url,
+                &PackedArchiveEntry::source_key(index.and(source.version()), ext),
+            )
+        });
         client
             .managed(async |client| {
                 client
                     .cached_client()
+                    .with_packed_entry(packed_entry.as_ref())
                     .skip_cache_with_retry(
                         Self::request(url.clone(), client)?,
                         &cache_entry,

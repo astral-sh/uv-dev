@@ -14,7 +14,9 @@ use uv_redacted::DisplaySafeUrl;
 
 use crate::base_client::CertificateSource;
 use crate::httpcache::{AfterResponse, BeforeRequest, CachePolicy, CachePolicyBuilder};
-use crate::{BaseClient, Error, ErrorKind, OwnedArchive, ProblemDetails, RetryState};
+use crate::{
+    BaseClient, Error, ErrorKind, OwnedArchive, PackedArchiveEntry, ProblemDetails, RetryState,
+};
 
 /// A trait the generalizes (de)serialization at a high level.
 ///
@@ -206,11 +208,34 @@ impl From<Freshness> for CacheControl {
 /// Again unlike `http-cache`, the caller gets full control over the cache key with the assumption
 /// that it's a file.
 #[derive(Debug, Clone)]
-pub struct CachedClient(BaseClient);
+pub struct CachedClient(BaseClient, Option<PackedArchiveEntry>);
 
 impl CachedClient {
     pub fn new(client: BaseClient) -> Self {
-        Self(client)
+        Self(client, None)
+    }
+
+    /// Limit packed fallback to an explicitly identified distribution.
+    #[must_use]
+    pub fn with_packed_entry(&self, entry: Option<&PackedArchiveEntry>) -> Self {
+        Self(self.0.clone(), entry.cloned())
+    }
+
+    async fn packed_response(
+        &self,
+        req: &Request,
+        cache_control: &CacheControl,
+    ) -> Result<Option<(Response, Box<CachePolicy>)>, Error> {
+        if matches!(cache_control, CacheControl::MustRevalidate) {
+            return Ok(None);
+        }
+        let Some(entry) = &self.1 else {
+            return Ok(None);
+        };
+        entry
+            .response(req, cache_control)
+            .await
+            .map_err(|err| ErrorKind::Io(std::io::Error::other(err)).into())
     }
 
     /// The underlying [`BaseClient`] without caching.
@@ -595,6 +620,12 @@ impl CachedClient {
         let url = DisplaySafeUrl::from_url(req.url().clone());
         debug!("Sending revalidation request for: {url}");
         let start = Instant::now();
+        if let Some((response, cache_policy)) = self.packed_response(&req, &cache_control).await? {
+            return Ok(CachedResponse::ModifiedOrNew {
+                response,
+                cache_policy: Some(cache_policy),
+            });
+        }
         let mut response = self
             .0
             .execute(req)
@@ -661,6 +692,9 @@ impl CachedClient {
         debug!("Sending fresh {} request for: {}", req.method(), url);
         let cache_policy_builder = CachePolicyBuilder::new(&req);
         let start = Instant::now();
+        if let Some((response, cache_policy)) = self.packed_response(&req, &cache_control).await? {
+            return Ok((response, Some(cache_policy)));
+        }
         let mut response = self.0.execute(req).await.map_err(|err| {
             Error::from_reqwest_middleware(url.clone(), err, start, self.certificate_source())
         })?;
@@ -720,6 +754,52 @@ impl CachedClient {
             })
             .await?;
         Ok(payload)
+    }
+
+    /// Retry an unusable derived response using a packed archive, without making another request.
+    ///
+    /// A download may have populated the packed cache after the derived response was cached. Keep
+    /// the original payload when no packed archive is available, so the caller can report the
+    /// original validation error.
+    pub async fn get_serde_with_retry_and_packed_fallback<
+        Payload: Serialize + DeserializeOwned + Send + 'static,
+        CallBackError: std::error::Error + 'static,
+        Callback: AsyncFn(Response) -> Result<Payload, CallBackError>,
+    >(
+        &self,
+        req: Request,
+        cache_entry: &CacheEntry,
+        cache_control: CacheControl,
+        packed_entry: Option<&PackedArchiveEntry>,
+        is_valid: impl FnOnce(&Payload) -> bool,
+        response_callback: Callback,
+    ) -> Result<Payload, CachedClientError<CallBackError>> {
+        // Scope packed lookup to this distribution request, not every request made by the client.
+        let client = self.with_packed_entry(packed_entry);
+        let packed_req = req.try_clone().expect("HTTP request must be cloneable");
+        let payload = client
+            .get_serde_with_retry(req, cache_entry, cache_control.clone(), &response_callback)
+            .await?;
+        if is_valid(&payload) {
+            return Ok(payload);
+        }
+
+        let start = Instant::now();
+        let Some((response, policy)) = client.packed_response(&packed_req, &cache_control).await?
+        else {
+            return Ok(payload);
+        };
+        self.run_response_callback(
+            cache_entry,
+            Some(policy),
+            start,
+            response,
+            async |response| {
+                let payload = response_callback(response).await?;
+                Ok(SerdeCacheable { inner: payload })
+            },
+        )
+        .await
     }
 
     /// Perform a [`CachedClient::get_cacheable`] request with a default retry strategy.
@@ -876,7 +956,7 @@ enum CachedResponse {
 #[derive(Debug)]
 pub struct DataWithCachePolicy {
     pub data: AlignedVec,
-    cache_policy: OwnedArchive<CachePolicy>,
+    pub(crate) cache_policy: OwnedArchive<CachePolicy>,
 }
 
 impl DataWithCachePolicy {

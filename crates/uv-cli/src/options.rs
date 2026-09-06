@@ -528,7 +528,7 @@ impl IntoPipOptions for FetchArgs {
 
 impl IndexArgs {
     /// Resolve the index arguments shared by pip, resolver, and installer settings.
-    fn resolve(self, configured_indexes: &[Index]) -> anyhow::Result<IndexOptions> {
+    pub fn resolve(self, configured_indexes: &[Index]) -> anyhow::Result<IndexOptions> {
         let Self {
             default_index,
             index,
