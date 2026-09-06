@@ -1445,7 +1445,11 @@ impl AddTarget {
         // breaking the assumption that the workspace cache is only used by the modifying code
         // when changing it.
         match self {
-            Self::Script(script, _) => Ok(AddTargetSnapshot::Script(script.clone(), lock)),
+            Self::Script(script, _) => Ok(AddTargetSnapshot::Script(
+                script.clone(),
+                fs_err::tokio::read(&script.path).await?,
+                lock,
+            )),
             Self::Project(project, _) => {
                 Ok(AddTargetSnapshot::Project(project.clone_detach(), lock))
             }
@@ -1456,7 +1460,7 @@ impl AddTarget {
 #[derive(Debug, Clone)]
 #[expect(clippy::large_enum_variant)]
 enum AddTargetSnapshot {
-    Script(Pep723Script, Option<Vec<u8>>),
+    Script(Pep723Script, Vec<u8>, Option<Vec<u8>>),
     Project(VirtualProject, Option<Vec<u8>>),
 }
 
@@ -1464,10 +1468,10 @@ impl AddTargetSnapshot {
     /// Write the snapshot back to disk (e.g., to a `pyproject.toml` and `uv.lock`).
     fn revert(&self) -> Result<(), io::Error> {
         match self {
-            Self::Script(script, lock) => {
+            Self::Script(script, content, lock) => {
                 // Write the PEP 723 script back to disk.
                 debug!("Reverting changes to PEP 723 script block");
-                script.write(&script.metadata.raw)?;
+                fs_err::write(&script.path, content)?;
 
                 // Write the lockfile back to disk.
                 let target = LockTarget::from(script);

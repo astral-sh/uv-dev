@@ -7092,6 +7092,36 @@ fn add_script_without_metadata_table() -> Result<()> {
     Ok(())
 }
 
+/// Revert a script without an existing metadata table when the `add` operation fails.
+#[test]
+fn fail_to_add_revert_script_without_metadata_table() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let script = context.temp_dir.child("script.py");
+    let content = indoc! {r#"
+        print("Hello from script!")
+    "#};
+    script.write_str(content)?;
+
+    uv_snapshot!(context.filters(), context.add().arg("fakepkg").arg("--script").arg("script.py").arg("--no-index"), @"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+
+    ----- stderr -----
+      × No solution found when resolving dependencies:
+      ╰─▶ Because fakepkg was not found in the provided package locations and you require fakepkg, we can conclude that your requirements are unsatisfiable.
+
+    hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
+    hint: If you want to add the package regardless of the failed resolution, provide the `--frozen` flag to skip locking and syncing
+    ");
+
+    assert_eq!(context.read("script.py"), content);
+    assert!(!context.temp_dir.join("script.py.lock").exists());
+
+    Ok(())
+}
+
 /// Add to a script without an existing metadata table, but with a shebang.
 #[test]
 fn add_script_without_metadata_table_with_shebang() -> Result<()> {
