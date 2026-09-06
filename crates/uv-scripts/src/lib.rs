@@ -513,6 +513,7 @@ impl ScriptTag {
         // Decode as UTF-8.
         let contents = &contents[index..];
         let contents = std::str::from_utf8(contents)?;
+        let contents = contents.replace("\r\n", "\n").replace('\r', "\n");
 
         let mut lines = contents.lines();
 
@@ -874,6 +875,26 @@ mod tests {
         assert_eq!(actual.prelude, String::new());
         assert_eq!(actual.metadata, expected_metadata);
         assert_eq!(actual.postlude, expected_data);
+    }
+
+    #[test]
+    fn carriage_return_newlines() {
+        let contents = concat!(
+            "# /// script\r",
+            "# requires-python = '>=3.11'\r",
+            "# dependencies = ['iniconfig']\r",
+            "# ///\r",
+            "import iniconfig\r",
+        );
+
+        let actual = ScriptTag::parse(contents.as_bytes()).unwrap().unwrap();
+
+        assert_eq!(actual.prelude, "");
+        assert_eq!(
+            actual.metadata,
+            "requires-python = '>=3.11'\ndependencies = ['iniconfig']\n"
+        );
+        assert_eq!(actual.postlude, "import iniconfig\n");
     }
 
     #[test]
