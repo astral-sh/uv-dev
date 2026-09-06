@@ -15,6 +15,7 @@ use assert_fs::{
 use indoc::indoc;
 use insta::assert_snapshot;
 use predicates::prelude::predicate;
+use url::Url;
 #[cfg(windows)]
 use uv_fs::Simplified;
 use uv_fs::copy_dir_all;
@@ -2597,6 +2598,89 @@ fn tool_install_already_installed() {
      ~ click==8.1.7
     Installed 2 executables: black, blackd
     ");
+}
+
+#[test]
+fn tool_install_restores_missing_executables() -> Result<()> {
+    let context = uv_test::test_context!("3.13").with_filtered_exe_suffix();
+    let tool_dir = context.temp_dir.child("tools");
+    let first_bin_dir = context.temp_dir.child("first-bin");
+    let second_bin_dir = context.temp_dir.child("second-bin");
+    let launcher = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    let app = context
+        .workspace_root
+        .join("test/links/basic_app-0.1.0-py3-none-any.whl");
+    let app_requirement = format!(
+        "basic-app @ {}",
+        Url::from_file_path(&app).expect("Failed to convert app path to file URL")
+    );
+
+    context
+        .tool_install()
+        .arg(&launcher)
+        .arg("--with-executables-from")
+        .arg(&app_requirement)
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::UV_TOOL_BIN_DIR, first_bin_dir.as_os_str())
+        .env(EnvVars::PATH, first_bin_dir.as_os_str())
+        .assert()
+        .success();
+
+    let launcher_executable =
+        first_bin_dir.child(format!("simple_launcher{}", std::env::consts::EXE_SUFFIX));
+    let app_executable = first_bin_dir.child(format!("basic-app{}", std::env::consts::EXE_SUFFIX));
+    fs_err::remove_file(&launcher_executable)?;
+    fs_err::remove_file(&app_executable)?;
+
+    context
+        .tool_install()
+        .arg(&launcher)
+        .arg("--with-executables-from")
+        .arg(&app_requirement)
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::UV_TOOL_BIN_DIR, first_bin_dir.as_os_str())
+        .env(EnvVars::PATH, first_bin_dir.as_os_str())
+        .assert()
+        .success();
+
+    launcher_executable.assert(predicate::path::exists());
+    app_executable.assert(predicate::path::exists());
+    fs_err::remove_file(&launcher_executable)?;
+    fs_err::remove_file(&app_executable)?;
+
+    context
+        .tool_upgrade()
+        .arg("simple-launcher")
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::UV_TOOL_BIN_DIR, first_bin_dir.as_os_str())
+        .env(EnvVars::PATH, first_bin_dir.as_os_str())
+        .assert()
+        .success();
+
+    launcher_executable.assert(predicate::path::exists());
+    app_executable.assert(predicate::path::exists());
+
+    context
+        .tool_install()
+        .arg(&launcher)
+        .arg("--with-executables-from")
+        .arg(&app_requirement)
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::UV_TOOL_BIN_DIR, second_bin_dir.as_os_str())
+        .env(EnvVars::PATH, second_bin_dir.as_os_str())
+        .assert()
+        .success();
+
+    second_bin_dir
+        .child(format!("simple_launcher{}", std::env::consts::EXE_SUFFIX))
+        .assert(predicate::path::exists());
+    second_bin_dir
+        .child(format!("basic-app{}", std::env::consts::EXE_SUFFIX))
+        .assert(predicate::path::exists());
+
+    Ok(())
 }
 
 /// Test installing a tool when its entry point already exists

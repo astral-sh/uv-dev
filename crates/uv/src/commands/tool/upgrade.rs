@@ -37,7 +37,9 @@ use crate::commands::project::{
     update_environment,
 };
 use crate::commands::reporters::PythonDownloadReporter;
-use crate::commands::tool::common::{ToolLock, remove_entrypoints, tool_environment_spec};
+use crate::commands::tool::common::{
+    ToolLock, remove_entrypoints, tool_entrypoints_are_fresh, tool_environment_spec,
+};
 use crate::commands::{ExitStatus, conjunction, tool::common::finalize_tool_install};
 use crate::printer::Printer;
 use crate::settings::ResolverInstallerSettings;
@@ -597,7 +599,8 @@ async fn upgrade_tool(
     if matches!(
         outcome,
         UpgradeOutcome::UpgradeEnvironment | UpgradeOutcome::UpgradeTool
-    ) {
+    ) || !tool_entrypoints_are_fresh(&existing_tool_receipt)
+    {
         // At this point, we updated the existing environment, so we should remove any of its
         // existing executables.
         remove_entrypoints(&existing_tool_receipt);
