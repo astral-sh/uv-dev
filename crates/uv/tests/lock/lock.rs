@@ -33879,6 +33879,14 @@ fn lock_script_initialize() -> Result<()> {
     Resolved in [TIME]
     ");
 
+    assert_snapshot!(context.read("script.py"), @r#"
+    # /// script
+    # requires-python = ">=3.12"
+    # dependencies = []
+    # ///
+    print('Hello, world!')
+    "#);
+
     let lock = context.read("script.py.lock");
 
     insta::with_settings!({
@@ -33896,6 +33904,34 @@ fn lock_script_initialize() -> Result<()> {
         );
     });
 
+    Ok(())
+}
+
+/// Do not leave an unusable script lockfile behind if metadata cannot be persisted.
+#[cfg(all(feature = "test-universal", unix))]
+#[test]
+fn lock_script_initialize_write_error() -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let context = uv_test::test_context!("3.12");
+    let script = context.temp_dir.child("script.py");
+    script.write_str("print('Hello, world!')\n")?;
+    fs_err::set_permissions(script.path(), std::fs::Permissions::from_mode(0o444))?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--script").arg("script.py"), @"
+    success: false
+    exit_code: 2
+    ----- stdout -----
+
+    ----- stderr -----
+    Resolved in [TIME]
+    error: failed to create file `[TEMP_DIR]/script.py`: Permission denied (os error 13)
+    ");
+
+    assert_snapshot!(context.read("script.py"), @r#"
+    print('Hello, world!')
+    "#);
+    assert!(!context.temp_dir.child("script.py.lock").exists());
     Ok(())
 }
 

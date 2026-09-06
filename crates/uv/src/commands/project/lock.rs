@@ -106,6 +106,7 @@ pub(crate) async fn lock(
     preview: Preview,
 ) -> anyhow::Result<ExitStatus> {
     // If necessary, initialize the PEP 723 script.
+    let initialize_script = matches!(&script, Some(ScriptPath::Path(_)));
     let script = match script {
         Some(ScriptPath::Path(path)) => {
             let reporter = PythonDownloadReporter::single(printer);
@@ -205,6 +206,13 @@ pub(crate) async fn lock(
     // Initialize any shared state.
     let state = UniversalState::default();
 
+    // Preserve the previous script lock in case writing the initialized metadata fails.
+    let previous_script_lock = if initialize_script && matches!(mode, LockMode::Write(_)) {
+        Some(target.read_bytes().await?)
+    } else {
+        None
+    };
+
     // Perform the lock operation.
     match Box::pin(
         LockOperation::new(
@@ -229,6 +237,27 @@ pub(crate) async fn lock(
     .await
     {
         Ok(lock) => {
+            if initialize_script
+                && matches!(mode, LockMode::Write(_))
+                && let Some(script) = script.as_ref()
+            {
+                if let Err(err) = script.write(&script.metadata.raw) {
+                    let lock_path = LockTarget::from(script).lock_path();
+                    match previous_script_lock {
+                        Some(Some(lock)) => fs_err::write(lock_path, lock)?,
+                        Some(None) => {
+                            if let Err(remove_err) = fs_err::remove_file(lock_path) {
+                                if remove_err.kind() != std::io::ErrorKind::NotFound {
+                                    return Err(remove_err.into());
+                                }
+                            }
+                        }
+                        None => {}
+                    }
+                    return Err(err.into());
+                }
+            }
+
             if let Some(frozen_source) = frozen {
                 warn_user!(
                     "The lockfile at `uv.lock` was only checked for validity, not whether it is up-to-date, because {} was provided; use `--check` instead",
