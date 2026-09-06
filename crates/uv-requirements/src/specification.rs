@@ -735,6 +735,13 @@ pub struct GroupsSpecification {
     pub groups: Vec<PipGroupName>,
 }
 
+fn redact_remote_script_error(
+    err: &(impl std::fmt::Display + ?Sized),
+    url: &DisplaySafeUrl,
+) -> String {
+    err.to_string().replace(url.as_str(), &url.to_string())
+}
+
 /// Read the contents of a path, fetching over HTTP(S) if necessary.
 async fn read_file(path: &Path, client_builder: &BaseClientBuilder<'_>) -> Result<String> {
     // If the path is a URL, fetch it over HTTP(S).
@@ -751,11 +758,27 @@ async fn read_file(path: &Path, client_builder: &BaseClientBuilder<'_>) -> Resul
                 .for_host(&url)
                 .get(Url::from(url.clone()))
                 .send()
-                .await?;
+                .await
+                .map_err(|err| {
+                    anyhow::anyhow!(
+                        "Failed to fetch remote script from `{url}`: {}",
+                        redact_remote_script_error(&err, &url)
+                    )
+                })?;
 
-            response.error_for_status_ref()?;
+            response.error_for_status_ref().map_err(|err| {
+                anyhow::anyhow!(
+                    "Failed to fetch remote script from `{url}`: {}",
+                    redact_remote_script_error(&err, &url)
+                )
+            })?;
 
-            return Ok(response.text().await?);
+            return response.text().await.map_err(|err| {
+                anyhow::anyhow!(
+                    "Failed to read remote script from `{url}`: {}",
+                    redact_remote_script_error(&err, &url)
+                )
+            });
         }
     }
 

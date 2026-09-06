@@ -4808,10 +4808,7 @@ fn run_remote_requirements_offline_redacts_credentials() -> Result<()> {
 
 #[test]
 fn run_remote_pep723_requirements_fetch_error_does_not_leak_credentials() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_filter((
-        r"(?m)^  Caused by: .*(Connection refused|No connection could be made).*$",
-        "  Caused by: [CONNECTION_REFUSED]",
-    ));
+    let context = uv_test::test_context!("3.12");
 
     let script = context.temp_dir.child("main.py");
     script.write_str("print('hello')")?;
@@ -4828,11 +4825,42 @@ fn run_remote_pep723_requirements_fetch_error_does_not_leak_credentials() -> Res
         .env(EnvVars::UV_TEST_NO_HTTP_RETRY_DELAY, "true"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Request failed after 3 retries
-      Caused by: error sending request for url (http://[LOCALHOST]/requirements.py)
-      Caused by: client error (Connect)
-      Caused by: tcp connect error
-      Caused by: [CONNECTION_REFUSED]
+    error: Failed to fetch remote script from `http://username:****@[LOCALHOST]/requirements.py`: Request failed after 3 retries
+    ");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn run_remote_requirements_redacts_fetch_error_credentials() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let script = context.temp_dir.child("main.py");
+    script.write_str("print('hello')")?;
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/requirements.txt"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+
+    let url = format!("{}/requirements.txt", server.uri()).replacen(
+        "http://",
+        "http://username:password@",
+        1,
+    );
+
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--with-requirements")
+        .arg(url)
+        .arg(script.as_os_str()), @"
+    success: false
+    exit_code: 2
+    ----- stdout -----
+
+    ----- stderr -----
+    error: Error while accessing remote requirements file: `http://username:****@[LOCALHOST]/requirements.txt`
     ");
 
     Ok(())
