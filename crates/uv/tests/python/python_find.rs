@@ -1436,6 +1436,60 @@ fn python_find_search_path() {
     ");
 }
 
+/// Named Python executable requests must use the same search-path override as version requests.
+#[test]
+#[cfg(unix)]
+fn python_find_search_path_executable_name() {
+    let context =
+        uv_test::test_context_with_versions!(&["3.11", "3.12"]).with_filtered_python_sources();
+
+    let system_path = context.temp_dir.child("system-path");
+    system_path.create_dir_all().unwrap();
+    fs_err::os::unix::fs::symlink(
+        &context.python_versions[0].1,
+        system_path.join("custom-python"),
+    )
+    .unwrap();
+
+    let override_path = context.temp_dir.child("override-path");
+    override_path.create_dir_all().unwrap();
+    fs_err::os::unix::fs::symlink(
+        &context.python_versions[1].1,
+        override_path.join("custom-python"),
+    )
+    .unwrap();
+
+    // An empty override must hide the named interpreter on the real `PATH`.
+    uv_snapshot!(context.filters(), context.python_find()
+        .arg("custom-python")
+        .env(EnvVars::PATH, system_path.path())
+        .env(EnvVars::UV_PYTHON_SEARCH_PATH, ""), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: No interpreter found for executable name `custom-python` in [PYTHON SOURCES]
+    ");
+
+    // A populated override must select its interpreter over a same-named executable on `PATH`.
+    uv_snapshot!(context.filters(), context.python_find()
+        .arg("custom-python")
+        .env(EnvVars::PATH, system_path.path())
+        .env(EnvVars::UV_PYTHON_SEARCH_PATH, override_path.path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/override-path/custom-python
+    ");
+
+    // Without an override, named requests continue to use the real `PATH`.
+    uv_snapshot!(context.filters(), context.python_find()
+        .arg("custom-python")
+        .env(EnvVars::PATH, system_path.path())
+        .env_remove(EnvVars::UV_PYTHON_SEARCH_PATH), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/system-path/custom-python
+    ");
+}
+
 /// When `requires-python` constrains to a minor version, we should find the correct interpreter
 /// even when only a version-specific executable (e.g., `python3.12`) is available.
 ///
