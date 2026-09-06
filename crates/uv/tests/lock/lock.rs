@@ -15,7 +15,7 @@ use wiremock::{
 use uv_fs::{Simplified, create_symlink};
 use uv_static::EnvVars;
 #[cfg(feature = "test-universal")]
-use uv_test::packse::PackseServer;
+use uv_test::packse::{PackseServer, scenario::Scenario};
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 use uv_test::{READ_ONLY_GITHUB_TOKEN, decode_token};
 use uv_test::{diff_snapshot, uv_snapshot};
@@ -79,6 +79,79 @@ fn lock_preserves_noncanonical_lock() -> Result<()> {
         .assert()
         .success();
     assert_eq!(context.read("uv.lock"), noncanonical_lock);
+
+    Ok(())
+}
+
+/// Prefer Python 3.13-ready candidates before newer candidates without matching wheels, while
+/// falling back for a package that has no ready release.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_tries_matching_wheels_first() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario: Scenario = toml::from_str(
+        r#"
+        name = "required-environment-soft-ranking"
+
+        [root]
+        requires = ["upgradeable", "holdout"]
+
+        [expected]
+        satisfiable = true
+
+        [packages.upgradeable.versions."1.0.0"]
+        wheel_tags = ["cp312-cp312-manylinux_2_17_x86_64"]
+
+        [packages.upgradeable.versions."2.0.0"]
+        wheel_tags = ["cp313-cp313-manylinux_2_17_x86_64"]
+
+        [packages.upgradeable.versions."3.0.0"]
+        wheel_tags = ["cp312-cp312-manylinux_2_17_x86_64"]
+
+        [packages.holdout.versions."1.0.0"]
+        wheel_tags = ["cp312-cp312-manylinux_2_17_x86_64"]
+        "#,
+    )?;
+    let server = PackseServer::from_scenario(&scenario);
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["upgradeable", "holdout"]
+
+        [tool.uv]
+        required-environments = ["python_version == '3.13'"]
+        "#,
+    )?;
+
+    let mut lock = context.lock();
+    lock.env_remove(EnvVars::UV_EXCLUDE_NEWER);
+    lock.arg("--index-url").arg(server.index_url());
+    uv_snapshot!(context.filters(), lock, @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+
+    let versions = context
+        .read("uv.lock")
+        .lines()
+        .filter(|line| line.starts_with("name = ") || line.starts_with("version = "))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_snapshot!(versions, @r#"
+    version = 1
+    name = "holdout"
+    version = "1.0.0"
+    name = "project"
+    version = "0.1.0"
+    name = "upgradeable"
+    version = "2.0.0"
+    "#);
 
     Ok(())
 }
