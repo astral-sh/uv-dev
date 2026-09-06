@@ -347,6 +347,71 @@ fn build_backend_path_symlink_outside_source_tree() -> Result<()> {
     Ok(())
 }
 
+/// An in-tree backend path containing control characters must be escaped in the generated Python.
+#[cfg(unix)]
+#[test]
+fn build_backend_path_control_characters() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let project = context.temp_dir.child("project");
+
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["backend\npath"]
+    "#})?;
+    project
+        .child("backend\npath/backend.py")
+        .write_str(indoc! {r#"
+            import pathlib
+            import zipfile
+
+
+            def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+                wheel_name = "project-0.1.0-py3-none-any.whl"
+                wheel_path = pathlib.Path(wheel_directory, wheel_name)
+                records = [
+                    ("project/__init__.py", b""),
+                    (
+                        "project-0.1.0.dist-info/METADATA",
+                        b"Metadata-Version: 2.1\nName: project\nVersion: 0.1.0\n",
+                    ),
+                    (
+                        "project-0.1.0.dist-info/WHEEL",
+                        b"Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+                    ),
+                ]
+
+                with zipfile.ZipFile(wheel_path, "w") as wheel:
+                    for path, contents in records:
+                        wheel.writestr(path, contents)
+                    record = "\n".join(f"{path},," for path, _ in records)
+                    wheel.writestr(
+                        "project-0.1.0.dist-info/RECORD",
+                        record + "\nproject-0.1.0.dist-info/RECORD,,\n",
+                    )
+
+                return wheel_name
+        "#})?;
+
+    uv_snapshot!(context.filters(), context.build().arg("--wheel").arg(project.path()), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Building wheel...
+    Successfully built project/dist/project-0.1.0-py3-none-any.whl
+    ");
+
+    Ok(())
+}
+
 #[test]
 fn build_sdist() -> Result<()> {
     let context = uv_test::test_context!("3.12").with_filter((r"\\\.", ""));
