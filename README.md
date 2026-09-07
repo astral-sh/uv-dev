@@ -99,7 +99,11 @@ reproduction here.
 The reporter's remaining concern is visibility. They report spending substantial time trying
 insufficient combinations such as plain `uv lock --check`, and suggest documenting the secure
 workflow on both the locking-and-syncing page and the GitHub Actions integration page. They offered
-to contribute that documentation if maintainers want it.
+to contribute that documentation if maintainers want it. A maintainer cautioned that documentation
+updates are generally difficult for external contributors because the project evaluates them
+against the broader product picture. This is not an explicit rejection of documentation changes,
+but it indicates that maintainers should first decide the desired guidance and placement rather
+than treating the contributor's offer as pre-approved.
 
 ## Classification
 
