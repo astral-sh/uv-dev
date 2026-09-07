@@ -26,14 +26,17 @@ still redirect the request, and changing both the URL and trusted hash remains o
 protection. The closest current CI workflow is `uv lock --refresh` followed by
 `git diff --exit-code -- uv.lock`, which revalidates index metadata and exposes any regenerated
 lockfile diff. A maintainer has now proposed `uv lock --check --refresh --no-build` as a direct,
-non-writing form of this check; source inspection supports its intended mechanics, though the exact
-tampering reproduction has not yet been run with that command in this handoff environment.
+non-writing form of this check. The reporter confirms that this is the behavior they were seeking.
+Source inspection supports its intended mechanics, though the exact tampering reproduction has not
+been independently run with that command in this handoff environment.
 
-No existing issue or pull request covers the complete network-backed provenance comparison.
-astral-sh/uv#11932 discusses a broader check command and the boundary between project, lockfile,
-environment, and hash checks. astral-sh/uv#12276 directly tracks the requested version/constraint
-subset, and astral-sh/uv#12235 implemented one narrower structural consistency check for package and
-wheel versions.
+The core capability therefore appears to exist as a composition of current flags. The remaining
+request is discoverability: documenting the secure combination prominently enough that reviewers
+know to opt into it. astral-sh/uv#11932 discusses a broader check command and the boundary between
+project, lockfile, environment, and hash checks. astral-sh/uv#12276 directly tracks the requested
+version/constraint subset and already contains a request to document a refresh-based CI pattern;
+astral-sh/uv#12235 implemented one narrower structural consistency check for package and wheel
+versions.
 
 The follow-up comment adds a concrete report against uv 0.12.9. After generating a project locked
 with `six`, changing only `files.pythonhosted.org` to the lookalike
@@ -66,9 +69,10 @@ can return the existing lock unchanged. Separately, the sync path builds its dow
 from the accepted lock resolution, so the changed URL is consulted before downloaded content can be
 checked against the lockfile hash.
 
-## Candidate verification command
+## Verification command
 
-A maintainer asked whether the following existing flag combination already satisfies the use case:
+A maintainer proposed the following existing flag combination, and the reporter confirms it is the
+behavior they wanted:
 
 ```console
 $ uv lock --check --refresh --no-build
@@ -88,41 +92,27 @@ Source inspection indicates that it should detect both reported mutations:
 The tradeoff is that `--no-build` can reject an otherwise legitimate project when a dependency or
 dynamic local project exposes metadata only through a build. The lock implementation deliberately
 propagates that disabled-build error rather than falling back, so the proposed command fails closed
-instead of executing build code. The command is source-supported and maintainer-proposed, but has
-not yet been independently exercised against the uv 0.12.9 reproduction here. If it covers the
-expected graph, version, URL, and hash comparisons in practice, the issue may primarily require
-documenting this secure verification workflow rather than adding a new command.
+instead of executing build code. The command is source-supported and accepted by the reporter as
+the desired workflow, but has not yet been independently exercised against the uv 0.12.9
+reproduction here.
 
-## Draft response
-
-`uv lock --check` currently checks whether `uv.lock` is consistent with the project metadata; it
-does not independently authenticate every locked dependency and artifact URL against freshly
-fetched index metadata. During sync, uv does verify downloaded artifacts against the hashes recorded
-in `uv.lock`, so changing only a wheel URL would not allow different bytes to be installed without a
-hash mismatch. However, the lockfile remains the source of truth for the URL and hash pair, so
-independently validating both would be a new capability.
-
-The closest CI check today is to run `uv lock --refresh` and then
-`git diff --exit-code -- uv.lock`, which forces index metadata revalidation and reports whether uv
-would regenerate the lockfile differently. The narrower version/constraint validation is already
-tracked in astral-sh/uv#12276, and astral-sh/uv#11932 discusses broader check semantics, but neither
-covers the full provenance check requested here. We can keep this issue open to track a dedicated
-verification workflow and its exact guarantees.
+The reporter's remaining concern is visibility. They report spending substantial time trying
+insufficient combinations such as plain `uv lock --check`, and suggest documenting the secure
+workflow on both the locking-and-syncing page and the GitHub Actions integration page. They offered
+to contribute that documentation if maintainers want it.
 
 ## Classification
 
-This is an enhancement. The report asks for a new, independently network-backed verification mode
-and does not demonstrate a violation of a guarantee currently made by `uv lock --check`. Existing
-behavior checks project/lock freshness and verifies downloaded artifacts against lockfile hashes,
-but the requested trust model requires using configured-index metadata as an independent source for
-the dependency graph, URLs, and hashes.
+This remains an enhancement, now best understood as a documentation and discoverability improvement
+rather than necessarily a new command. Plain `uv lock --check` does not promise provenance
+validation, while the existing `--check --refresh --no-build` combination appears to supply the
+requested network-backed, non-writing, fail-closed workflow.
 
-The issue is not a duplicate. Existing discussions cover important subsets, but none covers the
-full capability. In particular, astral-sh/uv#12276 does not fetch index metadata or validate artifact
-provenance, and astral-sh/uv#11932 primarily asks to compare a project environment with its lockfile.
-The classification should be revisited after testing the maintainer-proposed
-`uv lock --check --refresh --no-build` combination: if it provides the requested guarantees, the
-remaining gap may be discoverability and documentation rather than implementation.
+The reporter is open to treating this as a duplicate of astral-sh/uv#12276 because that discussion
+also requests refresh-oriented documentation. However, astral-sh/uv#12276's tracked implementation
+scope is narrower—validating locked versions against constraints—so a maintainer decision is still
+needed on whether to centralize the documentation request there or retain this issue's distinct
+untrusted-contribution security framing.
 
 ## Related
 
@@ -134,7 +124,9 @@ remaining gap may be discoverability and documentation rather than implementatio
 - astral-sh/uv#12276 — **Validate locked versions against constraints in lock file** (open issue).
   This directly matches one requested check: rejecting a manually corrupted lockfile whose selected
   versions violate its recorded project constraints. Maintainers welcomed additional validation,
-  but the issue does not cover dependency provenance or comparison with fresh index metadata.
+  and a later comment requests documentation for a refresh-based CI check. Its implementation scope
+  does not cover dependency provenance, but it may serve as the canonical documentation discussion
+  if maintainers choose to consolidate this issue there.
 - astral-sh/uv#12235 — **Error on lockfiles with incoherent wheel versions** (merged pull request).
   This added a narrower structural integrity check after externally edited lockfiles paired package
   versions with inconsistent wheel versions. It demonstrates an existing approach to rejecting
