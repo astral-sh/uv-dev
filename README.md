@@ -25,7 +25,9 @@ only an artifact URL cannot substitute different content without a hash mismatch
 still redirect the request, and changing both the URL and trusted hash remains outside that
 protection. The closest current CI workflow is `uv lock --refresh` followed by
 `git diff --exit-code -- uv.lock`, which revalidates index metadata and exposes any regenerated
-lockfile diff.
+lockfile diff. A maintainer has now proposed `uv lock --check --refresh --no-build` as a direct,
+non-writing form of this check; source inspection supports its intended mechanics, though the exact
+tampering reproduction has not yet been run with that command in this handoff environment.
 
 No existing issue or pull request covers the complete network-backed provenance comparison.
 astral-sh/uv#11932 discusses a broader check command and the boundary between project, lockfile,
@@ -64,6 +66,33 @@ can return the existing lock unchanged. Separately, the sync path builds its dow
 from the accepted lock resolution, so the changed URL is consulted before downloaded content can be
 checked against the lockfile hash.
 
+## Candidate verification command
+
+A maintainer asked whether the following existing flag combination already satisfies the use case:
+
+```console
+$ uv lock --check --refresh --no-build
+```
+
+Source inspection indicates that it should detect both reported mutations:
+
+- `--refresh` prevents the existing lock from taking the normal satisfied/unchanged fast path and
+  performs a new resolution against refreshed metadata while retaining locked versions as
+  preferences where possible.
+- `--check` runs that lock operation without writing `uv.lock` and returns a lock-mismatch error if
+  the newly produced lock differs from the existing one. A substituted artifact URL or an
+  unjustified dependency should therefore make the check fail.
+- `--no-build` prevents resolution or metadata validation from building source distributions. This
+  is important when checking an untrusted contribution because package builds can execute code.
+
+The tradeoff is that `--no-build` can reject an otherwise legitimate project when a dependency or
+dynamic local project exposes metadata only through a build. The lock implementation deliberately
+propagates that disabled-build error rather than falling back, so the proposed command fails closed
+instead of executing build code. The command is source-supported and maintainer-proposed, but has
+not yet been independently exercised against the uv 0.12.9 reproduction here. If it covers the
+expected graph, version, URL, and hash comparisons in practice, the issue may primarily require
+documenting this secure verification workflow rather than adding a new command.
+
 ## Draft response
 
 `uv lock --check` currently checks whether `uv.lock` is consistent with the project metadata; it
@@ -91,6 +120,9 @@ the dependency graph, URLs, and hashes.
 The issue is not a duplicate. Existing discussions cover important subsets, but none covers the
 full capability. In particular, astral-sh/uv#12276 does not fetch index metadata or validate artifact
 provenance, and astral-sh/uv#11932 primarily asks to compare a project environment with its lockfile.
+The classification should be revisited after testing the maintainer-proposed
+`uv lock --check --refresh --no-build` combination: if it provides the requested guarantees, the
+remaining gap may be discoverability and documentation rather than implementation.
 
 ## Related
 
@@ -143,4 +175,7 @@ project sync implementation constructs a verifying hash strategy from the lock r
 installing artifacts. The new source inspection further confirms that registry and Git sources are
 classified as immutable by `Source::is_immutable`; `Lock::satisfies` skips metadata and dependency
 validation for such packages, and a satisfied lock can be returned unchanged without a fresh
-resolution.
+resolution. Conversely, the explicit `--refresh` path marks the existing lock as merely preferable,
+constructs a new lock from the resulting resolution, and `--check` raises a mismatch when that lock
+differs. Disabled-build errors are propagated when metadata cannot be obtained under `--no-build`,
+which preserves the fail-closed property needed for reviewing untrusted lockfile changes.
