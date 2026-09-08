@@ -677,7 +677,7 @@ impl ManagedPythonInstallation {
         }
         // Build variants are separate installation identities. Selecting which identity owns the
         // ordinary executable names is handled explicitly by installation options.
-        if self.key.build_variant != other.key.build_variant {
+        if self.key.build_variant() != other.key.build_variant() {
             return false;
         }
         // Require matching minor version
@@ -1081,7 +1081,7 @@ mod tests {
 
         assert_eq!(
             ManagedPythonInstallation::path_from_base_prefix(root, &base_prefix).unwrap(),
-            installation
+            dunce::canonicalize(installation).unwrap()
         );
     }
 
