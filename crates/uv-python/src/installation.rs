@@ -643,6 +643,17 @@ impl PythonInstallationKey {
         format!("{}.{}.{}", self.major, self.minor, self.patch)
     }
 
+    /// Return a registry tag that distinguishes runtime and build variants.
+    #[cfg(windows)]
+    pub(crate) fn registry_tag(&self) -> String {
+        format!(
+            "{}{}{}",
+            self.implementation().pretty(),
+            self.version(),
+            self.display_variant_suffix(),
+        )
+    }
+
     pub fn major(&self) -> u8 {
         self.major
     }
@@ -683,7 +694,7 @@ impl PythonInstallationKey {
         self.variant.executable_suffix().to_string()
     }
 
-    pub(crate) fn display_variant_suffix(&self) -> String {
+    fn display_variant_suffix(&self) -> String {
         let mut suffix = match self.variant {
             PythonVariant::Default => String::new(),
             _ => format!("+{}", self.variant),
@@ -826,16 +837,11 @@ impl FromStr for PythonInstallationKey {
             )
         })?;
 
-        Ok(Self {
-            implementation,
-            major: version.major(),
-            minor: version.minor(),
-            patch: version.patch().unwrap_or_default(),
-            prerelease: version.pre(),
-            platform,
-            variant,
-            build_variant,
-        })
+        let mut key = Self::new_from_version(implementation, &version, platform, variant);
+        if let Some(build_variant) = build_variant {
+            key = key.with_build_variant(build_variant);
+        }
+        Ok(key)
     }
 }
 
