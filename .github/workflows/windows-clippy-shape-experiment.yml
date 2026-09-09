@@ -32,7 +32,7 @@ jobs:
         with:
           workspaces: ${{ env.UV_WORKSPACE }}
           save-if: "true"
-          prefix-key: uv-ci-windows-clippy-shape-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.replica }}
+          prefix-key: uv-ci-windows-clippy-shape-${{ github.run_id }}
           add-job-id-key: false
         id: rust-cache
       - name: Install Rust toolchain
@@ -49,10 +49,6 @@ jobs:
       matrix:
         replica:
           - 1
-          - 2
-          - 3
-          - 4
-          - 5
   compare:
     name: ${{ matrix.cache }} / ${{ matrix.shape.id }} / ${{ matrix.replica }}
     timeout-minutes: 35
@@ -72,7 +68,7 @@ jobs:
         with:
           workspaces: ${{ env.UV_WORKSPACE }}
           save-if: "false"
-          prefix-key: uv-ci-windows-clippy-shape-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.replica }}
+          prefix-key: uv-ci-windows-clippy-shape-${{ github.run_id }}
           add-job-id-key: false
         id: rust-cache
         if: ${{ matrix.cache == 'warm' }}
