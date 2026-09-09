@@ -75,6 +75,14 @@ reason = "used by Pixi to inspect cached registry wheels"
 
 [[override]]
 lint = "hawk::unnecessary_public"
+crate = "uv_pep440"
+item = "version::Operator::as_str"
+kind = "inherent_method"
+level = "expect"
+reason = "retained as the public token accessor for PEP 440 operators"
+
+[[override]]
+lint = "hawk::unnecessary_public"
 crate = "uv_resolver"
 item = "python_requirement::PythonRequirement::from_marker_environment"
 kind = "inherent_method"
