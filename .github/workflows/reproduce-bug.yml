@@ -230,17 +230,26 @@ jobs:
       issues: read
     outputs:
       bundle-artifact-id: ${{ steps.upload-test.outputs.artifact-id }}
+      commit-sha: ${{ steps.persist-test.outputs.head-sha }}
       created: ${{ steps.commit-test.outputs.created }}
       result: ${{ steps.create-test.outputs.final-message }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
           persist-credentials: false
 
-      - name: "Install uv"
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      - name: "Set up trusted Python automations"
+        id: automations
+        uses: ./.github/actions/setup-automations
+
+      - name: "Check out the regression-test base"
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          enable-cache: false
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
@@ -319,12 +328,26 @@ jobs:
             -c user.email="github-actions[bot]@users.noreply.github.com" \
             commit --message "Add regression test"
 
-          git -c core.hooksPath=/dev/null bundle create \
-            "$RUNNER_TEMP/regression-test.bundle" "$GITHUB_SHA..HEAD"
+          echo "head-sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           echo "created=true" >> "$GITHUB_OUTPUT"
         env:
           CREATE_TEST_OUTCOME: ${{ fromJSON(steps.create-test.outputs.final-message).outcome }}
           CREATE_TEST_SUMMARY: ${{ fromJSON(steps.create-test.outputs.final-message).summary }}
+
+      - name: "Persist regression-test commit"
+        id: persist-test
+        if: steps.commit-test.outputs.created == 'true'
+        env:
+          AUTOMATIONS_PYTHON: ${{ steps.automations.outputs.python }}
+          BASE_SHA: ${{ github.sha }}
+          HEAD_SHA: ${{ steps.commit-test.outputs.head-sha }}
+        run: |
+          "$AUTOMATIONS_PYTHON" -I -m uv_automations commits persist \
+            --repository "$GITHUB_WORKSPACE" \
+            --base "$BASE_SHA" \
+            --head "$HEAD_SHA" \
+            --destination "$RUNNER_TEMP/regression-test.bundle" \
+            --github-output "$GITHUB_OUTPUT"
 
       - name: "Upload regression test"
         id: upload-test
@@ -332,7 +355,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: regression-test-${{ needs.reproduce.outputs.issue-number }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/regression-test.bundle
+          path: ${{ steps.persist-test.outputs.path }}
           if-no-files-found: error
           compression-level: 0
           retention-days: 1
@@ -353,6 +376,18 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: "Set up trusted Python automations"
+        id: automations
+        uses: ./.github/actions/setup-automations
+
+      - name: "Check out the regression-test base"
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -360,6 +395,21 @@ jobs:
         with:
           artifact-ids: ${{ needs.create-integration-test.outputs.bundle-artifact-id }}
           path: ${{ runner.temp }}/regression-test
+          merge-multiple: true
+
+      - name: "Load regression-test commit"
+        id: load-test
+        env:
+          AUTOMATIONS_PYTHON: ${{ steps.automations.outputs.python }}
+          BASE_SHA: ${{ github.sha }}
+          HEAD_SHA: ${{ needs.create-integration-test.outputs.commit-sha }}
+        run: |
+          "$AUTOMATIONS_PYTHON" -I -m uv_automations commits load \
+            --repository "$GITHUB_WORKSPACE" \
+            --base "$BASE_SHA" \
+            --head "$HEAD_SHA" \
+            --bundle "$RUNNER_TEMP/regression-test/regression-test.bundle" \
+            --github-output "$GITHUB_OUTPUT"
 
       - name: "Verify regression-test commit"
         id: verify
@@ -367,16 +417,14 @@ jobs:
           GIT_CONFIG_GLOBAL: /dev/null
           GIT_CONFIG_NOSYSTEM: "1"
           ISSUE_NUMBER: ${{ needs.reproduce.outputs.issue-number }}
+          REGRESSION_HEAD_SHA: ${{ steps.load-test.outputs.head-sha }}
         run: |
           if ! [[ "$ISSUE_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
             echo "The upstream issue number is invalid." >&2
             exit 1
           fi
 
-          bundle="$RUNNER_TEMP/regression-test/regression-test.bundle"
-          git -c core.hooksPath=/dev/null bundle verify "$bundle"
-          git -c core.hooksPath=/dev/null fetch --no-tags "$bundle" HEAD
-          regression_head="$(git rev-parse 'FETCH_HEAD^{commit}')"
+          regression_head="$REGRESSION_HEAD_SHA"
 
           if [ "$(git rev-list --parents -n 1 "$regression_head")" != \
             "$regression_head $GITHUB_SHA" ] ||
