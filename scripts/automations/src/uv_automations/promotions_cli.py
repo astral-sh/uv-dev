@@ -9,6 +9,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import assert_never
 
+from uv_automations import promotion_retarget_cli
 from uv_automations.actions import append_summary, write_json_output, write_output
 from uv_automations.github_promotion import PromotionGitHub
 from uv_automations.github_promotion_queue import PromotionQueueGitHub
@@ -23,6 +24,7 @@ from uv_automations.promotion_models import (
     current_ready_approval,
     ready_approval,
 )
+from uv_automations.promotion_retarget_cli import ApplyRetargets, IdentifyRetargets
 from uv_automations.workflows.promotion import (
     AlreadyPublished,
     CopyUpstreamBaseClaim,
@@ -126,6 +128,7 @@ type PromotionCommand = (
     | ReplayPromotedChildren
     | SyncPromotionSource
     | EnsurePromotionBase
+    | promotion_retarget_cli.PromotionRetargetCommand
 )
 
 
@@ -205,8 +208,12 @@ def add_commands(parser: argparse.ArgumentParser) -> None:
     ensure.add_argument("--github-output", type=Path, required=True)
     ensure.add_argument("--summary", type=Path, required=True)
 
+    promotion_retarget_cli.add_commands(commands.add_parser("retarget"))
+
 
 def parse_command(parsed: argparse.Namespace) -> PromotionCommand:
+    if isinstance(parsed.command, promotion_retarget_cli.PromotionRetargetCommandKind):
+        return promotion_retarget_cli.parse_command(parsed)
     kind = PromotionCommandKind(parsed.command)
     match kind:
         case PromotionCommandKind.PREPARE:
@@ -501,5 +508,8 @@ def run(command: PromotionCommand) -> None:
                         "The promotion base or approval changed before publication.",
                     )
             append_summary(command.summary, f"Promotion base: {outcome.value}.")
+            return
+        case IdentifyRetargets() | ApplyRetargets():
+            promotion_retarget_cli.run(command)
             return
     assert_never(command)

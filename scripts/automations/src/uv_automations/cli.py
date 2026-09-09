@@ -359,6 +359,8 @@ def run(command: Command) -> None:
             | promotions_cli.ReplayPromotedChildren()
             | promotions_cli.SyncPromotionSource()
             | promotions_cli.EnsurePromotionBase()
+            | promotions_cli.IdentifyRetargets()
+            | promotions_cli.ApplyRetargets()
         ):
             promotions_cli.run(command)
             return
