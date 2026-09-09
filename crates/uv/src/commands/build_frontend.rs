@@ -16,7 +16,7 @@ use uv_build_frontend::SourceBuild;
 use uv_cache::{Cache, CacheBucket};
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_configuration::{
-    BuildIsolation, BuildKind, BuildOptions, BuildOutput, Concurrency, Constraints,
+    BuildIsolation, BuildKind, BuildOptions, BuildOutput, ConcurrencyState, Constraints,
     DependencyGroupsWithDefaults, DependencyMode, Excludes, HashCheckingMode, IndexStrategy,
     KeyringProviderType, NoSources, Overrides,
 };
@@ -220,7 +220,7 @@ pub(crate) async fn build_frontend(
     config_discovery: ConfigDiscovery,
     python_preference: PythonPreference,
     python_downloads: PythonDownloads,
-    concurrency: Concurrency,
+    concurrency: ConcurrencyState,
     cache: &Cache,
     workspace_cache: &WorkspaceCache,
     printer: Printer,
@@ -300,7 +300,7 @@ async fn build_impl(
     config_discovery: ConfigDiscovery,
     python_preference: PythonPreference,
     python_downloads: PythonDownloads,
-    concurrency: &Concurrency,
+    concurrency: &ConcurrencyState,
     cache: &Cache,
     workspace_cache: &WorkspaceCache,
     printer: Printer,
@@ -579,7 +579,7 @@ async fn build_package(
     keyring_provider: KeyringProviderType,
     exclude_newer: ExcludeNewer,
     sources: NoSources,
-    concurrency: &Concurrency,
+    concurrency: &ConcurrencyState,
     build_options: &BuildOptions,
     sdist: bool,
     wheel: bool,

@@ -9,7 +9,7 @@ use uv_cache::Cache;
 use uv_cli::PipInstallFormat;
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_configuration::{
-    BuildIsolation, BuildOptions, Concurrency, Constraints, DryRun, ExtrasSpecification,
+    BuildIsolation, BuildOptions, ConcurrencyState, Constraints, DryRun, ExtrasSpecification,
     HashCheckingMode, IndexStrategy, NoSources, Reinstall, Upgrade,
 };
 use uv_configuration::{KeyringProviderType, TargetTriple};
@@ -93,7 +93,7 @@ pub(crate) async fn pip_sync(
     prefix: Option<Prefix>,
     sources: NoSources,
     python_preference: PythonPreference,
-    concurrency: Concurrency,
+    concurrency: ConcurrencyState,
     cache: Cache,
     workspace_cache: WorkspaceCache,
     dry_run: DryRun,
