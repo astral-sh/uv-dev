@@ -407,7 +407,8 @@ fn workspace_list_scripts_invalid_metadata() -> Result<()> {
 
     ----- stderr -----
     warning: The `--scripts` option is experimental and may change without warning. Pass `--preview-features workspace-list-scripts` to disable this warning.
-    warning: Skipping invalid PEP 723 script `[TEMP_DIR]/fixtures/invalid-script.py`: The script contains multiple PEP 723 metadata blocks
+    warning: Skipping invalid PEP 723 script `[TEMP_DIR]/fixtures/invalid-script.py`
+      Caused by: The script contains multiple PEP 723 metadata blocks
     ");
 
     // Invalid TOML should also be skipped, including when the preview feature is enabled.
@@ -429,11 +430,12 @@ fn workspace_list_scripts_invalid_metadata() -> Result<()> {
     scripts/valid-script.py
 
     ----- stderr -----
-    warning: Skipping invalid PEP 723 script `[TEMP_DIR]/fixtures/invalid-script.py`: TOML parse error at line 1, column 17
-      |
-    1 | dependencies = [
-      |                 ^
-    unclosed array, expected `]`
+    warning: Skipping invalid PEP 723 script `[TEMP_DIR]/fixtures/invalid-script.py`
+      Caused by: TOML parse error at line 1, column 17
+          |
+        1 | dependencies = [
+          |                 ^
+        unclosed array, expected `]`
     ");
 
     Ok(())

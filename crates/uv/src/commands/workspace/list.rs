@@ -11,7 +11,7 @@ use uv_cache::Cache;
 use uv_fs::{CWD, Simplified, ValidatedReader, is_virtualenv_base, normalize_path};
 use uv_preview::{Preview, PreviewFeature};
 use uv_scripts::{Pep723Error, Pep723Metadata};
-use uv_warnings::warn_user;
+use uv_warnings::{warn_user, warn_user_with_chain};
 use uv_workspace::{DiscoveryOptions, Workspace, WorkspaceCache};
 
 use crate::commands::ExitStatus;
@@ -47,9 +47,13 @@ pub(crate) async fn list(
             .filter_map(|script| match script {
                 Ok(script) => Some(Ok(script)),
                 Err(ScriptDiscoveryError::Parse { path, source }) => {
-                    warn_user!(
-                        "Skipping invalid PEP 723 script `{}`: {source}",
-                        path.simplified_display()
+                    warn_user_with_chain!(
+                        anyhow::Error::from(source)
+                            .context(format!(
+                                "Skipping invalid PEP 723 script `{}`",
+                                path.simplified_display()
+                            ))
+                            .as_ref()
                     );
                     None
                 }
