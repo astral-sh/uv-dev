@@ -218,16 +218,36 @@ fn generate_command<'a>(output: &mut String, command: &'a Command, parents: &mut
             output.push_str("</dl>\n\n");
         }
 
-        // Display options and flags
-        let mut options = command
-            .get_arguments()
-            .filter(|arg| !arg.is_positional())
-            .filter(|arg| !arg.is_hide_set())
-            .sorted_by_key(|arg| arg.get_id())
-            .peekable();
+        // Match Clap's heading order: ungrouped options first, then custom headings in the
+        // order they first appear. Keep the reference's alphabetical ordering within each group.
+        let headings = std::iter::once(None).chain(
+            command
+                .get_arguments()
+                .filter_map(|arg| arg.get_help_heading())
+                .unique()
+                .map(Some),
+        );
+        let mut first = true;
+        for heading in headings {
+            let mut options = command
+                .get_arguments()
+                .filter(|arg| !arg.is_positional())
+                .filter(|arg| !arg.is_hide_set())
+                .filter(|arg| arg.get_help_heading() == heading)
+                .sorted_by_key(|arg| arg.get_id())
+                .peekable();
 
-        if options.peek().is_some() {
-            output.push_str("<h3 class=\"cli-reference\">Options</h3>\n\n");
+            if options.peek().is_none() {
+                continue;
+            }
+            if !first {
+                output.push_str("\n\n");
+            }
+            first = false;
+            output.push_str(&format!(
+                "<h3 class=\"cli-reference\">{}</h3>\n\n",
+                heading.unwrap_or("Options")
+            ));
             output.push_str("<dl class=\"cli-reference\">");
             for opt in options {
                 let Some(long) = opt.get_long() else { continue };
@@ -345,10 +365,102 @@ fn emit_possible_options(opt: &clap::Arg, output: &mut String) {
 
 #[cfg(test)]
 mod tests {
-    use clap::{Arg, Command};
+    use clap::{Arg, ArgAction, Command};
     use insta::assert_snapshot;
 
     use super::generate_command;
+
+    fn option_groups(output: &str) -> String {
+        output
+            .split("<h3 class=\"cli-reference\">")
+            .filter_map(|section| {
+                let (heading, body) = section.split_once("</h3>")?;
+                let ids = body
+                    .split("<dt id=\"")
+                    .skip(1)
+                    .map(|entry| entry.split_once('"').expect("id should be closed").0)
+                    .collect::<Vec<_>>();
+                (!ids.is_empty()).then(|| format!("{heading}: {}", ids.join(", ")))
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn groups_options_by_help_heading() {
+        let mut command = Command::new("sample")
+            .disable_help_flag(true)
+            .arg(
+                Arg::new("hidden")
+                    .long("hidden")
+                    .action(ArgAction::SetTrue)
+                    .help_heading("Resolver options")
+                    .hide(true),
+            )
+            .arg(
+                Arg::new("build")
+                    .long("build")
+                    .action(ArgAction::SetTrue)
+                    .help_heading("Build options"),
+            )
+            .arg(
+                Arg::new("zulu")
+                    .long("zulu")
+                    .action(ArgAction::SetTrue)
+                    .help_heading("Resolver options")
+                    .display_order(0),
+            )
+            .arg(
+                Arg::new("alpha")
+                    .long("alpha")
+                    .action(ArgAction::SetTrue)
+                    .help_heading("Resolver options")
+                    .display_order(1),
+            )
+            .arg(Arg::new("plain").long("plain").action(ArgAction::SetTrue))
+            .arg(
+                Arg::new("verbose")
+                    .long("verbose")
+                    .action(ArgAction::SetTrue)
+                    .help_heading("Global options"),
+            );
+        command.build();
+
+        let mut output = String::new();
+        generate_command(&mut output, &command, &mut Vec::new());
+
+        assert_snapshot!(option_groups(&output), @"
+        Options: sample--plain
+        Resolver options: sample--alpha, sample--zulu
+        Build options: sample--build
+        Global options: sample--verbose
+        ");
+    }
+
+    #[test]
+    fn repeats_global_options_on_leaf_commands() {
+        let mut command = Command::new("sample")
+            .disable_help_flag(true)
+            .disable_help_subcommand(true)
+            .arg(
+                Arg::new("verbose")
+                    .long("verbose")
+                    .action(ArgAction::SetTrue)
+                    .help_heading("Global options")
+                    .global(true),
+            )
+            .subcommand(Command::new("first").disable_help_flag(true))
+            .subcommand(Command::new("second").disable_help_flag(true));
+        command.build();
+
+        let mut output = String::new();
+        generate_command(&mut output, &command, &mut Vec::new());
+
+        assert_snapshot!(option_groups(&output), @"
+        Global options: sample-first--verbose
+        Global options: sample-second--verbose
+        ");
+    }
 
     #[test]
     fn generates_linked_positional_argument() {
