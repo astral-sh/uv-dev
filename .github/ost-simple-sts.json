@@ -187,6 +187,7 @@
       "caller_workflow": "pull-request-comments.yml",
       "on": ["workflow_dispatch"],
       "permissions": {
+        "actions": "write",
         "contents": "write",
         "workflows": "write",
         "issues": "write",

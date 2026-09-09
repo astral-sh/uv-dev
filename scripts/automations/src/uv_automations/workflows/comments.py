@@ -27,12 +27,15 @@ from uv_automations.comment_models import (
     CommentScope,
     CommentTarget,
     CommentTargetKind,
+    ContinuationKey,
     ConversationComment,
     InlineComment,
     ReviewThread,
     SubmittedReview,
     TargetRevision,
     ThreadPage,
+    as_continuation_budget,
+    as_feedback_progress,
     fingerprint,
     sanitize_recommendation,
 )
@@ -138,6 +141,7 @@ class FeedbackArtifactKind(StrEnum):
     RESULT = "result"
     SESSION = "session"
     STATE = "state"
+    INDEX = "index"
 
 
 def artifact_name(
@@ -186,8 +190,13 @@ class FeedbackCheckpoint:
     result: ArtifactIdentity
     session: ArtifactIdentity
     session_id: UUID
+    processed_targets: int
+    continuations_remaining: int
+    continuation_key: ContinuationKey | None
 
     def __post_init__(self) -> None:
+        as_continuation_budget(self.continuations_remaining)
+        as_feedback_progress(self.processed_targets)
         if (
             self.scope.repository != self.source.repository
             or not self.source.same_run(self.preparation.source)
@@ -215,7 +224,7 @@ class FeedbackCheckpoint:
 
     def to_json(self) -> dict[str, object]:
         return {
-            "version": 1,
+            "version": 2,
             "scope": self.scope.to_json(),
             "source": self.source.to_json(),
             "head": str(self.head),
@@ -224,27 +233,41 @@ class FeedbackCheckpoint:
             "result": self.result.to_json(),
             "session": self.session.to_json(),
             "session_id": str(self.session_id),
+            "processed_targets": self.processed_targets,
+            "continuations_remaining": self.continuations_remaining,
+            "continuation_key": (
+                str(self.continuation_key)
+                if self.continuation_key is not None
+                else None
+            ),
         }
 
     @classmethod
     def from_json(cls, value: object) -> FeedbackCheckpoint:
         data = as_object(value)
-        require_keys(
-            data,
-            {
-                "version",
-                "scope",
-                "source",
-                "head",
-                "collection",
-                "preparation",
-                "result",
-                "session",
-                "session_id",
-            },
-        )
-        if type(data["version"]) is not int or data["version"] != 1:
+        version = data["version"]
+        if type(version) is not int or version not in {1, 2}:
             raise ValueError("Unsupported feedback checkpoint version")
+        keys = {
+            "version",
+            "scope",
+            "source",
+            "head",
+            "collection",
+            "preparation",
+            "result",
+            "session",
+            "session_id",
+        }
+        if version == 2:
+            keys.update(
+                {
+                    "processed_targets",
+                    "continuations_remaining",
+                    "continuation_key",
+                }
+            )
+        require_keys(data, keys)
         session_id = as_string(data["session_id"])
         identifier = UUID(session_id)
         if str(identifier) != session_id:
@@ -258,6 +281,19 @@ class FeedbackCheckpoint:
             result=ArtifactIdentity.from_json(data["result"]),
             session=ArtifactIdentity.from_json(data["session"]),
             session_id=identifier,
+            # Legacy checkpoints retain their session and collection, but do
+            # not attest to automatic-follow-up progress or grant a budget.
+            processed_targets=as_feedback_progress(data["processed_targets"])
+            if version == 2
+            else 0,
+            continuations_remaining=as_continuation_budget(
+                data["continuations_remaining"]
+            )
+            if version == 2
+            else 0,
+            continuation_key=ContinuationKey(as_string(data["continuation_key"]))
+            if version == 2 and data["continuation_key"] is not None
+            else None,
         )
 
 
@@ -291,8 +327,14 @@ class PreparedFeedback:
     targets: tuple[TargetRevision, ...]
     session_id: UUID | None
     continuation: ArtifactIdentity | None
+    processed_targets: int
+    continuations_remaining: int
+    continuation_key: ContinuationKey | None
 
     def __post_init__(self) -> None:
+        as_continuation_budget(self.continuations_remaining)
+        if as_feedback_progress(self.processed_targets) < len(self.targets):
+            raise ValueError("Invalid bounded feedback progress")
         if self.scope.repository != self.source.repository:
             raise ValueError("The feedback source and repository differ")
         check_branch(self.head_ref)
@@ -308,7 +350,7 @@ class PreparedFeedback:
 
     def to_json(self) -> dict[str, object]:
         return {
-            "version": 1,
+            "version": 2,
             "scope": self.scope.to_json(),
             "source": self.source.to_json(),
             "dispatch_head": str(self.dispatch_head),
@@ -323,33 +365,50 @@ class PreparedFeedback:
             "continuation": (
                 self.continuation.to_json() if self.continuation is not None else None
             ),
+            "processed_targets": self.processed_targets,
+            "continuations_remaining": self.continuations_remaining,
+            "continuation_key": (
+                str(self.continuation_key)
+                if self.continuation_key is not None
+                else None
+            ),
         }
 
     @classmethod
     def from_json(cls, value: object) -> PreparedFeedback:
         data = as_object(value)
-        require_keys(
-            data,
-            {
-                "version",
-                "scope",
-                "source",
-                "dispatch_head",
-                "head",
-                "head_ref",
-                "base",
-                "base_ref",
-                "after",
-                "collection",
-                "targets",
-                "session_id",
-                "continuation",
-            },
-        )
-        if type(data["version"]) is not int or data["version"] != 1:
+        version = data["version"]
+        if type(version) is not int or version not in {1, 2}:
             raise ValueError("Unsupported prepared feedback version")
+        keys = {
+            "version",
+            "scope",
+            "source",
+            "dispatch_head",
+            "head",
+            "head_ref",
+            "base",
+            "base_ref",
+            "after",
+            "collection",
+            "targets",
+            "session_id",
+            "continuation",
+        }
+        if version == 2:
+            keys.update(
+                {
+                    "processed_targets",
+                    "continuations_remaining",
+                    "continuation_key",
+                }
+            )
+        require_keys(data, keys)
         session_id = data["session_id"]
         continuation = data["continuation"]
+        targets = tuple(
+            TargetRevision.from_json(value) for value in as_array(data["targets"])
+        )
         return cls(
             scope=CommentScope.from_json(data["scope"]),
             source=ActionsRun.from_json(data["source"]),
@@ -362,12 +421,21 @@ class PreparedFeedback:
             if data["after"] is not None
             else None,
             collection=CollectionCheckpoint.from_json(data["collection"]),
-            targets=tuple(
-                TargetRevision.from_json(value) for value in as_array(data["targets"])
-            ),
+            targets=targets,
             session_id=UUID(as_string(session_id)) if session_id is not None else None,
             continuation=ArtifactIdentity.from_json(continuation)
             if continuation is not None
+            else None,
+            processed_targets=as_feedback_progress(data["processed_targets"])
+            if version == 2
+            else len(targets),
+            continuations_remaining=as_continuation_budget(
+                data["continuations_remaining"]
+            )
+            if version == 2
+            else 0,
+            continuation_key=ContinuationKey(as_string(data["continuation_key"]))
+            if version == 2 and data["continuation_key"] is not None
             else None,
         )
 
@@ -434,6 +502,14 @@ class FeedbackPublication:
             )
         )
 
+    @property
+    def needs_continuation(self) -> bool:
+        return bool(
+            self.prepared.collection.pending
+            and self.prepared.processed_targets
+            and self.prepared.continuations_remaining
+        )
+
 
 def require_eligible(
     pull_request: CommentPullRequest,
@@ -464,12 +540,7 @@ def require_eligible(
 
 
 def _trusted_workflow(run: WorkflowRun) -> bool:
-    return (
-        run.head_repository == run.source.repository
-        and run.path in {WORKFLOW, f"{WORKFLOW}@refs/heads/main", f"{WORKFLOW}@main"}
-        and run.event == "workflow_dispatch"
-        and run.branch == "main"
-    )
+    return run.is_main_dispatch(WORKFLOW)
 
 
 def find_checkpoint(
@@ -517,11 +588,13 @@ def find_checkpoint(
     return None
 
 
-def validate_checkpoint(
+def _validate_checkpoint(
     github: CheckpointReader,
     scope: CommentScope,
     artifact: ArtifactIdentity,
     value: object,
+    *,
+    completed: bool,
 ) -> RetainedFeedback:
     state = FeedbackCheckpoint.from_json(value)
     if (
@@ -540,7 +613,7 @@ def validate_checkpoint(
         )
     }
     if (
-        not runs[state.source].is_successful_dispatch(WORKFLOW)
+        (completed and not runs[state.source].is_successful_dispatch(WORKFLOW))
         or not all(_trusted_workflow(run) for run in runs.values())
         or state.collection.through < runs[state.preparation.source].started_at
         or state.collection.through > Timestamp.now()
@@ -551,6 +624,28 @@ def validate_checkpoint(
     ):
         raise ValueError("The checkpoint's workflow or session provenance is invalid")
     return RetainedFeedback(artifact, state)
+
+
+def validate_checkpoint(
+    github: CheckpointReader,
+    scope: CommentScope,
+    artifact: ArtifactIdentity,
+    value: object,
+) -> RetainedFeedback:
+    return _validate_checkpoint(github, scope, artifact, value, completed=True)
+
+
+def validate_current_checkpoint(
+    github: CheckpointReader,
+    scope: CommentScope,
+    current: ActionsRun,
+    artifact: ArtifactIdentity,
+    value: object,
+) -> RetainedFeedback:
+    """Validate the checkpoint uploaded by this still-running publisher."""
+    if artifact.source != current:
+        raise ValueError("The checkpoint was not produced by this publisher attempt")
+    return _validate_checkpoint(github, scope, artifact, value, completed=False)
 
 
 type FeedbackRecord = ConversationComment | SubmittedReview | ReviewThread
@@ -778,6 +873,7 @@ def collect_comments(
             (*deferred, *remaining),
         ),
         targets,
+        len(selected_targets) - len(deferred),
     )
 
 
@@ -811,6 +907,8 @@ def prepare_feedback(
     trusted_files: Path,
     previous: RetainedFeedback | None,
     sessions: CodexSessionSnapshot | None,
+    continuations_remaining: int,
+    continuation_key: ContinuationKey | None,
 ) -> PreparedFeedback:
     through = Timestamp.now()
     pull_request = github.get_comment_pull_request(scope)
@@ -820,6 +918,15 @@ def prepare_feedback(
     fetch_commit(repository, scope, pull_request.details.base.sha)
     if previous is not None and previous.state.scope != scope:
         raise ValueError("The retained feedback belongs to a different pull request")
+    if continuation_key is not None and (
+        previous is None
+        or previous.state.head != expected_head
+        or sessions is None
+        or sessions.identifier != previous.state.session_id
+    ):
+        raise ValueError(
+            "An automatic continuation requires its exact checkpoint session"
+        )
     continuation: RetainedFeedback | None = None
     if candidate_head != expected_head:
         if previous is None or previous.state.head != candidate_head:
@@ -843,6 +950,10 @@ def prepare_feedback(
         except subprocess.CalledProcessError:
             current = False
         if not current:
+            if continuation_key is not None:
+                raise ValueError(
+                    "The automatic continuation's session is no longer current"
+                )
             logger.info(
                 "The retained session is not a current ancestor; collecting a fresh bounded history"
             )
@@ -864,7 +975,8 @@ def prepare_feedback(
             "The saved collection cursor is no longer usable; collecting a fresh bounded history"
         )
         resume = None
-        sessions = None
+        # Cursor expiry does not invalidate an independently verified, current
+        # Codex lineage. Only the collection falls back to a complete bootstrap.
         collection = collect_comments(github, scope, previous=None, through=through)
     # The three-dot diff and all metadata describe the same immutable head.
     diff = repository.output(
@@ -887,6 +999,9 @@ def prepare_feedback(
         targets=collection.targets,
         session_id=sessions.identifier if sessions is not None else None,
         continuation=continuation.artifact if continuation is not None else None,
+        processed_targets=collection.processed_targets,
+        continuations_remaining=continuations_remaining,
+        continuation_key=continuation_key,
     )
     destination.mkdir(parents=True, exist_ok=False)
     write_json_file(destination / "prepared.json", prepared.to_json())
@@ -1074,6 +1189,8 @@ def prepare_publication(
     preparation_artifact_id: int,
     result_artifact_id: int,
     session_artifact_id: int,
+    continuations_remaining: int,
+    continuation_key: ContinuationKey | None,
 ) -> FeedbackPublication:
     prepared = PreparedFeedback.from_json(read_json_file(context / "prepared.json"))
     result = FeedbackResult.from_json(read_json_file(result_directory / "result.json"))
@@ -1085,6 +1202,8 @@ def prepare_publication(
         or not prepared.source.attempt <= result.source.attempt <= source.attempt
         or prepared.dispatch_head != expected_head
         or result.base != prepared.head
+        or prepared.continuations_remaining != continuations_remaining
+        or prepared.continuation_key != continuation_key
     ):
         raise ValueError("The feedback artifacts do not match the trusted dispatch")
     runs = tuple(
@@ -1314,4 +1433,7 @@ def apply_publication(
         result=publication.result_artifact,
         session=publication.session,
         session_id=publication.session_id,
+        processed_targets=prepared.processed_targets,
+        continuations_remaining=prepared.continuations_remaining,
+        continuation_key=prepared.continuation_key,
     )

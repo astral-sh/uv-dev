@@ -24,6 +24,19 @@ on:
         description: "The immutable ID of the optional checkpoint artifact"
         required: false
         type: string
+      checkpoint_index:
+        description: "The immutable ID of the optional per-pull-request index"
+        required: false
+        type: string
+      continuation_key:
+        description: "The exact published-checkpoint key for an automatic follow-up"
+        required: false
+        type: string
+      continuations_remaining:
+        description: "The remaining automatic follow-up budget (0 to 3)"
+        required: false
+        default: "3"
+        type: string
 
 permissions: {}
 
@@ -37,6 +50,12 @@ concurrency:
 env:
   PULL_REQUEST_NUMBER: ${{ inputs.pull_request }}
   EXPECTED_HEAD_SHA: ${{ inputs.head_sha }}
+  CHECKPOINT_RUN: ${{ inputs.checkpoint_run }}
+  CHECKPOINT_ATTEMPT: ${{ inputs.checkpoint_attempt }}
+  CHECKPOINT_ARTIFACT: ${{ inputs.checkpoint_artifact }}
+  CHECKPOINT_INDEX: ${{ inputs.checkpoint_index }}
+  CONTINUATION_KEY: ${{ inputs.continuation_key }}
+  CONTINUATIONS_REMAINING: ${{ inputs.continuations_remaining || '3' }}
 
 jobs:
   prepare:
@@ -69,14 +88,12 @@ jobs:
             --checkpoint-run "$CHECKPOINT_RUN" \
             --checkpoint-attempt "$CHECKPOINT_ATTEMPT" \
             --checkpoint-artifact "$CHECKPOINT_ARTIFACT" \
+            --checkpoint-index "$CHECKPOINT_INDEX" \
             --destination "$RUNNER_TEMP/comments-source.json" \
             --github-output "$GITHUB_OUTPUT"
         env:
           AUTOMATIONS_PYTHON: ${{ steps.automations.outputs.python }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CHECKPOINT_RUN: ${{ inputs.checkpoint_run }}
-          CHECKPOINT_ATTEMPT: ${{ inputs.checkpoint_attempt }}
-          CHECKPOINT_ARTIFACT: ${{ inputs.checkpoint_artifact }}
 
       - name: "Download the immutable checkpoint"
         if: steps.source.outputs.found == 'true'
@@ -91,6 +108,7 @@ jobs:
 
       - name: "Verify the checkpoint's session provenance"
         id: previous
+        if: steps.source.outputs.proceed == 'true'
         run: |
           "$AUTOMATIONS_PYTHON" -I -m uv_automations comments inspect-source \
             --source-file "$RUNNER_TEMP/comments-source.json" \
@@ -113,6 +131,7 @@ jobs:
 
       - name: "Prepare the complete feedback context"
         id: context
+        if: steps.source.outputs.proceed == 'true'
         run: |
           "$AUTOMATIONS_PYTHON" -I -m uv_automations comments prepare \
             --repository "$GITHUB_WORKSPACE" \
@@ -317,13 +336,14 @@ jobs:
 
       - name: "Get the narrowly scoped uv-dev token"
         id: token
-        if: steps.validate.outputs.needs-writes == 'true'
+        if: steps.validate.outputs.needs-writes == 'true' || steps.validate.outputs.needs-continuation == 'true'
         uses: open-security-tools/ost-simple-sts@9e012247e07c39080fb6a832dbfbcfeacebc19c4
         with:
           exchange-url: ${{ secrets.STS_API_URL }}/exchange
           audience: ${{ secrets.STS_API_URL }}
           repository: astral-sh/uv-dev
           permissions: |
+            actions: write
             contents: write
             workflows: write
             issues: write
@@ -355,9 +375,88 @@ jobs:
       # No overwrite: a colliding state artifact fails this attempt. Discovery
       # accepts only the exact artifact from a successful workflow attempt.
       - name: "Retain the completed checkpoint"
+        id: checkpoint
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ steps.apply.outputs.artifact-name }}
           path: ${{ runner.temp }}/comments-state
           if-no-files-found: error
           retention-days: 30
+
+      - name: "Build the immutable feedback index"
+        id: index
+        run: |
+          "$AUTOMATIONS_PYTHON" -I -m uv_automations comments index \
+            --state "$RUNNER_TEMP/comments-state" \
+            --state-artifact "$STATE_ARTIFACT" \
+            --destination "$RUNNER_TEMP/comments-index" \
+            --github-output "$GITHUB_OUTPUT"
+        env:
+          AUTOMATIONS_PYTHON: ${{ steps.automations.outputs.python }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STATE_ARTIFACT: ${{ steps.checkpoint.outputs.artifact-id }}
+
+      # Continuations retain this exact ID. A later retry must not replace it.
+      - name: "Retain the immutable feedback index"
+        id: index-artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.index.outputs.artifact-name }}
+          path: ${{ runner.temp }}/comments-index/manifest.json
+          if-no-files-found: error
+          archive: true
+          retention-days: 30
+
+      - name: "Build the per-pull-request discovery aliases"
+        id: aliases
+        run: |
+          "$AUTOMATIONS_PYTHON" -I -m uv_automations comments index-aliases \
+            --state "$RUNNER_TEMP/comments-state" \
+            --state-artifact "$STATE_ARTIFACT" \
+            --index-artifact "$INDEX_ARTIFACT" \
+            --destination "$RUNNER_TEMP/comments-index-aliases" \
+            --github-output "$GITHUB_OUTPUT"
+        env:
+          AUTOMATIONS_PYTHON: ${{ steps.automations.outputs.python }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STATE_ARTIFACT: ${{ steps.checkpoint.outputs.artifact-id }}
+          INDEX_ARTIFACT: ${{ steps.index-artifact.outputs.artifact-id }}
+
+      # The small aliases retain an earlier successful attempt before replacing
+      # its pointer. Their immutable backing indexes are never overwritten.
+      - name: "Retain the per-pull-request discovery alias"
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.aliases.outputs.discovery-name }}
+          path: ${{ runner.temp }}/comments-index-aliases/discovery/manifest.json
+          if-no-files-found: error
+          archive: true
+          overwrite: true
+          retention-days: 30
+
+      - name: "Mark this exact continuation as consumed"
+        if: steps.aliases.outputs.marker-name != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.aliases.outputs.marker-name }}
+          path: ${{ runner.temp }}/comments-index-aliases/consumption/manifest.json
+          if-no-files-found: error
+          archive: true
+          overwrite: true
+          retention-days: 30
+
+      - name: "Continue a bounded pending feedback batch"
+        if: steps.validate.outputs.needs-continuation == 'true'
+        run: |
+          "$AUTOMATIONS_PYTHON" -I -m uv_automations comments continue \
+            --state "$RUNNER_TEMP/comments-state" \
+            --state-artifact "$STATE_ARTIFACT" \
+            --index-artifact "$INDEX_ARTIFACT" \
+            --github-output "$GITHUB_OUTPUT" \
+            --summary "$GITHUB_STEP_SUMMARY"
+        env:
+          AUTOMATIONS_PYTHON: ${{ steps.automations.outputs.python }}
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          GH_READ_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STATE_ARTIFACT: ${{ steps.checkpoint.outputs.artifact-id }}
+          INDEX_ARTIFACT: ${{ steps.index-artifact.outputs.artifact-id }}
