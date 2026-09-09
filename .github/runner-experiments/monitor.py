@@ -8,8 +8,11 @@ No command lines, environments, or network addresses are collected.
 import json
 import os
 import re
+import select
 import shutil
+import signal
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -200,14 +203,27 @@ def perf_supported(returncode, text):
 def probe_perf(results):
     """Optional PMU/software counters; missing support must remain explicit."""
     executable = os.environ.get("RCA_PERF") or shutil.which("perf")
-    report = {"executable": executable, "events": [], "probes": []}
+    report = {"executable": executable, "events": [], "probes": [], "scope": "whole VM"}
     if executable:
         for events in (
             "task-clock,context-switches,cpu-migrations,page-faults",
             "{cycles,instructions}",
             "{cache-references,cache-misses}",
         ):
-            command = [executable, "stat", "-x", ";", "-e", events, "--", "true"]
+            command = [
+                "sudo",
+                "-n",
+                executable,
+                "stat",
+                "-a",
+                "-x",
+                ";",
+                "-e",
+                events,
+                "--",
+                "sleep",
+                "0.1",
+            ]
             try:
                 result = subprocess.run(
                     command, capture_output=True, text=True, timeout=10, check=False
@@ -247,12 +263,13 @@ def probe_perf(results):
     return report
 
 
-def perf_command(report, path, command):
+def perf_command(report, path, command, *, privileged=True):
     if not report["events"]:
         return command
-    return [
+    return (["sudo", "-n"] if privileged else []) + [
         report["executable"],
         "stat",
+        "-a",
         "--no-big-num",
         "-x",
         ";",
@@ -265,3 +282,108 @@ def perf_command(report, path, command):
         "--",
         *command,
     ]
+
+
+def perf_coverage(path):
+    coverage = {}
+    for line in path.read_text().splitlines():
+        fields = line.split(";")
+        if len(fields) < 7:
+            continue
+        row = coverage.setdefault(fields[3], {"counted": 0, "missing": 0})
+        try:
+            float(fields[0])
+            float(fields[1])
+        except ValueError:
+            row["missing"] += 1
+        else:
+            row["counted"] += 1
+    return coverage
+
+
+class VmPerf:
+    """Keep privileged VM counting separate from the unprivileged workload."""
+
+    def __init__(self, report, path):
+        self.report = report
+        self.path = path
+        self.process = None
+        self.result = None
+
+    def __enter__(self):
+        if self.report is None or not self.report["events"]:
+            return self
+        # EOF on this pipe stops the helper, including if the caller exits.
+        self.process = subprocess.Popen(
+            [
+                "sudo",
+                "-n",
+                sys.executable,
+                str(Path(__file__).resolve()),
+                "--vm-perf",
+                self.report["executable"],
+                str(self.path),
+                ",".join(self.report["events"]),
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        if (
+            not select.select([self.process.stdout], [], [], 10)[0]
+            or self.process.stdout.readline().strip() != "ready"
+        ):
+            self.__exit__(None, None, None)
+            raise RuntimeError(f"VM perf failed to start: {self.result}")
+        return self
+
+    def __exit__(self, exception_type, exception, traceback):
+        if self.process is not None:
+            self.process.stdin.close()
+            self.process.stdin = None
+            stdout, stderr = self.process.communicate(timeout=15)
+            self.result = {
+                "scope": "whole VM",
+                "returncode": self.process.returncode,
+                "stdout": stdout,
+                "stderr": stderr,
+                "coverage": perf_coverage(self.path) if self.path.exists() else {},
+            }
+            self.path.with_suffix(".capture.json").write_text(
+                json.dumps(self.result, indent=2) + "\n"
+            )
+
+
+def vm_perf_helper(executable, output, events):
+    report = {"executable": executable, "events": [events]}
+    # A fixed upper bound protects against a leaked pipe; normal shutdown is EOF.
+    with subprocess.Popen(
+        perf_command(report, Path(output), ["sleep", "3600"], privileged=False)
+    ) as process:
+        try:
+            time.sleep(0.05)
+            if process.poll() is not None:
+                raise RuntimeError("perf exited during startup")
+            print("ready", flush=True)
+            sys.stdin.read(1)
+            if process.poll() is not None:
+                raise RuntimeError(
+                    f"perf exited before the sample finished: {process.returncode}"
+                )
+        finally:
+            if process.poll() is None:
+                process.send_signal(signal.SIGINT)
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+
+
+if __name__ == "__main__":
+    if len(sys.argv) != 5 or sys.argv[1] != "--vm-perf":
+        raise SystemExit(
+            "Internal VM perf helper: expected executable, output, and events"
+        )
+    vm_perf_helper(*sys.argv[2:])

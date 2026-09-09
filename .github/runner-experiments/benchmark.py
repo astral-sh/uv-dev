@@ -10,7 +10,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from monitor import Monitor, perf_command, probe_perf, read_file
+from monitor import Monitor, VmPerf, probe_perf, read_file
 
 SOURCE_REVISION = "e9837f6e09e481bf5d1c2c2f13b641c14a366518"
 AUTH_FIX = "51bcea71165dc26c1fd9ea6e6686ba413ae1f679"
@@ -57,22 +57,18 @@ def counters():
 def measure(command, name, environment, results, instrumentation=None):
     logfile = results / f"{name}.log"
     timefile = results / f"{name}.time"
-    before = counters()
-    started_utc_ns = time.time_ns()
-    started_monotonic_ns = time.monotonic_ns()
-    observed_command = (
-        perf_command(instrumentation, results / f"{name}.perf.txt", command)
-        if instrumentation is not None
-        else command
-    )
     monitor = None
     monitoring = None
     with (
+        VmPerf(instrumentation, results / f"{name}.perf.txt") as profiler,
         logfile.open("w") as output,
         (results / f"{name}.events.jsonl").open("w") as events,
     ):
+        before = counters()
+        started_utc_ns = time.time_ns()
+        started_monotonic_ns = time.monotonic_ns()
         process = subprocess.Popen(
-            ["/usr/bin/time", "-v", "-o", str(timefile), *observed_command],
+            ["/usr/bin/time", "-v", "-o", str(timefile), *command],
             env=environment,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -111,7 +107,7 @@ def measure(command, name, environment, results, instrumentation=None):
     row = {
         "name": name,
         "command": command,
-        "observed_command": observed_command,
+        "perf_capture": profiler.result,
         "started_utc_ns": started_utc_ns,
         "ended_utc_ns": ended_utc_ns,
         "started_monotonic_ns": started_monotonic_ns,
@@ -354,6 +350,8 @@ def main():
                 not row["monitoring"]["samples"] or row["monitoring"]["errors"]
             ):
                 failures.append(f"{row['name']}: monitoring incomplete")
+            if row["perf_capture"] is not None and row["perf_capture"]["returncode"]:
+                failures.append(f"{row['name']}: VM perf failed")
     if failures:
         raise RuntimeError(f"Incomplete samples: {failures}")
 

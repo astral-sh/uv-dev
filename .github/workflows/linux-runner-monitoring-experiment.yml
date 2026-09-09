@@ -116,6 +116,10 @@ jobs:
           for setting in kernel.perf_event_paranoid=1 kernel.sched_schedstats=1 kernel.task_delayacct=1; do
             { sudo sysctl -w "$setting" || true; } >> "$GITHUB_WORKSPACE/results/monitoring-setup.txt" 2>&1
           done
+      - name: Check VM-wide perf lifecycle
+        run: |
+          PYTHONPATH="$GITHUB_WORKSPACE/experiment/.github/runner-experiments" \
+            python3 -m unittest test_monitor.MonitorTests.test_vm_perf_lifecycle -v
       - name: Create isolated scratch filesystems
         run: |
           scratch="$HOME/code/tmp/uv-runner-rca"

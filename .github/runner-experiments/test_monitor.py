@@ -10,7 +10,16 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from monitor import Monitor, parse_stat, perf_command, perf_supported, process_tree
+from monitor import (
+    Monitor,
+    VmPerf,
+    parse_stat,
+    perf_command,
+    perf_coverage,
+    perf_supported,
+    probe_perf,
+    process_tree,
+)
 
 
 def stat(pid, parent, name="test process) worker"):
@@ -33,6 +42,30 @@ def stat(pid, parent, name="test process) worker"):
 
 
 class MonitorTests(unittest.TestCase):
+    @unittest.skipUnless(os.environ.get("RCA_PERF"), "Installed Linux perf required")
+    def test_vm_perf_lifecycle(self):
+        with tempfile.TemporaryDirectory() as directory:
+            report = probe_perf(Path(directory))
+            if not report["events"]:
+                self.skipTest("No supported VM perf events")
+            with VmPerf(report, Path(directory) / "smoke.perf.txt") as profiler:
+                time.sleep(1.1)
+            self.assertEqual(profiler.result["returncode"], 0)
+            self.assertTrue(profiler.result["coverage"])
+            self.assertTrue(
+                all(row["counted"] > 0 for row in profiler.result["coverage"].values())
+            )
+
+    def test_perf_coverage_preserves_missing_intervals(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "perf.txt"
+            path.write_text(
+                "# header\n1.0;123;;cycles;100;100.0;;\n2.0;<not counted>;;cycles;0;100.0;;\n"
+            )
+            self.assertEqual(
+                perf_coverage(path), {"cycles": {"counted": 1, "missing": 1}}
+            )
+
     @unittest.skipUnless(Path("/proc/self/stat").exists(), "Linux procfs required")
     def test_live_linux_process_snapshot(self):
         with subprocess.Popen(
