@@ -11,6 +11,10 @@ on:
         description: "The source pull request head SHA approved for promotion"
         required: true
         type: string
+      approval_id:
+        description: "The exact readiness event when replaying a queued promotion"
+        required: false
+        type: string
 
 permissions: {}
 
@@ -32,13 +36,14 @@ jobs:
     environment: automations
     timeout-minutes: 10
     permissions:
+      contents: read
       id-token: write
       pull-requests: read
     outputs:
       action: ${{ steps.plan.outputs.action }}
-      source_base_ref: ${{ steps.verify.outputs.base_ref }}
+      source_base_ref: ${{ steps.plan.outputs.source_base_ref }}
       source_base_sha: ${{ steps.plan.outputs.source_base_sha }}
-      head_ref: ${{ steps.verify.outputs.head_ref }}
+      head_ref: ${{ steps.plan.outputs.head_ref }}
       base_ref: ${{ steps.plan.outputs.base_ref }}
       base_sha: ${{ steps.plan.outputs.base_sha }}
       base_previous_sha: ${{ steps.plan.outputs.base_previous_sha }}
@@ -47,42 +52,19 @@ jobs:
       approval_id: ${{ steps.plan.outputs.approval_id }}
       rejection_reason: ${{ steps.plan.outputs.rejection_reason }}
       changed_head: ${{ steps.plan.outputs.changed_head }}
+      copy_base: ${{ steps.plan.outputs.copy_base }}
+      queue: ${{ steps.plan.outputs.queue }}
     steps:
-      - name: Verify pull request
-        id: verify
-        env:
-          EXPECTED_HEAD_SHA: ${{ inputs.head_sha }}
-          GH_TOKEN: ${{ github.token }}
-          PULL_REQUEST_NUMBER: ${{ inputs.pull_request }}
-        run: |
-          if [[ ! "$EXPECTED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "An approved pull request head SHA is required; refusing to promote it." >&2
-            exit 1
-          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
 
-          gh pr view "$PULL_REQUEST_NUMBER" \
-            --repo "$GITHUB_REPOSITORY" \
-            --json number,title,body,state,isDraft,baseRefName,headRefName,isCrossRepository \
-            > "$RUNNER_TEMP/pull-request.json"
+      - name: Set up trusted Python automations
+        id: automations
+        uses: ./.github/actions/setup-automations
 
-          if ! jq --exit-status \
-            '.state == "OPEN" and (.isDraft | not) and (.isCrossRepository | not)' \
-            "$RUNNER_TEMP/pull-request.json" > /dev/null; then
-            echo "The source pull request is no longer ready; refusing to promote it." >&2
-            exit 1
-          fi
-
-          head_ref=$(jq --raw-output '.headRefName' "$RUNNER_TEMP/pull-request.json")
-          base_ref=$(jq --raw-output '.baseRefName' "$RUNNER_TEMP/pull-request.json")
-          git check-ref-format "refs/heads/$head_ref"
-          git check-ref-format "refs/heads/$base_ref"
-
-          {
-            echo "base_ref=$base_ref"
-            echo "head_ref=$head_ref"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Get promotion token
+      - name: Get promotion read token
         id: token
         uses: open-security-tools/ost-simple-sts@974a63a2daaaa40f7c6dec40d334f3da4421469e
         with:
@@ -91,252 +73,126 @@ jobs:
           repositories: |
             astral-sh/uv
             ${{ github.repository }}
-          # `workflows: write` is required when the promoted branch modifies workflow files.
           permissions: |
-            contents: write
-            pull_requests: write
-            workflows: write
+            contents: read
+            pull_requests: read
 
       - name: Plan promotion
         id: plan
         env:
-          BASE_REF: ${{ steps.verify.outputs.base_ref }}
+          AUTOMATIONS_PYTHON: ${{ steps.automations.outputs.python }}
+          EXPECTED_APPROVAL_ID: ${{ inputs.approval_id }}
           EXPECTED_HEAD_SHA: ${{ inputs.head_sha }}
           GH_TOKEN: ${{ steps.token.outputs.token }}
-          HEAD_REF: ${{ steps.verify.outputs.head_ref }}
           PULL_REQUEST_NUMBER: ${{ inputs.pull_request }}
         run: |
-          reject() {
-            echo "rejection_reason=$1" >> "$GITHUB_OUTPUT"
-            echo "$1" >&2
-            exit 1
-          }
+          "$AUTOMATIONS_PYTHON" -I -m uv_automations promotions prepare \
+            --repo "$GITHUB_REPOSITORY" \
+            --repository-id "$GITHUB_REPOSITORY_ID" \
+            --pull-request "$PULL_REQUEST_NUMBER" \
+            --expected-head "$EXPECTED_HEAD_SHA" \
+            --approval-id "$EXPECTED_APPROVAL_ID" \
+            --github-output "$GITHUB_OUTPUT" \
+            --summary "$GITHUB_STEP_SUMMARY"
 
-          source_pull_request=$(gh api --method GET "repos/$GITHUB_REPOSITORY/pulls/$PULL_REQUEST_NUMBER")
-          approval=$(
-            gh api \
-              --method GET \
-              "repos/$GITHUB_REPOSITORY/issues/$PULL_REQUEST_NUMBER/events" \
-              --paginate \
-              --slurp |
-              jq --compact-output '[.[][] | select(.event == "ready_for_review" and .actor.type == "User")] | last // null'
-          )
-          promoter=$(jq --raw-output '.actor.login // empty' <<< "$approval")
-          if [ -z "$promoter" ]; then
-            echo "The pull request does not have a human promoter; refusing to promote it." >&2
-            exit 1
-          fi
-          echo "promoter=$promoter" >> "$GITHUB_OUTPUT"
-          echo "approval_id=$(jq --raw-output '.id' <<< "$approval")" >> "$GITHUB_OUTPUT"
+  queue:
+    name: "Queue promotion of pull request #${{ inputs.pull_request }}"
+    needs: prepare
+    if: needs.prepare.outputs.queue != ''
+    runs-on: ubuntu-slim
+    environment: automations
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: read
+    outputs:
+      recorded: ${{ steps.record.outputs.recorded }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
 
-          if [ "$GITHUB_REPOSITORY" = "astral-sh/uv-security" ]; then
-            if ! jq --exit-status --arg label "$UV_SECURITY_PUBLISH_LABEL" \
-              '.labels | any(.name == $label)' <<< "$source_pull_request" > /dev/null; then
-              reject "The private pull request requires the $UV_SECURITY_PUBLISH_LABEL label."
-            fi
-            promoter_permission=$(gh api --method GET "repos/$GITHUB_REPOSITORY/collaborators/$promoter/permission")
-            if ! jq --exit-status \
-              '.permission == "admin" or .permission == "maintain" or .permission == "write"' \
-              <<< "$promoter_permission" > /dev/null; then
-              reject "The private pull request was not approved by a repository writer."
-            fi
-          fi
+      - name: Set up trusted Python automations
+        id: automations
+        uses: ./.github/actions/setup-automations
 
-          if ! jq --exit-status \
-            --arg base_ref "$BASE_REF" \
-            --arg head_ref "$HEAD_REF" \
-            --argjson repository_id "$GITHUB_REPOSITORY_ID" \
-            '.state == "open" and (.draft | not) and .base.ref == $base_ref and .head.ref == $head_ref and .base.repo.id == $repository_id and .head.repo.id == $repository_id' \
-            <<< "$source_pull_request" > /dev/null; then
-            reject "The source pull request is no longer ready on the expected branch."
-          fi
+      - name: Get queue-record token
+        id: token
+        uses: open-security-tools/ost-simple-sts@974a63a2daaaa40f7c6dec40d334f3da4421469e
+        with:
+          exchange-url: ${{ secrets.STS_API_URL }}/exchange
+          audience: ${{ secrets.STS_API_URL }}
+          repository: ${{ github.repository }}
+          permissions: |
+            pull_requests: write
 
-          source_head=$(jq --raw-output '.head.sha' <<< "$source_pull_request")
-          if [ "$source_head" != "$EXPECTED_HEAD_SHA" ]; then
-            echo "changed_head=$source_head" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
+      - name: Record queued promotion
+        id: record
+        env:
+          AUTOMATIONS_PYTHON: ${{ steps.automations.outputs.python }}
+          GH_READ_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          PULL_REQUEST_NUMBER: ${{ inputs.pull_request }}
+          QUEUE_PLAN: ${{ needs.prepare.outputs.queue }}
+        run: |
+          "$AUTOMATIONS_PYTHON" -I -m uv_automations promotions record-queue \
+            --repo "$GITHUB_REPOSITORY" \
+            --repository-id "$GITHUB_REPOSITORY_ID" \
+            --pull-request "$PULL_REQUEST_NUMBER" \
+            --github-output "$GITHUB_OUTPUT" \
+            --summary "$GITHUB_STEP_SUMMARY" <<< "$QUEUE_PLAN"
 
-          base_head=$(jq --raw-output '.base.sha' <<< "$source_pull_request")
-          echo "source_base_sha=$base_head" >> "$GITHUB_OUTPUT"
-          echo "base_ref=$BASE_REF" >> "$GITHUB_OUTPUT"
+  replay-queued-promotion:
+    name: Check newly queued promotion
+    needs: [prepare, queue]
+    if: github.repository == 'astral-sh/uv-dev' && github.ref == 'refs/heads/main' && needs.queue.outputs.recorded == 'true'
+    runs-on: ubuntu-slim
+    environment: automations
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+      id-token: write
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
 
-          upstream_base_refs=$(gh api --method GET "repos/astral-sh/uv/git/matching-refs/heads/$BASE_REF")
-          if ! jq --exit-status --arg ref "refs/heads/$BASE_REF" 'any(.[]; .ref == $ref)' <<< "$upstream_base_refs" > /dev/null; then
-            parent_pull_requests=$(
-              gh pr list \
-                --repo astral-sh/uv \
-                --state open \
-                --head "$BASE_REF" \
-              --limit 2 \
-              --json headRefName,headRefOid,headRepository
-            )
+      - name: Set up trusted Python automations
+        id: automations
+        uses: ./.github/actions/setup-automations
 
-            if [ "$(jq 'length' <<< "$parent_pull_requests")" = "0" ]; then
-              source_parent_pull_requests=$(
-                gh pr list \
-                  --repo "$GITHUB_REPOSITORY" \
-                  --state open \
-                  --head "$BASE_REF" \
-                  --limit 2 \
-                  --json number,headRefName,headRefOid,headRepository
-              )
-              if [ "$(jq 'length' <<< "$source_parent_pull_requests")" != "0" ]; then
-                if ! jq --exit-status \
-                  --arg base_ref "$BASE_REF" \
-                  --arg base_head "$base_head" \
-                  --arg source_repository "$GITHUB_REPOSITORY" \
-                  'length == 1 and .[0].headRefName == $base_ref and .[0].headRefOid == $base_head and .[0].headRepository.nameWithOwner == $source_repository' \
-                  <<< "$source_parent_pull_requests" > /dev/null; then
-                  reject "The upstream base branch $BASE_REF does not have a matching open parent pull request."
-                fi
+      - name: Get promotion read token
+        id: read-token
+        uses: open-security-tools/ost-simple-sts@974a63a2daaaa40f7c6dec40d334f3da4421469e
+        with:
+          exchange-url: ${{ secrets.STS_API_URL }}/exchange
+          audience: ${{ secrets.STS_API_URL }}
+          repositories: |
+            astral-sh/uv
+            ${{ github.repository }}
+          permissions: |
+            contents: read
+            pull_requests: read
 
-                parent_number=$(jq --raw-output '.[0].number' <<< "$source_parent_pull_requests")
-                gh pr comment "$PULL_REQUEST_NUMBER" \
-                  --repo "$GITHUB_REPOSITORY" \
-                  --body "Waiting for promotion of parent #$parent_number"
-                echo "queued=true" >> "$GITHUB_OUTPUT"
-                exit 0
-              fi
-
-              merged_parent_pull_requests=$(
-                gh pr list \
-                  --repo astral-sh/uv \
-                  --state merged \
-                  --head "$BASE_REF" \
-                  --limit 2 \
-                  --json number,baseRefName,headRefName,headRefOid,headRepository
-              )
-              if ! jq --exit-status \
-                --arg base_ref "$BASE_REF" \
-                'length == 1 and .[0].headRefName == $base_ref and .[0].headRepository.nameWithOwner == "astral-sh/uv"' \
-                <<< "$merged_parent_pull_requests" > /dev/null; then
-                reject "The upstream base branch $BASE_REF does not have a matching open or merged parent pull request."
-              fi
-
-              parent_number=$(jq --raw-output '.[0].number' <<< "$merged_parent_pull_requests")
-              merged_parent=$(gh api --method GET "repos/astral-sh/uv/pulls/$parent_number")
-              if ! jq --exit-status \
-                --arg base_ref "$BASE_REF" \
-                --argjson repository_id "$UV_REPOSITORY_ID" \
-                '.merged_at != null and .head.ref == $base_ref and .base.repo.id == $repository_id and .head.repo.id == $repository_id' \
-                <<< "$merged_parent" > /dev/null; then
-                reject "The merged upstream parent for $BASE_REF changed before it could be verified."
-              fi
-
-              parent_head=$(jq --raw-output '.head.sha' <<< "$merged_parent")
-              if [ "$parent_head" != "$base_head" ]; then
-                # The copied upstream branch may have been rebased after promotion. Only
-                # accept that history when our bot recorded the exact source promotion.
-                closed_source_parents=$(
-                  gh pr list --repo "$GITHUB_REPOSITORY" --state closed --head "$BASE_REF" \
-                    --limit 2 --json number,headRefName,headRefOid,headRepository
-                )
-                if ! jq --exit-status \
-                  --arg base_ref "$BASE_REF" --arg base_head "$base_head" \
-                  --arg source_repository "$GITHUB_REPOSITORY" \
-                  'length == 1 and .[0].headRefName == $base_ref and .[0].headRefOid == $base_head and .[0].headRepository.nameWithOwner == $source_repository' \
-                  <<< "$closed_source_parents" > /dev/null; then
-                  reject "The merged parent of $BASE_REF is at $parent_head, but the original source parent at $base_head could not be verified."
-                fi
-                source_parent_number=$(jq --raw-output '.[0].number' <<< "$closed_source_parents")
-                source_parent=$(gh api --method GET "repos/$GITHUB_REPOSITORY/pulls/$source_parent_number")
-                if ! jq --exit-status \
-                  --arg base_ref "$BASE_REF" --arg base_head "$base_head" \
-                  --argjson repository_id "$GITHUB_REPOSITORY_ID" \
-                  '.state == "closed" and .head.ref == $base_ref and .head.sha == $base_head and .base.repo.id == $repository_id and .head.repo.id == $repository_id' \
-                  <<< "$source_parent" > /dev/null; then
-                  reject "The original source parent of $BASE_REF changed before it could be verified."
-                fi
-                promotion_comment="Promoted to [#$parent_number](https://github.com/astral-sh/uv/pull/$parent_number)."
-                parent_comments=$(gh api --method GET "repos/$GITHUB_REPOSITORY/issues/$source_parent_number/comments" --paginate --slurp)
-                if ! jq --exit-status \
-                  --arg body "$promotion_comment" --argjson bot_id "$AUTOMATIONS_BOT_ID" \
-                  'any(.[][]; .user.id == $bot_id and .performed_via_github_app.slug == "astral-automations-bot" and .body == $body)' \
-                  <<< "$parent_comments" > /dev/null \
-                  || ! jq --exit-status --argjson bot_id "$AUTOMATIONS_BOT_ID" '.user.id == $bot_id' <<< "$merged_parent" > /dev/null; then
-                  reject "The merged parent of $BASE_REF is at $parent_head, but its promotion from $base_head could not be verified."
-                fi
-
-                parent_history_query=$(cat <<'GRAPHQL'
-          query($number: Int!, $endCursor: String) {
-            repository(owner: "astral-sh", name: "uv") {
-              pullRequest(number: $number) {
-                timelineItems(first: 100, after: $endCursor, itemTypes: [HEAD_REF_FORCE_PUSHED_EVENT]) {
-                  nodes {
-                    ... on HeadRefForcePushedEvent {
-                      beforeCommit { oid }
-                      afterCommit { oid }
-                    }
-                  }
-                  pageInfo { hasNextPage endCursor }
-                }
-              }
-            }
-          }
-          GRAPHQL
-                )
-                parent_history=$(
-                  gh api graphql --paginate --slurp --field number="$parent_number" --raw-field query="$parent_history_query"
-                )
-                if ! jq --exit-status --arg base_head "$base_head" \
-                  'any(.[].data.repository.pullRequest.timelineItems.nodes[]; .beforeCommit.oid == $base_head or .afterCommit.oid == $base_head)' \
-                  <<< "$parent_history" > /dev/null; then
-                  reject "The original parent revision $base_head is not recorded in the upstream history of astral-sh/uv#$parent_number."
-                fi
-              fi
-
-              parent_base_ref=$(jq --raw-output '.base.ref' <<< "$merged_parent")
-              parent_merge_sha=$(jq --raw-output '.merge_commit_sha' <<< "$merged_parent")
-              git check-ref-format "refs/heads/$parent_base_ref"
-              parent_base_sha=$(gh api --method GET "repos/$GITHUB_REPOSITORY/git/ref/heads/$parent_base_ref" --jq .object.sha)
-              comparison=$(gh api --method GET "repos/$GITHUB_REPOSITORY/compare/$parent_merge_sha...$parent_base_sha")
-              if ! jq --exit-status '.status | IN("ahead", "identical")' <<< "$comparison" > /dev/null; then
-                gh pr comment "$PULL_REQUEST_NUMBER" --repo "$GITHUB_REPOSITORY" \
-                  --body "Waiting for astral-sh/uv#$parent_number to sync to $parent_base_ref."
-                echo "queued=true" >> "$GITHUB_OUTPUT"
-                exit 0
-              fi
-              current_pull_request=$(gh api --method GET "repos/$GITHUB_REPOSITORY/pulls/$PULL_REQUEST_NUMBER")
-              if ! jq --exit-status \
-                --arg base_ref "$BASE_REF" \
-                --arg base_head "$base_head" \
-                --arg head_ref "$HEAD_REF" \
-                --arg head_sha "$source_head" \
-                --argjson repository_id "$GITHUB_REPOSITORY_ID" \
-                '.state == "open" and (.draft | not) and .base.ref == $base_ref and .base.sha == $base_head and .head.ref == $head_ref and .head.sha == $head_sha and .base.repo.id == $repository_id and .head.repo.id == $repository_id' \
-                <<< "$current_pull_request" > /dev/null; then
-                reject "The pull request changed before its merged parent could be updated."
-              fi
-
-              {
-                echo "action=update-parent"
-                echo "base_ref=$parent_base_ref"
-                echo "base_sha=$parent_base_sha"
-                echo "base_previous_sha=$base_head"
-                echo "parent_merge_sha=$parent_merge_sha"
-              } >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-
-            if ! jq --exit-status \
-              --arg base_ref "$BASE_REF" \
-              --arg base_head "$base_head" \
-              --arg source_repository "$GITHUB_REPOSITORY" \
-              'length == 1 and .[0].headRefName == $base_ref and .[0].headRefOid == $base_head and .[0].headRepository.nameWithOwner == $source_repository' \
-              <<< "$parent_pull_requests" > /dev/null; then
-              reject "The upstream base branch $BASE_REF does not have a matching open parent pull request."
-            fi
-
-            gh api \
-              --method POST \
-              repos/astral-sh/uv/git/refs \
-              --raw-field ref="refs/heads/$BASE_REF" \
-              --raw-field sha="$base_head" \
-              --silent
-          fi
-
-          echo "action=promote" >> "$GITHUB_OUTPUT"
+      - name: Replay if the parent has already synchronized
+        env:
+          AUTOMATIONS_PYTHON: ${{ steps.automations.outputs.python }}
+          GH_SOURCE_TOKEN: ${{ steps.read-token.outputs.token }}
+          GH_UPSTREAM_TOKEN: ${{ steps.read-token.outputs.token }}
+          GH_TOKEN: ${{ github.token }}
+          PULL_REQUEST_NUMBER: ${{ inputs.pull_request }}
+          QUEUE_PLAN: ${{ needs.prepare.outputs.queue }}
+        run: |
+          "$AUTOMATIONS_PYTHON" -I -m uv_automations promotions replay-one \
+            --repo "$GITHUB_REPOSITORY" \
+            --repository-id "$GITHUB_REPOSITORY_ID" \
+            --pull-request "$PULL_REQUEST_NUMBER" \
+            --summary "$GITHUB_STEP_SUMMARY" <<< "$QUEUE_PLAN"
 
   update-pull-request-parent:
     name: Update pull request parent
@@ -367,13 +223,19 @@ jobs:
       pull-requests: read
     outputs:
       number: ${{ steps.promote.outputs.number }}
-      rejection_reason: ${{ steps.verify.outputs.rejection_reason || steps.promote.outputs.rejection_reason || steps.close.outputs.rejection_reason }}
+      closed: ${{ steps.close.outputs.closed }}
+      rejection_reason: ${{ steps.verify.outputs.rejection_reason || steps.base.outputs.rejection_reason || steps.promote.outputs.rejection_reason || steps.close.outputs.rejection_reason }}
       changed_head: ${{ steps.promote.outputs.changed_head || steps.close.outputs.changed_head }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.workflow_sha }}
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Set up trusted Python automations
+        id: automations
+        uses: ./.github/actions/setup-automations
 
       - name: Download updated parent candidate
         if: needs.prepare.outputs.action == 'update-parent'
@@ -414,6 +276,20 @@ jobs:
           fi
           echo "head_sha=$promoted_head" >> "$GITHUB_OUTPUT"
 
+      - name: Get promotion read token
+        id: read-token
+        if: steps.verify.outputs.head_sha != '' && needs.prepare.outputs.copy_base != ''
+        uses: open-security-tools/ost-simple-sts@974a63a2daaaa40f7c6dec40d334f3da4421469e
+        with:
+          exchange-url: ${{ secrets.STS_API_URL }}/exchange
+          audience: ${{ secrets.STS_API_URL }}
+          repositories: |
+            astral-sh/uv
+            ${{ github.repository }}
+          permissions: |
+            contents: read
+            pull_requests: read
+
       - name: Get promotion token
         id: token
         if: steps.verify.outputs.head_sha != ''
@@ -430,12 +306,30 @@ jobs:
             pull_requests: write
             workflows: write
 
+      - name: Ensure upstream base
+        id: base
+        if: steps.verify.outputs.head_sha != '' && needs.prepare.outputs.copy_base != ''
+        env:
+          AUTOMATIONS_PYTHON: ${{ steps.automations.outputs.python }}
+          COPY_BASE: ${{ needs.prepare.outputs.copy_base }}
+          GH_READ_TOKEN: ${{ steps.read-token.outputs.token }}
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          PULL_REQUEST_NUMBER: ${{ inputs.pull_request }}
+        run: |
+          "$AUTOMATIONS_PYTHON" -I -m uv_automations promotions ensure-base \
+            --repo "$GITHUB_REPOSITORY" \
+            --repository-id "$GITHUB_REPOSITORY_ID" \
+            --pull-request "$PULL_REQUEST_NUMBER" \
+            --github-output "$GITHUB_OUTPUT" \
+            --summary "$GITHUB_STEP_SUMMARY" <<< "$COPY_BASE"
+
       - name: Promote pull request
         id: promote
-        if: steps.verify.outputs.head_sha != ''
+        if: steps.verify.outputs.head_sha != '' && steps.base.outputs.ready != 'false'
         env:
           ACTION: ${{ needs.prepare.outputs.action }}
           APPROVAL_ID: ${{ needs.prepare.outputs.approval_id }}
+          AUTOMATIONS_PYTHON: ${{ steps.automations.outputs.python }}
           BASE_REF: ${{ needs.prepare.outputs.base_ref }}
           BASE_SHA: ${{ needs.prepare.outputs.base_sha }}
           EXPECTED_HEAD_SHA: ${{ inputs.head_sha }}
@@ -444,6 +338,7 @@ jobs:
           PROMOTED_HEAD: ${{ steps.verify.outputs.head_sha }}
           PROMOTER: ${{ needs.prepare.outputs.promoter }}
           PULL_REQUEST_NUMBER: ${{ inputs.pull_request }}
+          REPLAY_APPROVAL_ID: ${{ inputs.approval_id }}
           SOURCE_BASE_REF: ${{ needs.prepare.outputs.source_base_ref }}
           SOURCE_BASE_SHA: ${{ needs.prepare.outputs.source_base_sha }}
           GIT_CONFIG_GLOBAL: /dev/null
@@ -457,8 +352,10 @@ jobs:
 
           source_pull_request=$(gh api --method GET "repos/$GITHUB_REPOSITORY/pulls/$PULL_REQUEST_NUMBER")
           current_approval=$(
-            gh api --method GET "repos/$GITHUB_REPOSITORY/issues/$PULL_REQUEST_NUMBER/events" --paginate --slurp |
-              jq --raw-output '[.[][] | select(.event == "ready_for_review" and .actor.type == "User") | .id] | last // empty'
+            "$AUTOMATIONS_PYTHON" -I -m uv_automations promotions current-approval \
+              --repo "$GITHUB_REPOSITORY" --repository-id "$GITHUB_REPOSITORY_ID" \
+              --pull-request "$PULL_REQUEST_NUMBER" --expected-head "$EXPECTED_HEAD_SHA" \
+              --approval-id "$REPLAY_APPROVAL_ID"
           )
           if [ "$current_approval" != "$APPROVAL_ID" ] || ! jq --exit-status \
             --arg action "$ACTION" \
@@ -568,8 +465,10 @@ jobs:
                   exit 0
                 fi
                 current_approval=$(
-                  gh api --method GET "repos/$GITHUB_REPOSITORY/issues/$PULL_REQUEST_NUMBER/events" --paginate --slurp |
-                    jq --raw-output '[.[][] | select(.event == "ready_for_review" and .actor.type == "User") | .id] | last // empty'
+                  "$AUTOMATIONS_PYTHON" -I -m uv_automations promotions current-approval \
+                    --repo "$GITHUB_REPOSITORY" --repository-id "$GITHUB_REPOSITORY_ID" \
+                    --pull-request "$PULL_REQUEST_NUMBER" --expected-head "$EXPECTED_HEAD_SHA" \
+                    --approval-id "$REPLAY_APPROVAL_ID"
                 )
                 if [ "$current_approval" != "$APPROVAL_ID" ] || ! jq --exit-status \
                   --arg base_ref "$SOURCE_BASE_REF" --arg base_head "$SOURCE_BASE_SHA" \
@@ -647,12 +546,25 @@ jobs:
         id: close
         if: steps.promote.outputs.number != ''
         env:
+          APPROVAL_ID: ${{ needs.prepare.outputs.approval_id }}
+          AUTOMATIONS_PYTHON: ${{ steps.automations.outputs.python }}
           EXPECTED_HEAD_SHA: ${{ inputs.head_sha }}
           GH_TOKEN: ${{ steps.token.outputs.token }}
           PROMOTED_HEAD: ${{ steps.verify.outputs.head_sha }}
           PULL_REQUEST_NUMBER: ${{ inputs.pull_request }}
+          REPLAY_APPROVAL_ID: ${{ inputs.approval_id }}
           UPSTREAM_NUMBER: ${{ steps.promote.outputs.number }}
         run: |
+          current_approval=$(
+            "$AUTOMATIONS_PYTHON" -I -m uv_automations promotions current-approval \
+              --repo "$GITHUB_REPOSITORY" --repository-id "$GITHUB_REPOSITORY_ID" \
+              --pull-request "$PULL_REQUEST_NUMBER" --expected-head "$EXPECTED_HEAD_SHA" \
+              --approval-id "$REPLAY_APPROVAL_ID"
+          )
+          if [ "$current_approval" != "$APPROVAL_ID" ]; then
+            echo "The promotion approval changed after publication; leaving the source unchanged."
+            exit 0
+          fi
           pull_request=$(gh pr view "$PULL_REQUEST_NUMBER" --repo "$GITHUB_REPOSITORY" --json state,isDraft,headRefOid)
           if ! jq --exit-status \
             '.state == "OPEN" and (.isDraft | not)' \
@@ -677,7 +589,57 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --comment "Promoted to [#$UPSTREAM_NUMBER]($upstream_url)."
 
+          echo "closed=true" >> "$GITHUB_OUTPUT"
           echo "Promoted $GITHUB_REPOSITORY#$PULL_REQUEST_NUMBER to [#$UPSTREAM_NUMBER]($upstream_url)." >> "$GITHUB_STEP_SUMMARY"
+
+  replay-promoted-children:
+    name: Check children of promoted pull request
+    needs: promote
+    if: github.repository == 'astral-sh/uv-dev' && github.ref == 'refs/heads/main' && needs.promote.outputs.closed == 'true'
+    runs-on: ubuntu-slim
+    environment: automations
+    timeout-minutes: 10
+    permissions:
+      actions: write
+      contents: read
+      id-token: write
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+
+      - name: Set up trusted Python automations
+        id: automations
+        uses: ./.github/actions/setup-automations
+
+      - name: Get promotion read token
+        id: read-token
+        uses: open-security-tools/ost-simple-sts@974a63a2daaaa40f7c6dec40d334f3da4421469e
+        with:
+          exchange-url: ${{ secrets.STS_API_URL }}/exchange
+          audience: ${{ secrets.STS_API_URL }}
+          repositories: |
+            astral-sh/uv
+            ${{ github.repository }}
+          permissions: |
+            contents: read
+            pull_requests: read
+
+      - name: Replay children whose parent is already synchronized
+        env:
+          AUTOMATIONS_PYTHON: ${{ steps.automations.outputs.python }}
+          GH_SOURCE_TOKEN: ${{ steps.read-token.outputs.token }}
+          GH_UPSTREAM_TOKEN: ${{ steps.read-token.outputs.token }}
+          GH_TOKEN: ${{ github.token }}
+          PARENT_PULL_REQUEST: ${{ inputs.pull_request }}
+        run: |
+          "$AUTOMATIONS_PYTHON" -I -m uv_automations promotions replay-children \
+            --repo "$GITHUB_REPOSITORY" \
+            --repository-id "$GITHUB_REPOSITORY_ID" \
+            --parent "$PARENT_PULL_REQUEST" \
+            --summary "$GITHUB_STEP_SUMMARY"
 
   recover:
     name: "Recover rejected promotion #${{ inputs.pull_request }}"
@@ -687,9 +649,19 @@ jobs:
     environment: automations
     timeout-minutes: 10
     permissions:
+      contents: read
       id-token: write
       pull-requests: read
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+
+      - name: Set up trusted Python automations
+        id: automations
+        uses: ./.github/actions/setup-automations
+
       - name: Get promotion token
         id: token
         uses: open-security-tools/ost-simple-sts@974a63a2daaaa40f7c6dec40d334f3da4421469e
@@ -709,6 +681,7 @@ jobs:
         id: recover
         env:
           APPROVAL_ID: ${{ needs.prepare.outputs.approval_id }}
+          AUTOMATIONS_PYTHON: ${{ steps.automations.outputs.python }}
           BASE_REF: ${{ needs.prepare.outputs.source_base_ref }}
           BASE_PREVIOUS_SHA: ${{ needs.prepare.outputs.base_previous_sha }}
           CHANGED_HEAD: ${{ needs.prepare.outputs.changed_head || needs.promote.outputs.changed_head }}
@@ -717,13 +690,16 @@ jobs:
           HEAD_REF: ${{ needs.prepare.outputs.head_ref }}
           PROMOTER: ${{ needs.prepare.outputs.promoter }}
           PULL_REQUEST_NUMBER: ${{ inputs.pull_request }}
+          REPLAY_APPROVAL_ID: ${{ inputs.approval_id }}
           REBASE_REF: ${{ needs.update-pull-request-parent.outputs.outcome == 'conflicts' && needs.prepare.outputs.base_ref || '' }}
           REJECTION_REASON: ${{ needs.prepare.outputs.rejection_reason || needs.promote.outputs.rejection_reason || needs.update-pull-request-parent.outputs.rejection_reason || (needs.update-pull-request-parent.outputs.outcome == 'conflicts' && 'Updating the merged parent requires conflict resolution.') || (needs.update-pull-request-parent.outputs.outcome == 'empty' && 'No child commits remain after updating the merged parent.') || '' }}
           UPSTREAM_NUMBER: ${{ needs.promote.outputs.number }}
         run: |
           current_approval=$(
-            gh api --method GET "repos/$GITHUB_REPOSITORY/issues/$PULL_REQUEST_NUMBER/events" --paginate --slurp |
-              jq --raw-output '[.[][] | select(.event == "ready_for_review" and .actor.type == "User") | .id] | last // empty'
+            "$AUTOMATIONS_PYTHON" -I -m uv_automations promotions current-approval \
+              --repo "$GITHUB_REPOSITORY" --repository-id "$GITHUB_REPOSITORY_ID" \
+              --pull-request "$PULL_REQUEST_NUMBER" --expected-head "$EXPECTED_HEAD_SHA" \
+              --approval-id "$REPLAY_APPROVAL_ID"
           )
           pull_request=$(gh api --method GET "repos/$GITHUB_REPOSITORY/pulls/$PULL_REQUEST_NUMBER")
           if [ -z "$APPROVAL_ID" ] || [ "$current_approval" != "$APPROVAL_ID" ] || ! jq --exit-status \

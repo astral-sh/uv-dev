@@ -127,6 +127,21 @@
     {
       "caller": "uv",
       "environment": "automations",
+      "caller_ref": "refs/heads/main",
+      "caller_workflow": "sync-uv-dev.yml",
+      "reusable_workflow": "replay-queued-promotions.yml",
+      "on": ["push", "workflow_dispatch"],
+      "permissions": {
+        "actions": "write",
+        "contents": "read",
+        "pull_requests": "read"
+      },
+      "target": "uv-dev",
+      "installation": "automations"
+    },
+    {
+      "caller": "uv",
+      "environment": "automations",
       "caller_workflow": "sync-uv-security.yml",
       "on": ["push", "workflow_dispatch"],
       "permissions": { "contents": "write", "workflows": "write" },

@@ -242,20 +242,20 @@ survives or has been deleted. Manual promotion retains its existing-branch behav
 `current_ready_approval` is deliberately stricter than the legacy `ready_approval`: a later draft or
 bot-ready transition revokes the old replay approval.
 
-The workflow integration can wake the queue after a successful public-main sync, after recording a
-new queue entry, and after finishing a promoted parent's source-close receipt. The last wakeup
-considers only that parent's children. Queue recording needs only source-PR write authority. Local
-replay can use the source repository's own `GITHUB_TOKEN`, whose
+The workflow wakes the queue after a successful public-main sync, after recording a new queue entry,
+and after finishing a promoted parent's source-close receipt. The last wakeup considers only that
+parent's children. Queue recording has only source-PR write authority. Local replay uses the source
+repository's own `GITHUB_TOKEN`, whose
 [`workflow_dispatch` calls can start another run](https://docs.github.com/en/actions/concepts/security/github_token).
-Cross-repository replay belongs in a distinct reusable workflow, with an exact STS rule targeting
-only `uv-dev`; this avoids the first matching direct sync/publisher rule. The sync stage refuses to
-merge a divergent, source-only `main` and verifies its result is reachable from public `uv/main`
-before exposing the SHA.
+Cross-repository replay runs in `replay-queued-promotions.yml`, with an exact reusable-workflow STS
+rule targeting only `uv-dev`; this remains distinct from the first matching direct sync/publisher
+rule. The sync stage refuses to merge a divergent, source-only `main` and verifies its result is
+reachable from public `uv/main` before exposing the SHA.
 
 `promotions prepare`, `record-queue`, `replay`, `replay-one`, `replay-children`, `current-approval`,
-`sync`, and `ensure-base` are the corresponding CLI stages. The workflow adoption can retain the
-existing branch/PR publisher and recovery while calling the shared approval guard and create-only
-base-copy stage. Their next migration must preserve complete publication identity and
+`sync`, and `ensure-base` are the corresponding CLI stages. The existing branch/PR publisher and
+recovery still own their shell transport in this slice, but use the shared approval guard and
+create-only base-copy stage. Their next migration must preserve complete publication identity and
 partial-publication recovery, not merely move individual REST calls.
 
 ## Subsequent migrations
