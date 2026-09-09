@@ -537,10 +537,8 @@ impl Cache {
         .await
         {
             Ok(lock_file) => Some(Arc::new(lock_file)),
-            Err(err)
-                if err
-                    .as_io_error()
-                    .is_some_and(|err| err.kind() == io::ErrorKind::Unsupported) =>
+            Err(LockedFileError::Lock { source, .. })
+                if source.kind() == io::ErrorKind::Unsupported =>
             {
                 warn!(
                     "Shared locking is not supported by the current platform or filesystem, \
