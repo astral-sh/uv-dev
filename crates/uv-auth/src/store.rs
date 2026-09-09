@@ -1,3 +1,4 @@
+use std::io;
 use std::path::{Path, PathBuf};
 
 use fs_err as fs;
@@ -38,16 +39,10 @@ impl AuthBackend {
         let path = TextCredentialStore::default_file()?;
         match TextCredentialStore::read(&path).await {
             Ok((store, lock)) => Ok(Self::TextStore(store, lock)),
-            Err(err)
-                if err
-                    .as_io_error()
-                    .is_some_and(|err| err.kind() == std::io::ErrorKind::NotFound) =>
-            {
-                Ok(Self::TextStore(
-                    TextCredentialStore::default(),
-                    TextCredentialStore::lock(&path).await?,
-                ))
-            }
+            Err(TomlCredentialError::NotFound(_)) => Ok(Self::TextStore(
+                TextCredentialStore::default(),
+                TextCredentialStore::lock(&path).await?,
+            )),
             Err(err) => Err(err),
         }
     }
@@ -71,8 +66,11 @@ enum AuthScheme {
 /// Errors that can occur when working with TOML credential storage.
 #[derive(Debug, Error)]
 pub enum TomlCredentialError {
+    /// The credentials file does not exist.
     #[error(transparent)]
-    Io(#[from] std::io::Error),
+    NotFound(io::Error),
+    #[error(transparent)]
+    Io(io::Error),
     #[error(transparent)]
     LockedFile(#[from] LockedFileError),
     #[error("Failed to parse TOML credential file: {0}")]
@@ -87,21 +85,6 @@ pub enum TomlCredentialError {
     CredentialsDirError,
     #[error("Token is not valid unicode")]
     TokenNotUnicode(#[from] std::string::FromUtf8Error),
-}
-
-impl TomlCredentialError {
-    pub(crate) fn as_io_error(&self) -> Option<&std::io::Error> {
-        match self {
-            Self::Io(err) => Some(err),
-            Self::LockedFile(err) => err.as_io_error(),
-            Self::ParseError(_)
-            | Self::SerializeError(_)
-            | Self::BasicAuthError(_)
-            | Self::BearerAuthError(_)
-            | Self::CredentialsDirError
-            | Self::TokenNotUnicode(_) => None,
-        }
-    }
 }
 
 #[derive(Debug, Error)]
@@ -250,7 +233,9 @@ impl TextCredentialStore {
             return Ok(dir);
         }
 
-        Ok(StateStore::from_settings(None)?.bucket(StateBucket::Credentials))
+        Ok(StateStore::from_settings(None)
+            .map_err(TomlCredentialError::Io)?
+            .bucket(StateBucket::Credentials))
     }
 
     /// Return the standard file path for storing credentials.
@@ -262,7 +247,7 @@ impl TextCredentialStore {
     /// Acquire a lock on the credentials file at the given path.
     async fn lock(path: &Path) -> Result<LockedFile, TomlCredentialError> {
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
+            fs::create_dir_all(parent).map_err(TomlCredentialError::Io)?;
         }
         let lock = path.with_added_extension("lock");
         Ok(LockedFile::acquire(lock, LockedFileMode::Exclusive, "credentials store").await?)
@@ -270,7 +255,13 @@ impl TextCredentialStore {
 
     /// Read credentials from a file.
     fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, TomlCredentialError> {
-        let content = fs::read_to_string(path)?;
+        let content = fs::read_to_string(path).map_err(|err| {
+            if err.kind() == io::ErrorKind::NotFound {
+                TomlCredentialError::NotFound(err)
+            } else {
+                TomlCredentialError::Io(err)
+            }
+        })?;
         let credentials: TomlCredentials = toml::from_str(&content)?;
 
         let credentials: FxHashMap<(Service, Username), Credentials> = credentials
@@ -328,10 +319,11 @@ impl TextCredentialStore {
             path.as_ref()
                 .parent()
                 .ok_or(TomlCredentialError::CredentialsDirError)?,
-        )?;
+        )
+        .map_err(TomlCredentialError::Io)?;
 
         // TODO(zanieb): We should use an atomic write here
-        fs::write(path, content)?;
+        fs::write(path, content).map_err(TomlCredentialError::Io)?;
         Ok(())
     }
 
@@ -415,12 +407,47 @@ impl TextCredentialStore {
 
 #[cfg(test)]
 mod tests {
+    use std::assert_matches;
     use std::io::Write;
     use std::str::FromStr;
 
     use tempfile::NamedTempFile;
 
     use super::*;
+
+    #[test]
+    fn test_missing_file_error() -> io::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let missing = temp_dir.path().join("credentials.toml");
+
+        assert_matches!(
+            TextCredentialStore::from_file(&missing),
+            Err(TomlCredentialError::NotFound(_))
+        );
+        assert_matches!(
+            TextCredentialStore::from_file(temp_dir.path()),
+            Err(TomlCredentialError::Io(_))
+        );
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_missing_lock_target_error() -> io::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let path = temp_dir.path().join("credentials.toml");
+        fs::os::unix::fs::symlink(
+            temp_dir.path().join("missing-parent").join("lock"),
+            path.with_added_extension("lock"),
+        )?;
+
+        assert_matches!(
+            TextCredentialStore::read(&path).await,
+            Err(TomlCredentialError::LockedFile(LockedFileError::Io(err)))
+                if err.kind() == io::ErrorKind::NotFound
+        );
+        Ok(())
+    }
 
     #[test]
     fn test_toml_serialization() {
