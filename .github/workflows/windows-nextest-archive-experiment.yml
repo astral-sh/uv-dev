@@ -75,15 +75,15 @@ jobs:
       fail-fast: false
       max-parallel: 2
       matrix:
-        cache-state:
-          - cold
-          - warm
         replica:
           - 1
           - 2
           - 3
           - 4
           - 5
+        cache-state:
+          - cold
+          - warm
     uses: ./.github/workflows/windows-nextest-archive-replica.yml
     with:
       replica: ${{ matrix.replica }}
