@@ -4,7 +4,12 @@ import unittest
 from dataclasses import dataclass, field, replace
 from unittest.mock import patch
 
-from uv_automations.github import PULL_REQUEST_FIELDS, GitHub, decode_pull_request
+from uv_automations.github import (
+    PULL_REQUEST_FIELDS,
+    GitHub,
+    OpenPullRequestQuery,
+    decode_pull_request,
+)
 from uv_automations.models import (
     CommitSha,
     Mergeability,
@@ -13,8 +18,10 @@ from uv_automations.models import (
     RepositoryName,
 )
 from uv_automations.workflows.conflicts import (
+    MergeabilitySummary,
     conflict_payload,
     find_conflicted_pull_requests,
+    summarize_mergeability,
 )
 
 REPOSITORY = RepositoryName("astral-sh/uv")
@@ -38,23 +45,23 @@ def pull_request(number: int, mergeability: Mergeability) -> PullRequest:
 @dataclass
 class FakeGitHub:
     responses: list[tuple[PullRequest, ...]]
-    calls: list[tuple[RepositoryName, str | None]] = field(default_factory=list)
+    calls: list[OpenPullRequestQuery] = field(default_factory=list)
 
-    def list_pull_requests(
-        self, repository: RepositoryName, *, author: str | None = None
+    def list_open_pull_requests(
+        self, query: OpenPullRequestQuery
     ) -> tuple[PullRequest, ...]:
-        self.calls.append((repository, author))
+        self.calls.append(query)
         return self.responses.pop(0)
 
 
 def github_payload(
-    *, mergeability: str = "CONFLICTING", deleted: bool = False
+    *, mergeability: str = "CONFLICTING", deleted: bool = False, base: str = "main"
 ) -> dict[str, object]:
     return {
         "number": 123,
         "author": None if deleted else {"login": "astral-automations-bot"},
         "url": "https://github.com/astral-sh/uv/pull/123",
-        "baseRefName": "main",
+        "baseRefName": base,
         "headRefName": "some-branch",
         "headRefOid": str(HEAD_SHA),
         "headRepository": (
@@ -65,6 +72,19 @@ def github_payload(
 
 
 class ConflictTests(unittest.TestCase):
+    def test_summarize_mergeability(self) -> None:
+        conflicting = pull_request(1, Mergeability.CONFLICTING)
+        self.assertEqual(
+            summarize_mergeability(
+                [
+                    conflicting,
+                    pull_request(2, Mergeability.MERGEABLE),
+                    pull_request(3, Mergeability.UNKNOWN),
+                ]
+            ),
+            MergeabilitySummary((conflicting,), pending=1),
+        )
+
     def test_waits_for_mergeability(self) -> None:
         unknown = pull_request(1, Mergeability.UNKNOWN)
         conflicting = replace(unknown, mergeability=Mergeability.CONFLICTING)
@@ -80,7 +100,15 @@ class ConflictTests(unittest.TestCase):
             ),
             (conflicting,),
         )
-        self.assertEqual(github.calls, [(REPOSITORY, "app/astral-automations-bot")] * 2)
+        self.assertEqual(
+            github.calls,
+            [
+                OpenPullRequestQuery(
+                    REPOSITORY, base="main", author="app/astral-automations-bot"
+                )
+            ]
+            * 2,
+        )
         self.assertEqual(sleeps, [5])
 
     def test_retry_budget(self) -> None:
@@ -141,15 +169,24 @@ class ConflictTests(unittest.TestCase):
             decode_pull_request(github_payload(mergeability="NEW_STATE"), REPOSITORY)
 
     def test_github_cli_transport(self) -> None:
+        query = OpenPullRequestQuery(
+            REPOSITORY,
+            base="release/0.12",
+            author="app/astral-automations-bot",
+            limit=25,
+        )
         with patch("uv_automations.github.subprocess.run") as run:
             run.return_value = subprocess.CompletedProcess(
-                [], 0, json.dumps([github_payload()])
+                [], 0, json.dumps([github_payload(base=query.base)])
             )
             self.assertEqual(
-                GitHub().list_pull_requests(
-                    REPOSITORY, author="app/astral-automations-bot"
+                GitHub().list_open_pull_requests(query),
+                (
+                    replace(
+                        pull_request(123, Mergeability.CONFLICTING),
+                        base_ref=query.base,
+                    ),
                 ),
-                (pull_request(123, Mergeability.CONFLICTING),),
             )
             run.assert_called_once_with(
                 [
@@ -159,18 +196,24 @@ class ConflictTests(unittest.TestCase):
                     "--repo",
                     "astral-sh/uv",
                     "--base",
-                    "main",
+                    "release/0.12",
                     "--state",
                     "open",
                     "--limit",
-                    "1000",
+                    "25",
                     "--json",
                     PULL_REQUEST_FIELDS,
                     "--author",
                     "app/astral-automations-bot",
                 ],
+                input=None,
                 check=True,
                 text=True,
                 stdout=subprocess.PIPE,
                 timeout=60,
             )
+
+    def test_invalid_query_limit(self) -> None:
+        for limit in [0, -1, True]:
+            with self.subTest(limit=limit), self.assertRaises(ValueError):
+                OpenPullRequestQuery(REPOSITORY, base="main", limit=limit)
