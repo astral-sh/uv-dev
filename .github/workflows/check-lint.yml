@@ -63,6 +63,23 @@ jobs:
             uv check --script "$script" --locked
           done
 
+  automations:
+    name: "Python automations"
+    timeout-minutes: 10
+    runs-on: ubuntu-slim
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: "Install uv"
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.10"
+          checksum: "173d95a0c32d18c896c46ba6fafbf3cf9c14ab74b033f81b76c883ef492a976b"
+          python-version: "3.14"
+      - run: uv run --directory scripts/automations --locked python -m unittest discover -s tests
+      - run: uv run --only-group check ty check --project scripts/automations
+
   shellcheck:
     timeout-minutes: 10
     runs-on: ubuntu-slim
