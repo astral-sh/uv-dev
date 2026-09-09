@@ -3263,7 +3263,7 @@ impl VersionRequest {
     }
 
     /// Check if a interpreter matches the request.
-    pub(crate) fn matches_interpreter(&self, interpreter: &Interpreter) -> bool {
+    fn matches_interpreter(&self, interpreter: &Interpreter) -> bool {
         match self {
             Self::Any => true,
             // Do not use free-threaded interpreters by default
