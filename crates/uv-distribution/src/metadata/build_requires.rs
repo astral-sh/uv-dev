@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use anyhow::Context;
+use serde::Deserialize;
 use uv_auth::CredentialsCache;
 use uv_cache::Cache;
 use uv_configuration::NoSources;
@@ -8,7 +10,10 @@ use uv_distribution_types::{
     ExtraBuildRequirement, ExtraBuildRequires, IndexLocations, Requirement,
 };
 use uv_normalize::PackageName;
-use uv_workspace::pyproject::{ExtraBuildDependencies, ExtraBuildDependency, ToolUvSources};
+use uv_pypi_types::VerbatimParsedUrl;
+use uv_workspace::pyproject::{
+    ExtraBuildDependencies, ExtraBuildDependency, Source, ToolUvSources, WorkspaceReference,
+};
 use uv_workspace::{
     DiscoveryOptions, MemberDiscovery, ProjectWorkspace, Workspace, WorkspaceCache,
 };
@@ -23,6 +28,65 @@ pub struct BuildRequires {
 }
 
 impl BuildRequires {
+    /// Read the workspace packages declared in `[build-system].requires`.
+    pub fn workspace_names_from_directory(install_path: &Path) -> anyhow::Result<Vec<PackageName>> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "kebab-case")]
+        struct PyProjectToml {
+            build_system: Option<BuildSystem>,
+            tool: Option<Tool>,
+        }
+
+        #[derive(Deserialize)]
+        struct BuildSystem {
+            requires: Vec<uv_pep508::Requirement<VerbatimParsedUrl>>,
+        }
+
+        #[derive(Deserialize)]
+        struct Tool {
+            uv: Option<ToolUv>,
+        }
+
+        #[derive(Deserialize)]
+        struct ToolUv {
+            sources: Option<ToolUvSources>,
+        }
+
+        let pyproject_path = install_path.join("pyproject.toml");
+        let contents = fs_err::read_to_string(&pyproject_path)
+            .with_context(|| format!("Failed to read `{}`", pyproject_path.display()))?;
+        let pyproject = toml::from_str::<PyProjectToml>(&contents)
+            .with_context(|| format!("Failed to parse `{}`", pyproject_path.display()))?;
+        let sources = pyproject
+            .tool
+            .and_then(|tool| tool.uv)
+            .and_then(|uv| uv.sources)
+            .unwrap_or_default();
+        Ok(pyproject
+            .build_system
+            .into_iter()
+            .flat_map(|build_system| build_system.requires)
+            .filter(|requirement| {
+                sources
+                    .inner()
+                    .get(&requirement.name)
+                    .is_some_and(|sources| {
+                        sources.iter().any(|source| {
+                            matches!(
+                                source,
+                                Source::Workspace {
+                                    workspace: WorkspaceReference::Bool(true)
+                                        | WorkspaceReference::Path(_),
+                                    ..
+                                }
+                            )
+                        })
+                    })
+            })
+            .map(|requirement| requirement.name)
+            .collect())
+    }
+
     /// Lower without considering `tool.uv` in `pyproject.toml`, used for index and other archive
     /// dependencies.
     fn from_metadata23(metadata: uv_pypi_types::BuildRequires) -> Self {
