@@ -70,13 +70,13 @@ fn apply_redirect(url: &VerbatimUrl, redirect: DisplaySafeUrl) -> VerbatimUrl {
             .split_once('#')
             .map_or((given, None), |(prefix, suffix)| (prefix, Some(suffix)));
         if let Some(precise_suffix) = redirect
-            .raw()
+            .inner()
             .path()
             .rsplit_once('@')
             .map(|(_, suffix)| suffix.to_owned())
         {
             // If there was an `@` in the original representation...
-            if let Some((.., parsed_suffix)) = url.raw().path().rsplit_once('@') {
+            if let Some((.., parsed_suffix)) = url.inner().path().rsplit_once('@') {
                 if let Some((given_prefix, given_suffix)) = given.rsplit_once('@') {
                     // And the portion after the `@` is stable between the parsed and given representations...
                     if given_suffix == parsed_suffix {
