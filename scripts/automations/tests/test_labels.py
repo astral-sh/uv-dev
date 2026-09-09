@@ -84,27 +84,33 @@ class LabelTests(unittest.TestCase):
             self.assertEqual(result.stderr, "")
             self.assertEqual(output.read_text(), 'labels=["testing","bug"]\n')
 
-    def test_cli_rejects_multiple_json_documents(self) -> None:
+    def test_cli_rejects_invalid_json(self) -> None:
         with TemporaryDirectory() as directory:
             allowed = Path(directory) / "allowed.json"
             allowed.write_text('["bug"]', encoding="utf-8")
             output = Path(directory) / "github-output"
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    "-m",
-                    "uv_automations",
-                    "labels",
-                    "validate",
-                    "--allowed",
-                    str(allowed),
-                    "--github-output",
-                    str(output),
-                ],
-                input='{"labels":[],"summary":""}\n{"labels":["bug"],"summary":""}',
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-            self.assertEqual(result.returncode, 2)
-            self.assertFalse(output.exists())
+            for value in [
+                '{"labels":[],"summary":""}\n{"labels":["bug"],"summary":""}',
+                '{"labels":["bug"],"labels":[],"summary":""}',
+                '{"labels":[],"summary":NaN}',
+            ]:
+                with self.subTest(value=value):
+                    result = subprocess.run(
+                        [
+                            sys.executable,
+                            "-m",
+                            "uv_automations",
+                            "labels",
+                            "validate",
+                            "--allowed",
+                            str(allowed),
+                            "--github-output",
+                            str(output),
+                        ],
+                        input=value,
+                        text=True,
+                        capture_output=True,
+                        check=False,
+                    )
+                    self.assertEqual(result.returncode, 2)
+                    self.assertFalse(output.exists())
