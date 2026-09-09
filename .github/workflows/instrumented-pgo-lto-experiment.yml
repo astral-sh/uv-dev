@@ -3,6 +3,9 @@ name: Instrumented PGO LTO experiment
   push:
     branches:
       - zb/ci-instrumented-pgo-lto-20260909
+    paths:
+      - scripts/build_uv_pgo.py
+  workflow_dispatch:
 permissions:
   contents: read
 env:
