@@ -1,9 +1,16 @@
+#[cfg(unix)]
+use std::env;
+
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::{FileTouch, PathChild};
 use assert_fs::{fixture::FileWriteStr, prelude::PathCreateDir};
+#[cfg(unix)]
+use fs_err::os::unix::fs::symlink;
 use indoc::indoc;
 
+#[cfg(unix)]
+use uv_fs::which::is_executable;
 use uv_platform::{Arch, Os};
 use uv_static::EnvVars;
 
@@ -37,6 +44,100 @@ fn python_find_warning_chain() -> Result<()> {
              invalid type: integer `42`, expected a string
     ");
     uv_snapshot!(context.filters(), context.python_find().arg("--no-config").arg("--quiet"), @"exit_code: 0 (success)");
+    Ok(())
+}
+
+#[test]
+fn python_find_empty_path() {
+    let context = uv_test::test_context_with_versions!(&[]).with_filtered_python_sources();
+
+    // Exercise `PATH` itself, rather than the Python-specific search-path override.
+    uv_snapshot!(context.filters(), context.python_find()
+        .args(["--system", "--python-preference", "only-system", "--no-project", "--no-config", "--offline", "--no-python-downloads"])
+        .env_remove(EnvVars::UV_PYTHON_SEARCH_PATH)
+        .env(EnvVars::PATH, ""), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: No interpreter found in [PYTHON SOURCES]
+    ");
+
+    uv_snapshot!(context.filters(), context.python_find()
+        .args(["--system", "--python-preference", "only-system", "--no-project", "--no-config", "--offline", "--no-python-downloads"])
+        .env_remove(EnvVars::UV_PYTHON_SEARCH_PATH)
+        .env_remove(EnvVars::PATH), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: No interpreter found in [PYTHON SOURCES]
+    ");
+}
+
+#[test]
+#[cfg(unix)]
+fn python_find_non_executable_path() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"])
+        .with_versions_as_managed(&[])
+        .with_filtered_python_sources();
+    let directory = context.temp_dir.child("non-executable");
+    directory.create_dir_all()?;
+    let python = directory.child("python");
+    python.touch()?;
+    assert!(!is_executable(python.path()));
+
+    uv_snapshot!(context.filters(), context.python_find()
+        .args(["--system", "--python-preference", "only-system", "--no-project", "--no-config", "--offline", "--no-python-downloads"])
+        .env(EnvVars::UV_PYTHON_SEARCH_PATH, directory.path()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: No interpreter found in [PYTHON SOURCES]
+    ");
+
+    let search_path = env::join_paths(
+        std::iter::once(directory.to_path_buf()).chain(env::split_paths(&context.python_path())),
+    )?;
+
+    // The non-executable file does not prevent discovery of a later valid interpreter.
+    uv_snapshot!(context.filters(), context.python_find()
+        .args(["--system", "--python-preference", "only-system", "--no-project", "--no-config", "--offline", "--no-python-downloads"])
+        .env(EnvVars::UV_PYTHON_SEARCH_PATH, search_path), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [PYTHON-3.12]
+    ");
+
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn python_find_all_minors() -> Result<()> {
+    let context =
+        uv_test::test_context_with_versions!(&["3.11", "3.12"]).with_versions_as_managed(&[]);
+    let directory = context.temp_dir.child("search-path");
+    directory.create_dir_all()?;
+    let python_3_11 = &context.python_versions[0].1;
+    let python_3_12 = &context.python_versions[1].1;
+    symlink(python_3_11, directory.join("python"))?;
+    symlink(python_3_11, directory.join("python3"))?;
+    symlink(python_3_12, directory.join("python3.12"))?;
+
+    // The default executable names refer to an unsuitable older minor version.
+    uv_snapshot!(context.filters(), context.python_find()
+        .args(["--system", "--python-preference", "only-system", "--no-project", "--no-config", "--offline", "--no-python-downloads", "--show-version"])
+        .env(EnvVars::UV_PYTHON_SEARCH_PATH, directory.path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    3.11.[X]
+    ");
+
+    // A broad range must also consider version-specific executable names on the search path.
+    uv_snapshot!(context.filters(), context.python_find()
+        .args(["--system", "--python-preference", "only-system", "--no-project", "--no-config", "--offline", "--no-python-downloads", ">=3.12"])
+        .env(EnvVars::UV_PYTHON_SEARCH_PATH, directory.path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/search-path/python3.12
+    ");
+
     Ok(())
 }
 
