@@ -3,10 +3,7 @@ use std::str::FromStr;
 use memchr::memchr;
 use thiserror::Error;
 
-use uv_platform_tags::{
-    AbiTag, LanguageTag, ParseAbiTagError, ParseLanguageTagError, ParsePlatformTagError,
-    PlatformTag, TagCompatibility, Tags,
-};
+use uv_platform_tags::{AbiTag, LanguageTag, PlatformTag, TagCompatibility, Tags};
 
 use crate::splitter::MemchrSplitter;
 use crate::wheel_tag::{WheelTag, WheelTagLarge, WheelTagSmall};
@@ -75,12 +72,6 @@ pub enum ExpandedTagError {
     MissingPlatformTag(String),
     #[error("The wheel tag \"{0}\" contains too many segments")]
     ExtraSegment(String),
-    #[error("The wheel tag \"{0}\" contains an invalid language tag")]
-    InvalidLanguageTag(String, #[source] ParseLanguageTagError),
-    #[error("The wheel tag \"{0}\" contains an invalid ABI tag")]
-    InvalidAbiTag(String, #[source] ParseAbiTagError),
-    #[error("The wheel tag \"{0}\" contains an invalid platform tag")]
-    InvalidPlatformTag(String, #[source] ParsePlatformTagError),
 }
 
 /// Parse an expanded (i.e., simplified) wheel tag, e.g. `py3-none-any`.
