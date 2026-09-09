@@ -107,11 +107,10 @@ jobs:
           # Pin the userspace tool rather than the rolling kernel meta-package.
           sudo apt install -y --no-install-recommends linux-tools-6.8.0-136 \
             2>&1 | tee "$GITHUB_WORKSPACE/results/perf-install.txt"
-          perf_binary="$(find /usr/lib/linux-tools -type f -name perf | sort -V | tail -n 1)"
-          if [ -n "$perf_binary" ]; then
-            echo "RCA_PERF=$perf_binary" >> "$GITHUB_ENV"
-            "$perf_binary" --version > "$GITHUB_WORKSPACE/results/perf-version.txt"
-          fi
+          perf_binary="$(dpkg -L linux-tools-6.8.0-136 | awk '/\/perf$/ { print; exit }')"
+          test -x "$perf_binary"
+          echo "RCA_PERF=$perf_binary" >> "$GITHUB_ENV"
+          "$perf_binary" --version > "$GITHUB_WORKSPACE/results/perf-version.txt"
           # Keep these settings identical for monitored and control samples.
           # Unsupported settings/counters are retained as missing capabilities.
           for setting in kernel.perf_event_paranoid=1 kernel.sched_schedstats=1 kernel.task_delayacct=1; do
