@@ -46,6 +46,7 @@ class CommentModelTests(unittest.TestCase):
                 "addressing_commit": None,
             },
             {**valid.to_json(), "outcome": "IGNORE"},
+            {**valid.to_json(), "outcome": "NO_ACTION"},
             {**valid.to_json(), "extra": True},
             {
                 **valid.to_json(),
@@ -63,6 +64,8 @@ class CommentModelTests(unittest.TestCase):
                 )
         with self.assertRaisesRegex(ValueError, "only one action"):
             CommentRecommendation("duplicate", (valid, valid))
+        no_action = CommentAction(target, CommentOutcome.NO_ACTION, "", None)
+        self.assertEqual(CommentAction.from_json(no_action.to_json()), no_action)
 
     def test_comment_sanitization_is_idempotent(self) -> None:
         value = (
