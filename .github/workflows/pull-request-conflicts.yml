@@ -47,7 +47,16 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.workflow_sha }}
           persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.10"
+          checksum: "173d95a0c32d18c896c46ba6fafbf3cf9c14ab74b033f81b76c883ef492a976b"
+          python-version: "3.14"
+          enable-cache: false
 
       - name: Identify conflicted pull requests
         id: identify
@@ -97,9 +106,12 @@ jobs:
             echo "The dispatched rebase context is incomplete." >&2
             exit 1
           elif [[ "$GH_REPO" == "astral-sh/uv" ]]; then
-            pull_requests=$(./scripts/find-conflicted-pull-requests.sh --author app/astral-automations-bot)
+            pull_requests=$(uv run --project scripts/automations --locked --no-dev \
+              uv-automations pull-requests conflicts --repo "$GH_REPO" \
+              --author app/astral-automations-bot)
           else
-            pull_requests=$(./scripts/find-conflicted-pull-requests.sh)
+            pull_requests=$(uv run --project scripts/automations --locked --no-dev \
+              uv-automations pull-requests conflicts --repo "$GH_REPO")
           fi
 
           pull_request_count=$(jq 'length' <<< "$pull_requests")

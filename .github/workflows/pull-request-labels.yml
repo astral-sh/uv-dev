@@ -105,29 +105,24 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: main
+          ref: ${{ github.workflow_sha }}
           persist-credentials: false
+
+      - name: "Install uv"
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.10"
+          checksum: "173d95a0c32d18c896c46ba6fafbf3cf9c14ab74b033f81b76c883ef492a976b"
+          python-version: "3.14"
+          enable-cache: false
 
       - name: "Validate recommended labels"
         id: validate
         run: |
-          if ! labels=$(jq --exit-status --compact-output --slurp \
-            --slurpfile allowed .github/allowed-pull-request-labels.json '
-              select(length == 1)
-              | .[0]
-              | select(type == "object")
-              | .labels
-              | select(type == "array" and length <= 3)
-              | select(length == (unique | length))
-              | select(all(.[];
-                  type == "string"
-                  and (. as $label | $allowed[0] | index($label) != null)))
-            ' <<< "$LABEL_RESULT"); then
-            echo "Codex recommended an invalid or disallowed pull request label." >&2
-            exit 1
-          fi
-
-          echo "labels=$labels" >> "$GITHUB_OUTPUT"
+          uv run --project scripts/automations --locked --no-dev \
+            uv-automations labels validate \
+            --allowed .github/allowed-pull-request-labels.json \
+            --github-output "$GITHUB_OUTPUT" <<< "$LABEL_RESULT"
         env:
           LABEL_RESULT: ${{ needs.labels.outputs.result }}
 
