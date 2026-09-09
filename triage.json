@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 20628,
+        "title": "Add `--package` and `--all-packages` to `uv check`",
+        "url": "https://github.com/astral-sh/uv/pull/20628",
+        "state": "merged",
+        "reason": "Direct implementation origin: astral-sh/uv#20628 made virtual workspaces equivalent to `--all-packages` and passes every member root to ty. It shipped by uv 0.12.0 but did not cover ty exclusion precedence."
+      },
+      {
+        "kind": "issue",
+        "number": 20233,
+        "title": "Support for --package and --all-packages in `uv check`",
+        "url": "https://github.com/astral-sh/uv/issues/20233",
+        "state": "closed",
+        "reason": "Originating workspace-selection request completed by astral-sh/uv#20628. It does not address configured ty exclusions."
+      },
+      {
+        "kind": "pull_request",
+        "number": 20676,
+        "title": "Avoid checking any scripts in `uv check` unless `--script` is passed",
+        "url": "https://github.com/astral-sh/uv/pull/20676",
+        "state": "merged",
+        "reason": "Adjacent exclusion precedent: uv filters automatically discovered PEP 723 scripts, but astral-sh/uv#20676 does not cover `[tool.ty.src].exclude` or excluded workspace members."
+      },
+      {
+        "kind": "issue",
+        "number": 19791,
+        "title": "Allow users to specify a custom ty configuration file when running `uv check`",
+        "url": "https://github.com/astral-sh/uv/issues/19791",
+        "state": "open",
+        "reason": "Related configuration request, but another config file would not prevent uv-generated positional paths from overriding its exclusions."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests for `force-exclude`, `tool.ty.src`, `src.exclude`, `uv check --no-project`, explicit paths, vendored members, workspace/package selection, type-check ownership, selection semantics, and ty configuration. Fix-oriented review covered astral-sh/uv#20628, astral-sh/uv#20649, and astral-sh/uv#20676 and their discussion chains. No exact prior tracker or later exclusion fix was found. astral-sh/uv#20649 was ruled out as snapshot/lint cleanup, and astral-sh/uv#21083 concerns project installation rather than checked paths."
+  },
+  "type": "bug",
+  "type_reason": "Current source confirms that plain `uv check` treats an unqualified virtual workspace as `--all-packages`, passes each member root to ty as a positional target, and does not enable force-exclusion behavior. Consequently, uv's internal path selection changes the meaning of the user's ty exclusions even though the user did not explicitly select those paths. This is incorrect configuration behavior and is distinct from the earlier selection and custom-config requests.",
+  "summary": "No existing issue tracks this exact exclusion override. Astral-sh/uv#20628 introduced the relevant automatic positional targets; astral-sh/uv#20233 is its originating request. Astral-sh/uv#20676 and astral-sh/uv#19791 are adjacent but distinct.",
+  "draft_response": "Thanks for the clear report. The current implementation treats a virtual workspace with no package selection as `--all-packages` and passes each workspace member root to ty as an explicit check target. Since uv does not also force configured exclusions for those internally selected paths, `[tool.ty.src].exclude` can be bypassed as described; `--no-project` avoids those generated targets.\n\nThe workspace-selection work in astral-sh/uv#20233 and astral-sh/uv#20628 does not track this interaction, so this should remain open as a separate bug. The next step is a focused regression test with an automatically selected member beneath an excluded directory, followed by deciding whether uv should request ty's force-exclusion behavior or filter its generated targets before invoking ty."
+}
