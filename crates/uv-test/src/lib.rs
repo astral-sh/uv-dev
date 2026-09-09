@@ -4,6 +4,7 @@
 pub mod archive;
 pub mod find_links;
 mod http_server;
+pub mod osv;
 pub mod packse;
 pub mod pypi_proxy;
 mod vendor;
