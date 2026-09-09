@@ -27,7 +27,7 @@ jobs:
         run: rustup toolchain install --profile minimal
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
         with:
-          prefix-key: uv-ci-macos-build-shape-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.replica }}
+          prefix-key: uv-ci-macos-build-shape-${{ github.run_id }}
           cache-workspace-crates: "true"
           save-if: "true"
           cache-bin: false
@@ -41,10 +41,6 @@ jobs:
       matrix:
         replica:
           - 1
-          - 2
-          - 3
-          - 4
-          - 5
   dev-compare:
     name: dev / ${{ matrix.cache }} / ${{ matrix.shape.id }} / ${{ matrix.replica }}
     timeout-minutes: 35
@@ -66,7 +62,7 @@ jobs:
         run: rustup toolchain install --profile minimal
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
         with:
-          prefix-key: uv-ci-macos-build-shape-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.replica }}
+          prefix-key: uv-ci-macos-build-shape-${{ github.run_id }}
           cache-workspace-crates: "true"
           save-if: "false"
           cache-bin: false
