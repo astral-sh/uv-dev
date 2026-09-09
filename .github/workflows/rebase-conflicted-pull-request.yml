@@ -47,6 +47,7 @@ jobs:
     outputs:
       base_sha: ${{ steps.prepare.outputs.base_sha }}
       head_sha: ${{ steps.verify.outputs.head_sha }}
+      bundle_artifact_id: ${{ steps.upload.outputs.artifact-id }}
       empty: ${{ steps.verify.outputs.empty }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -87,7 +88,7 @@ jobs:
           cp agents/codex/config.toml "$RUNNER_TEMP/codex-home/config.toml"
           cp agents/prompts/rebase-pull-request.md "$RUNNER_TEMP/rebase-pull-request.md"
 
-          "$AUTOMATIONS_PYTHON" -I -m uv_automations.rebase_cli prepare \
+          "$AUTOMATIONS_PYTHON" -I -m uv_automations rebase prepare \
             --checkout "$GITHUB_WORKSPACE" \
             --repo "$GITHUB_REPOSITORY" \
             --repository-id "$GITHUB_REPOSITORY_ID" \
@@ -134,17 +135,18 @@ jobs:
           AUTOMATIONS_PYTHON: ${{ steps.automations.outputs.python }}
           BASE_SHA: ${{ steps.prepare.outputs.base_sha }}
         run: |
-          "$AUTOMATIONS_PYTHON" -I -m uv_automations.rebase_cli persist \
+          "$AUTOMATIONS_PYTHON" -I -m uv_automations rebase persist \
             --checkout "$GITHUB_WORKSPACE" \
             --base-sha "$BASE_SHA" \
             --bundle "$RUNNER_TEMP/rebased.bundle" \
             --github-output "$GITHUB_OUTPUT"
 
       - name: Upload rebased pull request
+        id: upload
         if: steps.verify.outputs.empty == 'false'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: rebased-pull-request-${{ inputs.number }}-${{ inputs.head-sha }}
+          name: rebased-pull-request-${{ inputs.number }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/rebased.bundle
           if-no-files-found: error
           compression-level: 0
@@ -159,6 +161,7 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
+      pull-requests: read
       id-token: write
     env:
       BASE_REF: ${{ inputs.base-ref }}
@@ -182,8 +185,9 @@ jobs:
       - name: Download rebased pull request
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: rebased-pull-request-${{ inputs.number }}-${{ inputs.head-sha }}
+          artifact-ids: ${{ needs.rebase.outputs.bundle_artifact_id }}
           path: ${{ runner.temp }}/rebased-pull-request
+          merge-multiple: true
 
       - name: Import rebased pull request
         id: import
@@ -191,7 +195,7 @@ jobs:
           AUTOMATIONS_PYTHON: ${{ steps.automations.outputs.python }}
           REBASED_HEAD: ${{ needs.rebase.outputs.head_sha }}
         run: |
-          "$AUTOMATIONS_PYTHON" -I -m uv_automations.rebase_cli load \
+          "$AUTOMATIONS_PYTHON" -I -m uv_automations rebase load \
             --checkout "$GITHUB_WORKSPACE" \
             --base-ref "$BASE_REF" \
             --base-sha "$BASE_SHA" \
@@ -200,9 +204,29 @@ jobs:
             --github-output "$GITHUB_OUTPUT" \
             --summary "$GITHUB_STEP_SUMMARY"
 
+      - name: Revalidate pull request before publication
+        id: source
+        if: steps.import.outputs.head_sha != ''
+        env:
+          AUTOMATIONS_PYTHON: ${{ steps.automations.outputs.python }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          "$AUTOMATIONS_PYTHON" -I -m uv_automations rebase verify-source \
+            --repo "$GITHUB_REPOSITORY" \
+            --repository-id "$GITHUB_REPOSITORY_ID" \
+            --pull-request "$PULL_REQUEST_NUMBER" \
+            --base-ref "$BASE_REF" \
+            --base-sha "$BASE_SHA" \
+            --previous-base-sha "$BASE_PREVIOUS_SHA" \
+            --head-repository "$HEAD_REPOSITORY" \
+            --head-ref "$HEAD_REF" \
+            --head-sha "$HEAD_SHA" \
+            --github-output "$GITHUB_OUTPUT" \
+            --summary "$GITHUB_STEP_SUMMARY"
+
       - name: Get pull request head token
         id: token
-        if: steps.import.outputs.head_sha != ''
+        if: steps.source.outputs.ready == 'true'
         uses: open-security-tools/ost-simple-sts@9e012247e07c39080fb6a832dbfbcfeacebc19c4
         with:
           exchange-url: ${{ secrets.STS_API_URL }}/exchange
@@ -214,13 +238,15 @@ jobs:
             workflows: write
 
       - name: Push rebased pull request
-        if: steps.import.outputs.head_sha != ''
+        if: steps.source.outputs.ready == 'true'
         env:
           AUTOMATIONS_PYTHON: ${{ steps.automations.outputs.python }}
+          GH_READ_TOKEN: ${{ github.token }}
           GH_TOKEN: ${{ steps.token.outputs.token }}
+          HEAD_REPOSITORY_ID: ${{ steps.source.outputs.head_repository_id }}
           REBASED_HEAD: ${{ steps.import.outputs.head_sha }}
         run: |
-          "$AUTOMATIONS_PYTHON" -I -m uv_automations.rebase_cli push \
+          "$AUTOMATIONS_PYTHON" -I -m uv_automations rebase push \
             --checkout "$GITHUB_WORKSPACE" \
             --repo "$GITHUB_REPOSITORY" \
             --repository-id "$GITHUB_REPOSITORY_ID" \
@@ -229,6 +255,7 @@ jobs:
             --base-sha "$BASE_SHA" \
             --previous-base-sha "$BASE_PREVIOUS_SHA" \
             --head-repository "$HEAD_REPOSITORY" \
+            --head-repository-id "$HEAD_REPOSITORY_ID" \
             --head-ref "$HEAD_REF" \
             --head-sha "$HEAD_SHA" \
             --rebased-head "$REBASED_HEAD" \
@@ -243,7 +270,8 @@ jobs:
       pull-requests: read
       id-token: write
     uses: $/.github/workflows/close-empty-pull-request.yml
-    secrets: inherit
+    secrets:
+      STS_API_URL: ${{ secrets.STS_API_URL }}
     with:
       number: ${{ inputs.number }}
       base-ref: ${{ inputs.base-ref }}

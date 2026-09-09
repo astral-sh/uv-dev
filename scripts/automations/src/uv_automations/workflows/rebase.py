@@ -135,6 +135,12 @@ class SkippedRebase:
 
 
 @dataclass(frozen=True, slots=True)
+class VerifiedRebaseSource:
+    rebase: PreparedRebase
+    head_repository: RepositoryIdentity
+
+
+@dataclass(frozen=True, slots=True)
 class VerifiedEmptyRebase:
     rebase: PreparedRebase
     head_repository: RepositoryIdentity
@@ -276,9 +282,26 @@ def load_rebase(
     return LoadedRebase(load_commit(repository, bundle, commits))
 
 
+def verify_rebase_source(
+    github: RebaseReader, rebase: PreparedRebase
+) -> VerifiedRebaseSource | SkippedRebase:
+    """Pin the current repository identity before acquiring push credentials."""
+    pull_request = github.get_pull_request(rebase.source.reference)
+    if not rebase.matches(pull_request):
+        return SkippedRebase("The pull request changed; skipping the stale rebase")
+    head_repository = pull_request.head.repository
+    if head_repository is None:
+        return SkippedRebase("The pull request head repository was deleted")
+    return VerifiedRebaseSource(rebase, head_repository)
+
+
 def push_rebase(
-    repository: Git, rebase: PreparedRebase, head_sha: CommitSha
+    github: RebaseReader,
+    repository: Git,
+    verified: VerifiedRebaseSource,
+    head_sha: CommitSha,
 ) -> PushOutcome:
+    rebase = verified.rebase
     source = rebase.source
     if head_sha == rebase.base_sha or not repository.is_ancestor(
         rebase.base_sha, head_sha
@@ -286,6 +309,11 @@ def push_rebase(
         raise ValueError(
             "The rebased pull request must contain a nonempty commit range"
         )
+    if not rebase.matches(
+        github.get_pull_request(source.reference),
+        head_repository=verified.head_repository,
+    ):
+        return PushOutcome.STALE
     if (
         _remote_head(repository, source.repository.name, source.base_ref)
         != rebase.base_sha
