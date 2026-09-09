@@ -28,6 +28,7 @@ use uv_cache_key::{RepositoryUrl, cache_digest};
 use uv_fs::Simplified;
 use uv_static::EnvVars;
 
+use uv_test::osv::mount_advisory;
 use uv_test::package_server::PackageServer;
 use uv_test::{uv_snapshot, venv_bin_path};
 
@@ -15492,22 +15493,7 @@ async fn add_malware_detected() {
 
     let server = MockServer::start().await;
 
-    Mock::given(method("POST"))
-        .and(path("/v1/querybatch"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "results": [{"vulns": [{"id": "MAL-2026-1234"}]}]
-        })))
-        .mount(&server)
-        .await;
-
-    Mock::given(method("GET"))
-        .and(path("/v1/vulns/MAL-2026-1234"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "id": "MAL-2026-1234",
-            "modified": "2026-01-01T00:00:00Z",
-        })))
-        .mount(&server)
-        .await;
+    mount_advisory(&server, "MAL-2026-1234").await;
 
     uv_snapshot!(context.filters(), context
         .add()
