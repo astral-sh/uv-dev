@@ -9,6 +9,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import assert_never
 
+from uv_automations import promotion_approval_cli
 from uv_automations.actions import append_summary, write_json_output, write_output
 from uv_automations.github_promotion import PromotionGitHub
 from uv_automations.github_promotion_queue import PromotionQueueGitHub
@@ -126,6 +127,7 @@ type PromotionCommand = (
     | ReplayPromotedChildren
     | SyncPromotionSource
     | EnsurePromotionBase
+    | promotion_approval_cli.ApprovalCommand
 )
 
 
@@ -205,8 +207,15 @@ def add_commands(parser: argparse.ArgumentParser) -> None:
     ensure.add_argument("--github-output", type=Path, required=True)
     ensure.add_argument("--summary", type=Path, required=True)
 
+    promotion_approval_cli.add_request_commands(commands.add_parser("request"))
+    promotion_approval_cli.add_private_approval_command(
+        commands.add_parser("private-approval")
+    )
+
 
 def parse_command(parsed: argparse.Namespace) -> PromotionCommand:
+    if isinstance(parsed.command, promotion_approval_cli.ApprovalCommandKind):
+        return promotion_approval_cli.parse_command(parsed)
     kind = PromotionCommandKind(parsed.command)
     match kind:
         case PromotionCommandKind.PREPARE:
@@ -392,6 +401,12 @@ def _replay_summary(outcomes: tuple[ReplayOutcome, ...]) -> str:
 
 def run(command: PromotionCommand) -> None:
     match command:
+        case (
+            promotion_approval_cli.InspectPrivatePromotion()
+            | promotion_approval_cli.VerifyPrivateApproval()
+        ):
+            promotion_approval_cli.run(command)
+            return
         case PreparePromotion():
             reader = PromotionGitHub()
             plan = (

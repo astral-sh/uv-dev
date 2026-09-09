@@ -258,6 +258,39 @@ recovery still own their shell transport in this slice, but use the shared appro
 create-only base-copy stage. Their next migration must preserve complete publication identity and
 partial-publication recovery, not merely move individual REST calls.
 
+### Private promotion approval contract
+
+The private-approval draft is read-only. `promotions request inspect` reports whether the current
+private pull request and label satisfy the proposed policy; it never captures approval. The separate
+`promotions private-approval` command verifies an exact existing receipt without publishing
+anything. `inspect-private-promotion.yml` can run the inspection inside uv-security using only read
+permissions. The existing dispatcher route, promotion publisher, and review state are unchanged.
+
+`workflows.promotion_approval` defines the future recorder and dispatcher interfaces, but does not
+provide a live write adapter or register those stages in the CLI. A captured request must come from
+the exact trusted dispatcher and preserve the original webhook head, event kind, sender ID/login,
+and original pull-request update timestamp. The label must be the current `bot:promote` application,
+follow the latest ready-for-review event, and have a human actor who can still write the repository.
+The latest ready/draft transition must still be ready, including when it is newer than the pull
+request snapshot. Sender/time matching is a fail-closed correlation guard, not an undocumented
+GitHub event-ID or head attestation. A canonical, never-edited, bot-App-authored receipt binds the
+source repository ID and pull request, approved head, readiness and label event IDs, and actor.
+Publication must re-read that exact receipt and revalidate all current authority before accepting
+it. Discovery ignores malformed or edited historical comments, but conflicting independently
+verified receipts for the current label fail closed. The proposed dispatcher returns the shared
+`WorkflowDispatch` repository/run identity.
+
+The remaining dependency is in github-services, not this repository. At source revision
+`5b04b5022bdb6d0b2578195a472ab40aee065e98`, the dispatch worker replaces `payload.pull_request` with
+the live REST response before resolving configured input pointers
+(`crates/aghs-actions-dispatch/src/bin/worker.rs`, lines 203–230). Its signed-webhook validation
+already requires the live head to equal the original event head (`src/webhook.rs`, lines 300–384),
+so the canonical `head_sha` input is preserved. There is no equivalent original-event guarantee for
+`/pull_request/updated_at`. An authorized dispatcher extension must expose authenticated original
+event metadata separately from the refreshed pull request before recording or dispatching private
+approval can be wired. This is a source-level dependency, not evidence of the deployed service's
+revision. No github-services changes are included here.
+
 ## Subsequent migrations
 
 Migrate complete deterministic workflow stages rather than extracting isolated `jq` expressions.
