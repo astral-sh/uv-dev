@@ -1,0 +1,17 @@
+name: CI runner-size dev samples
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  UV_LOCKED: 1
+
+jobs:
+  build-dev-binaries:
+    # Run the actual production job definitions from the macOS draft.
+    uses: astral-sh/uv-dev/.github/workflows/build-dev-binaries.yml@79915c5a0ac9dcf21ef7b46d5974193009dd12af
+    with:
+      save-rust-cache: "true"
