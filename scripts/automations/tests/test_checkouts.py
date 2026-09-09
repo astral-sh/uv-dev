@@ -4,6 +4,7 @@ import os
 import shlex
 import subprocess
 import unittest
+from collections.abc import Sequence
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import override
@@ -108,6 +109,292 @@ class CandidateInspectionTests(unittest.TestCase):
         self.assertEqual(load_commit(consumer, destination, commits), head)
         self.assertEqual(consumer.resolve_commit("HEAD"), self.base)
         self.assertFalse((consumer.path / "change.txt").exists())
+
+    def test_swapped_git_directory_cannot_redirect_transport(self) -> None:
+        outside = create_repository(self.root / "outside")
+        outside.command(
+            ("fetch", "--quiet", "--no-tags", str(self.source.path), str(self.base))
+        )
+        outside.command(("checkout", "--quiet", "--detach", str(self.base)))
+        outside.command(("commit", "--quiet", "--allow-empty", "-m", "outside"))
+        outside_head = outside.resolve_commit("HEAD")
+        original_command = Git.command
+        cloned = False
+
+        def command(
+            repository: Git,
+            arguments: Sequence[str],
+            *,
+            check: bool = True,
+            input: str | None = None,
+        ) -> subprocess.CompletedProcess[str]:
+            nonlocal cloned
+            self.assertNotEqual(repository.path, self.source.path)
+            if "clone" in arguments:
+                self.assertFalse(cloned)
+                self.assertTrue(Path(arguments[-2]).is_relative_to(self.scratch))
+                (self.source.path / ".git").rename(self.root / "held.git")
+                (self.source.path / ".git").symlink_to(
+                    outside.path / ".git", target_is_directory=True
+                )
+                cloned = True
+            return original_command(repository, arguments, check=check, input=input)
+
+        with (
+            patch.object(Git, "command", command),
+            inspect_candidate(
+                self.source, base=self.base, scratch=self.scratch
+            ) as candidate,
+        ):
+            candidate.require_clean()
+            self.assertEqual(candidate.head, self.base)
+            self.assertNotEqual(
+                candidate.repository.command(
+                    ("cat-file", "-e", str(outside_head)), check=False
+                ).returncode,
+                0,
+            )
+        self.assertTrue(cloned)
+
+    def test_swapped_checkout_directory_cannot_redirect_transport(self) -> None:
+        outside = create_repository(self.root / "outside")
+        outside.command(
+            ("fetch", "--quiet", "--no-tags", str(self.source.path), str(self.base))
+        )
+        outside.command(("checkout", "--quiet", "--detach", str(self.base)))
+        outside.command(("commit", "--quiet", "--allow-empty", "-m", "outside"))
+        original_command = Git.command
+
+        def command(
+            repository: Git,
+            arguments: Sequence[str],
+            *,
+            check: bool = True,
+            input: str | None = None,
+        ) -> subprocess.CompletedProcess[str]:
+            if "clone" in arguments:
+                self.assertTrue(Path(arguments[-2]).is_relative_to(self.scratch))
+                self.source.path.rename(self.root / "held-source")
+                self.source.path.symlink_to(outside.path, target_is_directory=True)
+            return original_command(repository, arguments, check=check, input=input)
+
+        with (
+            patch.object(Git, "command", command),
+            inspect_candidate(
+                self.source, base=self.base, scratch=self.scratch
+            ) as candidate,
+        ):
+            candidate.require_clean()
+            self.assertEqual(candidate.head, self.base)
+
+    def test_alternate_object_stores_are_rejected(self) -> None:
+        outside = create_repository(self.root / "outside")
+        outside.command(
+            ("fetch", "--quiet", "--no-tags", str(self.source.path), str(self.base))
+        )
+        outside.command(("checkout", "--quiet", "--detach", str(self.base)))
+        marker_commit = commit_file(outside, "marker.txt", "outside-only marker\n")
+        marker_object = outside.output("rev-parse", f"{marker_commit}:marker.txt")
+        outside.command(("rm", "--quiet", "--", "marker.txt"))
+        outside.command(("commit", "--quiet", "-m", "return to original tree"))
+        outside_head = outside.resolve_commit("HEAD")
+        objects = self.source.path / ".git" / "objects"
+        self.assertFalse((objects / marker_object[:2] / marker_object[2:]).exists())
+        info = objects / "info"
+        info.mkdir(exist_ok=True)
+        (info / "alternates").write_text(
+            f"{outside.path / '.git' / 'objects'}\n", encoding="utf-8"
+        )
+        (self.source.path / ".git" / "refs" / "heads" / "main").write_text(
+            f"{outside_head}\n", encoding="ascii"
+        )
+        with (
+            self.assertRaisesRegex(ValueError, "alternate object stores"),
+            inspect_candidate(self.source, base=self.base, scratch=self.scratch),
+        ):
+            self.fail("Accepted an outside object store")
+
+    def test_packed_head_reference_is_supported(self) -> None:
+        self.source.command(("pack-refs", "--all", "--prune"))
+        self.assertFalse(
+            (self.source.path / ".git" / "refs" / "heads" / "main").exists()
+        )
+        with inspect_candidate(
+            self.source, base=self.base, scratch=self.scratch
+        ) as candidate:
+            candidate.require_clean()
+            self.assertEqual(candidate.head, self.base)
+
+    def test_duplicate_packed_head_is_rejected(self) -> None:
+        self.source.command(("pack-refs", "--all", "--prune"))
+        packed = self.source.path / ".git" / "packed-refs"
+        with packed.open("a", encoding="ascii") as output:
+            output.write(f"{self.base} refs/heads/main\n")
+        with (
+            self.assertRaisesRegex(ValueError, "exactly one packed reference"),
+            inspect_candidate(self.source, base=self.base, scratch=self.scratch),
+        ):
+            self.fail("Accepted duplicate packed HEAD entries")
+
+    def test_symbolic_loose_head_reference_is_rejected(self) -> None:
+        (self.source.path / ".git" / "refs" / "heads" / "main").write_text(
+            "ref: refs/heads/other\n", encoding="ascii"
+        )
+        with (
+            self.assertRaisesRegex(ValueError, "full Git commit SHA"),
+            inspect_candidate(self.source, base=self.base, scratch=self.scratch),
+        ):
+            self.fail("Followed an additional symbolic reference")
+
+    def test_packed_objects_do_not_require_source_caches(self) -> None:
+        self.source.command(("repack", "-adb"))
+        self.source.command(("multi-pack-index", "write"))
+        self.source.command(("commit-graph", "write", "--reachable"))
+        objects = self.source.path / ".git" / "objects"
+        self.assertTrue(tuple((objects / "pack").glob("*.pack")))
+        self.assertTrue((objects / "pack" / "multi-pack-index").exists())
+        with inspect_candidate(
+            self.source, base=self.base, scratch=self.scratch
+        ) as candidate:
+            candidate.require_clean()
+            snapshot_objects = (
+                candidate.repository.path.parent / "source.git" / "objects"
+            )
+            self.assertFalse((snapshot_objects / "pack" / "multi-pack-index").exists())
+            self.assertFalse((snapshot_objects / "info" / "commit-graph").exists())
+            self.assertTrue(
+                all(
+                    path.suffix in {".pack", ".idx"}
+                    for path in (snapshot_objects / "pack").iterdir()
+                )
+            )
+
+    def test_symlinked_reference_directory_is_rejected(self) -> None:
+        heads = self.source.path / ".git" / "refs" / "heads"
+        saved = self.root / "saved-heads"
+        heads.rename(saved)
+        heads.symlink_to(saved, target_is_directory=True)
+        with (
+            self.assertRaisesRegex(ValueError, "ordinary checkout directories"),
+            inspect_candidate(self.source, base=self.base, scratch=self.scratch),
+        ):
+            self.fail("Followed a reference-directory symlink")
+
+    def test_symlinked_object_store_is_rejected(self) -> None:
+        objects = self.source.path / ".git" / "objects"
+        saved = self.root / "saved-objects"
+        objects.rename(saved)
+        objects.symlink_to(saved, target_is_directory=True)
+        with (
+            self.assertRaisesRegex(ValueError, "ordinary checkout directories"),
+            inspect_candidate(self.source, base=self.base, scratch=self.scratch),
+        ):
+            self.fail("Followed an object-store symlink")
+
+    def test_symlinked_loose_object_is_rejected(self) -> None:
+        name = str(self.base)
+        loose = self.source.path / ".git" / "objects" / name[:2] / name[2:]
+        saved = self.root / "saved-object"
+        loose.rename(saved)
+        loose.symlink_to(saved)
+        with (
+            self.assertRaisesRegex(ValueError, "unsafe candidate metadata"),
+            inspect_candidate(self.source, base=self.base, scratch=self.scratch),
+        ):
+            self.fail("Followed a loose-object symlink")
+
+    def test_hardlinked_loose_object_is_rejected(self) -> None:
+        name = str(self.base)
+        loose = self.source.path / ".git" / "objects" / name[:2] / name[2:]
+        os.link(loose, self.root / "linked-object")
+        with (
+            self.assertRaisesRegex(ValueError, "hardlinked"),
+            inspect_candidate(self.source, base=self.base, scratch=self.scratch),
+        ):
+            self.fail("Accepted an object shared with another path")
+
+    def test_shallow_and_reftable_repositories_are_rejected(self) -> None:
+        metadata = self.source.path / ".git"
+        shallow = metadata / "shallow"
+        shallow.write_text(f"{self.base}\n", encoding="ascii")
+        with (
+            self.assertRaisesRegex(ValueError, "shallow repositories"),
+            inspect_candidate(self.source, base=self.base, scratch=self.scratch),
+        ):
+            self.fail("Accepted a shallow repository")
+        shallow.unlink()
+        (metadata / "reftable").mkdir()
+        with (
+            self.assertRaisesRegex(ValueError, "reftable repositories"),
+            inspect_candidate(self.source, base=self.base, scratch=self.scratch),
+        ):
+            self.fail("Accepted a reftable repository")
+
+    def test_promisor_and_incomplete_pack_pairs_are_rejected(self) -> None:
+        self.source.command(("repack", "-ad"))
+        pack = next((self.source.path / ".git" / "objects" / "pack").glob("*.pack"))
+        promisor = pack.with_suffix(".promisor")
+        promisor.write_bytes(b"")
+        with (
+            self.assertRaisesRegex(ValueError, "promisor packs"),
+            inspect_candidate(self.source, base=self.base, scratch=self.scratch),
+        ):
+            self.fail("Accepted a promisor pack")
+        promisor.unlink()
+        pack.with_suffix(".idx").unlink()
+        with (
+            self.assertRaisesRegex(ValueError, "complete pack/index pairs"),
+            inspect_candidate(self.source, base=self.base, scratch=self.scratch),
+        ):
+            self.fail("Accepted an unindexed pack")
+
+    def test_corrupt_object_data_is_rejected(self) -> None:
+        name = str(self.base)
+        loose = self.source.path / ".git" / "objects" / name[:2] / name[2:]
+        loose.chmod(0o644)
+        loose.write_bytes(b"not a Git object")
+        with (
+            self.assertRaisesRegex(ValueError, "incomplete or corrupt"),
+            inspect_candidate(self.source, base=self.base, scratch=self.scratch),
+        ):
+            self.fail("Accepted corrupt source object data")
+
+    def test_in_place_source_changes_are_rejected(self) -> None:
+        index = self.source.path / ".git" / "index"
+        original_index = index.read_bytes()
+        identity = index.stat()
+        original_fstat = os.fstat
+        reads = 0
+
+        def fstat(descriptor: int) -> os.stat_result:
+            nonlocal reads
+            metadata = original_fstat(descriptor)
+            if (metadata.st_dev, metadata.st_ino) == (identity.st_dev, identity.st_ino):
+                reads += 1
+                if reads == 2:
+                    index.write_bytes(
+                        original_index[:-1] + bytes([original_index[-1] ^ 1])
+                    )
+                    return original_fstat(descriptor)
+            return metadata
+
+        with (
+            patch("uv_automations.checkouts.os.fstat", fstat),
+            self.assertRaisesRegex(ValueError, "changed while reading"),
+            inspect_candidate(self.source, base=self.base, scratch=self.scratch),
+        ):
+            self.fail("Accepted a source file changed while being copied")
+        self.assertEqual(reads, 2)
+
+    def test_snapshot_file_and_byte_budgets_are_enforced(self) -> None:
+        for name, value in (("_MAX_SNAPSHOT_FILES", 2), ("_MAX_SNAPSHOT_BYTES", 1)):
+            with (
+                self.subTest(limit=name),
+                patch(f"uv_automations.checkouts.{name}", value),
+                self.assertRaisesRegex(ValueError, "snapshot limits"),
+                inspect_candidate(self.source, base=self.base, scratch=self.scratch),
+            ):
+                self.fail("Exceeded the source snapshot budget")
 
     def test_reject_tracked_and_untracked_leftovers(self) -> None:
         for name in ("tracked.txt", "untracked.txt"):
