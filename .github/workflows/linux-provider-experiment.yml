@@ -1,0 +1,256 @@
+name: Linux full-job provider experiment
+"on":
+  push:
+    branches:
+      - zb/ci-linux-provider-20260909
+permissions:
+  contents: read
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  CARGO_TERM_COLOR: always
+  PYTHON_VERSION: "3.12"
+  RUSTC_BOOTSTRAP: 1
+  RUSTUP_MAX_RETRIES: 10
+  UV_LOCKED: 1
+jobs:
+  seed:
+    timeout-minutes: 35
+    runs-on: ${{ matrix.runner.labels }}
+    name: seed / ${{ matrix.runner.id }} / ${{ matrix.replica }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          repository: astral-sh/uv
+          ref: c4be691531385fd7563e2a29d9bfa2e19b4c2025
+      - name: Install mold
+        run: ./scripts/install-mold.sh
+      - name: Install Rust toolchain
+        run: rustup toolchain install --profile minimal
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        id: rust-cache
+        with:
+          prefix-key: uv-ci-linux-provider-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.runner.id }}-${{ matrix.replica }}
+          key: ${{ hashFiles('Cargo.toml') }}
+          cache-workspace-crates: "true"
+          save-if: "true"
+          add-job-id-key: false
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
+        with:
+          version: 0.12.10
+          checksum: 173d95a0c32d18c896c46ba6fafbf3cf9c14ab74b033f81b76c883ef492a976b
+          enable-cache: false
+      - name: Install required Python versions
+        run: uv python install
+      - name: Install secret service
+        run: |
+          printf '%s\n' 'Acquire::Retries "3";' 'Acquire::http::Timeout "10";' 'Acquire::https::Timeout "10";' | sudo tee /etc/apt/apt.conf.d/80-retries > /dev/null
+          sudo apt install -y --no-install-recommends dbus-daemon gnome-keyring
+      - name: Start gnome-keyring
+        run: |
+          DBUS_SESSION_BUS_ADDRESS="$(dbus-daemon --session --fork --print-address=1)"
+          export DBUS_SESSION_BUS_ADDRESS
+          echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS" >> "$GITHUB_ENV"
+          gnome-keyring-daemon --components=secrets --daemonize --unlock <<< 'foobar'
+      - name: Create btrfs filesystem
+        run: |
+          sudo apt install -y btrfs-progs
+          truncate -s 1G /tmp/btrfs.img
+          mkfs.btrfs /tmp/btrfs.img
+          sudo mkdir /btrfs
+          sudo mount -o loop /tmp/btrfs.img /btrfs
+          sudo chown "$(id -u):$(id -g)" /btrfs
+      - name: Create tmpfs filesystem
+        run: |
+          sudo mkdir /tmpfs
+          sudo mount -t tmpfs -o size=256m tmpfs /tmpfs
+          sudo chown "$(id -u):$(id -g)" /tmpfs
+      - name: Create minix filesystem (low hardlink limit)
+        run: |
+          truncate -s 16M /tmp/minix.img
+          mkfs.minix /tmp/minix.img
+          sudo mkdir /minix
+          sudo mount -o loop /tmp/minix.img /minix
+          sudo chown "$(id -u):$(id -g)" /minix
+      - name: Install cargo nextest
+        uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad
+        with:
+          tool: cargo-nextest
+      - name: Cargo test
+        env:
+          UV_HTTP_RETRIES: 5
+          RUST_BACKTRACE: 1
+          CARGO_UNSTABLE_MTIME_ON_USE: "false"
+          UV_INTERNAL__TEST_COW_FS: /btrfs
+          UV_INTERNAL__TEST_NOCOW_FS: /tmpfs
+          UV_INTERNAL__TEST_ALT_FS: /tmpfs
+          UV_INTERNAL__TEST_LOWLINKS_FS: /minix
+          INSTA_UPDATE: new
+          INSTA_PENDING_DIR: ${{ github.workspace }}/pending-snapshots
+        run: |
+          cargo nextest run \
+            --cargo-profile fast-build-nightly \
+            -Z panic-abort-tests \
+            -Z checksum-freshness \
+            --features test-python-patch,test-universal,native-auth,secret-service \
+            --workspace \
+            --profile ci-linux \
+            --test-threads ${{ matrix.runner.workers }} \
+            --no-run
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        replica:
+          - 1
+          - 2
+          - 3
+          - 4
+          - 5
+        runner:
+          - id: depot-16
+            labels:
+              - depot-ubuntu-24.04-16
+            workers: 20
+          - id: namespace-32
+            labels:
+              - nscloud-ubuntu-24.04-amd64-32x64-with-features
+              - namespace-features:container.privileged=true
+            workers: 40
+  compare:
+    timeout-minutes: 35
+    runs-on: ${{ matrix.runner.labels }}
+    name: ${{ matrix.cache }} / ${{ matrix.runner.id }} / ${{ matrix.replica }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          repository: astral-sh/uv
+          ref: c4be691531385fd7563e2a29d9bfa2e19b4c2025
+      - name: Install mold
+        run: ./scripts/install-mold.sh
+      - name: Install Rust toolchain
+        run: rustup toolchain install --profile minimal
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        id: rust-cache
+        with:
+          prefix-key: uv-ci-linux-provider-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.runner.id }}-${{ matrix.replica }}
+          key: ${{ hashFiles('Cargo.toml') }}
+          cache-workspace-crates: "true"
+          save-if: "false"
+          add-job-id-key: false
+        if: ${{ matrix.cache == 'warm' }}
+      - name: Require the expected Rust cache
+        if: ${{ matrix.cache == 'warm' }}
+        env:
+          CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        run: test "$CACHE_HIT" = true
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
+        with:
+          version: 0.12.10
+          checksum: 173d95a0c32d18c896c46ba6fafbf3cf9c14ab74b033f81b76c883ef492a976b
+          enable-cache: false
+      - name: Install required Python versions
+        run: uv python install
+      - name: Install secret service
+        run: |
+          printf '%s\n' 'Acquire::Retries "3";' 'Acquire::http::Timeout "10";' 'Acquire::https::Timeout "10";' | sudo tee /etc/apt/apt.conf.d/80-retries > /dev/null
+          sudo apt install -y --no-install-recommends dbus-daemon gnome-keyring
+      - name: Start gnome-keyring
+        run: |
+          DBUS_SESSION_BUS_ADDRESS="$(dbus-daemon --session --fork --print-address=1)"
+          export DBUS_SESSION_BUS_ADDRESS
+          echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS" >> "$GITHUB_ENV"
+          gnome-keyring-daemon --components=secrets --daemonize --unlock <<< 'foobar'
+      - name: Create btrfs filesystem
+        run: |
+          sudo apt install -y btrfs-progs
+          truncate -s 1G /tmp/btrfs.img
+          mkfs.btrfs /tmp/btrfs.img
+          sudo mkdir /btrfs
+          sudo mount -o loop /tmp/btrfs.img /btrfs
+          sudo chown "$(id -u):$(id -g)" /btrfs
+      - name: Create tmpfs filesystem
+        run: |
+          sudo mkdir /tmpfs
+          sudo mount -t tmpfs -o size=256m tmpfs /tmpfs
+          sudo chown "$(id -u):$(id -g)" /tmpfs
+      - name: Create minix filesystem (low hardlink limit)
+        run: |
+          truncate -s 16M /tmp/minix.img
+          mkfs.minix /tmp/minix.img
+          sudo mkdir /minix
+          sudo mount -o loop /tmp/minix.img /minix
+          sudo chown "$(id -u):$(id -g)" /minix
+      - name: Install cargo nextest
+        uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad
+        with:
+          tool: cargo-nextest
+      - name: Cargo test
+        env:
+          UV_HTTP_RETRIES: 5
+          RUST_BACKTRACE: 1
+          CARGO_UNSTABLE_MTIME_ON_USE: "false"
+          UV_INTERNAL__TEST_COW_FS: /btrfs
+          UV_INTERNAL__TEST_NOCOW_FS: /tmpfs
+          UV_INTERNAL__TEST_ALT_FS: /tmpfs
+          UV_INTERNAL__TEST_LOWLINKS_FS: /minix
+          INSTA_UPDATE: new
+          INSTA_PENDING_DIR: ${{ github.workspace }}/pending-snapshots
+        run: |
+          cargo nextest run \
+            --cargo-profile fast-build-nightly \
+            -Z panic-abort-tests \
+            -Z checksum-freshness \
+            --features test-python-patch,test-universal,native-auth,secret-service \
+            --workspace \
+            --profile ci-linux \
+            --test-threads ${{ matrix.runner.workers }}
+      - name: Upload pending snapshots
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: pending-snapshots-linux-${{ matrix.cache }}-${{ matrix.runner.id }}-${{ matrix.replica }}
+          path: pending-snapshots/
+          if-no-files-found: ignore
+          include-hidden-files: true
+          retention-days: 14
+      - name: Upload JUnit results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: junit-results-linux-${{ matrix.cache }}-${{ matrix.runner.id }}-${{ matrix.replica }}
+          path: target/nextest/ci*/junit.xml
+          if-no-files-found: ignore
+          retention-days: 14
+    defaults:
+      run:
+        shell: bash
+    needs: seed
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        replica:
+          - 1
+          - 2
+          - 3
+          - 4
+          - 5
+        cache:
+          - cold
+          - warm
+        runner:
+          - id: depot-16
+            labels:
+              - depot-ubuntu-24.04-16
+            workers: 20
+          - id: namespace-32
+            labels:
+              - nscloud-ubuntu-24.04-amd64-32x64-with-features
+              - namespace-features:container.privileged=true
+            workers: 40
