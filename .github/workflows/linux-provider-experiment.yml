@@ -47,20 +47,27 @@ jobs:
       - name: Install secret service
         run: |
           printf '%s\n' 'Acquire::Retries "3";' 'Acquire::http::Timeout "10";' 'Acquire::https::Timeout "10";' | sudo tee /etc/apt/apt.conf.d/80-retries > /dev/null
-          sudo apt install -y --no-install-recommends dbus-daemon gnome-keyring
+          sudo apt install -y --no-install-recommends dbus-daemon gnome-keyring libglib2.0-bin
       - name: Start gnome-keyring
         run: |
-          DBUS_SESSION_BUS_ADDRESS="$(dbus-daemon --session --fork --print-address=1)"
-          export DBUS_SESSION_BUS_ADDRESS
+          keyring_root="$HOME/code/tmp/uv-ci-provider/keyring"
+          install -d -m 700 "$keyring_root/data" "$keyring_root/control"
+          DBUS_SESSION_BUS_ADDRESS="$(dbus-daemon --session --address="unix:path=$keyring_root/bus" --fork --print-address=1)"
+          GNOME_KEYRING_CONTROL="$keyring_root/control"
+          export DBUS_SESSION_BUS_ADDRESS GNOME_KEYRING_CONTROL
           echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS" >> "$GITHUB_ENV"
-          gnome-keyring-daemon --components=secrets --daemonize --unlock <<< 'foobar'
+          echo "GNOME_KEYRING_CONTROL=$GNOME_KEYRING_CONTROL" >> "$GITHUB_ENV"
+          printf '%s' foobar | XDG_DATA_HOME="$keyring_root/data" gnome-keyring-daemon --control-directory="$GNOME_KEYRING_CONTROL" --components=secrets --daemonize --unlock
+          locked="$(gdbus call --session --dest org.freedesktop.secrets --object-path /org/freedesktop/secrets/aliases/default --method org.freedesktop.DBus.Properties.Get org.freedesktop.Secret.Collection Locked)"
+          test "$locked" = '(<false>,)'
       - name: Create btrfs filesystem
         run: |
           sudo apt install -y btrfs-progs
-          truncate -s 1G /tmp/btrfs.img
-          mkfs.btrfs /tmp/btrfs.img
+          mkdir -p "$HOME/code/tmp/uv-ci-provider"
+          truncate -s 1G "$HOME/code/tmp/uv-ci-provider/btrfs.img"
+          mkfs.btrfs "$HOME/code/tmp/uv-ci-provider/btrfs.img"
           sudo mkdir /btrfs
-          sudo mount -o loop /tmp/btrfs.img /btrfs
+          sudo mount -o loop "$HOME/code/tmp/uv-ci-provider/btrfs.img" /btrfs
           sudo chown "$(id -u):$(id -g)" /btrfs
       - name: Create tmpfs filesystem
         run: |
@@ -157,20 +164,27 @@ jobs:
       - name: Install secret service
         run: |
           printf '%s\n' 'Acquire::Retries "3";' 'Acquire::http::Timeout "10";' 'Acquire::https::Timeout "10";' | sudo tee /etc/apt/apt.conf.d/80-retries > /dev/null
-          sudo apt install -y --no-install-recommends dbus-daemon gnome-keyring
+          sudo apt install -y --no-install-recommends dbus-daemon gnome-keyring libglib2.0-bin
       - name: Start gnome-keyring
         run: |
-          DBUS_SESSION_BUS_ADDRESS="$(dbus-daemon --session --fork --print-address=1)"
-          export DBUS_SESSION_BUS_ADDRESS
+          keyring_root="$HOME/code/tmp/uv-ci-provider/keyring"
+          install -d -m 700 "$keyring_root/data" "$keyring_root/control"
+          DBUS_SESSION_BUS_ADDRESS="$(dbus-daemon --session --address="unix:path=$keyring_root/bus" --fork --print-address=1)"
+          GNOME_KEYRING_CONTROL="$keyring_root/control"
+          export DBUS_SESSION_BUS_ADDRESS GNOME_KEYRING_CONTROL
           echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS" >> "$GITHUB_ENV"
-          gnome-keyring-daemon --components=secrets --daemonize --unlock <<< 'foobar'
+          echo "GNOME_KEYRING_CONTROL=$GNOME_KEYRING_CONTROL" >> "$GITHUB_ENV"
+          printf '%s' foobar | XDG_DATA_HOME="$keyring_root/data" gnome-keyring-daemon --control-directory="$GNOME_KEYRING_CONTROL" --components=secrets --daemonize --unlock
+          locked="$(gdbus call --session --dest org.freedesktop.secrets --object-path /org/freedesktop/secrets/aliases/default --method org.freedesktop.DBus.Properties.Get org.freedesktop.Secret.Collection Locked)"
+          test "$locked" = '(<false>,)'
       - name: Create btrfs filesystem
         run: |
           sudo apt install -y btrfs-progs
-          truncate -s 1G /tmp/btrfs.img
-          mkfs.btrfs /tmp/btrfs.img
+          mkdir -p "$HOME/code/tmp/uv-ci-provider"
+          truncate -s 1G "$HOME/code/tmp/uv-ci-provider/btrfs.img"
+          mkfs.btrfs "$HOME/code/tmp/uv-ci-provider/btrfs.img"
           sudo mkdir /btrfs
-          sudo mount -o loop /tmp/btrfs.img /btrfs
+          sudo mount -o loop "$HOME/code/tmp/uv-ci-provider/btrfs.img" /btrfs
           sudo chown "$(id -u):$(id -g)" /btrfs
       - name: Create tmpfs filesystem
         run: |
