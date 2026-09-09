@@ -74,7 +74,9 @@ Workflows that switch to candidate code first check out `github.workflow_sha` an
 `.github/actions/setup-automations`. The action installs a non-editable copy of this package in a
 separate Python 3.14 environment. Invoke its `python` output with `-I -m uv_automations` so later
 checkouts, `PYTHONPATH`, and local modules cannot replace the implementation. It leaves the job's
-Python selection alone; only this runtime is pinned to Python 3.14.
+Python selection alone; only this runtime is pinned to Python 3.14. Agent steps receive a separate
+writable temporary directory, with their caches and editable context inside it; the installed
+runtime stays outside that directory.
 
 The shared Git adapter disables hooks, grafts, replacement objects, and inherited
 repository-selection state. Commit transport has a small, concrete API:
