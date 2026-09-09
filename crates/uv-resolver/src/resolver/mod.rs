@@ -1362,25 +1362,20 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             return Ok(None);
         };
 
-        let dist = match candidate.dist() {
-            CandidateDist::Compatible(dist) => dist,
-            CandidateDist::Incompatible {
-                incompatible_dist: incompatibility,
-                prioritized_dist: _,
-            } => {
+        let (candidate, dist) = match candidate.into_compatible() {
+            Ok(candidate) => candidate,
+            Err((version, incompatibility)) => {
                 // If the version is incompatible because no distributions are compatible, exit early.
                 return Ok(Some(ResolverVersion::Unavailable(
-                    candidate.version().clone(),
-                    // TODO(charlie): We can avoid this clone; the candidate is dropped here and
-                    // owns the incompatibility.
-                    UnavailableVersion::IncompatibleDist(incompatibility.clone()),
+                    version.clone(),
+                    UnavailableVersion::IncompatibleDist(incompatibility),
                 )));
             }
         };
 
         // Check whether the version is incompatible due to its Python requirement.
         if let Some((requires_python, incompatibility)) =
-            Self::check_requires_python(dist, python_requirement)
+            Self::check_requires_python(&dist, python_requirement)
         {
             if matches!(self.options.fork_strategy, ForkStrategy::RequiresPython) {
                 if env.marker_environment().is_none() {
@@ -1424,7 +1419,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
         // Check whether this version covers all supported platforms; and, if not, generate a fork.
         if let Some(forked) = self.fork_version_registry(
             &candidate,
-            dist,
+            &dist,
             version_maps,
             package,
             id,
@@ -1457,7 +1452,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             candidate.choice_kind(),
             filename,
         );
-        self.visit_candidate(&candidate, dist, package, name, pins, request_sink)?;
+        self.visit_candidate(&candidate, &dist, package, name, pins, request_sink)?;
 
         let version = candidate.version().clone();
         Ok(Some(ResolverVersion::Unforked(version)))
