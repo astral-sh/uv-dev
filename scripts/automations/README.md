@@ -164,6 +164,53 @@ The feedback adapters add immutable contracts without coupling them to one workf
   `write_sessions(snapshot, destination)` creates a fresh sessions tree, normalizing compressed
   rollouts without merging another Codex home.
 
+## Promotion evidence and planning
+
+`promotion_models` records exact repository IDs, pull request identities, full commit SHAs, human
+approval events, and bot-issued promotion records. `github_promotion.PromotionGitHub` reads bounded
+pull request, comment, event, and force-push histories. It also provides exact ref and
+commit-ancestry queries. Read credentials remain caller-selected, and transport errors do not
+disclose private repository paths or response bodies in public synchronization logs.
+
+```python
+from uv_automations.github_promotion import PromotionGitHub
+from uv_automations.models import CommitSha
+from uv_automations.promotion_models import PromotionScope, UV_DEV_REPOSITORY
+from uv_automations.workflows.promotion import PromotionRequest, plan_promotion
+
+reader = PromotionGitHub(token_variable="GH_READ_TOKEN")
+request = PromotionRequest(
+    PromotionScope(UV_DEV_REPOSITORY, number), CommitSha(head_sha), approval_id
+)
+plan = plan_promotion(reader, request)
+```
+
+The result is an exhaustive union of `Publish`, `Rebase`, `WaitForParent`, `WaitForSync`,
+`AlreadyPublished`, `Stale`, and `Rejected`. Planning does not mutate GitHub. `Publish.copy_base`
+describes the exact open cross-repository parent and missing upstream ref when the existing workflow
+needs to copy a stacked base. Its serialized `CopyUpstreamBaseClaim`, like `PromotionApprovalClaim`,
+is an untrusted request to revalidate, not reconstructed publication authority.
+
+`PromotionApproval.head` comes from the trusted dispatch, not the issue-event response. The trusted
+v2 dispatcher source binds that value to the signed webhook's `pull_request.head.sha` and rejects a
+different live head before dispatch; this is a required source contract, not a claim that a service
+deployment has been verified. Private label approval also retains the preceding readiness event ID.
+
+`verified_promoted_parent` checks a unique legacy record against the exact automation bot and GitHub
+App, the upstream repository and PR author, and the original head's complete bounded force-push
+history when needed. It returns explicit open, closed, or merged-parent evidence. Direct manual
+planning still distinguishes an exact-head `UnrecordedMergedParent`; automatic replay must require
+the recorded form and a merge contained in synchronized source `main`.
+
+Legacy promotion comments are historical evidence, not fresh approval of a head. GitHub lets
+repository writers
+[edit other users' comments](https://docs.github.com/en/communities/moderating-comments-and-conversations/managing-disruptive-comments),
+so newly authoritative queue or private-approval receipts use
+`get_unedited_promotion_comment(scope, comment_id)`. That read binds the exact REST and GraphQL
+comment identities and body to the issue-comment list's App metadata, then requires both edit fields
+to be empty. Its `UneditedPromotionComment` result is not deserialized from workflow input. Queue,
+replay, retarget, and publication decisions remain separate consumers.
+
 ## Subsequent migrations
 
 Migrate complete deterministic workflow stages rather than extracting isolated `jq` expressions.
@@ -181,12 +228,9 @@ The outstanding automation drafts provide useful tests of that boundary:
 | [uv-dev#922](https://github.com/astral-sh/uv-dev/pull/922) | Repository identities, parent history, ancestry, and narrow base updates        | Unique promoted-parent evidence, synchronized-`main` checks, and child freshness                 |
 | [uv-dev#986](https://github.com/astral-sh/uv-dev/pull/986) | Typed human approval events and publication preconditions                       | Private-to-public approval, label ordering, and recovery policy                                  |
 
-The promotion consumers should use a `PromotionApproval` that retains the source repository
-identity, pull request, approved head, human event ID, and approval kind. A `PromotionRecord` should
-identify the upstream pull request only after verifying the issuing bot's database ID and GitHub App
-identity. A `RetargetPlan` retains the synchronized `main` SHA, exact child base/head, and verified
-parent merge; publication rechecks those preconditions before each narrow mutation. These are
-publication authority, not properties of a valid Git bundle.
+A consumer-owned `RetargetPlan` retains the synchronized `main` SHA, exact child base/head, and
+verified parent merge; publication rechecks those preconditions before each narrow mutation. These
+are publication preconditions, not properties of a valid Git bundle.
 
 | Existing workflows                                                                     | Python responsibility                                                                                                |
 | -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
@@ -217,35 +261,6 @@ def plan_retry(
     run: WorkflowRun, diagnosis: Diagnosis, policy: RetryPolicy
 ) -> RetryPlan: ...
 def retry(github_writer: GitHubWriter, plan: RetryPlan) -> RetryResult: ...
-
-
-# workflows/promotion.py
-def plan(
-    source: PullRequest,
-    approval: PromotionApproval,
-    upstream: RepositoryState,
-    parent: ParentState,
-) -> PromotionPlan: ...
-def publish(
-    github_writer: GitHubWriter,
-    git: Git,
-    plan: PromotionPlan,
-    head: CommitSha,
-) -> PromotionResult: ...
-def plan_replay(
-    queued: QueuedPromotion,
-    approval: PromotionApproval,
-    parent: PromotedParent,
-    source_main: CommitSha,
-) -> ReplayPlan | StalePromotion: ...
-def plan_retarget(
-    parent: PromotedParent,
-    children: tuple[PullRequestDetails, ...],
-    source_main: CommitSha,
-) -> tuple[RetargetPlan, ...]: ...
-def retarget(
-    reader: PromotionReader, writer: PullRequestBaseWriter, plan: RetargetPlan
-) -> RetargetOutcome: ...
 ```
 
 `RebaseResult`, for example, should be a union of `CleanRebase`, `ConflictedRebase`, `EmptyRebase`,
