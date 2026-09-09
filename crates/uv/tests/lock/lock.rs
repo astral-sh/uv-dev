@@ -33861,12 +33861,113 @@ fn lock_no_build_invalid_dependency_virtual_project() -> Result<()> {
     )?;
 
     // Hiding the invalid dependency behind a build-disabled error is misleading; see astral-sh/uv#20908.
-    uv_snapshot!(context.filters(), context.lock(), @"
+    uv_snapshot!(context.filters(), context.lock().arg("--offline").arg("--no-index").arg("--no-python-downloads"), @"
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to build `project @ file://[TEMP_DIR]/`
-      cause: Building source distributions for `project` is disabled
+      cause: Failed to extract static metadata from `pyproject.toml`
+      cause: after parsing `5`, found `>`, which is not part of a valid version
+             anyio<5>
+                  ^^^
     ");
+
+    Ok(())
+}
+
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_no_build_invalid_dependency_optional() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [project.optional-dependencies]
+        invalid = ["uv-invalid-requirement<2.6>"]
+
+        [tool.uv]
+        package = false
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--offline").arg("--no-index").arg("--no-python-downloads").args(["--no-build-package", "project"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to build `project @ file://[TEMP_DIR]/`
+      cause: Failed to extract static metadata from `pyproject.toml`
+      cause: after parsing `2.6`, found `>`, which is not part of a valid version
+             uv-invalid-requirement<2.6>
+                                   ^^^^^
+    ");
+
+    Ok(())
+}
+
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_no_build_invalid_dependency_cached_metadata() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["uv-invalid-requirement<2.6>"]
+
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+
+        [tool.uv]
+        package = false
+    "#})?;
+    context.temp_dir.child("backend.py").write_str(indoc! {r#"
+        from pathlib import Path
+
+        def get_requires_for_build_wheel(config_settings=None):
+            return []
+
+        def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
+            Path(__file__).with_name("backend-called").write_text("called", encoding="utf-8")
+            dist_info = Path(metadata_directory) / "project-0.1.0.dist-info"
+            dist_info.mkdir()
+            (dist_info / "METADATA").write_text(
+                "Metadata-Version: 2.2\nName: project\nVersion: 0.1.0\n",
+                encoding="utf-8",
+            )
+            return dist_info.name
+
+        get_requires_for_build_editable = get_requires_for_build_wheel
+        prepare_metadata_for_build_editable = prepare_metadata_for_build_wheel
+    "#})?;
+
+    // A backend can still provide usable metadata when the static requirements are invalid.
+    uv_snapshot!(context.filters(), context.lock().arg("--offline").arg("--no-index").arg("--no-python-downloads"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    assert!(context.temp_dir.child("backend-called").is_file());
+
+    // Removing the lockfile forces a fresh resolution, but the cached metadata remains usable
+    // without invoking the backend again.
+    fs_err::remove_file(context.temp_dir.child("uv.lock"))?;
+    fs_err::remove_file(context.temp_dir.child("backend-called"))?;
+    uv_snapshot!(context.filters(), context.lock().arg("--offline").arg("--no-index").arg("--no-python-downloads").arg("--no-build"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    assert!(!context.temp_dir.child("backend-called").exists());
 
     Ok(())
 }
