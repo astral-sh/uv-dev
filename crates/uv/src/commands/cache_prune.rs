@@ -8,7 +8,8 @@ use uv_cache::{Cache, RemovalAccounting};
 use uv_fs::Simplified;
 use uv_preview::{Preview, PreviewFeature};
 
-use crate::commands::{ExitStatus, human_readable_bytes};
+use crate::commands::ExitStatus;
+use crate::commands::reporters::write_cache_removal_summary;
 use crate::printer::Printer;
 
 /// Prune dangling cache entries and cached environments.
@@ -67,37 +68,7 @@ pub(crate) async fn cache_prune(
         .prune(ci)
         .with_context(|| format!("Failed to prune cache at: {}", cache.root().user_display()))?;
 
-    // Write a summary of the number of files and directories removed.
-    match (summary.num_files, summary.num_dirs) {
-        (0, 0) => {
-            write!(printer.stderr(), "No unused entries found")?;
-        }
-        (0, 1) => {
-            write!(printer.stderr(), "Removed 1 directory")?;
-        }
-        (0, num_dirs_removed) => {
-            write!(printer.stderr(), "Removed {num_dirs_removed} directories")?;
-        }
-        (1, _) => {
-            write!(printer.stderr(), "Removed 1 file")?;
-        }
-        (num_files_removed, _) => {
-            write!(printer.stderr(), "Removed {num_files_removed} files")?;
-        }
-    }
-
-    // Prefer the fine-grained estimate, falling back to coarse accounting.
-    let reported_bytes = summary.fine_bytes.unwrap_or(summary.coarse_bytes);
-    if summary.num_files > 0 || summary.num_dirs > 0 {
-        let bytes = human_readable_bytes(reported_bytes);
-        if summary.fine_bytes_incomplete {
-            write!(printer.stderr(), " (at least {:.1})", bytes.green())?;
-        } else {
-            write!(printer.stderr(), " ({:.1})", bytes.green())?;
-        }
-    }
-
-    writeln!(printer.stderr())?;
+    write_cache_removal_summary(&mut printer.stderr(), &summary, "No unused entries found")?;
 
     Ok(ExitStatus::Success)
 }
