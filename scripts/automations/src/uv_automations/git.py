@@ -3,47 +3,57 @@
 import os
 import subprocess
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import Self
 
 from uv_automations.models import CommitSha
 
 
-def _environment() -> dict[str, str]:
+def _environment(
+    token_variable: str | None = None, *, directory: Path | None = None
+) -> dict[str, str]:
     # An explicit checkout must not be redirected by inherited Git state. The
     # caller still owns authentication (for example, GH_TOKEN).
-    excluded = {
-        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-        "GIT_COMMON_DIR",
-        "GIT_DIR",
-        "GIT_INDEX_FILE",
-        "GIT_NAMESPACE",
-        "GIT_OBJECT_DIRECTORY",
-        "GIT_PREFIX",
-        "GIT_REPLACE_REF_BASE",
-        "GIT_SHALLOW_FILE",
-        "GIT_WORK_TREE",
-    }
     environment = {
-        key: value
-        for key, value in os.environ.items()
-        if key not in excluded and not key.startswith("GIT_CONFIG")
+        key: value for key, value in os.environ.items() if not key.startswith("GIT_")
     }
     environment.update(
+        GIT_ATTR_NOSYSTEM="1",
         GIT_CONFIG_GLOBAL=os.devnull,
+        GIT_CONFIG_SYSTEM=os.devnull,
         GIT_CONFIG_NOSYSTEM="1",
         GIT_GRAFT_FILE=os.devnull,
+        GIT_NO_LAZY_FETCH="1",
         GIT_NO_REPLACE_OBJECTS="1",
+        GIT_OPTIONAL_LOCKS="0",
         GIT_TERMINAL_PROMPT="0",
     )
+    if directory is not None:
+        # `Git` names the repository itself, not a directory from which Git
+        # should discover some other repository in its ancestors.
+        environment["GIT_CEILING_DIRECTORIES"] = str(directory.absolute().parent)
+    if token_variable is not None:
+        token = os.environ.get(token_variable)
+        if not token:
+            raise ValueError(f"Missing Git token environment: {token_variable}")
+        environment["GH_TOKEN"] = token
     return environment
 
 
 @dataclass(frozen=True, slots=True)
 class Git:
-    """Run Git without hooks, grafts, replacements, or inherited repository state."""
+    """Run Git against trusted metadata with explicit repository and credentials.
+
+    Configuration-defined hooks and filters are not sandboxed by this adapter.
+    Inspect an agent-owned checkout through `checkouts.inspect_candidate` first.
+    """
 
     path: Path
+    token_variable: str | None = field(default=None, kw_only=True)
+
+    def with_token(self, variable: str | None) -> Self:
+        return replace(self, token_variable=variable)
 
     def command(
         self,
@@ -60,6 +70,8 @@ class Git:
                 "-c",
                 f"core.hooksPath={os.devnull}",
                 "-c",
+                "core.fsmonitor=false",
+                "-c",
                 "gc.auto=0",
                 "-c",
                 "maintenance.auto=false",
@@ -69,7 +81,7 @@ class Git:
             check=check,
             text=True,
             capture_output=True,
-            env=_environment(),
+            env=_environment(self.token_variable, directory=self.path),
             timeout=120,
         )
 
@@ -103,6 +115,7 @@ def check_branch(name: str) -> None:
         check=False,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
+        env=_environment(),
         timeout=30,
     )
     if result.returncode != 0:
