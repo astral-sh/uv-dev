@@ -104,7 +104,9 @@ jobs:
         run: |
           # Use the actual userspace perf binary: Ubuntu's wrapper expects a
           # distribution kernel, while Namespace supplies its own kernel.
-          sudo apt install -y --no-install-recommends linux-tools-generic
+          # Pin the userspace tool rather than the rolling kernel meta-package.
+          sudo apt install -y --no-install-recommends linux-tools-6.8.0-136 \
+            2>&1 | tee "$GITHUB_WORKSPACE/results/perf-install.txt"
           perf_binary="$(find /usr/lib/linux-tools -type f -name perf | sort -V | tail -n 1)"
           if [ -n "$perf_binary" ]; then
             echo "RCA_PERF=$perf_binary" >> "$GITHUB_ENV"
