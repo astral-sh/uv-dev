@@ -8,6 +8,7 @@ pub use error::ProjectError;
 
 pub mod add;
 pub mod audit;
+mod binary;
 pub mod check;
 mod edit;
 mod error;
