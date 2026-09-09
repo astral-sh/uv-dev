@@ -12,7 +12,7 @@ pub(crate) struct CompatibilityHint {
     incompatibility: Incompatibility,
 }
 
-/// Wheel errors are user-facing and colored, while installed distribution hints are debug logs.
+/// Wheel errors use color, while installed-distribution hints are plain text.
 #[derive(Debug, Clone, Copy)]
 enum HintSource {
     Wheel,

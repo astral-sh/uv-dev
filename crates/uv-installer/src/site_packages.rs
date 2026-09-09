@@ -25,6 +25,7 @@ use uv_redacted::DisplaySafeUrl;
 use uv_types::InstalledPackagesProvider;
 use uv_warnings::warn_user;
 
+use crate::compatibility::CompatibilityHint;
 use crate::satisfies::RequirementSatisfaction;
 
 /// An index over the packages installed in an environment.
@@ -265,9 +266,10 @@ impl SitePackages {
                 match distribution.read_tags() {
                     Ok(Some(wheel_tags)) => {
                         if !wheel_tags.is_compatible(tags) {
-                            // TODO(charlie): Show the expanded tag hint, that explains _why_ it doesn't match.
                             diagnostics.push(SitePackagesDiagnostic::IncompatiblePlatform {
                                 package: package.clone(),
+                                hint: CompatibilityHint::from_distribution(wheel_tags, tags)
+                                    .map(|hint| hint.to_string()),
                             });
                         }
                     }
@@ -710,6 +712,8 @@ pub enum SitePackagesDiagnostic {
     IncompatiblePlatform {
         /// The package that was built for a different platform.
         package: PackageName,
+        /// An explanation of the incompatible wheel tags, if available.
+        hint: Option<String>,
     },
     MissingDependency {
         /// The package that is missing a dependency.
@@ -752,8 +756,13 @@ impl Diagnostic for SitePackagesDiagnostic {
             } => format!(
                 "The package `{package}` requires Python {requires_python}, but `{version}` is installed"
             ),
-            Self::IncompatiblePlatform { package } => {
-                format!("The package `{package}` was built for a different platform")
+            Self::IncompatiblePlatform { package, hint } => {
+                let message = format!("The package `{package}` was built for a different platform");
+                if let Some(hint) = hint {
+                    format!("{message}. {hint}")
+                } else {
+                    message
+                }
             }
             Self::MissingDependency {
                 package,
@@ -786,7 +795,7 @@ impl Diagnostic for SitePackagesDiagnostic {
             Self::MetadataUnavailable { package, .. } => name == package,
             Self::TagsUnavailable { package, .. } => name == package,
             Self::IncompatiblePythonVersion { package, .. } => name == package,
-            Self::IncompatiblePlatform { package } => name == package,
+            Self::IncompatiblePlatform { package, .. } => name == package,
             Self::MissingDependency { package, .. } => name == package,
             Self::IncompatibleDependency {
                 package,

@@ -15881,7 +15881,7 @@ fn switch_platform() {
     ----- stderr -----
     Checked 2 packages in [TIME]
     Found 1 incompatibility
-    The package `cffi` was built for a different platform
+    The package `cffi` was built for a different platform. The distribution is compatible with Windows (`win_amd64`), but you're on Linux (`manylinux_2_28_x86_64`)
     "
     );
 
