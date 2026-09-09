@@ -10,6 +10,8 @@ import tempfile
 import time
 from pathlib import Path
 
+from monitor import Monitor, perf_command, probe_perf, read_file
+
 SOURCE_REVISION = "e9837f6e09e481bf5d1c2c2f13b641c14a366518"
 AUTH_FIX = "51bcea71165dc26c1fd9ea6e6686ba413ae1f679"
 CARGO = [
@@ -52,24 +54,54 @@ def counters():
     return result
 
 
-def measure(command, name, environment, results):
+def measure(command, name, environment, results, instrumentation=None):
     logfile = results / f"{name}.log"
     timefile = results / f"{name}.time"
     before = counters()
-    started = time.monotonic()
-    with logfile.open("w") as output:
+    started_utc_ns = time.time_ns()
+    started_monotonic_ns = time.monotonic_ns()
+    observed_command = (
+        perf_command(instrumentation, results / f"{name}.perf.txt", command)
+        if instrumentation is not None
+        else command
+    )
+    monitor = None
+    monitoring = None
+    with (
+        logfile.open("w") as output,
+        (results / f"{name}.events.jsonl").open("w") as events,
+    ):
         process = subprocess.Popen(
-            ["/usr/bin/time", "-v", "-o", str(timefile), *command],
+            ["/usr/bin/time", "-v", "-o", str(timefile), *observed_command],
             env=environment,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
         )
-        for line in process.stdout:
-            print(line, end="", flush=True)
-            output.write(line)
-        returncode = process.wait()
-    elapsed = time.monotonic() - started
+        if instrumentation is not None:
+            monitor = Monitor(process.pid, results / f"{name}.monitor.jsonl")
+            monitor.start()
+        try:
+            for line in process.stdout:
+                events.write(
+                    json.dumps(
+                        {
+                            "utc_ns": time.time_ns(),
+                            "monotonic_ns": time.monotonic_ns(),
+                            "line": ANSI.sub("", line).rstrip(),
+                        }
+                    )
+                    + "\n"
+                )
+                print(line, end="", flush=True)
+                output.write(line)
+            returncode = process.wait()
+            ended_utc_ns = time.time_ns()
+            ended_monotonic_ns = time.monotonic_ns()
+        finally:
+            if monitor is not None:
+                monitoring = monitor.stop()
+    elapsed = (ended_monotonic_ns - started_monotonic_ns) / 1e9
     after = counters()
     log = ANSI.sub("", logfile.read_text())
     summaries = re.findall(r"Summary \[\s*([0-9.]+)s\] ([^\n]+)", log)
@@ -79,6 +111,12 @@ def measure(command, name, environment, results):
     row = {
         "name": name,
         "command": command,
+        "observed_command": observed_command,
+        "started_utc_ns": started_utc_ns,
+        "ended_utc_ns": ended_utc_ns,
+        "started_monotonic_ns": started_monotonic_ns,
+        "ended_monotonic_ns": ended_monotonic_ns,
+        "monitoring": monitoring,
         "returncode": returncode,
         "elapsed_seconds": elapsed,
         "test_seconds": float(summaries[-1][0]) if summaries else None,
@@ -119,7 +157,9 @@ def measure(command, name, environment, results):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("cpu", "filesystem", "high-workers"))
+    parser.add_argument(
+        "mode", choices=("cpu", "filesystem", "high-workers", "monitored-filesystem")
+    )
     parser.add_argument("--results", type=Path, required=True)
     parser.add_argument("--dry-run", action="store_true")
     arguments = parser.parse_args()
@@ -127,8 +167,10 @@ def main():
         "cpu": [8, 20, 40],
         "filesystem": ["native", "ext4", "tmpfs"],
         "high-workers": [40, 64, 80],
+        "monitored-filesystem": ["native", "ext4", "tmpfs"],
     }[arguments.mode]
-    if arguments.mode == "high-workers":
+    replicated = arguments.mode in ("high-workers", "monitored-filesystem")
+    if replicated:
         replica = int(os.environ["RCA_REPLICA"])
         if replica not in (1, 2):
             raise RuntimeError(f"Unexpected replica: {replica}")
@@ -143,6 +185,14 @@ def main():
                     "mode": arguments.mode,
                     "schedules": schedules,
                     "source": SOURCE_REVISION,
+                    "native_monitor_order": [
+                        [False, True]
+                        if (round_index + replica) % 2 == 0
+                        else [True, False]
+                        for round_index in (1, 2, 3)
+                    ]
+                    if arguments.mode == "monitored-filesystem"
+                    else None,
                 }
             )
         )
@@ -153,13 +203,14 @@ def main():
     changed = capture(["git", "status", "--porcelain"])
     if changed:
         raise RuntimeError(f"Unexpected source changes: {changed}")
-    if arguments.mode == "high-workers":
+    if replicated:
         # Keep the native credential store isolated across repeated full suites.
         patch = Path(__file__).with_name("native-auth-isolation.patch")
         subprocess.run(["git", "apply", "--check", str(patch)], check=True)
         subprocess.run(["git", "apply", str(patch)], check=True)
-        if len(os.sched_getaffinity(0)) != 32:
-            raise RuntimeError("Expected a 32-vCPU runner")
+        expected_cpus = 32 if arguments.mode == "high-workers" else 16
+        if len(os.sched_getaffinity(0)) != expected_cpus:
+            raise RuntimeError(f"Expected a {expected_cpus}-vCPU runner")
 
     results = arguments.results.resolve()
     results.mkdir(parents=True, exist_ok=True)
@@ -179,7 +230,7 @@ def main():
         "kernel": capture(["uname", "-sr"]),
         "source_diff": capture(["git", "diff"]),
     }
-    if arguments.mode == "high-workers":
+    if replicated:
         metadata.update(
             replica=replica,
             common_auth_fix=AUTH_FIX,
@@ -197,6 +248,29 @@ def main():
                     ]
                 )
             ),
+        )
+    instrumentation = None
+    if arguments.mode == "monitored-filesystem":
+        instrumentation = probe_perf(results)
+        metadata.update(
+            perf=instrumentation,
+            clock_ticks=os.sysconf("SC_CLK_TCK"),
+            page_size=os.sysconf("SC_PAGE_SIZE"),
+            monitoring_interval_seconds=1,
+            thread_interval_seconds=2,
+            mounts=capture(["findmnt", "-J", "-o", "TARGET,SOURCE,FSTYPE,OPTIONS"]),
+            block_devices=capture(
+                ["lsblk", "-J", "-o", "NAME,TYPE,SIZE,FSTYPE,MOUNTPOINTS,PKNAME"]
+            ),
+            monitoring_settings={
+                name: read_file(Path(name))
+                for name in (
+                    "/proc/sys/kernel/perf_event_paranoid",
+                    "/proc/sys/kernel/sched_schedstats",
+                    "/proc/sys/kernel/task_delayacct",
+                    "/proc/sys/kernel/kptr_restrict",
+                )
+            },
         )
     for filename in ("cpu.max", "cpuset.cpus.effective", "memory.max"):
         path = Path("/sys/fs/cgroup") / filename
@@ -221,37 +295,65 @@ def main():
     print("PYTHON_CACHE_SEED " + capture(["du", "-sh", str(seed)]), flush=True)
 
     failures = []
+    samples = []
     for round_index, schedule in enumerate(schedules, start=1):
         for variant in schedule:
-            parent = (
-                scratch / str(variant) if arguments.mode == "filesystem" else native
+            if arguments.mode == "monitored-filesystem":
+                monitor_order = [True]
+                if variant == "native":
+                    monitor_order = (
+                        [False, True]
+                        if (round_index + replica) % 2 == 0
+                        else [True, False]
+                    )
+                for enabled in monitor_order:
+                    name = (
+                        f"round-{round_index}-{variant}"
+                        if enabled
+                        else f"overhead-{round_index}-native"
+                    )
+                    samples.append(
+                        (variant, name, instrumentation if enabled else None)
+                    )
+            else:
+                samples.append((variant, f"round-{round_index}-{variant}", None))
+    for variant, name, sample_instrumentation in samples:
+        parent = (
+            scratch / str(variant)
+            if arguments.mode in ("filesystem", "monitored-filesystem")
+            else native
+        )
+        with tempfile.TemporaryDirectory(prefix="sample-", dir=parent) as temporary:
+            # Copy the same warmed Python archive cache before every measurement.
+            # Copies and cleanup are outside the measured child process.
+            python_cache = Path(temporary) / "python-downloads"
+            subprocess.run(
+                ["cp", "-a", "--reflink=auto", str(seed), str(python_cache)],
+                check=True,
             )
-            with tempfile.TemporaryDirectory(prefix="sample-", dir=parent) as temporary:
-                # Copy the same warmed Python archive cache before every measurement.
-                # Copies and cleanup are outside the measured child process.
-                python_cache = Path(temporary) / "python-downloads"
-                subprocess.run(
-                    ["cp", "-a", "--reflink=auto", str(seed), str(python_cache)],
-                    check=True,
-                )
-                sample_environment = dict(
-                    environment, TMPDIR=temporary, UV_PYTHON_CACHE_DIR=str(python_cache)
-                )
-                workers = (
-                    str(variant) if arguments.mode in ("cpu", "high-workers") else "20"
-                )
-                row = measure(
-                    [*command, "--test-threads", workers],
-                    f"round-{round_index}-{variant}",
-                    sample_environment,
-                    results,
-                )
-                if (
-                    row["returncode"]
-                    or row["tests_run"] != expected_count
-                    or row["tests_passed"] != expected_count
-                ):
-                    failures.append(row["name"])
+            sample_environment = dict(
+                environment, TMPDIR=temporary, UV_PYTHON_CACHE_DIR=str(python_cache)
+            )
+            workers = (
+                str(variant) if arguments.mode in ("cpu", "high-workers") else "20"
+            )
+            row = measure(
+                [*command, "--test-threads", workers],
+                name,
+                sample_environment,
+                results,
+                sample_instrumentation,
+            )
+            if (
+                row["returncode"]
+                or row["tests_run"] != expected_count
+                or row["tests_passed"] != expected_count
+            ):
+                failures.append(row["name"])
+            if sample_instrumentation is not None and (
+                not row["monitoring"]["samples"] or row["monitoring"]["errors"]
+            ):
+                failures.append(f"{row['name']}: monitoring incomplete")
     if failures:
         raise RuntimeError(f"Incomplete samples: {failures}")
 
