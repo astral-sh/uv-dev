@@ -55,6 +55,16 @@ jobs:
         id: setup-uv
       - name: Install required Python versions
         run: uv python install
+      - name: Omit recreatable Python junctions from the cache
+        run: |
+          Get-ChildItem -LiteralPath $env:UV_PYTHON_INSTALL_DIR |
+            Where-Object { $_.Name -match '^cpython-\d+\.\d+-windows-' } |
+            ForEach-Object {
+              if (-not ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
+                throw "Expected a minor-version junction: $($_.FullName)"
+              }
+              [System.IO.Directory]::Delete($_.FullName)
+            }
   compare:
     timeout-minutes: 15
     runs-on: namespace-profile-windows-2022-x86-64-16x32
