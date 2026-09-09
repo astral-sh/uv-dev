@@ -4156,11 +4156,6 @@ mod tests {
             "An existing file is treated as a file"
         );
         assert_eq!(
-            PythonRequest::parse("./foo"),
-            PythonRequest::File(PathBuf::from_str("./foo").unwrap()),
-            "A string with a file system separator is treated as a file"
-        );
-        assert_eq!(
             PythonRequest::parse("3.13t"),
             PythonRequest::Version(VersionRequest::from_str("3.13t").unwrap())
         );

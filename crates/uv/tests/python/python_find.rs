@@ -1019,6 +1019,28 @@ fn python_find_path() {
     ----- stderr -----
     error: No interpreter found at path `foobar`
     ");
+
+    // Relative paths are interpreted in the subprocess's isolated working directory.
+    uv_snapshot!(context.filters(), context.python_find().arg("./foo"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: No interpreter found in directory `./foo`
+    ");
+
+    uv_snapshot!(context.filters(), context.python_find().arg("./bar"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to inspect Python interpreter from provided path at `./bar`
+      Caused by: Failed to query Python interpreter at `./bar`
+      Caused by: [PERMISSION DENIED]
+    ");
+
+    // A path separator makes a missing relative path a file request, not an executable name.
+    uv_snapshot!(context.filters(), context.python_find().arg("./foobar"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: No interpreter found at path `./foobar`
+    ");
 }
 
 #[test]
