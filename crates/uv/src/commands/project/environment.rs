@@ -15,7 +15,7 @@ use uv_cache::{Cache, CacheBucket};
 use uv_cache_info::CacheInfo;
 use uv_cache_key::{cache_digest, hash_digest};
 use uv_client::BaseClientBuilder;
-use uv_configuration::{Concurrency, Constraints, HashCheckingMode, TargetTriple};
+use uv_configuration::{ConcurrencyState, Constraints, HashCheckingMode, TargetTriple};
 use uv_distribution_types::{
     BuiltDist, Dist, Identifier, Node, Resolution, ResolvedDist, SourceDist,
 };
@@ -145,7 +145,7 @@ impl CachedEnvironment {
         resolve: Box<dyn ResolveLogger>,
         install: Box<dyn InstallLogger>,
         installer_metadata: bool,
-        concurrency: &Concurrency,
+        concurrency: &ConcurrencyState,
         cache: &Cache,
         workspace_cache: &WorkspaceCache,
         printer: Printer,
@@ -212,7 +212,7 @@ impl CachedEnvironment {
         state: &PlatformState,
         install: Box<dyn InstallLogger>,
         installer_metadata: bool,
-        concurrency: &Concurrency,
+        concurrency: &ConcurrencyState,
         cache: &Cache,
         printer: Printer,
         preview: Preview,
@@ -259,7 +259,7 @@ impl CachedEnvironment {
         state: &PlatformState,
         install: Box<dyn InstallLogger>,
         installer_metadata: bool,
-        concurrency: &Concurrency,
+        concurrency: &ConcurrencyState,
         cache: &Cache,
         printer: Printer,
         preview: Preview,
