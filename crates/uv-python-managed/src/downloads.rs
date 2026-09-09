@@ -5,9 +5,7 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::pin::Pin;
 use std::str::FromStr;
-use std::task::{Context, Poll};
 use std::time::{Duration, Instant, SystemTimeError};
 use std::{env, io};
 use uv_python_types::{PythonDownloadRequest, PythonDownloadRequestError};
@@ -21,7 +19,7 @@ use reqwest_retry::policies::ExponentialBackoff;
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 use thiserror::Error;
-use tokio::io::{AsyncRead, AsyncWriteExt, BufWriter, ReadBuf};
+use tokio::io::{AsyncRead, AsyncWriteExt, BufWriter};
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tokio_util::either::Either;
 use tracing::{debug, instrument};
@@ -37,7 +35,7 @@ use uv_client::{
 };
 use uv_distribution_filename::{ExtensionError, SourceDistExtension};
 use uv_extract::hash::Hasher;
-use uv_fs::{Simplified, rename_with_retry};
+use uv_fs::{ProgressReader, Simplified, rename_with_retry};
 use uv_macros::DebugNoInline;
 use uv_platform::{Arch, Libc, Os, Platform};
 use uv_pypi_types::{Digest, HashAlgorithm, HashDigest};
@@ -712,7 +710,9 @@ impl ManagedPythonDownload {
             if let Some(reporter) = reporter {
                 let key = reporter.on_request_start(Direction::Download, &self.key, size);
                 tokio::io::copy(
-                    &mut ProgressReader::new(reader, key, reporter),
+                    &mut ProgressReader::new(reader, |bytes| {
+                        reporter.on_request_progress(key, bytes as u64);
+                    }),
                     &mut archive_writer,
                 )
                 .await?;
@@ -753,7 +753,9 @@ impl ManagedPythonDownload {
 
         let target = if let Some(reporter) = reporter {
             let progress_key = reporter.on_request_start(direction, &self.key, size);
-            let mut reader = ProgressReader::new(&mut hasher, progress_key, reporter);
+            let mut reader = ProgressReader::new(&mut hasher, |bytes| {
+                reporter.on_request_progress(progress_key, bytes as u64);
+            });
             let (target, _) = uv_extract::stream::archive(&mut reader, ext, target, tar_backend)
                 .await
                 .map_err(|err| Error::ExtractError(filename.to_owned(), err))?;
@@ -1100,42 +1102,6 @@ pub trait Reporter: Send + Sync {
     ) -> usize;
     fn on_request_progress(&self, id: usize, inc: u64);
     fn on_request_complete(&self, direction: Direction, id: usize);
-}
-
-/// An asynchronous reader that reports progress as bytes are read.
-struct ProgressReader<'a, R> {
-    reader: R,
-    index: usize,
-    reporter: &'a dyn Reporter,
-}
-
-impl<'a, R> ProgressReader<'a, R> {
-    /// Create a new [`ProgressReader`] that wraps another reader.
-    fn new(reader: R, index: usize, reporter: &'a dyn Reporter) -> Self {
-        Self {
-            reader,
-            index,
-            reporter,
-        }
-    }
-}
-
-impl<R> AsyncRead for ProgressReader<'_, R>
-where
-    R: AsyncRead + Unpin,
-{
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.as_mut().reader)
-            .poll_read(cx, buf)
-            .map_ok(|()| {
-                self.reporter
-                    .on_request_progress(self.index, buf.filled().len() as u64);
-            })
-    }
 }
 
 /// Convert a [`Url`] into an [`AsyncRead`] stream.
