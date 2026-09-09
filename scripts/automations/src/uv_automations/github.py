@@ -154,7 +154,7 @@ class GitHub:
 
     def _api(
         self,
-        method: Literal["GET", "POST", "DELETE"],
+        method: Literal["GET", "POST", "PATCH", "DELETE"],
         path: str,
         *,
         payload: object | None = None,

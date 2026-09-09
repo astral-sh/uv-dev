@@ -15,6 +15,14 @@ class ManagedRepository(StrEnum):
     UV_SECURITY = "astral-sh/uv-security"
 
 
+class ActorKind(StrEnum):
+    USER = "User"
+    BOT = "Bot"
+    ENTERPRISE_USER_ACCOUNT = "EnterpriseUserAccount"
+    ORGANIZATION = "Organization"
+    MANNEQUIN = "Mannequin"
+
+
 @dataclass(frozen=True, slots=True)
 class RepositoryName:
     full_name: str

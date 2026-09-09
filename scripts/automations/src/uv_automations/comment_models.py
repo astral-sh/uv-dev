@@ -16,6 +16,7 @@ from uv_automations.json import (
     require_keys,
 )
 from uv_automations.models import (
+    ActorKind,
     CommitSha,
     PullRequestRef,
     RepositoryIdentity,
@@ -65,14 +66,6 @@ class CommentScope:
             ),
             as_positive_integer(data["pull_request"]),
         )
-
-
-class ActorKind(StrEnum):
-    USER = "User"
-    BOT = "Bot"
-    ENTERPRISE_USER_ACCOUNT = "EnterpriseUserAccount"
-    ORGANIZATION = "Organization"
-    MANNEQUIN = "Mannequin"
 
 
 class AuthorAssociation(StrEnum):
