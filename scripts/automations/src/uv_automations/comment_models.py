@@ -6,7 +6,7 @@ import json
 import re
 from dataclasses import dataclass, replace
 from enum import StrEnum
-from typing import assert_never
+from typing import assert_never, override
 
 from uv_automations.json import (
     as_array,
@@ -33,6 +33,7 @@ MAX_SELECTED_THREADS = 100
 MAX_KNOWN_THREADS = MAX_PAGE_SIZE * MAX_COLLECTION_PAGES
 MAX_KNOWN_REVIEWS = MAX_PAGE_SIZE * MAX_COLLECTION_PAGES
 MAX_PENDING_TARGETS = 3 * MAX_PAGE_SIZE * MAX_COLLECTION_PAGES
+MAX_CONTINUATIONS = 3
 AUTOMATION_LOGINS = frozenset({"astral-automations-bot", "astral-automations-bot[bot]"})
 
 
@@ -177,6 +178,67 @@ def fingerprint(value: object) -> str:
         value, sort_keys=True, separators=(",", ":"), allow_nan=False
     ).encode()
     return hashlib.sha256(encoded).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class ContinuationKey:
+    value: str
+
+    def __post_init__(self) -> None:
+        if re.fullmatch(r"[0-9a-f]{64}", self.value) is None:
+            raise ValueError("Expected a SHA-256 continuation key")
+
+    @override
+    def __str__(self) -> str:
+        return self.value
+
+
+def as_continuation_budget(value: object) -> int:
+    if type(value) is not int or not 0 <= value <= MAX_CONTINUATIONS:
+        raise ValueError(
+            f"Expected a continuation budget between 0 and {MAX_CONTINUATIONS}"
+        )
+    return value
+
+
+def as_feedback_progress(value: object) -> int:
+    if type(value) is not int or not 0 <= value <= MAX_ACTIONS:
+        raise ValueError("Invalid bounded feedback progress")
+    return value
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class FeedbackContinuation:
+    scope: CommentScope
+    head: CommitSha
+    checkpoint_run: int
+    checkpoint_attempt: int
+    checkpoint_artifact: int
+    checkpoint_index: int
+    key: ContinuationKey
+    remaining: int
+
+    def __post_init__(self) -> None:
+        for identifier in (
+            self.checkpoint_run,
+            self.checkpoint_attempt,
+            self.checkpoint_artifact,
+            self.checkpoint_index,
+        ):
+            as_positive_integer(identifier)
+        as_continuation_budget(self.remaining)
+
+    def inputs(self) -> dict[str, str]:
+        return {
+            "pull_request": str(self.scope.number),
+            "head_sha": str(self.head),
+            "checkpoint_run": str(self.checkpoint_run),
+            "checkpoint_attempt": str(self.checkpoint_attempt),
+            "checkpoint_artifact": str(self.checkpoint_artifact),
+            "checkpoint_index": str(self.checkpoint_index),
+            "continuation_key": str(self.key),
+            "continuations_remaining": str(self.remaining),
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -550,10 +612,13 @@ class CollectedComments:
     threads: tuple[ReviewThread, ...]
     checkpoint: CollectionCheckpoint
     targets: tuple[TargetRevision, ...]
+    processed_targets: int
 
     def __post_init__(self) -> None:
         if len(self.targets) > MAX_ACTIONS:
             raise ValueError("Too many feedback targets for one agent result")
+        if as_feedback_progress(self.processed_targets) < len(self.targets):
+            raise ValueError("Invalid bounded feedback progress")
         selected = {target.target for target in self.targets}
         if len(selected) != len(self.targets) or selected.intersection(
             target.target for target in self.checkpoint.pending
@@ -569,6 +634,7 @@ class CollectedComments:
             "reviews": [review.to_json() for review in self.reviews],
             "review_threads": [thread.to_agent_json() for thread in self.threads],
             "actionable_targets": [target.to_json() for target in self.targets],
+            "pending_count": len(self.checkpoint.pending),
         }
 
 

@@ -357,6 +357,9 @@ def run(command: Command) -> None:
             | comments_cli.VerifyComments()
             | comments_cli.ValidateComments()
             | comments_cli.ApplyComments()
+            | comments_cli.WriteIndex()
+            | comments_cli.WriteIndexAliases()
+            | comments_cli.ContinueComments()
             | comments_cli.WriteSchema()
         ):
             comments_cli.run(command)
