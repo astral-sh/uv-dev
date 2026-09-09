@@ -82,6 +82,11 @@ jobs:
         id: automations
         uses: ./.github/actions/setup-automations
 
+      - name: "Install uv for bug fixing"
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          enable-cache: false
+
       - name: "Prepare bug-fix temporary directory"
         run: mkdir -p "$RUNNER_TEMP/fix-bug"
 
