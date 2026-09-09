@@ -3,7 +3,7 @@
 import re
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import override
+from typing import assert_never, override
 
 from uv_automations.json import as_positive_integer
 
@@ -43,12 +43,58 @@ class CommitSha:
 
 
 @dataclass(frozen=True, slots=True)
+class RepositoryIdentity:
+    name: RepositoryName
+    database_id: int
+
+    def __post_init__(self) -> None:
+        as_positive_integer(self.database_id)
+
+
+@dataclass(frozen=True, slots=True)
 class PullRequestRef:
     repository: RepositoryName
     number: int
 
     def __post_init__(self) -> None:
         as_positive_integer(self.number)
+
+
+class PullRequestState(StrEnum):
+    OPEN = "open"
+    CLOSED = "closed"
+
+
+@dataclass(frozen=True, slots=True)
+class PullRequestRevision:
+    repository: RepositoryIdentity | None
+    ref: str
+    sha: CommitSha
+
+
+@dataclass(frozen=True, slots=True)
+class PullRequestDetails:
+    reference: PullRequestRef
+    state: PullRequestState
+    url: str
+    base: PullRequestRevision
+    head: PullRequestRevision
+    labels: tuple[str, ...]
+
+    @property
+    def is_open(self) -> bool:
+        match self.state:
+            case PullRequestState.OPEN:
+                return True
+            case PullRequestState.CLOSED:
+                return False
+        assert_never(self.state)
+
+
+@dataclass(frozen=True, slots=True)
+class Label:
+    name: str
+    description: str | None
 
 
 class Mergeability(StrEnum):
