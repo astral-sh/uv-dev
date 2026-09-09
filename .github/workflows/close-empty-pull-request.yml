@@ -25,10 +25,6 @@ on:
       head-repository:
         required: true
         type: string
-    secrets:
-      STS_API_URL:
-        description: "The credential broker URL, unless supplied by the automations environment"
-        required: false
 
 permissions: {}
 
