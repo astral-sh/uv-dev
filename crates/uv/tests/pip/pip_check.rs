@@ -2,6 +2,7 @@ use anyhow::Result;
 use assert_fs::fixture::ChildPath;
 use assert_fs::fixture::FileWriteStr;
 use assert_fs::fixture::PathChild;
+use assert_fs::fixture::PathCreateDir;
 
 use uv_test::uv_snapshot;
 
@@ -209,6 +210,69 @@ fn check_python_version() {
     The package `urllib3` requires Python >=3.8, but `3.12.[X]` is installed
     "
     );
+}
+
+#[test]
+fn check_incompatible_wheel_tags() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let dist_info = ChildPath::new(context.site_packages()).child("demo-1.0.0.dist-info");
+    dist_info.create_dir_all()?;
+    dist_info
+        .child("METADATA")
+        .write_str("Metadata-Version: 2.3\nName: demo\nVersion: 1.0.0\n")?;
+
+    let write_tag = |tag: &str| {
+        dist_info.child("WHEEL").write_str(&format!(
+            "Wheel-Version: 1.0\nRoot-Is-Purelib: false\nTag: {tag}\n"
+        ))
+    };
+
+    write_tag("cp313-none-any")?;
+    uv_snapshot!(context.pip_check().arg("--python-platform").arg("windows"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Checked 1 package in [TIME]
+    Found 1 incompatibility
+    The package `demo` was built for a different platform. The distribution is compatible with CPython 3.13 (`cp313`), but you're using CPython 3.12 (`cp312`)
+    ");
+
+    write_tag("cp312-cp311-any")?;
+    uv_snapshot!(context.pip_check().arg("--python-platform").arg("windows"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Checked 1 package in [TIME]
+    Found 1 incompatibility
+    The package `demo` was built for a different platform. The distribution is compatible with CPython 3.11 (`cp311`), but you're using CPython 3.12 (`cp312`)
+    ");
+
+    write_tag("py3-none-linux_x86_64")?;
+    uv_snapshot!(context.pip_check().arg("--python-platform").arg("windows"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Checked 1 package in [TIME]
+    Found 1 incompatibility
+    The package `demo` was built for a different platform. The distribution is compatible with Linux (`linux_x86_64`), but you're on Windows (`win_amd64`)
+    ");
+
+    // Unknown tags still receive the generic incompatibility diagnostic.
+    write_tag("unknown-none-any")?;
+    uv_snapshot!(context.pip_check().arg("--python-platform").arg("windows"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Checked 1 package in [TIME]
+    Found 1 incompatibility
+    The package `demo` was built for a different platform
+    ");
+
+    write_tag("py3-none-any")?;
+    uv_snapshot!(context.pip_check().arg("--python-platform").arg("windows"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked 1 package in [TIME]
+    All installed packages are compatible
+    ");
+
+    Ok(())
 }
 
 #[test]
