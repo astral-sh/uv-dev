@@ -6956,6 +6956,7 @@ dependencies = [
  "fs-err",
  "shellexpand",
  "temp-env",
+ "tempfile",
  "thiserror",
 ]
 
