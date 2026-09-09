@@ -29,6 +29,9 @@ class PrepareIssue:
     github_output: Path | None
 
 
+type IssueCommand = PrepareIssue
+
+
 def add_commands(parser: argparse.ArgumentParser) -> None:
     commands = parser.add_subparsers(required=True)
     prepare = commands.add_parser("prepare")
@@ -43,7 +46,7 @@ def add_commands(parser: argparse.ArgumentParser) -> None:
     prepare.add_argument("--github-output", type=Path)
 
 
-def parse_command(parsed: argparse.Namespace) -> PrepareIssue:
+def parse_command(parsed: argparse.Namespace) -> IssueCommand:
     kind = IssueCommandKind(parsed.command)
     match kind:
         case IssueCommandKind.PREPARE:
@@ -57,7 +60,7 @@ def parse_command(parsed: argparse.Namespace) -> PrepareIssue:
     assert_never(kind)
 
 
-def run(command: PrepareIssue) -> None:
+def run(command: IssueCommand) -> None:
     prepared = prepare_issue(
         GitHub(),
         command.reference,
