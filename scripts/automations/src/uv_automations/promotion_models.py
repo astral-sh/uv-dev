@@ -390,6 +390,30 @@ def latest_ready_event(
     return latest
 
 
+def current_ready_event(
+    events: tuple[PromotionEvent, ...], *, human_only: bool = False
+) -> ReadyForReviewEvent | None:
+    """Return readiness only when it is the latest ready/draft transition."""
+    latest: ReadyForReviewEvent | ConvertedToDraftEvent | None = None
+    for event in events:
+        match event:
+            case ReadyForReviewEvent() | ConvertedToDraftEvent():
+                if latest is None or event.identifier > latest.identifier:
+                    latest = event
+            case LabelAddedEvent() | LabelRemovedEvent():
+                pass
+            case _:
+                assert_never(event)
+    match latest:
+        case ReadyForReviewEvent(actor=actor) if not human_only or (
+            actor is not None and actor.is_human
+        ):
+            return latest
+        case ReadyForReviewEvent() | ConvertedToDraftEvent() | None:
+            return None
+    assert_never(latest)
+
+
 def latest_label_event(
     events: tuple[PromotionEvent, ...], label: str
 ) -> LabelAddedEvent | LabelRemovedEvent | None:
@@ -419,22 +443,12 @@ def current_ready_approval(
     scope: PromotionScope, head: CommitSha, events: tuple[PromotionEvent, ...]
 ) -> PromotionApproval | None:
     """Require the latest readiness transition to be a human approval."""
-    latest: ReadyForReviewEvent | ConvertedToDraftEvent | None = None
-    for event in events:
-        match event:
-            case ReadyForReviewEvent() | ConvertedToDraftEvent():
-                if latest is None or event.identifier > latest.identifier:
-                    latest = event
-            case LabelAddedEvent() | LabelRemovedEvent():
-                pass
-            case _:
-                assert_never(event)
-    match latest:
-        case ReadyForReviewEvent(actor=actor) if actor is not None and actor.is_human:
-            return PromotionApproval(scope, head, latest, latest.identifier)
-        case ReadyForReviewEvent() | ConvertedToDraftEvent() | None:
-            return None
-    assert_never(latest)
+    event = current_ready_event(events, human_only=True)
+    return (
+        PromotionApproval(scope, head, event, event.identifier)
+        if event is not None
+        else None
+    )
 
 
 @dataclass(frozen=True, slots=True)
