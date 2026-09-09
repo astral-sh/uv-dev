@@ -32,14 +32,14 @@ jobs:
             runner: nscloud-ubuntu-24.04-arm64-8x32
             pgo: true
             maturin_docker_options: -e JEMALLOC_SYS_WITH_LG_PAGE=16
-            manylinux: 228
+            manylinux: "2_28"
             provider: Namespace
           - target: aarch64-unknown-linux-gnu
             arch: aarch64
             runner: depot-ubuntu-24.04-arm-8
             pgo: true
             maturin_docker_options: -e JEMALLOC_SYS_WITH_LG_PAGE=16
-            manylinux: 228
+            manylinux: "2_28"
             provider: Depot
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
