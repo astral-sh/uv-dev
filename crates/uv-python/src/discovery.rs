@@ -257,7 +257,7 @@ impl VariantRequest {
     }
 
     /// Return the suffix for display purposes, e.g., `+freethreaded+pgo+lto`.
-    pub(crate) fn display_suffix(&self) -> String {
+    fn display_suffix(&self) -> String {
         let mut suffix = self.python.display_suffix().to_string();
         if let Some(build) = &self.build {
             suffix.push('+');
