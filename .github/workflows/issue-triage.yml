@@ -34,7 +34,7 @@ jobs:
           ref: ${{ github.workflow_sha }}
           persist-credentials: false
 
-      - name: "Set up automation runtime"
+      - name: "Set up trusted Python automations"
         id: automations
         uses: ./.github/actions/setup-automations
 

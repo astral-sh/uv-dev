@@ -8,6 +8,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from uv_automations.cli import main as automation_main
 from uv_automations.github import ISSUE_FIELDS, GitHub, decode_issue
 from uv_automations.issues_cli import PrepareIssue, add_commands, main, parse_command
 from uv_automations.models import Issue, IssueAuthor, IssueRef, RepositoryName
@@ -260,6 +261,37 @@ class IssuePreparationTests(unittest.TestCase):
 
 
 class IssueCliTests(unittest.TestCase):
+    def test_main_cli_delegates_issue_command(self) -> None:
+        with (
+            patch("uv_automations.cli.logging.basicConfig"),
+            patch("uv_automations.cli.issues_cli.run") as run,
+        ):
+            automation_main(
+                [
+                    "issues",
+                    "prepare",
+                    "--repo",
+                    "astral-sh/uv",
+                    "--issue",
+                    REFERENCE.url,
+                    "--path",
+                    "issue.json",
+                    "--workspace",
+                    "workspace",
+                    "--runner-temp",
+                    "runner-temp",
+                ]
+            )
+        run.assert_called_once_with(
+            PrepareIssue(
+                reference=REFERENCE,
+                path=Path("issue.json"),
+                workspace=Path("workspace"),
+                runner_temp=Path("runner-temp"),
+                github_output=None,
+            )
+        )
+
     def test_parse_prepare_issue(self) -> None:
         parser = argparse.ArgumentParser()
         add_commands(parser)
