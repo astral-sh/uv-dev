@@ -58,7 +58,13 @@ jobs:
           echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS" >> "$GITHUB_ENV"
           echo "GNOME_KEYRING_CONTROL=$GNOME_KEYRING_CONTROL" >> "$GITHUB_ENV"
           printf '%s' foobar | XDG_DATA_HOME="$keyring_root/data" gnome-keyring-daemon --control-directory="$GNOME_KEYRING_CONTROL" --components=secrets --daemonize --unlock
-          locked="$(gdbus call --session --dest org.freedesktop.secrets --object-path /org/freedesktop/secrets/aliases/default --method org.freedesktop.DBus.Properties.Get org.freedesktop.Secret.Collection Locked)"
+          for attempt in {1..50}; do
+            if locked="$(gdbus call --session --dest org.freedesktop.secrets --object-path /org/freedesktop/secrets/aliases/default --method org.freedesktop.DBus.Properties.Get org.freedesktop.Secret.Collection Locked 2>&1)" && test "$locked" = '(<false>,)'; then
+              break
+            fi
+            sleep 0.2
+          done
+          printf '%s\n' "$locked"
           test "$locked" = '(<false>,)'
       - name: Create btrfs filesystem
         run: |
@@ -175,7 +181,13 @@ jobs:
           echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS" >> "$GITHUB_ENV"
           echo "GNOME_KEYRING_CONTROL=$GNOME_KEYRING_CONTROL" >> "$GITHUB_ENV"
           printf '%s' foobar | XDG_DATA_HOME="$keyring_root/data" gnome-keyring-daemon --control-directory="$GNOME_KEYRING_CONTROL" --components=secrets --daemonize --unlock
-          locked="$(gdbus call --session --dest org.freedesktop.secrets --object-path /org/freedesktop/secrets/aliases/default --method org.freedesktop.DBus.Properties.Get org.freedesktop.Secret.Collection Locked)"
+          for attempt in {1..50}; do
+            if locked="$(gdbus call --session --dest org.freedesktop.secrets --object-path /org/freedesktop/secrets/aliases/default --method org.freedesktop.DBus.Properties.Get org.freedesktop.Secret.Collection Locked 2>&1)" && test "$locked" = '(<false>,)'; then
+              break
+            fi
+            sleep 0.2
+          done
+          printf '%s\n' "$locked"
           test "$locked" = '(<false>,)'
       - name: Create btrfs filesystem
         run: |
