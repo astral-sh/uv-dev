@@ -27,10 +27,6 @@ jobs:
       matrix:
         replica:
           - 1
-          - 2
-          - 3
-          - 4
-          - 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -49,7 +45,7 @@ jobs:
           enable-cache: true
           cache-python: true
           cache-dependency-glob: .python-versions
-          cache-suffix: uv-ci-python-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.replica }}
+          cache-suffix: uv-ci-python-${{ github.run_id }}
           save-cache: true
           restore-cache: false
         id: setup-uv
@@ -104,7 +100,7 @@ jobs:
           enable-cache: ${{ matrix.variant == 'cached' }}
           cache-python: true
           cache-dependency-glob: .python-versions
-          cache-suffix: uv-ci-python-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.replica }}
+          cache-suffix: uv-ci-python-${{ github.run_id }}
           save-cache: false
         id: setup-uv
       - name: Require the expected interpreter cache
