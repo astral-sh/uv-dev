@@ -45,10 +45,7 @@ impl RequirementSatisfaction {
         extra_build_requires: &ExtraBuildRequires,
         extra_build_variables: &ExtraBuildVariables,
     ) -> Self {
-        trace!(
-            "Comparing installed with source: {:?} {:?}",
-            distribution, source
-        );
+        trace!(%distribution, %source, "Comparing installed distribution with source");
 
         // If the distribution was built with other settings, it is out of date.
         if distribution.build_info().is_some_and(|dist_build_info| {
