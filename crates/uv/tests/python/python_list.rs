@@ -2,7 +2,6 @@
 use std::os::unix::fs::PermissionsExt;
 
 use uv_platform::{Arch, Os};
-use uv_python_managed::platform_key_from_env;
 use uv_static::EnvVars;
 
 use anyhow::Result;
@@ -13,6 +12,8 @@ use wiremock::{
     Mock, MockServer, ResponseTemplate,
     matchers::{method, path},
 };
+
+use super::platform_key_from_env;
 
 #[test]
 fn python_list_default_arch() {
