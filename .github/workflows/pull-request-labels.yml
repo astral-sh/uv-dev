@@ -34,11 +34,28 @@ jobs:
       pull-requests: read
     outputs:
       result: ${{ steps.labels.outputs.final-message }}
+      head-sha: ${{ steps.prepare.outputs.head-sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
           persist-credentials: false
+
+      - name: "Checkout automation implementation"
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: automation
+          sparse-checkout: scripts/automations
+          persist-credentials: false
+
+      - name: "Install uv"
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.10"
+          checksum: "173d95a0c32d18c896c46ba6fafbf3cf9c14ab74b033f81b76c883ef492a976b"
+          python-version: "3.14"
+          enable-cache: false
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -47,27 +64,24 @@ jobs:
           persist-credentials: false
 
       - name: "Collect pull request context"
-        working-directory: pull-request
+        id: prepare
         run: |
-          # Remove potential PR-controlled paths for label configuration.
-          rm -f .pull-request-labels-event.json .pull-request-labels.json
-          gh pr view "$PULL_REQUEST_NUMBER" \
+          uv run --project automation/scripts/automations --locked --no-dev \
+            uv-automations labels prepare \
             --repo "$GITHUB_REPOSITORY" \
-            --json number,title,body,author,baseRefName,headRefName,isDraft,labels,files,additions,deletions,changedFiles \
-            > .pull-request-labels-event.json
-          gh label list \
-            --repo "$GITHUB_REPOSITORY" \
-            --limit 1000 \
-            --json name,description \
-            | jq --slurpfile allowed "$GITHUB_WORKSPACE/.github/allowed-pull-request-labels.json" \
-              '[.[] | select(.name as $label | $allowed[0] | index($label))]' \
-            > .pull-request-labels.json
+            --pull-request "$PULL_REQUEST_NUMBER" \
+            --checkout "$GITHUB_WORKSPACE/pull-request" \
+            --allowed .github/allowed-pull-request-labels.json \
+            --expected-head "$EXPECTED_HEAD_SHA" \
+            --github-output "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PULL_REQUEST_NUMBER: ${{ inputs.pull_request }}
+          EXPECTED_HEAD_SHA: ${{ inputs.head_sha }}
 
       - name: "Determine pull request labels"
         id: labels
+        if: steps.prepare.outputs.ready == 'true'
         uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56 # v1.11
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -82,16 +96,14 @@ jobs:
           prompt-file: "${{ github.workspace }}/agents/prompts/pull-request-labels.md"
           output-schema-file: "${{ github.workspace }}/agents/schemas/pull-request-labels.json"
 
-  report:
-    needs: labels
-    if: needs.labels.outputs.result != ''
-    runs-on: ubuntu-latest
-    permissions: {}
-    steps:
       - name: "Write label recommendations"
-        run: printf '%s\n' "$LABEL_RESULT" >> "$GITHUB_STEP_SUMMARY"
+        if: steps.labels.outputs.final-message != ''
+        run: |
+          uv run --project automation/scripts/automations --locked --no-dev \
+            uv-automations labels report \
+            --summary "$GITHUB_STEP_SUMMARY" <<< "$LABEL_RESULT"
         env:
-          LABEL_RESULT: ${{ needs.labels.outputs.result }}
+          LABEL_RESULT: ${{ steps.labels.outputs.final-message }}
 
   validate:
     needs: labels
@@ -99,13 +111,23 @@ jobs:
       github.repository == 'astral-sh/uv-dev' &&
       needs.labels.outputs.result != ''
     runs-on: ubuntu-latest
-    permissions: {}
+    permissions:
+      contents: read
     outputs:
       labels: ${{ steps.validate.outputs.labels }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+
+      - name: "Checkout label policy"
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          path: label-policy
+          sparse-checkout: .github/allowed-pull-request-labels.json
+          sparse-checkout-cone-mode: false
           persist-credentials: false
 
       - name: "Install uv"
@@ -121,13 +143,13 @@ jobs:
         run: |
           uv run --project scripts/automations --locked --no-dev \
             uv-automations labels validate \
-            --allowed .github/allowed-pull-request-labels.json \
+            --allowed label-policy/.github/allowed-pull-request-labels.json \
             --github-output "$GITHUB_OUTPUT" <<< "$LABEL_RESULT"
         env:
           LABEL_RESULT: ${{ needs.labels.outputs.result }}
 
   apply:
-    needs: validate
+    needs: [labels, validate]
     if: >-
       needs.validate.outputs.labels != '' &&
       fromJSON(needs.validate.outputs.labels)[0] != null
@@ -135,8 +157,31 @@ jobs:
     environment: automations
     timeout-minutes: 5
     permissions:
+      contents: read
       id-token: write # for the repository label credential broker
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+
+      - name: "Checkout label policy"
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          path: label-policy
+          sparse-checkout: .github/allowed-pull-request-labels.json
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: "Install uv"
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.10"
+          checksum: "173d95a0c32d18c896c46ba6fafbf3cf9c14ab74b033f81b76c883ef492a976b"
+          python-version: "3.14"
+          enable-cache: false
+
       - name: "Get repository label token"
         id: token
         uses: open-security-tools/ost-simple-sts@9e012247e07c39080fb6a832dbfbcfeacebc19c4
@@ -149,14 +194,15 @@ jobs:
 
       - name: "Apply recommended labels"
         run: |
-          # POST adds labels without removing any labels already on the pull request.
-          jq --null-input --argjson labels "$LABELS" '{labels: $labels}' \
-            | gh api \
-                --method POST \
-                "repos/$GITHUB_REPOSITORY/issues/$PULL_REQUEST_NUMBER/labels" \
-                --input - \
-                --silent
+          uv run --project scripts/automations --locked --no-dev \
+            uv-automations labels apply \
+            --repo "$GITHUB_REPOSITORY" \
+            --pull-request "$PULL_REQUEST_NUMBER" \
+            --allowed label-policy/.github/allowed-pull-request-labels.json \
+            --expected-head "$EXPECTED_HEAD_SHA" \
+            --summary "$GITHUB_STEP_SUMMARY" <<< "$LABELS"
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
           LABELS: ${{ needs.validate.outputs.labels }}
           PULL_REQUEST_NUMBER: ${{ inputs.pull_request }}
+          EXPECTED_HEAD_SHA: ${{ needs.labels.outputs.head-sha }}
