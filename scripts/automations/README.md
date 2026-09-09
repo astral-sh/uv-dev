@@ -44,7 +44,8 @@ reusable workflow until its artifact and Git operations are migrated.
   environment; the library does not acquire or persist tokens. A publisher can use
   `GitHub(token_variable="GH_READ_TOKEN")` for provenance and freshness reads while `GH_TOKEN`
   remains a separate, narrowly scoped writer credential.
-- `git` provides the Git operations used by those workflows.
+- `git` provides operations on repositories with trusted Git metadata.
+- `checkouts` creates an isolated view of a candidate whose Git metadata was writable by an agent.
 - `artifacts` persists and imports exact commit ranges without checking out received code.
 - `actions` adapts typed results to Actions' file-based interfaces.
 - `workflows` contains workflow-specific decisions. Functions accept explicit inputs and narrow
@@ -80,10 +81,33 @@ Python selection alone; only this runtime is pinned to Python 3.14. The bootstra
 pinned `uv` on `PATH`. Workflows that use `uv` as the product under test or as their project tool
 install their intended version separately afterward. Agent steps receive a separate writable
 temporary directory, with their caches and editable context inside it; the installed runtime stays
-outside that directory.
+outside that directory. These profiles do not grant writes to all of `/tmp`, which can also contain
+the runner's trusted temporary state.
 
-The shared Git adapter disables hooks, grafts, replacement objects, and inherited
-repository-selection state. Commit transport has a small, concrete API:
+The shared Git adapter disables filesystem monitors, traditional hooks, grafts, replacement objects,
+and inherited repository-selection state. These settings do not make arbitrary repository-local
+configuration safe. If an agent can write `.git`, inspect it through a private transport clone
+before running Git operations outside the agent's sandbox:
+
+```python
+from uv_automations.artifacts import CommitRange, persist_commit
+from uv_automations.checkouts import inspect_candidate
+
+with inspect_candidate(source, base=base_sha, scratch=trusted_scratch) as candidate:
+    candidate.require_clean()
+    commits = CommitRange(base_sha, candidate.head)
+    bundle = persist_commit(candidate.repository, commits, destination)
+```
+
+The source index is checked separately from a fresh worktree-check index, so staged leftovers and
+index flags cannot hide changes. Attribute lookup uses the trusted base. The first implementation
+requires Git 2.50.1 or newer, native no-follow directory descriptors, and a regular Actions
+checkout. It rejects submodules and does not rediscover linked-worktree metadata after the agent has
+run. The scratch directory must be outside the agent-writable checkout and temporary directories.
+Git reads can select a separate credential with `repository.with_token("GH_READ_TOKEN")`; the
+original repository object retains the writer's environment.
+
+Commit transport has a small, concrete API:
 
 ```python
 from pathlib import Path
@@ -112,6 +136,18 @@ acquiring write credentials.
 
 Migrate complete deterministic workflow stages rather than extracting isolated `jq` expressions.
 Keep the existing wire formats and job-level credential boundaries during each migration.
+
+The outstanding automation drafts provide useful tests of that boundary:
+
+| Proposal                                                   | Shared mechanism                                                                | Policy that remains with the consumer                                                       |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| [uv-dev#766](https://github.com/astral-sh/uv-dev/pull/766) | Exact commit ranges, bundle verification, and immutable artifact IDs            | Allowed paths, authorship, parent selection, and permission to publish                      |
+| [uv-dev#546](https://github.com/astral-sh/uv-dev/pull/546) | Typed issue reads and safe context-file creation                                | Which issue to collect and how a workflow uses its context                                  |
+| [uv-dev#942](https://github.com/astral-sh/uv-dev/pull/942) | Candidate inspection, explicit empty/nonempty outcomes, and leased pushes       | Independently proving that the original changes are already in the base before closing a PR |
+| [uv-dev#305](https://github.com/astral-sh/uv-dev/pull/305) | Bounded feedback collection, typed results, and verified run/session provenance | Eligible feedback, checkpoint advancement, commit accounting, and reply/resolve decisions   |
+
+Promotion and parent-update work can consume the same identities, commit artifacts, and publication
+preconditions without putting queue policy, approval policy, or recovery decisions in the Git layer.
 
 | Existing workflows                                                                     | Python responsibility                                                                                                |
 | -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
