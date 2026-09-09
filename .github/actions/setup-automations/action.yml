@@ -12,10 +12,26 @@ outputs:
 runs:
   using: "composite"
   steps:
+    - name: "Select uv checksum"
+      id: uv
+      shell: bash
+      run: |
+        case "$RUNNER_OS-$RUNNER_ARCH" in
+          Linux-X64) checksum=173d95a0c32d18c896c46ba6fafbf3cf9c14ab74b033f81b76c883ef492a976b ;;
+          Linux-ARM64) checksum=9ff6b9d4665edcdd3a88dcc73cd1eb641754deb927f14e8c62ebfde6bf4f5f5e ;;
+          macOS-X64) checksum=5296d5aa2b9143360405eea866f8ef4d5dc8986b164eb0dc35e8f876a9304d30 ;;
+          macOS-ARM64) checksum=51c6170e8e3a01cef9f33b94f582b7b81ac65046f55d40afb35f9cff5a68c179 ;;
+          Windows-X64) checksum=f65744f94072152b1f86ba2aace4d01f1124d9a8ecb235805039e3718c36cac2 ;;
+          Windows-ARM64) checksum=ee985c51c0c9c1f82267a5d80f959b34a7ff888c109182bd3b2b35c4661bbcde ;;
+          *) echo "Unsupported automation runner: $RUNNER_OS-$RUNNER_ARCH" >&2; exit 1 ;;
+        esac
+        printf 'checksum=%s\n' "$checksum" >> "$GITHUB_OUTPUT"
+
     - name: "Install uv"
       uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
       with:
         version: "0.12.10"
+        checksum: ${{ steps.uv.outputs.checksum }}
         enable-cache: false
 
     - name: "Install trusted automation runtime"
