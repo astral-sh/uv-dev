@@ -3400,6 +3400,7 @@ impl StaticMetadata {
                     uv_pypi_types::MetadataError::Pep508Error(_)
                     | uv_pypi_types::MetadataError::DynamicField(_)
                     | uv_pypi_types::MetadataError::FieldNotFound(_)
+                    | uv_pypi_types::MetadataError::UnknownName
                     | uv_pypi_types::MetadataError::UnsupportedMetadataVersion(_),
                 )),
             ) => {
