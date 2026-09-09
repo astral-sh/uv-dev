@@ -1,11 +1,14 @@
 import argparse
+import errno
 import io
 import json
+import os
 import subprocess
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import override
 from unittest.mock import patch
 
 from uv_automations.cli import main as automation_main
@@ -18,6 +21,11 @@ REPOSITORY = RepositoryName("astral-sh/uv")
 REFERENCE = IssueRef(REPOSITORY, 123)
 AUTHOR = IssueAuthor("MDQ6VXNlcjE=", False, "contributor", "Contributor")
 ISSUE = Issue(REFERENCE, "An issue\ntitle", "The issue body", AUTHOR)
+HAS_SECURE_DIRECTORY_DESCRIPTORS = (
+    os.open in os.supports_dir_fd
+    and bool(getattr(os, "O_DIRECTORY", 0))
+    and bool(getattr(os, "O_NOFOLLOW", 0))
+)
 
 
 class IssueReader:
@@ -138,6 +146,10 @@ class IssueGitHubTests(unittest.TestCase):
             )
 
 
+@unittest.skipUnless(
+    HAS_SECURE_DIRECTORY_DESCRIPTORS,
+    "requires no-follow directory descriptors",
+)
 class IssuePreparationTests(unittest.TestCase):
     def test_prepare_relative_workspace_destination(self) -> None:
         with TemporaryDirectory() as directory:
@@ -184,15 +196,12 @@ class IssuePreparationTests(unittest.TestCase):
             root = Path(directory)
             workspace = root / "workspace"
             runner_temp = root / "runner-temp"
-            outside = root / "outside"
             workspace.mkdir()
             runner_temp.mkdir()
-            outside.mkdir()
-            (workspace / "outside-link").symlink_to(outside, target_is_directory=True)
             destinations = [
                 root / "issue.json",
                 Path("../issue.json"),
-                Path("outside-link/issue.json"),
+                Path("parent/../issue.json"),
                 Path("issue\nother.json"),
                 workspace,
             ]
@@ -210,7 +219,112 @@ class IssuePreparationTests(unittest.TestCase):
                         runner_temp=runner_temp,
                     )
             self.assertEqual(reader.references, [])
+
+    def test_reject_symbolic_link_parents(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            workspace = root / "workspace"
+            runner_temp = root / "runner-temp"
+            outside = root / "outside"
+            workspace.mkdir()
+            runner_temp.mkdir()
+            outside.mkdir()
+            (workspace / "parent").mkdir()
+            (workspace / "safe-target").mkdir()
+            (outside / "nested").mkdir()
+            (workspace / "outside-link").symlink_to(outside, target_is_directory=True)
+            (workspace / "parent" / "outside-link").symlink_to(
+                outside, target_is_directory=True
+            )
+            (workspace / "parent" / "inside-link").symlink_to(
+                workspace / "safe-target", target_is_directory=True
+            )
+            destinations = [
+                Path("outside-link/issue.json"),
+                Path("parent/outside-link/nested/issue.json"),
+                Path("parent/inside-link/issue.json"),
+            ]
+            reader = IssueReader()
+            for destination in destinations:
+                with (
+                    self.subTest(destination=destination),
+                    self.assertRaisesRegex(ValueError, "symbolic-link parents"),
+                ):
+                    prepare_issue(
+                        reader,
+                        REFERENCE,
+                        destination,
+                        workspace=workspace,
+                        runner_temp=runner_temp,
+                    )
+            self.assertEqual(reader.references, [REFERENCE] * len(destinations))
+            self.assertEqual(list((outside / "nested").iterdir()), [])
+            self.assertFalse((outside / "issue.json").exists())
+            self.assertEqual(list((workspace / "safe-target").iterdir()), [])
+
+    def test_parent_swap_during_github_read_is_not_followed(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            workspace = root / "workspace"
+            runner_temp = root / "runner-temp"
+            outside = root / "outside"
+            workspace.mkdir()
+            runner_temp.mkdir()
+            outside.mkdir()
+            parent = workspace / "parent"
+            moved_parent = workspace / "moved-parent"
+            parent.mkdir()
+
+            class ParentSwappingIssueReader(IssueReader):
+                @override
+                def get_issue(self, reference: IssueRef) -> Issue:
+                    parent.rename(moved_parent)
+                    parent.symlink_to(outside, target_is_directory=True)
+                    return super().get_issue(reference)
+
+            reader = ParentSwappingIssueReader()
+            with self.assertRaisesRegex(ValueError, "symbolic-link parents"):
+                prepare_issue(
+                    reader,
+                    REFERENCE,
+                    Path("parent/issue.json"),
+                    workspace=workspace,
+                    runner_temp=runner_temp,
+                )
+            self.assertEqual(reader.references, [REFERENCE])
+            self.assertTrue(parent.is_symlink())
+            self.assertEqual(list(moved_parent.iterdir()), [])
             self.assertEqual(list(outside.iterdir()), [])
+
+    def test_trusted_root_alias_is_resolved(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            workspace = root / "workspace"
+            alias = root / "workspace-alias"
+            workspace.mkdir()
+            (workspace / "nested").mkdir()
+            alias.symlink_to(workspace, target_is_directory=True)
+            destinations = [
+                Path("nested/relative.json"),
+                alias / "nested" / "absolute.json",
+                workspace / "nested" / "canonical.json",
+            ]
+            for destination in destinations:
+                with self.subTest(destination=destination):
+                    prepared = prepare_issue(
+                        IssueReader(),
+                        REFERENCE,
+                        destination,
+                        workspace=alias,
+                        runner_temp=root,
+                    )
+                    self.assertEqual(
+                        prepared.path,
+                        workspace.resolve() / "nested" / destination.name,
+                    )
+                    self.assertEqual(
+                        json.loads(prepared.path.read_text()), ISSUE.to_payload()
+                    )
 
     def test_existing_destination_is_not_replaced(self) -> None:
         with TemporaryDirectory() as directory:
@@ -257,6 +371,50 @@ class IssuePreparationTests(unittest.TestCase):
                     workspace=root,
                     runner_temp=root,
                 )
+            self.assertFalse(destination.exists())
+
+
+class IssueCreationSupportTests(unittest.TestCase):
+    def test_fail_closed_without_directory_descriptor_support(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            destination = root / "issue.json"
+            reader = IssueReader()
+            with (
+                patch("uv_automations.workflows.issues.os.supports_dir_fd", set()),
+                self.assertRaises(OSError) as error,
+            ):
+                prepare_issue(
+                    reader,
+                    REFERENCE,
+                    destination,
+                    workspace=root,
+                    runner_temp=root,
+                )
+            self.assertEqual(error.exception.errno, errno.ENOTSUP)
+            self.assertEqual(reader.references, [])
+            self.assertFalse(destination.exists())
+
+    def test_fail_closed_without_required_flags(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            destination = root / "issue.json"
+            reader = IssueReader()
+            for flag in ["O_DIRECTORY", "O_NOFOLLOW"]:
+                with (
+                    self.subTest(flag=flag),
+                    patch(f"uv_automations.workflows.issues.os.{flag}", 0, create=True),
+                    self.assertRaises(OSError) as error,
+                ):
+                    prepare_issue(
+                        reader,
+                        REFERENCE,
+                        destination,
+                        workspace=root,
+                        runner_temp=root,
+                    )
+                self.assertEqual(error.exception.errno, errno.ENOTSUP)
+            self.assertEqual(reader.references, [])
             self.assertFalse(destination.exists())
 
 
@@ -322,6 +480,10 @@ class IssueCliTests(unittest.TestCase):
             ),
         )
 
+    @unittest.skipUnless(
+        HAS_SECURE_DIRECTORY_DESCRIPTORS,
+        "requires no-follow directory descriptors",
+    )
     def test_prepare_issue_actions_outputs(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)

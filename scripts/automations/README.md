@@ -94,10 +94,12 @@ prepared = prepare_issue(
 )
 ```
 
-The destination must be inside the workspace or runner temporary directory. Preparation creates it
-exclusively, without following an existing leaf symlink or overwriting another file. The CLI exposes
-`issue-number`, `issue-json`, and `path` Actions outputs; persisted investigation loading and
-publication remain separate workflow stages.
+The destination must be inside the workspace or runner temporary directory. Preparation opens each
+parent relative to a trusted directory descriptor and creates the file exclusively, without
+following parent or leaf symlinks or overwriting another file. This stage requires native
+descriptor-relative opens and no-follow directory flags; unsupported platforms fail closed. The CLI
+exposes `issue-number`, `issue-json`, and `path` Actions outputs; persisted investigation loading
+and publication remain separate workflow stages.
 
 ## Trusted runtime and commit artifacts
 
