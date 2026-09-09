@@ -108,7 +108,7 @@ worktree capture; transported commits come only from the protected object snapsh
 
 The first implementation requires Git 2.50.1 or newer, native no-follow directory descriptors, and a
 full SHA-1 Actions checkout with ordinary files-based refs. It rejects submodules, linked worktrees,
-reftable, shallow or promisor repositories, alternate object stores, and symlinked or hardlinked
+reftable, shallow repositories, promisor packs, alternate object stores, and symlinked or hardlinked
 source metadata. Copies are limited to 100,000 source files and 2 GiB, and incomplete or corrupt
 object stores fail closed. The scratch directory must be outside the agent-writable checkout and
 temporary directories. Git reads can select a separate credential with
