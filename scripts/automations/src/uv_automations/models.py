@@ -3,7 +3,7 @@
 import re
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import assert_never, override
+from typing import Self, assert_never, override
 
 from uv_automations.json import as_positive_integer
 
@@ -49,6 +49,59 @@ class RepositoryIdentity:
 
     def __post_init__(self) -> None:
         as_positive_integer(self.database_id)
+
+
+@dataclass(frozen=True, slots=True)
+class IssueRef:
+    repository: RepositoryName
+    number: int
+
+    def __post_init__(self) -> None:
+        as_positive_integer(self.number)
+
+    @property
+    def url(self) -> str:
+        return f"https://github.com/{self.repository}/issues/{self.number}"
+
+    @classmethod
+    def from_input(cls, repository: RepositoryName, value: str) -> Self:
+        number = value.removeprefix(f"https://github.com/{repository}/issues/")
+        if re.fullmatch(r"[1-9][0-9]*", number) is None:
+            raise ValueError(f"Expected an issue number or URL in {repository}")
+        return cls(repository, int(number))
+
+
+@dataclass(frozen=True, slots=True)
+class IssueAuthor:
+    node_id: str
+    is_bot: bool
+    login: str
+    name: str | None
+
+    def to_payload(self) -> dict[str, object]:
+        return {
+            "id": self.node_id,
+            "is_bot": self.is_bot,
+            "login": self.login,
+            "name": self.name,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class Issue:
+    reference: IssueRef
+    title: str
+    body: str
+    author: IssueAuthor | None
+
+    def to_payload(self) -> dict[str, object]:
+        return {
+            "number": self.reference.number,
+            "title": self.title,
+            "body": self.body,
+            "author": self.author.to_payload() if self.author is not None else None,
+            "url": self.reference.url,
+        }
 
 
 @dataclass(frozen=True, slots=True)
