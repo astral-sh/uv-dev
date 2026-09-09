@@ -452,6 +452,19 @@ pub(crate) async fn sync(
             )?;
             return Err(UvError::from(operations::Error::OutdatedEnvironment(changelog)).into());
         }
+        Err(ProjectError::Lock(err)) => {
+            if frozen.is_some()
+                && let Some(name) = err.multiple_root_package()
+                && package.contains(name)
+                && !outcome.lock().members().contains(name)
+                && outcome.lock().root().is_none_or(|root| root.name() != name)
+            {
+                let context = format!("Package `{name}` not found in workspace");
+                let error = anyhow::Error::new(ProjectError::Lock(err)).context(context);
+                return Err(UvError::unexpected(error).into());
+            }
+            return Err(UvError::from(ProjectError::Lock(err)).into());
+        }
         Err(err) => return Err(UvError::from(err).into()),
     };
 
