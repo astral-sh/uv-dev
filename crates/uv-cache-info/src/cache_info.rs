@@ -6,6 +6,7 @@ use serde::Deserialize;
 use tracing::{debug, info_span, warn};
 
 use uv_fs::{Simplified, created_time};
+use uv_normalize::PackageName;
 
 use crate::git_info::{Commit, Tags};
 use crate::glob::cluster_globs;
@@ -42,6 +43,23 @@ pub struct CacheInfo {
 }
 
 impl CacheInfo {
+    /// Read the packages whose builds this project depends on.
+    pub fn dependencies_from_directory(directory: &Path) -> Vec<CacheDependency> {
+        let pyproject_path = directory.join("pyproject.toml");
+        let Ok(contents) = fs_err::read_to_string(&pyproject_path) else {
+            return Vec::new();
+        };
+        let result =
+            info_span!("toml::from_str cache dependencies", path = %pyproject_path.display())
+                .in_scope(|| toml::from_str::<PyProjectToml>(&contents));
+        result
+            .ok()
+            .and_then(|pyproject_toml| pyproject_toml.tool)
+            .and_then(|tool| tool.uv)
+            .and_then(|tool_uv| tool_uv.cache_depends)
+            .unwrap_or_default()
+    }
+
     /// Return the [`CacheInfo`] for a given timestamp.
     pub fn from_timestamp(timestamp: Timestamp) -> Self {
         Self {
@@ -335,6 +353,15 @@ struct Tool {
 #[serde(rename_all = "kebab-case")]
 struct ToolUv {
     cache_keys: Option<Vec<CacheKey>>,
+    cache_depends: Option<Vec<CacheDependency>>,
+}
+
+/// A package whose build should invalidate and precede the current project's build.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct CacheDependency {
+    pub package: PackageName,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -382,6 +409,25 @@ mod tests_unix {
     use anyhow::Result;
 
     use super::{CacheInfo, Timestamp};
+
+    #[test]
+    fn test_cache_dependencies() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        fs_err::write(
+            dir.path().join("pyproject.toml"),
+            r#"
+            [tool.uv]
+            cache-depends = [{ package = "foo" }, { package = "bar" }]
+            "#,
+        )?;
+
+        let dependencies = CacheInfo::dependencies_from_directory(dir.path());
+        assert_eq!(dependencies.len(), 2);
+        assert_eq!(dependencies[0].package.as_ref(), "foo");
+        assert_eq!(dependencies[1].package.as_ref(), "bar");
+
+        Ok(())
+    }
 
     #[test]
     fn test_cache_info_symlink_resolve() -> Result<()> {

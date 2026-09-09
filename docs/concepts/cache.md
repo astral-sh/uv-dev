@@ -123,6 +123,22 @@ reinstall-package = ["my-package"]
 This will force uv to rebuild and reinstall `my-package` on every run, regardless of whether the
 package's `pyproject.toml`, `setup.py`, or `setup.cfg` file has changed.
 
+## Build dependencies
+
+If a project links against build output from another package, it may need to be rebuilt whenever
+that package is rebuilt. Use [`tool.uv.cache-depends`](../reference/settings.md#cache-depends) to
+declare this relationship:
+
+```toml title="pyproject.toml"
+[tool.uv]
+cache-depends = [{ package = "foo" }]
+```
+
+If `foo` is selected for rebuilding in the same operation, uv will also rebuild the current project
+after the build for `foo` completes. This setting does not incorporate `foo`'s cache keys into the
+current project's cache key, and it does not add `foo` to the project's dependencies or build
+environment.
+
 ## Cache safety
 
 It's safe to run multiple uv commands concurrently, even against the same virtual environment. uv's

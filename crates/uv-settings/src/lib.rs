@@ -300,6 +300,7 @@ fn validate_uv_toml(path: &Path, options: &Options) -> Result<(), Error> {
         audit: _,
         pip: _,
         cache_keys: _,
+        cache_depends: _,
         override_dependencies: _,
         exclude_dependencies: _,
         constraint_dependencies: _,
@@ -450,6 +451,7 @@ fn warn_uv_toml_masked_fields(options: &Options) {
         audit: _,
         pip,
         cache_keys,
+        cache_depends,
         override_dependencies,
         exclude_dependencies,
         constraint_dependencies,
@@ -641,6 +643,9 @@ fn warn_uv_toml_masked_fields(options: &Options) {
     }
     if cache_keys.is_some() {
         masked_fields.push("cache_keys");
+    }
+    if cache_depends.is_some() {
+        masked_fields.push("cache-depends");
     }
     if override_dependencies.is_some() {
         masked_fields.push("override-dependencies");
