@@ -62,6 +62,7 @@ jobs:
       issues: read
     outputs:
       bundle-artifact-id: ${{ steps.upload-fix.outputs.artifact-id }}
+      commit-sha: ${{ steps.persist-fix.outputs.head-sha }}
       context-artifact-id: ${{ steps.upload-context.outputs.artifact-id }}
       context-sha: ${{ steps.issue-context.outputs.head-sha }}
       created: ${{ steps.commit-fix.outputs.created }}
@@ -73,15 +74,28 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.workflow_sha }}
           fetch-depth: 0
           persist-credentials: false
+
+      - name: "Set up trusted Python automations"
+        id: automations
+        uses: ./.github/actions/setup-automations
+
+      - name: "Install uv for bug fixing"
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          enable-cache: false
+
+      - name: "Prepare bug-fix temporary directory"
+        run: mkdir -p "$RUNNER_TEMP/fix-bug"
 
       - name: "Load issue context"
         id: issue-context
         uses: ./.github/actions/load-issue-context
         with:
           issue-number: ${{ inputs.issue-number }}
-          path: ${{ runner.temp }}/issue-context
+          path: ${{ runner.temp }}/fix-bug/issue-context
 
       - name: "Load reproduction Codex thread"
         id: reproduction-thread
@@ -92,11 +106,6 @@ jobs:
           artifact-id: ${{ inputs.reproduction-thread-artifact-id }}
           github-token: ${{ github.token }}
           path: ${{ runner.temp }}/codex-home/sessions
-
-      - name: "Install uv"
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
-        with:
-          enable-cache: false
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
@@ -262,7 +271,7 @@ jobs:
             git -c core.hooksPath=/dev/null fetch --no-tags \
               https://github.com/astral-sh/uv-dev.git "refs/heads/$fix_branch"
             if [ "$(git rev-parse 'FETCH_HEAD^{commit}')" != "$fix_head" ] ||
-              [ "$(git rev-parse "$fix_head^")" != "$PARENT_HEAD_SHA" ] ||
+              [ "$(git rev-list --parents -n 1 "$fix_head")" != "$fix_head $PARENT_HEAD_SHA" ] ||
               [ "$(git show --no-patch --format=%s "$fix_head")" != "Fix reproduced bug" ] ||
               [ "$(git show --no-patch --format=%ae "$fix_head")" != \
                 "305554984+astral-automations-bot[bot]@users.noreply.github.com" ]; then
@@ -292,11 +301,11 @@ jobs:
         if: steps.prepare.outputs.existing != 'true'
         uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56 # v1.11
         env:
-          CARGO_HOME: ${{ runner.temp }}/cargo-home
+          CARGO_HOME: ${{ runner.temp }}/fix-bug/cargo-home
           GH_TOKEN: ${{ github.token }}
           INSTA_UPDATE: "no"
-          TMPDIR: ${{ runner.temp }}
-          UV_CACHE_DIR: ${{ runner.temp }}/uv-fix-bug-cache
+          TMPDIR: ${{ runner.temp }}/fix-bug
+          UV_CACHE_DIR: ${{ runner.temp }}/fix-bug/uv-cache
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           codex-version: "0.147.0"
@@ -411,9 +420,8 @@ jobs:
             created=true
           fi
 
-          git -c core.hooksPath=/dev/null bundle create \
-            "$RUNNER_TEMP/fixed-bug.bundle" "$PARENT_HEAD_SHA..HEAD"
           {
+            echo "head-sha=$(git rev-parse HEAD)"
             echo "created=$created"
             echo "publish=true"
             jq --raw-output '"pull-request-title=\(.pull_request_title)"' \
@@ -432,9 +440,24 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: issue-fix-context-${{ inputs.issue-number }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/issue-context/README.md
+          path: ${{ runner.temp }}/fix-bug/issue-context/README.md
           if-no-files-found: error
           retention-days: 1
+
+      - name: "Persist verified bug-fix commit"
+        id: persist-fix
+        if: steps.commit-fix.outputs.publish == 'true'
+        env:
+          AUTOMATIONS_PYTHON: ${{ steps.automations.outputs.python }}
+          BASE_SHA: ${{ steps.prepare.outputs.parent-head-sha }}
+          HEAD_SHA: ${{ steps.commit-fix.outputs.head-sha }}
+        run: |
+          "$AUTOMATIONS_PYTHON" -I -m uv_automations commits persist \
+            --repository "$GITHUB_WORKSPACE" \
+            --base "$BASE_SHA" \
+            --head "$HEAD_SHA" \
+            --destination "$RUNNER_TEMP/fixed-bug.bundle" \
+            --github-output "$GITHUB_OUTPUT"
 
       - name: "Upload verified bug fix"
         id: upload-fix
@@ -442,7 +465,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: fixed-bug-${{ inputs.issue-number }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/fixed-bug.bundle
+          path: ${{ steps.persist-fix.outputs.path }}
           if-no-files-found: error
           compression-level: 0
           retention-days: 1
@@ -461,6 +484,18 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: "Set up trusted Python automations"
+        id: automations
+        uses: ./.github/actions/setup-automations
+
+      - name: "Check out the regression-test base"
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -468,9 +503,9 @@ jobs:
         with:
           artifact-ids: ${{ needs.fix.outputs.bundle-artifact-id }}
           path: ${{ runner.temp }}/fixed-bug
+          merge-multiple: true
 
-      - name: "Verify regression and bug-fix commits"
-        id: verify
+      - name: "Verify regression and bug-fix branches"
         env:
           EXISTING_HEAD_SHA: ${{ needs.fix.outputs.existing-head }}
           GH_TOKEN: ${{ github.token }}
@@ -544,11 +579,31 @@ jobs:
             fi
           fi
 
-          bundle="$RUNNER_TEMP/fixed-bug/fixed-bug.bundle"
-          git -c core.hooksPath=/dev/null bundle verify "$bundle"
-          git -c core.hooksPath=/dev/null fetch --no-tags "$bundle" HEAD
-          fixed_head="$(git rev-parse 'FETCH_HEAD^{commit}')"
-          if [ "$(git rev-parse "$fixed_head^")" != "$PARENT_HEAD_SHA" ] ||
+      - name: "Load bug-fix commit"
+        id: load-fix
+        env:
+          AUTOMATIONS_PYTHON: ${{ steps.automations.outputs.python }}
+          BASE_SHA: ${{ needs.fix.outputs.parent-head-sha }}
+          HEAD_SHA: ${{ needs.fix.outputs.commit-sha }}
+        run: |
+          "$AUTOMATIONS_PYTHON" -I -m uv_automations commits load \
+            --repository "$GITHUB_WORKSPACE" \
+            --base "$BASE_SHA" \
+            --head "$HEAD_SHA" \
+            --bundle "$RUNNER_TEMP/fixed-bug/fixed-bug.bundle" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: "Verify bug-fix commit"
+        id: verify
+        env:
+          EXISTING_HEAD_SHA: ${{ needs.fix.outputs.existing-head }}
+          FIXED_HEAD_SHA: ${{ steps.load-fix.outputs.head-sha }}
+          GIT_CONFIG_GLOBAL: /dev/null
+          GIT_CONFIG_NOSYSTEM: "1"
+          PARENT_HEAD_SHA: ${{ needs.fix.outputs.parent-head-sha }}
+        run: |
+          fixed_head="$FIXED_HEAD_SHA"
+          if [ "$(git rev-list --parents -n 1 "$fixed_head")" != "$fixed_head $PARENT_HEAD_SHA" ] ||
             [ "$(git show --no-patch --format=%s "$fixed_head")" != "Fix reproduced bug" ] ||
             [ "$(git show --no-patch --format=%ae "$fixed_head")" != \
               "305554984+astral-automations-bot[bot]@users.noreply.github.com" ]; then

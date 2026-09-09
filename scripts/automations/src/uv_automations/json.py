@@ -2,6 +2,8 @@
 
 import json
 import math
+from collections.abc import Mapping
+from collections.abc import Set as AbstractSet
 from typing import Never, cast
 
 
@@ -41,6 +43,17 @@ def as_object(value: object) -> dict[str, object]:
     if not all(isinstance(key, str) for key in value):
         raise ValueError("JSON object fields must be strings")
     return cast(dict[str, object], value)
+
+
+def require_keys(data: Mapping[str, object], expected: AbstractSet[str]) -> None:
+    if data.keys() != expected:
+        raise ValueError(f"Expected exactly these fields: {sorted(expected)!r}")
+
+
+def as_boolean(value: object) -> bool:
+    if type(value) is not bool:
+        raise TypeError("Expected a JSON boolean")
+    return value
 
 
 def as_array(value: object) -> list[object]:
