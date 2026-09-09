@@ -243,13 +243,17 @@ class PromotionComparisonReader(Protocol):
     ) -> CommitComparison: ...
 
 
+class PromotionRevisionReader(PromotionComparisonReader, Protocol):
+    def get_ref(self, repository: RepositoryIdentity, ref: str) -> CommitSha | None: ...
+
+
 class PromotionReceiptReader(Protocol):
     def get_unedited_promotion_comment(
         self, scope: PromotionScope, identifier: int
     ) -> UneditedPromotionComment | None: ...
 
 
-class PromotionReader(PromotedParentReader, PromotionComparisonReader, Protocol):
+class PromotionReader(PromotedParentReader, PromotionRevisionReader, Protocol):
     def list_pull_requests(
         self,
         repository: RepositoryIdentity,
@@ -266,8 +270,6 @@ class PromotionReader(PromotedParentReader, PromotionComparisonReader, Protocol)
     def get_repository_permission(
         self, repository: RepositoryIdentity, actor: PromotionActor
     ) -> RepositoryPermission: ...
-
-    def get_ref(self, repository: RepositoryIdentity, ref: str) -> CommitSha | None: ...
 
 
 class PromotionGitHub(ActionsGitHub):

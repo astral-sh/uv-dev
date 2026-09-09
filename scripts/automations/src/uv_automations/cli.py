@@ -12,9 +12,10 @@ from enum import StrEnum
 from pathlib import Path
 from typing import assert_never
 
-from uv_automations import commits_cli
+from uv_automations import commits_cli, promotions_cli
 from uv_automations.actions import append_summary, write_json_output, write_output
 from uv_automations.github import GitHub
+from uv_automations.github_promotion import PromotionReadError
 from uv_automations.json import loads
 from uv_automations.models import (
     CommitSha,
@@ -50,6 +51,7 @@ class CommandGroup(StrEnum):
     LABELS = "labels"
     PULL_REQUESTS = "pull-requests"
     COMMITS = "commits"
+    PROMOTIONS = "promotions"
 
 
 class CommandKind(StrEnum):
@@ -119,7 +121,7 @@ type CoreCommand = (
     | RemoveRebaseLabel
 )
 
-type Command = CoreCommand | commits_cli.CommitCommand
+type Command = CoreCommand | commits_cli.CommitCommand | promotions_cli.PromotionCommand
 
 
 def _positive_integer(value: str) -> int:
@@ -199,6 +201,7 @@ def create_parser() -> argparse.ArgumentParser:
     remove.set_defaults(command=CommandKind.REMOVE_REBASE_LABEL)
     _add_pull_request(remove)
     commits_cli.add_commands(commands.add_parser("commits"))
+    promotions_cli.add_commands(commands.add_parser("promotions"))
     return parser
 
 
@@ -212,6 +215,8 @@ def parse_command(
             return _parse_core_command(parsed)
         case CommandGroup.COMMITS:
             return commits_cli.parse_command(parsed)
+        case CommandGroup.PROMOTIONS:
+            return promotions_cli.parse_command(parsed)
     assert_never(group)
 
 
@@ -345,6 +350,18 @@ def run(command: Command) -> None:
         case commits_cli.PersistCommit() | commits_cli.LoadCommit():
             commits_cli.run(command)
             return
+        case (
+            promotions_cli.PreparePromotion()
+            | promotions_cli.ReadPromotionApproval()
+            | promotions_cli.RecordPromotionQueue()
+            | promotions_cli.ReplayPromotions()
+            | promotions_cli.ReplayOnePromotion()
+            | promotions_cli.ReplayPromotedChildren()
+            | promotions_cli.SyncPromotionSource()
+            | promotions_cli.EnsurePromotionBase()
+        ):
+            promotions_cli.run(command)
+            return
     assert_never(command)
 
 
@@ -363,3 +380,5 @@ def main(arguments: Sequence[str] | None = None) -> None:
         parser.exit(
             1, f"{parser.prog}: command timed out after {error.timeout} seconds\n"
         )
+    except PromotionReadError as error:
+        parser.exit(1, f"{parser.prog}: {error}\n")

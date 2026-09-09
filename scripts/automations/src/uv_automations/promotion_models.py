@@ -415,6 +415,28 @@ def ready_approval(
     )
 
 
+def current_ready_approval(
+    scope: PromotionScope, head: CommitSha, events: tuple[PromotionEvent, ...]
+) -> PromotionApproval | None:
+    """Require the latest readiness transition to be a human approval."""
+    latest: ReadyForReviewEvent | ConvertedToDraftEvent | None = None
+    for event in events:
+        match event:
+            case ReadyForReviewEvent() | ConvertedToDraftEvent():
+                if latest is None or event.identifier > latest.identifier:
+                    latest = event
+            case LabelAddedEvent() | LabelRemovedEvent():
+                pass
+            case _:
+                assert_never(event)
+    match latest:
+        case ReadyForReviewEvent(actor=actor) if actor is not None and actor.is_human:
+            return PromotionApproval(scope, head, latest, latest.identifier)
+        case ReadyForReviewEvent() | ConvertedToDraftEvent() | None:
+            return None
+    assert_never(latest)
+
+
 @dataclass(frozen=True, slots=True)
 class PromotionComment:
     scope: PromotionScope

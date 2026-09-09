@@ -11,6 +11,7 @@ from uv_automations.json import (
 )
 from uv_automations.models import CommitSha
 from uv_automations.promotion_models import (
+    UV_DEV_REPOSITORY,
     UV_REPOSITORY,
     UV_SECURITY_REPOSITORY,
     BranchRevision,
@@ -24,6 +25,7 @@ from uv_automations.promotion_models import (
     PromotionScope,
     PullRequestSelection,
     UnrecordedMergedParent,
+    current_ready_approval,
     latest_label_event,
     latest_ready_event,
     ready_approval,
@@ -203,7 +205,10 @@ def _require_merged_parent(
         parent.original_head != source.details.base.sha
         or parent.upstream.details.head.ref != source.details.base.ref
         or base.repository != source.scope.repository
-        or base.ref != parent.upstream.details.base.ref
+        or (
+            base.ref != parent.upstream.details.base.ref
+            and not (isinstance(parent, MergedPromotedParent) and base.ref == "main")
+        )
     ):
         raise ValueError("Promotion plan has different merged-parent preconditions")
 
@@ -330,9 +335,13 @@ def _current_approval(
     head: CommitSha,
     events: tuple[PromotionEvent, ...],
     kind: PromotionApprovalKind,
+    *,
+    exact_readiness: bool = False,
 ) -> PromotionApproval | None:
     match kind:
         case PromotionApprovalKind.READY_FOR_REVIEW:
+            if exact_readiness:
+                return current_ready_approval(source.scope, head, events)
             return ready_approval(source.scope, head, events)
         case PromotionApprovalKind.LABELED:
             readiness = latest_ready_event(events)
@@ -449,7 +458,14 @@ def plan_promotion(
     if not source.same_repository:
         return Rejected(source, "The source uses a different head repository")
     current_approval = _current_approval(
-        source, request.head, reader.list_promotion_events(request.source), request.kind
+        source,
+        request.head,
+        reader.list_promotion_events(request.source),
+        request.kind,
+        exact_readiness=(
+            request.source.repository == UV_DEV_REPOSITORY
+            and (request.approval_id is not None or approval is not None)
+        ),
     )
     if current_approval is None:
         if request.approval_id is not None or approval is not None:
