@@ -41,6 +41,8 @@ pub enum MetadataError {
     MissingName,
     #[error("Metadata field {0} not found")]
     FieldNotFound(&'static str),
+    #[error("Metadata field `Name` is set to the placeholder `UNKNOWN`")]
+    UnknownName,
     #[error("Invalid version: {0}")]
     Pep440VersionError(VersionParseError),
     #[error(transparent)]
@@ -84,6 +86,21 @@ impl<'a> Headers<'a> {
     fn parse(content: &'a [u8]) -> Self {
         Self {
             message: Message::parse(content),
+        }
+    }
+
+    /// Return the first decoded name, distinguishing a placeholder from a missing field.
+    fn get_name(&self) -> Result<String, MetadataError> {
+        let name = self
+            .message
+            .first("Name")
+            .ok_or(MetadataError::FieldNotFound("Name"))?
+            .decoded_value()?
+            .into_owned();
+        if name == "UNKNOWN" {
+            Err(MetadataError::UnknownName)
+        } else {
+            Ok(name)
         }
     }
 

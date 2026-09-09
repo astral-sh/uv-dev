@@ -11,4 +11,6 @@ mod json;
 mod pip_install;
 
 #[cfg(feature = "test-python")]
+mod unknown_metadata_name;
+#[cfg(feature = "test-python")]
 mod wheel_variants;
