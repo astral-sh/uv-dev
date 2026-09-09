@@ -1,4 +1,5 @@
 # Build uv on all platforms.
+# Keep job definitions unchanged for the pinned runner-sizing control.
 #
 # Generates both wheels (for PyPI) and archived binaries (for GitHub releases).
 #
