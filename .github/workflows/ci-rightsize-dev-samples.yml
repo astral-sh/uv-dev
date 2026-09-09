@@ -1,6 +1,11 @@
 name: CI runner-size dev samples
 
 on:
+  push:
+    branches:
+      - zb/ci-rightsize-dev-samples-20260909
+      - zb/ci-rightsize-dev-samples-20260909-2
+      - zb/ci-rightsize-dev-samples-20260909-3
   workflow_dispatch:
 
 permissions:
