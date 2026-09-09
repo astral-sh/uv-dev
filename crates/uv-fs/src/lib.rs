@@ -476,31 +476,33 @@ pub fn symlink_or_copy_file(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> std
 /// Write `data` to `path` atomically using a temporary file and atomic rename.
 #[cfg(feature = "tokio")]
 pub async fn write_atomic(path: impl AsRef<Path>, data: impl AsRef<[u8]>) -> std::io::Result<()> {
-    let temp_file = tempfile_in(
-        path.as_ref()
-            .parent()
-            .expect("Write path must have a parent"),
-    )?;
+    let parent = path.as_ref().parent().ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidInput, "Write path must have a parent")
+    })?;
+    let temp_file = tempfile_in(parent)?;
     fs_err::tokio::write(&temp_file, &data).await?;
     persist_with_retry(temp_file, path.as_ref()).await
 }
 
 /// Write `data` to `path` atomically using a temporary file and atomic rename.
 pub fn write_atomic_sync(path: impl AsRef<Path>, data: impl AsRef<[u8]>) -> std::io::Result<()> {
-    let mut temp_file = tempfile_in(
-        path.as_ref()
-            .parent()
-            .expect("Write path must have a parent"),
-    )?;
+    let parent = path.as_ref().parent().ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidInput, "Write path must have a parent")
+    })?;
+    let mut temp_file = tempfile_in(parent)?;
     temp_file.write_all(data.as_ref())?;
     persist_with_retry_sync(temp_file, path.as_ref())
 }
 
 /// Copy `from` to `to` atomically using a temporary file and atomic rename.
 pub fn copy_atomic_sync(from: impl AsRef<Path>, to: impl AsRef<Path>) -> std::io::Result<()> {
-    let temp_file = tempfile_in(to.as_ref().parent().expect("Write path must have a parent"))?;
+    let to = to.as_ref();
+    let parent = to.parent().ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidInput, "Write path must have a parent")
+    })?;
+    let temp_file = tempfile_in(parent)?;
     fs_err::copy(from.as_ref(), &temp_file)?;
-    persist_with_retry_sync(temp_file, to.as_ref())
+    persist_with_retry_sync(temp_file, to)
 }
 
 #[cfg(windows)]
