@@ -2,7 +2,7 @@ import json
 import os
 import subprocess
 import unittest
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 from uv_automations.github import GitHub, decode_pull_request_details
 from uv_automations.models import (
@@ -112,3 +112,22 @@ class GitHubTests(unittest.TestCase):
         ):
             GitHub(token_variable="GH_READ_TOKEN").get_pull_request(REFERENCE)
         run.assert_not_called()
+
+    def test_close_pull_request_uses_fixed_json_endpoints(self) -> None:
+        with patch("uv_automations.github.GitHub._api") as api:
+            GitHub().close_pull_request(REFERENCE, comment="Already merged.")
+        self.assertEqual(
+            api.call_args_list,
+            [
+                call(
+                    "POST",
+                    "repos/astral-sh/uv-dev/issues/123/comments",
+                    payload={"body": "Already merged."},
+                ),
+                call(
+                    "PATCH",
+                    "repos/astral-sh/uv-dev/pulls/123",
+                    payload={"state": "closed"},
+                ),
+            ],
+        )

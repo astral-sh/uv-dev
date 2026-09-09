@@ -154,7 +154,7 @@ class GitHub:
 
     def _api(
         self,
-        method: Literal["GET", "POST", "DELETE"],
+        method: Literal["GET", "POST", "PATCH", "DELETE"],
         path: str,
         *,
         payload: object | None = None,
@@ -261,4 +261,16 @@ class GitHub:
             "DELETE",
             f"repos/{reference.repository}/issues/{reference.number}/labels/"
             f"{quote(label, safe='')}",
+        )
+
+    def close_pull_request(self, reference: PullRequestRef, *, comment: str) -> None:
+        self._api(
+            "POST",
+            f"repos/{reference.repository}/issues/{reference.number}/comments",
+            payload={"body": comment},
+        )
+        self._api(
+            "PATCH",
+            f"repos/{reference.repository}/pulls/{reference.number}",
+            payload={"state": "closed"},
         )
