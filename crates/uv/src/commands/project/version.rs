@@ -12,7 +12,8 @@ use uv_cli::version::ProjectVersionInfo;
 use uv_cli::{VersionBump, VersionBumpSpec, VersionFormat};
 use uv_client::BaseClientBuilder;
 use uv_configuration::{
-    ActiveEnvironment, Concurrency, DependencyGroups, DryRun, ExtrasSpecification, InstallOptions,
+    ActiveEnvironment, ConcurrencyState, DependencyGroups, DryRun, ExtrasSpecification,
+    InstallOptions,
 };
 use uv_fs::Simplified;
 use uv_normalize::DefaultExtras;
@@ -93,7 +94,7 @@ pub(crate) async fn project_version(
     python_arch: Option<PythonArchitecture>,
     python_downloads: PythonDownloads,
     installer_metadata: bool,
-    concurrency: Concurrency,
+    concurrency: ConcurrencyState,
     config_discovery: ConfigDiscovery,
     cache: &Cache,
     workspace_cache: &WorkspaceCache,
@@ -484,7 +485,7 @@ async fn print_frozen_version(
     frozen_source: FrozenSource,
     settings: &ResolverInstallerSettings,
     client_builder: BaseClientBuilder<'_>,
-    concurrency: &Concurrency,
+    concurrency: &ConcurrencyState,
     cache: &Cache,
     workspace_cache: &WorkspaceCache,
     short: bool,
@@ -558,7 +559,7 @@ async fn lock_and_sync(
     python_arch: Option<PythonArchitecture>,
     python_downloads: PythonDownloads,
     installer_metadata: bool,
-    concurrency: &Concurrency,
+    concurrency: &ConcurrencyState,
     config_discovery: ConfigDiscovery,
     cache: &Cache,
     printer: Printer,

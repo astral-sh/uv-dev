@@ -13,8 +13,9 @@ use serde::Deserialize;
 use uv_cache::Cache;
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_configuration::{
-    ActiveEnvironment, Concurrency, DependencyGroups, DependencyGroupsWithDefaults, EditableMode,
-    ExportFormat, ExtrasSpecification, ExtrasSpecificationWithDefaults, InstallOptions,
+    ActiveEnvironment, ConcurrencyState, DependencyGroups, DependencyGroupsWithDefaults,
+    EditableMode, ExportFormat, ExtrasSpecification, ExtrasSpecificationWithDefaults,
+    InstallOptions,
 };
 use uv_distribution_types::Verbatim;
 use uv_fs::CWD;
@@ -184,7 +185,7 @@ pub(crate) async fn export(
     python_preference: PythonPreference,
     python_arch: Option<PythonArchitecture>,
     python_downloads: PythonDownloads,
-    concurrency: Concurrency,
+    concurrency: ConcurrencyState,
     config_discovery: ConfigDiscovery,
     quiet: bool,
     cache: &Cache,
@@ -523,7 +524,7 @@ async fn render_export<'output>(
     include_find_links: bool,
     settings: &ResolverSettings,
     client_builder: &BaseClientBuilder<'_>,
-    concurrency: &Concurrency,
+    concurrency: &ConcurrencyState,
     quiet: bool,
     cache: &Cache,
     preview: Preview,
@@ -744,7 +745,7 @@ async fn render_export<'output>(
                     .index_locations(settings.index_locations.clone())
                     .build()?;
                 export
-                    .generate_missing_hashes(&client, concurrency.downloads, output_dir)
+                    .generate_missing_hashes(&client, concurrency.limits().downloads, output_dir)
                     .await?;
             }
 

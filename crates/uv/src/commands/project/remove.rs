@@ -10,7 +10,8 @@ use tracing::{debug, warn};
 use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
 use uv_configuration::{
-    ActiveEnvironment, Concurrency, DependencyGroups, DryRun, ExtrasSpecification, InstallOptions,
+    ActiveEnvironment, ConcurrencyState, DependencyGroups, DryRun, ExtrasSpecification,
+    InstallOptions,
 };
 use uv_fs::Simplified;
 use uv_normalize::PackageName;
@@ -60,7 +61,7 @@ pub(crate) async fn remove(
     python_arch: Option<PythonArchitecture>,
     python_downloads: PythonDownloads,
     installer_metadata: bool,
-    concurrency: Concurrency,
+    concurrency: ConcurrencyState,
     config_discovery: ConfigDiscovery,
     cache: &Cache,
     printer: Printer,
