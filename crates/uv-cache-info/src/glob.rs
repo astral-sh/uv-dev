@@ -64,64 +64,127 @@ fn split_glob(pattern: impl AsRef<str>) -> GlobParts {
 
 /// Classic trie with edges being path components and values being glob patterns.
 #[derive(Default)]
-struct Trie<'a> {
-    children: BTreeMap<Component<'a>, Self>,
+struct TrieNode<'a> {
+    children: BTreeMap<Component<'a>, usize>,
     patterns: Vec<&'a Path>,
 }
 
-impl<'a> Trie<'a> {
-    fn insert(&mut self, mut components: Components<'a>, pattern: &'a Path) {
-        if let Some(part) = components.next() {
-            self.children
-                .entry(part)
-                .or_default()
-                .insert(components, pattern);
-        } else {
-            self.patterns.push(pattern);
+/// Store nodes in an arena so inserting, traversing, and dropping a deep path are not recursive.
+struct Trie<'a> {
+    nodes: Vec<TrieNode<'a>>,
+}
+
+impl Default for Trie<'_> {
+    fn default() -> Self {
+        Self {
+            nodes: vec![TrieNode::default()],
         }
     }
+}
 
-    #[expect(clippy::needless_pass_by_value)]
-    fn collect_patterns(
-        &self,
+enum Visit {
+    Group {
+        node: usize,
+        prefix: PathBuf,
+    },
+    Patterns {
+        node: usize,
         pattern_prefix: PathBuf,
         group_prefix: PathBuf,
-        patterns: &mut Vec<PathBuf>,
-        groups: &mut Vec<(PathBuf, Vec<PathBuf>)>,
-    ) {
-        // collect all patterns beneath and including this node
-        for pattern in &self.patterns {
-            patterns.push(pattern_prefix.join(pattern));
-        }
-        for (part, child) in &self.children {
-            if let Component::Normal(_) = part {
-                // for normal components, collect all descendant patterns ('normal' edges only)
-                child.collect_patterns(
-                    pattern_prefix.join(part),
-                    group_prefix.join(part),
-                    patterns,
-                    groups,
-                );
-            } else {
-                // for non-normal component edges, kick off separate group collection at this node
-                child.collect_groups(group_prefix.join(part), groups);
+        group: usize,
+    },
+    FinishGroup {
+        prefix: PathBuf,
+        group: usize,
+    },
+}
+
+impl<'a> Trie<'a> {
+    fn insert(&mut self, components: Components<'a>, pattern: &'a Path) {
+        let mut node = 0;
+        for part in components {
+            let next = self.nodes.len();
+            let child = *self.nodes[node].children.entry(part).or_insert(next);
+            if child == next {
+                self.nodes.push(TrieNode::default());
             }
+            node = child;
         }
+        self.nodes[node].patterns.push(pattern);
     }
 
-    fn collect_groups(&self, prefix: PathBuf, groups: &mut Vec<(PathBuf, Vec<PathBuf>)>) {
-        // LCP-style grouping of patterns
-        if self.patterns.is_empty() {
-            // no patterns in this node; child nodes can form independent groups
-            for (part, child) in &self.children {
-                child.collect_groups(prefix.join(part), groups);
+    fn collect_groups(&self) -> Vec<(PathBuf, Vec<PathBuf>)> {
+        let mut groups = Vec::new();
+        let mut patterns: Vec<Vec<PathBuf>> = Vec::new();
+        let mut pending = vec![Visit::Group {
+            node: 0,
+            prefix: PathBuf::new(),
+        }];
+
+        while let Some(visit) = pending.pop() {
+            match visit {
+                Visit::Group { node, prefix } => {
+                    let trie_node = &self.nodes[node];
+                    if trie_node.patterns.is_empty() {
+                        // Child nodes can form independent groups. Reverse insertion preserves
+                        // the original depth-first, component-sorted traversal order.
+                        for (part, child) in trie_node.children.iter().rev() {
+                            pending.push(Visit::Group {
+                                node: *child,
+                                prefix: prefix.join(part),
+                            });
+                        }
+                    } else {
+                        // This pattern node is a pivot. Finish its group after any nested groups
+                        // reached through non-normal components.
+                        let group = patterns.len();
+                        patterns.push(Vec::new());
+                        pending.push(Visit::FinishGroup {
+                            prefix: prefix.clone(),
+                            group,
+                        });
+                        pending.push(Visit::Patterns {
+                            node,
+                            pattern_prefix: PathBuf::new(),
+                            group_prefix: prefix,
+                            group,
+                        });
+                    }
+                }
+                Visit::Patterns {
+                    node,
+                    pattern_prefix,
+                    group_prefix,
+                    group,
+                } => {
+                    let node = &self.nodes[node];
+                    patterns[group].extend(
+                        node.patterns
+                            .iter()
+                            .map(|pattern| pattern_prefix.join(pattern)),
+                    );
+                    for (part, child) in node.children.iter().rev() {
+                        if let Component::Normal(_) = part {
+                            pending.push(Visit::Patterns {
+                                node: *child,
+                                pattern_prefix: pattern_prefix.join(part),
+                                group_prefix: group_prefix.join(part),
+                                group,
+                            });
+                        } else {
+                            pending.push(Visit::Group {
+                                node: *child,
+                                prefix: group_prefix.join(part),
+                            });
+                        }
+                    }
+                }
+                Visit::FinishGroup { prefix, group } => {
+                    groups.push((prefix, std::mem::take(&mut patterns[group])));
+                }
             }
-        } else {
-            // pivot point, we've hit a pattern node; we have to stop here and form a group
-            let mut group = Vec::new();
-            self.collect_patterns(PathBuf::new(), prefix.clone(), &mut group, groups);
-            groups.push((prefix, group));
         }
+        groups
     }
 }
 
@@ -140,8 +203,7 @@ pub(crate) fn cluster_globs(patterns: &[impl AsRef<str>]) -> Vec<(PathBuf, Vec<S
     }
 
     // run LCP-style aggregation of patterns in the trie into groups
-    let mut groups = Vec::new();
-    trie.collect_groups(PathBuf::new(), &mut groups);
+    let groups = trie.collect_groups();
 
     // finally, convert resulting patterns to strings
     groups
@@ -313,5 +375,30 @@ mod tests {
                 ],
             );
         }
+    }
+
+    #[test]
+    fn test_cluster_globs_preserves_order() {
+        let patterns = [
+            "*",
+            "a/../z/*.rs",
+            "a/file.txt",
+            "a/nested/*.py",
+            "b/file.txt",
+        ];
+        let expected = vec![
+            (windowsify("a/../z").into(), vec![windowsify("*.rs")]),
+            (
+                "".into(),
+                vec![
+                    windowsify("*"),
+                    windowsify("a/file.txt"),
+                    windowsify("a/nested/*.py"),
+                    windowsify("b/file.txt"),
+                ],
+            ),
+        ];
+
+        assert_eq!(cluster_globs(&patterns), expected);
     }
 }
