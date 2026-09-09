@@ -1,0 +1,110 @@
+name: Close empty pull request
+
+on:
+  workflow_call:
+    inputs:
+      number:
+        required: true
+        type: number
+      base-ref:
+        required: true
+        type: string
+      base-sha:
+        required: true
+        type: string
+      base-previous-sha:
+        required: false
+        type: string
+        default: ""
+      head-ref:
+        required: true
+        type: string
+      head-sha:
+        required: true
+        type: string
+      head-repository:
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  close:
+    name: "Close empty pull request #${{ inputs.number }}"
+    runs-on: ubuntu-slim
+    environment: automations
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+      id-token: write
+    env:
+      BASE_REF: ${{ inputs.base-ref }}
+      BASE_SHA: ${{ inputs.base-sha }}
+      BASE_PREVIOUS_SHA: ${{ inputs.base-previous-sha }}
+      HEAD_REF: ${{ inputs.head-ref }}
+      HEAD_SHA: ${{ inputs.head-sha }}
+      HEAD_REPOSITORY: ${{ inputs.head-repository }}
+      PULL_REQUEST_NUMBER: ${{ inputs.number }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install Python automations
+        id: automations
+        uses: ./.github/actions/setup-automations
+
+      - name: Verify empty pull request
+        id: verify
+        env:
+          AUTOMATIONS_PYTHON: ${{ steps.automations.outputs.python }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          "$AUTOMATIONS_PYTHON" -I -m uv_automations rebase verify-empty \
+            --checkout "$GITHUB_WORKSPACE" \
+            --repo "$GITHUB_REPOSITORY" \
+            --repository-id "$GITHUB_REPOSITORY_ID" \
+            --pull-request "$PULL_REQUEST_NUMBER" \
+            --base-ref "$BASE_REF" \
+            --base-sha "$BASE_SHA" \
+            --previous-base-sha "$BASE_PREVIOUS_SHA" \
+            --head-repository "$HEAD_REPOSITORY" \
+            --head-ref "$HEAD_REF" \
+            --head-sha "$HEAD_SHA" \
+            --github-output "$GITHUB_OUTPUT" \
+            --summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Get pull request token
+        id: token
+        if: steps.verify.outputs.close == 'true'
+        uses: open-security-tools/ost-simple-sts@9e012247e07c39080fb6a832dbfbcfeacebc19c4
+        with:
+          exchange-url: ${{ secrets.STS_API_URL }}/exchange
+          audience: ${{ secrets.STS_API_URL }}
+          repository: ${{ github.repository }}
+          permissions: |
+            pull_requests: write
+
+      - name: Close empty pull request
+        if: steps.verify.outputs.close == 'true'
+        env:
+          AUTOMATIONS_PYTHON: ${{ steps.automations.outputs.python }}
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          HEAD_REPOSITORY_ID: ${{ steps.verify.outputs.head_repository_id }}
+        run: |
+          "$AUTOMATIONS_PYTHON" -I -m uv_automations rebase close-empty \
+            --repo "$GITHUB_REPOSITORY" \
+            --repository-id "$GITHUB_REPOSITORY_ID" \
+            --pull-request "$PULL_REQUEST_NUMBER" \
+            --base-ref "$BASE_REF" \
+            --base-sha "$BASE_SHA" \
+            --previous-base-sha "$BASE_PREVIOUS_SHA" \
+            --head-repository "$HEAD_REPOSITORY" \
+            --head-repository-id "$HEAD_REPOSITORY_ID" \
+            --head-ref "$HEAD_REF" \
+            --head-sha "$HEAD_SHA" \
+            --run-id "$GITHUB_RUN_ID" \
+            --summary "$GITHUB_STEP_SUMMARY"

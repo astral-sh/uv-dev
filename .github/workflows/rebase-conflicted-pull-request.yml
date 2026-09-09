@@ -36,13 +36,34 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
+      pull-requests: read
+    env:
+      BASE_REF: ${{ inputs.base-ref }}
+      BASE_PREVIOUS_SHA: ${{ inputs.base-previous-sha }}
+      HEAD_REF: ${{ inputs.head-ref }}
+      HEAD_SHA: ${{ inputs.head-sha }}
+      HEAD_REPOSITORY: ${{ inputs.head-repository }}
+      PULL_REQUEST_NUMBER: ${{ inputs.number }}
     outputs:
       base_sha: ${{ steps.prepare.outputs.base_sha }}
+      head_sha: ${{ steps.verify.outputs.head_sha }}
+      bundle_artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      empty: ${{ steps.verify.outputs.empty }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.workflow_sha }}
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Install Python automations
+        id: automations
+        uses: ./.github/actions/setup-automations
+
+      - name: Install uv for rebase checks
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          enable-cache: false
 
       - name: Install Rust toolchain
         run: rustup show
@@ -65,33 +86,24 @@ jobs:
       - name: Prepare pull request branch
         id: prepare
         env:
-          BASE_REF: ${{ inputs.base-ref }}
-          BASE_PREVIOUS_SHA: ${{ inputs.base-previous-sha }}
-          HEAD_REF: ${{ inputs.head-ref }}
-          HEAD_SHA: ${{ inputs.head-sha }}
-          HEAD_REPOSITORY: ${{ inputs.head-repository }}
+          GH_TOKEN: ${{ github.token }}
+          AUTOMATIONS_PYTHON: ${{ steps.automations.outputs.python }}
         run: |
-          mkdir -p "$RUNNER_TEMP/codex-home"
+          mkdir -p "$RUNNER_TEMP/codex-home" "$RUNNER_TEMP/codex-tmp"
           cp agents/codex/config.toml "$RUNNER_TEMP/codex-home/config.toml"
           cp agents/prompts/rebase-pull-request.md "$RUNNER_TEMP/rebase-pull-request.md"
 
-          git fetch --no-tags "https://github.com/$HEAD_REPOSITORY.git" "refs/heads/$HEAD_REF"
-          current_head=$(git rev-parse 'FETCH_HEAD^{commit}')
-          if [ "$current_head" != "$HEAD_SHA" ]; then
-            echo "The pull request head changed; refusing to rebase a stale revision." >&2
-            exit 1
-          fi
-
-          if [ -n "$BASE_PREVIOUS_SHA" ] && { ! [[ "$BASE_PREVIOUS_SHA" =~ ^[0-9a-f]{40}$ ]] || ! git merge-base --is-ancestor "$BASE_PREVIOUS_SHA" "$HEAD_SHA"; }; then
-            echo "The stacked pull request does not contain its previous base; refusing to rebase it." >&2
-            exit 1
-          fi
-
-          git checkout --detach "$HEAD_SHA"
-          git config user.name "astral-automations-bot[bot]"
-          git config user.email "305554984+astral-automations-bot[bot]@users.noreply.github.com"
-          base_sha=$(git rev-parse --verify "refs/remotes/origin/$BASE_REF^{commit}")
-          echo "base_sha=$base_sha" >> "$GITHUB_OUTPUT"
+          "$AUTOMATIONS_PYTHON" -I -m uv_automations rebase prepare \
+            --checkout "$GITHUB_WORKSPACE" \
+            --repo "$GITHUB_REPOSITORY" \
+            --repository-id "$GITHUB_REPOSITORY_ID" \
+            --pull-request "$PULL_REQUEST_NUMBER" \
+            --base-ref "$BASE_REF" \
+            --previous-base-sha "$BASE_PREVIOUS_SHA" \
+            --head-repository "$HEAD_REPOSITORY" \
+            --head-ref "$HEAD_REF" \
+            --head-sha "$HEAD_SHA" \
+            --github-output "$GITHUB_OUTPUT"
 
       - name: Enable Linux user namespaces for bubblewrap
         run: |
@@ -110,7 +122,7 @@ jobs:
         env:
           BASE_REF: ${{ inputs.base-ref }}
           BASE_PREVIOUS_SHA: ${{ inputs.base-previous-sha }}
-          TMPDIR: ${{ runner.temp }}
+          TMPDIR: ${{ runner.temp }}/codex-tmp
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           codex-version: "0.147.0"
@@ -123,26 +135,23 @@ jobs:
           prompt-file: "${{ runner.temp }}/rebase-pull-request.md"
 
       - name: Verify rebased pull request
+        id: verify
         env:
-          BASE_REF: ${{ inputs.base-ref }}
+          AUTOMATIONS_PYTHON: ${{ steps.automations.outputs.python }}
+          BASE_SHA: ${{ steps.prepare.outputs.base_sha }}
         run: |
-          if [ -d "$(git rev-parse --git-path rebase-merge)" ] || [ -d "$(git rev-parse --git-path rebase-apply)" ]; then
-            echo "The rebase is still in progress; refusing to push." >&2
-            exit 1
-          fi
-
-          git diff --check "refs/remotes/origin/$BASE_REF...HEAD"
-          if [ -n "$(git status --porcelain)" ]; then
-            echo "The worktree is not clean after the rebase; refusing to push." >&2
-            exit 1
-          fi
-
-          git bundle create "$RUNNER_TEMP/rebased.bundle" "refs/remotes/origin/$BASE_REF..HEAD"
+          "$AUTOMATIONS_PYTHON" -I -m uv_automations rebase persist \
+            --checkout "$GITHUB_WORKSPACE" \
+            --base-sha "$BASE_SHA" \
+            --bundle "$RUNNER_TEMP/rebased.bundle" \
+            --github-output "$GITHUB_OUTPUT"
 
       - name: Upload rebased pull request
+        id: upload
+        if: steps.verify.outputs.empty == 'false'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: rebased-pull-request-${{ inputs.number }}-${{ inputs.head-sha }}
+          name: rebased-pull-request-${{ inputs.number }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/rebased.bundle
           if-no-files-found: error
           compression-level: 0
@@ -151,53 +160,78 @@ jobs:
   push:
     name: "Push rebased pull request #${{ inputs.number }}"
     needs: rebase
+    if: needs.rebase.outputs.empty == 'false'
     runs-on: ubuntu-slim
     environment: automations
     timeout-minutes: 10
     permissions:
       contents: read
+      pull-requests: read
       id-token: write
+    env:
+      BASE_REF: ${{ inputs.base-ref }}
+      BASE_SHA: ${{ needs.rebase.outputs.base_sha }}
+      BASE_PREVIOUS_SHA: ${{ inputs.base-previous-sha }}
+      HEAD_REF: ${{ inputs.head-ref }}
+      HEAD_SHA: ${{ inputs.head-sha }}
+      HEAD_REPOSITORY: ${{ inputs.head-repository }}
+      PULL_REQUEST_NUMBER: ${{ inputs.number }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.workflow_sha }}
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Install Python automations
+        id: automations
+        uses: ./.github/actions/setup-automations
 
       - name: Download rebased pull request
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: rebased-pull-request-${{ inputs.number }}-${{ inputs.head-sha }}
+          artifact-ids: ${{ needs.rebase.outputs.bundle_artifact_id }}
           path: ${{ runner.temp }}/rebased-pull-request
+          merge-multiple: true
 
       - name: Import rebased pull request
         id: import
         env:
-          BASE_REF: ${{ inputs.base-ref }}
-          BASE_SHA: ${{ needs.rebase.outputs.base_sha }}
-          GIT_CONFIG_GLOBAL: /dev/null
-          GIT_CONFIG_NOSYSTEM: "1"
+          AUTOMATIONS_PYTHON: ${{ steps.automations.outputs.python }}
+          REBASED_HEAD: ${{ needs.rebase.outputs.head_sha }}
         run: |
-          current_base_sha=$(git rev-parse --verify "refs/remotes/origin/$BASE_REF^{commit}")
-          if [ "$current_base_sha" != "$BASE_SHA" ]; then
-            echo "The pull request base changed from $BASE_SHA to $current_base_sha; skipping the stale rebase."
-            exit 0
-          fi
+          "$AUTOMATIONS_PYTHON" -I -m uv_automations rebase load \
+            --checkout "$GITHUB_WORKSPACE" \
+            --base-ref "$BASE_REF" \
+            --base-sha "$BASE_SHA" \
+            --head-sha "$REBASED_HEAD" \
+            --bundle "$RUNNER_TEMP/rebased-pull-request/rebased.bundle" \
+            --github-output "$GITHUB_OUTPUT" \
+            --summary "$GITHUB_STEP_SUMMARY"
 
-          bundle="$RUNNER_TEMP/rebased-pull-request/rebased.bundle"
-          git bundle verify "$bundle"
-          git -c core.hooksPath=/dev/null fetch --no-tags "$bundle" HEAD
-          rebased_head=$(git rev-parse 'FETCH_HEAD^{commit}')
-
-          if ! git merge-base --is-ancestor "refs/remotes/origin/$BASE_REF" "$rebased_head"; then
-            echo "The rebased pull request does not contain its base; refusing to push." >&2
-            exit 1
-          fi
-
-          echo "head_sha=$rebased_head" >> "$GITHUB_OUTPUT"
+      - name: Revalidate pull request before publication
+        id: source
+        if: steps.import.outputs.head_sha != ''
+        env:
+          AUTOMATIONS_PYTHON: ${{ steps.automations.outputs.python }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          "$AUTOMATIONS_PYTHON" -I -m uv_automations rebase verify-source \
+            --repo "$GITHUB_REPOSITORY" \
+            --repository-id "$GITHUB_REPOSITORY_ID" \
+            --pull-request "$PULL_REQUEST_NUMBER" \
+            --base-ref "$BASE_REF" \
+            --base-sha "$BASE_SHA" \
+            --previous-base-sha "$BASE_PREVIOUS_SHA" \
+            --head-repository "$HEAD_REPOSITORY" \
+            --head-ref "$HEAD_REF" \
+            --head-sha "$HEAD_SHA" \
+            --github-output "$GITHUB_OUTPUT" \
+            --summary "$GITHUB_STEP_SUMMARY"
 
       - name: Get pull request head token
         id: token
-        if: steps.import.outputs.head_sha != ''
+        if: steps.source.outputs.ready == 'true'
         uses: open-security-tools/ost-simple-sts@9e012247e07c39080fb6a832dbfbcfeacebc19c4
         with:
           exchange-url: ${{ secrets.STS_API_URL }}/exchange
@@ -209,17 +243,44 @@ jobs:
             workflows: write
 
       - name: Push rebased pull request
-        if: steps.import.outputs.head_sha != ''
+        if: steps.source.outputs.ready == 'true'
         env:
-          GIT_CONFIG_GLOBAL: /dev/null
-          GIT_CONFIG_NOSYSTEM: "1"
+          AUTOMATIONS_PYTHON: ${{ steps.automations.outputs.python }}
+          GH_READ_TOKEN: ${{ github.token }}
           GH_TOKEN: ${{ steps.token.outputs.token }}
-          HEAD_REF: ${{ inputs.head-ref }}
-          HEAD_REPOSITORY: ${{ inputs.head-repository }}
-          HEAD_SHA: ${{ inputs.head-sha }}
+          HEAD_REPOSITORY_ID: ${{ steps.source.outputs.head_repository_id }}
           REBASED_HEAD: ${{ steps.import.outputs.head_sha }}
         run: |
-          git -c core.hooksPath=/dev/null push \
-            --force-with-lease="refs/heads/$HEAD_REF:$HEAD_SHA" \
-            "https://x-access-token:${GH_TOKEN}@github.com/${HEAD_REPOSITORY}.git" \
-            "${REBASED_HEAD}:refs/heads/$HEAD_REF"
+          "$AUTOMATIONS_PYTHON" -I -m uv_automations rebase push \
+            --checkout "$GITHUB_WORKSPACE" \
+            --repo "$GITHUB_REPOSITORY" \
+            --repository-id "$GITHUB_REPOSITORY_ID" \
+            --pull-request "$PULL_REQUEST_NUMBER" \
+            --base-ref "$BASE_REF" \
+            --base-sha "$BASE_SHA" \
+            --previous-base-sha "$BASE_PREVIOUS_SHA" \
+            --head-repository "$HEAD_REPOSITORY" \
+            --head-repository-id "$HEAD_REPOSITORY_ID" \
+            --head-ref "$HEAD_REF" \
+            --head-sha "$HEAD_SHA" \
+            --rebased-head "$REBASED_HEAD" \
+            --summary "$GITHUB_STEP_SUMMARY"
+
+  close:
+    name: "Close empty pull request #${{ inputs.number }}"
+    needs: rebase
+    if: needs.rebase.outputs.empty == 'true'
+    permissions:
+      contents: read
+      pull-requests: read
+      id-token: write
+    uses: $/.github/workflows/close-empty-pull-request.yml
+    secrets: inherit
+    with:
+      number: ${{ inputs.number }}
+      base-ref: ${{ inputs.base-ref }}
+      base-sha: ${{ needs.rebase.outputs.base_sha }}
+      base-previous-sha: ${{ inputs.base-previous-sha }}
+      head-ref: ${{ inputs.head-ref }}
+      head-sha: ${{ inputs.head-sha }}
+      head-repository: ${{ inputs.head-repository }}
