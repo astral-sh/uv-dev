@@ -57,7 +57,8 @@ jobs:
           export DBUS_SESSION_BUS_ADDRESS GNOME_KEYRING_CONTROL
           echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS" >> "$GITHUB_ENV"
           echo "GNOME_KEYRING_CONTROL=$GNOME_KEYRING_CONTROL" >> "$GITHUB_ENV"
-          printf '%s' foobar | XDG_DATA_HOME="$keyring_root/data" gnome-keyring-daemon --control-directory="$GNOME_KEYRING_CONTROL" --components=secrets --daemonize --unlock
+          printf '%s' foobar | XDG_DATA_HOME="$keyring_root/data" gnome-keyring-daemon --control-directory="$GNOME_KEYRING_CONTROL" --components=secrets --daemonize --login
+          XDG_DATA_HOME="$keyring_root/data" gnome-keyring-daemon --control-directory="$GNOME_KEYRING_CONTROL" --components=secrets --start
           for attempt in {1..50}; do
             if locked="$(gdbus call --session --dest org.freedesktop.secrets --object-path /org/freedesktop/secrets/aliases/default --method org.freedesktop.DBus.Properties.Get org.freedesktop.Secret.Collection Locked 2>&1)" && test "$locked" = '(<false>,)'; then
               break
@@ -180,7 +181,8 @@ jobs:
           export DBUS_SESSION_BUS_ADDRESS GNOME_KEYRING_CONTROL
           echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS" >> "$GITHUB_ENV"
           echo "GNOME_KEYRING_CONTROL=$GNOME_KEYRING_CONTROL" >> "$GITHUB_ENV"
-          printf '%s' foobar | XDG_DATA_HOME="$keyring_root/data" gnome-keyring-daemon --control-directory="$GNOME_KEYRING_CONTROL" --components=secrets --daemonize --unlock
+          printf '%s' foobar | XDG_DATA_HOME="$keyring_root/data" gnome-keyring-daemon --control-directory="$GNOME_KEYRING_CONTROL" --components=secrets --daemonize --login
+          XDG_DATA_HOME="$keyring_root/data" gnome-keyring-daemon --control-directory="$GNOME_KEYRING_CONTROL" --components=secrets --start
           for attempt in {1..50}; do
             if locked="$(gdbus call --session --dest org.freedesktop.secrets --object-path /org/freedesktop/secrets/aliases/default --method org.freedesktop.DBus.Properties.Get org.freedesktop.Secret.Collection Locked 2>&1)" && test "$locked" = '(<false>,)'; then
               break
