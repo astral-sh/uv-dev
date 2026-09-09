@@ -93,6 +93,8 @@ jobs:
           checksum: "173d95a0c32d18c896c46ba6fafbf3cf9c14ab74b033f81b76c883ef492a976b"
       - name: "Validate pyproject and uv schema"
         run: ./scripts/validate-pyproject.sh
+      - name: "Check release version consistency"
+        run: uv run --no-project --python 3.12 python -m unittest discover --start-directory scripts --pattern test_check_release_versions.py
 
   readme:
     timeout-minutes: 10
