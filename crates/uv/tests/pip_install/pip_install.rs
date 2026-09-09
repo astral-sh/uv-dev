@@ -3307,6 +3307,62 @@ fn install_git_private_https_pat_at_ref() {
     context.assert_installed("uv_private_pypackage", "0.1.0");
 }
 
+/// Install a package from a private GitHub repository using Git's credential helper.
+#[test]
+#[cfg(feature = "test-git")]
+fn install_git_private_https_credential_helper() -> Result<()> {
+    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION).with_unset_git_credential_helper();
+    let git_config = context.home_dir.child(".gitconfig");
+    let credentials = context.home_dir.child(".git-credentials");
+    let user_config_dir = context.home_dir.child(".config");
+    let context = context
+        .with_env(EnvVars::GIT_CONFIG_GLOBAL, git_config.as_os_str())
+        .with_env(EnvVars::XDG_CONFIG_HOME, user_config_dir.as_os_str())
+        .with_env("GIT_CONFIG_NOSYSTEM", "1")
+        .with_env("GIT_CONFIG_COUNT", "0")
+        .with_env("GIT_CONFIG_PARAMETERS", "")
+        .with_env("GIT_ASKPASS", "")
+        .with_env("SSH_ASKPASS", "")
+        .with_filter((r"/([^/\s]+/)*git ", "/usr/bin/git "));
+    let package = "uv-private-pypackage @ git+https://github.com/astral-test/uv-private-pypackage@6c09ce9ae81f50670a60abd7d95f30dd416d00ac";
+
+    // No inherited helper or prompt should supply credentials.
+    uv_snapshot!(context.filters(), context.pip_install().arg(package), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+      × Failed to download and build `uv-private-pypackage @ git+https://github.com/astral-test/uv-private-pypackage@6c09ce9ae81f50670a60abd7d95f30dd416d00ac`
+      ├─▶ Git operation failed
+      ├─▶ failed to clone into: [CACHE_DIR]/git-v0/db/8401f5508e3e612d
+      ├─▶ failed to fetch commit `6c09ce9ae81f50670a60abd7d95f30dd416d00ac`
+      ╰─▶ process didn't exit successfully: `/usr/bin/git fetch --force --update-head-ok 'https://github.com/astral-test/uv-private-pypackage' '+6c09ce9ae81f50670a60abd7d95f30dd416d00ac:refs/commit/6c09ce9ae81f50670a60abd7d95f30dd416d00ac'` (exit status: 128)
+          --- stderr
+          fatal: could not read Username for 'https://github.com': terminal prompts disabled
+    ");
+
+    // Git's store helper reads only the files in the test context's home directory.
+    let token = decode_token(uv_test::READ_ONLY_GITHUB_TOKEN);
+    credentials.write_str(&format!(
+        "https://git:{token}@github.com/astral-test/uv-private-pypackage\n"
+    ))?;
+    git_config.write_str(indoc! {r"
+        [credential]
+            helper =
+            helper = store
+            useHttpPath = true
+    "})?;
+
+    uv_snapshot!(context.filters(), context.pip_install().arg(package), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + uv-private-pypackage==0.1.0 (from git+https://github.com/astral-test/uv-private-pypackage@6c09ce9ae81f50670a60abd7d95f30dd416d00ac)
+    ");
+    context.assert_installed("uv_private_pypackage", "0.1.0");
+    Ok(())
+}
+
 /// Install a package from a private GitHub repository using a PAT and username
 /// An arbitrary username is supported when using a PAT.
 #[test]
