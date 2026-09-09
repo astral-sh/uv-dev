@@ -17,7 +17,7 @@ use uv_configuration::{
     ExportFormat, ExtrasSpecification, ExtrasSpecificationWithDefaults, InstallOptions,
 };
 use uv_distribution_types::Verbatim;
-use uv_lock::{Installable, Lock, PylockToml, RequirementsTxtExport, cyclonedx_json};
+use uv_lock::{Installable, Lock, PylockTomlExport, RequirementsTxtExport, cyclonedx_json};
 use uv_normalize::{DefaultExtras, DefaultGroups, ExtraName, GroupName, PackageName};
 use uv_preview::{Preview, PreviewFeature};
 use uv_python::{ConfigDiscovery, PythonDownloads, PythonPreference, PythonRequest};
@@ -633,7 +633,7 @@ async fn render_export<'output>(
             write!(writer, "{export}")?;
         }
         ExportFormat::PylockToml => {
-            let mut export = PylockToml::from_lock(
+            let export = PylockTomlExport::from_lock(
                 &target,
                 prune,
                 extras,
@@ -641,18 +641,19 @@ async fn render_export<'output>(
                 include_annotations,
                 editable.as_ref(),
                 install_options,
-            )?;
-
-            // Registries don't always provide hashes, but `packages.*.hashes` is a required
-            // key in PEP 751, so we have to download and hash files with missing hashes.
-            if export.has_missing_hashes() {
-                let client = RegistryClientBuilder::new(client_builder.clone(), cache.clone())
-                    .index_locations(settings.index_locations.clone())
-                    .build()?;
-                export
-                    .generate_missing_hashes(&client, concurrency.downloads, target.install_path())
-                    .await?;
-            }
+            )?
+            .finish(
+                || -> Result<_> {
+                    Ok(
+                        RegistryClientBuilder::new(client_builder.clone(), cache.clone())
+                            .index_locations(settings.index_locations.clone())
+                            .build()?,
+                    )
+                },
+                concurrency.downloads,
+                target.install_path(),
+            )
+            .await?;
 
             if include_header {
                 writeln!(
