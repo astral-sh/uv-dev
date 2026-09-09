@@ -1,3 +1,4 @@
+import os
 import subprocess
 import unittest
 from collections.abc import Mapping, Sequence
@@ -5,6 +6,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import override
+from unittest.mock import patch
 
 from uv_automations.artifacts import CommitRange
 from uv_automations.git import Git
@@ -45,6 +47,9 @@ UV_DEV = RepositoryIdentity(RepositoryName("astral-sh/uv-dev"), 1302176231)
 class LocalGit(Git):
     remotes: Mapping[str, Path]
     commands: list[tuple[str, ...]] = field(default_factory=list, compare=False)
+    credentials: list[tuple[str | None, tuple[str, ...]]] = field(
+        default_factory=list, compare=False
+    )
 
     @override
     def command(
@@ -55,6 +60,7 @@ class LocalGit(Git):
         input: str | None = None,
     ) -> subprocess.CompletedProcess[str]:
         self.commands.append(tuple(arguments))
+        self.credentials.append((self.token_variable, tuple(arguments)))
         local_arguments = [str(self.remotes.get(value, value)) for value in arguments]
         return Git.command(self, local_arguments, check=check, input=input)
 
@@ -92,6 +98,7 @@ def details(rebase: PreparedRebase) -> PullRequestDetails:
 class RebaseTests(unittest.TestCase):
     @override
     def setUp(self) -> None:
+        self.enterContext(patch.dict(os.environ, {"GH_READ_TOKEN": "test-read-token"}))
         directory = TemporaryDirectory(prefix="uv-automations-rebase-")
         self.addCleanup(directory.cleanup)
         self.root = Path(directory.name)
@@ -418,6 +425,22 @@ class RebaseTests(unittest.TestCase):
                 "https://github.com/astral-sh/uv-dev.git",
                 f"{head}:refs/heads/feature",
             ),
+        )
+        self.assertEqual(
+            [
+                token
+                for token, arguments in repository.credentials
+                if "ls-remote" in arguments
+            ],
+            ["GH_READ_TOKEN", "GH_READ_TOKEN"],
+        )
+        self.assertEqual(
+            [
+                token
+                for token, arguments in repository.credentials
+                if "push" in arguments
+            ],
+            [None],
         )
         self.assertEqual(
             push_rebase(github, repository, verified, head), PushOutcome.STALE

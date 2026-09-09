@@ -11,6 +11,7 @@ from uv_automations.artifacts import (
     load_commit,
     persist_commit,
 )
+from uv_automations.checkouts import inspect_candidate
 from uv_automations.git import Git, check_branch
 from uv_automations.json import as_positive_integer
 from uv_automations.models import (
@@ -252,23 +253,20 @@ def prepare_rebase(
 def persist_rebase(
     repository: Git, base_sha: CommitSha, destination: Path
 ) -> RebaseResult:
-    for name in ("rebase-merge", "rebase-apply"):
-        path = Path(repository.output("rev-parse", "--git-path", name))
-        if not path.is_absolute():
-            path = repository.path / path
-        if path.is_dir():
-            raise ValueError("The rebase is still in progress; refusing to publish it")
-    head_sha = repository.resolve_commit("HEAD")
-    if not repository.is_ancestor(base_sha, head_sha):
-        raise ValueError("The rebased pull request does not contain its base")
-    repository.command(("diff", "--check", f"{base_sha}...{head_sha}"))
-    if repository.output("status", "--porcelain=v1"):
-        raise ValueError("The worktree is not clean after the rebase")
-    if head_sha == base_sha:
-        return EmptyRebase(base_sha)
-    return PersistedRebase(
-        persist_commit(repository, CommitRange(base_sha, head_sha), destination)
-    )
+    with inspect_candidate(
+        repository, base=base_sha, scratch=destination.absolute().parent
+    ) as candidate:
+        candidate.require_clean()
+        head_sha = candidate.head
+        trusted = candidate.repository
+        if not trusted.is_ancestor(base_sha, head_sha):
+            raise ValueError("The rebased pull request does not contain its base")
+        trusted.command(("diff", "--check", f"{base_sha}...{head_sha}"))
+        if head_sha == base_sha:
+            return EmptyRebase(base_sha)
+        return PersistedRebase(
+            persist_commit(trusted, CommitRange(base_sha, head_sha), destination)
+        )
 
 
 def load_rebase(
@@ -314,10 +312,11 @@ def push_rebase(
         head_repository=verified.head_repository,
     ):
         return PushOutcome.STALE
+    read_repository = repository.with_token("GH_READ_TOKEN")
     if (
-        _remote_head(repository, source.repository.name, source.base_ref)
+        _remote_head(read_repository, source.repository.name, source.base_ref)
         != rebase.base_sha
-        or _remote_head(repository, source.head_repository, source.head_ref)
+        or _remote_head(read_repository, source.head_repository, source.head_ref)
         != source.head_sha
     ):
         return PushOutcome.STALE
