@@ -139,15 +139,22 @@ Keep the existing wire formats and job-level credential boundaries during each m
 
 The outstanding automation drafts provide useful tests of that boundary:
 
-| Proposal                                                   | Shared mechanism                                                                | Policy that remains with the consumer                                                       |
-| ---------------------------------------------------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| [uv-dev#766](https://github.com/astral-sh/uv-dev/pull/766) | Exact commit ranges, bundle verification, and immutable artifact IDs            | Allowed paths, authorship, parent selection, and permission to publish                      |
-| [uv-dev#546](https://github.com/astral-sh/uv-dev/pull/546) | Typed issue reads and safe context-file creation                                | Which issue to collect and how a workflow uses its context                                  |
-| [uv-dev#942](https://github.com/astral-sh/uv-dev/pull/942) | Candidate inspection, explicit empty/nonempty outcomes, and leased pushes       | Independently proving that the original changes are already in the base before closing a PR |
-| [uv-dev#305](https://github.com/astral-sh/uv-dev/pull/305) | Bounded feedback collection, typed results, and verified run/session provenance | Eligible feedback, checkpoint advancement, commit accounting, and reply/resolve decisions   |
+| Proposal                                                   | Shared mechanism                                                                | Policy that remains with the consumer                                                            |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| [uv-dev#766](https://github.com/astral-sh/uv-dev/pull/766) | Exact commit ranges, bundle verification, and immutable artifact IDs            | Allowed paths, authorship, parent selection, and permission to publish                           |
+| [uv-dev#546](https://github.com/astral-sh/uv-dev/pull/546) | Typed issue reads and safe context-file creation                                | Which issue to collect and how a workflow uses its context                                       |
+| [uv-dev#942](https://github.com/astral-sh/uv-dev/pull/942) | Candidate inspection, explicit empty/nonempty outcomes, and leased pushes       | Independently proving that the original changes are already in the base before closing a PR      |
+| [uv-dev#305](https://github.com/astral-sh/uv-dev/pull/305) | Bounded feedback collection, typed results, and verified run/session provenance | Eligible feedback, checkpoint advancement, commit accounting, and reply/resolve decisions        |
+| [uv-dev#894](https://github.com/astral-sh/uv-dev/pull/894) | Bounded event histories, typed promotion records, and exact workflow dispatch   | The queued head and human approval are still current, and the parent merge reached source `main` |
+| [uv-dev#922](https://github.com/astral-sh/uv-dev/pull/922) | Repository identities, parent history, ancestry, and narrow base updates        | Unique promoted-parent evidence, synchronized-`main` checks, and child freshness                 |
+| [uv-dev#986](https://github.com/astral-sh/uv-dev/pull/986) | Typed human approval events and publication preconditions                       | Private-to-public approval, label ordering, and recovery policy                                  |
 
-Promotion and parent-update work can consume the same identities, commit artifacts, and publication
-preconditions without putting queue policy, approval policy, or recovery decisions in the Git layer.
+The promotion consumers should use a `PromotionApproval` that retains the source repository
+identity, pull request, approved head, human event ID, and approval kind. A `PromotionRecord` should
+identify the upstream pull request only after verifying the issuing bot's database ID and GitHub App
+identity. A `RetargetPlan` retains the synchronized `main` SHA, exact child base/head, and verified
+parent merge; publication rechecks those preconditions before each narrow mutation. These are
+publication authority, not properties of a valid Git bundle.
 
 | Existing workflows                                                                     | Python responsibility                                                                                                |
 | -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
@@ -183,7 +190,7 @@ def retry(github_writer: GitHubWriter, plan: RetryPlan) -> RetryResult: ...
 # workflows/promotion.py
 def plan(
     source: PullRequest,
-    approval: Approval,
+    approval: PromotionApproval,
     upstream: RepositoryState,
     parent: ParentState,
 ) -> PromotionPlan: ...
@@ -193,6 +200,20 @@ def publish(
     plan: PromotionPlan,
     head: CommitSha,
 ) -> PromotionResult: ...
+def plan_replay(
+    queued: QueuedPromotion,
+    approval: PromotionApproval,
+    parent: PromotedParent,
+    source_main: CommitSha,
+) -> ReplayPlan | StalePromotion: ...
+def plan_retarget(
+    parent: PromotedParent,
+    children: tuple[PullRequestDetails, ...],
+    source_main: CommitSha,
+) -> tuple[RetargetPlan, ...]: ...
+def retarget(
+    reader: PromotionReader, writer: PullRequestBaseWriter, plan: RetargetPlan
+) -> RetargetOutcome: ...
 ```
 
 `RebaseResult`, for example, should be a union of `CleanRebase`, `ConflictedRebase`, `EmptyRebase`,
