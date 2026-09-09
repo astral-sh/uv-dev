@@ -24,7 +24,7 @@ use crate::{
     index::{AuthPolicy, Indexes},
     realm::Realm,
 };
-use crate::{Index, TextCredentialStore};
+use crate::{Index, TextCredentialStore, TomlCredentialError};
 
 /// Cached check for whether we're running in Dependabot.
 static IS_DEPENDABOT: LazyLock<bool> =
@@ -108,11 +108,7 @@ impl TextStoreMode {
                 debug!("Loaded credential file {}", path.display());
                 Some(store)
             }
-            Err(err)
-                if err
-                    .as_io_error()
-                    .is_some_and(|err| err.kind() == std::io::ErrorKind::NotFound) =>
-            {
+            Err(TomlCredentialError::NotFound(_)) => {
                 debug!("No credentials file found at {}", path.display());
                 None
             }
