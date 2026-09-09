@@ -29,7 +29,7 @@ use uv_distribution_types::{DistributionMetadata, InstalledMetadata, Name, Resol
 use uv_fs::{CWD, Simplified, normalize_path_under};
 use uv_install_wheel::{LinkMode, installed_dist_info_path, read_record_into_iter};
 use uv_installer::{InstallationStrategy, Plan, Planner, Preparer, SitePackages};
-use uv_normalize::PackageName;
+use uv_normalize::{ExtraName, PackageName};
 use uv_pep440::Version;
 use uv_pep508::{MarkerEnvironment, RequirementOrigin, VerbatimUrl};
 use uv_platform_tags::Tags;
@@ -70,7 +70,11 @@ pub(crate) async fn read_requirements(
         let has_editable = requirements
             .iter()
             .any(|source| matches!(source, RequirementsSource::Editable(_)));
-        return Err(anyhow::Error::new(ExtrasWithoutSourceError { has_editable }).into());
+        return Err(anyhow::Error::new(ExtrasWithoutSourceError {
+            has_editable,
+            extra: extras.history().single_extra().cloned(),
+        })
+        .into());
     }
 
     // Read all requirements from the provided sources.
@@ -1422,14 +1426,16 @@ impl uv_errors::Hint for Error {
 )]
 pub(crate) struct ExtrasWithoutSourceError {
     has_editable: bool,
+    extra: Option<ExtraName>,
 }
 
 impl uv_errors::Hint for ExtrasWithoutSourceError {
     fn hints(&self) -> uv_errors::Hints<'_> {
+        let extra = self.extra.as_ref().map_or("extra", ExtraName::as_str);
         uv_errors::Hints::from(if self.has_editable {
-            "Use `<dir>[extra]` syntax or `-r <file>` instead"
+            format!("Use `<dir>[{extra}]` syntax or `-r <file>` instead")
         } else {
-            "Use `package[extra]` syntax instead"
+            format!("Use `package[{extra}]` syntax instead")
         })
     }
 }

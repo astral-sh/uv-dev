@@ -198,6 +198,35 @@ pub struct ExtrasSpecificationHistory {
 }
 
 impl ExtrasSpecificationHistory {
+    /// Return the sole explicit positive `--extra`, without other selections or defaults.
+    pub fn single_extra(&self) -> Option<&ExtraName> {
+        let Self {
+            extra,
+            only_extra,
+            no_extra,
+            all_extras,
+            no_default_extras,
+            defaults,
+        } = self;
+
+        let defaults_empty = match defaults {
+            DefaultExtras::All => false,
+            DefaultExtras::List(defaults) => defaults.is_empty(),
+        };
+
+        match (
+            extra.as_slice(),
+            only_extra.as_slice(),
+            no_extra.as_slice(),
+            all_extras,
+            no_default_extras,
+            defaults_empty,
+        ) {
+            ([extra], [], [], false, false, true) => Some(extra),
+            _ => None,
+        }
+    }
+
     /// Returns all the CLI flags that this represents.
     ///
     /// If a flag was provided multiple times (e.g. `--extra A --extra B`) this will
