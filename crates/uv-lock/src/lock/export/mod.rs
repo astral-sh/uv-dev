@@ -23,7 +23,9 @@ pub(crate) use crate::lock::export::metadata::{
     MetadataNode, MetadataNodeId, MetadataNodeKind, MetadataScript, MetadataWorkspace,
     MetadataWorkspaceMember,
 };
-pub use crate::lock::export::pylock_toml::{PylockToml, PylockTomlError, PylockTomlErrorKind};
+pub use crate::lock::export::pylock_toml::{
+    PylockToml, PylockTomlError, PylockTomlErrorKind, PylockTomlSourceKind,
+};
 pub use crate::lock::export::requirements_txt::RequirementsTxtExport;
 use crate::lock::{LockErrorKind, PackageIndex};
 use crate::{Installable, InstallableRootKind, LockError, Package};
