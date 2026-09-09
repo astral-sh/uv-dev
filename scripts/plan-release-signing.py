@@ -17,8 +17,8 @@ import json
 import tomllib
 from pathlib import Path
 
-MACOS_RUNNER = "namespace-profile-macos-15"
-WINDOWS_X64_RUNNER = "namespace-profile-windows-2022-x86-64-16x32"
+MACOS_RUNNER = "namespace-profile-macos-15-4x7"
+WINDOWS_X64_RUNNER = "namespace-profile-windows-2022-x86-64-4x8"
 WINDOWS_ARM64_RUNNER = "github-windows-11-aarch64-8"
 
 # Runner assignment is explicit: adding a release target needs a native verifier.
