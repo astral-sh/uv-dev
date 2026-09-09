@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import unittest
 from unittest.mock import patch
@@ -65,6 +66,7 @@ class GitHubTests(unittest.TestCase):
                 check=True,
                 text=True,
                 stdout=subprocess.PIPE,
+                env=None,
                 timeout=60,
             )
 
@@ -84,5 +86,29 @@ class GitHubTests(unittest.TestCase):
                 check=True,
                 text=True,
                 stdout=subprocess.PIPE,
+                env=None,
                 timeout=60,
             )
+
+    def test_read_token_is_scoped_to_the_github_subprocess(self) -> None:
+        with (
+            patch.dict(os.environ, {"GH_TOKEN": "writer", "GH_READ_TOKEN": "reader"}),
+            patch("uv_automations.github.subprocess.run") as run,
+        ):
+            run.return_value = subprocess.CompletedProcess(
+                [], 0, json.dumps(pull_request_payload())
+            )
+            GitHub(token_variable="GH_READ_TOKEN").get_pull_request(REFERENCE)
+            self.assertEqual(run.call_args.kwargs["env"]["GH_TOKEN"], "reader")
+            self.assertEqual(os.environ["GH_TOKEN"], "writer")
+            self.assertNotIn("reader", run.call_args.args[0])
+            self.assertNotIn("writer", run.call_args.args[0])
+
+    def test_missing_read_token_fails_closed(self) -> None:
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch("uv_automations.github.subprocess.run") as run,
+            self.assertRaisesRegex(ValueError, "GH_READ_TOKEN"),
+        ):
+            GitHub(token_variable="GH_READ_TOKEN").get_pull_request(REFERENCE)
+        run.assert_not_called()
