@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 
 SOURCE_REVISION = "e9837f6e09e481bf5d1c2c2f13b641c14a366518"
+AUTH_FIX = "51bcea71165dc26c1fd9ea6e6686ba413ae1f679"
 CARGO = [
     "cargo",
     "nextest",
@@ -43,6 +44,7 @@ def counters():
         "/proc/pressure/io",
         "/proc/pressure/memory",
         "/sys/fs/cgroup/cpu.stat",
+        "/sys/fs/cgroup/memory.events",
     ):
         path = Path(filename)
         if path.exists():
@@ -117,13 +119,21 @@ def measure(command, name, environment, results):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("cpu", "filesystem"))
+    parser.add_argument("mode", choices=("cpu", "filesystem", "high-workers"))
     parser.add_argument("--results", type=Path, required=True)
     parser.add_argument("--dry-run", action="store_true")
     arguments = parser.parse_args()
-    variants = {"cpu": [8, 20, 40], "filesystem": ["native", "ext4", "tmpfs"]}[
-        arguments.mode
-    ]
+    variants = {
+        "cpu": [8, 20, 40],
+        "filesystem": ["native", "ext4", "tmpfs"],
+        "high-workers": [40, 64, 80],
+    }[arguments.mode]
+    if arguments.mode == "high-workers":
+        replica = int(os.environ["RCA_REPLICA"])
+        if replica not in (1, 2):
+            raise RuntimeError(f"Unexpected replica: {replica}")
+        if replica == 2:
+            variants = variants[::-1]
     # Rotate each variant through every position to balance order effects.
     schedules = [variants[index:] + variants[:index] for index in range(len(variants))]
     if arguments.dry_run:
@@ -140,9 +150,16 @@ def main():
 
     if capture(["git", "rev-parse", "HEAD"]) != SOURCE_REVISION:
         raise RuntimeError("Unexpected uv source revision")
-    changed = capture(["git", "diff", "--name-only"])
+    changed = capture(["git", "status", "--porcelain"])
     if changed:
         raise RuntimeError(f"Unexpected source changes: {changed}")
+    if arguments.mode == "high-workers":
+        # Keep the native credential store isolated across repeated full suites.
+        patch = Path(__file__).with_name("native-auth-isolation.patch")
+        subprocess.run(["git", "apply", "--check", str(patch)], check=True)
+        subprocess.run(["git", "apply", str(patch)], check=True)
+        if len(os.sched_getaffinity(0)) != 32:
+            raise RuntimeError("Expected a 32-vCPU runner")
 
     results = arguments.results.resolve()
     results.mkdir(parents=True, exist_ok=True)
@@ -162,6 +179,25 @@ def main():
         "kernel": capture(["uname", "-sr"]),
         "source_diff": capture(["git", "diff"]),
     }
+    if arguments.mode == "high-workers":
+        metadata.update(
+            replica=replica,
+            common_auth_fix=AUTH_FIX,
+            rustc=capture(["rustc", "-Vv"]),
+            nextest=capture(["cargo", "nextest", "--version"]),
+            storage=json.loads(
+                capture(
+                    [
+                        "findmnt",
+                        "--json",
+                        "--output",
+                        "TARGET,SOURCE,FSTYPE,OPTIONS",
+                        "--target",
+                        str(native),
+                    ]
+                )
+            ),
+        )
     for filename in ("cpu.max", "cpuset.cpus.effective", "memory.max"):
         path = Path("/sys/fs/cgroup") / filename
         if path.exists():
@@ -169,7 +205,10 @@ def main():
     (results / "machine.json").write_text(json.dumps(metadata, indent=2) + "\n")
     command = CARGO.copy()
     subprocess.run([*command, "--no-run"], env=environment, check=True)
-    warmup = measure([*command, "--test-threads", "20"], "warmup", environment, results)
+    warmup_workers = "40" if arguments.mode == "high-workers" else "20"
+    warmup = measure(
+        [*command, "--test-threads", warmup_workers], "warmup", environment, results
+    )
     expected_count = warmup["tests_run"]
     if (
         warmup["returncode"]
@@ -198,7 +237,9 @@ def main():
                 sample_environment = dict(
                     environment, TMPDIR=temporary, UV_PYTHON_CACHE_DIR=str(python_cache)
                 )
-                workers = str(variant) if arguments.mode == "cpu" else "20"
+                workers = (
+                    str(variant) if arguments.mode in ("cpu", "high-workers") else "20"
+                )
                 row = measure(
                     [*command, "--test-threads", workers],
                     f"round-{round_index}-{variant}",
