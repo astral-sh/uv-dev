@@ -186,6 +186,20 @@ impl uv_errors::Hinted for Error {
                     "Use `package[extra]` syntax instead"
                 })
             }
+            Self::Anyhow(error) => {
+                let mut hints = uv_errors::Hints::none();
+                for cause in error.chain() {
+                    if let Some(
+                        error @ (uv_distribution::Error::Metadata(_)
+                        | uv_distribution::Error::PkgInfo(_)
+                        | uv_distribution::Error::PyprojectToml(_)),
+                    ) = cause.downcast_ref::<uv_distribution::Error>()
+                    {
+                        hints.extend(uv_errors::Hinted::hints(error));
+                    }
+                }
+                hints
+            }
             Self::Hash(_)
             | Self::ScopedOverride(_)
             | Self::Io(_)
@@ -194,8 +208,7 @@ impl uv_errors::Hinted for Error {
             | Self::RequirementsWithContext { .. }
             | Self::MissingExtras(_)
             | Self::MissingGroup { .. }
-            | Self::DependencyGroups { .. }
-            | Self::Anyhow(_) => uv_errors::Hints::none(),
+            | Self::DependencyGroups { .. } => uv_errors::Hints::none(),
         }
     }
 }
