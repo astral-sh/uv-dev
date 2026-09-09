@@ -1112,39 +1112,37 @@ fn parse_email_message_file(
 pub(crate) fn find_dist_info(path: impl AsRef<Path>) -> Result<String, Error> {
     // Iterate over `path` to find the `.dist-info` directory. It should be at the top-level,
     // and wheels must contain exactly one.
-    let mut dist_info = fs::read_dir(path.as_ref())?
-        .filter_map(|entry| {
-            let entry = entry.ok()?;
-            let file_type = entry.file_type().ok()?;
-            if file_type.is_dir() {
-                let path = entry.path();
-                if path.extension().is_some_and(|ext| ext == "dist-info") {
-                    return Some(path);
-                }
+    let mut candidates = fs::read_dir(path.as_ref())?.filter_map(|entry| {
+        let entry = entry.ok()?;
+        let file_type = entry.file_type().ok()?;
+        if file_type.is_dir() {
+            let path = entry.path();
+            if path.extension().is_some_and(|ext| ext == "dist-info") {
+                return Some(path);
             }
-            None
-        })
-        .collect::<Vec<_>>();
-    dist_info.sort();
+        }
+        None
+    });
 
-    let dist_info = match dist_info.as_slice() {
-        [] => {
-            return Err(Error::InvalidWheel(
-                "Missing .dist-info directory".to_string(),
-            ));
-        }
-        [dist_info] => dist_info,
-        _ => {
-            return Err(Error::InvalidWheel(format!(
-                "Multiple .dist-info directories found: {}",
-                dist_info
-                    .iter()
-                    .filter_map(|path| path.file_stem())
-                    .map(|prefix| prefix.to_string_lossy())
-                    .join(", ")
-            )));
-        }
+    let Some(dist_info) = candidates.next() else {
+        return Err(Error::InvalidWheel(
+            "Missing .dist-info directory".to_string(),
+        ));
     };
+
+    if let Some(second) = candidates.next() {
+        let mut dist_info = vec![dist_info, second];
+        dist_info.extend(candidates);
+        dist_info.sort();
+        return Err(Error::InvalidWheel(format!(
+            "Multiple .dist-info directories found: {}",
+            dist_info
+                .iter()
+                .filter_map(|path| path.file_stem())
+                .map(|prefix| prefix.to_string_lossy())
+                .join(", ")
+        )));
+    }
 
     let Some(dist_info_prefix) = dist_info.file_stem() else {
         return Err(Error::InvalidWheel(
@@ -1228,12 +1226,84 @@ mod test {
 
     use anyhow::Result;
     use assert_fs::prelude::*;
+    #[cfg(unix)]
+    use fs_err::os::unix::fs::symlink;
     use indoc::{formatdoc, indoc};
 
     use super::{
-        Error, RecordEntry, Script, WheelFile, format_shebang, get_script_executable,
-        parse_email_message_file, parse_scripts, read_record, write_installer_metadata,
+        Error, RecordEntry, Script, WheelFile, find_dist_info, format_shebang,
+        get_script_executable, parse_email_message_file, parse_scripts, read_record,
+        write_installer_metadata,
     };
+
+    #[test]
+    fn test_find_dist_info_missing() -> Result<()> {
+        let wheel = assert_fs::TempDir::new()?;
+        wheel.child("package").create_dir_all()?;
+        wheel.child("file.dist-info").write_str("")?;
+        wheel.child(".dist-info").create_dir_all()?;
+
+        assert_matches!(
+            find_dist_info(wheel.path()),
+            Err(Error::InvalidWheel(message)) if message == "Missing .dist-info directory"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_find_dist_info_unique() -> Result<()> {
+        let wheel = assert_fs::TempDir::new()?;
+        wheel.child("package").create_dir_all()?;
+        wheel.child("file.dist-info").write_str("")?;
+        wheel.child("package-1.0.dist-info").create_dir_all()?;
+
+        assert_eq!(find_dist_info(wheel.path())?, "package-1.0");
+        Ok(())
+    }
+
+    #[test]
+    fn test_find_dist_info_multiple() -> Result<()> {
+        let wheel = assert_fs::TempDir::new()?;
+        for name in ["zeta-3.0", "alpha-1.0", "middle-2.0"] {
+            wheel.child(format!("{name}.dist-info")).create_dir_all()?;
+        }
+
+        assert_matches!(
+            find_dist_info(wheel.path()),
+            Err(Error::InvalidWheel(message))
+                if message == "Multiple .dist-info directories found: alpha-1.0, middle-2.0, zeta-3.0"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_find_dist_info_missing_root() -> Result<()> {
+        let wheel = assert_fs::TempDir::new()?;
+
+        assert_matches!(
+            find_dist_info(wheel.child("missing").path()),
+            Err(Error::Io(error)) if error.kind() == ErrorKind::NotFound
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_find_dist_info_symlinks() -> Result<()> {
+        let wheel = assert_fs::TempDir::new()?;
+        wheel.child("target").create_dir_all()?;
+        symlink("target", wheel.child("linked.dist-info").path())?;
+        symlink("missing", wheel.child("dangling.dist-info").path())?;
+
+        assert_matches!(
+            find_dist_info(wheel.path()),
+            Err(Error::InvalidWheel(message)) if message == "Missing .dist-info directory"
+        );
+
+        wheel.child("package-1.0.dist-info").create_dir_all()?;
+        assert_eq!(find_dist_info(wheel.path())?, "package-1.0");
+        Ok(())
+    }
 
     #[test]
     fn test_parse_email_message_file() {
