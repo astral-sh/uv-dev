@@ -193,14 +193,12 @@ impl RequirementsTxt {
         cache: &mut SourceCache,
     ) -> Result<Self, RequirementsTxtFileError> {
         let requirements_txt = requirements_txt.into();
-        let mut visited = VisitedFiles::Requirements {
-            requirements: &mut FxHashSet::default(),
-            constraints: &mut FxHashSet::default(),
-        };
+        let mut visited = VisitedFiles::default();
         Self::parse_impl(
             &requirements_txt,
             working_dir,
             client_builder,
+            InclusionKind::Requirements,
             &mut visited,
             cache,
         )
@@ -218,17 +216,14 @@ impl RequirementsTxt {
     ) -> Result<Self, RequirementsTxtFileError> {
         let requirements_txt = requirements_txt.into();
         let working_dir = working_dir.as_ref();
-
-        let mut visited = VisitedFiles::Requirements {
-            requirements: &mut FxHashSet::default(),
-            constraints: &mut FxHashSet::default(),
-        };
+        let mut visited = VisitedFiles::default();
 
         Self::parse_inner(
             content,
             working_dir,
             client_builder,
             &requirements_txt,
+            InclusionKind::Requirements,
             &mut visited,
             source_contents,
         )
@@ -245,7 +240,8 @@ impl RequirementsTxt {
         requirements_txt: &RequirementsInput,
         working_dir: impl AsRef<Path>,
         client_builder: &BaseClientBuilder<'_>,
-        visited: &mut VisitedFiles<'_>,
+        kind: InclusionKind,
+        visited: &mut VisitedFiles,
         cache: &mut SourceCache,
     ) -> Result<Self, RequirementsTxtFileError> {
         let working_dir = working_dir.as_ref();
@@ -323,6 +319,7 @@ impl RequirementsTxt {
             working_dir,
             client_builder,
             requirements_txt,
+            kind,
             visited,
             cache,
         )
@@ -346,7 +343,8 @@ impl RequirementsTxt {
         working_dir: &Path,
         client_builder: &BaseClientBuilder<'_>,
         requirements_txt: &RequirementsInput,
-        visited: &mut VisitedFiles<'_>,
+        kind: InclusionKind,
+        visited: &mut VisitedFiles,
         cache: &mut SourceCache,
     ) -> Result<Self, RequirementsTxtParserError> {
         let mut s = Scanner::new(content);
@@ -367,25 +365,17 @@ impl RequirementsTxt {
                             start,
                             end,
                         })?;
-                    match visited {
-                        VisitedFiles::Requirements { requirements, .. } => {
-                            if !requirements.insert(visited_file(&sub_file)) {
-                                continue;
-                            }
-                        }
-                        // Treat any nested requirements or constraints as constraints. This differs
-                        // from `pip`, which seems to treat `-r` requirements in constraints files as
-                        // _requirements_, but we don't want to support that.
-                        VisitedFiles::Constraints { constraints } => {
-                            if !constraints.insert(visited_file(&sub_file)) {
-                                continue;
-                            }
-                        }
+                    // In constraints mode, nested requirements are also treated as constraints.
+                    // This differs from `pip`, which seems to treat `-r` requirements in
+                    // constraints files as _requirements_, but we don't want to support that.
+                    if !visited.insert(&sub_file, kind) {
+                        continue;
                     }
                     let sub_requirements = Box::pin(Self::parse_impl(
                         &sub_file,
                         working_dir,
                         client_builder,
+                        kind,
                         visited,
                         cache,
                     ))
@@ -429,26 +419,16 @@ impl RequirementsTxt {
                         })?;
 
                     // Switch to constraints mode, if we aren't in it already.
-                    let mut visited = match visited {
-                        VisitedFiles::Requirements { constraints, .. } => {
-                            if !constraints.insert(visited_file(&sub_file)) {
-                                continue;
-                            }
-                            VisitedFiles::Constraints { constraints }
-                        }
-                        VisitedFiles::Constraints { constraints } => {
-                            if !constraints.insert(visited_file(&sub_file)) {
-                                continue;
-                            }
-                            VisitedFiles::Constraints { constraints }
-                        }
-                    };
+                    if !visited.insert(&sub_file, InclusionKind::Constraints) {
+                        continue;
+                    }
 
                     let sub_constraints = Box::pin(Self::parse_impl(
                         &sub_file,
                         working_dir,
                         client_builder,
-                        &mut visited,
+                        InclusionKind::Constraints,
+                        visited,
                         cache,
                     ))
                     .await
@@ -1430,19 +1410,31 @@ impl RequirementsTxtParserError {
 
 /// Avoid infinite recursion through recursive inclusions, while also being mindful of nested
 /// requirements and constraint inclusions.
-#[derive(Debug)]
-enum VisitedFiles<'a> {
+#[derive(Debug, Default)]
+struct VisitedFiles {
+    requirements: FxHashSet<RequirementsInput>,
+    constraints: FxHashSet<RequirementsInput>,
+}
+
+impl VisitedFiles {
+    fn insert(&mut self, input: &RequirementsInput, kind: InclusionKind) -> bool {
+        let visited = match kind {
+            InclusionKind::Requirements => &mut self.requirements,
+            InclusionKind::Constraints => &mut self.constraints,
+        };
+        visited.insert(visited_file(input))
+    }
+}
+
+/// How a requirements file was included.
+#[derive(Debug, Clone, Copy)]
+enum InclusionKind {
     /// The requirements are included as regular requirements, and can recursively include both
     /// requirements and constraints.
-    Requirements {
-        requirements: &'a mut FxHashSet<RequirementsInput>,
-        constraints: &'a mut FxHashSet<RequirementsInput>,
-    },
+    Requirements,
     /// The requirements are included as constraints, all recursive inclusions are considered
     /// constraints.
-    Constraints {
-        constraints: &'a mut FxHashSet<RequirementsInput>,
-    },
+    Constraints,
 }
 
 /// Return a stable identity for a requirements input without changing the input used to read it.
