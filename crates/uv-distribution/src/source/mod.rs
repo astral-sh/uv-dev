@@ -3038,7 +3038,13 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         };
 
         // Read the metadata from the wheel.
-        let filename = WheelFilename::from_str(&disk_filename)?;
+        let filename = WheelFilename::from_str(&disk_filename).map_err(|err| {
+            if disk_filename.contains(['/', '\\']) {
+                Error::WheelFilenamePath(err)
+            } else {
+                Error::WheelFilename(err)
+            }
+        })?;
         let metadata = read_wheel_metadata(&filename, &temp_dir.path().join(&disk_filename))?;
 
         // Validate the metadata.

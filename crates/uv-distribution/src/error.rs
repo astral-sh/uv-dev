@@ -74,6 +74,8 @@ pub enum Error {
     Build(AnyErrorBuild),
     #[error("Built wheel has an invalid filename")]
     WheelFilename(#[from] WheelFilenameError),
+    #[error("Build backend must return a wheel filename, not a path")]
+    WheelFilenamePath(#[source] WheelFilenameError),
     #[error("Package metadata name `{metadata}` does not match given name `{given}`")]
     WheelMetadataNameMismatch {
         given: PackageName,
