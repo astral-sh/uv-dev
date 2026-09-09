@@ -6,82 +6,127 @@ Classification: bug
 
 ## Summary
 
-`uv check` reports diagnostics from a workspace member beneath a directory configured in
-`[tool.ty.src].exclude`. The reported virtual workspace lists `vendor/sglang/python` as a member
-while excluding `vendor`; plain `uv check` checks that member, whereas `uv check --no-project`
-respects the exclusion.
+The reported behavior is reproducible. In a virtual workspace whose only member is beneath
+`vendor`, `[tool.ty.src].exclude = ["vendor"]` prevents ty's normal source discovery from checking
+that member, but plain `uv check` automatically selects the workspace member and reports its type
+error. `uv check --no-project` respects normal ty discovery and reports no diagnostics.
 
-The current source supports the reported mechanism. In a virtual workspace with no explicit
-package selection, `crates/uv/src/commands/project/check.rs` treats the invocation as
-`--all-packages`, constructs the check targets from every workspace member root, and passes those
-targets to ty. `crates/uv/src/commands/project/check/ty.rs` places the targets after `--` as
-positional paths but does not enable ty's force-exclusion behavior. With `--no-project`, uv does not
-discover the workspace or generate those positional member targets. Existing integration tests
-confirm that a virtual workspace checks all members by default, but do not cover a member matched
-by `[tool.ty.src].exclude`.
+The observed subprocess command and current implementation agree on the mechanism: a virtual
+workspace with no explicit package selection is treated like `--all-packages`, and uv passes each
+member root to ty as a positional path. No existing integration test combines automatic workspace
+selection with `[tool.ty.src].exclude`.
 
-No earlier issue or pull request was found for this exact interaction. The behavior originates in
-the workspace-selection implementation in astral-sh/uv#20628, which completed the request in
-astral-sh/uv#20233. That pull request merged before uv 0.12.0, while this report is against uv
-0.12.10; no intervening exclusion fix was found. Other related work concerns different kinds of
-selection or configuration.
+## Reproduction
+
+Outcome: **reproducible**.
+
+Environment:
+
+- uv 0.12.11 (`x86_64-unknown-linux-gnu`); the report used uv 0.12.10 on the same target
+- ty 0.0.79, automatically selected by uv (the same version reported)
+- CPython 3.12 at `/usr/bin/python3.12`
+- Linux 6.17.0-1022-azure x86_64
+- All fixture files, the uv cache, and the uv-managed Python directory were isolated under `/tmp`
+
+Minimal fixture:
+
+```toml
+# pyproject.toml
+[tool.uv.workspace]
+members = ["vendor/vendored"]
+
+[tool.ty.src]
+exclude = ["vendor"]
+```
+
+```toml
+# vendor/vendored/pyproject.toml
+[project]
+name = "vendored"
+version = "0.1.0"
+requires-python = ">=3.12"
+```
+
+```python
+# vendor/vendored/bad.py
+value: int = "not an integer"
+```
+
+With `UV_CACHE_DIR` and `UV_PYTHON_INSTALL_DIR` pointed inside the temporary fixture and inherited
+`UV_LOCKED` disabled, run:
+
+```console
+$ uv check --isolated --python /usr/bin/python3.12 --color never --show-version --show-command
+Using ty 0.0.79
+Running `ty check --color never --no-progress --exclude-scripts -- vendor/vendored`
+error[invalid-assignment]: Object of type `Literal["not an integer"]` is not assignable to `int`
+ --> vendor/vendored/bad.py:1:14
+Found 1 diagnostic
+```
+
+The command exits 1. The control command succeeds:
+
+```console
+$ uv check --isolated --no-project --ty-version 0.0.79 --color never --show-version --show-command
+Using ty 0.0.79
+Running `ty check --color never --no-progress --exclude-scripts`
+All checks passed!
+WARN No python files found under the given path(s)
+```
+
+Direct ty checks confirm that the positional member target is the relevant behavioral difference:
+`ty check` discovers no Python files, while `ty check -- vendor/vendored` reports the same error.
+One nuance for the proposed remedy is that ty 0.0.79's `--force-exclude` still reports the file with
+the exact bare pattern `vendor`; an explicit recursive pattern such as `vendor/**` is excluded.
+Therefore the reproduction confirms the report, but does not establish that adding
+`--force-exclude` alone would handle every currently valid exclusion spelling.
+
+Nearby integration coverage is in `crates/uv/tests/project/check.rs`:
+
+- `check_virtual_workspace_checks_all_members_by_default` verifies that plain `uv check` at a
+  virtual-workspace root checks every member.
+- `check_workspace_member_selection` verifies implicit and explicit selection of one member.
+- `check_workspace_member_inherits_workspace_configuration` verifies that a selected member uses
+  workspace-level ty rule configuration.
+
+Those tests do not configure `[tool.ty.src].exclude` or assert its interaction with uv-generated
+positional targets.
 
 ## Draft response
 
-Thanks for the clear report. The current implementation does treat a virtual workspace with no
-package selection as `--all-packages` and passes each workspace member root to ty as an explicit
-check target. Since uv does not also force configured exclusions for those internally selected
-paths, `[tool.ty.src].exclude` can be bypassed in exactly the way you describe; `--no-project`
-avoids those generated targets.
+Thanks for the clear report. I reproduced this on uv 0.12.11 with the same automatically selected
+ty 0.0.79. In a minimal virtual workspace with `vendor/vendored` as a member and
+`[tool.ty.src].exclude = ["vendor"]`, plain `uv check` passed `vendor/vendored` to ty as a positional
+path and reported its type error. `uv check --no-project` passed no positional target and succeeded.
 
-The existing workspace-selection work in astral-sh/uv#20233 and astral-sh/uv#20628 does not track
-this interaction, so this should remain open as a separate bug. The next step is a focused
-regression test with an automatically selected member beneath an excluded directory, followed by a
-decision on whether uv should request ty's force-exclusion behavior or filter its generated targets
-before invoking ty.
+The existing workspace-selection tests cover checking all virtual-workspace members by default,
+but not the interaction with ty source exclusions. This should remain open as a focused bug. The
+fix will need to account for ty's exclusion-pattern semantics: with ty 0.0.79, `--force-exclude`
+did not suppress an explicitly selected member for the bare pattern `vendor`, although
+`vendor/**` did.
 
 ## Classification
 
-This is a `bug`. Source confirms that uv internally turns automatically discovered workspace
-members into explicit ty paths. The user did not explicitly select those paths, yet that internal
-translation changes the meaning of their ty exclusion configuration. The difference between plain
-`uv check` and `uv check --no-project` follows directly from whether uv discovers the workspace and
-generates member targets.
+This is a `bug`. The behavior is directly observed, not inferred solely from source: uv's displayed
+ty command contains the automatically generated positional path, the excluded file is diagnosed,
+and removing project discovery via `--no-project` makes the check pass. The user did not explicitly
+select the member path, so uv's automatic workspace selection changes how their ty exclusion is
+applied.
 
-This is not a duplicate of the earlier package-selection request or custom-config-file request.
-astral-sh/uv#20233 asked for selecting workspace packages, and astral-sh/uv#19791 asks for choosing a
-different ty configuration file; neither tracks exclusions being overridden by uv-generated
-positional paths. It is also not a regression of a previously fixed exclusion bug: no earlier
-matching report or fix was found.
+This is not a duplicate of the earlier package-selection or custom-config-file requests.
+astral-sh/uv#20233 concerns selecting workspace packages, and astral-sh/uv#19791 concerns choosing a
+different ty configuration file; neither tracks exclusions overridden by uv-generated paths.
 
 ## Related
 
 - astral-sh/uv#20628 (merged pull request), "Add `--package` and `--all-packages` to `uv check`" —
-  the direct implementation origin. It made a virtual workspace with no package selection
-  equivalent to `--all-packages` and added explicit member-root check targets so ty would follow
-  uv's workspace selection. It shipped by uv 0.12.0 and did not cover
-  `[tool.ty.src].exclude` precedence.
+  introduced the workspace-selection behavior and made a virtual workspace with no package
+  selection equivalent to `--all-packages`.
 - astral-sh/uv#20233 (closed issue), "Support for --package and --all-packages in `uv check`" — the
-  request completed by astral-sh/uv#20628. It concerns which workspace packages uv selects, not
-  whether ty exclusions remain effective for automatically generated targets.
+  selection request completed by astral-sh/uv#20628.
 - astral-sh/uv#20676 (merged pull request), "Avoid checking any scripts in `uv check` unless
-  `--script` is passed" — adjacent selection/exclusion precedent. uv deliberately excludes
-  automatically discovered PEP 723 scripts, but this change does not address ty source exclusions
-  or excluded workspace members.
+  `--script` is passed" — adjacent selection/exclusion behavior, but it does not address ty source
+  exclusions for workspace members.
 - astral-sh/uv#19791 (open issue), "Allow users to specify a custom ty configuration file when
-  running `uv check`" — related configuration-forwarding work, but a different config file would
-  not stop uv-generated positional member paths from taking precedence over its exclusions.
-
-## Search and evidence scope
-
-Literal issue and pull-request searches covered `force-exclude`, `tool.ty.src`, `src.exclude`,
-`uv check --no-project`, explicit paths, exclusions, and vendored workspace members. Conceptual
-searches covered workspace/package selection, type-check ownership, selection semantics, ty
-configuration, positional-path precedence, and automatic member discovery. Fix-oriented searches
-covered closed issues and merged changes around the introduction of workspace selection, including
-astral-sh/uv#20628, astral-sh/uv#20649, and astral-sh/uv#20676, and their comments and references.
-
-astral-sh/uv#20649 was ruled out because it only repaired workspace snapshots and Ruff lints after
-astral-sh/uv#20628. astral-sh/uv#21083 was ruled out because it concerns avoiding installation of a
-project with native extensions, not controlling ty's checked paths. The reporter-suggested
-astral-sh/uv#20233 and astral-sh/uv#19791 are related but do not track the same behavior.
+  running `uv check`" — related configuration forwarding, but not the same exclusion-precedence
+  interaction.

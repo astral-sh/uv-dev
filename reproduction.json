@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "Reproduced in an isolated /tmp fixture on Linux x86_64 with uv 0.12.11, Python 3.12, and automatically selected ty 0.0.79. A virtual workspace containing member vendor/vendored with [tool.ty.src].exclude = [\"vendor\"] caused plain `uv check --isolated` to invoke `ty check -- vendor/vendored`, exit 1, and report the member's invalid assignment. `uv check --isolated --no-project` exited 0 with no Python files found. Nearby tests in crates/uv/tests/project/check.rs cover automatic virtual-workspace member selection but not its interaction with ty exclusions. The issue-context README was updated with the fixture, commands, observations, and test coverage."
+}
