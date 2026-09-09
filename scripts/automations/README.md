@@ -228,9 +228,9 @@ def retarget(
 
 The rebase consumer returns `EmptyRebase | PersistedRebase`; publication first obtains a
 `VerifiedRebaseSource` carrying the exact head-repository identity. The push stage reads current
-pull-request metadata through `GH_READ_TOKEN` while `GH_TOKEN` remains the separate contents writer.
-A plan must carry the repository identity, approved head SHA, run attempt, or other preconditions
-needed to detect stale state. Git writes use an exact lease.
+pull-request metadata and Git refs through `GH_READ_TOKEN` while `GH_TOKEN` remains the separate
+contents writer. A plan must carry the repository identity, approved head SHA, run attempt, or other
+preconditions needed to detect stale state. Git writes use an exact lease.
 
 Keep analysis and publication in separate jobs. A publisher loads its code and configuration from
 the trusted workflow revision, validates incoming artifacts again, and obtains only the permissions
