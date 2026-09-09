@@ -1,0 +1,61 @@
+name: Inspect private promotion approval
+
+on:
+  workflow_dispatch:
+    inputs:
+      pull_request:
+        description: "The private pull request number"
+        required: true
+        type: string
+      head_sha:
+        description: "The exact private head to inspect"
+        required: true
+        type: string
+      kind:
+        description: "The current event policy to inspect"
+        required: true
+        default: labeled
+        type: choice
+        options: [ready_for_review, labeled]
+
+permissions: {}
+
+env:
+  UV_LOCKED: 1
+
+jobs:
+  inspect:
+    name: Inspect current private approval
+    if: github.repository == 'astral-sh/uv-security' && github.repository_id == '1333576902' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-slim
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+
+      - name: Set up trusted automation runtime
+        id: automations
+        uses: ./.github/actions/setup-automations
+
+      - name: Inspect current private approval
+        env:
+          AUTOMATIONS_PYTHON: ${{ steps.automations.outputs.python }}
+          GH_READ_TOKEN: ${{ github.token }}
+          PULL_REQUEST: ${{ inputs.pull_request }}
+          HEAD_SHA: ${{ inputs.head_sha }}
+          REQUEST_KIND: ${{ inputs.kind }}
+        run: |
+          "$AUTOMATIONS_PYTHON" -I -m uv_automations promotions request inspect \
+            --repo astral-sh/uv-security \
+            --repository-id 1333576902 \
+            --pull-request "$PULL_REQUEST" \
+            --expected-head "$HEAD_SHA" \
+            --kind "$REQUEST_KIND" \
+            --github-output "$GITHUB_OUTPUT" \
+            --summary "$GITHUB_STEP_SUMMARY"
