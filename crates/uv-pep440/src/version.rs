@@ -117,7 +117,7 @@ impl Operator {
     }
 
     /// Returns the string representation of this operator.
-    pub fn as_str(self) -> &'static str {
+    fn as_str(self) -> &'static str {
         match self {
             Self::Equal => "==",
             // Beware, this doesn't print the star
@@ -132,6 +132,15 @@ impl Operator {
             Self::GreaterThan => ">",
             Self::GreaterThanEqual => ">=",
         }
+    }
+}
+
+impl CacheKey for Operator {
+    fn cache_key(&self, state: &mut CacheKeyHasher) {
+        self.as_str().cache_key(state);
+        // The display string omits wildcards. Include the flag for every operator so both exact
+        // and wildcard specifiers leave the cache keys that previously collided.
+        self.is_star().cache_key(state);
     }
 }
 
@@ -2901,9 +2910,30 @@ pub static MIN_VERSION: LazyLock<Version> =
 mod tests {
     use std::str::FromStr;
 
+    use uv_cache_key::cache_digest;
+
     use crate::VersionSpecifier;
 
     use super::*;
+
+    #[test]
+    fn operator_cache_key_encoding() {
+        for (operator, token, wildcard) in [
+            (Operator::Equal, "==", false),
+            (Operator::EqualStar, "==", true),
+            (Operator::ExactEqual, "===", false),
+            (Operator::NotEqual, "!=", false),
+            (Operator::NotEqualStar, "!=", true),
+            (Operator::TildeEqual, "~=", false),
+            (Operator::LessThan, "<", false),
+            (Operator::LessThanEqual, "<=", false),
+            (Operator::GreaterThan, ">", false),
+            (Operator::GreaterThanEqual, ">=", false),
+        ] {
+            assert_eq!(cache_digest(&operator), cache_digest(&(token, wildcard)));
+            assert_ne!(cache_digest(&operator), cache_digest(&token));
+        }
+    }
 
     /// <https://github.com/pypa/packaging/blob/237ff3aa348486cf835a980592af3a59fccd6101/tests/test_version.py#L24-L81>
     #[test]
