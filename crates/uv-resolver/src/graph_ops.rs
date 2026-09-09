@@ -254,13 +254,7 @@ pub(crate) fn simplify_conflict_markers(
         if all_paths_satisfied {
             for set in inference_sets {
                 for inf in set {
-                    // TODO(konsti): Now that `Inference` is public, move more `included` handling
-                    // to `UniversalMarker`.
-                    if inf.included {
-                        graph[edge_index].assume_conflict_item(&inf.item);
-                    } else {
-                        graph[edge_index].assume_not_conflict_item(&inf.item);
-                    }
+                    graph[edge_index].assume_inference(inf);
                 }
             }
         } else {
