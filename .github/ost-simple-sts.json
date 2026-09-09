@@ -182,6 +182,20 @@
       "target": "uv-dev"
     },
     {
+      "caller": "uv-dev",
+      "environment": "automations",
+      "caller_workflow": "pull-request-comments.yml",
+      "on": ["workflow_dispatch"],
+      "permissions": {
+        "contents": "write",
+        "workflows": "write",
+        "issues": "write",
+        "pull_requests": "write"
+      },
+      "target": "uv-dev",
+      "installation": "automations"
+    },
+    {
       "caller": "uv",
       "environment": "automations",
       "caller_workflow": "pull-request-labels.yml",

@@ -67,6 +67,15 @@
       "workflow": "promote-pull-request.yml"
     },
     {
+      "repository": "uv-dev",
+      "on": {
+        "issue_comment": ["created", "edited"],
+        "pull_request_review_comment": ["created", "edited"],
+        "pull_request_review": ["submitted", "edited"]
+      },
+      "workflow": "pull-request-comments.yml"
+    },
+    {
       "repository": "uv-security",
       "on": {
         "pull_request": ["ready_for_review"]

@@ -21,7 +21,7 @@
           "id": { "type": "string", "minLength": 1, "maxLength": 200 },
           "outcome": {
             "type": "string",
-            "enum": ["COMMIT_AND_RESOLVE", "RESPOND", "CLARIFY"]
+            "enum": ["COMMIT_AND_RESOLVE", "RESPOND", "CLARIFY", "NO_ACTION"]
           },
           "body": { "type": "string", "maxLength": 12000 },
           "addressing_commit": {

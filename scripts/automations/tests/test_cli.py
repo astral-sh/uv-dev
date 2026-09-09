@@ -5,6 +5,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from uv_automations import comments_cli
 from uv_automations.cli import (
     FindConflicts,
     ValidateLabels,
@@ -18,6 +19,18 @@ from uv_automations.workflows.labels import LabelApplyOutcome
 
 
 class CliTests(unittest.TestCase):
+    def test_comments_family_is_parsed_and_dispatched(self) -> None:
+        command = comments_cli.WriteSchema(destination=None)
+        self.assertEqual(
+            parse_command(create_parser(), ["comments", "schema"]), command
+        )
+        with (
+            patch("uv_automations.cli.logging.basicConfig"),
+            patch("uv_automations.cli.comments_cli.run") as run,
+        ):
+            main(["comments", "schema"])
+        run.assert_called_once_with(command)
+
     def test_parse_validate_labels(self) -> None:
         self.assertEqual(
             parse_command(

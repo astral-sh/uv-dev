@@ -164,6 +164,32 @@ The feedback adapters add immutable contracts without coupling them to one workf
   `write_sessions(snapshot, destination)` creates a fresh sessions tree, normalizing compressed
   rollouts without merging another Codex home.
 
+`workflows.comments` composes those adapters into the `comments` preparation, result-validation, and
+publication CLI stages. Collection overlaps GitHub's whole-second `since` boundary, remembers exact
+comment versions at that boundary, and keeps a review-thread cursor. Review summaries have no
+updated-since API, so their small, bounded connection is scanned to detect edits to old reviews.
+Each API history is limited to ten pages; an incomplete history is an error, not a checkpoint. A
+stale or unverifiable saved cursor falls back to a complete bounded bootstrap. An edit or
+contributing review-thread reply newer than the collection watermark is deferred in the pending
+queue. Agent-facing thread context excludes the automation's own replies; the publisher retains the
+full typed thread for idempotency checks.
+
+Only twenty trusted feedback targets are offered to the agent at a time. Every selected target must
+receive an explicit disposition, including `NO_ACTION`, and the completed checkpoint retains a
+bounded backlog of the rest. Post-agent commit transport uses `inspect_candidate` and protected
+scratch, so agent-owned Git configuration cannot run during verification. Every new commit must be
+named by an addressing disposition. The checkpoint advances only after successful publication,
+including a result that needs no writes.
+
+The immutable preparation, result, and session artifacts may come from different attempts of the
+same workflow run. Publication verifies their exact IDs and records its own attempt, so retrying a
+failed publisher does not require rerunning an already-successful agent. A pending dispatch can
+advance only to the exact strict-descendant head recorded by a verified completed checkpoint. The
+writer imports bundles without checking out candidate code, rechecks the head and human feedback,
+and uses an exact push lease. That lease prevents a concurrent intentional rewind from being
+overwritten; it does not authorize a history rewrite. Read provenance and freshness use the job
+token, while the isolated writer token is used only for publication.
+
 ## Subsequent migrations
 
 Migrate complete deterministic workflow stages rather than extracting isolated `jq` expressions.
