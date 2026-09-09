@@ -211,6 +211,53 @@ comment identities and body to the issue-comment list's App metadata, then requi
 to be empty. Its `UneditedPromotionComment` result is not deserialized from workflow input. Queue,
 replay, retarget, and publication decisions remain separate consumers.
 
+### Durable public promotion replay
+
+`workflows.promotion_queue.QueuedPromotion` binds one `uv-dev` pull request to its exact base and
+head revisions, human readiness event, and source parent. A sync-wait record additionally retains
+the promoted upstream PR and merge SHA. `record_queue` creates a canonical, never-edited bot
+comment; it does not rewrite older approvals. A newer human readiness transition can supersede old
+records, while conflicting records for the current event fail closed. Legacy waiting comments do not
+contain enough head/approval provenance to be upgraded automatically.
+
+```python
+from uv_automations.github_promotion import PromotionGitHub
+from uv_automations.github_promotion_queue import PromotionQueueGitHub
+from uv_automations.models import CommitSha
+from uv_automations.promotion_models import BranchRevision, UV_DEV_REPOSITORY
+from uv_automations.workflows.promotion_queue import replay_queued_promotions
+
+source = PromotionGitHub(token_variable="GH_SOURCE_TOKEN")
+upstream = PromotionGitHub(token_variable="GH_UPSTREAM_TOKEN")
+main = BranchRevision(UV_DEV_REPOSITORY, "main", CommitSha(synced_main_sha))
+outcomes = replay_queued_promotions(source, upstream, PromotionQueueGitHub(), main)
+```
+
+Replay verifies the exact current source and latest readiness transition, never-edited queue
+receipt, uniquely bot-promoted parent, original-parent-head history, upstream merge, and public
+source-main ancestry. `DispatchedReplay` retains the returned workflow-run identity; `SkippedReplay`
+has a closed reason enum. `plan_queued_promotion` repeats those checks in the dispatched worker and
+rebases the child onto the pinned public `main`, even if an old parent or grandparent branch
+survives or has been deleted. Manual promotion retains its existing-branch behavior.
+`current_ready_approval` is deliberately stricter than the legacy `ready_approval`: a later draft or
+bot-ready transition revokes the old replay approval.
+
+The workflow integration can wake the queue after a successful public-main sync, after recording a
+new queue entry, and after finishing a promoted parent's source-close receipt. The last wakeup
+considers only that parent's children. Queue recording needs only source-PR write authority. Local
+replay can use the source repository's own `GITHUB_TOKEN`, whose
+[`workflow_dispatch` calls can start another run](https://docs.github.com/en/actions/concepts/security/github_token).
+Cross-repository replay belongs in a distinct reusable workflow, with an exact STS rule targeting
+only `uv-dev`; this avoids the first matching direct sync/publisher rule. The sync stage refuses to
+merge a divergent, source-only `main` and verifies its result is reachable from public `uv/main`
+before exposing the SHA.
+
+`promotions prepare`, `record-queue`, `replay`, `replay-one`, `replay-children`, `current-approval`,
+`sync`, and `ensure-base` are the corresponding CLI stages. The workflow adoption can retain the
+existing branch/PR publisher and recovery while calling the shared approval guard and create-only
+base-copy stage. Their next migration must preserve complete publication identity and
+partial-publication recovery, not merely move individual REST calls.
+
 ## Subsequent migrations
 
 Migrate complete deterministic workflow stages rather than extracting isolated `jq` expressions.
