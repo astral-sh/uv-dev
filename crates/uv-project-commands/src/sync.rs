@@ -563,6 +563,19 @@ pub async fn sync(
             }
             return Err(UvError::from(error).into());
         }
+        Err(EnvironmentError::Lock(err)) => {
+            if frozen.is_some()
+                && let Some(name) = err.multiple_root_package()
+                && package.contains(name)
+                && !outcome.lock().members().contains(name)
+                && outcome.lock().root().is_none_or(|root| root.name() != name)
+            {
+                let context = format!("Package `{name}` not found in workspace");
+                let error = anyhow::Error::new(EnvironmentError::Lock(err)).context(context);
+                return Err(UvError::unexpected(error).into());
+            }
+            return Err(UvError::from(EnvironmentError::Lock(err)).into());
+        }
         Err(err) => return Err(UvError::from(err).into()),
     };
 
