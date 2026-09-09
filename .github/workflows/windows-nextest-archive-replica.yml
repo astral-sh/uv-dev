@@ -5,6 +5,9 @@ name: Windows nextest archive replica
       replica:
         required: true
         type: number
+      cache-state:
+        required: true
+        type: string
 permissions:
   contents: read
 env:
@@ -19,7 +22,7 @@ jobs:
   baseline:
     timeout-minutes: 25
     runs-on: namespace-profile-windows-2022-x86-64-16x32
-    name: baseline / ${{ inputs.replica }} / ${{ matrix.partition }}
+    name: ${{ inputs.cache-state }} / baseline / ${{ inputs.replica }} / ${{ matrix.partition }}
     strategy:
       fail-fast: false
       matrix:
@@ -52,12 +55,18 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
         id: rust-cache
         with:
-          prefix-key: v1-rust-workspace
+          prefix-key: uv-ci-windows-nextest-archive-${{ github.run_id }}
           key: ${{ hashFiles('Cargo.toml') }}
           workspaces: ${{ env.UV_WORKSPACE }}
           cache-workspace-crates: "true"
           add-job-id-key: false
           save-if: "false"
+        if: ${{ inputs.cache-state == 'warm' }}
+      - name: Require the expected Rust cache
+        if: ${{ inputs.cache-state == 'warm' }}
+        env:
+          CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        run: if ($env:CACHE_HIT -ne 'true') { throw 'Expected an exact Rust cache hit' }
       - name: Create NTFS test directory (low hardlink limit)
         run: New-Item -Path "C:\uv" -ItemType Directory -Force
       - name: Create SMB test share (alternative filesystem)
@@ -95,7 +104,7 @@ jobs:
         if: ${{ failure() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: pending-snapshots-windows-${{ matrix.partition }}-baseline-${{ inputs.replica }}
+          name: pending-snapshots-windows-${{ matrix.partition }}-baseline-${{ inputs.replica }}-${{ inputs.cache-state }}
           path: pending-snapshots/
           if-no-files-found: ignore
           include-hidden-files: true
@@ -104,7 +113,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: junit-results-windows-${{ matrix.partition }}-baseline-${{ inputs.replica }}
+          name: junit-results-windows-${{ matrix.partition }}-baseline-${{ inputs.replica }}-${{ inputs.cache-state }}
           path: ${{ env.UV_WORKSPACE }}/target/nextest/ci*/junit.xml
           if-no-files-found: ignore
           retention-days: 14
@@ -114,7 +123,7 @@ jobs:
   producer:
     timeout-minutes: 25
     runs-on: namespace-profile-windows-2022-x86-64-16x32
-    name: producer / ${{ inputs.replica }}
+    name: ${{ inputs.cache-state }} / producer / ${{ inputs.replica }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -139,12 +148,18 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
         id: rust-cache
         with:
-          prefix-key: v1-rust-workspace
+          prefix-key: uv-ci-windows-nextest-archive-${{ github.run_id }}
           key: ${{ hashFiles('Cargo.toml') }}
           workspaces: ${{ env.UV_WORKSPACE }}
           cache-workspace-crates: "true"
           add-job-id-key: false
           save-if: "false"
+        if: ${{ inputs.cache-state == 'warm' }}
+      - name: Require the expected Rust cache
+        if: ${{ inputs.cache-state == 'warm' }}
+        env:
+          CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        run: if ($env:CACHE_HIT -ne 'true') { throw 'Expected an exact Rust cache hit' }
       - name: Install cargo nextest
         uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad
         with:
@@ -175,7 +190,7 @@ jobs:
       - name: Upload nextest archive
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: nextest-windows-${{ inputs.replica }}
+          name: nextest-windows-${{ inputs.replica }}-${{ inputs.cache-state }}
           path: ${{ env.UV_WORKSPACE }}/nextest.tar.zst
           compression-level: 0
           if-no-files-found: error
@@ -186,7 +201,7 @@ jobs:
   consumer:
     timeout-minutes: 25
     runs-on: namespace-profile-windows-2022-x86-64-16x32
-    name: consumer / ${{ inputs.replica }} / ${{ matrix.partition }}
+    name: ${{ inputs.cache-state }} / consumer / ${{ inputs.replica }} / ${{ matrix.partition }}
     strategy:
       fail-fast: false
       matrix:
@@ -229,7 +244,7 @@ jobs:
       - name: Download nextest archive
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          name: nextest-windows-${{ inputs.replica }}
+          name: nextest-windows-${{ inputs.replica }}-${{ inputs.cache-state }}
           path: ${{ env.UV_WORKSPACE }}
       - name: Cargo test
         working-directory: ${{ env.UV_WORKSPACE }}
@@ -256,7 +271,7 @@ jobs:
         if: ${{ failure() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: pending-snapshots-windows-${{ matrix.partition }}-consumer-${{ inputs.replica }}
+          name: pending-snapshots-windows-${{ matrix.partition }}-consumer-${{ inputs.replica }}-${{ inputs.cache-state }}
           path: pending-snapshots/
           if-no-files-found: ignore
           include-hidden-files: true
@@ -265,7 +280,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: junit-results-windows-${{ matrix.partition }}-consumer-${{ inputs.replica }}
+          name: junit-results-windows-${{ matrix.partition }}-consumer-${{ inputs.replica }}-${{ inputs.cache-state }}
           path: ${{ env.UV_WORKSPACE }}/target/nextest/ci*/junit.xml
           if-no-files-found: ignore
           retention-days: 14
@@ -273,26 +288,3 @@ jobs:
       run:
         shell: pwsh
     needs: producer
----
-name: Windows nextest archive experiment
-"on":
-  push:
-    branches:
-      - zb/ci-windows-nextest-archive-20260909
-permissions:
-  contents: read
-jobs:
-  compare:
-    strategy:
-      fail-fast: false
-      max-parallel: 2
-      matrix:
-        replica:
-          - 1
-          - 2
-          - 3
-          - 4
-          - 5
-    uses: ./.github/workflows/windows-nextest-archive-replica.yml
-    with:
-      replica: ${{ matrix.replica }}

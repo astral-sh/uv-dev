@@ -1,34 +1,99 @@
-{
-  "name": "Windows nextest archive experiment",
-  "on": {
-    "push": {
-      "branches": [
-        "zb/ci-windows-nextest-archive-20260909"
-      ]
-    }
-  },
-  "permissions": {
-    "contents": "read"
-  },
-  "jobs": {
-    "compare": {
-      "strategy": {
-        "fail-fast": false,
-        "max-parallel": 2,
-        "matrix": {
-          "replica": [
-            1,
-            2,
-            3,
-            4,
-            5
-          ]
-        }
-      },
-      "uses": "./.github/workflows/windows-nextest-archive-replica.yml",
-      "with": {
-        "replica": "${{ matrix.replica }}"
-      }
-    }
-  }
-}
+name: Windows nextest archive experiment
+"on":
+  push:
+    branches:
+      - zb/ci-windows-nextest-archive-20260909
+permissions:
+  contents: read
+jobs:
+  seed:
+    timeout-minutes: 25
+    runs-on: namespace-profile-windows-2022-x86-64-16x32
+    name: seed
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          repository: astral-sh/uv
+          ref: c4be691531385fd7563e2a29d9bfa2e19b4c2025
+      - name: Setup Dev Drive
+        run: ${{ github.workspace }}/.github/workflows/setup-dev-drive.ps1
+      - name: Copy Git Repo to Dev Drive
+        run: |
+          Copy-Item -Path "${{ github.workspace }}" -Destination "$Env:UV_WORKSPACE" -Recurse
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
+        with:
+          version: 0.12.10
+          checksum: f65744f94072152b1f86ba2aace4d01f1124d9a8ecb235805039e3718c36cac2
+          enable-cache: false
+      - name: Install required Python versions
+        run: uv python install
+      - name: Install Rust toolchain
+        working-directory: ${{ env.UV_WORKSPACE }}
+        run: rustup toolchain install --profile minimal
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        id: rust-cache
+        with:
+          prefix-key: uv-ci-windows-nextest-archive-${{ github.run_id }}
+          key: ${{ hashFiles('Cargo.toml') }}
+          workspaces: ${{ env.UV_WORKSPACE }}
+          cache-workspace-crates: "true"
+          add-job-id-key: false
+          save-if: "true"
+      - name: Install cargo nextest
+        uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad
+        with:
+          tool: cargo-nextest
+      - name: Archive test binaries
+        working-directory: ${{ env.UV_WORKSPACE }}
+        env:
+          UV_HTTP_RETRIES: 5
+          UV_LINK_MODE: copy
+          RUST_BACKTRACE: 1
+          CARGO_UNSTABLE_MTIME_ON_USE: "false"
+          UV_INTERNAL__TEST_ALT_FS: \\localhost\uv-alt-fs
+          UV_INTERNAL__TEST_SMB_FS: \\localhost\uv-alt-fs
+          UV_INTERNAL__TEST_LOWLINKS_FS: C:\uv
+          INSTA_UPDATE: new
+          INSTA_PENDING_DIR: ${{ github.workspace }}/pending-snapshots
+        shell: bash
+        run: |
+          cargo nextest archive \
+            --cargo-profile fast-build-nightly \
+            -Z panic-abort-tests \
+            -Z checksum-freshness \
+            --no-default-features \
+            --features test-python,test-pypi,test-python-managed,test-windows-registry,native-auth,windows-native \
+            --workspace \
+            --profile ci-windows \
+            --archive-file "$UV_WORKSPACE/nextest.tar.zst"
+    defaults:
+      run:
+        shell: pwsh
+  compare:
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        cache-state:
+          - cold
+          - warm
+        replica:
+          - 1
+          - 2
+          - 3
+          - 4
+          - 5
+    uses: ./.github/workflows/windows-nextest-archive-replica.yml
+    with:
+      replica: ${{ matrix.replica }}
+      cache-state: ${{ matrix.cache-state }}
+    needs: seed
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  CARGO_TERM_COLOR: always
+  PYTHON_VERSION: "3.12"
+  RUSTC_BOOTSTRAP: 1
+  RUSTUP_MAX_RETRIES: 10
+  UV_LOCKED: 1
