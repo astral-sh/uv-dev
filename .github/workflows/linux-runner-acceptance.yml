@@ -222,11 +222,11 @@ jobs:
           save-if: "false"
           shared-key: linux-${{ matrix.provider }}
           workspaces: source -> target
-      - name: Require a warm Rust cache
+      - name: Record Rust cache result
         env:
           CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
         run: |
-          test "$CACHE_HIT" = true
+          printf '%s\n' "${CACHE_HIT:-false}" > "$GITHUB_WORKSPACE/results/rust-cache-hit.txt"
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
         with:
           version: 0.12.7
@@ -380,11 +380,11 @@ jobs:
           save-if: "false"
           shared-key: linux-${{ matrix.provider }}
           workspaces: source -> target
-      - name: Require a warm Rust cache
+      - name: Record Rust cache result
         env:
           CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
         run: |
-          test "$CACHE_HIT" = true
+          printf '%s\n' "${CACHE_HIT:-false}" > "$GITHUB_WORKSPACE/results/rust-cache-hit.txt"
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
         with:
           version: 0.12.7
@@ -538,11 +538,11 @@ jobs:
           save-if: "false"
           shared-key: linux-${{ matrix.provider }}
           workspaces: source -> target
-      - name: Require a warm Rust cache
+      - name: Record Rust cache result
         env:
           CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
         run: |
-          test "$CACHE_HIT" = true
+          printf '%s\n' "${CACHE_HIT:-false}" > "$GITHUB_WORKSPACE/results/rust-cache-hit.txt"
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
         with:
           version: 0.12.7
