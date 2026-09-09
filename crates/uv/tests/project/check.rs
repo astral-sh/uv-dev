@@ -750,17 +750,16 @@ fn check_virtual_workspace_checks_all_members_by_default() -> Result<()> {
         .child("main.py")
         .write_str("value: int = 'selected-vendored'\n")?;
 
-    // Automatically selecting the vendored member overrides ty's exclusion, which is undesirable
-    // because configured exclusions should still apply. See astral-sh/uv#21551.
-    uv_snapshot!(context.filters(), workspace_check(&context), @r#"
+    // Automatically selected workspace members should still respect ty's source exclusions.
+    uv_snapshot!(context.filters(), workspace_check(&context).arg("--show-command"), @r#"
     exit_code: 1 (failure)
     ----- stdout -----
     packages/member-a/main.py:1:14: error[invalid-assignment] Object of type `Literal["selected-a"]` is not assignable to `int`
-    vendor/vendored/main.py:1:14: error[invalid-assignment] Object of type `Literal["selected-vendored"]` is not assignable to `int`
-    Found 2 diagnostics
+    Found 1 diagnostic
 
     ----- stderr -----
     warning: `uv check` is experimental and may change without warning. Pass `--preview-features check-command` to disable this warning.
+    Running `ty check --color auto --exclude-scripts --config 'src.include = ["packages/member-a", "vendor/vendored"]'`
     "#);
 
     Ok(())

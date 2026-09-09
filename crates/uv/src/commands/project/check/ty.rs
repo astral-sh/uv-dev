@@ -4,6 +4,7 @@ use std::str::FromStr;
 
 use anyhow::{Context, Result};
 use tokio::process::Command;
+use toml_edit::Array;
 use tracing::debug;
 
 use uv_bin_install::{BinVersion, Binary, ResolvedVersion, bin_install, find_matching_version};
@@ -20,6 +21,11 @@ use crate::commands::reporters::BinaryDownloadReporter;
 use crate::commands::workspace::list::{ScriptDiscoveryError, find_scripts};
 use crate::printer::Printer;
 
+pub(super) enum TargetMode {
+    Include,
+    Positional,
+}
+
 /// Run a type check powered by ty.
 pub(super) async fn run(
     version: Option<String>,
@@ -28,6 +34,7 @@ pub(super) async fn run(
     target_dir: &Path,
     workspace_root: Option<&Path>,
     check_targets: &[PathBuf],
+    target_mode: TargetMode,
     excluded_targets: &[PathBuf],
     venv_path: Option<&Path>,
     exclude_newer: Option<jiff::Timestamp>,
@@ -199,15 +206,42 @@ pub(super) async fn run(
         );
     }
     if !check_targets.is_empty() {
-        // Keep paths relative to the working directory for stable diagnostics, and use `--` so
-        // option-like filenames are treated as paths.
-        command.arg("--");
-        for check_target in check_targets {
-            command.arg(
-                check_target
-                    .strip_prefix(target_dir)
-                    .unwrap_or(check_target),
-            );
+        let includes = match target_mode {
+            TargetMode::Include => workspace_root.and_then(|workspace_root| {
+                check_targets
+                    .iter()
+                    .try_fold(Array::new(), |mut includes, check_target| {
+                        let check_target = check_target.strip_prefix(workspace_root).ok()?;
+                        let check_target = if check_target.as_os_str().is_empty() {
+                            ".".to_string()
+                        } else {
+                            check_target.to_str()?.to_string()
+                        };
+                        #[cfg(windows)]
+                        let check_target = check_target.replace('\\', "/");
+                        includes.push(check_target);
+                        Some(includes)
+                    })
+            }),
+            TargetMode::Positional => None,
+        };
+
+        if let Some(includes) = includes {
+            // Use configuration includes for automatically selected targets so ty's configured
+            // source exclusions retain their normal precedence.
+            command.arg("--config");
+            command.arg(format!("src.include = {includes}"));
+        } else {
+            // Keep paths relative to the working directory for stable diagnostics, and use `--`
+            // so option-like filenames are treated as paths.
+            command.arg("--");
+            for check_target in check_targets {
+                command.arg(
+                    check_target
+                        .strip_prefix(target_dir)
+                        .unwrap_or(check_target),
+                );
+            }
         }
     }
     // Opt into ty querying uv for project metadata.

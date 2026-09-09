@@ -735,6 +735,11 @@ pub(crate) async fn check(
         .resolver
         .exclude_newer
         .exclude_newer_package_for_index(&PackageName::from_str("ty")?, None);
+    let target_mode = if defacto_all_packages && !all_packages {
+        ty::TargetMode::Include
+    } else {
+        ty::TargetMode::Positional
+    };
 
     ty::run(
         ty_version,
@@ -745,6 +750,7 @@ pub(crate) async fn check(
             .as_ref()
             .map(|project| project.workspace().install_path().as_path()),
         &check_targets,
+        target_mode,
         &excluded_targets,
         venv_path.as_deref(),
         exclude_newer,
