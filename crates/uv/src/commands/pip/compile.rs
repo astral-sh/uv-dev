@@ -42,7 +42,7 @@ use uv_requirements::{
 };
 use uv_resolver::{
     AnnotationStyle, DependencyMode, DisplayResolutionGraph, ExcludeNewer, FlatIndex, ForkStrategy,
-    InMemoryIndex, OptionsBuilder, Prerelease, PylockToml, PythonRequirement, ResolutionMode,
+    InMemoryIndex, OptionsBuilder, Prerelease, PylockTomlExport, PythonRequirement, ResolutionMode,
     ResolverEnvironment,
 };
 use uv_settings::PythonInstallMirrors;
@@ -756,19 +756,19 @@ pub(crate) async fn pip_compile(
             };
 
             // Convert the resolution to a `pylock.toml` file.
-            let mut export = PylockToml::from_resolution(
+            let export = PylockTomlExport::from_resolution(
                 &resolution,
                 &no_emit_packages,
                 install_path,
                 tags.as_deref(),
                 &build_options,
-            )?;
-
-            // Registries don't always provide hashes, but `packages.*.hashes` is a required
-            // key in PEP 751, so we have to download and hash files with missing hashes.
-            export
-                .generate_missing_hashes(&client, concurrency.downloads, install_path)
-                .await?;
+            )?
+            .finish(
+                || -> Result<_> { Ok(&client) },
+                concurrency.downloads,
+                install_path,
+            )
+            .await?;
 
             write!(writer, "{}", export.to_toml()?)?;
         }

@@ -1,4 +1,4 @@
-use std::borrow::Cow;
+use std::borrow::{Borrow, Cow};
 use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -269,6 +269,12 @@ pub struct PylockToml {
     attestation_identities: Vec<PylockTomlAttestationIdentity>,
 }
 
+/// A `pylock.toml` export that must complete its required artifact hashes before serialization.
+#[derive(Debug)]
+pub struct PylockTomlExport {
+    lock: PylockToml,
+}
+
 fn deserialize_lock_version<'de, D>(deserializer: D) -> Result<Version, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -511,8 +517,8 @@ struct PylockTomlAttestationIdentity {
     kind: String,
 }
 
-impl<'lock> PylockToml {
-    /// Construct a [`PylockToml`] from a [`ResolverOutput`].
+impl<'lock> PylockTomlExport {
+    /// Construct a [`PylockTomlExport`] from a [`ResolverOutput`].
     ///
     /// If `tags` is provided, only wheels compatible with the given tags will be included.
     /// If `build_options` is provided, packages marked as `--only-binary` will not include
@@ -753,14 +759,16 @@ impl<'lock> PylockToml {
 
         // Return the constructed `pylock.toml`.
         Ok(Self {
-            lock_version,
-            created_by,
-            requires_python: Some(requires_python),
-            extras,
-            dependency_groups,
-            default_groups,
-            packages,
-            attestation_identities,
+            lock: PylockToml {
+                lock_version,
+                created_by,
+                requires_python: Some(requires_python),
+                extras,
+                dependency_groups,
+                default_groups,
+                packages,
+                attestation_identities,
+            },
         })
     }
 
@@ -837,7 +845,7 @@ impl<'lock> PylockToml {
         Ok(Some(wheels))
     }
 
-    /// Construct a [`PylockToml`] from a uv lockfile.
+    /// Construct a [`PylockTomlExport`] from a uv lockfile.
     pub fn from_lock(
         target: &impl Installable<'lock>,
         prune: &[PackageName],
@@ -1113,19 +1121,46 @@ impl<'lock> PylockToml {
         }
 
         Ok(Self {
-            lock_version,
-            created_by,
-            requires_python: Some(requires_python),
-            extras,
-            dependency_groups,
-            default_groups,
-            packages,
-            attestation_identities,
+            lock: PylockToml {
+                lock_version,
+                created_by,
+                requires_python: Some(requires_python),
+                extras,
+                dependency_groups,
+                default_groups,
+                packages,
+                attestation_identities,
+            },
         })
     }
 
+    /// Complete the required artifact hashes and return a serializable [`PylockToml`].
+    ///
+    /// The client is only requested if any hashes are missing. Local files are read from disk,
+    /// with relative paths resolved against `install_path`.
+    pub async fn finish<Client, Error>(
+        mut self,
+        client: impl FnOnce() -> Result<Client, Error>,
+        concurrency: usize,
+        install_path: &Path,
+    ) -> Result<PylockToml, Error>
+    where
+        Client: Borrow<RegistryClient>,
+        Error: From<PylockTomlErrorKind>,
+    {
+        if self.lock.has_missing_hashes() {
+            let client = client()?;
+            self.lock
+                .generate_missing_hashes(client.borrow(), concurrency, install_path)
+                .await?;
+        }
+        Ok(self.lock)
+    }
+}
+
+impl PylockToml {
     /// Returns `true` if any distribution file is missing the hashes required by PEP 751.
-    pub fn has_missing_hashes(&self) -> bool {
+    fn has_missing_hashes(&self) -> bool {
         self.packages.iter().any(|package| {
             package
                 .archive
@@ -1147,14 +1182,12 @@ impl<'lock> PylockToml {
     /// registry didn't provide them, since `packages.*.hashes` is a required key in PEP 751.
     ///
     /// Local files are read from disk, with relative paths resolved against `install_path`.
-    pub async fn generate_missing_hashes(
+    async fn generate_missing_hashes(
         &mut self,
         client: &RegistryClient,
         concurrency: usize,
         install_path: &Path,
     ) -> Result<(), PylockTomlErrorKind> {
-        // TODO(tk): Maybe make hash completion part of the export API so callers cannot accidentally skip it.
-
         // Collect the files that are missing hashes.
         let mut jobs = Vec::new();
         for package in &mut self.packages {
@@ -2088,4 +2121,64 @@ where
         .to_timestamp(DateTime::from_parts(date, time))
         .map_err(serde::de::Error::custom)?;
     Ok(Some(timestamp))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use futures::executor::block_on;
+
+    use uv_client::RegistryClient;
+    use uv_pypi_types::Hashes;
+
+    use super::{PylockTomlErrorKind, PylockTomlExport};
+
+    fn export_with_hashes() -> Result<PylockTomlExport, toml::de::Error> {
+        Ok(PylockTomlExport {
+            lock: toml::from_str(
+                r#"
+                lock-version = "1.0"
+                created-by = "uv"
+
+                [[packages]]
+                name = "demo"
+                version = "1.0"
+                archive = { path = "demo-1.0-py3-none-any.whl", hashes = { sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" } }
+                "#,
+            )?,
+        })
+    }
+
+    #[test]
+    fn complete_export_skips_client() -> Result<(), PylockTomlErrorKind> {
+        let export = export_with_hashes()?;
+        let lock = block_on(export.finish(
+            || Err::<RegistryClient, _>(PylockTomlErrorKind::PathToUrl),
+            1,
+            Path::new("."),
+        ))?;
+        assert!(!lock.has_missing_hashes());
+        Ok(())
+    }
+
+    #[test]
+    fn incomplete_export_requires_client() -> Result<(), PylockTomlErrorKind> {
+        let mut export = export_with_hashes()?;
+        for package in &mut export.lock.packages {
+            if let Some(archive) = &mut package.archive {
+                archive.hashes = Hashes::default();
+            }
+        }
+        assert!(export.lock.has_missing_hashes());
+
+        let error = block_on(export.finish(
+            || Err::<RegistryClient, _>(PylockTomlErrorKind::PathToUrl),
+            1,
+            Path::new("."),
+        ))
+        .expect_err("an incomplete export must request a client");
+        assert_eq!(error.to_string(), "Failed to convert path to URL");
+        Ok(())
+    }
 }
