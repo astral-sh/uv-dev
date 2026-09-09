@@ -81,6 +81,14 @@ the exact bare pattern `vendor`; an explicit recursive pattern such as `vendor/*
 Therefore the reproduction confirms the report, but does not establish that adding
 `--force-exclude` alone would handle every currently valid exclusion spelling.
 
+## Workaround
+
+A maintainer recommends using the recursive ty exclusion pattern
+`[tool.ty.src].exclude = ["vendor/**"]` while the fix is pending. The isolated reproduction
+confirms that this pattern excludes the automatically selected vendored member with ty 0.0.79,
+whereas the reporter's bare `vendor` pattern does not. This is a configuration workaround, not a
+change to uv's workspace-member selection.
+
 Nearby integration coverage is in `crates/uv/tests/project/check.rs`:
 
 - `check_virtual_workspace_checks_all_members_by_default` verifies that plain `uv check` at a
@@ -154,4 +162,4 @@ different ty configuration file; neither tracks exclusions overridden by uv-gene
   running `uv check`" — related configuration forwarding, but not the same exclusion-precedence
   interaction.
 
-Pull request: https://github.com/astral-sh/uv-dev/pull/991
+Pull request: astral-sh/uv-dev#991
