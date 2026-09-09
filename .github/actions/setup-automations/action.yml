@@ -1,0 +1,26 @@
+name: "Set up Python automations"
+description: "Install the trusted workflow's automation package independently of later checkouts."
+
+outputs:
+  executable:
+    description: "The absolute path to the installed uv-automations command."
+    value: ${{ steps.install.outputs.executable }}
+  python:
+    description: "The absolute path to the installed environment's Python interpreter."
+    value: ${{ steps.install.outputs.python }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: "Install uv"
+      uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      with:
+        version: "0.12.10"
+        enable-cache: false
+
+    - name: "Install trusted automation runtime"
+      id: install
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+      run: uv run --no-project --no-config --python 3.14 python "$ACTION_PATH/install.py"

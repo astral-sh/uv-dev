@@ -12,6 +12,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import assert_never
 
+from uv_automations import commits_cli
 from uv_automations.actions import append_summary, write_json_output, write_output
 from uv_automations.github import GitHub
 from uv_automations.json import loads
@@ -43,6 +44,12 @@ from uv_automations.workflows.labels import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class CommandGroup(StrEnum):
+    LABELS = "labels"
+    PULL_REQUESTS = "pull-requests"
+    COMMITS = "commits"
 
 
 class CommandKind(StrEnum):
@@ -102,7 +109,7 @@ class RemoveRebaseLabel:
     reference: PullRequestRef
 
 
-type Command = (
+type CoreCommand = (
     PrepareLabels
     | ValidateLabels
     | ReportLabels
@@ -111,6 +118,8 @@ type Command = (
     | IdentifyConflicts
     | RemoveRebaseLabel
 )
+
+type Command = CoreCommand | commits_cli.CommitCommand
 
 
 def _positive_integer(value: str) -> int:
@@ -138,7 +147,7 @@ def _add_pull_request(parser: argparse.ArgumentParser) -> None:
 
 def create_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="uv-automations", description=__doc__)
-    commands = parser.add_subparsers(required=True)
+    commands = parser.add_subparsers(dest="command_group", required=True)
     labels = commands.add_parser("labels").add_subparsers(required=True)
 
     prepare = labels.add_parser("prepare")
@@ -189,6 +198,7 @@ def create_parser() -> argparse.ArgumentParser:
     remove = pull_requests.add_parser("remove-rebase-label")
     remove.set_defaults(command=CommandKind.REMOVE_REBASE_LABEL)
     _add_pull_request(remove)
+    commits_cli.add_commands(commands.add_parser("commits"))
     return parser
 
 
@@ -196,6 +206,16 @@ def parse_command(
     parser: argparse.ArgumentParser, arguments: Sequence[str] | None
 ) -> Command:
     parsed = parser.parse_args(arguments)
+    group = CommandGroup(parsed.command_group)
+    match group:
+        case CommandGroup.LABELS | CommandGroup.PULL_REQUESTS:
+            return _parse_core_command(parsed)
+        case CommandGroup.COMMITS:
+            return commits_cli.parse_command(parsed)
+    assert_never(group)
+
+
+def _parse_core_command(parsed: argparse.Namespace) -> CoreCommand:
     kind = CommandKind(parsed.command)
     match kind:
         case CommandKind.PREPARE_LABELS:
@@ -322,6 +342,9 @@ def run(command: Command) -> None:
         case RemoveRebaseLabel():
             remove_rebase_label(github, command.reference)
             return
+        case commits_cli.PersistCommit() | commits_cli.LoadCommit():
+            commits_cli.run(command)
+            return
     assert_never(command)
 
 
@@ -330,7 +353,7 @@ def main(arguments: Sequence[str] | None = None) -> None:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     try:
         run(parse_command(parser, arguments))
-    except (KeyError, TypeError, ValueError) as error:
+    except (KeyError, TypeError, ValueError, OSError) as error:
         parser.exit(2, f"{parser.prog}: {error}\n")
     except subprocess.CalledProcessError as error:
         parser.exit(
