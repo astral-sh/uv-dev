@@ -65,11 +65,7 @@ pub(crate) async fn audit(
     let installed_tools = InstalledTools::from_settings()?;
     let _lock = match installed_tools.lock().await {
         Ok(lock) => lock,
-        Err(error)
-            if error
-                .as_io_error()
-                .is_some_and(|error| error.kind() == io::ErrorKind::NotFound) =>
-        {
+        Err(uv_tool::Error::ToolsDirectoryNotFound { .. }) => {
             if let Some(name) = names.first() {
                 bail!("`{name}` is not installed; run `uv tool install {name}` to install");
             }
