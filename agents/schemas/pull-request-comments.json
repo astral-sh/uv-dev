@@ -1,0 +1,37 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "summary": { "type": "string", "minLength": 1, "maxLength": 4000 },
+    "actions": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "target": {
+            "type": "string",
+            "enum": [
+              "CONVERSATION_COMMENT",
+              "REVIEW_THREAD",
+              "PULL_REQUEST_REVIEW"
+            ]
+          },
+          "id": { "type": "string", "minLength": 1, "maxLength": 200 },
+          "outcome": {
+            "type": "string",
+            "enum": ["COMMIT_AND_RESOLVE", "RESPOND", "CLARIFY"]
+          },
+          "body": { "type": "string", "maxLength": 12000 },
+          "addressing_commit": {
+            "type": ["string", "null"],
+            "pattern": "^[0-9a-f]{40}$"
+          }
+        },
+        "required": ["target", "id", "outcome", "body", "addressing_commit"]
+      }
+    }
+  },
+  "required": ["summary", "actions"]
+}

@@ -2,6 +2,7 @@
 
 import re
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import assert_never, override
 
@@ -40,6 +41,40 @@ class CommitSha:
     @override
     def __str__(self) -> str:
         return self.value
+
+
+@dataclass(frozen=True, slots=True, order=True)
+class Timestamp:
+    """GitHub's UTC, whole-second timestamp representation."""
+
+    value: datetime
+
+    def __post_init__(self) -> None:
+        if self.value.utcoffset() != timedelta(0) or self.value.microsecond:
+            raise ValueError("Expected a UTC timestamp with whole-second precision")
+
+    @classmethod
+    def parse(cls, value: str) -> Timestamp:
+        if (
+            re.fullmatch(
+                r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", value
+            )
+            is None
+        ):
+            raise ValueError("Expected a canonical UTC timestamp")
+        return cls(datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC))
+
+    @classmethod
+    def now(cls) -> Timestamp:
+        return cls(datetime.now(UTC).replace(microsecond=0))
+
+    def overlap(self) -> Timestamp:
+        # GitHub's `since` filters are exclusive and have second precision.
+        return Timestamp(self.value - timedelta(seconds=1))
+
+    @override
+    def __str__(self) -> str:
+        return self.value.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 @dataclass(frozen=True, slots=True)
