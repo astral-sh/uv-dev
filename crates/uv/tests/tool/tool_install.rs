@@ -13,13 +13,14 @@ use assert_fs::{
     fixture::{FileTouch, FileWriteStr, PathChild, PathCreateDir},
 };
 use indoc::indoc;
-use insta::assert_snapshot;
+use insta::{allow_duplicates, assert_snapshot};
 use predicates::prelude::predicate;
 #[cfg(windows)]
 use uv_fs::Simplified;
 use uv_fs::copy_dir_all;
 use uv_static::EnvVars;
 
+use uv_test::packse::PackseServer;
 use uv_test::uv_snapshot;
 
 #[cfg(feature = "test-git")]
@@ -46,6 +47,47 @@ fn tool_install_git_path(bin_dir: &ChildPath) -> OsString {
     }
 
     std::env::join_paths(paths).unwrap()
+}
+
+/// Install and execute console scripts from both generated wheels and built source distributions.
+#[test]
+fn tool_install_packse_console_scripts() {
+    let server = PackseServer::new("tools/console-scripts.toml");
+
+    allow_duplicates! {
+        for binary_option in ["--no-build-package", "--no-binary-package"] {
+            let context = uv_test::test_context!("3.12")
+                .with_filtered_exe_suffix()
+                .with_tool_dirs();
+            let bin_dir = context.temp_dir.child("bin");
+
+            uv_snapshot!(context.filters(), context.tool_install()
+                .arg("packse-tool")
+                .arg("--index-url")
+                .arg(server.index_url())
+                .arg(binary_option)
+                .arg("packse-tool")
+                .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+            exit_code: 0 (success)
+            ----- stderr -----
+            Resolved 1 package in [TIME]
+            Prepared 1 package in [TIME]
+            Installed 1 package in [TIME]
+             + packse-tool==1.2.3
+            Installed 2 executables: packse-alias, packse-tool
+            ");
+
+            for script in ["packse-tool", "packse-alias"] {
+                let executable = bin_dir.child(format!("{script}{}", std::env::consts::EXE_SUFFIX));
+                uv_snapshot!(Command::new(executable.path())
+                    .arg("--version"), @"
+                exit_code: 0 (success)
+                ----- stdout -----
+                packse-tool 1.2.3
+                ");
+            }
+        }
+    }
 }
 
 #[test]

@@ -27,7 +27,8 @@ use crate::vendor::{VendorArtifact, vendor_artifacts};
 
 use super::scenario::{Scenario, WheelTag};
 use super::scenarios_dir;
-use super::wheel::{generate_sdist, generate_wheel, sha256_hex};
+use super::scripts::GeneratedScripts;
+use super::wheel::{generate_sdist_with_scripts, generate_wheel_with_scripts, sha256_hex};
 
 const PACKSE_UPLOAD_TIME: &str = "2024-03-24T00:00:00Z";
 
@@ -143,6 +144,8 @@ fn build_server_index(scenario: &Scenario) -> ServerIndex {
         let mut dists = Vec::new();
 
         for (version, meta) in &package.versions {
+            let scripts = GeneratedScripts::new(package_name, version, &meta.scripts)
+                .expect("Packse package scripts should be valid");
             if let Some(wheel_metadata) = &meta.wheel {
                 let tags = if meta.wheel_tags.is_empty() {
                     vec!["py3-none-any"]
@@ -151,13 +154,14 @@ fn build_server_index(scenario: &Scenario) -> ServerIndex {
                 };
 
                 for tag in tags {
-                    let (filename, bytes) = generate_wheel(
+                    let (filename, bytes) = generate_wheel_with_scripts(
                         package_name,
                         version,
                         &meta.requires,
                         &meta.extras,
                         meta.requires_python.as_ref(),
                         tag,
+                        &scripts,
                     );
                     let sha256 = sha256_hex(&bytes);
                     files.insert(filename.clone(), FileData::Bytes(bytes.into()));
@@ -172,12 +176,13 @@ fn build_server_index(scenario: &Scenario) -> ServerIndex {
             }
 
             if let Some(sdist_metadata) = &meta.sdist {
-                let (filename, bytes) = generate_sdist(
+                let (filename, bytes) = generate_sdist_with_scripts(
                     package_name,
                     version,
                     &meta.requires,
                     &meta.extras,
                     meta.requires_python.as_ref(),
+                    &scripts,
                 );
                 let sha256 = sha256_hex(&bytes);
                 files.insert(filename.clone(), FileData::Bytes(bytes.into()));
