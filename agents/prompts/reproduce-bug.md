@@ -53,10 +53,10 @@ Do not infer that reported behavior is reproducible from source inspection or a 
 Clearly distinguish observed behavior from hypotheses, and do not claim a root cause that has not
 been confirmed.
 
-Update `$RUNNER_TEMP/issue-context/README.md` directly with the reproduction findings. Read the
-entire existing document and revise any part of it when reproduction evidence clarifies or corrects
-the issue context. Preserve accurate issue identification, classification, and related issues or
-pull requests, while updating stale summaries or conclusions as needed.
+Update `$TMPDIR/issue-context/README.md` directly with the reproduction findings. Read the entire
+existing document and revise any part of it when reproduction evidence clarifies or corrects the
+issue context. Preserve accurate issue identification, classification, and related issues or pull
+requests, while updating stale summaries or conclusions as needed.
 
 Write a coherent, self-contained maintainer handoff with clear headings. Preserve the existing
 `## Summary`, `## Classification`, and `## Related` sections when applicable, and include exactly
