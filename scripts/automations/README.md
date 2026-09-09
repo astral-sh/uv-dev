@@ -157,7 +157,9 @@ The feedback adapters add immutable contracts without coupling them to one workf
   identify the retry attempt: consumers bind it through a trusted producer name or manifest and
   verify that exact workflow attempt before trusting downloaded contents. `ActionsRun.workflow_sha`
   is deliberately limited to the verified root `workflow_dispatch` on `main`; REST `head_sha` is not
-  generic workflow-file provenance for other event types.
+  generic workflow-file provenance for other event types. Its small-manifest API lists one exact
+  artifact name and reads one digest-verified `manifest.json` from a bounded ZIP without extracting
+  paths or accepting arbitrary download URLs.
 - `sessions.snapshot_sessions(path, workspace, trusted_root=runner_temp)` validates one root Codex
   Action session and its parent-linked subagents. The root must be outside all agent-writable
   ancestors; the reader walks below it through no-follow directory descriptors.
@@ -189,6 +191,24 @@ writer imports bundles without checking out candidate code, rechecks the head an
 and uses an exact push lease. That lease prevents a concurrent intentional rewind from being
 overwritten; it does not authorize a history rewrite. Read provenance and freshness use the job
 token, while the isolated writer token is used only for publication.
+
+`workflows.comments_index` records each published state and session in an immutable, attempt-scoped
+index. A stable, PR-specific discovery alias points to that exact index and retains at most one
+verified successful earlier attempt, so a failed retry cannot erase a useful checkpoint. Discovery
+tries at most twenty matching aliases, validates the successful main-workflow attempt and archive
+digest, and prefers the greatest complete collection watermark before verifying the downloaded
+checkpoint. The selected wire record contains only exact artifact identities; parsed, verified
+indexes remain in memory. Older checkpoints remain readable; their format does not attest to
+continuation progress or grant an automatic-follow-up budget. Missing or invalid normal checkpoints
+cause a bounded bootstrap, while an unverifiable automatic continuation fails closed.
+
+A completed checkpoint with retained pending targets can request at most three automatic follow-ups.
+Each one requires measurable processed-target progress, carries the exact state/index identities and
+head, and decreases the remaining budget. Exact-key consumption aliases preserve successful earlier
+attempts and suppress duplicate dispatches; incomplete marker discovery fails closed. The isolated
+publisher rechecks the current PR head before invoking the same workflow on `main`. A failed
+publisher retry revalidates its immutable parent IDs without rediscovering a different checkpoint,
+but does not launch another child if a completed sibling already consumed the same key.
 
 ## Subsequent migrations
 
