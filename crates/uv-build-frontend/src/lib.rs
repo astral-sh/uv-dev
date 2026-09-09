@@ -4,6 +4,7 @@
 
 mod error;
 mod pipreqs;
+mod warnings;
 
 use std::borrow::Cow;
 use std::ffi::OsString;
@@ -49,6 +50,8 @@ use uv_warnings::warn_user_once;
 use uv_workspace::WorkspaceCache;
 
 pub use crate::error::{Error, MissingHeaderCause};
+pub use crate::warnings::warn_for_bundled_backend;
+use crate::warnings::warn_for_unused_settings;
 
 /// The default backend to use when PEP 517 is used without a `build-system` section.
 static DEFAULT_BACKEND: LazyLock<Pep517Backend> = LazyLock::new(|| Pep517Backend {
@@ -729,7 +732,7 @@ impl SourceBuild {
         // Only show the warning for first party and URL dependencies, not for registry dependencies
         // (which have sources disabled). In-tree build backends may wrap `uv_build`, so we don't
         // warn for them either.
-        if !no_sources.all()
+        if warn_for_unused_settings(no_sources)
             && backend_path.is_none()
             && pyproject_toml
                 .tool
