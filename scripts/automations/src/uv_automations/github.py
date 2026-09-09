@@ -10,6 +10,7 @@ from urllib.parse import quote
 
 from uv_automations.json import (
     as_array,
+    as_boolean,
     as_object,
     as_positive_integer,
     as_string,
@@ -72,13 +73,10 @@ def _decode_issue_author(value: object) -> IssueAuthor | None:
     if value is None:
         return None
     data = as_object(value)
-    is_bot = data["is_bot"]
-    if type(is_bot) is not bool:
-        raise TypeError("Expected a JSON boolean")
     name = data["name"]
     return IssueAuthor(
         node_id=as_string(data["id"]),
-        is_bot=is_bot,
+        is_bot=as_boolean(data["is_bot"]),
         login=as_string(data["login"]),
         name=as_string(name) if name is not None else None,
     )
