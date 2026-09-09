@@ -32,6 +32,7 @@ MAX_THREAD_COMMENTS = 100
 MAX_SELECTED_THREADS = 100
 MAX_KNOWN_THREADS = MAX_PAGE_SIZE * MAX_COLLECTION_PAGES
 MAX_KNOWN_REVIEWS = MAX_PAGE_SIZE * MAX_COLLECTION_PAGES
+MAX_PENDING_TARGETS = 3 * MAX_PAGE_SIZE * MAX_COLLECTION_PAGES
 AUTOMATION_LOGINS = frozenset({"astral-automations-bot", "astral-automations-bot[bot]"})
 
 
@@ -389,6 +390,16 @@ class ReviewThread:
             "comments": [comment.to_json() for comment in self.comments],
         }
 
+    def to_agent_json(self) -> dict[str, object]:
+        return {
+            **self.to_json(),
+            "comments": [
+                comment.to_json()
+                for comment in self.comments
+                if not comment.author.is_automation
+            ],
+        }
+
     @property
     def revision(self) -> TargetRevision:
         # Pushing the addressing commit can update anchors/outdatedness, and our
@@ -448,6 +459,7 @@ class CollectionCheckpoint:
     threads: tuple[ThreadRoot, ...]
     reviews: tuple[TargetRevision, ...]
     comments: tuple[CommentVersion, ...] = ()
+    pending: tuple[TargetRevision, ...] = ()
 
     def __post_init__(self) -> None:
         if len(self.threads) > MAX_KNOWN_THREADS:
@@ -456,6 +468,8 @@ class CollectionCheckpoint:
             raise ValueError("Too many retained pull request reviews")
         if len(self.comments) > 2 * MAX_PAGE_SIZE * MAX_COLLECTION_PAGES:
             raise ValueError("Too many comments at the collection watermark")
+        if len(self.pending) > MAX_PENDING_TARGETS:
+            raise ValueError("Too many pending feedback targets")
         if self.thread_cursor is not None and (
             not self.thread_cursor or len(self.thread_cursor) > 4096
         ):
@@ -466,6 +480,8 @@ class CollectionCheckpoint:
             raise ValueError("Duplicate review thread")
         if len({review.target for review in self.reviews}) != len(self.reviews):
             raise ValueError("Duplicate pull request review")
+        if len({target.target for target in self.pending}) != len(self.pending):
+            raise ValueError("Duplicate pending feedback target")
         if len(
             {(comment.kind, comment.identifier) for comment in self.comments}
         ) != len(self.comments):
@@ -484,6 +500,7 @@ class CollectionCheckpoint:
             "threads": [thread.to_json() for thread in self.threads],
             "reviews": [review.to_json() for review in self.reviews],
             "comments": [comment.to_json() for comment in self.comments],
+            "pending": [target.to_json() for target in self.pending],
         }
 
     @classmethod
@@ -491,7 +508,15 @@ class CollectionCheckpoint:
         data = as_object(value)
         require_keys(
             data,
-            {"complete", "through", "thread_cursor", "threads", "reviews", "comments"},
+            {
+                "complete",
+                "through",
+                "thread_cursor",
+                "threads",
+                "reviews",
+                "comments",
+                "pending",
+            },
         )
         if data["complete"] is not True:
             raise ValueError("A truncated collection is not a usable checkpoint")
@@ -511,6 +536,9 @@ class CollectionCheckpoint:
             comments=tuple(
                 CommentVersion.from_json(value) for value in as_array(data["comments"])
             ),
+            pending=tuple(
+                TargetRevision.from_json(value) for value in as_array(data["pending"])
+            ),
         )
 
 
@@ -523,6 +551,15 @@ class CollectedComments:
     checkpoint: CollectionCheckpoint
     targets: tuple[TargetRevision, ...]
 
+    def __post_init__(self) -> None:
+        if len(self.targets) > MAX_ACTIONS:
+            raise ValueError("Too many feedback targets for one agent result")
+        selected = {target.target for target in self.targets}
+        if len(selected) != len(self.targets) or selected.intersection(
+            target.target for target in self.checkpoint.pending
+        ):
+            raise ValueError("Selected and pending feedback targets must be distinct")
+
     def to_json(self) -> dict[str, object]:
         return {
             "conversation_comments": [
@@ -530,7 +567,7 @@ class CollectedComments:
             ],
             "inline_comments": [comment.to_json() for comment in self.inline],
             "reviews": [review.to_json() for review in self.reviews],
-            "review_threads": [thread.to_json() for thread in self.threads],
+            "review_threads": [thread.to_agent_json() for thread in self.threads],
             "actionable_targets": [target.to_json() for target in self.targets],
         }
 
@@ -539,6 +576,7 @@ class CommentOutcome(StrEnum):
     COMMIT_AND_RESOLVE = "COMMIT_AND_RESOLVE"
     RESPOND = "RESPOND"
     CLARIFY = "CLARIFY"
+    NO_ACTION = "NO_ACTION"
 
 
 @dataclass(frozen=True, slots=True)
@@ -575,6 +613,12 @@ class CommentAction:
             case CommentOutcome.RESPOND | CommentOutcome.CLARIFY:
                 if self.addressing_commit is not None or not self.body.strip():
                     raise ValueError("A reply needs a nonempty body and no commit")
+                return
+            case CommentOutcome.NO_ACTION:
+                if self.addressing_commit is not None or self.body.strip():
+                    raise ValueError(
+                        "A no-action disposition cannot contain a reply or commit"
+                    )
                 return
         assert_never(self.outcome)
 

@@ -1,0 +1,363 @@
+# Coalesce collaborator feedback and retain one verified Codex lineage per pull request.
+name: "Pull request comments"
+
+on:
+  workflow_dispatch:
+    inputs:
+      pull_request:
+        description: "The pull request number"
+        required: true
+        type: string
+      head_sha:
+        description: "The expected pull request head SHA"
+        required: true
+        type: string
+      checkpoint_run:
+        description: "An optional older successful checkpoint run"
+        required: false
+        type: string
+      checkpoint_attempt:
+        description: "The exact attempt containing the optional checkpoint"
+        required: false
+        type: string
+      checkpoint_artifact:
+        description: "The immutable ID of the optional checkpoint artifact"
+        required: false
+        type: string
+
+permissions: {}
+
+# This covers preparation through publication, not just the collector. GitHub
+# replaces an older pending run with the newest one; the complete checkpoint
+# ensures that coalesced comment edits are collected by the next successful run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.repository_id }}-${{ inputs.pull_request }}
+  cancel-in-progress: false
+
+env:
+  PULL_REQUEST_NUMBER: ${{ inputs.pull_request }}
+  EXPECTED_HEAD_SHA: ${{ inputs.head_sha }}
+
+jobs:
+  prepare:
+    if: github.repository == 'astral-sh/uv-dev'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+      issues: read
+      pull-requests: read
+    outputs:
+      eligible: ${{ steps.context.outputs.eligible }}
+      head-sha: ${{ steps.context.outputs.head-sha }}
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - id: automations
+        uses: ./.github/actions/setup-automations
+
+      - name: "Find a completed feedback checkpoint"
+        id: source
+        run: |
+          "$AUTOMATIONS_PYTHON" -I -m uv_automations comments source \
+            --checkpoint-run "$CHECKPOINT_RUN" \
+            --checkpoint-attempt "$CHECKPOINT_ATTEMPT" \
+            --checkpoint-artifact "$CHECKPOINT_ARTIFACT" \
+            --destination "$RUNNER_TEMP/comments-source.json" \
+            --github-output "$GITHUB_OUTPUT"
+        env:
+          AUTOMATIONS_PYTHON: ${{ steps.automations.outputs.python }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CHECKPOINT_RUN: ${{ inputs.checkpoint_run }}
+          CHECKPOINT_ATTEMPT: ${{ inputs.checkpoint_attempt }}
+          CHECKPOINT_ARTIFACT: ${{ inputs.checkpoint_artifact }}
+
+      - name: "Download the immutable checkpoint"
+        if: steps.source.outputs.found == 'true'
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.source.outputs.run-id }}
+          artifact-ids: ${{ steps.source.outputs.artifact-id }}
+          path: ${{ runner.temp }}/comments-previous-state
+
+      - name: "Verify the checkpoint's session provenance"
+        id: previous
+        run: |
+          "$AUTOMATIONS_PYTHON" -I -m uv_automations comments inspect-source \
+            --source-file "$RUNNER_TEMP/comments-source.json" \
+            --checkpoint "$RUNNER_TEMP/comments-previous-state" \
+            --github-output "$GITHUB_OUTPUT"
+        env:
+          AUTOMATIONS_PYTHON: ${{ steps.automations.outputs.python }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: "Download the verified session artifact"
+        if: steps.previous.outputs.usable == 'true'
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.previous.outputs.run-id }}
+          artifact-ids: ${{ steps.previous.outputs.artifact-id }}
+          path: ${{ runner.temp }}/comments-previous-session
+
+      - name: "Prepare the complete feedback context"
+        id: context
+        run: |
+          "$AUTOMATIONS_PYTHON" -I -m uv_automations comments prepare \
+            --repository "$GITHUB_WORKSPACE" \
+            --trusted-files "$GITHUB_WORKSPACE" \
+            --trusted-root "$RUNNER_TEMP" \
+            --source-file "$RUNNER_TEMP/comments-source.json" \
+            --checkpoint "$RUNNER_TEMP/comments-previous-state" \
+            --sessions "$RUNNER_TEMP/comments-previous-session" \
+            --destination "$RUNNER_TEMP/comments-context" \
+            --github-output "$GITHUB_OUTPUT" \
+            --summary "$GITHUB_STEP_SUMMARY"
+        env:
+          AUTOMATIONS_PYTHON: ${{ steps.automations.outputs.python }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Upload before any candidate code runs. The publisher downloads this exact
+      # immutable ID, so an agent cannot enlarge its own set of allowed targets.
+      - name: "Retain the prepared context"
+        id: upload
+        if: steps.context.outputs.eligible == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.context.outputs.artifact-name }}
+          path: ${{ runner.temp }}/comments-context
+          if-no-files-found: error
+          retention-days: 1
+
+  handle:
+    needs: prepare
+    if: needs.prepare.outputs.eligible == 'true'
+    runs-on: ubuntu-latest
+    environment: automations
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: read
+      issues: read
+      pull-requests: read
+    outputs:
+      result-artifact-id: ${{ steps.result.outputs.artifact-id }}
+      session-artifact-id: ${{ steps.session.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+
+      - id: automations
+        uses: ./.github/actions/setup-automations
+
+      # The isolated automation runtime has its own pinned uv. Keep the project
+      # tool selection independent so feedback is tested with the normal uv.
+      - name: "Install project uv"
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          enable-cache: false
+
+      - name: "Download the prepared context"
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          artifact-ids: ${{ needs.prepare.outputs.artifact-id }}
+          path: ${{ runner.temp }}/comments-context
+
+      - name: "Checkout the exact candidate"
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.head-sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: "Prepare the verified Codex session"
+        id: agent
+        run: |
+          "$AUTOMATIONS_PYTHON" -I -m uv_automations comments prepare-agent \
+            --context "$RUNNER_TEMP/comments-context" \
+            --repository "$GITHUB_WORKSPACE" \
+            --codex-home "$RUNNER_TEMP/comments-agent/codex-home" \
+            --trusted-root "$RUNNER_TEMP" \
+            --github-output "$GITHUB_OUTPUT"
+        env:
+          AUTOMATIONS_PYTHON: ${{ steps.automations.outputs.python }}
+
+      - name: "Handle pull request feedback"
+        id: comments
+        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56 # v1.11
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UV_AUTOMATIONS_CONTEXT: ${{ runner.temp }}/comments-context
+          TMPDIR: ${{ runner.temp }}/comments-agent
+          CARGO_HOME: ${{ runner.temp }}/comments-agent/cargo-home
+          UV_CACHE_DIR: ${{ runner.temp }}/comments-agent/uv-cache
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          codex-version: "0.147.0"
+          effort: high
+          working-directory: ${{ github.workspace }}
+          codex-home: ${{ runner.temp }}/comments-agent/codex-home
+          codex-args: ${{ steps.agent.outputs.codex-args }}
+          permission-profile: "pull-request-comments"
+          safety-strategy: drop-sudo
+          allow-bot-users: "astral-automations-bot[bot]"
+          prompt-file: ${{ runner.temp }}/comments-context/prompt.md
+          output-schema-file: ${{ runner.temp }}/comments-context/schema.json
+
+      - name: "Validate and retain the agent result"
+        id: verify
+        run: |
+          "$AUTOMATIONS_PYTHON" -I -m uv_automations comments verify \
+            --context "$RUNNER_TEMP/comments-context" \
+            --repository "$GITHUB_WORKSPACE" \
+            --codex-home "$RUNNER_TEMP/comments-agent/codex-home" \
+            --trusted-root "$RUNNER_TEMP" \
+            --destination "$RUNNER_TEMP/comments-result" \
+            --session-destination "$RUNNER_TEMP/comments-session" \
+            --github-output "$GITHUB_OUTPUT" \
+            --summary "$GITHUB_STEP_SUMMARY" <<< "$CODEX_RESULT"
+        env:
+          AUTOMATIONS_PYTHON: ${{ steps.automations.outputs.python }}
+          CODEX_RESULT: ${{ steps.comments.outputs.final-message }}
+
+      - name: "Upload the immutable result"
+        id: result
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.verify.outputs.result-name }}
+          path: ${{ runner.temp }}/comments-result
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: "Upload the verified Codex session"
+        id: session
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.verify.outputs.session-name }}
+          path: ${{ runner.temp }}/comments-session
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    needs: [prepare, handle]
+    if: needs.prepare.outputs.eligible == 'true'
+    runs-on: ubuntu-latest
+    environment: automations
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+      issues: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - id: automations
+        uses: ./.github/actions/setup-automations
+
+      - name: "Download the trusted preparation"
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          artifact-ids: ${{ needs.prepare.outputs.artifact-id }}
+          path: ${{ runner.temp }}/comments-context
+
+      - name: "Download the immutable result"
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          artifact-ids: ${{ needs.handle.outputs.result-artifact-id }}
+          path: ${{ runner.temp }}/comments-result
+
+      - name: "Download the exact Codex session"
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          artifact-ids: ${{ needs.handle.outputs.session-artifact-id }}
+          path: ${{ runner.temp }}/comments-session
+
+      - name: "Validate publication before requesting write authority"
+        id: validate
+        run: |
+          "$AUTOMATIONS_PYTHON" -I -m uv_automations comments validate \
+            --repository "$GITHUB_WORKSPACE" \
+            --prepared "$RUNNER_TEMP/comments-context" \
+            --result "$RUNNER_TEMP/comments-result" \
+            --session "$RUNNER_TEMP/comments-session" \
+            --trusted-root "$RUNNER_TEMP" \
+            --preparation-artifact "$PREPARATION_ARTIFACT" \
+            --result-artifact "$RESULT_ARTIFACT" \
+            --session-artifact "$SESSION_ARTIFACT" \
+            --github-output "$GITHUB_OUTPUT"
+        env:
+          AUTOMATIONS_PYTHON: ${{ steps.automations.outputs.python }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PREPARATION_ARTIFACT: ${{ needs.prepare.outputs.artifact-id }}
+          RESULT_ARTIFACT: ${{ needs.handle.outputs.result-artifact-id }}
+          SESSION_ARTIFACT: ${{ needs.handle.outputs.session-artifact-id }}
+
+      - name: "Get the narrowly scoped uv-dev token"
+        id: token
+        if: steps.validate.outputs.needs-writes == 'true'
+        uses: open-security-tools/ost-simple-sts@9e012247e07c39080fb6a832dbfbcfeacebc19c4
+        with:
+          exchange-url: ${{ secrets.STS_API_URL }}/exchange
+          audience: ${{ secrets.STS_API_URL }}
+          repository: astral-sh/uv-dev
+          permissions: |
+            contents: write
+            workflows: write
+            issues: write
+            pull_requests: write
+
+      - name: "Publish feedback and advance the checkpoint"
+        id: apply
+        run: |
+          "$AUTOMATIONS_PYTHON" -I -m uv_automations comments apply \
+            --repository "$GITHUB_WORKSPACE" \
+            --prepared "$RUNNER_TEMP/comments-context" \
+            --result "$RUNNER_TEMP/comments-result" \
+            --session "$RUNNER_TEMP/comments-session" \
+            --trusted-root "$RUNNER_TEMP" \
+            --preparation-artifact "$PREPARATION_ARTIFACT" \
+            --result-artifact "$RESULT_ARTIFACT" \
+            --session-artifact "$SESSION_ARTIFACT" \
+            --destination "$RUNNER_TEMP/comments-state" \
+            --github-output "$GITHUB_OUTPUT" \
+            --summary "$GITHUB_STEP_SUMMARY"
+        env:
+          AUTOMATIONS_PYTHON: ${{ steps.automations.outputs.python }}
+          GH_TOKEN: ${{ steps.token.outputs.token || secrets.GITHUB_TOKEN }}
+          GH_READ_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PREPARATION_ARTIFACT: ${{ needs.prepare.outputs.artifact-id }}
+          RESULT_ARTIFACT: ${{ needs.handle.outputs.result-artifact-id }}
+          SESSION_ARTIFACT: ${{ needs.handle.outputs.session-artifact-id }}
+
+      # No overwrite: a colliding state artifact fails this attempt. Discovery
+      # accepts only the exact artifact from a successful workflow attempt.
+      - name: "Retain the completed checkpoint"
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.apply.outputs.artifact-name }}
+          path: ${{ runner.temp }}/comments-state
+          if-no-files-found: error
+          retention-days: 30

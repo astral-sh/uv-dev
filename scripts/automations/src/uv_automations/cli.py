@@ -12,7 +12,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import assert_never
 
-from uv_automations import commits_cli
+from uv_automations import comments_cli, commits_cli
 from uv_automations.actions import append_summary, write_json_output, write_output
 from uv_automations.github import GitHub
 from uv_automations.json import loads
@@ -50,6 +50,7 @@ class CommandGroup(StrEnum):
     LABELS = "labels"
     PULL_REQUESTS = "pull-requests"
     COMMITS = "commits"
+    COMMENTS = "comments"
 
 
 class CommandKind(StrEnum):
@@ -119,7 +120,7 @@ type CoreCommand = (
     | RemoveRebaseLabel
 )
 
-type Command = CoreCommand | commits_cli.CommitCommand
+type Command = CoreCommand | commits_cli.CommitCommand | comments_cli.CommentsCommand
 
 
 def _positive_integer(value: str) -> int:
@@ -199,6 +200,7 @@ def create_parser() -> argparse.ArgumentParser:
     remove.set_defaults(command=CommandKind.REMOVE_REBASE_LABEL)
     _add_pull_request(remove)
     commits_cli.add_commands(commands.add_parser("commits"))
+    comments_cli.add_commands(commands.add_parser("comments"))
     return parser
 
 
@@ -212,6 +214,8 @@ def parse_command(
             return _parse_core_command(parsed)
         case CommandGroup.COMMITS:
             return commits_cli.parse_command(parsed)
+        case CommandGroup.COMMENTS:
+            return comments_cli.parse_command(parsed)
     assert_never(group)
 
 
@@ -344,6 +348,18 @@ def run(command: Command) -> None:
             return
         case commits_cli.PersistCommit() | commits_cli.LoadCommit():
             commits_cli.run(command)
+            return
+        case (
+            comments_cli.FindSource()
+            | comments_cli.InspectSource()
+            | comments_cli.PrepareComments()
+            | comments_cli.PrepareAgent()
+            | comments_cli.VerifyComments()
+            | comments_cli.ValidateComments()
+            | comments_cli.ApplyComments()
+            | comments_cli.WriteSchema()
+        ):
+            comments_cli.run(command)
             return
     assert_never(command)
 

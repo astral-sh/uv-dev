@@ -116,3 +116,27 @@ enabled = true
 [permissions.pull-request-labels.network.domains]
 "api.github.com" = "allow"
 "github.com" = "allow"
+
+[permissions.pull-request-comments]
+description = "Pull request feedback handling with workspace and Git metadata access."
+extends = ":workspace"
+
+[permissions.pull-request-comments.filesystem]
+":slash_tmp" = "read"
+":tmpdir" = "write"
+
+[permissions.pull-request-comments.filesystem.":workspace_roots"]
+".git" = "write"
+
+[permissions.pull-request-comments.network]
+enabled = true
+
+[permissions.pull-request-comments.network.domains]
+"api.github.com" = "allow"
+"crates.io" = "allow"
+"files.pythonhosted.org" = "allow"
+"github.com" = "allow"
+"index.crates.io" = "allow"
+"pypi.org" = "allow"
+"static.crates.io" = "allow"
+"static.rust-lang.org" = "allow"
