@@ -70,47 +70,56 @@ jobs:
       contents: read
       issues: read
     outputs:
-      issue-number: ${{ steps.issue.outputs.number }}
+      issue-number: ${{ steps.issue.outputs.issue-number }}
       result: ${{ steps.reproduce.outputs.final-message }}
       thread-artifact-id: ${{ steps.upload-thread.outputs.artifact-id }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.workflow_sha }}
           persist-credentials: false
 
-      - name: "Install uv"
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      - name: "Set up automation runtime"
+        id: automations
+        uses: ./.github/actions/setup-automations
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          enable-cache: false
+          ref: ${{ github.sha }}
+          persist-credentials: false
 
       - name: "Collect issue context"
         id: issue
         run: |
-          gh issue view "$ISSUE" \
+          "$AUTOMATIONS_PYTHON" -I -m uv_automations issues prepare \
             --repo "$GITHUB_REPOSITORY" \
-            --json number,title,body,author \
-            > .issue-triage-event.json
+            --issue "$ISSUE" \
+            --path .issue-triage-event.json \
+            --workspace "$GITHUB_WORKSPACE" \
+            --runner-temp "$RUNNER_TEMP" \
+            --github-output "$GITHUB_OUTPUT"
+        env:
+          AUTOMATIONS_PYTHON: ${{ steps.automations.outputs.python }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE: ${{ inputs.issue }}
 
-          issue_number="$(jq --raw-output '.number' .issue-triage-event.json)"
-          jq --raw-output '"number=\(.number)"' \
-            .issue-triage-event.json >> "$GITHUB_OUTPUT"
-
+      - name: "Prepare issue reproduction prompt"
+        run: |
           mkdir -p "$RUNNER_TEMP/reproduce-bug"
           git init --quiet "$RUNNER_TEMP/reproduce-bug/issue-context"
           git -C "$RUNNER_TEMP/reproduce-bug/issue-context" fetch --quiet --depth 1 \
             https://github.com/astral-sh/uv-dev.git \
-            "refs/heads/issue/$issue_number"
+            "refs/heads/issue/$ISSUE_NUMBER"
           git -C "$RUNNER_TEMP/reproduce-bug/issue-context" checkout --quiet FETCH_HEAD
 
           {
             printf 'Issue reproduction for #%s: %s\n\n' \
-              "$issue_number" \
+              "$ISSUE_NUMBER" \
               "$(jq -r '.title | gsub("[\r\n]+"; " ")' .issue-triage-event.json)"
             cat agents/prompts/reproduce-bug.md
           } > "$RUNNER_TEMP/reproduce-bug-prompt.md"
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ISSUE: ${{ inputs.issue }}
+          ISSUE_NUMBER: ${{ steps.issue.outputs.issue-number }}
 
       - name: "Reproduce issue behavior"
         id: reproduce
@@ -134,7 +143,7 @@ jobs:
         if: steps.reproduce.outputs.final-message != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: issue-context-${{ steps.issue.outputs.number }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: issue-context-${{ steps.issue.outputs.issue-number }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/reproduce-bug/issue-context/README.md
           if-no-files-found: error
           retention-days: 1
@@ -264,17 +273,25 @@ jobs:
       - name: "Install required Python versions"
         run: uv python install
 
-      - name: "Collect reproduction context"
+      - name: "Collect issue context"
+        id: issue
         run: |
           mkdir -p "$RUNNER_TEMP/create-bug-test"
-          gh issue view "$ISSUE" \
+          "$AUTOMATIONS_PYTHON" -I -m uv_automations issues prepare \
             --repo "$GITHUB_REPOSITORY" \
-            --json number,title,body,author \
-            > "$RUNNER_TEMP/issue-triage-event.json"
-          printf '%s\n' "$REPRODUCTION_RESULT" > "$RUNNER_TEMP/bug-reproduction-result.json"
+            --issue "$ISSUE" \
+            --path "$RUNNER_TEMP/issue-triage-event.json" \
+            --workspace "$GITHUB_WORKSPACE" \
+            --runner-temp "$RUNNER_TEMP" \
+            --github-output "$GITHUB_OUTPUT"
         env:
+          AUTOMATIONS_PYTHON: ${{ steps.automations.outputs.python }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ISSUE: ${{ inputs.issue }}
+
+      - name: "Prepare reproduction context"
+        run: printf '%s\n' "$REPRODUCTION_RESULT" > "$RUNNER_TEMP/bug-reproduction-result.json"
+        env:
           REPRODUCTION_RESULT: ${{ needs.reproduce.outputs.result }}
 
       - name: "Create integration test"
