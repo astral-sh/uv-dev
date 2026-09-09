@@ -12,6 +12,13 @@ $ uv run python -c "import example"
 When using `run`, uv will ensure that the project environment is up-to-date before running the given
 command.
 
+To open an interactive Python session (REPL) in the project environment, run Python without
+arguments:
+
+```console
+$ uv run python
+```
+
 The given command can be provided by the project environment or exist outside of it, e.g.:
 
 ```console
