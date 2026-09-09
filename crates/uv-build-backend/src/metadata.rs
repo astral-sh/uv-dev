@@ -1,3 +1,4 @@
+use arcstr::ArcStr;
 use indexmap::IndexMap;
 use itertools::Itertools;
 use serde::{Deserialize, Deserializer};
@@ -334,7 +335,7 @@ pub fn check_direct_build(
 #[derive(Debug, Clone)]
 struct VerbatimPackageName {
     /// The package name as given in the `pyproject.toml`.
-    given: String,
+    given: ArcStr,
     /// The normalized package name.
     normalized: PackageName,
 }
@@ -347,7 +348,7 @@ impl<'de> Deserialize<'de> for VerbatimPackageName {
         let given = <Cow<'_, str>>::deserialize(deserializer)?;
         let normalized = PackageName::from_str(&given).map_err(serde::de::Error::custom)?;
         Ok(Self {
-            given: given.to_string(),
+            given: given.as_ref().into(),
             normalized,
         })
     }
@@ -655,7 +656,7 @@ impl PyProjectToml {
 
         Ok(Metadata23 {
             metadata_version: metadata_version.to_string(),
-            name: self.project.name.given.clone(),
+            name: self.project.name.given.to_string(),
             version: self.project.version.to_string(),
             // Not supported.
             platforms: vec![],

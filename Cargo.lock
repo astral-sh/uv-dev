@@ -6155,6 +6155,7 @@ name = "uv-build-backend"
 version = "0.0.79"
 dependencies = [
  "anstream",
+ "arcstr",
  "astral-tokio-tar",
  "astral-version-ranges",
  "astral_async_zip",
