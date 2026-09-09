@@ -2,6 +2,9 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+#[cfg(all(windows, feature = "tokio"))]
+use std::future::ready;
+
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 #[cfg(windows)]
@@ -625,12 +628,26 @@ pub fn with_retry_sync(
 }
 
 /// Why a file persist failed
-#[cfg(windows)]
+#[cfg(any(windows, test))]
+#[derive(Debug)]
 enum PersistRetryError {
     /// Something went wrong while persisting, maybe retry (contains error message)
     Persist(String),
     /// Something went wrong trying to retrieve the file to persist, we must bail
     LostState,
+}
+
+/// Try to persist a temporary file, retaining ownership if the operation fails.
+#[cfg(any(windows, test))]
+fn persist_once(from: &mut Option<NamedTempFile>, to: &Path) -> Result<(), PersistRetryError> {
+    let Some(file) = from.take() else {
+        return Err(PersistRetryError::LostState);
+    };
+    file.persist(to).map(drop).map_err(|err| {
+        let error_message = err.to_string();
+        *from = Some(err.file);
+        PersistRetryError::Persist(error_message)
+    })
 }
 
 /// Persist a `NamedTempFile`, retrying (on Windows) if it fails due to transient operating system
@@ -650,51 +667,10 @@ async fn persist_with_retry(
         // See: <https://github.com/astral-sh/uv/issues/1491> & <https://github.com/astral-sh/uv/issues/9531>
         let to = to.as_ref();
 
-        // Ok there's a lot of complex ownership stuff going on here.
-        //
-        // the `NamedTempFile` `persist` method consumes `self`, and returns it back inside
-        // the Error in case of `PersistError`:
-        // https://docs.rs/tempfile/latest/tempfile/struct.NamedTempFile.html#method.persist
-        // So every time we fail, we need to reset the `NamedTempFile` to try again.
-        //
-        // Every time we (re)try we call this outer closure (`let persist = ...`), so it needs to
-        // be at least a `FnMut` (as opposed to `Fnonce`). However the closure needs to return a
-        // totally owned `Future` (so effectively it returns a `FnOnce`).
-        //
-        // But if the `Future` is totally owned it *necessarily* can't write back the `NamedTempFile`
-        // to somewhere the outer `FnMut` can see using references. So we need to use `Arc`s
-        // with interior mutability (`Mutex`) to have the closure and all the Futures it creates share
-        // a single memory location that the `NamedTempFile` can be shuttled in and out of.
-        //
-        // In spite of the Mutex all of this code will run logically serially, so there shouldn't be a
-        // chance for a race where we try to get the `NamedTempFile` but it's actually None. The code
-        // is just written pedantically/robustly.
-        let from = std::sync::Arc::new(std::sync::Mutex::new(Some(from)));
-        let persist = || {
-            // Turn our by-ref-captured Arc into an owned Arc that the Future can capture by-value
-            let from2 = from.clone();
-
-            async move {
-                let maybe_file: Option<NamedTempFile> = from2
-                    .lock()
-                    .map_err(|_| PersistRetryError::LostState)?
-                    .take();
-                if let Some(file) = maybe_file {
-                    file.persist(to).map_err(|err| {
-                        let error_message: String = err.to_string();
-                        // Set back the `NamedTempFile` returned back by the Error
-                        if let Ok(mut guard) = from2.lock() {
-                            *guard = Some(err.file);
-                            PersistRetryError::Persist(error_message)
-                        } else {
-                            PersistRetryError::LostState
-                        }
-                    })
-                } else {
-                    Err(PersistRetryError::LostState)
-                }
-            }
-        };
+        // Each persist attempt is synchronous, so its owned result can be returned in a ready
+        // future without moving the retry state into the future.
+        let mut from = Some(from);
+        let persist = || ready(persist_once(&mut from, to));
 
         let persisted = persist
             .retry(backoff_file_move())
@@ -712,7 +688,7 @@ async fn persist_with_retry(
             .await;
 
         match persisted {
-            Ok(_) => Ok(()),
+            Ok(()) => Ok(()),
             Err(PersistRetryError::Persist(error_message)) => Err(std::io::Error::other(format!(
                 "Failed to persist temporary file to {}: {}",
                 to.display(),
@@ -748,24 +724,8 @@ pub fn persist_with_retry_sync(
         // See: <https://github.com/astral-sh/uv/issues/1491> & <https://github.com/astral-sh/uv/issues/9531>
         let to = to.as_ref();
 
-        // the `NamedTempFile` `persist` method consumes `self`, and returns it back inside the Error in case of `PersistError`
-        // https://docs.rs/tempfile/latest/tempfile/struct.NamedTempFile.html#method.persist
-        // So we will update the `from` optional value in safe and borrow-checker friendly way every retry
-        // Allows us to use the NamedTempFile inside a FnMut closure used for backoff::retry
         let mut from = Some(from);
-        let persist = || {
-            // Needed because we cannot move out of `from`, a captured variable in an `FnMut` closure, and then pass it to the async move block
-            if let Some(file) = from.take() {
-                file.persist(to).map_err(|err| {
-                    let error_message = err.to_string();
-                    // Set back the NamedTempFile returned back by the Error
-                    from = Some(err.file);
-                    PersistRetryError::Persist(error_message)
-                })
-            } else {
-                Err(PersistRetryError::LostState)
-            }
-        };
+        let persist = || persist_once(&mut from, to);
 
         let persisted = persist
             .retry(backoff_file_move())
@@ -783,7 +743,7 @@ pub fn persist_with_retry_sync(
             .call();
 
         match persisted {
-            Ok(_) => Ok(()),
+            Ok(()) => Ok(()),
             Err(PersistRetryError::Persist(error_message)) => Err(std::io::Error::other(format!(
                 "Failed to persist temporary file to {}: {}",
                 to.display(),
@@ -1045,6 +1005,67 @@ mod tests {
     use std::assert_matches;
 
     use super::*;
+
+    #[test]
+    fn persist_once_retains_file_after_failure() -> io::Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let mut file = tempfile_in(tempdir.path())?;
+        file.write_all(b"content")?;
+        let source = file.path().to_path_buf();
+        let parent = tempdir.path().join("missing");
+        let destination = parent.join("file");
+
+        let err = file
+            .persist(&destination)
+            .expect_err("destination parent does not exist");
+        let expected_error = err.to_string();
+        let mut from = Some(err.file);
+
+        for _ in 0..2 {
+            assert_matches!(
+                persist_once(&mut from, &destination),
+                Err(PersistRetryError::Persist(error)) if error == expected_error
+            );
+            assert_eq!(
+                from.as_ref().map(NamedTempFile::path),
+                Some(source.as_path())
+            );
+            assert_eq!(fs_err::read_to_string(&source)?, "content");
+        }
+
+        fs_err::create_dir(&parent)?;
+        assert_matches!(persist_once(&mut from, &destination), Ok(()));
+        assert!(from.is_none());
+        assert!(!source.try_exists()?);
+        assert_eq!(fs_err::read_to_string(&destination)?, "content");
+        assert_matches!(
+            persist_once(&mut from, &destination),
+            Err(PersistRetryError::LostState)
+        );
+        Ok(())
+    }
+
+    #[cfg(all(windows, feature = "tokio"))]
+    #[tokio::test]
+    async fn persist_with_retry_retains_file_after_failure() -> io::Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let mut file = tempfile_in(tempdir.path())?;
+        file.write_all(b"content")?;
+        let parent = tempdir.path().join("missing");
+        let destination = parent.join("file");
+
+        // Poll persistence first so it fails before the destination directory is created.
+        let (persisted, created) = tokio::join!(
+            biased;
+            persist_with_retry(file, &destination),
+            async { fs_err::create_dir(&parent) },
+        );
+        created?;
+        persisted?;
+
+        assert_eq!(fs_err::read_to_string(destination)?, "content");
+        Ok(())
+    }
 
     #[test]
     fn remove_symlink_removes_directory_link_without_removing_target() -> io::Result<()> {
