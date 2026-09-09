@@ -688,16 +688,14 @@ impl<'a> BaseClientBuilder<'a> {
                 // Initialize the authentication middleware to set headers.
                 match self.auth_integration {
                     AuthIntegration::Default => {
-                        let auth_middleware = AuthMiddleware::new()
-                            .with_cache_arc(self.credentials_cache.clone())
+                        let auth_middleware = AuthMiddleware::new(self.credentials_cache.clone())
                             .with_indexes(self.indexes.clone())
                             .with_keyring(self.keyring.to_provider())
                             .with_preview(self.preview);
                         client = client.with(auth_middleware);
                     }
                     AuthIntegration::OnlyAuthenticated => {
-                        let auth_middleware = AuthMiddleware::new()
-                            .with_cache_arc(self.credentials_cache.clone())
+                        let auth_middleware = AuthMiddleware::new(self.credentials_cache.clone())
                             .with_indexes(self.indexes.clone())
                             .with_keyring(self.keyring.to_provider())
                             .with_preview(self.preview)
