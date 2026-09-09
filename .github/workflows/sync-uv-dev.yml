@@ -21,8 +21,20 @@ jobs:
     runs-on: ubuntu-slim
     environment: automations
     permissions:
+      contents: read
       id-token: write # for the credential broker
+    outputs:
+      main-sha: ${{ steps.sync.outputs.main-sha }}
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+
+      - name: Set up trusted Python automations
+        id: automations
+        uses: ./.github/actions/setup-automations
+
       - name: Get uv-dev token
         id: token
         uses: open-security-tools/ost-simple-sts@9e012247e07c39080fb6a832dbfbcfeacebc19c4
@@ -36,10 +48,26 @@ jobs:
             workflows: write
 
       - name: Sync main
+        id: sync
         env:
+          AUTOMATIONS_PYTHON: ${{ steps.automations.outputs.python }}
           GH_TOKEN: ${{ steps.token.outputs.token }}
+          GH_UPSTREAM_TOKEN: ${{ github.token }}
         run: |
-          gh api \
-            --method POST \
-            repos/astral-sh/uv-dev/merge-upstream \
-            --field branch=main
+          "$AUTOMATIONS_PYTHON" -I -m uv_automations promotions sync \
+            --repo astral-sh/uv-dev \
+            --repository-id 1302176231 \
+            --github-output "$GITHUB_OUTPUT"
+
+  replay-queued-promotions:
+    name: Replay queued promotions
+    needs: sync
+    if: github.repository == 'astral-sh/uv' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: read
+    uses: $/.github/workflows/replay-queued-promotions.yml
+    secrets: inherit
+    with:
+      main-sha: ${{ needs.sync.outputs.main-sha }}

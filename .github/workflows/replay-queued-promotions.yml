@@ -1,0 +1,70 @@
+name: Replay queued promotions
+
+on:
+  workflow_call:
+    inputs:
+      main-sha:
+        description: "The synchronized public main revision"
+        required: true
+        type: string
+
+permissions: {}
+
+env:
+  UV_LOCKED: 1
+
+jobs:
+  replay:
+    name: Replay queued uv-dev promotions
+    if: github.repository == 'astral-sh/uv' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-slim
+    environment: automations
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+
+      - name: Set up trusted Python automations
+        id: automations
+        uses: ./.github/actions/setup-automations
+
+      - name: Get promotion read token
+        id: read-token
+        uses: open-security-tools/ost-simple-sts@974a63a2daaaa40f7c6dec40d334f3da4421469e
+        with:
+          exchange-url: ${{ secrets.STS_API_URL }}/exchange
+          audience: ${{ secrets.STS_API_URL }}
+          repository: astral-sh/uv-dev
+          permissions: |
+            contents: read
+            pull_requests: read
+
+      - name: Get promotion replay token
+        id: token
+        uses: open-security-tools/ost-simple-sts@974a63a2daaaa40f7c6dec40d334f3da4421469e
+        with:
+          exchange-url: ${{ secrets.STS_API_URL }}/exchange
+          audience: ${{ secrets.STS_API_URL }}
+          repository: astral-sh/uv-dev
+          permissions: |
+            actions: write
+
+      - name: Replay queued promotions
+        env:
+          AUTOMATIONS_PYTHON: ${{ steps.automations.outputs.python }}
+          GH_SOURCE_TOKEN: ${{ steps.read-token.outputs.token }}
+          GH_UPSTREAM_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          SYNCED_MAIN_SHA: ${{ inputs.main-sha }}
+        run: |
+          "$AUTOMATIONS_PYTHON" -I -m uv_automations promotions replay \
+            --repo astral-sh/uv-dev \
+            --repository-id 1302176231 \
+            --main-sha "$SYNCED_MAIN_SHA" \
+            --summary "$GITHUB_STEP_SUMMARY"
