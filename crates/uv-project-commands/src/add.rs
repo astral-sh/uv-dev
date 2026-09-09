@@ -15,9 +15,9 @@ use uv_cache_key::RepositoryUrl;
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_command_support::{ExitStatus, Printer, UvError};
 use uv_configuration::{
-    ActiveEnvironment, AddBoundsKind, Concurrency, DependencyGroups, DependencyGroupsWithDefaults,
-    DevMode, DryRun, EditableMode, ExtrasSpecification, ExtrasSpecificationWithDefaults,
-    GitLfsSetting, InstallOptions, Modifications, NoSources,
+    ActiveEnvironment, AddBoundsKind, ConcurrencyState, DependencyGroups,
+    DependencyGroupsWithDefaults, DevMode, DryRun, EditableMode, ExtrasSpecification,
+    ExtrasSpecificationWithDefaults, GitLfsSetting, InstallOptions, Modifications, NoSources,
 };
 use uv_dispatch::{BuildDispatch, PlatformState, UniversalState};
 use uv_distribution::{DistributionDatabase, LoweredExtraBuildDependencies};
@@ -132,7 +132,7 @@ pub async fn add(
     python_arch: Option<PythonArchitecture>,
     python_downloads: PythonDownloads,
     installer_metadata: bool,
-    concurrency: Concurrency,
+    concurrency: ConcurrencyState,
     config_discovery: ConfigDiscovery,
     cache: &Cache,
     printer: Printer,
@@ -528,7 +528,7 @@ pub async fn add(
                     DistributionDatabase::new(
                         &client,
                         &build_dispatch,
-                        concurrency.downloads_semaphore.clone(),
+                        concurrency.downloads_semaphore(),
                     ),
                 )
                 .with_reporter(Arc::new(ResolverReporter::from(printer)))
@@ -1100,7 +1100,7 @@ async fn lock_and_sync(
     settings: &ResolverInstallerSettings,
     client_builder: &BaseClientBuilder<'_>,
     installer_metadata: bool,
-    concurrency: &Concurrency,
+    concurrency: &ConcurrencyState,
     cache: &Cache,
     printer: Printer,
     preview: Preview,

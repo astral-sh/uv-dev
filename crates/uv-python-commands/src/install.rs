@@ -16,7 +16,7 @@ use tracing::{debug, trace, warn};
 
 use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
-use uv_configuration::{Concurrency, PythonUpgrade, PythonUpgradeSource};
+use uv_configuration::{ConcurrencyState, PythonUpgrade, PythonUpgradeSource};
 use uv_errors::{ErrorOptions, Hints, write_error_chain_with_options};
 use uv_fs::Simplified;
 use uv_platform::{Arch, Libc};
@@ -199,7 +199,7 @@ pub async fn install(
     python_downloads: PythonDownloads,
     config_discovery: ConfigDiscovery,
     compile_bytecode: bool,
-    concurrency: &Concurrency,
+    concurrency: &ConcurrencyState,
     cache: &Cache,
     preview: Preview,
     printer: Printer,
@@ -304,7 +304,7 @@ async fn perform_install(
     python_downloads: PythonDownloads,
     config_discovery: ConfigDiscovery,
     bytecode_compilation_sender: Option<mpsc::UnboundedSender<ManagedPythonInstallation>>,
-    concurrency: &Concurrency,
+    concurrency: &ConcurrencyState,
     preview: Preview,
     printer: Printer,
 ) -> Result<ExitStatus> {
@@ -612,7 +612,7 @@ async fn perform_install(
                     .await,
             )
         })
-        .buffer_unordered(concurrency.downloads);
+        .buffer_unordered(concurrency.limits().downloads);
 
     let mut errors = vec![];
     let mut downloaded = Vec::with_capacity(downloads.len());
@@ -1232,7 +1232,7 @@ fn create_bin_links(
 /// Attempt to compile the bytecode for a [`ManagedPythonInstallation`]'s stdlib
 async fn compile_stdlib_bytecode(
     installation: &ManagedPythonInstallation,
-    concurrency: &Concurrency,
+    concurrency: &ConcurrencyState,
     cache: &Cache,
 ) -> Result<Option<(usize, std::time::Duration)>> {
     let start = std::time::Instant::now();
@@ -1265,7 +1265,7 @@ async fn compile_stdlib_bytecode(
     let files = uv_installer::compile_tree(
         &stdlib_path,
         &installation.executable(false),
-        concurrency,
+        concurrency.limits(),
         cache.root(),
     )
     .await
