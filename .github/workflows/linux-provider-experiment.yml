@@ -3,6 +3,7 @@ name: Linux full-job provider experiment
   push:
     branches:
       - zb/ci-linux-provider-20260909
+  workflow_dispatch:
 permissions:
   contents: read
 env:
