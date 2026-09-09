@@ -149,9 +149,6 @@ pub enum EnvironmentError {
     Io(#[from] std::io::Error),
 
     #[error(transparent)]
-    RetryParsing(#[from] uv_client::RetryParsingError),
-
-    #[error(transparent)]
     Accelerator(#[from] uv_torch::AcceleratorError),
 
     #[error(transparent)]
@@ -245,7 +242,6 @@ impl From<EnvironmentError> for UvError {
             | EnvironmentError::Fmt(..)
             | EnvironmentError::CacheInfo(..)
             | EnvironmentError::Io(..)
-            | EnvironmentError::RetryParsing(..)
             | EnvironmentError::Accelerator(..)
             | EnvironmentError::Anyhow(..)) => Self::unexpected(error.into()),
         }
@@ -295,7 +291,6 @@ impl uv_errors::Hinted for EnvironmentError {
             | Self::Fmt(..)
             | Self::CacheInfo(..)
             | Self::Io(..)
-            | Self::RetryParsing(..)
             | Self::Accelerator(..)
             | Self::Anyhow(..) => uv_errors::Hints::none(),
         }
