@@ -16,8 +16,8 @@ use uv_cache::Cache;
 use uv_client::{BaseClientBuilder, CachedClient, RegistryClientBuilder};
 use uv_command_support::{ExitStatus, Printer};
 use uv_configuration::{
-    AuditOutputFormat, Concurrency, DependencyGroupsWithDefaults, ExtrasSpecificationWithDefaults,
-    KeyringProviderType,
+    AuditOutputFormat, ConcurrencyState, DependencyGroupsWithDefaults,
+    ExtrasSpecificationWithDefaults, KeyringProviderType,
 };
 use uv_distribution_types::{IndexCapabilities, IndexLocations, IndexUrl};
 use uv_fs::{CWD, find_git_repository_root, relative_to};
@@ -46,7 +46,7 @@ pub async fn audit_lock(
     index_locations: &IndexLocations,
     keyring_provider: KeyringProviderType,
     client_builder: BaseClientBuilder<'_>,
-    concurrency: Concurrency,
+    concurrency: ConcurrencyState,
     cache: &Cache,
     printer: Printer,
     service: VulnerabilityServiceFormat,

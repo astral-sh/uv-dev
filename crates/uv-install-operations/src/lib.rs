@@ -12,7 +12,7 @@ use tracing::debug;
 use uv_cache::Cache;
 use uv_client::RegistryClient;
 use uv_command_support::Printer;
-use uv_configuration::{BuildOptions, Concurrency, DryRun, Modifications, Reinstall};
+use uv_configuration::{BuildOptions, ConcurrencyState, DryRun, Modifications, Reinstall};
 use uv_dispatch::BuildDispatch;
 use uv_distribution::DistributionDatabase;
 use uv_distribution_types::{
@@ -329,7 +329,7 @@ pub async fn install(
     tags: &Tags,
     client: &RegistryClient,
     in_flight: &InFlight,
-    concurrency: &Concurrency,
+    concurrency: &ConcurrencyState,
     build_dispatch: &BuildDispatch<'_>,
     cache: &Cache,
     venv: &PythonEnvironment,
@@ -392,7 +392,7 @@ impl InstallationPlan {
         tags: &Tags,
         client: &RegistryClient,
         in_flight: &InFlight,
-        concurrency: &Concurrency,
+        concurrency: &ConcurrencyState,
         build_dispatch: &BuildDispatch<'_>,
         cache: &Cache,
         venv: &PythonEnvironment,
@@ -679,7 +679,7 @@ async fn execute_plan(
     tags: &Tags,
     client: &RegistryClient,
     in_flight: &InFlight,
-    concurrency: &Concurrency,
+    concurrency: &ConcurrencyState,
     build_dispatch: &BuildDispatch<'_>,
     cache: &Cache,
     venv: &PythonEnvironment,
@@ -706,11 +706,7 @@ async fn execute_plan(
             tags,
             hasher,
             build_options,
-            DistributionDatabase::new(
-                client,
-                build_dispatch,
-                concurrency.downloads_semaphore.clone(),
-            ),
+            DistributionDatabase::new(client, build_dispatch, concurrency.downloads_semaphore()),
         )
         .with_reporter(Arc::new(
             PrepareReporter::from(printer).with_length(remote.len() as u64),
