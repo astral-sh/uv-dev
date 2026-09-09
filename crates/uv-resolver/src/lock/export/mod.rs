@@ -22,7 +22,9 @@ pub(crate) use crate::lock::export::metadata::{
     MetadataWorkspaceMember,
 };
 pub(crate) use crate::lock::export::pylock_toml::PylockTomlPackage;
-pub use crate::lock::export::pylock_toml::{PylockToml, PylockTomlError, PylockTomlErrorKind};
+pub use crate::lock::export::pylock_toml::{
+    PylockToml, PylockTomlError, PylockTomlErrorKind, PylockTomlExport,
+};
 pub use crate::lock::export::requirements_txt::RequirementsTxtExport;
 use crate::lock::{LockErrorKind, PackageIndex};
 use crate::universal_marker::resolve_activated_extras;

@@ -67,7 +67,8 @@ pub use crate::lock::deserialize::Error as CanonicalLockError;
 pub(crate) use crate::lock::export::PylockTomlPackage;
 pub use crate::lock::export::RequirementsTxtExport;
 pub use crate::lock::export::{
-    Metadata, PylockToml, PylockTomlError, PylockTomlErrorKind, PythonReport, cyclonedx_json,
+    Metadata, PylockToml, PylockTomlError, PylockTomlErrorKind, PylockTomlExport, PythonReport,
+    cyclonedx_json,
 };
 pub use crate::lock::installable::{Installable, InstallableRootKind};
 pub use crate::lock::map::PackageMap;
