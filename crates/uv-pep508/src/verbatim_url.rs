@@ -379,7 +379,7 @@ impl<P: SerializationPolicy> VerbatimUrl<P> {
     }
 
     /// Return the underlying [`SafeUrl`].
-    pub fn raw(&self) -> &SafeUrl<P> {
+    pub fn inner(&self) -> &SafeUrl<P> {
         &self.url
     }
 
@@ -882,7 +882,7 @@ mod tests {
         let raw = Url::parse("https://user:password@EXAMPLE.COM/demo.whl?sig=signature").unwrap();
         let url = VerbatimUrl::from(raw);
         assert_eq!(
-            url.raw().as_str(),
+            url.inner().as_str(),
             "https://user:password@example.com/demo.whl?sig=signature"
         );
         assert_eq!(url.given(), None);
@@ -907,7 +907,7 @@ mod tests {
         assert!(url.force_relative());
         assert_snapshot!(serde_json::to_string(&url)?, @r#""https://user:password@example.com/file.whl?sig=abc%2Bdef%3D""#);
         let roundtrip: VerbatimUrl<Raw> = serde_json::from_str(&serde_json::to_string(&url)?)?;
-        assert_eq!(roundtrip.raw(), url.raw());
+        assert_eq!(roundtrip.inner(), url.inner());
         assert_eq!(roundtrip.given(), None);
         Ok(())
     }
