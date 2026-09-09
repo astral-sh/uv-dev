@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use tokio::process::Command;
 use tracing::debug;
 
-use uv_bin_install::{BinVersion, Binary, ResolvedVersion, bin_install, find_matching_version};
+use uv_bin_install::{BinVersion, Binary, bin_install};
 use uv_cache::Cache;
 use uv_cli::ColorChoice;
 use uv_client::BaseClientBuilder;
@@ -16,6 +16,7 @@ use uv_shell::shlex_posix;
 
 use crate::child::run_to_completion;
 use crate::commands::ExitStatus;
+use crate::commands::binary::resolve_version;
 use crate::commands::reporters::BinaryDownloadReporter;
 use crate::commands::workspace::list::{ScriptDiscoveryError, find_scripts};
 use crate::printer::Printer;
@@ -71,58 +72,18 @@ pub(super) async fn run(
             .transpose()?
             .unwrap_or(BinVersion::Default);
 
-        let resolved = match bin_version {
-            BinVersion::Default => {
-                let constraints = Binary::Ty.default_constraints();
-                let resolved = find_matching_version(
-                    Binary::Ty,
-                    Some(&constraints),
-                    exclude_newer,
-                    &ty_client,
-                    &retry_policy,
-                )
-                .await
-                .with_context(|| {
-                    format!("Failed to find ty version matching default constraints: {constraints}")
-                })?;
-                debug!("Resolved `ty@{constraints}` to `ty=={}`", resolved.version);
-                resolved
-            }
-            BinVersion::Pinned(version) => {
-                if exclude_newer.is_some() {
-                    debug!("`--exclude-newer` is ignored for pinned version `{version}`");
-                }
-                let resolved = ResolvedVersion::from_version(Binary::Ty, version)?;
-                debug!("Using `ty=={}`", resolved.version);
-                resolved
-            }
-            BinVersion::Latest => {
-                let resolved = find_matching_version(
-                    Binary::Ty,
-                    None,
-                    exclude_newer,
-                    &ty_client,
-                    &retry_policy,
-                )
-                .await
-                .with_context(|| "Failed to find latest ty version")?;
-                debug!("Resolved `ty@latest` to `ty=={}`", resolved.version);
-                resolved
-            }
-            BinVersion::Constraint(constraints) => {
-                let resolved = find_matching_version(
-                    Binary::Ty,
-                    Some(&constraints),
-                    exclude_newer,
-                    &ty_client,
-                    &retry_policy,
-                )
-                .await
-                .with_context(|| format!("Failed to find ty version matching: {constraints}"))?;
-                debug!("Resolved `ty@{constraints}` to `ty=={}`", resolved.version);
-                resolved
-            }
-        };
+        let pinned = matches!(bin_version, BinVersion::Pinned(_));
+        let resolved = resolve_version(
+            Binary::Ty,
+            bin_version,
+            exclude_newer,
+            &ty_client,
+            &retry_policy,
+        )
+        .await?;
+        if pinned {
+            debug!("Using `ty=={}`", resolved.version);
+        }
 
         if show_version {
             writeln!(printer.stderr(), "Using ty {}", resolved.version)?;
