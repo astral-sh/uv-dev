@@ -3,7 +3,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Result, bail};
-use owo_colors::OwoColorize;
 use tracing::{debug, warn};
 
 use uv_cache::{Cache, CacheBucket, WheelCache};
@@ -12,7 +11,6 @@ use uv_configuration::{BuildOptions, Reinstall};
 use uv_distribution::{
     BuiltWheelIndex, HttpArchivePointer, PathArchivePointer, RegistryWheelIndex,
 };
-use uv_distribution_filename::WheelFilename;
 use uv_distribution_types::{
     BuiltDist, CachedDirectUrlDist, CachedDist, ConfigSettings, Dist, Error, ExtraBuildRequires,
     ExtraBuildVariables, Hashed, IndexLocations, InstalledDist, Name, PackageConfigSettings,
@@ -20,12 +18,13 @@ use uv_distribution_types::{
 };
 use uv_fs::Simplified;
 use uv_normalize::PackageName;
-use uv_platform_tags::{AbiTag, IncompatibleTag, LanguageTag, PlatformTag, TagCompatibility, Tags};
+use uv_platform_tags::Tags;
 use uv_pypi_types::VerbatimParsedUrl;
 use uv_python::PythonEnvironment;
 use uv_redacted::DisplaySafeUrl;
 use uv_types::HashStrategy;
 
+use crate::compatibility::CompatibilityHint;
 use crate::satisfies::RequirementSatisfaction;
 use crate::{InstallationStrategy, SitePackages};
 
@@ -35,7 +34,7 @@ pub struct IncompatibleWheelError {
     /// The dependency source (URL or path, with location).
     kind: IncompatibleWheelKind,
     /// Optional compatibility hint generated from wheel tags.
-    compatibility_hint: Option<IncompatibleWheelHint>,
+    compatibility_hint: Option<CompatibilityHint>,
 }
 
 #[derive(Debug)]
@@ -51,162 +50,6 @@ impl fmt::Display for IncompatibleWheelKind {
             Self::Path(path) => write!(f, "path ({})", path.user_display()),
         }
     }
-}
-
-/// A hint describing why a wheel is incompatible.
-#[derive(Debug)]
-enum IncompatibleWheelHint {
-    /// The wheel targets a different Python version than the current interpreter.
-    Python {
-        wheel_tags: Vec<LanguageTag>,
-        current: Option<LanguageTag>,
-    },
-    /// The wheel targets a different ABI than the current interpreter.
-    Abi {
-        wheel_tags: Vec<AbiTag>,
-        current: Option<AbiTag>,
-    },
-    /// The wheel targets a GIL-enabled interpreter, but the current one is free-threaded.
-    FreethreadedAbi {
-        wheel_tags: Vec<AbiTag>,
-        current: Option<AbiTag>,
-    },
-    /// The wheel targets a different platform than the current one.
-    Platform {
-        wheel_tags: Vec<PlatformTag>,
-        current: Option<PlatformTag>,
-    },
-}
-
-impl fmt::Display for IncompatibleWheelHint {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Python {
-                wheel_tags,
-                current,
-            } => {
-                if let Some(current) = current {
-                    write!(
-                        f,
-                        "The wheel is compatible with {}, but you're using {}",
-                        format_language_tags(wheel_tags),
-                        format_language_tag(*current),
-                    )
-                } else {
-                    write!(f, "The wheel requires {}", format_language_tags(wheel_tags))
-                }
-            }
-            Self::Abi {
-                wheel_tags,
-                current,
-            } => {
-                if let Some(current) = current {
-                    write!(
-                        f,
-                        "The wheel is compatible with {}, but you're using {}",
-                        format_abi_tags(wheel_tags),
-                        format_abi_tag(*current),
-                    )
-                } else {
-                    write!(f, "The wheel requires {}", format_abi_tags(wheel_tags))
-                }
-            }
-            Self::FreethreadedAbi {
-                wheel_tags,
-                current,
-            } => {
-                let current_display = if let Some(current) = current {
-                    format_abi_tag(*current)
-                } else {
-                    "free-threaded Python".to_string()
-                };
-                let wheel_display = wheel_tags
-                    .iter()
-                    .map(|tag| match tag {
-                        AbiTag::Abi3 => format!("the stable ABI (`{}`)", tag.cyan()),
-                        _ => {
-                            if let Some(pretty) = tag.pretty() {
-                                format!("the {} ABI (`{}`)", pretty.cyan(), tag.cyan())
-                            } else {
-                                format!("`{}`", tag.cyan())
-                            }
-                        }
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                write!(
-                    f,
-                    "You're using {current_display}, but the wheel was built for {wheel_display}, which requires a GIL-enabled interpreter"
-                )
-            }
-            Self::Platform {
-                wheel_tags,
-                current,
-            } => {
-                if let Some(current) = current {
-                    write!(
-                        f,
-                        "The wheel is compatible with {}, but you're on {}",
-                        format_platform_tags(wheel_tags),
-                        format_platform_tag(current),
-                    )
-                } else {
-                    write!(f, "The wheel requires {}", format_platform_tags(wheel_tags))
-                }
-            }
-        }
-    }
-}
-
-/// Format a single language tag with optional pretty name and cyan coloring.
-fn format_language_tag(tag: LanguageTag) -> String {
-    if let Some(pretty) = tag.pretty() {
-        format!("{} (`{}`)", pretty.cyan(), tag.cyan())
-    } else {
-        format!("`{}`", tag.cyan())
-    }
-}
-
-/// Format a list of language tags as a comma-separated string.
-fn format_language_tags(tags: &[LanguageTag]) -> String {
-    tags.iter()
-        .map(|tag| format_language_tag(*tag))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-/// Format a single ABI tag with optional pretty name and cyan coloring.
-fn format_abi_tag(tag: AbiTag) -> String {
-    if let Some(pretty) = tag.pretty() {
-        format!("{} (`{}`)", pretty.cyan(), tag.cyan())
-    } else {
-        format!("`{}`", tag.cyan())
-    }
-}
-
-/// Format a list of ABI tags as a comma-separated string.
-fn format_abi_tags(tags: &[AbiTag]) -> String {
-    tags.iter()
-        .map(|tag| format_abi_tag(*tag))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-/// Format a single platform tag with optional pretty name and cyan coloring.
-fn format_platform_tag(tag: &PlatformTag) -> String {
-    if let Some(pretty) = tag.pretty() {
-        format!("{} (`{}`)", pretty.cyan(), tag.cyan())
-    } else {
-        format!("`{}`", tag.cyan())
-    }
-}
-
-/// Format a list of platform tags as a comma-separated string.
-fn format_platform_tags(tags: &[PlatformTag]) -> String {
-    tags.iter()
-        .map(format_platform_tag)
-        .collect::<Vec<_>>()
-        .join(", ")
 }
 
 impl fmt::Display for IncompatibleWheelError {
@@ -409,7 +252,7 @@ impl<'a> Planner<'a> {
                     if !wheel.filename.is_compatible(tags) {
                         return Err(IncompatibleWheelError {
                             kind: IncompatibleWheelKind::Url(wheel.url.to_url()),
-                            compatibility_hint: generate_wheel_compatibility_hint(
+                            compatibility_hint: CompatibilityHint::from_wheel(
                                 &wheel.filename,
                                 tags,
                             ),
@@ -477,7 +320,7 @@ impl<'a> Planner<'a> {
                     if !wheel.filename.is_compatible(tags) {
                         return Err(IncompatibleWheelError {
                             kind: IncompatibleWheelKind::Path(wheel.install_path.to_path_buf()),
-                            compatibility_hint: generate_wheel_compatibility_hint(
+                            compatibility_hint: CompatibilityHint::from_wheel(
                                 &wheel.filename,
                                 tags,
                             ),
@@ -784,36 +627,6 @@ fn is_seed_package(dist_info: &InstalledDist, venv: &PythonEnvironment) -> bool 
     }
 }
 
-/// Generate a hint for explaining wheel compatibility issues.
-fn generate_wheel_compatibility_hint(
-    filename: &WheelFilename,
-    tags: &Tags,
-) -> Option<IncompatibleWheelHint> {
-    let TagCompatibility::Incompatible(incompatible_tag) = filename.compatibility(tags) else {
-        return None;
-    };
-
-    match incompatible_tag {
-        IncompatibleTag::Python => Some(IncompatibleWheelHint::Python {
-            wheel_tags: filename.python_tags().to_vec(),
-            current: tags.python_tag(),
-        }),
-        IncompatibleTag::FreethreadedAbi => Some(IncompatibleWheelHint::FreethreadedAbi {
-            wheel_tags: filename.abi_tags().to_vec(),
-            current: tags.abi_tag(),
-        }),
-        IncompatibleTag::Abi => Some(IncompatibleWheelHint::Abi {
-            wheel_tags: filename.abi_tags().to_vec(),
-            current: tags.abi_tag(),
-        }),
-        IncompatibleTag::Platform => Some(IncompatibleWheelHint::Platform {
-            wheel_tags: filename.platform_tags().to_vec(),
-            current: tags.platform_tag().cloned(),
-        }),
-        _ => None,
-    }
-}
-
 #[derive(Debug, Default)]
 pub struct Plan {
     /// The distributions that are not already installed in the current environment, but are
@@ -910,6 +723,7 @@ impl Plan {
 mod tests {
     use super::*;
     use std::str::FromStr;
+    use uv_distribution_filename::WheelFilename;
     use uv_platform_tags::{Arch, Os, Platform, TagsOptions};
 
     #[test]
@@ -941,7 +755,7 @@ mod tests {
             WheelFilename::from_str("foo-1.0-cp37-abi3-manylinux_2_17_x86_64.whl").unwrap();
 
         // Generate the hint
-        let hint = generate_wheel_compatibility_hint(&filename, &tags).unwrap();
+        let hint = CompatibilityHint::from_wheel(&filename, &tags).unwrap();
 
         let hint = hint.to_string();
         let hint = anstream::adapter::strip_str(&hint);
@@ -977,7 +791,7 @@ mod tests {
             WheelFilename::from_str("foo-1.0-cp314-cp314-manylinux_2_17_x86_64.whl").unwrap();
 
         // Generate the hint
-        let hint = generate_wheel_compatibility_hint(&filename, &tags).unwrap();
+        let hint = CompatibilityHint::from_wheel(&filename, &tags).unwrap();
 
         let hint = hint.to_string();
         let hint = anstream::adapter::strip_str(&hint);
@@ -1013,7 +827,7 @@ mod tests {
             WheelFilename::from_str("foo-1.0-cp37-abi3-manylinux_2_17_x86_64.whl").unwrap();
 
         // The wheel should be compatible (abi3 works on regular Python)
-        let hint = generate_wheel_compatibility_hint(&filename, &tags);
+        let hint = CompatibilityHint::from_wheel(&filename, &tags);
 
         // No hint should be generated because the wheel is compatible
         assert!(
