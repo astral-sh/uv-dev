@@ -41,7 +41,9 @@ reusable workflow until its artifact and Git operations are migrated.
 
 - `models` contains validated identities, immutable dataclasses, and closed enums.
 - `github` provides typed reads and narrow writes through `gh`. Credentials come from the caller's
-  environment; the library does not acquire or persist tokens.
+  environment; the library does not acquire or persist tokens. A publisher can use
+  `GitHub(token_variable="GH_READ_TOKEN")` for provenance and freshness reads while `GH_TOKEN`
+  remains a separate, narrowly scoped writer credential.
 - `git` provides the Git operations used by those workflows.
 - `artifacts` persists and imports exact commit ranges without checking out received code.
 - `actions` adapts typed results to Actions' file-based interfaces.

@@ -1,6 +1,7 @@
-"""The GitHub reads needed by the automation workflows."""
+"""Typed GitHub operations used by the automation workflows."""
 
 import json
+import os
 import subprocess
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -123,6 +124,17 @@ class GitHub:
     """Use the caller's existing GitHub CLI authentication."""
 
     executable: str = "gh"
+    token_variable: str | None = None
+
+    def _environment(self) -> dict[str, str] | None:
+        if self.token_variable is None:
+            return None
+        environment = os.environ.copy()
+        token = environment.get(self.token_variable)
+        if not token:
+            raise ValueError(f"Missing GitHub token environment: {self.token_variable}")
+        environment["GH_TOKEN"] = token
+        return environment
 
     def _command(
         self, arguments: Sequence[str], *, payload: object | None = None
@@ -135,6 +147,7 @@ class GitHub:
             check=True,
             text=True,
             stdout=subprocess.PIPE,
+            env=self._environment(),
             timeout=60,
         )
         return loads(result.stdout) if result.stdout.strip() else None
