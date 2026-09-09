@@ -122,6 +122,7 @@ class CommitArtifactTests(unittest.TestCase):
             self.source.output("commit-tree", tree, "-m", "unrelated")
         )
         grafts = self.source.path / ".git" / "info" / "grafts"
+        grafts.parent.mkdir(exist_ok=True)
         grafts.write_text(f"{unrelated} {self.base}\n", encoding="utf-8")
         self.assertFalse(self.source.is_ancestor(self.base, unrelated))
         with self.assertRaisesRegex(ValueError, "trusted base"):
