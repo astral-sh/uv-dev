@@ -490,10 +490,8 @@ pub(crate) async fn install(
                             package_name.cyan()
                         );
                     }
-                    Err(err)
-                        if err
-                            .as_io_error()
-                            .is_some_and(|err| err.kind() == std::io::ErrorKind::NotFound) => {}
+                    Err(uv_tool::Error::VirtualEnvError(uv_virtualenv::Error::Io(err)))
+                        if err.kind() == std::io::ErrorKind::NotFound => {}
                     Err(err) => {
                         return Err(err.into());
                     }
