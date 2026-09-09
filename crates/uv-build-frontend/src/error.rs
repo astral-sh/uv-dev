@@ -281,19 +281,7 @@ impl Display for BuildBackendError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{} ({})", self.message, self.exit_code)?;
 
-        let mut non_empty = false;
-
-        if self.stdout.iter().any(|line| !line.trim().is_empty()) {
-            write!(f, "\n\n{}\n{}", "[stdout]".red(), self.stdout.join("\n"))?;
-            non_empty = true;
-        }
-
-        if self.stderr.iter().any(|line| !line.trim().is_empty()) {
-            write!(f, "\n\n{}\n{}", "[stderr]".red(), self.stderr.join("\n"))?;
-            non_empty = true;
-        }
-
-        if non_empty {
+        if write_captured_output(f, &self.stdout, &self.stderr)? {
             writeln!(f)?;
         }
 
@@ -313,17 +301,25 @@ pub struct MissingHeaderError {
 impl Display for MissingHeaderError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{} ({})", self.message, self.exit_code)?;
-
-        if self.stdout.iter().any(|line| !line.trim().is_empty()) {
-            write!(f, "\n\n{}\n{}", "[stdout]".red(), self.stdout.join("\n"))?;
-        }
-
-        if self.stderr.iter().any(|line| !line.trim().is_empty()) {
-            write!(f, "\n\n{}\n{}", "[stderr]".red(), self.stderr.join("\n"))?;
-        }
-
+        write_captured_output(f, &self.stdout, &self.stderr)?;
         Ok(())
     }
+}
+
+/// Write non-empty output sections, returning whether either section was emitted.
+fn write_captured_output(
+    f: &mut Formatter<'_>,
+    stdout: &[String],
+    stderr: &[String],
+) -> Result<bool, std::fmt::Error> {
+    let mut non_empty = false;
+    for (label, lines) in [("[stdout]", stdout), ("[stderr]", stderr)] {
+        if lines.iter().any(|line| !line.trim().is_empty()) {
+            write!(f, "\n\n{}\n{}", label.red(), lines.join("\n"))?;
+            non_empty = true;
+        }
+    }
+    Ok(non_empty)
 }
 
 impl Error {
@@ -445,6 +441,7 @@ impl Error {
 mod test {
     use std::assert_matches;
 
+    use super::{BuildBackendError, MissingHeaderCause, MissingHeaderError, MissingLibrary};
     use crate::{Error, PythonRunnerOutput};
     use indoc::indoc;
     use std::process::ExitStatus;
@@ -462,6 +459,96 @@ mod test {
             .replace("exit status: ", "exit code: ");
         let formatted = ErrorWithHints::new(formatted, err.hints()).to_string();
         anstream::adapter::strip_str(&formatted).to_string()
+    }
+
+    #[test]
+    fn captured_output_formatting() {
+        let cases: &[(&str, &[&str], &[&str])] = &[
+            ("empty", &[], &[]),
+            ("whitespace", &[" \t", ""], &["\t"]),
+            ("stdout", &["first", "second"], &[]),
+            ("stderr", &[], &["error"]),
+            ("both", &["first"], &["error"]),
+            ("blank stdout", &["", " "], &["error"]),
+            (
+                "preserve lines",
+                &["", " first ", "\t", ""],
+                &["", "error", ""],
+            ),
+        ];
+        let normalize = |message: String| {
+            let message = message.replace("exit status: ", "exit code: ");
+            anstream::adapter::strip_str(&message).to_string()
+        };
+        let rendered = cases
+            .iter()
+            .map(|(name, stdout, stderr)| {
+                let stdout: Vec<String> = stdout.iter().map(ToString::to_string).collect();
+                let stderr: Vec<String> = stderr.iter().map(ToString::to_string).collect();
+                let backend = BuildBackendError {
+                    message: "Failed building wheel".to_string(),
+                    exit_code: ExitStatus::default(),
+                    stdout: stdout.clone(),
+                    stderr: stderr.clone(),
+                };
+                let missing_header = MissingHeaderError {
+                    message: "Failed building wheel".to_string(),
+                    exit_code: ExitStatus::default(),
+                    stdout,
+                    stderr,
+                    cause: MissingHeaderCause {
+                        missing_library: MissingLibrary::Header("example.h".to_string()),
+                        package_name: None,
+                        package_version: None,
+                        version_id: None,
+                    },
+                };
+                (
+                    *name,
+                    normalize(backend.to_string()),
+                    normalize(missing_header.to_string()),
+                )
+            })
+            .collect::<Vec<_>>();
+        insta::assert_debug_snapshot!(rendered, @r#"
+        [
+            (
+                "empty",
+                "Failed building wheel (exit code: 0)",
+                "Failed building wheel (exit code: 0)",
+            ),
+            (
+                "whitespace",
+                "Failed building wheel (exit code: 0)",
+                "Failed building wheel (exit code: 0)",
+            ),
+            (
+                "stdout",
+                "Failed building wheel (exit code: 0)\n\n[stdout]\nfirst\nsecond\n",
+                "Failed building wheel (exit code: 0)\n\n[stdout]\nfirst\nsecond",
+            ),
+            (
+                "stderr",
+                "Failed building wheel (exit code: 0)\n\n[stderr]\nerror\n",
+                "Failed building wheel (exit code: 0)\n\n[stderr]\nerror",
+            ),
+            (
+                "both",
+                "Failed building wheel (exit code: 0)\n\n[stdout]\nfirst\n\n[stderr]\nerror\n",
+                "Failed building wheel (exit code: 0)\n\n[stdout]\nfirst\n\n[stderr]\nerror",
+            ),
+            (
+                "blank stdout",
+                "Failed building wheel (exit code: 0)\n\n[stderr]\nerror\n",
+                "Failed building wheel (exit code: 0)\n\n[stderr]\nerror",
+            ),
+            (
+                "preserve lines",
+                "Failed building wheel (exit code: 0)\n\n[stdout]\n\n first \n\t\n\n\n[stderr]\n\nerror\n\n",
+                "Failed building wheel (exit code: 0)\n\n[stdout]\n\n first \n\t\n\n\n[stderr]\n\nerror\n",
+            ),
+        ]
+        "#);
     }
 
     #[test]
