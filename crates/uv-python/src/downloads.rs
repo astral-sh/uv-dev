@@ -1284,7 +1284,7 @@ impl ManagedPythonDownload {
         self.build
     }
 
-    pub(crate) const fn is_default(&self) -> bool {
+    const fn is_default(&self) -> bool {
         self.default
     }
 
