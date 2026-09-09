@@ -29,7 +29,7 @@ use uv_cache::Cache;
 use uv_cli::AuditOutputFormat;
 use uv_client::{BaseClientBuilder, CachedClient, RegistryClientBuilder};
 use uv_configuration::{
-    ActiveEnvironment, Concurrency, DependencyGroups, DependencyGroupsWithDefaults,
+    ActiveEnvironment, ConcurrencyState, DependencyGroups, DependencyGroupsWithDefaults,
     ExtrasSpecification, ExtrasSpecificationWithDefaults, TargetTriple,
 };
 use uv_distribution_types::{IndexCapabilities, IndexUrl};
@@ -61,7 +61,7 @@ pub(crate) async fn audit(
     client_builder: BaseClientBuilder<'_>,
     python_preference: PythonPreference,
     python_downloads: PythonDownloads,
-    concurrency: Concurrency,
+    concurrency: ConcurrencyState,
     config_discovery: ConfigDiscovery,
     cache: Cache,
     workspace_cache: &WorkspaceCache,
@@ -280,7 +280,7 @@ pub(crate) async fn audit_lock(
     groups: &DependencyGroupsWithDefaults,
     settings: &ResolverSettings,
     client_builder: BaseClientBuilder<'_>,
-    concurrency: Concurrency,
+    concurrency: ConcurrencyState,
     cache: &Cache,
     printer: Printer,
     service: VulnerabilityServiceFormat,

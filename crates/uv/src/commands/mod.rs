@@ -66,7 +66,7 @@ pub(crate) use tool::uninstall::uninstall as tool_uninstall;
 pub(crate) use tool::update_shell::update_shell as tool_update_shell;
 pub(crate) use tool::upgrade::upgrade as tool_upgrade;
 use uv_cache::Cache;
-use uv_configuration::Concurrency;
+use uv_configuration::ConcurrencyState;
 pub(crate) use uv_console::human_readable_bytes;
 use uv_fs::{CWD, Simplified};
 use uv_installer::{compile_files, compile_tree};
@@ -289,7 +289,7 @@ pub(super) struct ChangeEvent<'a> {
 /// See the `--compile` option on `pip sync` and `pip install`.
 pub(super) async fn compile_bytecode(
     venv: &PythonEnvironment,
-    concurrency: &Concurrency,
+    concurrency: &ConcurrencyState,
     cache: &Cache,
     printer: Printer,
 ) -> anyhow::Result<()> {
@@ -307,7 +307,7 @@ pub(super) async fn compile_bytecode(
         files += compile_tree(
             &site_packages,
             venv.python_executable(),
-            concurrency,
+            concurrency.limits(),
             cache.root(),
         )
         .await
@@ -326,14 +326,19 @@ pub(super) async fn compile_bytecode(
 pub(super) async fn compile_bytecode_files(
     files: impl IntoIterator<Item = anyhow::Result<PathBuf>>,
     venv: &PythonEnvironment,
-    concurrency: &Concurrency,
+    concurrency: &ConcurrencyState,
     cache: &Cache,
     printer: Printer,
 ) -> anyhow::Result<()> {
     let start = std::time::Instant::now();
-    let files = compile_files(files, venv.python_executable(), concurrency, cache.root())
-        .await
-        .context("Failed to bytecode-compile installed packages")?;
+    let files = compile_files(
+        files,
+        venv.python_executable(),
+        concurrency.limits(),
+        cache.root(),
+    )
+    .await
+    .context("Failed to bytecode-compile installed packages")?;
     if files == 0 {
         return Ok(());
     }

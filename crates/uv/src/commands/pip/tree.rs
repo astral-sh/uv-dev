@@ -13,7 +13,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use uv_cache::{Cache, Refresh};
 use uv_cache_info::Timestamp;
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
-use uv_configuration::{Concurrency, IndexStrategy, KeyringProviderType};
+use uv_configuration::{ConcurrencyState, IndexStrategy, KeyringProviderType};
 use uv_distribution_types::{
     DependencyMetadata, Diagnostic, IndexCapabilities, IndexLocations, Name, RequiresPython,
 };
@@ -46,7 +46,7 @@ pub(crate) async fn pip_tree(
     index_strategy: IndexStrategy,
     keyring_provider: KeyringProviderType,
     client_builder: BaseClientBuilder<'_>,
-    concurrency: Concurrency,
+    concurrency: ConcurrencyState,
     strict: bool,
     exclude_newer: ExcludeNewer,
     dependency_metadata: &DependencyMetadata,
@@ -100,7 +100,7 @@ pub(crate) async fn pip_tree(
         .markers(environment.interpreter().markers())
         .platform(environment.interpreter().platform())
         .build()?;
-        let download_concurrency = concurrency.downloads_semaphore.clone();
+        let download_concurrency = concurrency.downloads_semaphore();
 
         // Determine the platform tags.
         let interpreter = environment.interpreter();
@@ -132,7 +132,7 @@ pub(crate) async fn pip_tree(
                 };
                 Ok::<Option<_>, uv_client::Error>(Some((*name, filename.into_version())))
             })
-            .buffer_unordered(concurrency.downloads);
+            .buffer_unordered(concurrency.limits().downloads);
 
         let mut map = FxHashMap::default();
         while let Some(entry) = fetches.next().await.transpose()? {

@@ -16,9 +16,9 @@ use uv_cache::Cache;
 use uv_cache_key::RepositoryUrl;
 use uv_client::{BaseClientBuilder, FlatIndexClient, RegistryClientBuilder};
 use uv_configuration::{
-    ActiveEnvironment, Concurrency, Constraints, DependencyGroups, DependencyGroupsWithDefaults,
-    DevMode, DryRun, EditableMode, ExtrasSpecification, ExtrasSpecificationWithDefaults,
-    GitLfsSetting, InstallOptions, NoSources,
+    ActiveEnvironment, ConcurrencyState, Constraints, DependencyGroups,
+    DependencyGroupsWithDefaults, DevMode, DryRun, EditableMode, ExtrasSpecification,
+    ExtrasSpecificationWithDefaults, GitLfsSetting, InstallOptions, NoSources,
 };
 use uv_dispatch::BuildDispatch;
 use uv_distribution::{DistributionDatabase, LoweredExtraBuildDependencies};
@@ -105,7 +105,7 @@ pub(crate) async fn add(
     python_preference: PythonPreference,
     python_downloads: PythonDownloads,
     installer_metadata: bool,
-    concurrency: Concurrency,
+    concurrency: ConcurrencyState,
     config_discovery: ConfigDiscovery,
     cache: &Cache,
     printer: Printer,
@@ -486,7 +486,7 @@ pub(crate) async fn add(
                     DistributionDatabase::new(
                         &client,
                         &build_dispatch,
-                        concurrency.downloads_semaphore.clone(),
+                        concurrency.downloads_semaphore(),
                     ),
                 )
                 .with_reporter(Arc::new(ResolverReporter::from(printer)))
@@ -1067,7 +1067,7 @@ async fn lock_and_sync(
     settings: &ResolverInstallerSettings,
     client_builder: &BaseClientBuilder<'_>,
     installer_metadata: bool,
-    concurrency: &Concurrency,
+    concurrency: &ConcurrencyState,
     cache: &Cache,
     printer: Printer,
     preview: Preview,

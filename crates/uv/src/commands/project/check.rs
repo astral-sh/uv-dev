@@ -8,7 +8,7 @@ use uv_cache::Cache;
 use uv_cli::ColorChoice;
 use uv_client::BaseClientBuilder;
 use uv_configuration::{
-    ActiveEnvironment, Concurrency, DependencyGroups, DependencyGroupsWithDefaults, DryRun,
+    ActiveEnvironment, ConcurrencyState, DependencyGroups, DependencyGroupsWithDefaults, DryRun,
     ExtrasSpecification, InstallOptions,
 };
 use uv_fs::normalize_path;
@@ -67,7 +67,7 @@ pub(crate) async fn check(
     python_preference: PythonPreference,
     python_downloads: PythonDownloads,
     installer_metadata: bool,
-    concurrency: Concurrency,
+    concurrency: ConcurrencyState,
     cache: &Cache,
     workspace_cache: &WorkspaceCache,
     color: ColorChoice,

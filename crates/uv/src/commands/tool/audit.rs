@@ -8,7 +8,7 @@ use uv_audit::{VulnerabilityID, VulnerabilityServiceFormat};
 use uv_cache::Cache;
 use uv_cli::AuditOutputFormat;
 use uv_client::BaseClientBuilder;
-use uv_configuration::{Concurrency, DependencyGroupsWithDefaults, ExtrasSpecification};
+use uv_configuration::{ConcurrencyState, DependencyGroupsWithDefaults, ExtrasSpecification};
 use uv_fs::Simplified;
 use uv_normalize::{DefaultExtras, PackageName};
 use uv_preview::{Preview, PreviewFeature};
@@ -35,7 +35,7 @@ pub(crate) async fn audit(
     ignore_until_fixed: Vec<VulnerabilityID>,
     filesystem: ResolverInstallerOptions,
     client_builder: BaseClientBuilder<'_>,
-    concurrency: Concurrency,
+    concurrency: ConcurrencyState,
     cache: &Cache,
     printer: Printer,
     preview: Preview,

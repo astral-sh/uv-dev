@@ -20,7 +20,7 @@ use uv_client::RegistryClient;
 use uv_configuration::{
     BuildKind, BuildOptions, Constraints, IndexStrategy, NoSources, Overrides, Reinstall,
 };
-use uv_configuration::{BuildOutput, Concurrency, Excludes};
+use uv_configuration::{BuildOutput, ConcurrencyState, Excludes};
 use uv_distribution::DistributionDatabase;
 use uv_distribution_filename::DistFilename;
 use uv_distribution_types::{
@@ -132,7 +132,7 @@ pub struct BuildDispatch<'a> {
     sources: NoSources,
     source_tree_editable_policy: SourceTreeEditablePolicy,
     workspace_cache: WorkspaceCache,
-    concurrency: Concurrency,
+    concurrency: ConcurrencyState,
     preview: Preview,
 }
 
@@ -159,7 +159,7 @@ impl<'a> BuildDispatch<'a> {
         sources: NoSources,
         source_tree_editable_policy: SourceTreeEditablePolicy,
         workspace_cache: WorkspaceCache,
-        concurrency: Concurrency,
+        concurrency: ConcurrencyState,
         preview: Preview,
     ) -> Self {
         Self {
@@ -181,7 +181,7 @@ impl<'a> BuildDispatch<'a> {
             build_options,
             hasher,
             exclude_newer,
-            source_build_context: SourceBuildContext::new(concurrency.builds_semaphore.clone()),
+            source_build_context: SourceBuildContext::new(concurrency.builds_semaphore()),
             build_extra_env_vars: FxHashMap::default(),
             sources,
             source_tree_editable_policy,
@@ -203,9 +203,7 @@ impl<'a> BuildDispatch<'a> {
                 build_arena: BuildArena::default(),
                 ..self.shared_state.fork()
             },
-            source_build_context: SourceBuildContext::new(
-                self.concurrency.builds_semaphore.clone(),
-            ),
+            source_build_context: SourceBuildContext::new(self.concurrency.builds_semaphore()),
             ..self.clone()
         }
     }
@@ -324,12 +322,8 @@ impl BuildContext for BuildDispatch<'_> {
             self.dependency_metadata,
             &hasher,
             &self.shared_state.index,
-            DistributionDatabase::new(
-                self.client,
-                self,
-                self.concurrency.downloads_semaphore.clone(),
-            )
-            .with_build_stack(build_stack),
+            DistributionDatabase::new(self.client, self, self.concurrency.downloads_semaphore())
+                .with_build_stack(build_stack),
         )
         .resolve(&resolver_env)
         .await?;
@@ -357,12 +351,8 @@ impl BuildContext for BuildDispatch<'_> {
             &hasher,
             self,
             EmptyInstalledPackages,
-            DistributionDatabase::new(
-                self.client,
-                self,
-                self.concurrency.downloads_semaphore.clone(),
-            )
-            .with_build_stack(build_stack),
+            DistributionDatabase::new(self.client, self, self.concurrency.downloads_semaphore())
+                .with_build_stack(build_stack),
         )?;
         let resolution = Resolution::from(resolver.resolve().await.with_context(|| {
             format!(
@@ -456,7 +446,7 @@ impl BuildContext for BuildDispatch<'_> {
                 DistributionDatabase::new(
                     self.client,
                     self,
-                    self.concurrency.downloads_semaphore.clone(),
+                    self.concurrency.downloads_semaphore(),
                 )
                 .with_build_stack(build_stack),
             );

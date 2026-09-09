@@ -9,7 +9,7 @@ use itertools::Itertools;
 use uv_cache::{Cache, Refresh};
 use uv_client::BaseClientBuilder;
 use uv_configuration::{
-    ActiveEnvironment, Concurrency, DependencyGroupsWithDefaults, DryRun, Upgrade,
+    ActiveEnvironment, ConcurrencyState, DependencyGroupsWithDefaults, DryRun, Upgrade,
 };
 use uv_distribution::{ArchiveMetadata, Metadata};
 use uv_distribution_types::{Identifier, RequiresPython};
@@ -166,7 +166,7 @@ pub(crate) async fn upgrade(
     client_builder: BaseClientBuilder<'_>,
     python_preference: PythonPreference,
     python_downloads: PythonDownloads,
-    concurrency: Concurrency,
+    concurrency: ConcurrencyState,
     config_discovery: ConfigDiscovery,
     cache: &Cache,
     workspace_cache: &WorkspaceCache,
