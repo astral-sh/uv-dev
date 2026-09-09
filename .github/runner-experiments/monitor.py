@@ -279,8 +279,7 @@ def perf_command(report, path, command, *, privileged=True):
         ",".join(report["events"]),
         "-o",
         str(path),
-        "--",
-        *command,
+        *(["--", *command] if command else []),
     ]
 
 
@@ -357,9 +356,15 @@ class VmPerf:
 
 def vm_perf_helper(executable, output, events):
     report = {"executable": executable, "events": [events]}
+    # Count without a dummy child: perf does not reliably stop that child when
+    # interrupted, and an orphan could keep the helper's output pipes open.
     # A fixed upper bound protects against a leaked pipe; normal shutdown is EOF.
     with subprocess.Popen(
-        perf_command(report, Path(output), ["sleep", "3600"], privileged=False)
+        perf_command(report, Path(output), [], privileged=False)
+        + ["--interval-count", "3600"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        start_new_session=True,
     ) as process:
         try:
             time.sleep(0.05)
@@ -379,6 +384,7 @@ def vm_perf_helper(executable, output, events):
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait(timeout=5)
+                raise RuntimeError("perf did not stop after SIGINT") from None
 
 
 if __name__ == "__main__":
