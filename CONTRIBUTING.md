@@ -98,16 +98,33 @@ uv uses [insta](https://insta.rs/) for snapshot testing. It's recommended (but n
 `cargo-insta` for a better snapshot review experience. See the
 [installation guide](https://insta.rs/docs/cli/) for more information.
 
-In tests, you can use `uv_snapshot!` macro to simplify creating snapshots for uv commands. For
-example:
+Integration tests use `TestContext` from the `uv-test` crate to run uv in an isolated environment.
+Create one with `test_context!("3.12")` to use Python 3.12 and create a virtual environment. The
+context provides a temporary working directory, cache, and home directory, and configures commands
+to ignore machine-specific settings. Use `context.temp_dir` to create test inputs and command
+helpers such as `context.pip_install()` to run uv with that configuration.
+
+Use the `uv_snapshot!` macro to capture a command's exit status and output. Pass `context.filters()`
+to replace variable output, such as temporary paths and elapsed times, with stable placeholders:
 
 ```rust
+use uv_test::{test_context, uv_snapshot};
+
 #[test]
-fn test_add() {
-    let context = TestContext::new("3.12");
-    uv_snapshot!(context.filters(), context.add().arg("requests"), @"");
+fn missing_requirements_txt() {
+    let context = test_context!("3.12");
+    uv_snapshot!(context.filters(), context.pip_install().arg("-r").arg("requirements.txt"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: File not found: `requirements.txt`
+    ");
 }
 ```
+
+Start a new snapshot with `@""`, then run the test and review the recorded output. If a test needs
+additional normalization, use `TestContext::with_filter` to add a regular expression and
+replacement, or a shared helper such as `TestContext::with_filtered_counts`. Only filter values that
+are irrelevant to the behavior under test; package counts, for example, can be useful assertions.
 
 To run and review a specific snapshot test:
 
