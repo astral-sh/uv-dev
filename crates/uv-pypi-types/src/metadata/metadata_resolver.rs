@@ -44,11 +44,7 @@ impl ResolutionMetadata {
     pub fn parse_metadata(content: &[u8]) -> Result<Self, MetadataError> {
         let headers = Headers::parse(content)?;
 
-        let name = PackageName::from_owned(
-            headers
-                .get_first_value("Name")
-                .ok_or(MetadataError::FieldNotFound("Name"))?,
-        )?;
+        let name = PackageName::from_owned(headers.get_name()?)?;
         let version = Version::from_str(
             &headers
                 .get_first_value("Version")
@@ -122,11 +118,7 @@ impl ResolutionMetadata {
         }
 
         // The `Name` and `Version` fields are required, and can't be dynamic.
-        let name = PackageName::from_owned(
-            headers
-                .get_first_value("Name")
-                .ok_or(MetadataError::FieldNotFound("Name"))?,
-        )?;
+        let name = PackageName::from_owned(headers.get_name()?)?;
         let version = Version::from_str(
             &headers
                 .get_first_value("Version")
