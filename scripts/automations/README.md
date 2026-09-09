@@ -4,7 +4,7 @@ This internal Python 3.14+ package moves workflow logic out of shell and `jq` wi
 GitHub Actions as the scheduler. Actions still owns triggers, permissions, concurrency, runners, job
 dependencies, and credential acquisition.
 
-The first consumers are pull-request label validation and conflicted-pull-request discovery:
+The first consumers are pull-request labeling and conflicted-pull-request discovery:
 
 ```console
 uv run --project scripts/automations --locked --no-dev uv-automations labels validate --allowed .github/allowed-pull-request-labels.json
@@ -14,12 +14,34 @@ uv run --project scripts/automations --locked --no-dev uv-automations pull-reque
 Label validation reads the recommendation from stdin. Pass `--github-output "$GITHUB_OUTPUT"` to
 write the validated `labels` output. Conflict discovery preserves the JSON consumed by
 `.github/workflows/pull-request-conflicts.yml`, including the head repository and the full head SHA.
+The label workflow loads its allowlist from `main`, independently of the revision providing the
+automation implementation.
+
+## Python and Actions boundary
+
+Python owns input and result validation, GitHub API calls, Git operations, policy decisions, matrix
+and request payloads, summaries, and publication. The CLI exposes named workflow stages; it does not
+expose arbitrary GitHub requests. Internally, `gh` and `git` remain useful transports and are
+invoked with argument arrays rather than shell commands.
+
+Actions owns triggers, the job graph, runner selection, concurrency, environments, permissions,
+credential exchange, checkout/tool setup, artifact upload/download, and the Codex action. Small
+`run` steps invoke one Python stage. Moving an operation into Python must not move it into a
+less-trusted job or make its credentials available to an agent.
+
+`pull-request-labels.yml` now calls `labels prepare`, `labels report`, `labels validate`, and
+`labels apply`. Preparation records the inspected head, and publication checks that the pull request
+is still open at that head. `pull-request-conflicts.yml` calls `pull-requests identify` and
+`pull-requests remove-rebase-label`; Python owns dispatch verification, repository-ID checks, the
+writable-head filter, the matrix limit, and idempotent cleanup. The actual rebase remains a separate
+reusable workflow until its artifact and Git operations are migrated.
 
 ## Library shape
 
 - `models` contains validated identities, immutable dataclasses, and closed enums.
-- `github` provides typed reads through `gh`. Credentials come from the caller's environment; the
-  library does not acquire or persist tokens.
+- `github` provides typed reads and narrow writes through `gh`. Credentials come from the caller's
+  environment; the library does not acquire or persist tokens.
+- `git` provides the Git operations used by those workflows.
 - `actions` adapts typed results to Actions' file-based interfaces.
 - `workflows` contains workflow-specific decisions. Functions accept explicit inputs and narrow
   interfaces, so tests do not need GitHub access.
@@ -28,28 +50,75 @@ write the validated `labels` output. Conflict discovery preserves the JSON consu
 Use exhaustive `match` statements followed by `assert_never` for finite states. When outcomes have
 different payloads, use unions of frozen dataclasses instead of several optional fields and flags.
 Decode external JSON at the boundary rather than passing untyped dictionaries through the workflow.
+The shared decoder rejects duplicate object fields and non-finite numbers.
+
+For example, workflow code can make an explicit, typed GitHub query:
+
+```python
+from uv_automations.github import GitHub, OpenPullRequestQuery
+from uv_automations.models import RepositoryName
+
+query = OpenPullRequestQuery(
+    repository=RepositoryName("astral-sh/uv"),
+    base="main",
+    author="app/astral-automations-bot",
+)
+pull_requests = GitHub().list_open_pull_requests(query)
+```
 
 ## Subsequent migrations
 
-Keep the existing wire formats while moving one consumer at a time. The intended API for the next
-consumers is approximately:
+Migrate complete deterministic workflow stages rather than extracting isolated `jq` expressions.
+Keep the existing wire formats and job-level credential boundaries during each migration.
+
+| Existing workflows                                                                     | Python responsibility                                                                                                |
+| -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `issue-triage`, `update-issue-context`, `reproduce-bug`, `fix-bug`                     | Issue context, thread selection, typed agent results, candidate commits, and context/PR publication                  |
+| `diagnose-workflow-failure`                                                            | Run snapshots, retry budget and backoff, stale-run checks, duplicate detection, and issue reporting                  |
+| `promote-pull-request`, `update-pull-request-parent`, `rebase-conflicted-pull-request` | Approval and repository identity, parent state, ancestry, bundles, leased pushes, and recovery                       |
+| `pull-request-security-review`                                                         | Finding conversion, review anchors, current-head checks, and publication                                             |
+| `plan`, `sync-uv-dev`, `sync-uv-security`, `sync-python-releases`                      | Changed-file decisions, revision plans, metadata updates, and synchronization                                        |
+| Release preparation, signing, verification, and publication                            | Release policy, artifact inventories, checksums, and publication plans; native build/signing tools remain primitives |
+
+The intended API for the next consumers is approximately:
 
 ```python
-# Read and validate.
-github.get_issue(reference: IssueRef) -> Issue
-github.get_workflow_run(reference: WorkflowRunRef) -> WorkflowRun
-context.load(issue: IssueRef) -> IssueContext
-artifacts.verify_bundle(path: Path, policy: BundlePolicy) -> VerifiedBundle
+# github.py
+def get_issue(reference: IssueRef) -> Issue: ...
+def get_workflow_run(reference: WorkflowRunRef) -> WorkflowRun: ...
 
-# Plan without writing.
-failures.plan_retry(run, diagnosis, policy) -> RetryPlan
-promotion.plan(source, approval, upstream, parent) -> PromotionPlan
-rebase.plan(source, destination, previous_base) -> RebasePlan
 
-# Apply explicitly, checking that the expected revisions still match.
-context.persist(git, update, *, expected_head: CommitSha) -> PersistResult
-failures.retry(github_writer, plan: RetryPlan) -> RetryResult
-promotion.publish(github_writer, git, plan, bundle) -> PromotionResult
+# artifacts.py
+def verify_bundle(path: Path, policy: BundlePolicy) -> VerifiedBundle: ...
+
+
+# context.py
+def load(issue: IssueRef) -> IssueContext: ...
+def persist(
+    git: Git, update: IssueContextUpdate, *, expected_head: CommitSha
+) -> PersistResult: ...
+
+
+# workflows/failures.py
+def plan_retry(
+    run: WorkflowRun, diagnosis: Diagnosis, policy: RetryPolicy
+) -> RetryPlan: ...
+def retry(github_writer: GitHubWriter, plan: RetryPlan) -> RetryResult: ...
+
+
+# workflows/promotion.py
+def plan(
+    source: PullRequest,
+    approval: Approval,
+    upstream: RepositoryState,
+    parent: ParentState,
+) -> PromotionPlan: ...
+def publish(
+    github_writer: GitHubWriter,
+    git: Git,
+    plan: PromotionPlan,
+    bundle: VerifiedBundle,
+) -> PromotionResult: ...
 ```
 
 `RebaseResult`, for example, should be a union of `CleanRebase`, `ConflictedRebase`, `EmptyRebase`,
