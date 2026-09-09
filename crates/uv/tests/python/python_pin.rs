@@ -685,6 +685,75 @@ fn python_pin_resolve() {
 }
 
 #[test]
+fn python_pin_resolve_interpreter_directory() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_virtualenv_bin()
+        .with_filtered_exe_suffix();
+    let interpreter = context.interpreter();
+    let bin_dir = interpreter.parent().unwrap();
+
+    // A resolved pin should remain an absolute path even when the interpreter is in the
+    // working directory.
+    uv_snapshot!(context.filters(), context.python_pin()
+        .arg("--no-project")
+        .arg("--resolved")
+        .arg(&interpreter)
+        .current_dir(bin_dir), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Pinned `.python-version` to `[VENV]/[BIN]/python`
+    ");
+
+    let python_version = fs_err::read_to_string(bin_dir.join(PYTHON_VERSION_FILENAME))?;
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(python_version, @"[VENV]/[BIN]/python");
+    });
+
+    // Reading the pin from a child directory must select the same interpreter.
+    let child = bin_dir.join("child");
+    fs_err::create_dir_all(&child)?;
+    uv_snapshot!(context.filters(), context.python_find()
+        .arg("--system")
+        .current_dir(child), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [VENV]/[BIN]/python
+    ");
+
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn python_pin_resolve_version_named_path() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let interpreter = context.temp_dir.child("python3.12");
+    fs_err::os::unix::fs::symlink(&context.python_versions.first().unwrap().1, &interpreter)?;
+
+    // Reparsing the displayed executable name would turn this path into a version request.
+    uv_snapshot!(context.filters(), context.python_pin()
+        .arg("--no-project")
+        .arg("--resolved")
+        .arg(interpreter.path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Pinned `.python-version` to `[TEMP_DIR]/python3.12`
+    ");
+
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read(PYTHON_VERSION_FILENAME), @"[TEMP_DIR]/python3.12");
+    });
+
+    uv_snapshot!(context.filters(), context.python_find().arg("--system"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/python3.12
+    ");
+
+    Ok(())
+}
+
+#[test]
 fn python_pin_with_comments_and_whitespace() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[]);
 
