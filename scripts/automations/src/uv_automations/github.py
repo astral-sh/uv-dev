@@ -4,7 +4,7 @@ import json
 import os
 import subprocess
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal, Protocol
 from urllib.parse import quote
 
@@ -124,7 +124,7 @@ class GitHub:
     """Use the caller's existing GitHub CLI authentication."""
 
     executable: str = "gh"
-    token_variable: str | None = None
+    token_variable: str | None = field(default=None, kw_only=True)
 
     def _environment(self) -> dict[str, str] | None:
         if self.token_variable is None:
