@@ -2,16 +2,14 @@ use std::cmp::Reverse;
 use std::future::Future;
 use std::io;
 use std::path::Path;
-use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll};
 
 use futures::{FutureExt, TryStreamExt};
 use http_content_range::{ContentRange, ContentRangeBytes, ContentRangeUnbound};
 use rayon::in_place_scope;
 use rayon::prelude::*;
 use rustc_hash::FxHashMap;
-use tokio::io::{AsyncRead, AsyncSeekExt, AsyncWriteExt, ReadBuf};
+use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::Semaphore;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tracing::{Instrument, debug, info_span, instrument, warn};
@@ -32,7 +30,7 @@ use uv_distribution_types::{
 };
 use uv_extract::dirhash::{DirectoryDigest, HashedFile};
 use uv_extract::hash::Hasher;
-use uv_fs::{LockedFile, write_atomic};
+use uv_fs::{LockedFile, ProgressReader, write_atomic};
 use uv_git::{GIT_LFS, GitError};
 use uv_platform_tags::Tags;
 use uv_preview::PreviewFeature;
@@ -765,7 +763,9 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
 
                 let mut extracted = match progress {
                     Some((reporter, progress)) => {
-                        let mut reader = ProgressReader::new(&mut hasher, progress, &**reporter);
+                        let mut reader = ProgressReader::new(&mut hasher, |bytes| {
+                            reporter.on_download_progress(progress, bytes as u64);
+                        });
                         extractor
                             .extract_streaming(&mut reader)
                             .await
@@ -1131,7 +1131,9 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
                 Some((reporter, progress)) => {
                     // Wrap the reader in a progress reporter. This will report 100%
                     // progress once the download is complete, before the wheel is unzipped.
-                    let mut reader = ProgressReader::new(&mut hasher, progress, &**reporter);
+                    let mut reader = ProgressReader::new(&mut hasher, |bytes| {
+                        reporter.on_download_progress(progress, bytes as u64);
+                    });
 
                     tokio::io::copy(&mut reader, &mut writer)
                         .await
@@ -1698,42 +1700,6 @@ fn content_range(
     }
 
     Some(range)
-}
-
-/// An asynchronous reader that reports progress as bytes are read.
-struct ProgressReader<'a, R> {
-    reader: R,
-    index: usize,
-    reporter: &'a dyn Reporter,
-}
-
-impl<'a, R> ProgressReader<'a, R> {
-    /// Create a new [`ProgressReader`] that wraps another reader.
-    fn new(reader: R, index: usize, reporter: &'a dyn Reporter) -> Self {
-        Self {
-            reader,
-            index,
-            reporter,
-        }
-    }
-}
-
-impl<R> AsyncRead for ProgressReader<'_, R>
-where
-    R: AsyncRead + Unpin,
-{
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.as_mut().reader)
-            .poll_read(cx, buf)
-            .map_ok(|()| {
-                self.reporter
-                    .on_download_progress(self.index, buf.filled().len() as u64);
-            })
-    }
 }
 
 /// A pointer to an archive in the cache, fetched from an HTTP archive.

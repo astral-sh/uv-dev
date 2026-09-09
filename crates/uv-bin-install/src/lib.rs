@@ -7,9 +7,7 @@ use std::error::Error as _;
 use std::fmt;
 use std::io;
 use std::path::PathBuf;
-use std::pin::Pin;
 use std::str::FromStr;
-use std::task::{Context, Poll};
 use std::time::{Duration, SystemTimeError};
 
 use futures::{StreamExt, TryStreamExt};
@@ -17,7 +15,6 @@ use reqwest_retry::Retryable;
 use reqwest_retry::policies::ExponentialBackoff;
 use serde::Deserialize;
 use thiserror::Error;
-use tokio::io::{AsyncRead, ReadBuf};
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use url::Url;
 use uv_client::retryable_on_request_failure;
@@ -28,6 +25,7 @@ use uv_static::{astral_mirror_base_url, astral_mirror_url_from_env, custom_astra
 use uv_cache::{Cache, CacheBucket, CacheEntry, Error as CacheError};
 use uv_client::{BaseClient, RetriableError, fetch_with_url_fallback};
 use uv_extract::{Error as ExtractError, stream};
+use uv_fs::ProgressReader;
 use uv_pep440::{Version, VersionSpecifier, VersionSpecifiers};
 use uv_platform::Platform;
 use uv_redacted::DisplaySafeUrl;
@@ -841,7 +839,9 @@ async fn download_and_unpack(
         .compat();
 
     let id = reporter.on_download_start(binary.name(), version, size);
-    let mut progress_reader = ProgressReader::new(reader, id, reporter);
+    let mut progress_reader = ProgressReader::new(reader, |bytes| {
+        reporter.on_download_progress(id, bytes as u64);
+    });
     let (temp_dir, _) = stream::archive(&mut progress_reader, format.into(), temp_dir)
         .await
         .map_err(|e| Error::Extract { source: e })?;
@@ -882,42 +882,6 @@ pub trait Reporter: Send + Sync {
     fn on_download_progress(&self, id: usize, inc: u64);
     /// Called when a download completes.
     fn on_download_complete(&self, id: usize);
-}
-
-/// An asynchronous reader that reports progress as bytes are read.
-struct ProgressReader<'a, R> {
-    reader: R,
-    index: usize,
-    reporter: &'a dyn Reporter,
-}
-
-impl<'a, R> ProgressReader<'a, R> {
-    /// Create a new [`ProgressReader`] that wraps another reader.
-    fn new(reader: R, index: usize, reporter: &'a dyn Reporter) -> Self {
-        Self {
-            reader,
-            index,
-            reporter,
-        }
-    }
-}
-
-impl<R> AsyncRead for ProgressReader<'_, R>
-where
-    R: AsyncRead + Unpin,
-{
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<std::io::Result<()>> {
-        Pin::new(&mut self.as_mut().reader)
-            .poll_read(cx, buf)
-            .map_ok(|()| {
-                self.reporter
-                    .on_download_progress(self.index, buf.filled().len() as u64);
-            })
-    }
 }
 
 #[cfg(test)]
