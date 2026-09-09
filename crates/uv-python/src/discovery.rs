@@ -46,7 +46,7 @@ use crate::{BrokenLink, Interpreter, PythonVersion};
 
 /// A request to find a Python installation.
 ///
-/// See [`PythonRequest::from_str`].
+/// See [`PythonRequest::parse`].
 #[derive(Debug, Clone, Eq, Default)]
 pub enum PythonRequest {
     /// An appropriate default Python installation
