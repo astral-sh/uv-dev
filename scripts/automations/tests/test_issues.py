@@ -142,6 +142,7 @@ class IssueGitHubTests(unittest.TestCase):
                 check=True,
                 text=True,
                 stdout=subprocess.PIPE,
+                env=None,
                 timeout=60,
             )
 
