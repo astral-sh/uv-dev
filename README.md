@@ -11,10 +11,10 @@ The reported behavior is reproducible. In a virtual workspace whose only member 
 that member, but plain `uv check` automatically selects the workspace member and reports its type
 error. `uv check --no-project` respects normal ty discovery and reports no diagnostics.
 
-The observed subprocess command and current implementation agree on the mechanism: a virtual
-workspace with no explicit package selection is treated like `--all-packages`, and uv passes each
-member root to ty as a positional path. No existing integration test combines automatic workspace
-selection with `[tool.ty.src].exclude`.
+The observed subprocess command and original implementation agree on the mechanism: a virtual
+workspace with no explicit package selection was treated like `--all-packages`, and uv passed each
+member root to ty as a positional path. The parent regression extended the existing virtual
+workspace integration test to cover this interaction.
 
 ## Reproduction
 
@@ -89,21 +89,44 @@ Nearby integration coverage is in `crates/uv/tests/project/check.rs`:
 - `check_workspace_member_inherits_workspace_configuration` verifies that a selected member uses
   workspace-level ty rule configuration.
 
-Those tests do not configure `[tool.ty.src].exclude` or assert its interaction with uv-generated
-positional targets.
+Before the parent regression, those tests did not configure `[tool.ty.src].exclude`. The updated
+virtual-workspace test now covers its interaction with uv-generated member selection.
+
+## Fix
+
+Outcome: **fixed**.
+
+For the default selection of all members in a virtual workspace, uv now passes the in-workspace
+member roots to ty through a `src.include` configuration override instead of positional path
+arguments. ty applies configured `src.exclude` patterns to configuration includes with their normal
+precedence, so the vendored member is omitted while the non-excluded member is still checked.
+Explicit `--package`, `--all-packages`, and script selections retain their existing positional-path
+behavior. If an automatically selected target cannot be represented as an in-workspace UTF-8
+include, uv preserves the prior positional fallback.
+
+The parent regression in `crates/uv/tests/project/check.rs`,
+`check_virtual_workspace_checks_all_members_by_default`, now expects only the diagnostic from the
+non-excluded member and snapshots the generated ty command with
+`src.include = ["packages/member-a", "vendor/vendored"]`. The following focused debug-profile
+validation passed:
+
+- `cargo test --package uv --test project check::check_virtual_workspace` (4 tests)
+- `cargo test --package uv --test project check::check_workspace` (7 tests)
+- `cargo +stable clippy --package uv --test project -- -D warnings`
+- `cargo +stable fmt --all -- --check`
+
+The repository's pinned toolchain lacked writable access to install its missing rustfmt and clippy
+components, so the already-installed stable toolchain of the same Rust version was used for those
+two checks.
 
 ## Draft response
 
 Thanks for the clear report. I reproduced this on uv 0.12.11 with the same automatically selected
-ty 0.0.79. In a minimal virtual workspace with `vendor/vendored` as a member and
-`[tool.ty.src].exclude = ["vendor"]`, plain `uv check` passed `vendor/vendored` to ty as a positional
-path and reported its type error. `uv check --no-project` passed no positional target and succeeded.
-
-The existing workspace-selection tests cover checking all virtual-workspace members by default,
-but not the interaction with ty source exclusions. This should remain open as a focused bug. The
-fix will need to account for ty's exclusion-pattern semantics: with ty 0.0.79, `--force-exclude`
-did not suppress an explicitly selected member for the bare pattern `vendor`, although
-`vendor/**` did.
+ty 0.0.79. The fix now represents automatically selected virtual-workspace members as ty source
+includes rather than explicit positional paths. This preserves `[tool.ty.src].exclude`, so the
+vendored member is skipped while other workspace members are still checked. The focused regression
+also snapshots the generated ty command, and neighboring workspace-selection tests continue to
+pass unchanged.
 
 ## Classification
 
@@ -130,3 +153,5 @@ different ty configuration file; neither tracks exclusions overridden by uv-gene
 - astral-sh/uv#19791 (open issue), "Allow users to specify a custom ty configuration file when
   running `uv check`" — related configuration forwarding, but not the same exclusion-precedence
   interaction.
+
+Pull request: https://github.com/astral-sh/uv-dev/pull/991

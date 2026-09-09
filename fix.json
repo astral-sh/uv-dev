@@ -1,0 +1,11 @@
+{
+  "outcome": "fixed",
+  "summary": "Honor ty source exclusions for automatically selected virtual-workspace members by passing member roots through `src.include` instead of positional arguments. The updated regression verifies that excluded vendored code is skipped while other members remain checked.",
+  "validation": [
+    "4 focused virtual-workspace integration tests passed",
+    "7 focused workspace-selection integration tests passed",
+    "Focused project-test clippy passed with warnings denied",
+    "Rust formatting check passed"
+  ],
+  "pull_request": "https://github.com/astral-sh/uv-dev/pull/991"
+}
