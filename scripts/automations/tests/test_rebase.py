@@ -27,12 +27,14 @@ from uv_automations.workflows.rebase import (
     RebaseSource,
     SkippedRebase,
     VerifiedEmptyRebase,
+    VerifiedRebaseSource,
     close_empty_rebase,
     load_rebase,
     persist_rebase,
     prepare_rebase,
     push_rebase,
     verify_empty_rebase,
+    verify_rebase_source,
 )
 
 UV = RepositoryIdentity(RepositoryName("astral-sh/uv"), 699532645)
@@ -400,7 +402,11 @@ class RebaseTests(unittest.TestCase):
         rebase = self.history(base_content="upstream\n", head_content="feature\n")
         repository = self.clone()
         head = self.commit(repository, {"new.txt": "rebased\n"}, "rebased")
-        self.assertEqual(push_rebase(repository, rebase, head), PushOutcome.PUSHED)
+        github = FakeGitHub([details(rebase)])
+        verified = VerifiedRebaseSource(rebase, UV_DEV)
+        self.assertEqual(
+            push_rebase(github, repository, verified, head), PushOutcome.PUSHED
+        )
         self.assertEqual(self.remote.resolve_commit("refs/heads/feature"), head)
         pushes = [arguments for arguments in repository.commands if "push" in arguments]
         self.assertEqual(len(pushes), 1)
@@ -413,7 +419,45 @@ class RebaseTests(unittest.TestCase):
                 f"{head}:refs/heads/feature",
             ),
         )
-        self.assertEqual(push_rebase(repository, rebase, head), PushOutcome.STALE)
+        self.assertEqual(
+            push_rebase(github, repository, verified, head), PushOutcome.STALE
+        )
+
+    def test_source_preflight_pins_repository_identity(self) -> None:
+        original = self.history(base_content="upstream\n", head_content="feature\n")
+        rebase = replace(original, source=replace(original.source, repository=UV))
+        self.assertEqual(
+            verify_rebase_source(FakeGitHub([details(rebase)]), rebase),
+            VerifiedRebaseSource(rebase, UV_DEV),
+        )
+        closed = replace(details(rebase), state=PullRequestState.CLOSED)
+        self.assertIsInstance(
+            verify_rebase_source(FakeGitHub([closed]), rebase), SkippedRebase
+        )
+
+    def test_push_rechecks_current_pull_request_metadata(self) -> None:
+        original = self.history(base_content="upstream\n", head_content="feature\n")
+        rebase = replace(original, source=replace(original.source, repository=UV))
+        repository = self.clone()
+        head = self.commit(repository, {"new.txt": "rebased\n"}, "rebased")
+        current = details(rebase)
+        verified = VerifiedRebaseSource(rebase, UV_DEV)
+        for changed in (
+            replace(current, state=PullRequestState.CLOSED),
+            replace(current, base=replace(current.base, ref="retargeted")),
+            replace(
+                current,
+                head=replace(
+                    current.head, repository=RepositoryIdentity(UV_DEV.name, 1)
+                ),
+            ),
+        ):
+            with self.subTest(changed=changed):
+                self.assertEqual(
+                    push_rebase(FakeGitHub([changed]), repository, verified, head),
+                    PushOutcome.STALE,
+                )
+        self.assertFalse(any("push" in arguments for arguments in repository.commands))
 
     def test_source_rejects_unmanaged_heads_and_invalid_refs(self) -> None:
         head = CommitSha("a" * 40)

@@ -35,7 +35,9 @@ less-trusted job or make its credentials available to an agent.
 is still open at that head. `pull-request-conflicts.yml` calls `pull-requests identify` and
 `pull-requests remove-rebase-label`; Python owns dispatch verification, repository-ID checks, the
 writable-head filter, the matrix limit, and idempotent cleanup. The actual rebase remains a separate
-reusable workflow until its artifact and Git operations are migrated.
+reusable workflow, with Python stages for preparation, bundle persistence/import, source
+revalidation, and the exact-lease push. An empty result goes to a separate trusted closer, which
+recomputes the original changes with `git merge-tree` before it can close the pull request.
 
 ## Library shape
 
@@ -164,14 +166,14 @@ identity. A `RetargetPlan` retains the synchronized `main` SHA, exact child base
 parent merge; publication rechecks those preconditions before each narrow mutation. These are
 publication authority, not properties of a valid Git bundle.
 
-| Existing workflows                                                                     | Python responsibility                                                                                                |
-| -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `issue-triage`, `update-issue-context`, `reproduce-bug`, `fix-bug`                     | Issue context, thread selection, typed agent results, candidate commits, and context/PR publication                  |
-| `diagnose-workflow-failure`                                                            | Run snapshots, retry budget and backoff, stale-run checks, duplicate detection, and issue reporting                  |
-| `promote-pull-request`, `update-pull-request-parent`, `rebase-conflicted-pull-request` | Approval and repository identity, parent state, ancestry, bundles, leased pushes, and recovery                       |
-| `pull-request-security-review`                                                         | Finding conversion, review anchors, current-head checks, and publication                                             |
-| `plan`, `sync-uv-dev`, `sync-uv-security`, `sync-python-releases`                      | Changed-file decisions, revision plans, metadata updates, and synchronization                                        |
-| Release preparation, signing, verification, and publication                            | Release policy, artifact inventories, checksums, and publication plans; native build/signing tools remain primitives |
+| Existing workflows                                                 | Python responsibility                                                                                                |
+| ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
+| `issue-triage`, `update-issue-context`, `reproduce-bug`, `fix-bug` | Issue context, thread selection, typed agent results, candidate commits, and context/PR publication                  |
+| `diagnose-workflow-failure`                                        | Run snapshots, retry budget and backoff, stale-run checks, duplicate detection, and issue reporting                  |
+| `promote-pull-request`, `update-pull-request-parent`               | Approval and repository identity, parent state, ancestry, bundles, leased pushes, and recovery                       |
+| `pull-request-security-review`                                     | Finding conversion, review anchors, current-head checks, and publication                                             |
+| `plan`, `sync-uv-dev`, `sync-uv-security`, `sync-python-releases`  | Changed-file decisions, revision plans, metadata updates, and synchronization                                        |
+| Release preparation, signing, verification, and publication        | Release policy, artifact inventories, checksums, and publication plans; native build/signing tools remain primitives |
 
 The intended API for the next consumers is approximately:
 
@@ -224,9 +226,11 @@ def retarget(
 ) -> RetargetOutcome: ...
 ```
 
-`RebaseResult`, for example, should be a union of `CleanRebase`, `ConflictedRebase`, `EmptyRebase`,
-and `RejectedRebase`. A plan must carry the repository identity, approved head SHA, run attempt, or
-other preconditions needed to detect stale state. Git writes use an exact lease.
+The rebase consumer returns `EmptyRebase | PersistedRebase`; publication first obtains a
+`VerifiedRebaseSource` carrying the exact head-repository identity. The push stage reads current
+pull-request metadata through `GH_READ_TOKEN` while `GH_TOKEN` remains the separate contents writer.
+A plan must carry the repository identity, approved head SHA, run attempt, or other preconditions
+needed to detect stale state. Git writes use an exact lease.
 
 Keep analysis and publication in separate jobs. A publisher loads its code and configuration from
 the trusted workflow revision, validates incoming artifacts again, and obtains only the permissions

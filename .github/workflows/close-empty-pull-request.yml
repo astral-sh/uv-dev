@@ -25,6 +25,10 @@ on:
       head-repository:
         required: true
         type: string
+    secrets:
+      STS_API_URL:
+        description: "The credential broker URL, unless supplied by the automations environment"
+        required: false
 
 permissions: {}
 
@@ -63,7 +67,7 @@ jobs:
           AUTOMATIONS_PYTHON: ${{ steps.automations.outputs.python }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          "$AUTOMATIONS_PYTHON" -I -m uv_automations.rebase_cli verify-empty \
+          "$AUTOMATIONS_PYTHON" -I -m uv_automations rebase verify-empty \
             --checkout "$GITHUB_WORKSPACE" \
             --repo "$GITHUB_REPOSITORY" \
             --repository-id "$GITHUB_REPOSITORY_ID" \
@@ -95,7 +99,7 @@ jobs:
           GH_TOKEN: ${{ steps.token.outputs.token }}
           HEAD_REPOSITORY_ID: ${{ steps.verify.outputs.head_repository_id }}
         run: |
-          "$AUTOMATIONS_PYTHON" -I -m uv_automations.rebase_cli close-empty \
+          "$AUTOMATIONS_PYTHON" -I -m uv_automations rebase close-empty \
             --repo "$GITHUB_REPOSITORY" \
             --repository-id "$GITHUB_REPOSITORY_ID" \
             --pull-request "$PULL_REQUEST_NUMBER" \
