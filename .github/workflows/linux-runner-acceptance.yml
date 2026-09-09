@@ -1,12 +1,12 @@
-name: Linux runner migration acceptance
+name: Linux runner equal-rate acceptance
 "on":
   push:
     branches:
-      - zb/linux-runner-acceptance-20260909
+      - zb/linux-runner-32cpu-acceptance-20260909
 permissions:
   contents: read
 concurrency:
-  group: linux-runner-acceptance-${{ github.ref }}
+  group: linux-runner-equal-rate-${{ github.ref }}
   cancel-in-progress: false
 env:
   CARGO_INCREMENTAL: 0
@@ -41,7 +41,9 @@ jobs:
       - name: Record runner characteristics
         env:
           EXPECTED_REVISION: e9837f6e09e481bf5d1c2c2f13b641c14a366518
+          EXPECTED_CPUS: ${{ matrix.cpus }}
         run: |
+          test "$(nproc)" = "$EXPECTED_CPUS"
           {
           test "$(git rev-parse HEAD)" = "$EXPECTED_REVISION"
           git rev-parse HEAD
@@ -59,7 +61,7 @@ jobs:
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
         id: rust-cache
         with:
-          prefix-key: uv-linux-acceptance-20260909
+          prefix-key: uv-linux-equal-rate-20260909
           key: ${{ hashFiles('source/Cargo.toml') }}
           cache-workspace-crates: "true"
           save-if: "true"
@@ -155,10 +157,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - provider: Namespace
-            runner: namespace-profile-ubuntu-24-04-16;container.privileged=true
+          - provider: Namespace-32
+            runner:
+              - nscloud-ubuntu-24.04-amd64-32x64-with-features
+              - namespace-features:container.privileged=true
+            cpus: 32
+            workers: 40
           - provider: Depot
             runner: depot-ubuntu-24.04-16
+            cpus: 16
+            workers: 20
     defaults:
       run:
         working-directory: source
@@ -188,7 +196,9 @@ jobs:
       - name: Record runner characteristics
         env:
           EXPECTED_REVISION: e9837f6e09e481bf5d1c2c2f13b641c14a366518
+          EXPECTED_CPUS: ${{ matrix.cpus }}
         run: |
+          test "$(nproc)" = "$EXPECTED_CPUS"
           {
           test "$(git rev-parse HEAD)" = "$EXPECTED_REVISION"
           git rev-parse HEAD
@@ -206,7 +216,7 @@ jobs:
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
         id: rust-cache
         with:
-          prefix-key: uv-linux-acceptance-20260909
+          prefix-key: uv-linux-equal-rate-20260909
           key: ${{ hashFiles('source/Cargo.toml') }}
           cache-workspace-crates: "true"
           save-if: "false"
@@ -273,6 +283,7 @@ jobs:
           UV_INTERNAL__TEST_LOWLINKS_FS: /ext4
           INSTA_UPDATE: "no"
           INSTA_PENDING_DIR: ${{ github.workspace }}/results/pending-snapshots
+          TEST_WORKERS: ${{ matrix.workers }}
         run: |
           {
           TIMEFORMAT='CARGO_TIMING elapsed=%3R user=%3U system=%3S'
@@ -283,7 +294,7 @@ jobs:
             --features test-python-patch,test-universal,native-auth,secret-service \
             --workspace \
             --profile ci-linux \
-            --test-threads 20
+            --test-threads "$TEST_WORKERS"
           } 2>&1 | tee "$GITHUB_WORKSPACE/results/cargo.log"
       - name: Preserve test report
         if: ${{ always() }}
@@ -303,10 +314,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - provider: Namespace
-            runner: namespace-profile-ubuntu-24-04-16;container.privileged=true
+          - provider: Namespace-32
+            runner:
+              - nscloud-ubuntu-24.04-amd64-32x64-with-features
+              - namespace-features:container.privileged=true
+            cpus: 32
+            workers: 40
           - provider: Depot
             runner: depot-ubuntu-24.04-16
+            cpus: 16
+            workers: 20
     needs: warmup
     defaults:
       run:
@@ -337,7 +354,9 @@ jobs:
       - name: Record runner characteristics
         env:
           EXPECTED_REVISION: e9837f6e09e481bf5d1c2c2f13b641c14a366518
+          EXPECTED_CPUS: ${{ matrix.cpus }}
         run: |
+          test "$(nproc)" = "$EXPECTED_CPUS"
           {
           test "$(git rev-parse HEAD)" = "$EXPECTED_REVISION"
           git rev-parse HEAD
@@ -355,7 +374,7 @@ jobs:
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
         id: rust-cache
         with:
-          prefix-key: uv-linux-acceptance-20260909
+          prefix-key: uv-linux-equal-rate-20260909
           key: ${{ hashFiles('source/Cargo.toml') }}
           cache-workspace-crates: "true"
           save-if: "false"
@@ -422,6 +441,7 @@ jobs:
           UV_INTERNAL__TEST_LOWLINKS_FS: /ext4
           INSTA_UPDATE: "no"
           INSTA_PENDING_DIR: ${{ github.workspace }}/results/pending-snapshots
+          TEST_WORKERS: ${{ matrix.workers }}
         run: |
           {
           TIMEFORMAT='CARGO_TIMING elapsed=%3R user=%3U system=%3S'
@@ -432,7 +452,7 @@ jobs:
             --features test-python-patch,test-universal,native-auth,secret-service \
             --workspace \
             --profile ci-linux \
-            --test-threads 20
+            --test-threads "$TEST_WORKERS"
           } 2>&1 | tee "$GITHUB_WORKSPACE/results/cargo.log"
       - name: Preserve test report
         if: ${{ always() }}
@@ -452,10 +472,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - provider: Namespace
-            runner: namespace-profile-ubuntu-24-04-16;container.privileged=true
+          - provider: Namespace-32
+            runner:
+              - nscloud-ubuntu-24.04-amd64-32x64-with-features
+              - namespace-features:container.privileged=true
+            cpus: 32
+            workers: 40
           - provider: Depot
             runner: depot-ubuntu-24.04-16
+            cpus: 16
+            workers: 20
     needs: sample-1
     defaults:
       run:
@@ -486,7 +512,9 @@ jobs:
       - name: Record runner characteristics
         env:
           EXPECTED_REVISION: e9837f6e09e481bf5d1c2c2f13b641c14a366518
+          EXPECTED_CPUS: ${{ matrix.cpus }}
         run: |
+          test "$(nproc)" = "$EXPECTED_CPUS"
           {
           test "$(git rev-parse HEAD)" = "$EXPECTED_REVISION"
           git rev-parse HEAD
@@ -504,7 +532,7 @@ jobs:
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
         id: rust-cache
         with:
-          prefix-key: uv-linux-acceptance-20260909
+          prefix-key: uv-linux-equal-rate-20260909
           key: ${{ hashFiles('source/Cargo.toml') }}
           cache-workspace-crates: "true"
           save-if: "false"
@@ -571,6 +599,7 @@ jobs:
           UV_INTERNAL__TEST_LOWLINKS_FS: /ext4
           INSTA_UPDATE: "no"
           INSTA_PENDING_DIR: ${{ github.workspace }}/results/pending-snapshots
+          TEST_WORKERS: ${{ matrix.workers }}
         run: |
           {
           TIMEFORMAT='CARGO_TIMING elapsed=%3R user=%3U system=%3S'
@@ -581,7 +610,7 @@ jobs:
             --features test-python-patch,test-universal,native-auth,secret-service \
             --workspace \
             --profile ci-linux \
-            --test-threads 20
+            --test-threads "$TEST_WORKERS"
           } 2>&1 | tee "$GITHUB_WORKSPACE/results/cargo.log"
       - name: Preserve test report
         if: ${{ always() }}
@@ -601,10 +630,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - provider: Namespace
-            runner: namespace-profile-ubuntu-24-04-16;container.privileged=true
+          - provider: Namespace-32
+            runner:
+              - nscloud-ubuntu-24.04-amd64-32x64-with-features
+              - namespace-features:container.privileged=true
+            cpus: 32
+            workers: 40
           - provider: Depot
             runner: depot-ubuntu-24.04-16
+            cpus: 16
+            workers: 20
     needs: sample-2
     defaults:
       run:
