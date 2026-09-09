@@ -32,6 +32,7 @@ def _environment() -> dict[str, str]:
     environment.update(
         GIT_CONFIG_GLOBAL=os.devnull,
         GIT_CONFIG_NOSYSTEM="1",
+        GIT_GRAFT_FILE=os.devnull,
         GIT_NO_REPLACE_OBJECTS="1",
         GIT_TERMINAL_PROMPT="0",
     )
@@ -40,7 +41,7 @@ def _environment() -> dict[str, str]:
 
 @dataclass(frozen=True, slots=True)
 class Git:
-    """Run Git without hooks, replacement objects, or inherited repository state."""
+    """Run Git without hooks, grafts, replacements, or inherited repository state."""
 
     path: Path
 

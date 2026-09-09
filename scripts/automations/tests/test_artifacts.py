@@ -116,6 +116,17 @@ class CommitArtifactTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "trusted base"):
             persist_commit(self.source, CommitRange(self.base, unrelated), self.bundle)
 
+    def test_legacy_grafts_cannot_change_ancestry(self) -> None:
+        tree = self.source.output("rev-parse", f"{self.base}^{{tree}}")
+        unrelated = CommitSha(
+            self.source.output("commit-tree", tree, "-m", "unrelated")
+        )
+        grafts = self.source.path / ".git" / "info" / "grafts"
+        grafts.write_text(f"{unrelated} {self.base}\n", encoding="utf-8")
+        self.assertFalse(self.source.is_ancestor(self.base, unrelated))
+        with self.assertRaisesRegex(ValueError, "trusted base"):
+            persist_commit(self.source, CommitRange(self.base, unrelated), self.bundle)
+
     def test_existing_bundle_is_not_replaced(self) -> None:
         self.bundle.write_bytes(b"existing")
         with self.assertRaises(FileExistsError):

@@ -22,6 +22,8 @@ def main() -> None:
             "sync",
             "--directory",
             str(project),
+            "--project",
+            str(project),
             "--locked",
             "--no-dev",
             "--no-editable",
