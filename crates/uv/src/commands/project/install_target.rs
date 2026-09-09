@@ -8,9 +8,10 @@ use rustc_hash::FxHashSet;
 
 use uv_configuration::{
     BuildOptions, Constraints, DependencyGroupsWithDefaults, ExtrasSpecification,
-    ExtrasSpecificationWithDefaults, InstallOptions,
+    ExtrasSpecificationWithDefaults, InstallOptions, NoSources,
 };
-use uv_distribution_types::{Index, Resolution};
+use uv_distribution::BuildRequires;
+use uv_distribution_types::{Index, Name, Node, Resolution, ResolvedDist};
 use uv_normalize::{DEV_DEPENDENCIES, ExtraName, GroupName, PackageName};
 use uv_platform_tags::Tags;
 use uv_preview::PreviewFeature;
@@ -18,7 +19,7 @@ use uv_pypi_types::{
     DependencyGroupSpecifier, DependencyGroups, LenientRequirement, ResolverMarkerEnvironment,
     VerbatimParsedUrl,
 };
-use uv_resolver::{Installable, InstallableRootKind, Lock, LockError, Package};
+use uv_resolver::{Installable, InstallableRootKind, Lock, Package};
 use uv_scripts::Pep723Script;
 use uv_workspace::Workspace;
 use uv_workspace::pyproject::{Source, Sources, ToolUvSources};
@@ -206,7 +207,8 @@ impl<'lock> InstallTarget<'lock> {
         groups: &DependencyGroupsWithDefaults,
         build_options: &BuildOptions,
         install_options: &InstallOptions,
-    ) -> Result<Resolution, LockError> {
+        sources: &NoSources,
+    ) -> Result<Resolution, ProjectError> {
         // Package-backed project and workspace targets without conflicts can use concrete roots.
         // Other targets need the generic path to include manifest dependencies or evaluate
         // conflict markers from project roots.
@@ -224,7 +226,7 @@ impl<'lock> InstallTarget<'lock> {
                 .map(|root_name| self.lock().find_by_name(root_name).ok().flatten())
                 .collect::<Option<Vec<_>>>()
         {
-            return self.lock().to_resolution(
+            let resolution = self.lock().to_resolution(
                 self.install_path(),
                 roots,
                 self.project_name(),
@@ -234,10 +236,17 @@ impl<'lock> InstallTarget<'lock> {
                 groups,
                 build_options,
                 install_options,
+            )?;
+            return self.with_workspace_build_distributions(
+                resolution,
+                marker_env,
+                tags,
+                build_options,
+                sources,
             );
         }
 
-        Installable::to_resolution(
+        let resolution = Installable::to_resolution(
             &self,
             marker_env,
             tags,
@@ -245,7 +254,83 @@ impl<'lock> InstallTarget<'lock> {
             groups,
             build_options,
             install_options,
+        )?;
+        self.with_workspace_build_distributions(
+            resolution,
+            marker_env,
+            tags,
+            build_options,
+            sources,
         )
+    }
+
+    /// Attach the workspace members needed to build the selected members without marking those
+    /// requirements for installation into the target environment.
+    fn with_workspace_build_distributions(
+        self,
+        resolution: Resolution,
+        marker_env: &ResolverMarkerEnvironment,
+        tags: &Tags,
+        build_options: &BuildOptions,
+        sources: &NoSources,
+    ) -> Result<Resolution, ProjectError> {
+        let workspace = match self {
+            Self::Project { workspace, .. }
+            | Self::Projects { workspace, .. }
+            | Self::Workspace { workspace, .. }
+            | Self::NonProjectWorkspace { workspace, .. } => workspace,
+            Self::Script { .. } => return Ok(resolution),
+        };
+
+        let selected = resolution
+            .distributions()
+            .map(ResolvedDist::name)
+            .filter(|name| workspace.packages().contains_key(*name))
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let mut seen = selected.clone();
+        let mut queue = selected.iter().cloned().collect::<VecDeque<_>>();
+        let mut build_distributions = BTreeSet::new();
+
+        while let Some(name) = queue.pop_front() {
+            let Some(member) = workspace.packages().get(&name) else {
+                continue;
+            };
+            for dependency in BuildRequires::workspace_names_from_directory(member.root())? {
+                if sources.for_package(&dependency)
+                    || !workspace.packages().contains_key(&dependency)
+                {
+                    continue;
+                }
+                if !selected.contains(&dependency) {
+                    build_distributions.insert(dependency.clone());
+                }
+                if seen.insert(dependency.clone()) {
+                    queue.push_back(dependency);
+                }
+            }
+        }
+
+        let build_distributions = build_distributions
+            .into_iter()
+            .map(|name| {
+                let package = self
+                    .lock()
+                    .find_by_name(&name)
+                    .map_err(anyhow::Error::msg)?
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("Workspace member `{name}` is missing from the lockfile")
+                    })?;
+                let Node::Dist { dist, .. } =
+                    self.installable_node(package, tags, marker_env, build_options)?
+                else {
+                    unreachable!("installable package nodes are distributions");
+                };
+                Ok(dist)
+            })
+            .collect::<Result<Vec<_>, ProjectError>>()?;
+
+        Ok(resolution.with_build_distributions(build_distributions))
     }
 
     /// Return an iterator over the [`Index`] definitions in the target.
