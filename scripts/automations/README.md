@@ -86,8 +86,8 @@ the runner's trusted temporary state.
 
 The shared Git adapter disables filesystem monitors, traditional hooks, grafts, replacement objects,
 and inherited repository-selection state. These settings do not make arbitrary repository-local
-configuration safe. If an agent can write `.git`, inspect it through a private transport clone
-before running Git operations outside the agent's sandbox:
+configuration safe. If an agent can write `.git`, inspect it through a private transport clone of a
+protected object snapshot before running Git operations outside the agent's sandbox:
 
 ```python
 from uv_automations.artifacts import CommitRange, persist_commit
@@ -99,13 +99,21 @@ with inspect_candidate(source, base=base_sha, scratch=trusted_scratch) as candid
     bundle = persist_commit(candidate.repository, commits, destination)
 ```
 
-The source index is checked separately from a fresh worktree-check index, so staged leftovers and
-index flags cannot hide changes. Attribute lookup uses the trusted base. The first implementation
-requires Git 2.50.1 or newer, native no-follow directory descriptors, and a regular Actions
-checkout. It rejects submodules and does not rediscover linked-worktree metadata after the agent has
-run. The scratch directory must be outside the agent-writable checkout and temporary directories.
-Git reads can select a separate credential with `repository.with_token("GH_READ_TOKEN")`; the
-original repository object retains the writer's environment.
+Only the captured `HEAD` and independently copied loose objects and pack/index pairs enter the
+snapshot's fresh SHA-1/files-ref metadata. Git never reads the source configuration, hooks,
+alternates, grafts, or replacement refs. The source index is checked separately from a fresh
+worktree-check index, so staged leftovers and index flags cannot hide changes. Attribute lookup uses
+the trusted base. `require_clean` is a consistency check of the live working tree, not an atomic
+worktree capture; transported commits come only from the protected object snapshot.
+
+The first implementation requires Git 2.50.1 or newer, native no-follow directory descriptors, and a
+full SHA-1 Actions checkout with ordinary files-based refs. It rejects submodules, linked worktrees,
+reftable, shallow or promisor repositories, alternate object stores, and symlinked or hardlinked
+source metadata. Copies are limited to 100,000 source files and 2 GiB, and incomplete or corrupt
+object stores fail closed. The scratch directory must be outside the agent-writable checkout and
+temporary directories. Git reads can select a separate credential with
+`repository.with_token("GH_READ_TOKEN")`; the original repository object retains the writer's
+environment.
 
 Commit transport has a small, concrete API:
 
