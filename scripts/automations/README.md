@@ -258,6 +258,29 @@ recovery still own their shell transport in this slice, but use the shared appro
 create-only base-copy stage. Their next migration must preserve complete publication identity and
 partial-publication recovery, not merely move individual REST calls.
 
+### Retargeting draft children
+
+`workflows.promotion_retarget.plan_retargets(source_reader, upstream_reader, repository, main_sha)`
+returns a `RetargetBatch` or `StaleRetargetSync`. Every plan retains the exact child base and head,
+the synchronized source `main`, and a uniquely verified merged parent. Only open, same-repository
+draft children are eligible; ready children stay with promotion and replay. The parent merge must
+already be contained in the pinned synchronized `main`, whose SHA is independently checked against
+public `uv/main` history.
+
+`apply_retargets` rechecks the main, parent, and child before each
+`PromotionRetargetGitHub.retarget_to_main` call. The writer can only update the PR base to `main`;
+it cannot rebase, push, close, or publish a child. GitHub's documented
+[pull-request update](https://docs.github.com/en/rest/pulls/pulls#update-a-pull-request) has no
+atomic expected-head or draft precondition, so the final read is an optimistic freshness check. The
+mutation response is checked as well, and concurrent changes are reported instead of silently
+accepted.
+
+The `promotions retarget identify` and `promotions retarget apply` stages run after synchronization.
+The read-only job emits a count, and the PR-only publisher recomputes its plan. No private PR
+identities, branch names, or revisions cross the public Actions output boundary. `uv-security`'s
+sync job emits only a SHA already verified against public `uv/main` history. If a parent source PR
+closes or receives its promotion record after the scan, the next public or manual sync retries it.
+
 ## Subsequent migrations
 
 Migrate complete deterministic workflow stages rather than extracting isolated `jq` expressions.

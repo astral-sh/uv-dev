@@ -1,0 +1,131 @@
+name: Retarget promoted pull request children
+
+on:
+  workflow_call:
+    inputs:
+      repository:
+        description: "The synchronized source repository"
+        required: true
+        type: string
+      repository-id:
+        description: "The expected source repository ID"
+        required: true
+        type: string
+      main-sha:
+        description: "The synchronized public main SHA"
+        required: true
+        type: string
+
+permissions: {}
+
+env:
+  UV_LOCKED: 1
+
+jobs:
+  identify:
+    name: Identify children of promoted pull requests
+    if: github.repository == 'astral-sh/uv' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-slim
+    environment: automations
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: read
+    outputs:
+      count: ${{ steps.identify.outputs.count }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+
+      - name: Set up trusted automation runtime
+        id: automations
+        uses: ./.github/actions/setup-automations
+
+      - name: Get source read token
+        id: read-token
+        uses: open-security-tools/ost-simple-sts@974a63a2daaaa40f7c6dec40d334f3da4421469e
+        with:
+          exchange-url: ${{ secrets.STS_API_URL }}/exchange
+          audience: ${{ secrets.STS_API_URL }}
+          repository: ${{ inputs.repository }}
+          permissions: |
+            contents: read
+            pull_requests: read
+
+      - name: Identify children of promoted pull requests
+        id: identify
+        env:
+          AUTOMATIONS_PYTHON: ${{ steps.automations.outputs.python }}
+          GH_READ_TOKEN: ${{ steps.read-token.outputs.token }}
+          GH_UPSTREAM_TOKEN: ${{ github.token }}
+          MAIN_SHA: ${{ inputs.main-sha }}
+          SOURCE_REPOSITORY: ${{ inputs.repository }}
+          SOURCE_REPOSITORY_ID: ${{ inputs.repository-id }}
+        run: |
+          "$AUTOMATIONS_PYTHON" -I -m uv_automations promotions retarget identify \
+            --repo "$SOURCE_REPOSITORY" \
+            --repository-id "$SOURCE_REPOSITORY_ID" \
+            --main-sha "$MAIN_SHA" \
+            --github-output "$GITHUB_OUTPUT" \
+            --summary "$GITHUB_STEP_SUMMARY"
+
+  retarget:
+    name: Retarget children of promoted pull requests
+    needs: identify
+    if: needs.identify.outputs.count != '' && needs.identify.outputs.count != '0'
+    runs-on: ubuntu-slim
+    environment: automations
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+
+      - name: Set up trusted automation runtime
+        id: automations
+        uses: ./.github/actions/setup-automations
+
+      - name: Get source read token
+        id: read-token
+        uses: open-security-tools/ost-simple-sts@974a63a2daaaa40f7c6dec40d334f3da4421469e
+        with:
+          exchange-url: ${{ secrets.STS_API_URL }}/exchange
+          audience: ${{ secrets.STS_API_URL }}
+          repository: ${{ inputs.repository }}
+          permissions: |
+            contents: read
+            pull_requests: read
+
+      - name: Get source pull request token
+        id: write-token
+        uses: open-security-tools/ost-simple-sts@974a63a2daaaa40f7c6dec40d334f3da4421469e
+        with:
+          exchange-url: ${{ secrets.STS_API_URL }}/exchange
+          audience: ${{ secrets.STS_API_URL }}
+          repository: ${{ inputs.repository }}
+          permissions: |
+            pull_requests: write
+
+      - name: Retarget children of promoted pull requests
+        env:
+          AUTOMATIONS_PYTHON: ${{ steps.automations.outputs.python }}
+          GH_READ_TOKEN: ${{ steps.read-token.outputs.token }}
+          GH_UPSTREAM_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.write-token.outputs.token }}
+          MAIN_SHA: ${{ inputs.main-sha }}
+          SOURCE_REPOSITORY: ${{ inputs.repository }}
+          SOURCE_REPOSITORY_ID: ${{ inputs.repository-id }}
+        run: |
+          "$AUTOMATIONS_PYTHON" -I -m uv_automations promotions retarget apply \
+            --repo "$SOURCE_REPOSITORY" \
+            --repository-id "$SOURCE_REPOSITORY_ID" \
+            --main-sha "$MAIN_SHA" \
+            --summary "$GITHUB_STEP_SUMMARY"
