@@ -1,0 +1,194 @@
+name: Native ARM64 runner acceptance
+"on":
+  push:
+    branches:
+      - zb/linux-arm64-memory-20260909
+permissions:
+  contents: read
+concurrency:
+  group: arm64-acceptance-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  ACTIONS_CACHE_MODE: none
+  AWS_LC_SYS_USE_SYSTEM: "0"
+  PACKAGE_NAME: uv
+  MODULE_NAME: uv
+  PYTHON_VERSION: "3.11"
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  CARGO_TERM_COLOR: always
+  RUSTUP_MAX_RETRIES: 10
+jobs:
+  compare:
+    name: ${{ matrix.platform.provider }} / native ARM64 PGO
+    runs-on: ${{ matrix.platform.runner }}
+    timeout-minutes: ${{ matrix.platform.pgo && 60 || 30 }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - target: aarch64-unknown-linux-gnu
+            arch: aarch64
+            runner: nscloud-ubuntu-24.04-arm64-8x32
+            pgo: true
+            maturin_docker_options: -e JEMALLOC_SYS_WITH_LG_PAGE=16
+            manylinux: "2_28"
+            provider: Namespace
+          - target: aarch64-unknown-linux-gnu
+            arch: aarch64
+            runner: depot-ubuntu-24.04-arm-8
+            pgo: true
+            maturin_docker_options: -e JEMALLOC_SYS_WITH_LG_PAGE=16
+            manylinux: "2_28"
+            provider: Depot
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          repository: astral-sh/uv
+          ref: baf3915086bd725a9227bb2115e324065eecb415
+      - name: Record runner resources
+        env:
+          EXPECTED_SOURCE: baf3915086bd725a9227bb2115e324065eecb415
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE"
+          mkdir -p "$HOME/code/tmp/uv-arm64-acceptance" results
+          echo "TMPDIR=$HOME/code/tmp/uv-arm64-acceptance" >> "$GITHUB_ENV"
+          { git rev-parse HEAD; uname -sr; lscpu; free -b; swapon --show; } > results/machine.txt
+          vmstat -w 5 > results/vmstat.txt < /dev/null &
+          echo "$!" > results/vmstat.pid
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          cache: ""
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Prep README.md
+        run: python scripts/transform_readme.py --target pypi
+      - name: Build wheels
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b
+        with:
+          sccache: false
+          maturin-version: v1.14.1
+          target: ${{ matrix.platform.target }}
+          manylinux: ${{ matrix.platform.manylinux }}
+          docker-options: -e CARGO -e AWS_LC_SYS_USE_SYSTEM ${{ matrix.platform.maturin_docker_options }}
+          args: --release --locked --out dist --features self-update --compatibility pypi
+          before-script-linux: |
+            scripts/install-cargo-extensions.sh
+
+            if [[ "${{ matrix.platform.pgo }}" == "true" ]]; then
+                # GNU ld cannot resolve long-range calls in the instrumented ARM64 binary.
+                bundled_lld_dir="$(rustc --print sysroot)/lib/rustlib/${{ matrix.platform.target }}/bin/gcc-ld"
+                test -x "${bundled_lld_dir}/ld.lld"
+                export RUSTFLAGS="${RUSTFLAGS:+${RUSTFLAGS} }-C link-arg=-B${bundled_lld_dir} -C link-arg=-fuse-ld=lld"
+
+                rustup component add llvm-tools-preview
+                python${{ env.PYTHON_VERSION }} scripts/build_uv_pgo.py \
+                    --target "${{ matrix.platform.target }}" \
+                    --target-dir "$PWD/target/uv-pgo" \
+                    --train-only
+
+                export RUSTFLAGS="${RUSTFLAGS:+${RUSTFLAGS} }-Cprofile-use=$PWD/target/uv-pgo/uv.profdata"
+            fi
+        env:
+          CARGO: ${{ github.workspace }}/scripts/cargo.sh
+      - name: Use local Docker builder for emulated tests
+        run: docker buildx use default
+      - uses: uraimo/run-on-arch-action@f9b26e3a1a408d5fd530d20c17b9f3f4428ff8d9
+        name: Test wheel
+        with:
+          arch: ${{ matrix.platform.arch == 'arm' && 'armv6' || matrix.platform.arch }}
+          distro: ${{ matrix.platform.arch == 'arm' && 'bullseye' || 'ubuntu20.04' }}
+          install: |
+            sed -i 's|http://ports.ubuntu.com/ubuntu-ports|http://mirrors.ocf.berkeley.edu/ubuntu-ports|g' /etc/apt/sources.list
+            apt-get update
+            apt-get install -y --no-install-recommends python3 python3-pip python-is-python3
+            pip3 install -U pip
+          run: |
+            pip install ${PACKAGE_NAME} --no-index --find-links dist/ --force-reinstall
+            ${MODULE_NAME} --help
+            # TODO(konsti): Enable this test on all platforms, currently `find_uv_bin` is failing to discover uv here.
+            # python -m ${MODULE_NAME} --help
+            uvx --help
+          env: |
+            PACKAGE_NAME: ${{ env.PACKAGE_NAME }}
+            MODULE_NAME: ${{ env.MODULE_NAME }}
+      - name: Upload wheels
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: wheels_uv-${{ matrix.platform.target }}-${{ matrix.platform.provider }}
+          path: dist
+      - name: Archive binary
+        shell: bash
+        run: |
+          ARCHIVE_NAME=uv-$TARGET
+          ARCHIVE_FILE=$ARCHIVE_NAME.tar.gz
+
+          mkdir -p "$ARCHIVE_NAME"
+          cp "target/$TARGET/release/uv" "$ARCHIVE_NAME/uv"
+          cp "target/$TARGET/release/uvx" "$ARCHIVE_NAME/uvx"
+          tar czvf "$ARCHIVE_FILE" "$ARCHIVE_NAME"
+          shasum -a 256 "$ARCHIVE_FILE" > "$ARCHIVE_FILE.sha256"
+        env:
+          TARGET: ${{ matrix.platform.target }}
+      - name: Upload binary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: artifacts-${{ matrix.platform.target }}-${{ matrix.platform.provider }}
+          path: |
+            *.tar.gz
+            *.sha256
+      - name: Build wheels uv-build
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b
+        with:
+          sccache: false
+          maturin-version: v1.14.1
+          target: ${{ matrix.platform.target }}
+          manylinux: ${{ matrix.platform.manylinux }}
+          docker-options: -e CARGO -e AWS_LC_SYS_USE_SYSTEM ${{ matrix.platform.maturin_docker_options }}
+          args:
+            --profile minimal-size --locked --out crates/uv-build/dist -m crates/uv-build/Cargo.toml
+            --compatibility pypi
+          before-script-linux: |
+            scripts/install-cargo-extensions.sh
+        env:
+          CARGO: ${{ github.workspace }}/scripts/cargo.sh
+      - uses: uraimo/run-on-arch-action@f9b26e3a1a408d5fd530d20c17b9f3f4428ff8d9
+        name: Test wheel uv-build
+        with:
+          arch: ${{ matrix.platform.arch == 'arm' && 'armv6' || matrix.platform.arch }}
+          distro: ${{ matrix.platform.arch == 'arm' && 'bullseye' || 'ubuntu20.04' }}
+          install: |
+            sed -i 's|http://ports.ubuntu.com/ubuntu-ports|http://mirrors.ocf.berkeley.edu/ubuntu-ports|g' /etc/apt/sources.list
+            apt-get update
+            apt-get install -y --no-install-recommends python3 python3-pip python-is-python3
+            pip3 install -U pip
+          run: |
+            pip install ${PACKAGE_NAME}_build --no-index --find-links crates/uv-build/dist --force-reinstall
+            ${MODULE_NAME}-build --help
+            # TODO(konsti): Enable this test on all platforms, currently `find_uv_bin` is failing to discover uv here.
+            # python -m ${MODULE_NAME}_build --help
+          env: |
+            PACKAGE_NAME: ${{ env.PACKAGE_NAME }}
+            MODULE_NAME: ${{ env.MODULE_NAME }}
+      - name: Upload wheels uv-build
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: wheels_uv_build-${{ matrix.platform.target }}-${{ matrix.platform.provider }}
+          path: crates/uv-build/dist
+      - name: Stop resource sampler
+        if: ${{ always() }}
+        run: |
+          if test -f results/vmstat.pid; then
+            kill "$(cat results/vmstat.pid)" || true
+          fi
+          free -b > results/memory-final.txt
+          cat /proc/pressure/memory > results/memory-pressure-final.txt
+          cat /proc/vmstat > results/vmstat-final.txt
+      - name: Upload resource samples
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: arm64-resources-${{ matrix.platform.provider }}
+          path: results/
+          retention-days: 14
+          if-no-files-found: error
