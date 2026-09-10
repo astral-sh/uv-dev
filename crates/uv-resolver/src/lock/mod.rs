@@ -6709,7 +6709,7 @@ fn normalize_requirement(
     requirement.groups.sort();
 
     // Normalize the requirement source.
-    match requirement.source {
+    let source = match requirement.source {
         RequirementSource::GitDirectory {
             git,
             subdirectory,
@@ -6740,18 +6740,11 @@ fn normalize_requirement(
                 subdirectory: subdirectory.clone(),
             });
 
-            Ok(Requirement {
-                name: requirement.name,
-                extras: requirement.extras,
-                groups: requirement.groups,
-                marker: requires_python.simplify_markers(requirement.marker),
-                source: RequirementSource::GitDirectory {
-                    git,
-                    subdirectory,
-                    url: VerbatimUrl::from_url(url),
-                },
-                origin: None,
-            })
+            RequirementSource::GitDirectory {
+                git,
+                subdirectory,
+                url: VerbatimUrl::from_url(url),
+            }
         }
         RequirementSource::GitPath {
             git,
@@ -6785,19 +6778,12 @@ fn normalize_requirement(
                 ext,
             });
 
-            Ok(Requirement {
-                name: requirement.name,
-                extras: requirement.extras,
-                groups: requirement.groups,
-                marker: requires_python.simplify_markers(requirement.marker),
-                source: RequirementSource::GitPath {
-                    git,
-                    install_path,
-                    ext,
-                    url: VerbatimUrl::from_url(url),
-                },
-                origin: None,
-            })
+            RequirementSource::GitPath {
+                git,
+                install_path,
+                ext,
+                url: VerbatimUrl::from_url(url),
+            }
         }
         RequirementSource::Path {
             install_path,
@@ -6809,18 +6795,11 @@ fn normalize_requirement(
             let url = VerbatimUrl::from_normalized_path(&install_path)
                 .map_err(LockErrorKind::RequirementVerbatimUrl)?;
 
-            Ok(Requirement {
-                name: requirement.name,
-                extras: requirement.extras,
-                groups: requirement.groups,
-                marker: requires_python.simplify_markers(requirement.marker),
-                source: RequirementSource::Path {
-                    install_path,
-                    ext,
-                    url,
-                },
-                origin: None,
-            })
+            RequirementSource::Path {
+                install_path,
+                ext,
+                url,
+            }
         }
         RequirementSource::Directory {
             install_path,
@@ -6833,19 +6812,12 @@ fn normalize_requirement(
             let url = VerbatimUrl::from_normalized_path(&install_path)
                 .map_err(LockErrorKind::RequirementVerbatimUrl)?;
 
-            Ok(Requirement {
-                name: requirement.name,
-                extras: requirement.extras,
-                groups: requirement.groups,
-                marker: requires_python.simplify_markers(requirement.marker),
-                source: RequirementSource::Directory {
-                    install_path,
-                    editable: Some(editable.unwrap_or(false)),
-                    r#virtual: Some(r#virtual.unwrap_or(false)),
-                    url,
-                },
-                origin: None,
-            })
+            RequirementSource::Directory {
+                install_path,
+                editable: Some(editable.unwrap_or(false)),
+                r#virtual: Some(r#virtual.unwrap_or(false)),
+                url,
+            }
         }
         RequirementSource::Registry {
             specifier,
@@ -6860,18 +6832,11 @@ fn normalize_requirement(
                     index
                 })
                 .map(|index| IndexMetadata::from(IndexUrl::from(VerbatimUrl::from_url(index))));
-            Ok(Requirement {
-                name: requirement.name,
-                extras: requirement.extras,
-                groups: requirement.groups,
-                marker: requires_python.simplify_markers(requirement.marker),
-                source: RequirementSource::Registry {
-                    specifier,
-                    index,
-                    conflict,
-                },
-                origin: None,
-            })
+            RequirementSource::Registry {
+                specifier,
+                index,
+                conflict,
+            }
         }
         RequirementSource::Url {
             mut location,
@@ -6892,21 +6857,23 @@ fn normalize_requirement(
                 ext,
             });
 
-            Ok(Requirement {
-                name: requirement.name,
-                extras: requirement.extras,
-                groups: requirement.groups,
-                marker: requires_python.simplify_markers(requirement.marker),
-                source: RequirementSource::Url {
-                    location,
-                    subdirectory,
-                    ext,
-                    url: VerbatimUrl::from_url(url),
-                },
-                origin: None,
-            })
+            RequirementSource::Url {
+                location,
+                subdirectory,
+                ext,
+                url: VerbatimUrl::from_url(url),
+            }
         }
-    }
+    };
+
+    Ok(Requirement {
+        name: requirement.name,
+        extras: requirement.extras,
+        groups: requirement.groups,
+        marker: requires_python.simplify_markers(requirement.marker),
+        source,
+        origin: None,
+    })
 }
 
 #[derive(Debug)]
@@ -8673,5 +8640,307 @@ wheels = [
                 Path::new("C:/Users/user/links").into()
             ))
         );
+    }
+}
+
+#[cfg(test)]
+mod normalize_requirement_tests {
+    use serde_json::{Value, json};
+    use uv_distribution_types::IndexFormat;
+    use uv_pep508::RequirementOrigin;
+
+    use super::*;
+
+    // Equality intentionally ignores the spelling retained by VerbatimUrl and
+    // some Git URL components. Check those fields independently.
+    fn url_fields(source: &RequirementSource) -> Value {
+        let (location, verbatim): (Option<&DisplaySafeUrl>, Option<&VerbatimUrl>) = match source {
+            RequirementSource::Registry { index, .. } => {
+                let verbatim = index.as_ref().map(|index| match &index.url {
+                    IndexUrl::Pypi(url) | IndexUrl::Url(url) | IndexUrl::Path(url) => url.as_ref(),
+                });
+                (verbatim.map(VerbatimUrl::raw), verbatim)
+            }
+            RequirementSource::Url { location, url, .. } => (Some(location), Some(url)),
+            RequirementSource::GitDirectory { git, url, .. }
+            | RequirementSource::GitPath { git, url, .. } => (Some(git.url()), Some(url)),
+            RequirementSource::Path { url, .. } | RequirementSource::Directory { url, .. } => {
+                (None, Some(url))
+            }
+        };
+        json!({
+            "location": location.map(|url| url.as_str()),
+            "verbatim": verbatim.map(|url| json!({
+                "raw": url.raw().as_str(),
+                "given": url.given(),
+            })),
+        })
+    }
+
+    #[test]
+    fn sources_and_markers() -> Result<(), Box<dyn Error>> {
+        let root = std::env::current_dir()?.join("test-normalize-requirement");
+        let discarded = VerbatimUrl::parse_url("https://discard.invalid/original")?
+            .with_given("the original spelling");
+        let specifier = VersionSpecifiers::from_str(">=1,!=1.5,<3")?;
+        let conflict = Some(ConflictItem::from((
+            PackageName::from_str("owner")?,
+            GroupName::from_str("build")?,
+        )));
+        let commit = GitOid::from_str("0123456789abcdef0123456789abcdef01234567")?;
+        let directory_reference = GitReference::Branch("release/one".to_string());
+        let path_reference = GitReference::NamedRef("refs/pull/7/head".to_string());
+        let wheel_path = root.join("café wheel.whl");
+        let project_path = root.join("project");
+        let mut cases = vec![
+            (
+                RequirementSource::Registry {
+                    specifier: specifier.clone(),
+                    index: Some(IndexMetadata {
+                        url: IndexUrl::from(
+                            VerbatimUrl::parse_url(
+                                "https://fake:password@index.invalid/simple?keep=1#keep",
+                            )?
+                            .with_given("the configured index"),
+                        ),
+                        format: IndexFormat::Flat,
+                    }),
+                    conflict: conflict.clone(),
+                },
+                RequirementSource::Registry {
+                    specifier,
+                    index: Some(IndexMetadata::from(IndexUrl::from(VerbatimUrl::parse_url(
+                        "https://index.invalid/simple?keep=1#keep",
+                    )?))),
+                    conflict,
+                },
+            ),
+            (
+                RequirementSource::Url {
+                    location: DisplaySafeUrl::parse(
+                        "https://fake:password@files.invalid/fixture.tar.gz?download=%23#discard",
+                    )?,
+                    subdirectory: Some(Path::new("src/package").into()),
+                    ext: DistExtension::Source(SourceDistExtension::TarGz),
+                    url: discarded.clone(),
+                },
+                RequirementSource::Url {
+                    location: DisplaySafeUrl::parse(
+                        "https://files.invalid/fixture.tar.gz?download=%23",
+                    )?,
+                    subdirectory: Some(Path::new("src/package").into()),
+                    ext: DistExtension::Source(SourceDistExtension::TarGz),
+                    url: VerbatimUrl::parse_url(
+                        "https://files.invalid/fixture.tar.gz?download=%23#subdirectory=src/package",
+                    )?,
+                },
+            ),
+            (
+                RequirementSource::GitDirectory {
+                    git: GitUrl::from_fields(
+                        DisplaySafeUrl::parse(
+                            "https://fake:password@git.invalid/repository.git?discard=1#discard",
+                        )?,
+                        directory_reference.clone(),
+                        Some(commit),
+                        GitLfs::Enabled,
+                    )?,
+                    subdirectory: Some(Path::new("src/package").into()),
+                    url: discarded.clone(),
+                },
+                RequirementSource::GitDirectory {
+                    git: GitUrl::from_fields(
+                        DisplaySafeUrl::parse("https://git.invalid/repository.git")?,
+                        directory_reference,
+                        Some(commit),
+                        GitLfs::Enabled,
+                    )?,
+                    subdirectory: Some(Path::new("src/package").into()),
+                    url: VerbatimUrl::parse_url(format!(
+                        "git+https://git.invalid/repository.git@{commit}#subdirectory=src/package&lfs=true"
+                    ))?,
+                },
+            ),
+            (
+                RequirementSource::GitPath {
+                    git: GitUrl::from_fields(
+                        DisplaySafeUrl::parse(
+                            "ssh://git@git.invalid/repository.git?discard=1#discard",
+                        )?,
+                        path_reference.clone(),
+                        None,
+                        GitLfs::Disabled,
+                    )?,
+                    install_path: PathBuf::from("dist/fixture.whl"),
+                    ext: DistExtension::Wheel,
+                    url: discarded.clone(),
+                },
+                RequirementSource::GitPath {
+                    git: GitUrl::from_fields(
+                        DisplaySafeUrl::parse("ssh://git@git.invalid/repository.git")?,
+                        path_reference,
+                        None,
+                        GitLfs::Disabled,
+                    )?,
+                    install_path: PathBuf::from("dist/fixture.whl"),
+                    ext: DistExtension::Wheel,
+                    url: VerbatimUrl::parse_url(
+                        "git+ssh://git@git.invalid/repository.git@refs/pull/7/head#path=dist/fixture.whl",
+                    )?,
+                },
+            ),
+            (
+                RequirementSource::Path {
+                    install_path: Path::new("nested/../café wheel.whl").into(),
+                    ext: DistExtension::Wheel,
+                    url: discarded.clone(),
+                },
+                RequirementSource::Path {
+                    install_path: wheel_path.clone().into_boxed_path(),
+                    ext: DistExtension::Wheel,
+                    url: VerbatimUrl::from_normalized_path(&wheel_path)?,
+                },
+            ),
+        ];
+        for editable in [None, Some(false), Some(true)] {
+            for is_virtual in [None, Some(false), Some(true)] {
+                cases.push((
+                    RequirementSource::Directory {
+                        install_path: Path::new("nested/../project").into(),
+                        editable,
+                        r#virtual: is_virtual,
+                        url: discarded.clone(),
+                    },
+                    RequirementSource::Directory {
+                        install_path: project_path.clone().into_boxed_path(),
+                        editable: Some(editable.unwrap_or(false)),
+                        r#virtual: Some(is_virtual.unwrap_or(false)),
+                        url: VerbatimUrl::from_normalized_path(&project_path)?,
+                    },
+                ));
+            }
+        }
+        assert_eq!(cases.len(), 14);
+
+        let requires_python =
+            RequiresPython::from_specifiers(VersionSpecifiers::from_str(">=3.12,<3.14")?);
+        let markers = [
+            ("python_full_version < '3.12'", MarkerTree::FALSE),
+            ("python_full_version >= '3.12'", MarkerTree::TRUE),
+            (
+                "python_full_version >= '3.12' and sys_platform == 'win32'",
+                MarkerTree::from_str("sys_platform == 'win32'")?,
+            ),
+        ];
+        let extras = ["z", "a", "z"]
+            .into_iter()
+            .map(ExtraName::from_str)
+            .collect::<Result<Vec<_>, _>>()?
+            .into_boxed_slice();
+        let groups = ["z", "a", "z"]
+            .into_iter()
+            .map(GroupName::from_str)
+            .collect::<Result<Vec<_>, _>>()?
+            .into_boxed_slice();
+        let mut observations = 0;
+        for (source, expected_source) in cases {
+            for (marker, expected_marker) in markers {
+                for use_groups in [false, true] {
+                    let original = Requirement {
+                        name: PackageName::from_str("normalization-fixture")?,
+                        extras: if use_groups {
+                            Box::default()
+                        } else {
+                            extras.clone()
+                        },
+                        groups: if use_groups {
+                            groups.clone()
+                        } else {
+                            Box::default()
+                        },
+                        marker: MarkerTree::from_str(marker)?,
+                        source: source.clone(),
+                        origin: Some(RequirementOrigin::File(root.join("requirements.txt"))),
+                    };
+                    let mut expected = original.clone();
+                    expected.extras.sort();
+                    expected.groups.sort();
+                    expected.marker = expected_marker;
+                    expected.source = expected_source.clone();
+                    expected.origin = None;
+
+                    let normalized = normalize_requirement(original, &root, &requires_python)?;
+                    assert_eq!(normalized, expected);
+                    assert_eq!(url_fields(&normalized.source), url_fields(&expected.source));
+                    assert_eq!(
+                        serde_json::to_value(&normalized)?,
+                        serde_json::to_value(&expected)?,
+                    );
+                    assert!(normalized.origin.is_none());
+                    observations += 1;
+                }
+            }
+        }
+        assert_eq!(observations, 84);
+        Ok(())
+    }
+
+    #[test]
+    fn relative_path_error_chains() -> Result<(), Box<dyn Error>> {
+        let discarded = VerbatimUrl::parse_url("https://discard.invalid/original")?;
+        let root = Path::new("relative-root");
+        let requires_python =
+            RequiresPython::from_specifiers(VersionSpecifiers::from_str(">=3.12")?);
+        for (source, expected_path) in [
+            (
+                RequirementSource::Path {
+                    install_path: Path::new("nested/../fixture.whl").into(),
+                    ext: DistExtension::Wheel,
+                    url: discarded.clone(),
+                },
+                root.join("fixture.whl"),
+            ),
+            (
+                RequirementSource::Directory {
+                    install_path: Path::new("nested/../project").into(),
+                    editable: None,
+                    r#virtual: None,
+                    url: discarded,
+                },
+                root.join("project"),
+            ),
+        ] {
+            let error = normalize_requirement(
+                Requirement {
+                    name: PackageName::from_str("normalization-fixture")?,
+                    extras: Box::default(),
+                    groups: Box::default(),
+                    marker: MarkerTree::TRUE,
+                    source,
+                    origin: None,
+                },
+                root,
+                &requires_python,
+            )
+            .expect_err("relative paths require an absolute root");
+            let mut chain = vec![error.to_string()];
+            let mut source = error.source();
+            while let Some(error) = source {
+                chain.push(error.to_string());
+                source = error.source();
+            }
+            assert_eq!(
+                chain,
+                [
+                    "Could not convert between URL and path".to_string(),
+                    format!(
+                        "relative path without a working directory: {}",
+                        expected_path.display()
+                    ),
+                ],
+            );
+            assert!(error.hint.is_none());
+        }
+        Ok(())
     }
 }
