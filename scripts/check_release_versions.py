@@ -7,6 +7,7 @@
 # exclude-newer = "P7D"
 # ///
 
+import argparse
 import sys
 import tomllib
 from pathlib import Path
@@ -25,7 +26,7 @@ VERSION_GROUPS = (
 )
 
 
-def check_release_versions(root: Path) -> str:
+def check_release_versions(root: Path, tag: str | None = None) -> str:
     matched_versions = []
     # Cargo and Python use different spellings for prerelease versions.
     for section, manifests in VERSION_GROUPS:
@@ -46,12 +47,24 @@ def check_release_versions(root: Path) -> str:
                 + "\n".join(mismatches)
             )
         matched_versions.append(expected)
+
+    if tag is not None and tag != matched_versions[1]:
+        raise ValueError(
+            f"Release tag {tag!r} does not match crates/uv/Cargo.toml "
+            f"({matched_versions[1]})"
+        )
     return matched_versions[0]
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--tag", help="Require the release tag to match uv's Cargo version"
+    )
+    args = parser.parse_args()
+
     try:
-        version = check_release_versions(ROOT)
+        version = check_release_versions(ROOT, tag=args.tag)
     except ValueError as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
