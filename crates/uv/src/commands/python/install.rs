@@ -13,6 +13,8 @@ use owo_colors::{AnsiColors, OwoColorize};
 use rustc_hash::{FxHashMap, FxHashSet};
 use tokio::sync::mpsc;
 use tracing::{debug, trace, warn};
+#[cfg(unix)]
+use which::which;
 
 use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
@@ -897,6 +899,15 @@ async fn perform_install(
 
         if let Some(bin_dir) = bin_dir.as_ref() {
             warn_if_not_on_path(bin_dir);
+        }
+
+        #[cfg(unix)]
+        if installations.iter().any(|installation| {
+            changelog.installed.contains(installation.key())
+                && installation.implementation() == ImplementationName::Pyodide
+        }) && which("node").is_err()
+        {
+            warn_user!("Pyodide requires a `node` executable on `PATH`, but none was found");
         }
     }
 
