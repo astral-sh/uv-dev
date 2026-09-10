@@ -97,6 +97,12 @@ requires = ["uv_build>=0.12.12,<0.13"]
 build-backend = "uv_build"
 ```
 
+The `name` field identifies the project in dependency declarations and package-management commands.
+It does not have to match the name used in Python `import` statements. For example, another project
+would depend on `hello-world` but use `import hello_world` in its Python code. See
+[distribution packages and import packages](https://packaging.python.org/en/latest/discussions/distribution-package-vs-import-package/)
+for more on this distinction.
+
 You'll use this file to specify dependencies, as well as details about the project such as its
 description or license. You can edit this file manually, or use commands like `uv add` and
 `uv remove` to manage your project from the terminal.
