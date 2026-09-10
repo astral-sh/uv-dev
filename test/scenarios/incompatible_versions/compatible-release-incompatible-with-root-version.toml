@@ -1,0 +1,26 @@
+name = "compatible-release-incompatible-with-root-version"
+description = "A dependency's exact compatible-release interval is displayed with the compatible-release operator."
+
+[root]
+requires = ["b==2.0.0", "a==1.0.0"]
+
+[expected]
+satisfiable = false
+
+[packages.a.versions."1.0.0"]
+requires = ["b~=1.4.5"]
+
+[packages.b.versions."1.0.0"]
+
+[packages.b.versions."1.4.4"]
+
+[packages.b.versions."1.4.5"]
+
+[packages.b.versions."1.4.9"]
+
+[packages.b.versions."1.5.0"]
+
+[packages.b.versions."2.0.0"]
+
+[testgen]
+kind = "compile"
