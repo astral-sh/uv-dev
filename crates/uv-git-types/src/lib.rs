@@ -295,20 +295,10 @@ impl From<GitUrl> for DisplaySafeUrl {
         if let Some(precise) = git.precise {
             let path = format!("{}@{}", url.path(), precise);
             url.set_path(&path);
-        } else {
+        } else if let Some(rev) = git.reference.as_url_rev() {
             // Otherwise, add the branch or tag name.
-            match git.reference {
-                GitReference::Branch(rev)
-                | GitReference::Tag(rev)
-                | GitReference::BranchOrTag(rev)
-                | GitReference::NamedRef(rev)
-                | GitReference::BranchOrTagOrCommit(rev) => {
-                    let rev = GitReference::encode_rev(&rev);
-                    let path = format!("{}@{}", url.path(), rev);
-                    url.set_path(&path);
-                }
-                GitReference::DefaultBranch => {}
-            }
+            let path = format!("{}@{}", url.path(), rev);
+            url.set_path(&path);
         }
 
         url
