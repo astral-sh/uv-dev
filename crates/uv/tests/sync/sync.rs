@@ -5,6 +5,7 @@ use indoc::{formatdoc, indoc};
 use insta::assert_snapshot;
 use predicates::prelude::predicate;
 use serde_json::json;
+use std::collections::BTreeMap;
 #[cfg(feature = "test-git")]
 use std::process::Command;
 use tempfile::tempdir_in;
@@ -13,8 +14,10 @@ use wiremock::matchers::{basic_auth, body_string_contains, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use uv_fs::Simplified;
+use uv_normalize::PackageName;
+use uv_pep440::Version;
 use uv_static::EnvVars;
-use uv_test::packse::PackseServer;
+use uv_test::packse::{PackseServer, generate_wheel, generate_wheel_with_files};
 
 use uv_test::{TestContext, download_to_disk, uv_snapshot, venv_bin_path};
 
@@ -14978,6 +14981,110 @@ fn match_runtime_optional() -> Result<()> {
     Resolved 3 packages in [TIME]
     Checked in [TIME]
     ");
+
+    Ok(())
+}
+
+/// Exact and wildcard build requirements must not reuse each other's cached wheels.
+#[test]
+fn sync_extra_build_dependencies_wildcard_cache() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let child = context.temp_dir.child("child");
+    let links = context.temp_dir.child("links");
+    let dependency: PackageName = "foo".parse()?;
+    let package: PackageName = "child".parse()?;
+
+    // Provide all build inputs locally. Each child wheel records the version that was present
+    // in its isolated build environment.
+    for version in [
+        Version::new([1, 1, 9]),
+        Version::new([1, 2]),
+        Version::new([1, 2, 3]),
+    ] {
+        let (filename, bytes) = generate_wheel(
+            &dependency,
+            &version,
+            &[],
+            &BTreeMap::new(),
+            None,
+            "py3-none-any",
+        );
+        links.child(filename).write_binary(&bytes)?;
+
+        let (filename, bytes) = generate_wheel_with_files(
+            &package,
+            &Version::new([0, 1, 0]),
+            &[],
+            &BTreeMap::new(),
+            None,
+            "py3-none-any",
+            &[("child/build_dep.py", &format!("VERSION = \"{version}\"\n"))],
+        );
+        child
+            .child("wheels")
+            .child(version.to_string())
+            .child(filename)
+            .write_binary(&bytes)?;
+    }
+
+    child.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    child.child("backend.py").write_str(indoc! {r#"
+        from importlib.metadata import version
+        from pathlib import Path
+        from shutil import copyfile
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            filename = "child-0.1.0-py3-none-any.whl"
+            source = Path(__file__).parent / "wheels" / version("foo") / filename
+            copyfile(source, Path(wheel_directory) / filename)
+            return filename
+    "#})?;
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    for (requirement, expected) in [
+        ("foo==1.2.*", "1.2.3"),
+        ("foo==1.2", "1.2"),
+        ("foo!=1.2.*", "1.1.9"),
+        ("foo!=1.2", "1.2.3"),
+        ("foo==1.2.*", "1.2.3"),
+        ("foo!=1.2.*", "1.1.9"),
+    ] {
+        pyproject_toml.write_str(&formatdoc! {r#"
+            [project]
+            name = "parent"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = ["child"]
+
+            [tool.uv]
+            no-index = true
+            find-links = ["links"]
+
+            [tool.uv.sources]
+            child = {{ path = "child" }}
+
+            [tool.uv.extra-build-dependencies]
+            child = ["{requirement}"]
+        "#})?;
+
+        // Start with an empty environment, but retain both the source and build cache.
+        context.reset_venv();
+        context.sync().arg("--offline").assert().success();
+        context
+            .assert_command("from child.build_dep import VERSION; print(VERSION, end='')")
+            .success()
+            .stdout(expected);
+    }
 
     Ok(())
 }

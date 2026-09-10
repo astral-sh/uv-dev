@@ -400,7 +400,7 @@ impl<T: Pep508Url> CacheKey for VersionOrUrl<T> {
                 0u8.cache_key(state);
                 specifiers.len().cache_key(state);
                 for specifier in specifiers.iter() {
-                    specifier.operator().as_str().cache_key(state);
+                    specifier.operator().cache_key(state);
                     specifier.version().cache_key(state);
                 }
             }
@@ -1115,7 +1115,12 @@ mod tests {
                     "requests",
                     0usize,
                     1u8,
-                    (0u8, 2usize, ">=", Version::new([2]), "<", Version::new([3])),
+                    (
+                        0u8,
+                        2usize,
+                        (">=", false, Version::new([2])),
+                        ("<", false, Version::new([3])),
+                    ),
                     0u8,
                 )),
             ),
@@ -1128,12 +1133,9 @@ mod tests {
                     (
                         0u8,
                         3usize,
-                        ">=",
-                        Version::new([2]),
-                        "!=",
-                        Version::new([2, 5]),
-                        "<",
-                        Version::new([3]),
+                        (">=", false, Version::new([2])),
+                        ("!=", true, Version::new([2, 5])),
+                        ("<", false, Version::new([3])),
                     ),
                     (1u8, "sys_platform == 'linux'"),
                 )),
@@ -1174,12 +1176,9 @@ mod tests {
                 cache_digest(&(
                     0u8,
                     3usize,
-                    ">=",
-                    Version::new([2]),
-                    "!=",
-                    Version::new([2, 5]),
-                    "<",
-                    Version::new([3]),
+                    (">=", false, Version::new([2])),
+                    ("!=", true, Version::new([2, 5])),
+                    ("<", false, Version::new([3])),
                 )),
             ),
             (
@@ -1208,6 +1207,40 @@ mod tests {
             )),
             cache_digest(&(0u8, 0usize)),
         );
+    }
+
+    #[test]
+    fn wildcard_cache_keys_leave_legacy_encoding() {
+        let version = Version::new([1, 2]);
+        for (operator, exact, wildcard) in [
+            ("==", "foo==1.2", "foo==1.2.*"),
+            ("!=", "foo!=1.2", "foo!=1.2.*"),
+        ] {
+            let legacy_version_or_url = (0u8, 1usize, operator, &version);
+            let legacy_requirement =
+                cache_digest(&("foo", 0usize, 1u8, legacy_version_or_url, 0u8));
+
+            let keys = [(exact, false), (wildcard, true)].map(|(input, is_star)| {
+                let requirement =
+                    Requirement::<VerbatimUrl>::from_str(input).expect("valid test requirement");
+                let version_or_url = requirement
+                    .version_or_url
+                    .as_ref()
+                    .expect("requirement contains version specifiers");
+                assert_eq!(
+                    cache_digest(version_or_url),
+                    cache_digest(&(0u8, 1usize, operator, is_star, &version)),
+                );
+                assert_ne!(
+                    cache_digest(version_or_url),
+                    cache_digest(&legacy_version_or_url),
+                );
+                let key = cache_digest(&requirement);
+                assert_ne!(key, legacy_requirement);
+                key
+            });
+            assert_ne!(keys[0], keys[1]);
+        }
     }
 
     fn parse_pep508_err(input: &str) -> String {
