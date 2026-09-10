@@ -89,7 +89,6 @@ fn username_password_no_longer_supported() {
     ----- stderr -----
     Publishing 1 file to https://test.pypi.org/legacy/
     Hashing ok-1.0.0-py3-none-any.whl ([SIZE]B)
-    Uploading ok-1.0.0-py3-none-any.whl ([SIZE]B)
     error: Failed to publish `[WORKSPACE]/test/links/ok-1.0.0-py3-none-any.whl` to `https://test.pypi.org/legacy/`
       cause: Server returned status code 403 Forbidden. Server says: 403 Username/Password authentication is no longer supported. Migrate to API Tokens or Trusted Publishers instead. See https://test.pypi.org/help/#apitoken and https://test.pypi.org/help/#trusted-publishers
     "
@@ -114,7 +113,6 @@ fn invalid_token() {
     ----- stderr -----
     Publishing 1 file to https://test.pypi.org/legacy/
     Hashing ok-1.0.0-py3-none-any.whl ([SIZE]B)
-    Uploading ok-1.0.0-py3-none-any.whl ([SIZE]B)
     error: Failed to publish `[WORKSPACE]/test/links/ok-1.0.0-py3-none-any.whl` to `https://test.pypi.org/legacy/`
       cause: Server returned status code 403 Forbidden. Server says: 403 Invalid or non-existent authentication information. See https://test.pypi.org/help/#invalid-auth for more information.
     "
@@ -201,7 +199,6 @@ async fn no_credentials() {
     ----- stderr -----
     Publishing 1 file to http://[LOCALHOST]/upload
     Hashing ok-1.0.0-py3-none-any.whl ([SIZE]B)
-    Uploading ok-1.0.0-py3-none-any.whl ([SIZE]B)
     Note: Trusted publishing also failed. To use it, check the error below.
     error: Trusted publishing failed
       cause: Failed to obtain OIDC token: is the `id-token: write` permission missing?
@@ -513,11 +510,8 @@ async fn publish_wheels_before_sdist_in_filename_order() {
     ----- stderr -----
     Publishing 3 files to http://[LOCALHOST]/upload
     Hashing basic_app-0.1.0-py3-none-any.whl ([SIZE]KiB)
-    Uploading basic_app-0.1.0-py3-none-any.whl ([SIZE]KiB)
     Hashing basic_package-0.1.0-py3-none-any.whl ([SIZE]KiB)
-    Uploading basic_package-0.1.0-py3-none-any.whl ([SIZE]KiB)
     Hashing basic_package-0.1.0.tar.gz ([SIZE]B)
-    Uploading basic_package-0.1.0.tar.gz ([SIZE]B)
     "
     );
 }
@@ -560,7 +554,6 @@ fn check_keyring_behaviours() {
     ----- stderr -----
     Publishing 1 file to https://test.pypi.org/legacy/?ok
     Hashing ok-1.0.0-py3-none-any.whl ([SIZE]B)
-    Uploading ok-1.0.0-py3-none-any.whl ([SIZE]B)
     error: Failed to publish `[WORKSPACE]/test/links/ok-1.0.0-py3-none-any.whl` to `https://test.pypi.org/legacy/?ok`
       cause: Server returned status code 403 Forbidden. Server says: 403 Username/Password authentication is no longer supported. Migrate to API Tokens or Trusted Publishers instead. See https://test.pypi.org/help/#apitoken and https://test.pypi.org/help/#trusted-publishers
     "
@@ -583,7 +576,6 @@ fn check_keyring_behaviours() {
     Publishing 1 file to https://test.pypi.org/legacy/?ok
     warning: Using `--keyring-provider` with a password or token and no check URL has no effect
     Hashing ok-1.0.0-py3-none-any.whl ([SIZE]B)
-    Uploading ok-1.0.0-py3-none-any.whl ([SIZE]B)
     error: Failed to publish `[WORKSPACE]/test/links/ok-1.0.0-py3-none-any.whl` to `https://test.pypi.org/legacy/?ok`
       cause: Server returned status code 403 Forbidden. Server says: 403 Username/Password authentication is no longer supported. Migrate to API Tokens or Trusted Publishers instead. See https://test.pypi.org/help/#apitoken and https://test.pypi.org/help/#trusted-publishers
     "
@@ -609,7 +601,6 @@ fn check_keyring_behaviours() {
     Keyring request for dummy@test.pypi.org
     warning: Keyring has no password for URL `https://test.pypi.org/legacy/?ok` and username `dummy`
     Hashing ok-1.0.0-py3-none-any.whl ([SIZE]B)
-    Uploading ok-1.0.0-py3-none-any.whl ([SIZE]B)
     Keyring request for dummy@https://test.pypi.org/legacy/?ok
     Keyring request for dummy@test.pypi.org
     error: Failed to publish `[WORKSPACE]/test/links/ok-1.0.0-py3-none-any.whl` to `https://test.pypi.org/legacy/?ok`
@@ -634,7 +625,6 @@ fn check_keyring_behaviours() {
     Publishing 1 file to https://test.pypi.org/legacy/?ok
     Keyring request for dummy@https://test.pypi.org/legacy/?ok
     Hashing ok-1.0.0-py3-none-any.whl ([SIZE]B)
-    Uploading ok-1.0.0-py3-none-any.whl ([SIZE]B)
     error: Failed to publish `[WORKSPACE]/test/links/ok-1.0.0-py3-none-any.whl` to `https://test.pypi.org/legacy/?ok`
       cause: Server returned status code 403 Forbidden. Server says: 403 Username/Password authentication is no longer supported. Migrate to API Tokens or Trusted Publishers instead. See https://test.pypi.org/help/#apitoken and https://test.pypi.org/help/#trusted-publishers
     "
@@ -778,7 +768,6 @@ async fn read_index_credential_env_vars_for_check_url() {
     ----- stderr -----
     Publishing 1 file to http://[LOCALHOST]/upload
     Hashing astral_test_private-0.1.0-py3-none-any.whl ([SIZE]KiB)
-    Uploading astral_test_private-0.1.0-py3-none-any.whl ([SIZE]KiB)
     error: Failed to publish `dist/astral_test_private-0.1.0-py3-none-any.whl` to `http://[LOCALHOST]/upload`
       cause: Failed to send POST request
       cause: Missing credentials for: http://[LOCALHOST]/upload
@@ -907,7 +896,6 @@ async fn check_url_missing_package_ignores_content_type() {
     ----- stderr -----
     Publishing 1 file to http://[LOCALHOST]/upload
     Hashing ok-1.0.0-py3-none-any.whl ([SIZE]B)
-    Uploading ok-1.0.0-py3-none-any.whl ([SIZE]B)
     "
     );
 }
@@ -958,7 +946,6 @@ async fn check_url_missing_package_follows_redirect() {
     ----- stderr -----
     Publishing 1 file to http://[LOCALHOST]/upload
     Hashing ok-1.0.0-py3-none-any.whl ([SIZE]B)
-    Uploading ok-1.0.0-py3-none-any.whl ([SIZE]B)
     "
     );
 }
@@ -1017,9 +1004,7 @@ async fn gitlab_trusted_publishing_pypi_id_token() {
     ----- stderr -----
     Publishing 2 files to http://[LOCALHOST]/upload
     Hashing basic_app-0.1.0-py3-none-any.whl ([SIZE]KiB)
-    Uploading basic_app-0.1.0-py3-none-any.whl ([SIZE]KiB)
     Hashing ok-1.0.0-py3-none-any.whl ([SIZE]B)
-    Uploading ok-1.0.0-py3-none-any.whl ([SIZE]B)
     "
     );
 
@@ -1097,7 +1082,6 @@ async fn gitlab_trusted_publishing_testpypi_id_token() {
     ----- stderr -----
     Publishing 1 file to http://[LOCALHOST]/upload
     Hashing ok-1.0.0-py3-none-any.whl ([SIZE]B)
-    Uploading ok-1.0.0-py3-none-any.whl ([SIZE]B)
     "
     );
 }
@@ -1152,8 +1136,7 @@ async fn trusted_publishing_burn_failure() {
     ----- stderr -----
     Publishing 1 file to http://[LOCALHOST]/upload
     Hashing ok-1.0.0-py3-none-any.whl ([SIZE]B)
-    Uploading ok-1.0.0-py3-none-any.whl ([SIZE]B)
-    warning: Failed to invalidate trusted publishing token. It will expire naturally. Cause: Failed to fetch: http://[LOCALHOST]/_/oidc/burn-token
+    warning: Failed to invalidate trusted publishing token. It will expire naturally. Cause: Failed to fetch: `http://[LOCALHOST]/_/oidc/burn-token`
     "
     );
 
@@ -1177,8 +1160,7 @@ async fn trusted_publishing_burn_failure() {
     ----- stderr -----
     Publishing 1 file to http://[LOCALHOST]/upload
     Hashing ok-1.0.0-py3-none-any.whl ([SIZE]B)
-    Uploading ok-1.0.0-py3-none-any.whl ([SIZE]B)
-    warning: Failed to invalidate trusted publishing token. It will expire naturally. Cause: Failed to fetch: http://[LOCALHOST]/_/oidc/burn-token
+    warning: Failed to invalidate trusted publishing token. It will expire naturally. Cause: Failed to fetch: `http://[LOCALHOST]/_/oidc/burn-token`
     error: Failed to publish `[WORKSPACE]/test/links/ok-1.0.0-py3-none-any.whl` to `http://[LOCALHOST]/upload`
       cause: Server returned status code 400 Bad Request. Server says: Upload failed
     "
@@ -1255,7 +1237,6 @@ async fn trusted_publishing_burn_after_prepare_failure() {
     ----- stderr -----
     Publishing 2 files to http://[LOCALHOST]/upload
     Hashing ok-1.0.0-py3-none-any.whl ([SIZE]B)
-    Uploading ok-1.0.0-py3-none-any.whl ([SIZE]B)
     Hashing z-1.0.0-py3-none-any.whl ([SIZE]B)
     error: Failed to publish: z-1.0.0-py3-none-any.whl
       cause: Failed to read metadata
@@ -1467,7 +1448,6 @@ async fn trusted_publishing_does_not_burn_explicit_token() {
     ----- stderr -----
     Publishing 1 file to http://[LOCALHOST]/upload
     Hashing ok-1.0.0-py3-none-any.whl ([SIZE]B)
-    Uploading ok-1.0.0-py3-none-any.whl ([SIZE]B)
     "
     );
 }
@@ -1501,7 +1481,6 @@ async fn upload_error_pypi_json() {
     ----- stderr -----
     Publishing 1 file to http://[LOCALHOST]/upload
     Hashing ok-1.0.0-py3-none-any.whl ([SIZE]B)
-    Uploading ok-1.0.0-py3-none-any.whl ([SIZE]B)
     error: Failed to publish `[WORKSPACE]/test/links/ok-1.0.0-py3-none-any.whl` to `http://[LOCALHOST]/upload`
       cause: Server returned status code 400 Bad Request. Server says: 400 Use 'source' as Python version for an sdist.
     "
@@ -1537,7 +1516,6 @@ async fn upload_error_problem_details() {
     ----- stderr -----
     Publishing 1 file to http://[LOCALHOST]/upload
     Hashing ok-1.0.0-py3-none-any.whl ([SIZE]B)
-    Uploading ok-1.0.0-py3-none-any.whl ([SIZE]B)
     error: Failed to publish `[WORKSPACE]/test/links/ok-1.0.0-py3-none-any.whl` to `http://[LOCALHOST]/upload`
       cause: Server returned status code 400 Bad Request. Server message: Bad Request, Missing required field `name`
     "
@@ -1699,9 +1677,7 @@ async fn publish_invalid_attestations() {
     ----- stderr -----
     Publishing 2 files to http://[LOCALHOST]/upload
     Hashing basic_app-0.1.0-py3-none-any.whl ([SIZE]KiB)
-    Uploading basic_app-0.1.0-py3-none-any.whl ([SIZE]KiB)
     Hashing ok-1.0.0-py3-none-any.whl ([SIZE]B)
-    Uploading ok-1.0.0-py3-none-any.whl ([SIZE]B)
     "
     );
 
