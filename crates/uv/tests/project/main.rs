@@ -21,6 +21,9 @@ mod init;
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod run;
 
+#[cfg(all(unix, feature = "test-python"))]
+mod run_path;
+
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod tree;
 
