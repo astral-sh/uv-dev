@@ -1458,7 +1458,16 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             candidate.choice_kind(),
             filename,
         );
-        self.visit_candidate(&candidate, dist, package, name, pins, request_sink)?;
+        self.visit_candidate(
+            &candidate,
+            dist,
+            package,
+            id,
+            name,
+            pubgrub,
+            pins,
+            request_sink,
+        )?;
 
         let version = candidate.version().clone();
         Ok(Some(ResolverVersion::Unforked(version)))
@@ -1624,7 +1633,9 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                 &base_candidate,
                 base_dist,
                 package,
+                id,
                 name,
+                pubgrub,
                 pins,
                 request_sink,
             )?;
@@ -1674,12 +1685,23 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                 .collect::<Vec<_>>()
                 .join(", ")
         );
-        self.visit_candidate(candidate, dist, package, name, pins, request_sink)?;
+        self.visit_candidate(
+            candidate,
+            dist,
+            package,
+            id,
+            name,
+            pubgrub,
+            pins,
+            request_sink,
+        )?;
         self.visit_candidate(
             &base_candidate,
             base_dist,
             package,
+            id,
             name,
+            pubgrub,
             pins,
             request_sink,
         )?;
@@ -1705,7 +1727,9 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
         candidate: &Candidate,
         dist: &CompatibleDist,
         package: &PubGrubPackage,
+        id: Id<PubGrubPackage>,
         name: &PackageName,
+        pubgrub: &State<UvDependencyProvider>,
         pins: &mut FilePins,
         request_sink: &Sender<Request>,
     ) -> Result<(), ResolveError> {
@@ -1730,7 +1754,14 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                         .hasher
                         .allows_package(candidate.name(), candidate.version())
                     {
-                        return Err(ResolveError::UnhashedPackage(candidate.name().clone()));
+                        let chain =
+                            DerivationChainBuilder::from_state(id, candidate.version(), pubgrub)
+                                .unwrap_or_default();
+                        return Err(ResolveError::UnhashedPackageVersion(
+                            candidate.name().clone(),
+                            candidate.version().clone(),
+                            chain,
+                        ));
                     }
 
                     let request = Request::from(dist);

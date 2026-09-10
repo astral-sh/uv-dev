@@ -58,7 +58,9 @@ pub(crate) fn hints_for_error(err: &anyhow::Error) -> Hints<'static> {
         collect_hint::<ToolRunUsageError>(cause, &mut hints);
         collect_hint::<Box<uv_resolver::NoSolutionError>>(cause, &mut hints);
         collect_hint::<uv_resolver::NoSolutionError>(cause, &mut hints);
-        collect_hint::<uv_resolver::ResolveError>(cause, &mut hints);
+        if let Some(error) = cause.downcast_ref::<uv_resolver::ResolveError>() {
+            hints.extend(resolve_error_hints(error));
+        }
         collect_hint::<uv_resolver::LockError>(cause, &mut hints);
         collect_hint::<pip::operations::Error>(cause, &mut hints);
         collect_hint::<ToolRunScriptError>(cause, &mut hints);
@@ -120,6 +122,17 @@ pub(crate) fn dist_hints(
     }
     hints.extend(cause_hints);
     hints.into_owned()
+}
+
+/// Collect resolver hints that need the command-line derivation-chain formatter.
+pub(super) fn resolve_error_hints(error: &uv_resolver::ResolveError) -> Hints<'static> {
+    let mut hints = error.hints().into_owned();
+    if let uv_resolver::ResolveError::UnhashedPackageVersion(name, version, chain) = error
+        && !chain.is_empty()
+    {
+        hints.push(format_chain(name, Some(version), chain));
+    }
+    hints
 }
 
 /// Format a [`DerivationChain`] as a human-readable error message.
@@ -245,9 +258,15 @@ fn format_chain(name: &PackageName, version: Option<&Version>, chain: &Derivatio
 mod tests {
     use insta::assert_debug_snapshot;
 
+    use uv_distribution_types::{DerivationChain, DerivationStep};
+    use uv_normalize::PackageName;
+    use uv_pep440::Version;
+    use uv_resolver::ResolveError;
     use uv_workspace::pyproject::{PyprojectTomlError, SourceError};
+    use version_ranges::Ranges;
 
     use super::hints_for_error;
+    use crate::commands::pip::operations;
 
     #[test]
     fn collects_source_hints_through_pyproject_errors() {
@@ -263,5 +282,49 @@ mod tests {
             "replace `python_version == '3.12'` with `python_version != '3.12'`",
         ]
         "#);
+    }
+
+    #[test]
+    fn collects_unhashed_package_context_through_operation_errors() {
+        let name: PackageName = "sklearn".parse().expect("valid package name");
+        let version = Version::new([2]);
+        let chain: DerivationChain = [DerivationStep::new(
+            "parent".parse().expect("valid package name"),
+            None,
+            None,
+            Some(Version::new([1])),
+            Ranges::higher_than(Version::new([2])),
+        )]
+        .into_iter()
+        .collect();
+        let plain = ResolveError::UnhashedPackage(name.clone());
+
+        for wrapped in [false, true] {
+            let contextual =
+                ResolveError::UnhashedPackageVersion(name.clone(), version.clone(), chain.clone());
+            assert_eq!(contextual.to_string(), plain.to_string());
+            let error = if wrapped {
+                anyhow::Error::new(operations::Error::Resolve(contextual))
+            } else {
+                anyhow::Error::new(contextual)
+            };
+            assert_eq!(
+                error.chain().map(ToString::to_string).collect::<Vec<_>>(),
+                vec![plain.to_string()]
+            );
+            let hints = hints_for_error(&error)
+                .into_iter()
+                .map(|hint| anstream::adapter::strip_str(&hint).to_string())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                hints,
+                vec!["`sklearn` (v2) was included because `parent` (v1) depends on `sklearn>=2`"]
+            );
+        }
+
+        let direct =
+            ResolveError::UnhashedPackageVersion(name, version, DerivationChain::default());
+        assert_eq!(direct.to_string(), plain.to_string());
+        assert!(hints_for_error(&anyhow::Error::new(direct)).is_empty());
     }
 }

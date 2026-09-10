@@ -122,6 +122,11 @@ pub enum ResolveError {
     )]
     UnhashedPackage(PackageName),
 
+    #[error(
+        "In `--require-hashes` mode, all requirements must be pinned upfront with `==`, but found: `{0}`"
+    )]
+    UnhashedPackageVersion(PackageName, Version, DerivationChain),
+
     #[error("found conflicting distribution in resolution: {0}")]
     ConflictingDistribution(ConflictingDistributionError),
 
@@ -163,6 +168,7 @@ impl ResolveError {
             | Self::DistributionType(_)
             | Self::NoSolution(_)
             | Self::UnhashedPackage(_)
+            | Self::UnhashedPackageVersion(..)
             | Self::PackageUnavailable(_)
             | Self::InvalidExtraInConflictMarker { .. }
             | Self::InvalidValueInConflictMarker { .. }
