@@ -1644,16 +1644,10 @@ impl SimpleDetailMetadata {
                     continue;
                 }
             };
-            match version_map.entry(filename.version().clone()) {
-                std::collections::btree_map::Entry::Occupied(mut entry) => {
-                    entry.get_mut().push(&filename, file);
-                }
-                std::collections::btree_map::Entry::Vacant(entry) => {
-                    let mut files = VersionFiles::default();
-                    files.push(&filename, file);
-                    entry.insert(files);
-                }
-            }
+            version_map
+                .entry(filename.version().clone())
+                .or_default()
+                .push(&filename, file);
         }
 
         // Keep file ordering deterministic without sorting the complete Simple API response.
@@ -2423,6 +2417,220 @@ mod tests {
         ]
         "#);
 
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod grouping_tests {
+    use std::str::FromStr;
+
+    use uv_distribution_types::File;
+    use uv_normalize::PackageName;
+    use uv_pypi_types::{PypiSimpleDetail, Status};
+    use uv_redacted::DisplaySafeUrl;
+    use uv_small_str::SmallString;
+
+    use super::{CachedFile, OwnedArchive, SimpleDetailMetadata};
+
+    type Error = Box<dyn std::error::Error>;
+
+    const MIXED_FILES: &str = r#"{
+        "project-status": {"status": "deprecated", "reason": "Use a replacement"},
+        "files": [
+            {"filename": "example-2.0.0.tar.gz", "hashes": {}, "url": "../../files/example-2.0.0.tar.gz"},
+            {
+                "filename": "example-1.0-py3-none-any.whl",
+                "hashes": {"sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+                "core-metadata": true,
+                "requires-python": ">=3.9",
+                "size": 123,
+                "upload-time": "2024-01-02T03:04:05.006Z",
+                "yanked": "Use the build-tagged wheel",
+                "url": "../../files/example-1.0-py3-none-any.whl"
+            },
+            {"filename": "example-1.0.0.zip", "hashes": {}, "url": "../../files/example-1.0.0.zip"},
+            {"filename": "example-2.0-py2.py3-none-any.whl", "hashes": {}, "url": "../../files/example-2.0-py2.py3-none-any.whl"},
+            {"filename": "example-1.0-2-py3-none-any.whl", "hashes": {}, "url": "../../files/example-1.0-2-py3-none-any.whl"},
+            {"filename": "example-1.0.tar.gz", "hashes": {}, "url": "../../files/example-1.0.tar.gz"},
+            {"filename": "example-0.9.tar.gz", "hashes": {}, "url": "../../files/example-0.9.tar.gz"},
+            {"filename": "example-2.0.zip", "hashes": {}, "url": "../../files/example-2.0.zip"},
+            {"filename": "other-4.0.tar.gz", "hashes": {}, "url": "../../files/other-4.0.tar.gz"},
+            {"filename": "example-invalid.tar.gz", "hashes": {}, "url": "../../files/example-invalid.tar.gz"},
+            {"filename": "example-3.0.tar.gz", "hashes": {}, "requires-python": ">=3.8,,<4", "url": "../../files/example-3.0.tar.gz"},
+            {"filename": "example-2.0.0-3-py3-none-any.whl", "hashes": {}, "requires-python": ">=3.8,,<4", "url": "../../files/example-2.0.0-3-py3-none-any.whl"}
+        ]
+    }"#;
+
+    fn from_json(response: &str, base: &DisplaySafeUrl) -> Result<SimpleDetailMetadata, Error> {
+        let data: PypiSimpleDetail = serde_json::from_str(response)?;
+        Ok(SimpleDetailMetadata::from_pypi_files(
+            data.files,
+            &PackageName::from_str("example")?,
+            data.project_status,
+            base,
+        ))
+    }
+
+    fn filenames(metadata: &SimpleDetailMetadata) -> Vec<(String, Vec<&str>, Vec<&str>)> {
+        metadata
+            .iter()
+            .map(|datum| {
+                assert!(datum.metadata.is_none());
+                (
+                    datum.version.to_string(),
+                    datum
+                        .files
+                        .wheels
+                        .iter()
+                        .map(CachedFile::filename)
+                        .collect(),
+                    datum
+                        .files
+                        .source_dists
+                        .iter()
+                        .map(CachedFile::filename)
+                        .collect(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn groups_normalized_versions_and_sorts_files() -> Result<(), Error> {
+        let base = DisplaySafeUrl::parse("https://example.org/simple/example/")?;
+        let metadata = from_json(MIXED_FILES, &base)?;
+
+        assert_eq!(
+            filenames(&metadata),
+            [
+                ("0.9".to_string(), vec![], vec!["example-0.9.tar.gz"],),
+                (
+                    "1.0".to_string(),
+                    vec![
+                        "example-1.0-2-py3-none-any.whl",
+                        "example-1.0-py3-none-any.whl",
+                    ],
+                    vec!["example-1.0.0.zip", "example-1.0.tar.gz"],
+                ),
+                (
+                    "2.0.0".to_string(),
+                    vec!["example-2.0-py2.py3-none-any.whl"],
+                    vec!["example-2.0.0.tar.gz", "example-2.0.zip"],
+                ),
+            ]
+        );
+        assert_eq!(metadata.project_status.status, Status::Deprecated);
+        assert_eq!(
+            metadata.project_status.reason.as_deref(),
+            Some("Use a replacement")
+        );
+
+        let data: PypiSimpleDetail = serde_json::from_str(MIXED_FILES)?;
+        let expected = [
+            "example-0.9.tar.gz",
+            "example-1.0.0.zip",
+            "example-1.0.tar.gz",
+            "example-1.0-2-py3-none-any.whl",
+            "example-1.0-py3-none-any.whl",
+            "example-2.0.0.tar.gz",
+            "example-2.0.zip",
+            "example-2.0-py2.py3-none-any.whl",
+        ]
+        .into_iter()
+        .map(|filename| {
+            let file = data
+                .files
+                .iter()
+                .find(|file| file.filename.as_ref() == filename)
+                .expect("authored accepted file");
+            File::try_from_pypi(file.clone(), &SmallString::from(base.as_str()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+        let archived = OwnedArchive::from_unarchived(&metadata)?;
+        let restored = OwnedArchive::deserialize(&archived);
+        assert_eq!(filenames(&restored), filenames(&metadata));
+        assert_eq!(
+            restored.project_status.status,
+            metadata.project_status.status
+        );
+        assert_eq!(
+            restored.project_status.reason,
+            metadata.project_status.reason
+        );
+
+        let package_name = PackageName::from_str("example")?;
+        let actual = restored
+            .into_iter()
+            .flat_map(|datum| datum.files.all(&package_name))
+            .map(|(_, file)| file)
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn rejected_files_do_not_create_versions() -> Result<(), Error> {
+        let base = DisplaySafeUrl::parse("https://example.org/simple/example/")?;
+        let response = r#"{
+            "files": [
+                {"filename": "other-1.0.tar.gz", "hashes": {}, "url": "other-1.0.tar.gz"},
+                {"filename": "example-invalid.tar.gz", "hashes": {}, "url": "example-invalid.tar.gz"},
+                {"filename": "example-2.0-py3-none-any.whl", "hashes": {}, "requires-python": ">=3.8,,<4", "url": "example-2.0-py3-none-any.whl"},
+                {"filename": "example-2.0.tar.gz", "hashes": {}, "requires-python": ">=3.8,,<4", "url": "example-2.0.tar.gz"}
+            ]
+        }"#;
+        let metadata = from_json(response, &base)?;
+        assert!(metadata.iter().next().is_none());
+        let archived = OwnedArchive::from_unarchived(&metadata)?;
+        assert!(archived.iter().next().is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn html_and_json_share_grouped_archive() -> Result<(), Error> {
+        let base = DisplaySafeUrl::parse("https://example.org/files/")?;
+        let json = r#"{
+            "project-status": {"status": "deprecated", "reason": "Use a replacement"},
+            "files": [
+                {"filename": "example-2.0.tar.gz", "hashes": {}, "url": "example-2.0.tar.gz"},
+                {"filename": "example-1.0-py3-none-any.whl", "hashes": {"sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}, "core-metadata": true, "requires-python": ">=3.9", "url": "example-1.0-py3-none-any.whl"},
+                {"filename": "example-1.0.tar.gz", "hashes": {}, "requires-python": ">=3.8", "url": "example-1.0.tar.gz"},
+                {"filename": "example-2.0-py3-none-any.whl", "hashes": {}, "url": "example-2.0-py3-none-any.whl"},
+                {"filename": "example-3.0.tar.gz", "hashes": {}, "requires-python": ">=3.8,,<4", "url": "example-3.0.tar.gz"},
+                {"filename": "other-9.0.tar.gz", "hashes": {}, "url": "other-9.0.tar.gz"}
+            ]
+        }"#;
+        let html = r#"<!DOCTYPE html>
+            <html>
+              <head>
+                <base href="https://example.org/files/">
+                <meta name="pypi:project-status" content="deprecated">
+                <meta name="pypi:project-status-reason" content="Use a replacement">
+              </head>
+              <body>
+                <a href="example-2.0-py3-none-any.whl">wheel</a>
+                <a href="example-1.0.tar.gz" data-requires-python="&gt;=3.8">source</a>
+                <a href="other-9.0.tar.gz">other package</a>
+                <a href="example-1.0-py3-none-any.whl#sha256=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" data-core-metadata="true" data-requires-python="&gt;=3.9">wheel</a>
+                <a href="example-3.0.tar.gz" data-requires-python="&gt;=3.8,,&lt;4">invalid metadata</a>
+                <a href="example-2.0.tar.gz">source</a>
+              </body>
+            </html>"#;
+        let json_metadata = from_json(json, &base)?;
+        let html_metadata = SimpleDetailMetadata::from_html(
+            html,
+            &PackageName::from_str("example")?,
+            &DisplaySafeUrl::parse("https://example.org/simple/example/")?,
+        )?;
+        assert_eq!(filenames(&json_metadata), filenames(&html_metadata));
+
+        let json_archive = OwnedArchive::from_unarchived(&json_metadata)?;
+        let html_archive = OwnedArchive::from_unarchived(&html_metadata)?;
+        assert_eq!(
+            OwnedArchive::as_bytes(&json_archive),
+            OwnedArchive::as_bytes(&html_archive)
+        );
         Ok(())
     }
 }
