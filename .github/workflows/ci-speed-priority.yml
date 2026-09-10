@@ -1,0 +1,15 @@
+name: Windows upgrade-priority samples
+
+on:
+  push:
+    branches: ["zb/ci-speed-priority-candidate-20260909-*"]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    uses: astral-sh/uv-dev/.github/workflows/test.yml@99d65b6e30fef3affe3c68d402310217749af39e
+    with:
+      save-rust-cache: "true"
+      test-macos: "false"
