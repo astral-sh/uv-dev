@@ -1,4 +1,4 @@
-pub use diagnostics::dist_hints;
+pub use diagnostics::{dist_hints, format_derivation_chain};
 pub use distribution_database::{DistributionDatabase, HttpArchivePointer, PathArchivePointer};
 pub use download::LocalWheel;
 pub use error::Error;

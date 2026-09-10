@@ -1460,7 +1460,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             candidate.choice_kind(),
             filename,
         );
-        self.visit_candidate(&candidate, dist, package, name, pins, requests)?;
+        self.visit_candidate(&candidate, dist, package, id, name, pubgrub, pins, requests)?;
 
         let version = candidate.version().clone();
         Ok(Some(ResolverVersion::Unforked(version)))
@@ -1626,7 +1626,16 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                 base_candidate.choice_kind(),
                 filename,
             );
-            self.visit_candidate(&base_candidate, base_dist, package, name, pins, requests)?;
+            self.visit_candidate(
+                &base_candidate,
+                base_dist,
+                package,
+                id,
+                name,
+                pubgrub,
+                pins,
+                requests,
+            )?;
 
             return Ok(Some(ResolverVersion::Unforked(
                 base_candidate.version().clone(),
@@ -1671,8 +1680,17 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                 .collect::<Vec<_>>()
                 .join(", ")
         );
-        self.visit_candidate(candidate, dist, package, name, pins, requests)?;
-        self.visit_candidate(&base_candidate, base_dist, package, name, pins, requests)?;
+        self.visit_candidate(candidate, dist, package, id, name, pubgrub, pins, requests)?;
+        self.visit_candidate(
+            &base_candidate,
+            base_dist,
+            package,
+            id,
+            name,
+            pubgrub,
+            pins,
+            requests,
+        )?;
 
         let forks = vec![
             VersionFork {
@@ -1695,7 +1713,9 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
         candidate: &Candidate,
         dist: &CompatibleDist,
         package: &PubGrubPackage,
+        id: Id<PubGrubPackage>,
         name: &PackageName,
+        pubgrub: &State<UvDependencyProvider>,
         pins: &mut FilePins<'index>,
         requests: &'index MetadataRequests,
     ) -> Result<(), ResolveError> {
@@ -1718,7 +1738,17 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                             .hasher
                             .allows_package(candidate.name(), candidate.version())
                         {
-                            return Err(ResolveError::UnhashedPackage(candidate.name().clone()));
+                            let chain = DerivationChainBuilder::from_state(
+                                id,
+                                candidate.version(),
+                                pubgrub,
+                            )
+                            .unwrap_or_default();
+                            return Err(ResolveError::UnhashedPackageVersion(
+                                candidate.name().clone(),
+                                candidate.version().clone(),
+                                chain,
+                            ));
                         }
                         Ok(())
                     },
