@@ -2,6 +2,8 @@
 // https://github.com/rust-lang/rust/issues/64402
 extern crate uv_performance_memory_allocator;
 
+use std::cell::LazyCell;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fmt::Write;
 use std::hint::black_box;
@@ -28,6 +30,7 @@ use tokio::io::AsyncRead;
 use tokio_util::compat::{FuturesAsyncReadCompatExt, FuturesAsyncWriteCompatExt};
 use uv_cache::Cache;
 use uv_client::{BaseClientBuilder, Connectivity, RegistryClientBuilder};
+use uv_configuration::{BuildOptions, Constraints, DependencyModifiers, NoBinary, NoBuild};
 use uv_distribution_filename::{SourceDistExtension, WheelFilename};
 use uv_distribution_types::Requirement;
 use uv_extract::dirhash::UnhashedFile;
@@ -36,7 +39,7 @@ use uv_install_wheel::{InstallState, Layout, LinkMode};
 use uv_preview::Preview;
 use uv_pypi_types::{HashAlgorithm, Scheme};
 use uv_python_interpreter::PythonEnvironment;
-use uv_resolver::Manifest;
+use uv_resolver::{Exclusions, Manifest, Preference, Preferences, ResolverEnvironment};
 use uv_static::TarBackend;
 
 const MANY_FILES_WHEEL_FILENAME: &str = "manyfiles-0.0.0-py3-none-any.whl";
@@ -44,6 +47,18 @@ const MANY_FILES_WHEEL_FILE_COUNT: usize = 10_000;
 const MANY_FILES_SDIST_TOP_LEVEL: &str = "manyfiles-0.0.0";
 const MANY_FILES_SDIST_FILE_COUNT: usize = 10_000;
 const SHA256_BENCHMARK_SIZE: usize = 1024 * 1024;
+
+#[derive(Clone, Copy)]
+enum WheelTagPolicy {
+    FixedPlatform,
+    Universal,
+}
+
+struct ResolutionPolicy {
+    build_options: BuildOptions,
+    wheel_tags: WheelTagPolicy,
+    environment: ResolverEnvironment,
+}
 
 fn is_codspeed_simulation() -> bool {
     // CodSpeed reports Simulation as `instrumentation` in current versions.
@@ -416,42 +431,58 @@ fn layout(root: &Path) -> Layout {
 }
 
 fn resolve_warm_jupyter(c: &mut Criterion<WallTime>) {
-    let manifest = Manifest::simple(vec![Requirement::from(
+    let requirements = vec![Requirement::from(
         uv_pep508::Requirement::from_str("jupyter==1.0.0").unwrap(),
-    )]);
-    let run = setup(manifest, false);
-    c.bench_function("resolve_warm_jupyter", |b| b.iter(&run));
+    )];
+    // Initialize resolver fixtures only when Criterion selects this benchmark.
+    let run = LazyCell::new(|| setup(requirements, false, None));
+    c.bench_function("resolve_warm_jupyter", |b| b.iter(&*run));
 }
 
 fn resolve_warm_jupyter_universal(c: &mut Criterion<WallTime>) {
-    let manifest = Manifest::simple(vec![Requirement::from(
+    let requirements = vec![Requirement::from(
         uv_pep508::Requirement::from_str("jupyter==1.0.0").unwrap(),
-    )]);
-    let run = setup(manifest, true);
-    c.bench_function("resolve_warm_jupyter_universal", |b| b.iter(&run));
+    )];
+    let run = LazyCell::new(|| setup(requirements, true, None));
+    c.bench_function("resolve_warm_jupyter_universal", |b| b.iter(&*run));
+}
+
+fn resolve_warm_jupyter_incremental_universal(c: &mut Criterion<WallTime>) {
+    let previous_requirements = vec![
+        Requirement::from(uv_pep508::Requirement::from_str("jupyter==1.0.0").unwrap()),
+        Requirement::from(uv_pep508::Requirement::from_str("notebook==7.0.7").unwrap()),
+    ];
+    let requirements = vec![
+        Requirement::from(uv_pep508::Requirement::from_str("jupyter==1.0.0").unwrap()),
+        Requirement::from(uv_pep508::Requirement::from_str("notebook==7.0.8").unwrap()),
+    ];
+    let run = LazyCell::new(|| setup(requirements, true, Some(previous_requirements)));
+    c.bench_function("resolve_warm_jupyter_incremental_universal", |b| {
+        b.iter(&*run);
+    });
 }
 
 fn resolve_warm_airflow(c: &mut Criterion<WallTime>) {
-    let manifest = Manifest::simple(vec![
+    let requirements = vec![
         Requirement::from(uv_pep508::Requirement::from_str("apache-airflow[all]==2.9.3").unwrap()),
         Requirement::from(
             uv_pep508::Requirement::from_str("apache-airflow-providers-apache-beam>3.0.0").unwrap(),
         ),
-    ]);
-    let run = setup(manifest, false);
-    c.bench_function("resolve_warm_airflow", |b| b.iter(&run));
+    ];
+    let run = LazyCell::new(|| setup(requirements, false, None));
+    c.bench_function("resolve_warm_airflow", |b| b.iter(&*run));
 }
 
 // This takes >5m to run in CodSpeed.
 // fn resolve_warm_airflow_universal(c: &mut Criterion<WallTime>) {
-//     let manifest = Manifest::simple(vec![
+//     let requirements = vec![
 //         Requirement::from(uv_pep508::Requirement::from_str("apache-airflow[all]").unwrap()),
 //         Requirement::from(
 //             uv_pep508::Requirement::from_str("apache-airflow-providers-apache-beam>3.0.0").unwrap(),
 //         ),
-//     ]);
-//     let run = setup(manifest, true);
-//     c.bench_function("resolve_warm_airflow_universal", |b| b.iter(&run));
+//     ];
+//     let run = LazyCell::new(|| setup(requirements, true, None));
+//     c.bench_function("resolve_warm_airflow_universal", |b| b.iter(&*run));
 // }
 
 fn criterion_with_preview() -> Criterion<WallTime> {
@@ -473,11 +504,16 @@ criterion_group! {
         install_wheel_many_files,
         resolve_warm_jupyter,
         resolve_warm_jupyter_universal,
+        resolve_warm_jupyter_incremental_universal,
         resolve_warm_airflow
 }
 criterion_main!(uv);
 
-fn setup(manifest: Manifest, universal: bool) -> impl Fn() {
+fn setup(
+    requirements: Vec<Requirement>,
+    universal: bool,
+    previous_requirements: Option<Vec<Requirement>>,
+) -> impl Fn() {
     let runtime = tokio::runtime::Builder::new_current_thread()
         // CodSpeed limits the total number of threads to 500
         .max_blocking_threads(256)
@@ -496,19 +532,124 @@ fn setup(manifest: Manifest, universal: bool) -> impl Fn() {
         .build()
         .expect("failed to build registry client");
 
+    // The incremental workload only reads registry metadata. Never execute a build backend while
+    // preparing its prior lockfile or resolving the changed requirements.
+    let (build_options, wheel_tags) = if previous_requirements.is_some() {
+        (
+            BuildOptions::new(NoBinary::None, NoBuild::All),
+            WheelTagPolicy::Universal,
+        )
+    } else {
+        (BuildOptions::default(), WheelTagPolicy::FixedPlatform)
+    };
+    let mut policy = ResolutionPolicy {
+        build_options,
+        wheel_tags,
+        environment: resolver::environment(universal),
+    };
+    let previous_resolution = previous_requirements.map(|previous_requirements| {
+        runtime
+            .block_on(resolver::resolve(
+                Manifest::simple(previous_requirements),
+                cache.clone(),
+                &client,
+                &interpreter,
+                &policy,
+            ))
+            .expect("failed to resolve the prior requirements")
+    });
+    let previous_packages = previous_resolution.as_ref().map(|resolution| {
+        resolution
+            .base_dists()
+            .map(|(_, distribution)| {
+                (
+                    distribution.name.clone(),
+                    distribution.version.clone(),
+                    distribution.marker,
+                )
+            })
+            .collect::<BTreeSet<_>>()
+    });
+    let manifest = if let Some(resolution) = previous_resolution.as_ref() {
+        // Seed the same forks as the real lockfile update path. Preferences alone can otherwise
+        // cause a repeated resolution to skip a fork point.
+        policy.environment = ResolverEnvironment::universal(
+            resolution
+                .fork_markers
+                .iter()
+                .map(|marker| marker.combined())
+                .collect(),
+        );
+        let preferences = resolution
+            .base_dists()
+            .map(|(_, distribution)| {
+                let fork_markers = if resolution
+                    .base_dists()
+                    .filter(|(_, candidate)| candidate.name == distribution.name)
+                    .nth(1)
+                    .is_some()
+                {
+                    resolution
+                        .fork_markers
+                        .iter()
+                        .filter(|marker| !marker.is_disjoint(distribution.marker))
+                        .copied()
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                Preference::from_locked(
+                    distribution.name.clone(),
+                    distribution.version.clone(),
+                    distribution.index().cloned(),
+                    fork_markers,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert!(!preferences.is_empty(), "the prior lockfile must have pins");
+        Manifest::new(
+            requirements,
+            Constraints::default(),
+            DependencyModifiers::default(),
+            Preferences::from_iter(preferences, &policy.environment),
+            None,
+            BTreeMap::new(),
+            Exclusions::default(),
+            vec![],
+        )
+    } else {
+        Manifest::simple(requirements)
+    };
+
     // Prime the cache: First run for performance the network operation, the second run primes
     // reading from the cache from the first run. If they are already primed, we only lose ~1s for
     // the large airflow benchmark.
     for _ in 0..2 {
-        runtime
+        let resolution = runtime
             .block_on(resolver::resolve(
                 black_box(manifest.clone()),
                 black_box(cache.clone()),
                 black_box(&client),
                 &interpreter,
-                universal,
+                &policy,
             ))
             .unwrap();
+        if let Some(previous_packages) = previous_packages.as_ref() {
+            let packages = resolution
+                .base_dists()
+                .map(|(_, distribution)| {
+                    (
+                        distribution.name.clone(),
+                        distribution.version.clone(),
+                        distribution.marker,
+                    )
+                })
+                .collect::<BTreeSet<_>>();
+            assert_ne!(
+                previous_packages, &packages,
+                "the incremental resolution must change the locked packages"
+            );
+        }
     }
 
     // No matter how long the benchmarks run, never do fresh network requests
@@ -526,7 +667,7 @@ fn setup(manifest: Manifest, universal: bool) -> impl Fn() {
                 black_box(cache.clone()),
                 black_box(&client),
                 &interpreter,
-                universal,
+                &policy,
             ))
             .unwrap();
     }
@@ -539,7 +680,7 @@ mod resolver {
 
     use uv_cache::Cache;
     use uv_client::RegistryClient;
-    use uv_configuration::{BuildOptions, Concurrency, Constraints, IndexStrategy, NoSources};
+    use uv_configuration::{Concurrency, Constraints, IndexStrategy, NoSources};
     use uv_dispatch::{BuildDispatch, SharedState};
     use uv_distribution::DistributionDatabase;
     use uv_distribution_types::{
@@ -561,6 +702,8 @@ mod resolver {
         BuildIsolation, EmptyInstalledPackages, HashStrategy, SourceTreeEditablePolicy,
     };
     use uv_workspace::WorkspaceCache;
+
+    use super::{ResolutionPolicy, WheelTagPolicy};
 
     static MARKERS: LazyLock<MarkerEnvironment> = LazyLock::new(|| {
         MarkerEnvironment::try_from(MarkerEnvironmentBuilder {
@@ -597,17 +740,24 @@ mod resolver {
         .unwrap()
     });
 
-    pub(crate) async fn resolve(
+    pub(super) fn environment(universal: bool) -> ResolverEnvironment {
+        if universal {
+            ResolverEnvironment::universal(vec![])
+        } else {
+            ResolverEnvironment::specific(ResolverMarkerEnvironment::from(MARKERS.clone()))
+        }
+    }
+
+    pub(super) async fn resolve(
         manifest: Manifest,
         cache: Cache,
         client: &RegistryClient,
         interpreter: &Interpreter,
-        universal: bool,
+        policy: &ResolutionPolicy,
     ) -> Result<ResolverOutput> {
         let build_isolation = BuildIsolation::default();
         let extra_build_requires = ExtraBuildRequires::default();
         let extra_build_variables = ExtraBuildVariables::default();
-        let build_options = BuildOptions::default();
         let concurrency = Concurrency::default();
         let config_settings = ConfigSettings::default();
         let config_settings_package = PackageConfigSettings::default();
@@ -626,6 +776,7 @@ mod resolver {
         let index_locations = IndexLocations::default();
         let installed_packages = EmptyInstalledPackages;
         let options = OptionsBuilder::new()
+            .build_options(policy.build_options.clone())
             .exclude_newer(exclude_newer.clone())
             .build();
         let sources = NoSources::default();
@@ -633,7 +784,7 @@ mod resolver {
         let conflicts = Conflicts::empty();
         let workspace_cache = WorkspaceCache::default();
 
-        let python_requirement = if universal {
+        let python_requirement = if policy.environment.marker_environment().is_none() {
             PythonRequirement::from_requires_python(
                 interpreter,
                 RequiresPython::greater_than_equal_version(&Version::new([3, 11])),
@@ -658,7 +809,7 @@ mod resolver {
             &extra_build_requires,
             &extra_build_variables,
             LinkMode::default(),
-            &build_options,
+            &policy.build_options,
             &hashes,
             exclude_newer,
             sources,
@@ -668,20 +819,19 @@ mod resolver {
             Preview::default(),
         );
 
-        let markers = if universal {
-            ResolverEnvironment::universal(vec![])
-        } else {
-            ResolverEnvironment::specific(ResolverMarkerEnvironment::from(MARKERS.clone()))
+        let tags: Option<&Tags> = match policy.wheel_tags {
+            WheelTagPolicy::FixedPlatform => Some(&TAGS),
+            WheelTagPolicy::Universal => None,
         };
 
         let resolver = Resolver::new(
             manifest,
             options,
             &python_requirement,
-            markers,
+            policy.environment.clone(),
             interpreter.markers(),
             conflicts,
-            Some(&TAGS),
+            tags,
             &flat_index,
             &index,
             &hashes,
