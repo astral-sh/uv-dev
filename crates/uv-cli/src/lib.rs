@@ -5724,7 +5724,8 @@ pub struct UvxArgs {
 
 #[derive(Args)]
 pub struct ToolInstallArgs {
-    /// The package to install commands from.
+    /// The package to install commands from. Version constraints, e.g., `'ruff<1'`, are retained
+    /// for `uv tool upgrade`; use `uv tool install` again to replace them.
     #[arg(value_hint = ValueHint::Other)]
     pub package: String,
 
