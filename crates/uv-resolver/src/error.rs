@@ -1631,20 +1631,55 @@ fn collapse_unavailable_versions(tree: ErrorTree) -> ErrorTree {
     )
 }
 
-fn is_root_dependency_on_project(external: &ErrorExternal, project: &PackageName) -> bool {
+fn is_root_dependency_on_project(
+    external: &ErrorExternal,
+    other: &ErrorTree,
+    project: &PackageName,
+) -> bool {
     let External::FromDependencyOf(package, _, dependency, _) = external else {
         return false;
     };
     if !matches!(&**package, PubGrubPackageInner::Root(_)) {
         return false;
     }
-    matches!(&**dependency, PubGrubPackageInner::Package { name, .. } if name == project)
+    match &**dependency {
+        PubGrubPackageInner::Package { name, .. } => name == project,
+        PubGrubPackageInner::Extra { name, .. } if name == project => {
+            // Keep the root requirement when it explains why an extra's own requirements, or
+            // conflicts between multiple extras, make the project unsatisfiable.
+            let DerivationTree::Derived(derived) = other else {
+                return false;
+            };
+            let mut terms = derived.terms.iter();
+            let Some((package, Term::Positive(_))) = terms.next() else {
+                return false;
+            };
+            terms.next().is_none()
+                && matches!(
+                    &**package,
+                    PubGrubPackageInner::Package {
+                        name,
+                        extra: None,
+                        group: None,
+                        ..
+                    } if name == project
+                )
+        }
+        PubGrubPackageInner::Root(_)
+        | PubGrubPackageInner::Python(_)
+        | PubGrubPackageInner::System(_)
+        | PubGrubPackageInner::Extra { .. }
+        | PubGrubPackageInner::Group { .. }
+        | PubGrubPackageInner::Marker { .. } => false,
+    }
 }
 
 /// Given a [`DerivationTree`], drop dependency incompatibilities from the root to the project.
 ///
 /// This effectively changes the root to the workspace member in a single-project workspace,
-/// avoiding an extra level of indirection like "your project requires your project".
+/// avoiding an extra level of indirection like "your project requires your project". A requirement
+/// on an extra is redundant only if the opposite cause already concludes that the base project's
+/// requirements are unsatisfiable.
 ///
 /// A direct dependency incompatibility is also a traversal boundary: if it is not the
 /// root-to-project edge, leave that subtree unchanged. After removing a matching edge, continue
@@ -1673,7 +1708,12 @@ fn drop_root_dependency_on_project(tree: ErrorTree, project: &PackageName) -> Er
                     };
 
                     if let Some((external, dependency_is_cause1)) = first_dependency {
-                        if is_root_dependency_on_project(external, project) {
+                        let other = if dependency_is_cause1 {
+                            derived.cause2.as_ref()
+                        } else {
+                            derived.cause1.as_ref()
+                        };
+                        if is_root_dependency_on_project(external, other, project) {
                             let other = if dependency_is_cause1 {
                                 Arc::unwrap_or_clone(derived.cause2)
                             } else {
@@ -2011,6 +2051,169 @@ mod tests {
 
     fn version(version: &str) -> Version {
         version.parse().expect("valid version")
+    }
+
+    #[test]
+    fn drops_only_root_dependencies_on_the_project_or_its_extras() {
+        let project = package_name("project");
+        let root: PubGrubPackage = PubGrubPackageInner::Root(None).into();
+        let extra = |name| {
+            PubGrubPackageInner::Extra {
+                name: package_name(name),
+                extra: "dev".parse().expect("valid extra name"),
+                marker: uv_pep508::MarkerTree::TRUE,
+            }
+            .into()
+        };
+        let cases = [
+            (pubgrub_package("project"), true),
+            (extra("project"), true),
+            (pubgrub_package("other"), false),
+            (extra("other"), false),
+            (
+                PubGrubPackageInner::Group {
+                    name: project.clone(),
+                    group: "dev".parse().expect("valid group name"),
+                    marker: uv_pep508::MarkerTree::TRUE,
+                }
+                .into(),
+                false,
+            ),
+            (
+                PubGrubPackageInner::Marker {
+                    name: project.clone(),
+                    marker: uv_pep508::MarkerTree::TRUE,
+                }
+                .into(),
+                false,
+            ),
+        ];
+
+        for (dependency, should_drop) in cases {
+            let external =
+                External::FromDependencyOf(root.clone(), Range::full(), dependency, Range::full());
+            let other = ErrorTree::Derived(Derived {
+                terms: Map::from_iter([(
+                    pubgrub_package("project"),
+                    Term::Positive(Range::full()),
+                )]),
+                shared_id: None,
+                cause1: Arc::new(ErrorTree::External(External::NotRoot(
+                    root.clone(),
+                    version("1"),
+                ))),
+                cause2: Arc::new(ErrorTree::External(External::NotRoot(
+                    root.clone(),
+                    version("2"),
+                ))),
+            });
+            assert_eq!(
+                is_root_dependency_on_project(&external, &other, &project),
+                should_drop
+            );
+
+            for dependency_first in [false, true] {
+                let dependency = ErrorTree::External(external.clone());
+                let expected = format!("{other:?}");
+                let (cause1, cause2) = if dependency_first {
+                    (dependency, other.clone())
+                } else {
+                    (other.clone(), dependency)
+                };
+                let tree = ErrorTree::Derived(Derived {
+                    terms: pubgrub::Map::default(),
+                    shared_id: None,
+                    cause1: Arc::new(cause1),
+                    cause2: Arc::new(cause2),
+                });
+                let original = format!("{tree:?}");
+                let reduced = drop_root_dependency_on_project(tree, &project);
+                if should_drop {
+                    assert_eq!(format!("{reduced:?}"), expected);
+                } else {
+                    assert_eq!(format!("{reduced:?}"), original);
+                }
+            }
+        }
+
+        assert!(!is_root_dependency_on_project(
+            &External::FromDependencyOf(
+                pubgrub_package("other"),
+                Range::full(),
+                extra("project"),
+                Range::full(),
+            ),
+            &ErrorTree::External(External::NotRoot(root, version("1"))),
+            &project,
+        ));
+    }
+
+    #[test]
+    fn keeps_root_requirements_on_conflicting_project_extras() {
+        let project = package_name("project");
+        let root: PubGrubPackage = PubGrubPackageInner::Root(None).into();
+        let extra: PubGrubPackage = PubGrubPackageInner::Extra {
+            name: project.clone(),
+            extra: "dev".parse().expect("valid extra name"),
+            marker: uv_pep508::MarkerTree::TRUE,
+        }
+        .into();
+        let dependency =
+            External::FromDependencyOf(root.clone(), Range::full(), extra.clone(), Range::full());
+        let leaf = ErrorTree::External(External::NotRoot(root.clone(), version("1")));
+        let cases = [
+            Map::default(),
+            Map::from_iter([(pubgrub_package("project"), Term::Negative(Range::full()))]),
+            Map::from_iter([(pubgrub_package("other"), Term::Positive(Range::full()))]),
+            Map::from_iter([(extra.clone(), Term::Positive(Range::full()))]),
+            Map::from_iter([(
+                PubGrubPackageInner::Package {
+                    name: project.clone(),
+                    extra: Some("dev".parse().expect("valid extra name")),
+                    group: None,
+                    marker: uv_pep508::MarkerTree::TRUE,
+                }
+                .into(),
+                Term::Positive(Range::full()),
+            )]),
+            Map::from_iter([
+                (pubgrub_package("project"), Term::Positive(Range::full())),
+                (extra, Term::Positive(Range::full())),
+            ]),
+            Map::from_iter([(root, Term::Positive(Range::full()))]),
+        ];
+
+        for other in std::iter::once(leaf.clone()).chain(cases.into_iter().map(|terms| {
+            ErrorTree::Derived(Derived {
+                terms,
+                shared_id: None,
+                cause1: Arc::new(leaf.clone()),
+                cause2: Arc::new(leaf.clone()),
+            })
+        })) {
+            assert!(!is_root_dependency_on_project(
+                &dependency,
+                &other,
+                &project,
+            ));
+            for dependency_first in [false, true] {
+                let dependency = ErrorTree::External(dependency.clone());
+                let (cause1, cause2) = if dependency_first {
+                    (dependency, other.clone())
+                } else {
+                    (other.clone(), dependency)
+                };
+                let tree = ErrorTree::Derived(Derived {
+                    terms: Map::default(),
+                    shared_id: None,
+                    cause1: Arc::new(cause1),
+                    cause2: Arc::new(cause2),
+                });
+                let original = format!("{tree:?}");
+                let reduced = drop_root_dependency_on_project(tree, &project);
+                assert_eq!(format!("{reduced:?}"), original);
+            }
+        }
     }
 
     fn known_versions(name: &str, versions: &[&str]) -> FxHashMap<PackageName, Arc<[Version]>> {
