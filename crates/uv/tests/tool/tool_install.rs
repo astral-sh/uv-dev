@@ -3100,57 +3100,68 @@ fn tool_install_no_binary_package_env_var() {
 
 /// Test installing a package that can't be installed.
 #[test]
-fn tool_install_uninstallable() {
+fn tool_install_uninstallable() -> Result<()> {
     let context = uv_test::test_context!("3.12")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let tool_dir = context.temp_dir.child("tools");
     let bin_dir = context.temp_dir.child("bin");
+    let package = context.temp_dir.child("uninstallable");
+    package.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "uninstallable-tool"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = []
 
-    let filters = context
-        .filters()
-        .into_iter()
-        .chain([
-            (r"bdist\.[^/\\\s]+(-[^/\\\s]+)?", "bdist.linux-x86_64"),
-            (r"\\\.", ""),
-            (r"#+", "#"),
-            (
-                "Please read the installation instructions at:\n ",
-                "Please read the installation instructions at:\n",
-            ),
-        ])
-        .collect::<Vec<_>>();
-    uv_snapshot!(filters, context.tool_install()
-        .arg("pyenv")
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    package.child("backend.py").write_str(indoc! {r#"
+        import os
+        import sys
+        from pathlib import Path
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            environment = Path(os.environ["UV_TOOL_DIR"], "uninstallable-tool")
+            if not (environment / "pyvenv.cfg").is_file():
+                raise RuntimeError("the test tool environment does not exist")
+            print("This test package cannot be installed.", file=sys.stderr)
+            raise SystemExit(1)
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.tool_install()
+        .arg(package.as_os_str())
+        .arg("--offline")
+        .arg("--no-index")
+        .arg("--python")
+        .arg("3.12")
+        .env(EnvVars::UV_PYTHON_DOWNLOADS, "never")
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 1 (failure)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    error: Failed to build `pyenv==0.0.1`
+    error: Failed to build `uninstallable-tool @ file://[TEMP_DIR]/uninstallable`
       cause: The build backend returned an error
-      cause: Call to `setuptools.build_meta:__legacy__.build_wheel` failed (exit status: 1)
-
-             [stdout]
-             running bdist_wheel
-             running build
-             installing to build/bdist.linux-x86_64/wheel
-             running install
+      cause: Call to `backend.build_wheel` failed (exit status: 1)
 
              [stderr]
-             # NOTE #
-             We are sorry, but this package is not installable with pip.
-
-             Please read the installation instructions at:
-
-             https://github.com/pyenv/pyenv#installation
-             #
+             This test package cannot be installed.
 
     hint: Build failures usually indicate a problem with the package or the build environment
     ");
 
-    // Ensure the tool environment is not created.
-    tool_dir.child("pyenv").assert(predicate::path::missing());
-    bin_dir.child("pyenv").assert(predicate::path::missing());
+    // Ensure the failed installation leaves no environment or executable.
+    tool_dir
+        .child("uninstallable-tool")
+        .assert(predicate::path::missing());
+    bin_dir
+        .child("uninstallable-tool")
+        .assert(predicate::path::missing());
+
+    Ok(())
 }
 
 /// Test installing a tool with a bare URL requirement.
