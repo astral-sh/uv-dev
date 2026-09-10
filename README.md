@@ -30,6 +30,14 @@ minimal reproducible example. The requested follow-up includes the uv version, o
 command, and output; for this Docker failure, the complete Dockerfile and full numbered BuildKit
 output remain the essential missing pieces.
 
+The reporter subsequently confirmed that changing the image reference from `latest`/0.12.12 to
+`ghcr.io/astral-sh/uv:0.12.11` resolves the container-initialization error in their build. This is a
+credible workaround and makes a version-dependent interaction in their omitted Dockerfile or build
+environment more plausible, but it does not identify the mechanism because the full reproduction
+and comparative logs are still unavailable. They also report a separate package-installation
+timeout that stops when `ENV UV_COMPILE_BYTECODE=1` is removed; no error output or reproduction was
+provided for that secondary behavior.
+
 ## Reproduction
 
 Outcome: `needs_more_information`.
@@ -79,10 +87,12 @@ and an unrelated hash-cutoff fix; they contain no Docker image layout change. Li
 `crates/uv/tests/` and `crates/uv-client/tests/it/` found no integration test that builds the
 published Docker image or covers this external-stage COPY pattern.
 
-To reproduce or diagnose the reported build, the complete Dockerfile, the full BuildKit output
-including the numbered failing instruction, the build command and build context/target, and the
-output from the same build pinned to 0.12.11 are required. Those details will identify which active
-stage is missing `/bin/sh`; the provided line alone only reads files from the distroless image.
+The reporter reports that the same build succeeds when pinned to 0.12.11, but did not provide the
+Dockerfile or comparative logs. To reproduce or diagnose the difference, the complete Dockerfile,
+the full BuildKit output including the numbered failing instruction, the build command and build
+context/target, and output from both 0.12.12 and 0.12.11 are required. Those details will identify
+which active stage is missing `/bin/sh`; the provided line alone only reads files from the
+distroless image.
 
 The repository bot subsequently recorded that a maintainer considers the issue non-reproducible
 with the information provided and requested an MRE, including the uv version, operating system,
@@ -119,7 +129,10 @@ which stage or instruction Docker was executing.
 The 0.12.12 release timing is confirmed, but no root cause for the reporter's build failure is
 confirmed. A complete Dockerfile and full BuildKit output could establish a bug and justify
 reclassification. A maintainer has requested that reproduction information, so the present
-classification and `needs_more_information` reproduction status remain current.
+classification and `needs_more_information` reproduction status remain current. The reporter's
+successful rollback to 0.12.11 raises the possibility of a version-dependent regression, but the
+repository reproduction succeeds with both versions and the missing build context prevents that
+possibility from being established.
 
 ## Related
 
@@ -145,6 +158,10 @@ classification and `needs_more_information` reproduction status remain current.
 - Repeating the COPY build with 0.12.11 also succeeded. Making either 0.12.12 or 0.12.11 the active
   stage reproduced the shell error, confirming that the shell-free image layout is not new in
   0.12.12 and that the omitted stage selection is material.
+- In the reporter's full but undisclosed build, pinning 0.12.11 resolves the initialization error.
+  They separately report that removing `UV_COMPILE_BYTECODE=1` resolves a package-installation
+  timeout. These are user-reported observations, not independently reproduced findings, and the
+  relationship between the two symptoms is unknown.
 - Recent Docker workflow history contains no image-layout change associated with 0.12.12. The
   nearby workflow changes update artifact-attestation tooling, CI settings, runners, or add Python
   3.15 release-candidate derived images.
