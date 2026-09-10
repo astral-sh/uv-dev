@@ -68,32 +68,26 @@ pub fn find_archive_dist_info<'a, T: Copy>(
     filename: &WheelFilename,
     files: impl Iterator<Item = (T, &'a str)>,
 ) -> Result<(T, &'a str), Error> {
-    let metadatas: Vec<_> = files
-        .filter_map(|(payload, path)| {
+    let (payload, dist_info_prefix) = {
+        let mut metadatas = files.filter_map(|(payload, path)| {
             let (dist_info_dir, file) = path.split_once('/')?;
             if file != "METADATA" {
                 return None;
             }
             let dist_info_prefix = dist_info_dir.strip_suffix(".dist-info")?;
             Some((payload, dist_info_prefix))
-        })
-        .collect();
+        });
 
-    // Like `pip`, assert that there is exactly one `.dist-info` directory.
-    let (payload, dist_info_prefix) = match metadatas[..] {
-        [] => {
+        // Like `pip`, assert that there is exactly one `.dist-info` directory.
+        let Some(metadata) = metadatas.next() else {
             return Err(Error::MissingDistInfo);
+        };
+        if let Some((_, second)) = metadatas.next() {
+            let mut prefixes = vec![metadata.1, second];
+            prefixes.extend(metadatas.map(|(_, prefix)| prefix));
+            return Err(Error::MultipleDistInfo(prefixes.join(", ")));
         }
-        [(payload, path)] => (payload, path),
-        _ => {
-            return Err(Error::MultipleDistInfo(
-                metadatas
-                    .into_iter()
-                    .map(|(_, dist_info_dir)| dist_info_dir.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", "),
-            ));
-        }
+        metadata
     };
 
     // Like `pip`, validate that the `.dist-info` directory is prefixed with the canonical
