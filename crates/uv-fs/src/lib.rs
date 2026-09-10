@@ -181,6 +181,10 @@ pub async fn read_to_string_transcode(path: impl AsRef<Path>) -> std::io::Result
     } else {
         fs_err::tokio::read(path).await?
     };
+    // The decoder needs three bytes to detect a BOM, so handle empty UTF-16 files explicitly.
+    if matches!(raw.as_slice(), [0xff, 0xfe] | [0xfe, 0xff]) {
+        return Ok(String::new());
+    }
     let mut buf = String::with_capacity(1024);
     DecodeReaderBytes::new(&*raw)
         .read_to_string(&mut buf)
