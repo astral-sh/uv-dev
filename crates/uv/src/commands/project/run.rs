@@ -84,6 +84,9 @@ use crate::settings::{
     ResolverSettings,
 };
 
+#[cfg(test)]
+mod module_stdin_tests;
+
 /// Run a command.
 #[expect(clippy::fn_params_excessive_bools)]
 pub(crate) async fn run(
@@ -1515,12 +1518,14 @@ impl ParsedRunCommand {
         };
 
         if target.eq_ignore_ascii_case("-") {
+            if module {
+                return Err(anyhow!("Cannot run a Python module from stdin"));
+            }
+
             let mut buf = Vec::with_capacity(1024);
             std::io::stdin().read_to_end(&mut buf)?;
 
-            return if module {
-                Err(anyhow!("Cannot run a Python module from stdin"))
-            } else if gui_script {
+            return if gui_script {
                 Ok(Self::Ready(RunCommand::PythonGuiStdin(buf, args.to_vec())))
             } else {
                 Ok(Self::Ready(RunCommand::PythonStdin(buf, args.to_vec())))
