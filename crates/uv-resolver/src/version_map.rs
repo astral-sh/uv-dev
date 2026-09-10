@@ -205,7 +205,7 @@ impl VersionMap {
     pub(crate) fn index(&self) -> Option<&IndexUrl> {
         match &self.inner {
             VersionMapInner::Eager(_) => None,
-            VersionMapInner::Lazy(lazy) => Some(&lazy.index_route.canonical),
+            VersionMapInner::Lazy(lazy) => Some(lazy.index_route.canonical_url()),
         }
     }
 
@@ -764,7 +764,7 @@ impl VersionMapLazy {
                         let dist = RegistryBuiltWheel {
                             filename,
                             file: Box::new(file),
-                            index: self.index_route.canonical.clone(),
+                            index: self.index_route.canonical_url().clone(),
                             size_is_authoritative: false,
                         };
                         priority_dist.insert_built(dist, hashes, compatibility);
@@ -775,7 +775,7 @@ impl VersionMapLazy {
                             version: filename.version.clone(),
                             ext: filename.extension,
                             file: Box::new(file),
-                            index: self.index_route.canonical.clone(),
+                            index: self.index_route.canonical_url().clone(),
                             wheels: vec![],
                             size_is_authoritative: false,
                         };

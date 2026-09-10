@@ -346,11 +346,16 @@ impl From<&Index> for IndexRequestPolicy {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IndexRoute {
     /// The original index URL recorded in the lockfile.
-    pub canonical: IndexUrl,
+    canonical: IndexUrl,
     proxy: Option<Arc<ProxyRoute>>,
 }
 
 impl IndexRoute {
+    /// Return the original index URL used for identity and persistence.
+    pub fn canonical_url(&self) -> &IndexUrl {
+        &self.canonical
+    }
+
     /// Return whether this index is routed through a configured proxy.
     pub fn is_proxy(&self) -> bool {
         self.proxy.is_some()

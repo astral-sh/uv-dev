@@ -2168,8 +2168,10 @@ mod tests {
                 .index_locations(locations)
                 .build()?;
             let route = client.index_locations().route_for(&canonical);
-            let physical_artifact = route
-                .artifact_url_for_request(&CanonicalArtifactUrl::from_url(canonical_artifact))?;
+            let physical_artifact =
+                route.artifact_url_for_request(&CanonicalArtifactUrl::from_lockfile(
+                    FileLocation::AbsoluteUrl(canonical_artifact.into()),
+                ))?;
 
             let response = client
                 .uncached_client(&physical_artifact)

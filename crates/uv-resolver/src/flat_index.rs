@@ -8,8 +8,8 @@ use uv_client::{FlatIndexEntries, FlatIndexEntry};
 use uv_configuration::BuildOptions;
 use uv_distribution_filename::{DistFilename, SourceDistFilename, WheelFilename};
 use uv_distribution_types::{
-    CanonicalArtifactUrl, File, HashComparison, IncompatibleSource, IncompatibleWheel, IndexUrl,
-    PrioritizedDist, RegistryBuiltWheel, RegistrySourceDist, SourceDistCompatibility,
+    File, HashComparison, IncompatibleSource, IncompatibleWheel, IndexUrl, PrioritizedDist,
+    RegistryBuiltWheel, RegistryFile, RegistrySourceDist, SourceDistCompatibility,
     WheelCompatibility,
 };
 use uv_normalize::PackageName;
@@ -100,7 +100,7 @@ impl FlatDistributions {
         build_options: &BuildOptions,
         index: IndexUrl,
     ) {
-        let file = file.map_url(CanonicalArtifactUrl::from_location);
+        let file = RegistryFile::from_flat_index(file);
 
         // No `requires-python` here: for source distributions, we don't have that information;
         // for wheels, we read it lazily only when selected.
