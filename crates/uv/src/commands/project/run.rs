@@ -1245,8 +1245,7 @@ pub(crate) async fn run(
     let mut process = command.as_command(interpreter);
     process.envs(env_file_environment);
 
-    // Construct the `PATH` environment variable.
-    let new_path = std::env::join_paths(
+    let environment_paths = || {
         ephemeral_env
             .as_ref()
             .map(PythonEnvironment::scripts)
@@ -1262,13 +1261,18 @@ pub(crate) async fn run(
             )
             .dedup()
             .map(PathBuf::from)
-            .chain(
-                std::env::var_os(EnvVars::PATH)
-                    .as_ref()
-                    .iter()
-                    .flat_map(std::env::split_paths),
-            ),
-    )?;
+    };
+
+    // Construct the `PATH` environment variable.
+    let new_path = std::env::join_paths(
+        environment_paths().chain(
+            std::env::var_os(EnvVars::PATH)
+                .as_ref()
+                .iter()
+                .flat_map(std::env::split_paths),
+        ),
+    )
+    .with_context(|| path_join_error_context(environment_paths()))?;
     process.env(EnvVars::PATH, new_path);
 
     // Increment recursion depth counter.
@@ -1300,6 +1304,21 @@ pub(crate) async fn run(
         .with_context(|| format!("Failed to spawn: `{}`", command.display_executable()))?;
 
     run_to_completion(handle).await
+}
+
+/// Describe a failed `PATH` join without assuming which environment path caused it.
+fn path_join_error_context(paths: impl IntoIterator<Item = PathBuf>) -> String {
+    if let Some(path) = paths
+        .into_iter()
+        .find(|path| std::env::join_paths([path]).is_err())
+    {
+        format!(
+            "Failed to construct `PATH` for command: cannot include directory `{}`",
+            path.user_display()
+        )
+    } else {
+        "Failed to construct `PATH` for command".to_string()
+    }
 }
 
 /// Returns `true` if we can skip creating an additional ephemeral environment in `uv run`.
@@ -2151,5 +2170,67 @@ impl uv_errors::Hinted for RecursionLimitError {
             "uv run".green(),
             "--script".green(),
         ))
+    }
+}
+
+#[cfg(all(test, any(unix, windows)))]
+mod tests {
+    use std::env;
+    use std::ffi::OsString;
+    use std::path::PathBuf;
+
+    use anyhow::Context;
+
+    use super::path_join_error_context;
+
+    #[test]
+    fn path_join_error_identifies_the_first_invalid_path() {
+        let invalid = if cfg!(windows) {
+            PathBuf::from("invalid\"path")
+        } else {
+            PathBuf::from("invalid:path")
+        };
+        let paths = [
+            PathBuf::from("valid"),
+            invalid.clone(),
+            invalid.join("later"),
+        ];
+        let source = env::join_paths(&paths).expect_err("the path cannot be joined");
+        let source_message = source.to_string();
+        let error = Err::<OsString, _>(source)
+            .with_context(|| path_join_error_context(paths))
+            .expect_err("the original failure is retained");
+
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "Failed to construct `PATH` for command: cannot include directory `{}`",
+                invalid.display()
+            )
+        );
+        assert_eq!(
+            error
+                .downcast_ref::<env::JoinPathsError>()
+                .expect("the original error remains available")
+                .to_string(),
+            source_message
+        );
+    }
+
+    #[test]
+    fn path_join_error_keeps_generic_context_for_valid_insertions() {
+        let paths = [
+            PathBuf::from("directory with spaces"),
+            PathBuf::from("directory;with;semicolons"),
+        ];
+        env::join_paths(&paths).expect("the paths can be joined on every supported platform");
+        assert_eq!(
+            path_join_error_context(paths),
+            "Failed to construct `PATH` for command"
+        );
+        assert_eq!(
+            path_join_error_context([]),
+            "Failed to construct `PATH` for command"
+        );
     }
 }
