@@ -7404,6 +7404,7 @@ dependencies = [
  "uv-configuration",
  "uv-dirs",
  "uv-distribution-types",
+ "uv-errors",
  "uv-flags",
  "uv-fs",
  "uv-install-wheel",
@@ -7418,6 +7419,7 @@ dependencies = [
  "uv-redacted",
  "uv-resolver",
  "uv-static",
+ "uv-toml",
  "uv-torch",
  "uv-version",
  "uv-warnings",
@@ -7520,7 +7522,9 @@ version = "0.0.79"
 dependencies = [
  "insta",
  "serde",
+ "toml",
  "toml_edit",
+ "uv-errors",
 ]
 
 [[package]]

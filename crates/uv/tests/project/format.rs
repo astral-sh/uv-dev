@@ -355,11 +355,11 @@ fn format_fails_malformed_pyproject() -> Result<()> {
 
     warning: `uv format` is experimental and may change without warning. Pass `--preview-features format-command` to disable this warning.
     error: Failed to parse: `pyproject.toml`
-      cause: TOML parse error at line 1, column 11
-               |
-             1 | malformed pyproject.toml
-               |           ^
-             key with no value, expected `=`
+      cause: key with no value, expected `=`
+       --> pyproject.toml:1:11
+        |
+      1 | malformed pyproject.toml
+        |           ^
     ");
 
     // Check that the file is not formatted

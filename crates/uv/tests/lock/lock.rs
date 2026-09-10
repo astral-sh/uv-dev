@@ -24932,11 +24932,11 @@ fn lock_invalid_index() -> Result<()> {
       Index names may only contain letters, digits, hyphens, underscores, and periods, but found unsupported character (` `) in: `internal proxy`
 
     error: Failed to parse: `pyproject.toml`
-      cause: TOML parse error at line 9, column 31
-               |
-             9 |         iniconfig = { index = "internal proxy" }
-               |                               ^^^^^^^^^^^^^^^^
-             Index names may only contain letters, digits, hyphens, underscores, and periods, but found unsupported character (` `) in: `internal proxy`
+      cause: Index names may only contain letters, digits, hyphens, underscores, and periods, but found unsupported character (` `) in: `internal proxy`
+       --> pyproject.toml:9:31
+        |
+      9 |         iniconfig = { index = "internal proxy" }
+        |                               ^^^^^^^^^^^^^^^^
     "#);
 
     Ok(())
@@ -25237,11 +25237,11 @@ fn lock_unnamed_explicit_index() -> Result<()> {
       An index with `explicit = true` requires a `name`: https://test.pypi.org/simple
 
     error: Failed to parse: `pyproject.toml`
-      cause: TOML parse error at line 8, column 9
-               |
-             8 |         [[tool.uv.index]]
-               |         ^^^^^^^^^^^^^^^^^
-             An index with `explicit = true` requires a `name`: https://test.pypi.org/simple
+      cause: An index with `explicit = true` requires a `name`: https://test.pypi.org/simple
+       --> pyproject.toml:8:9
+        |
+      8 |         [[tool.uv.index]]
+        |         ^^^^^^^^^^^^^^^^^
     ");
 
     Ok(())
@@ -25282,11 +25282,11 @@ fn lock_invalid_index_cache_control() -> Result<()> {
       `cache-control.api` must be a valid HTTP header value
 
     error: Failed to parse: `pyproject.toml`
-      cause: TOML parse error at line 11, column 9
-                |
-             11 |         cache-control.api = """
-                |         ^^^^^^^^^^^^^
-             `cache-control.api` must be a valid HTTP header value
+      cause: `cache-control.api` must be a valid HTTP header value
+        --> pyproject.toml:11:9
+         |
+      11 |         cache-control.api = """
+         |         ^^^^^^^^^^^^^
     "#);
 
     Ok(())
@@ -25709,11 +25709,11 @@ fn lock_repeat_named_index() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to parse: `pyproject.toml`
-      cause: TOML parse error at line 8, column 9
-               |
-             8 |         [[tool.uv.index]]
-               |         ^^^^^^^^^^^^^^^^^
-             duplicate index name `pytorch`
+      cause: duplicate index name `pytorch`
+       --> pyproject.toml:8:9
+        |
+      8 |         [[tool.uv.index]]
+        |         ^^^^^^^^^^^^^^^^^
     ");
 
     Ok(())
@@ -25750,11 +25750,11 @@ fn lock_multiple_default_indexes() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to parse: `pyproject.toml`
-      cause: TOML parse error at line 8, column 9
-               |
-             8 |         [[tool.uv.index]]
-               |         ^^^^^^^^^^^^^^^^^
-             found multiple indexes with `default = true`; only one index may be marked as default
+      cause: found multiple indexes with `default = true`; only one index may be marked as default
+       --> pyproject.toml:8:9
+        |
+      8 |         [[tool.uv.index]]
+        |         ^^^^^^^^^^^^^^^^^
     ");
 
     Ok(())
@@ -28113,11 +28113,11 @@ fn lock_duplicate_sources() -> Result<()> {
       duplicate key
 
     error: Failed to parse: `pyproject.toml`
-      cause: TOML parse error at line 9, column 9
-               |
-             9 |         python-multipart = { url = "https://files.pythonhosted.org/packages/c0/3e/9fbfd74e7f5b54f653f7ca99d44ceb56e718846920162165061c4c22b71a/python_multipart-0.0.8-py3-none-any.whl" }
-               |         ^^^^^^^^^^^^^^^^
-             duplicate key
+      cause: duplicate key
+       --> pyproject.toml:9:9
+        |
+      9 |         python-multipart = { url = "https://files.pythonhosted.org/packages/c0/3e/9fbfd74e7f5b54f653f7ca99d44ceb56e718846920162165061c4c22b71a/python_multipart-0.0.8-py3-none-any.whl" }
+        |         ^^^^^^^^^^^^^^^^
     "#);
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -28138,11 +28138,11 @@ fn lock_duplicate_sources() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to parse: `pyproject.toml`
-      cause: TOML parse error at line 7, column 9
-               |
-             7 |         [tool.uv.sources]
-               |         ^^^^^^^^^^^^^^^^^
-             duplicate sources for package `python-multipart`
+      cause: duplicate sources for package `python-multipart`
+       --> pyproject.toml:7:9
+        |
+      7 |         [tool.uv.sources]
+        |         ^^^^^^^^^^^^^^^^^
     ");
 
     Ok(())
@@ -28210,11 +28210,11 @@ fn lock_missing_name() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to parse: `pyproject.toml`
-      cause: TOML parse error at line 1, column 1
-               |
-             1 | [project]
-               | ^^^^^^^^^
-             `pyproject.toml` is using the `[project]` table, but the required `project.name` field is not set
+      cause: `pyproject.toml` is using the `[project]` table, but the required `project.name` field is not set
+       --> pyproject.toml:1:1
+        |
+      1 | [project]
+        | ^^^^^^^^^
     ");
 
     Ok(())
@@ -28239,11 +28239,11 @@ fn lock_missing_version() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to parse: `pyproject.toml`
-      cause: TOML parse error at line 1, column 1
-               |
-             1 | [project]
-               | ^^^^^^^^^
-             `pyproject.toml` is using the `[project]` table, but the required `project.version` field is neither set nor present in the `project.dynamic` list
+      cause: `pyproject.toml` is using the `[project]` table, but the required `project.version` field is neither set nor present in the `project.dynamic` list
+       --> pyproject.toml:1:1
+        |
+      1 | [project]
+        | ^^^^^^^^^
     ");
 
     Ok(())
@@ -31098,11 +31098,11 @@ fn lock_group_invalid_entry_group_name() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to parse: `pyproject.toml`
-      cause: TOML parse error at line 9, column 16
-               |
-             9 |         foo = [{include-group = "invalid!"}]
-               |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-             Not a valid package or extra name: "invalid!". Names must start and end with a letter or digit and may only contain -, _, ., and alphanumeric characters.
+      cause: Not a valid package or extra name: "invalid!". Names must start and end with a letter or digit and may only contain -, _, ., and alphanumeric characters.
+       --> pyproject.toml:9:16
+        |
+      9 |         foo = [{include-group = "invalid!"}]
+        |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
     "#);
 
     Ok(())
@@ -31132,11 +31132,11 @@ fn lock_group_invalid_duplicate_group_name() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to parse: `pyproject.toml`
-      cause: TOML parse error at line 8, column 9
-               |
-             8 |         [dependency-groups]
-               |         ^^^^^^^^^^^^^^^^^^^
-             duplicate dependency group: `foo-bar`
+      cause: duplicate dependency group: `foo-bar`
+       --> pyproject.toml:8:9
+        |
+      8 |         [dependency-groups]
+        |         ^^^^^^^^^^^^^^^^^^^
     ");
 
     Ok(())
@@ -31224,11 +31224,11 @@ fn lock_group_invalid_entry_type() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to parse: `pyproject.toml`
-      cause: TOML parse error at line 9, column 33
-               |
-             9 |         foo = [{include-group = true}]
-               |                                 ^^^^
-             invalid type: boolean `true`, expected a string
+      cause: invalid type: boolean `true`, expected a string
+       --> pyproject.toml:9:33
+        |
+      9 |         foo = [{include-group = true}]
+        |                                 ^^^^
     ");
 
     Ok(())
@@ -31257,11 +31257,11 @@ fn lock_group_empty_entry_table() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to parse: `pyproject.toml`
-      cause: TOML parse error at line 9, column 16
-               |
-             9 |         foo = [{}]
-               |                ^^
-             missing field `include-group`
+      cause: missing field `include-group`
+       --> pyproject.toml:9:16
+        |
+      9 |         foo = [{}]
+        |                ^^
     ");
 
     Ok(())
@@ -41162,11 +41162,11 @@ async fn lock_check_multiple_default_indexes_explicit_assignment_dependency_grou
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to parse: `pyproject.toml`
-      cause: TOML parse error at line 13, column 9
-                |
-             13 |         [[tool.uv.index]]
-                |         ^^^^^^^^^^^^^^^^^
-             found multiple indexes with `default = true`; only one index may be marked as default
+      cause: found multiple indexes with `default = true`; only one index may be marked as default
+        --> pyproject.toml:13:9
+         |
+      13 |         [[tool.uv.index]]
+         |         ^^^^^^^^^^^^^^^^^
     ");
 
     Ok(())

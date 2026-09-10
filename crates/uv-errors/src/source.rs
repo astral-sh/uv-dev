@@ -31,15 +31,14 @@ impl SourceFile {
     ///
     /// The excerpt must start at a line boundary, and annotation ranges must be relative to the
     /// excerpt. An invalid line number causes the renderer to show only the source name.
-    #[cfg(test)]
     #[must_use]
-    fn with_line_start(mut self, line_start: usize) -> Self {
+    pub fn with_line_start(mut self, line_start: usize) -> Self {
         self.line_start = line_start;
         self
     }
 
     /// The user-facing source name.
-    fn name(&self) -> &str {
+    pub fn name(&self) -> &str {
         &self.name
     }
 
@@ -148,9 +147,8 @@ impl<'a> SourceSnippet<'a> {
     }
 
     /// Opt in to showing this many surrounding lines for each annotation.
-    #[cfg(test)]
     #[must_use]
-    fn with_context_lines(mut self, context_lines: usize) -> Self {
+    pub fn with_context_lines(mut self, context_lines: usize) -> Self {
         self.context_lines = context_lines;
         self
     }

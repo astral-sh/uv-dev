@@ -60,6 +60,8 @@ fn diagnostic_for_error<'a>(error: &'a (dyn Error + 'static)) -> Option<Diagnost
     }
     uv_publish::diagnostic_for_error(error)
         .or_else(|| uv_requirements_txt::diagnostic_for_error(error))
+        .or_else(|| uv_settings::diagnostic_for_error(error))
+        .or_else(|| uv_workspace::pyproject::diagnostic_for_error(error))
 }
 
 /// Walk an error chain and collect hint strings from all known error types.
@@ -259,12 +261,17 @@ fn format_chain(name: &PackageName, version: Option<&Version>, chain: &Derivatio
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error;
+
+    use assert_fs::prelude::*;
     use insta::{assert_debug_snapshot, assert_snapshot};
     use reqwest::StatusCode;
 
     use uv_errors::{ErrorOptions, Hints, write_error_chain_with_options};
+    use uv_fs::Simplified;
     use uv_publish::PublishSendError;
-    use uv_workspace::pyproject::{PyprojectTomlError, SourceError};
+    use uv_settings::FilesystemOptions;
+    use uv_workspace::pyproject::{PyProjectToml, PyprojectTomlError, SourceError};
 
     use super::{diagnostic_for_error, hints_for_error};
     use crate::commands::pip;
@@ -290,6 +297,62 @@ mod tests {
             | Use /upload/ instead.
         ");
         Ok(())
+    }
+
+    #[test]
+    fn settings_parse_error_retains_source() -> anyhow::Result<()> {
+        let file = assert_fs::NamedTempFile::new("uv.toml")?;
+        file.write_str(indoc::indoc! {r#"
+            index-url = "https://user:first-secret@example.com/simple"
+            preview-features = 123
+            publish-url = "https://user:second-secret@example.com/legacy/"
+        "#})?;
+        let error = FilesystemOptions::from_file(file.path())
+            .expect_err("invalid preview setting in test input");
+        assert!(
+            error
+                .source()
+                .expect("settings retain the original TOML cause")
+                .is::<Box<toml::de::Error>>()
+        );
+
+        // Rendering must use the input that failed, not a later version of the file.
+        file.write_str("preview-features = []\n")?;
+        let mut output = String::new();
+        write_error_chain_with_options(
+            &error,
+            &Hints::none(),
+            ErrorOptions::default()
+                .with_diagnostic(diagnostic_for_error)
+                .with_stream(&mut output),
+        )?;
+        let output = anstream::adapter::strip_str(&output);
+        let display_path = regex::escape(&file.path().user_display().to_string());
+        let source_path = regex::escape(&file.path().portable_display().to_string());
+        let filters = [
+            (display_path.as_str(), "[CONFIG]"),
+            (source_path.as_str(), "[CONFIG]"),
+        ];
+        insta::with_settings!({ filters => filters }, {
+            assert_snapshot!(output, @"
+            error: Failed to parse: `[CONFIG]`
+              cause: invalid type: integer `123`, expected a boolean or a list of preview feature names
+               --> [CONFIG]:2:20
+                |
+              2 | preview-features = 123
+                |                    ^^^
+            ");
+        });
+        Ok(())
+    }
+
+    #[test]
+    fn resolves_toml_diagnostics_through_boxed_errors() {
+        let error = PyProjectToml::from_string("[project]\n".to_owned(), "pyproject.toml")
+            .expect_err("missing project name in test input");
+        assert!(error.source().is_none());
+        assert!(diagnostic_for_error(&error).is_some());
+        assert!(diagnostic_for_error(&Box::new(error)).is_some());
     }
 
     #[test]
