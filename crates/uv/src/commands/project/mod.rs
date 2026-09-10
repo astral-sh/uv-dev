@@ -3262,7 +3262,7 @@ pub(crate) fn detect_conflicts(
                 continue;
             }
             let is_conflicting = match item.kind() {
-                ConflictKind::Project => groups.prod(),
+                ConflictKind::Project => groups.includes_non_group_dependencies(),
                 ConflictKind::Extra(extra) => extras.contains(extra),
                 ConflictKind::Group(group1) => groups.contains(group1),
             };

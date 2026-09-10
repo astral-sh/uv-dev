@@ -140,7 +140,7 @@ impl<'env> TreeDisplay<'env> {
             // Add an edge from the root.
             graph.add_edge(root, index, Edge::Prod(None, UniversalMarker::TRUE));
 
-            if groups.prod() {
+            if groups.includes_non_group_dependencies() {
                 // Push its dependencies on the queue.
                 if seen.insert((package_index, None)) {
                     queue.push_back((package_index, None));
@@ -518,7 +518,7 @@ impl<'env> TreeDisplay<'env> {
             depth,
             no_dedupe,
             invert,
-            prod: groups.prod(),
+            prod: groups.includes_non_group_dependencies(),
             groups: groups.clone(),
             lock,
             show_sizes,

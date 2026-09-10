@@ -1840,7 +1840,7 @@ impl Lock {
             if seen.insert((index, None)) {
                 queue.push_back((index, None));
             }
-            if groups.prod() {
+            if groups.includes_non_group_dependencies() {
                 for extra in extras.extra_names(package.optional_dependencies.keys()) {
                     if seen.insert((index, Some(extra))) {
                         queue.push_back((index, Some(extra)));
@@ -1932,7 +1932,7 @@ impl Lock {
                     .get(extra)
                     .map(Vec::as_slice)
                     .unwrap_or_default(),
-                None if is_member && !groups.prod() => &[],
+                None if is_member && !groups.includes_non_group_dependencies() => &[],
                 None => &package.dependencies,
             };
 
