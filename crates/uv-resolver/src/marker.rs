@@ -14,8 +14,10 @@ pub(crate) fn requires_python(tree: MarkerTree) -> Option<RequiresPythonRange> {
 
     /// Collect the Python version markers from the tree.
     ///
-    /// Specifically, performs a DFS to collect all Python requirements on the path to every
-    /// `MarkerTreeKind::True` node.
+    /// Specifically, performs a DFS to collect the Python version range for every path to a
+    /// [`MarkerTreeKind::True`] node. The ordered decision diagram has at most one
+    /// [`CanonicalMarkerValueVersion::PythonFullVersion`] node on each path, so its edge range
+    /// replaces the unconstrained [`Ranges::full()`] default without requiring an intersection.
     fn collect_python_markers(tree: MarkerTree, markers: &mut Markers, range: &Ranges<Version>) {
         match tree.kind() {
             MarkerTreeKind::True => {
@@ -79,7 +81,7 @@ pub(crate) fn requires_python(tree: MarkerTree) -> Option<RequiresPythonRange> {
         return None;
     }
 
-    // Take the union of the intersections of the Python version markers.
+    // Take the union of the Python version ranges from all satisfying paths.
     let range = markers
         .into_iter()
         .fold(Ranges::empty(), |acc: Ranges<Version>, range| {
