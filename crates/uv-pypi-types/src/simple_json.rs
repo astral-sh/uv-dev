@@ -61,13 +61,20 @@ enum FileField {
 
 type RequiresPythonResult = Result<Arc<VersionSpecifiers>, VersionSpecifiersParseError>;
 
+/// A response-scoped cache of leniently parsed `requires-python` specifiers.
+///
+/// Repeated input strings share successful [`VersionSpecifiers`] values and retain parse errors.
 #[derive(Default)]
-struct RequiresPythonInterner {
+pub struct RequiresPythonInterner {
     values: FxHashMap<SmallString, RequiresPythonResult>,
 }
 
 impl RequiresPythonInterner {
-    fn parse(&mut self, value: &str) -> RequiresPythonResult {
+    /// Parse a specifier string once per response and reuse the result.
+    pub fn parse(
+        &mut self,
+        value: &str,
+    ) -> Result<Arc<VersionSpecifiers>, VersionSpecifiersParseError> {
         if let Some(requires_python) = self.values.get(value) {
             return requires_python.clone();
         }
@@ -901,5 +908,88 @@ impl PypiSimpleIndex {
     /// Return the project names in the index.
     pub fn into_project_names(self) -> Vec<PackageName> {
         self.projects.into_iter().map(|entry| entry.name).collect()
+    }
+}
+
+#[cfg(test)]
+mod requires_python_tests {
+    use std::sync::Arc;
+
+    use super::RequiresPythonInterner;
+    use crate::PypiSimpleDetail;
+
+    #[test]
+    fn requires_python_interner_preserves_exact_inputs() -> anyhow::Result<()> {
+        let mut interner = RequiresPythonInterner::default();
+        let first = interner.parse(">=3.8")?;
+        let repeated = interner.parse(">=3.8")?;
+        let equivalent = interner.parse(">= 3.8")?;
+
+        assert!(Arc::ptr_eq(&first, &repeated));
+        assert_eq!(first, equivalent);
+        assert!(!Arc::ptr_eq(&first, &equivalent));
+
+        let invalid = "not a version specifier";
+        let error = interner.parse(invalid).expect_err("invalid specifier");
+        assert_eq!(interner.parse(invalid), Err(error.clone()));
+        assert_eq!(interner.values.get(invalid), Some(&Err(error)));
+        assert_eq!(interner.values.len(), 3);
+
+        let separate = RequiresPythonInterner::default().parse(">=3.8")?;
+        assert_eq!(first, separate);
+        assert!(!Arc::ptr_eq(&first, &separate));
+        Ok(())
+    }
+
+    #[test]
+    fn simple_json_interns_requires_python_per_response() -> anyhow::Result<()> {
+        let response = serde_json::json!({
+            "files": [
+                {"filename": "a.whl", "url": "a.whl", "hashes": {}, "requires-python": ">=3.8"},
+                {"filename": "b.whl", "url": "b.whl", "hashes": {}, "requires-python": ">=3.8"},
+                {"filename": "c.whl", "url": "c.whl", "hashes": {}, "requires-python": ">= 3.8"},
+                {"filename": "d.whl", "url": "d.whl", "hashes": {}, "requires-python": "not a version specifier"},
+                {"filename": "e.whl", "url": "e.whl", "hashes": {}, "requires-python": "not a version specifier"},
+                {"filename": "f.whl", "url": "f.whl", "hashes": {}, "requires-python": null},
+                {"filename": "g.whl", "url": "g.whl", "hashes": {}}
+            ]
+        });
+        let parsed: PypiSimpleDetail = serde_json::from_value(response.clone())?;
+        let [
+            first,
+            repeated,
+            equivalent,
+            invalid,
+            invalid_repeated,
+            null,
+            absent,
+        ] = parsed.files.as_slice()
+        else {
+            anyhow::bail!("expected seven files");
+        };
+        let Some(Ok(first)) = &first.requires_python else {
+            anyhow::bail!("expected a valid specifier");
+        };
+        let Some(Ok(repeated)) = &repeated.requires_python else {
+            anyhow::bail!("expected a repeated specifier");
+        };
+        let Some(Ok(equivalent)) = &equivalent.requires_python else {
+            anyhow::bail!("expected an equivalent specifier");
+        };
+        assert!(Arc::ptr_eq(first, repeated));
+        assert_eq!(first, equivalent);
+        assert!(!Arc::ptr_eq(first, equivalent));
+        assert!(invalid.requires_python.as_ref().is_some_and(Result::is_err));
+        assert_eq!(invalid.requires_python, invalid_repeated.requires_python);
+        assert!(null.requires_python.is_none());
+        assert!(absent.requires_python.is_none());
+
+        let separate: PypiSimpleDetail = serde_json::from_value(response)?;
+        let Some(Ok(separate)) = &separate.files[0].requires_python else {
+            anyhow::bail!("expected a valid specifier in the second response");
+        };
+        assert_eq!(first, separate);
+        assert!(!Arc::ptr_eq(first, separate));
+        Ok(())
     }
 }
