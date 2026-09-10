@@ -146,29 +146,7 @@ pub fn read_archive_metadata(
     filename: &WheelFilename,
     reader: impl std::io::BufRead + std::io::Seek + Unpin,
 ) -> Result<Vec<u8>, Error> {
-    block_on(async {
-        let mut zip_reader =
-            async_zip::base::read::seek::ZipFileReader::new(AllowStdIo::new(reader)).await?;
-
-        let (metadata_index, _dist_info_prefix) = find_archive_dist_info(
-            filename,
-            zip_reader
-                .file()
-                .entries()
-                .iter()
-                .enumerate()
-                .filter_map(|(index, entry)| Some((index, entry.filename().as_str().ok()?))),
-        )?;
-
-        let mut buffer = Vec::new();
-        zip_reader
-            .reader_with_entry(metadata_index)
-            .await?
-            .read_to_end_checked(&mut buffer)
-            .await?;
-
-        Ok(buffer)
-    })
+    block_on(read_metadata_seek(filename, AllowStdIo::new(reader)))
 }
 
 /// Find the `.dist-info` directory in an unzipped wheel.
@@ -224,6 +202,33 @@ fn read_dist_info_metadata(
         .as_ref()
         .join(format!("{dist_info_prefix}.dist-info/METADATA"));
     fs_err::read(metadata_file).map_err(Error::Io)
+}
+
+async fn read_metadata_seek(
+    filename: &WheelFilename,
+    reader: impl futures::AsyncBufRead + futures::AsyncSeek + Unpin,
+) -> Result<Vec<u8>, Error> {
+    let mut zip_reader = async_zip::base::read::seek::ZipFileReader::new(reader).await?;
+
+    let (metadata_idx, _dist_info_prefix) = find_archive_dist_info(
+        filename,
+        zip_reader
+            .file()
+            .entries()
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entry)| Some((index, entry.filename().as_str().ok()?))),
+    )?;
+
+    // Read the contents of the `METADATA` file.
+    let mut contents = Vec::new();
+    zip_reader
+        .reader_with_entry(metadata_idx)
+        .await?
+        .read_to_end_checked(&mut contents)
+        .await?;
+
+    Ok(contents)
 }
 
 /// Read and parse a wheel's `METADATA` file from a zip stream without seeking.
