@@ -19,7 +19,7 @@ use crate::lock::export::{ExportableRequirement, ExportableRequirements};
 use crate::lock::{Package, PackageId, Source};
 use crate::{Installable, LockError};
 
-/// An export of a [`Lock`] that renders in `requirements.txt` format.
+/// An export of a [`crate::Lock`] that renders in `requirements.txt` format.
 #[derive(Debug)]
 pub struct RequirementsTxtExport<'lock> {
     nodes: Vec<ExportableRequirement<'lock>>,
