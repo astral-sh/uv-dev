@@ -1,0 +1,15 @@
+name: Windows four-shard samples
+
+on:
+  push:
+    branches: ["zb/ci-speed-shards-candidate-20260909-*"]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    uses: astral-sh/uv-dev/.github/workflows/test.yml@8e9014571767c4c8299fc7531e1d3cab9a135186
+    with:
+      save-rust-cache: "true"
+      test-macos: "false"
