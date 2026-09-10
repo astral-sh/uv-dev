@@ -3,6 +3,8 @@
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 use uv_test::pypi_proxy;
 
+#[cfg(feature = "test-python")]
+mod dependency_groups;
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod direct_url_hashes;
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
