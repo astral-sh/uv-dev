@@ -159,16 +159,12 @@ pub struct BuildBackendSettings {
     ///   files.
     /// - `purelib` and `platlib`: Installed to the `site-packages` directory. It is not recommended
     ///   to use these two options.
-    // TODO(konsti): We should show a flat example instead.
-    // ```toml
-    // [tool.uv.build-backend.data]
-    // headers = "include/headers",
-    // scripts = "bin"
-    // ```
     #[option(
         default = r#"{}"#,
         value_type = "dict[str, str]",
-        example = r#"data = { headers = "include/headers", scripts = "bin" }"#
+        scope = "data",
+        example = r#"headers = "include/headers"
+scripts = "bin""#
     )]
     pub(crate) data: WheelDataIncludes,
 }
