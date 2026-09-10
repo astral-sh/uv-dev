@@ -1051,7 +1051,8 @@ impl Lock {
             });
 
             if let Some(index) = dist.index()
-                && let Some(route) = index_locations.proxy_route_for(index)
+                && let route = index_locations.route_for(index)
+                && route.is_proxy()
                 && let Some(filename) = package
                     .wheels
                     .iter()

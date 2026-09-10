@@ -765,9 +765,10 @@ impl<'lock> PylockToml {
             return Ok(());
         }
 
-        let Some(route) = index_locations.proxy_route_for(index) else {
+        let route = index_locations.route_for(index);
+        if !route.is_proxy() {
             return Ok(());
-        };
+        }
 
         let mut physical = route.effective_url().url().clone();
         physical.remove_credentials();

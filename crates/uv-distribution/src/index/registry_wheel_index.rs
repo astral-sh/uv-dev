@@ -131,7 +131,7 @@ impl<'a> RegistryWheelIndex<'a> {
         no_binary: bool,
     ) -> Option<&CachedRegistryDist> {
         let wheel = distribution.best_wheel();
-        let is_proxy = self.index_locations.proxy_route_for(&wheel.index).is_some();
+        let is_proxy = self.index_locations.route_for(&wheel.index).is_proxy();
 
         self.get(&wheel.filename.name).find_map(|entry| {
             if !entry.matches_wheel(&wheel.index, &wheel.filename, no_build, no_binary) {
@@ -161,10 +161,7 @@ impl<'a> RegistryWheelIndex<'a> {
         no_build: bool,
         no_binary: bool,
     ) -> Option<&CachedRegistryDist> {
-        let is_proxy = self
-            .index_locations
-            .proxy_route_for(&source.index)
-            .is_some();
+        let is_proxy = self.index_locations.route_for(&source.index).is_proxy();
 
         self.get(&source.name).find_map(|entry| {
             if !entry.matches_source(
@@ -243,8 +240,9 @@ impl<'a> RegistryWheelIndex<'a> {
                 continue;
             }
 
+            let route = index_locations.route_for(index.url());
             let index_url = match index.format {
-                IndexFormat::Simple => index_locations.effective_url(index.url()),
+                IndexFormat::Simple => route.effective_url(),
                 IndexFormat::Flat => index.url(),
             };
 

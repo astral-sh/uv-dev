@@ -1335,7 +1335,12 @@ impl PubGrubReportFormatter<'_> {
 
         for index in index_locations.allowed_indexes() {
             indexes
-                .entry(index_locations.effective_url(&index.url).clone())
+                .entry(
+                    index_locations
+                        .route_for(&index.url)
+                        .effective_url()
+                        .clone(),
+                )
                 .or_default();
         }
         for route in index_locations.proxy_routes() {
@@ -1344,7 +1349,7 @@ impl PubGrubReportFormatter<'_> {
 
         for canonical in available_indexes.values().flatten() {
             if let Some(any_successful_response) =
-                indexes.get_mut(index_locations.effective_url(canonical))
+                indexes.get_mut(index_locations.route_for(canonical).effective_url())
             {
                 *any_successful_response = true;
             }
@@ -2926,9 +2931,14 @@ mod tests {
         )?;
 
         assert_eq!(index_locations.proxy_routes().count(), 2);
-        assert_eq!(index_locations.effective_url(&first_canonical), &physical);
         assert_eq!(
-            index_locations.effective_url(&redacted_second_canonical),
+            index_locations.route_for(&first_canonical).effective_url(),
+            &physical
+        );
+        assert_eq!(
+            index_locations
+                .route_for(&redacted_second_canonical)
+                .effective_url(),
             &physical
         );
 
