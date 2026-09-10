@@ -30,6 +30,7 @@ use uv_pypi_types::Scheme;
 use uv_python::PythonEnvironment;
 use uv_resolver::{
     Exclusions, Lock, Manifest, Preference, Preferences, ResolverEnvironment, ResolverManifest,
+    ResolverOutput,
 };
 
 const MANY_FILES_WHEEL_FILENAME: &str = "manyfiles-0.0.0-py3-none-any.whl";
@@ -339,6 +340,14 @@ fn resolve_warm_jupyter_universal(c: &mut Criterion<WallTime>) {
 }
 
 fn resolve_warm_jupyter_incremental_universal(c: &mut Criterion<WallTime>) {
+    let (previous_requirements, requirements) = jupyter_incremental_requirements();
+    let run = setup(requirements, true, Some(previous_requirements));
+    c.bench_function("resolve_warm_jupyter_incremental_universal", |b| {
+        b.iter(&run);
+    });
+}
+
+fn jupyter_incremental_requirements() -> (Vec<Requirement>, Vec<Requirement>) {
     let previous_requirements = vec![
         Requirement::from(uv_pep508::Requirement::from_str("jupyter==1.0.0").unwrap()),
         Requirement::from(uv_pep508::Requirement::from_str("notebook==7.0.7").unwrap()),
@@ -347,9 +356,65 @@ fn resolve_warm_jupyter_incremental_universal(c: &mut Criterion<WallTime>) {
         Requirement::from(uv_pep508::Requirement::from_str("jupyter==1.0.0").unwrap()),
         Requirement::from(uv_pep508::Requirement::from_str("notebook==7.0.8").unwrap()),
     ];
-    let run = setup(requirements, true, Some(previous_requirements));
-    c.bench_function("resolve_warm_jupyter_incremental_universal", |b| {
-        b.iter(&run);
+    (previous_requirements, requirements)
+}
+
+fn lock_from_resolution_jupyter_universal(c: &mut Criterion<WallTime>) {
+    let (previous_requirements, requirements) = jupyter_incremental_requirements();
+    let root = Path::new("../..");
+    let manifest = ResolverManifest::new([], requirements.clone(), [], [], [], [], [], [])
+        .relative_to(root)
+        .expect("failed to create the lockfile manifest");
+    let index_locations = IndexLocations::default();
+
+    // Resolve once, outside timing, using the metadata-only universal workload. The benchmark
+    // measures the real post-resolution lockfile construction and serialization paths.
+    let resolve = setup_resolution(requirements, true, Some(previous_requirements));
+    let resolution = resolve();
+    assert!(!resolution.is_empty(), "the resolution must have packages");
+
+    let lock = Lock::from_resolution(
+        &resolution,
+        manifest.clone(),
+        root,
+        vec![],
+        &index_locations,
+    )
+    .expect("failed to construct the benchmark lockfile");
+    assert!(lock.len() > 50, "expected a large Jupyter lockfile");
+    assert!(lock.packages().iter().any(|package| {
+        package.name().as_str() == "notebook"
+            && package
+                .version()
+                .is_some_and(|version| version.to_string() == "7.0.8")
+    }));
+    let contents = lock
+        .to_toml()
+        .expect("failed to serialize the benchmark lockfile");
+    assert_eq!(
+        Lock::from_toml(&contents).expect("failed to parse the benchmark lockfile"),
+        lock,
+    );
+
+    c.bench_function("lock_from_resolution_jupyter_universal", |b| {
+        b.iter_batched(
+            || manifest.clone(),
+            |manifest| {
+                let lock = Lock::from_resolution(
+                    black_box(&resolution),
+                    manifest,
+                    root,
+                    vec![],
+                    &index_locations,
+                )
+                .expect("failed to construct the benchmark lockfile");
+                let contents = lock
+                    .to_toml()
+                    .expect("failed to serialize the benchmark lockfile");
+                black_box((lock, contents));
+            },
+            BatchSize::SmallInput,
+        );
     });
 }
 
@@ -395,6 +460,7 @@ criterion_group! {
         resolve_warm_jupyter,
         resolve_warm_jupyter_universal,
         resolve_warm_jupyter_incremental_universal,
+        lock_from_resolution_jupyter_universal,
         resolve_warm_airflow
 }
 criterion_main!(uv);
@@ -404,6 +470,17 @@ fn setup(
     universal: bool,
     previous_requirements: Option<Vec<Requirement>>,
 ) -> impl Fn() {
+    let run = setup_resolution(requirements, universal, previous_requirements);
+    move || {
+        run();
+    }
+}
+
+fn setup_resolution(
+    requirements: Vec<Requirement>,
+    universal: bool,
+    previous_requirements: Option<Vec<Requirement>>,
+) -> impl Fn() -> ResolverOutput {
     let runtime = tokio::runtime::Builder::new_current_thread()
         // CodSpeed limits the total number of threads to 500
         .max_blocking_threads(256)
@@ -534,7 +611,7 @@ fn setup(
                 &interpreter,
                 &policy,
             ))
-            .unwrap();
+            .unwrap()
     }
 }
 
