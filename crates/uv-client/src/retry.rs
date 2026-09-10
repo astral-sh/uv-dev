@@ -17,7 +17,7 @@ use uv_redacted::DisplaySafeUrl;
 
 use crate::WrappedReqwestError;
 
-/// An extension over [`DefaultRetryableStrategy`] that logs transient request failures and
+/// An extension over [`reqwest_retry::DefaultRetryableStrategy`] that logs transient request failures and
 /// adds additional retry cases.
 pub(crate) struct UvRetryableStrategy;
 
@@ -141,7 +141,7 @@ impl RetryState {
 
 /// Whether the error looks like a network error that should be retried.
 ///
-/// This is an extension over [`reqwest_middleware::default_on_request_failure`], which is missing
+/// This is an extension over [`reqwest_retry::default_on_request_failure`], which is missing
 /// a number of cases:
 /// * Inside the reqwest or reqwest-middleware error is an `io::Error` such as a broken pipe
 /// * When streaming a response, a reqwest error may be hidden several layers behind errors
@@ -247,7 +247,7 @@ pub fn retryable_on_request_failure(err: &(dyn Error + 'static)) -> Option<Retry
 
 /// An error type that supports URL-fallback and exponential-backoff retry logic.
 ///
-/// Used by [`fetch_with_url_fallback`] to drive the retry loop without knowing the concrete error
+/// Used by [`crate::fetch_with_url_fallback`] to drive the retry loop without knowing the concrete error
 /// type.
 pub trait RetriableError: std::error::Error + Sized + 'static {
     /// Returns `true` if an alternative URL should be tried immediately (without backoff).
