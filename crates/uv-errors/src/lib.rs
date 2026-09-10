@@ -391,8 +391,12 @@ pub fn write_error_chain_with_options<C: DynColor + Copy, W: fmt::Write>(
         write_info(&mut stream, &diagnostic.info, width)?;
     }
 
+    let mut source_override = main_diagnostic.and_then(|diagnostic| diagnostic.source);
     for source in iter::successors(err.source(), |&err| err.source()) {
-        let source_diagnostic = diagnostic.and_then(|diagnostic| diagnostic(source));
+        let source_diagnostic = source_override
+            .take()
+            .map(|diagnostic| *diagnostic)
+            .or_else(|| diagnostic.and_then(|diagnostic| diagnostic(source)));
         let msg = source_diagnostic
             .as_ref()
             .and_then(|diagnostic| diagnostic.message.as_deref())
@@ -421,6 +425,7 @@ pub fn write_error_chain_with_options<C: DynColor + Copy, W: fmt::Write>(
         if let Some(diagnostic) = &source_diagnostic {
             write_info(&mut stream, &diagnostic.info, width)?;
         }
+        source_override = source_diagnostic.and_then(|diagnostic| diagnostic.source);
     }
 
     for hint in hints {
@@ -1021,6 +1026,58 @@ mod tests {
             |     indented
             | \u{1b}[31mred\u{1b}[0m
             | \u{1b}]8;;https://example.com\u{7}link\u{85}\u{202e}text\u{2029}\rrewritten
+        ");
+    }
+
+    #[test]
+    fn format_source_diagnostic_overrides() {
+        #[derive(Debug, thiserror::Error)]
+        #[error("Outer error")]
+        struct Outer(#[source] Middle);
+
+        #[derive(Debug, thiserror::Error)]
+        #[error("Middle error")]
+        struct Middle(#[source] Inner);
+
+        #[derive(Debug, thiserror::Error)]
+        #[error("Inner error")]
+        struct Inner(#[source] HttpError);
+
+        let error = Outer(Middle(Inner(HttpError)));
+        let mut output = String::new();
+        write_error_chain_with_options(
+            &error,
+            &Hints::none(),
+            ErrorOptions::default()
+                .with_diagnostic(|error| {
+                    if error.is::<Outer>() {
+                        Some(
+                            Diagnostic::default().with_source(
+                                Diagnostic::default()
+                                    .with_info(Info::new("Context from the outer error"))
+                                    .with_source(Diagnostic::new("Explicit inner message")),
+                            ),
+                        )
+                    } else if error.is::<Middle>() || error.is::<Inner>() {
+                        Some(Diagnostic::new("Ordinary callback message"))
+                    } else if error.is::<HttpError>() {
+                        Some(
+                            Diagnostic::new("Resolved HTTP error")
+                                .with_source(Diagnostic::new("Not an actual source")),
+                        )
+                    } else {
+                        None
+                    }
+                })
+                .with_stream(&mut output),
+        )
+        .unwrap();
+        assert_snapshot!(anstream::adapter::strip_str(&output), @"
+        error: Outer error
+          cause: Middle error
+          info: Context from the outer error
+          cause: Explicit inner message
+          cause: Resolved HTTP error
         ");
     }
 }
