@@ -57,6 +57,26 @@ impl std::fmt::Display for KeyringProviderBackend {
     }
 }
 
+/// Return the unprefixed native keyring service name used to store and remove credentials.
+fn native_service_name(url: &DisplaySafeUrl) -> String {
+    let url = url.without_credentials();
+    if let Some(host) = url.host_str().filter(|_| !url.path().is_empty()) {
+        let mut target = String::new();
+        if url.scheme() != "https" {
+            target.push_str(url.scheme());
+            target.push_str("://");
+        }
+        target.push_str(host);
+        if let Some(port) = url.port() {
+            target.push(':');
+            target.push_str(&port.to_string());
+        }
+        target
+    } else {
+        url.to_string()
+    }
+}
+
 impl KeyringProvider {
     /// Create a new [`KeyringProvider::Native`].
     pub(crate) fn native() -> Self {
@@ -90,25 +110,7 @@ impl KeyringProvider {
             return Ok(false);
         };
 
-        // Ensure we strip credentials from the URL before storing
-        let url = url.without_credentials();
-
-        // If there's no path, we'll perform a host-level login
-        let target = if let Some(host) = url.host_str().filter(|_| !url.path().is_empty()) {
-            let mut target = String::new();
-            if url.scheme() != "https" {
-                target.push_str(url.scheme());
-                target.push_str("://");
-            }
-            target.push_str(host);
-            if let Some(port) = url.port() {
-                target.push(':');
-                target.push_str(&port.to_string());
-            }
-            target
-        } else {
-            url.to_string()
-        };
+        let target = native_service_name(url);
 
         match &self.backend {
             KeyringProviderBackend::Native => {
@@ -140,25 +142,7 @@ impl KeyringProvider {
     /// Only the native keyring provider is supported at this time.
     #[instrument(skip_all, fields(url = % url.to_string(), username))]
     pub async fn remove(&self, url: &DisplaySafeUrl, username: &str) -> Result<(), Error> {
-        // Ensure we strip credentials from the URL before storing
-        let url = url.without_credentials();
-
-        // If there's no path, we'll perform a host-level login
-        let target = if let Some(host) = url.host_str().filter(|_| !url.path().is_empty()) {
-            let mut target = String::new();
-            if url.scheme() != "https" {
-                target.push_str(url.scheme());
-                target.push_str("://");
-            }
-            target.push_str(host);
-            if let Some(port) = url.port() {
-                target.push(':');
-                target.push_str(&port.to_string());
-            }
-            target
-        } else {
-            url.to_string()
-        };
+        let target = native_service_name(url);
 
         match &self.backend {
             KeyringProviderBackend::Native => {
@@ -423,7 +407,81 @@ impl KeyringProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::error::Error as StdError;
     use url::Url;
+    use uv_redacted::DisplaySafeUrlError;
+
+    #[test]
+    fn native_service_name_preserves_existing_spelling() -> Result<(), DisplaySafeUrlError> {
+        for (url, expected) in [
+            ("https://example.invalid", "example.invalid"),
+            ("https://example.invalid:443/simple", "example.invalid"),
+            (
+                "https://user:password@example.invalid:8443/simple?query#fragment",
+                "example.invalid:8443",
+            ),
+            ("http://example.invalid", "http://example.invalid"),
+            ("http://example.invalid:80/simple", "http://example.invalid"),
+            (
+                "http://user:password@example.invalid:8080/simple",
+                "http://example.invalid:8080",
+            ),
+            ("https://[2001:db8::1]:8443/simple", "[2001:db8::1]:8443"),
+            (
+                "http://[2001:db8::1]:8080/simple",
+                "http://[2001:db8::1]:8080",
+            ),
+            ("ftp://example.invalid:21/simple", "ftp://example.invalid"),
+            (
+                "custom://user:password@example.invalid:1234?query#fragment",
+                "custom://example.invalid:1234?query#fragment",
+            ),
+            (
+                "custom://user:password@example.invalid:1234/simple?query#fragment",
+                "custom://example.invalid:1234",
+            ),
+            (
+                "ssh://git@example.invalid?query#fragment",
+                "ssh://git@example.invalid?query#fragment",
+            ),
+            (
+                "ssh://git:password@example.invalid?query#fragment",
+                "ssh://example.invalid?query#fragment",
+            ),
+            ("ssh://git@example.invalid/repo", "ssh://example.invalid"),
+            ("file:///keyring-fixture", "file:///keyring-fixture"),
+            ("mailto:user@example.invalid", "mailto:user@example.invalid"),
+        ] {
+            assert_eq!(native_service_name(&DisplaySafeUrl::parse(url)?), expected);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn native_service_name_preserves_backend_guards() -> Result<(), Box<dyn StdError>> {
+        let url = DisplaySafeUrl::parse("https://example.invalid/simple")?;
+        let keyring = KeyringProvider::subprocess();
+        for credentials in [
+            Credentials::basic(None, None),
+            Credentials::basic(None, Some("password".to_string())),
+            Credentials::basic(Some("user".to_string()), None),
+        ] {
+            assert!(!keyring.store(&url, &credentials).await?);
+        }
+
+        let credentials =
+            Credentials::basic(Some("user".to_string()), Some("password".to_string()));
+        let Err(Error::StoreUnsupported(provider)) = keyring.store(&url, &credentials).await else {
+            return Err("expected unsupported store".into());
+        };
+        assert_eq!(provider, "subprocess");
+
+        let Err(Error::RemoveUnsupported(provider)) = keyring.remove(&url, "user").await else {
+            return Err("expected unsupported removal".into());
+        };
+        assert_eq!(provider, "subprocess");
+        Ok(())
+    }
 
     #[tokio::test]
     #[cfg_attr(
