@@ -1,3 +1,5 @@
+#[cfg(unix)]
+use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::{FileTouch, PathChild};
 use assert_fs::{fixture::FileWriteStr, prelude::PathCreateDir};
@@ -702,6 +704,58 @@ fn python_find_unsupported_version() {
     ----- stderr -----
     error: Invalid version request: Python <3.13 does not support free-threading but 3.12+freethreaded was requested.
     ");
+}
+
+#[test]
+#[cfg(unix)]
+fn python_find_venv_symlink_cycle() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_python_names()
+        .with_filtered_virtualenv_bin();
+    let python = context.interpreter();
+    let python3 = python.with_file_name("python3");
+    fs_err::remove_file(&python)?;
+    fs_err::remove_file(&python3)?;
+    fs_err::os::unix::fs::symlink("python3", &python)?;
+    fs_err::os::unix::fs::symlink("python", &python3)?;
+
+    uv_snapshot!(context.filters(), context.python_find()
+        .env(EnvVars::VIRTUAL_ENV, context.venv.path()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to inspect Python interpreter from active virtual environment at `.venv/[BIN]/[PYTHON]`
+      Caused by: Python interpreter at `.venv/[BIN]/[PYTHON]` is part of a symlink cycle or exceeds the symlink limit
+    ");
+
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn python_find_venv_symlink_depth_limit() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_python_names()
+        .with_filtered_virtualenv_bin();
+    let python = context.interpreter();
+    let executable = fs_err::canonicalize(&python)?;
+    let links = context.temp_dir.child("links");
+    links.create_dir_all()?;
+    for index in 0..100 {
+        fs_err::os::unix::fs::symlink((index + 1).to_string(), links.join(index.to_string()))?;
+    }
+    fs_err::os::unix::fs::symlink(executable, links.join("100"))?;
+    fs_err::remove_file(&python)?;
+    fs_err::os::unix::fs::symlink(links.join("0"), &python)?;
+
+    uv_snapshot!(context.filters(), context.python_find()
+        .env(EnvVars::VIRTUAL_ENV, context.venv.path()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to inspect Python interpreter from active virtual environment at `.venv/[BIN]/[PYTHON]`
+      Caused by: Python interpreter at `.venv/[BIN]/[PYTHON]` is part of a symlink cycle or exceeds the symlink limit
+    ");
+
+    Ok(())
 }
 
 #[test]

@@ -734,6 +734,14 @@ pub fn canonicalize_executable(path: impl AsRef<Path>) -> std::io::Result<PathBu
     fs_err::canonicalize(path)
 }
 
+/// Whether an I/O error reports too many symlink traversals.
+#[cfg(unix)]
+fn is_filesystem_loop(err: &io::Error) -> bool {
+    // `ErrorKind::FilesystemLoop` is unstable. Comparing error kinds also handles errors wrapped
+    // by `fs-err`, which do not expose the underlying raw OS error code.
+    err.kind() == io::Error::from_raw_os_error(libc::ELOOP).kind()
+}
+
 /// The `EXTERNALLY-MANAGED` file in a Python installation.
 ///
 /// See: <https://packaging.python.org/en/latest/specifications/externally-managed-environments/>
@@ -830,6 +838,11 @@ pub enum Error {
     Io(#[from] io::Error),
     #[error(transparent)]
     BrokenLink(BrokenLink),
+    #[error(
+        "Python interpreter at `{}` is part of a symlink cycle or exceeds the symlink limit",
+        .0.user_display()
+    )]
+    SymlinkLoop(PathBuf),
     #[error("Python interpreter not found at `{0}`")]
     NotFound(PathBuf),
     #[error("Failed to query Python interpreter at `{path}`")]
@@ -1035,6 +1048,10 @@ impl InterpreterInfo {
         command.env("SYSTEM_VERSION_COMPAT", "0");
 
         let output = command.output().map_err(|err| {
+            #[cfg(unix)]
+            if is_filesystem_loop(&err) {
+                return Error::SymlinkLoop(interpreter.to_path_buf());
+            }
             match err.kind() {
                 io::ErrorKind::NotFound => return Error::NotFound(interpreter.to_path_buf()),
                 io::ErrorKind::PermissionDenied => {
@@ -1206,6 +1223,10 @@ impl InterpreterInfo {
         // `canonicalize_executable` does not resolve the file on Windows, we must re-use this logic
         // for the subsequent metadata read as we may not have actually resolved the path.
         let handle_io_error = |err: io::Error| -> Error {
+            #[cfg(unix)]
+            if is_filesystem_loop(&err) {
+                return Error::SymlinkLoop(executable.to_path_buf());
+            }
             if err.kind() == io::ErrorKind::NotFound {
                 // Check if it looks like a venv interpreter where the underlying Python
                 // installation was removed.

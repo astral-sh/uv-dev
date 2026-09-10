@@ -1061,6 +1061,7 @@ impl Error {
             Self::Query(err, _, source) => match &**err {
                 InterpreterError::Encode(_)
                 | InterpreterError::Io(_)
+                | InterpreterError::SymlinkLoop(_)
                 | InterpreterError::SpawnFailed { .. } => true,
                 InterpreterError::UnexpectedResponse(UnexpectedResponseError { path, .. })
                 | InterpreterError::StatusCode(StatusCodeError { path, .. }) => {

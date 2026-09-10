@@ -5,6 +5,8 @@ use indoc::{formatdoc, indoc};
 use insta::assert_snapshot;
 use predicates::prelude::predicate;
 use serde_json::json;
+#[cfg(unix)]
+use std::path::Path;
 #[cfg(feature = "test-git")]
 use std::process::Command;
 use tempfile::tempdir_in;
@@ -9088,6 +9090,41 @@ fn build_system_requires_path() -> Result<()> {
      + iniconfig==2.0.0
      + project==0.1.0 (from file://[TEMP_DIR]/project)
     ");
+
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn sync_interpreter_symlink_cycle() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_virtualenv_bin()
+        .with_filtered_python_names();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+
+    let bin = venv_bin_path(context.temp_dir.join(".venv"));
+    fs_err::remove_file(bin.join("python"))?;
+    fs_err::remove_file(bin.join("python3"))?;
+    fs_err::os::unix::fs::symlink("python3", bin.join("python"))?;
+    fs_err::os::unix::fs::symlink("python", bin.join("python3"))?;
+
+    uv_snapshot!(context.filters(), context.sync(), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Python interpreter at `.venv/[BIN]/[PYTHON]` is part of a symlink cycle or exceeds the symlink limit
+    ");
+
+    // A symlink cycle leaves the existing environment untouched.
+    assert_eq!(fs_err::read_link(bin.join("python"))?, Path::new("python3"));
+    assert_eq!(fs_err::read_link(bin.join("python3"))?, Path::new("python"));
 
     Ok(())
 }
