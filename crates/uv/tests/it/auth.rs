@@ -747,7 +747,7 @@ async fn logout_native_auth() -> Result<()> {
         .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: When using `--token`, a username cannot not be provided; found: public
+    error: When using `--token`, a username other than `__token__` cannot be provided; found: public
     ");
 
     Ok(())
@@ -928,7 +928,7 @@ fn login_native_auth_url() {
         .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: When using `--token`, a username cannot not be provided; found: test
+    error: When using `--token`, a username other than `__token__` cannot be provided; found: test
     ");
 }
 
