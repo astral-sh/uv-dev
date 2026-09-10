@@ -470,4 +470,56 @@ mod tests {
             @"`Import-Name` and `Import-Namespace` must not both contain `spam`"
         );
     }
+
+    #[test]
+    fn import_name_base_whitespace() {
+        for (value, expected) in [
+            ("spam", "spam"),
+            ("spam ", "spam "),
+            ("spam\t", "spam\t"),
+            ("spam;private", "spam"),
+            ("spam \t; private", "spam"),
+            ("spam.eggs ; private", "spam.eggs"),
+        ] {
+            assert_eq!(import_name_base(value), expected, "{value:?}");
+        }
+    }
+
+    #[test]
+    fn import_name_exact_overlap() {
+        for (first, second, name) in [
+            ("spam", "spam", "spam"),
+            ("spam \t; private", "spam", "spam"),
+            ("spam;private", "spam ; private", "spam"),
+            ("spam.eggs ; private", "spam.eggs", "spam.eggs"),
+        ] {
+            for (import_name, import_namespace) in [(first, second), (second, first)] {
+                let metadata = format!(
+                    "Metadata-Version: 2.5\nName: pkg\nVersion: 1.0\nImport-Name: {import_name}\nImport-Namespace: {import_namespace}\n"
+                );
+                assert_matches!(
+                    Metadata23::parse(metadata.as_bytes()),
+                    Err(MetadataError::DuplicateImportName(actual_name)) if actual_name == name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn import_name_nested_overlap() {
+        for (first, second) in [
+            ("spam", "spam.eggs"),
+            ("spam; private", "spam.eggs; private"),
+            ("spam.eggs", "spam.eggs.ham"),
+        ] {
+            for (import_name, import_namespace) in [(first, second), (second, first)] {
+                let metadata = format!(
+                    "Metadata-Version: 2.5\nName: pkg\nVersion: 1.0\nImport-Name: {import_name}\nImport-Namespace: {import_namespace}\n"
+                );
+                let parsed = Metadata23::parse(metadata.as_bytes()).unwrap();
+                assert_eq!(parsed.import_names, [import_name]);
+                assert_eq!(parsed.import_namespaces, [import_namespace]);
+            }
+        }
+    }
 }
