@@ -113,7 +113,6 @@ async_zip = { version = "0.0.20", package = "astral_async_zip", features = [
   "tokio",
   "zstd",
 ] }
-axoupdater = { version = "0.10.0", default-features = false }
 backon = { version = "1.3.0" }
 base64 = { version = "0.22.1" }
 bitflags = { version = "2.6.0" }

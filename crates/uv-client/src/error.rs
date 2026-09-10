@@ -625,7 +625,7 @@ impl WrappedReqwestError {
     }
 
     /// Return the inner [`reqwest::Error`] from the error chain, if it exists.
-    pub fn inner(&self) -> Option<&reqwest::Error> {
+    pub(crate) fn inner(&self) -> Option<&reqwest::Error> {
         match &self.error {
             reqwest_middleware::Error::Reqwest(err) => Some(err),
             reqwest_middleware::Error::Middleware(err) => err.chain().find_map(|err| {

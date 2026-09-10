@@ -1,67 +1,310 @@
 use std::fmt::Write;
-use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::time::{Duration, SystemTimeError};
 
 use anyhow::{Context, Result};
-use axoupdater::{
-    AxoUpdater, AxoupdateError, ReleaseSource, ReleaseSourceType, UpdateRequest,
-    app_name_to_env_var,
-};
 use owo_colors::OwoColorize;
 use serde::Deserialize;
-use tempfile::TempDir;
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio::process::Command;
-use tracing::{debug, warn};
+use tracing::warn;
 use url::Url;
-use uv_bin_install::{Binary, find_matching_version};
-use uv_client::{BaseClientBuilder, RetriableError, WrappedReqwestError, fetch_with_url_fallback};
-use uv_fs::Simplified;
-use uv_pep440::{Version as Pep440Version, VersionSpecifier, VersionSpecifiers};
-use uv_redacted::DisplaySafeUrl;
-use uv_static::{
-    EnvVars, astral_mirror_base_url, astral_mirror_url_from_env, custom_astral_mirror_url,
+use uv_bin_install::{Binary, find_matching_version_for_platform};
+use uv_client::{
+    BaseClient, BaseClientBuilder, RetriableError, WrappedReqwestError, fetch_with_url_fallback,
 };
+use uv_distribution_filename::{LegacySourceDistExtension, SourceDistExtension};
+use uv_pep440::{Version, VersionSpecifier, VersionSpecifiers};
+use uv_redacted::DisplaySafeUrl;
+use uv_static::EnvVars;
 
+use super::self_install::{
+    InstallReceipt, LockedInstallation, ReleaseSource, executable_names, legacy_receipt_path,
+};
 use crate::commands::ExitStatus;
-use crate::commands::self_install::RECEIPT_NAME;
-use crate::commands::self_update_native;
 use crate::printer::Printer;
 
-const UV_GITHUB_RELEASES_DOWNLOAD_PREFIX: &str =
-    "https://github.com/astral-sh/uv/releases/download/";
+struct Release {
+    version: Version,
+    urls: Vec<DisplaySafeUrl>,
+    checksum_url: Option<DisplaySafeUrl>,
+    sha256: Option<String>,
+    format: SourceDistExtension,
+    filename: String,
+    api_origin: Option<Url>,
+}
 
-/// The suffix appended to the Astral mirror base for uv release downloads.
-const UV_MIRROR_SUFFIX: &str = "/github/uv/releases/download/";
+fn apply_download_override(release: &mut Release, download_url: Option<&str>) -> Result<()> {
+    if let Some(download_url) = download_url.filter(|url| !url.is_empty()) {
+        let archive = format!(
+            "{}/{}",
+            download_url.trim_end_matches('/'),
+            release.filename
+        );
+        release.urls = vec![DisplaySafeUrl::parse(&archive)?];
+        release.checksum_url = Some(DisplaySafeUrl::parse(&format!("{archive}.sha256"))?);
+        // The override can contain a separately built distribution, with its own checksum.
+        release.sha256 = None;
+    }
+    Ok(())
+}
 
-/// Return the effective Astral mirror prefix for uv release downloads.
-fn effective_uv_mirror_prefix(astral_mirror_url: Option<&str>) -> String {
-    format!(
-        "{}{UV_MIRROR_SUFFIX}",
-        astral_mirror_base_url(astral_mirror_url)
+#[derive(Deserialize)]
+struct GithubRelease {
+    tag_name: String,
+    assets: Vec<GithubAsset>,
+}
+
+#[derive(Deserialize)]
+struct GithubAsset {
+    name: String,
+    url: DisplaySafeUrl,
+}
+
+fn github_api() -> Result<Url> {
+    let github = std::env::var(EnvVars::UV_INSTALLER_GITHUB_BASE_URL).ok();
+    let ghe = std::env::var(EnvVars::UV_INSTALLER_GHE_BASE_URL).ok();
+    anyhow::ensure!(
+        github.is_none() || ghe.is_none(),
+        "Cannot set both UV_INSTALLER_GITHUB_BASE_URL and UV_INSTALLER_GHE_BASE_URL"
+    );
+    if let Some(ghe) = ghe {
+        return Ok(Url::parse(&format!(
+            "{}/api/v3/",
+            ghe.trim_end_matches('/')
+        ))?);
+    }
+    if let Some(github) = github {
+        let mut url = Url::parse(&github)?;
+        let domain = url.domain().context("GitHub base URL must have a domain")?;
+        url.set_host(Some(&format!("api.{domain}")))?;
+        url.set_path("/");
+        url.set_query(None);
+        url.set_fragment(None);
+        return Ok(url);
+    }
+    Ok(Url::parse("https://api.github.com/")?)
+}
+
+async fn resolve_release(
+    source: &ReleaseSource,
+    version: Option<&str>,
+    target: &str,
+    client: &BaseClient,
+    client_builder: &BaseClientBuilder<'_>,
+    token: Option<&str>,
+) -> Result<Release> {
+    anyhow::ensure!(
+        source.release_type == "github",
+        "Unsupported release source `{}`",
+        source.release_type
+    );
+    let format = if target.ends_with("-windows-msvc") {
+        SourceDistExtension::Legacy(LegacySourceDistExtension::Zip)
+    } else {
+        SourceDistExtension::TarGz
+    };
+    let extension = if target.ends_with("-windows-msvc") {
+        "zip"
+    } else {
+        "tar.gz"
+    };
+    let filename = format!("uv-{target}.{extension}");
+    if source.owner == "astral-sh"
+        && source.name == "uv"
+        && std::env::var_os(EnvVars::UV_INSTALLER_GITHUB_BASE_URL).is_none()
+        && std::env::var_os(EnvVars::UV_INSTALLER_GHE_BASE_URL).is_none()
+    {
+        let constraints = official_target_version_specifiers(version)?;
+        let resolved = find_matching_version_for_platform(
+            Binary::Uv,
+            constraints.as_ref(),
+            None,
+            target,
+            client,
+            &client_builder.retry_policy(),
+        )
+        .await?;
+        return Ok(Release {
+            sha256: resolved.sha256().map(str::to_owned),
+            urls: resolved.artifact_urls().to_vec(),
+            format: resolved.archive_format(),
+            version: resolved.version,
+            checksum_url: None,
+            filename,
+            api_origin: None,
+        });
+    }
+
+    let api = github_api()?;
+    let mut url = api.clone();
+    {
+        let mut segments = url
+            .path_segments_mut()
+            .map_err(|()| anyhow::anyhow!("Invalid GitHub API URL"))?;
+        segments
+            .pop_if_empty()
+            .extend(["repos", &source.owner, &source.name, "releases"]);
+        if let Some(version) = version {
+            segments.extend(["tags", version]);
+        } else {
+            segments.push("latest");
+        }
+    }
+    let url = DisplaySafeUrl::from(url);
+    let bytes = download_bytes(
+        client,
+        &url,
+        token,
+        Some(&api),
+        "application/vnd.github+json",
     )
+    .await?;
+    let release: GithubRelease = serde_json::from_slice(&bytes)?;
+    let version = Version::from_str(
+        release
+            .tag_name
+            .strip_prefix('v')
+            .unwrap_or(&release.tag_name),
+    )?;
+    let asset = |name: &str| -> Result<DisplaySafeUrl> {
+        release
+            .assets
+            .iter()
+            .find(|asset| asset.name == name)
+            .map(|asset| asset.url.clone())
+            .with_context(|| format!("Release `{}` has no `{name}` asset", release.tag_name))
+    };
+    Ok(Release {
+        version,
+        urls: vec![asset(&filename)?],
+        checksum_url: Some(asset(&format!("{filename}.sha256"))?),
+        sha256: None,
+        format,
+        filename,
+        api_origin: Some(api),
+    })
 }
 
-/// Return the `UV_DOWNLOAD_URL` value for the standalone installer when a custom Astral mirror is
-/// configured.
-fn installer_download_url(
-    target_version: &Pep440Version,
-    astral_mirror_url: Option<&str>,
-) -> Option<String> {
-    let mirror = custom_astral_mirror_url(astral_mirror_url)?;
-    Some(format!(
-        "{}{}{}",
-        mirror.trim_end_matches('/'),
-        UV_MIRROR_SUFFIX,
-        target_version
-    ))
+async fn download_bytes(
+    client: &BaseClient,
+    url: &DisplaySafeUrl,
+    token: Option<&str>,
+    api: Option<&Url>,
+    accept: &str,
+) -> Result<Vec<u8>, DownloadError> {
+    let parsed = Url::from(url.clone());
+    let mut request = client
+        .for_host(url)
+        .get(parsed.clone())
+        .header("Accept", accept);
+    if let Some(token) = token
+        && (parsed.host_str() == Some("github.com")
+            || api.is_some_and(|api| api.origin() == parsed.origin()))
+    {
+        request = request.header("Authorization", format!("Bearer {token}"));
+    }
+    let response = request.send().await.map_err(|source| DownloadError::Http {
+        url: url.clone(),
+        source: source.into(),
+    })?;
+    let response = response
+        .error_for_status()
+        .map_err(|source| DownloadError::Http {
+            url: url.clone(),
+            source: source.into(),
+        })?;
+    Ok(response
+        .bytes()
+        .await
+        .map_err(|source| DownloadError::Http {
+            url: url.clone(),
+            source: source.into(),
+        })?
+        .to_vec())
 }
 
-const AXOUPDATER_CONFIG_PATH: &str = "AXOUPDATER_CONFIG_PATH";
-const AXOUPDATER_CONFIG_WORKING_DIR: &str = "AXOUPDATER_CONFIG_WORKING_DIR";
+fn checksum_from_sidecar(bytes: &[u8], filename: &str) -> Result<String, DownloadError> {
+    let text = std::str::from_utf8(bytes).map_err(|_| DownloadError::InvalidChecksum)?;
+    let mut fields = text.split_whitespace();
+    let digest = fields.next().ok_or(DownloadError::InvalidChecksum)?;
+    if fields
+        .next()
+        .is_some_and(|name| name.trim_start_matches('*') != filename)
+        || fields.next().is_some()
+    {
+        return Err(DownloadError::InvalidChecksum);
+    }
+    validate_checksum(digest)?;
+    Ok(digest.to_owned())
+}
 
-/// Attempt to update the uv binary.
+fn validate_checksum(digest: &str) -> Result<(), DownloadError> {
+    if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(DownloadError::InvalidChecksum);
+    }
+    Ok(())
+}
+
+async fn download_release(
+    release: &Release,
+    client: &BaseClient,
+    builder: &BaseClientBuilder<'_>,
+    token: Option<&str>,
+) -> Result<tempfile::TempDir> {
+    let bytes = fetch_with_url_fallback(
+        &release.urls,
+        builder.retry_policy(),
+        "uv release archive",
+        |url| async move {
+            let checksum = if let Some(checksum) = &release.sha256 {
+                validate_checksum(checksum)?;
+                checksum.clone()
+            } else {
+                let checksum_url = match &release.checksum_url {
+                    Some(checksum_url) => checksum_url.clone(),
+                    None => DisplaySafeUrl::parse(&format!("{url}.sha256"))
+                        .map_err(|_| DownloadError::InvalidChecksum)?,
+                };
+                let bytes = download_bytes(
+                    client,
+                    &checksum_url,
+                    token,
+                    release.api_origin.as_ref(),
+                    "application/octet-stream",
+                )
+                .await?;
+                checksum_from_sidecar(&bytes, &release.filename)?
+            };
+            let bytes = download_bytes(
+                client,
+                &url,
+                token,
+                release.api_origin.as_ref(),
+                "application/octet-stream",
+            )
+            .await?;
+            let actual = hex::encode(Sha256::digest(&bytes));
+            if !actual.eq_ignore_ascii_case(&checksum) {
+                return Err(DownloadError::ChecksumMismatch {
+                    expected: checksum,
+                    actual,
+                });
+            }
+            Ok(bytes)
+        },
+    )
+    .await?;
+    let (directory, _) = uv_extract::stream::archive(
+        std::io::Cursor::new(bytes),
+        release.format,
+        tempfile::tempdir()?,
+    )
+    .await?;
+    Ok(directory)
+}
+
 pub(crate) async fn self_update(
     version: Option<String>,
     token: Option<String>,
@@ -72,893 +315,203 @@ pub(crate) async fn self_update(
     if client_builder.is_offline() {
         writeln!(
             printer.stderr_important(),
-            "{}",
-            format_args!(
-                "{}{} Self-update is not possible because network connectivity is disabled (i.e., with `--offline`)",
-                "error".red().bold(),
-                ":".bold()
-            )
+            "{}{} Self-update is not possible because network connectivity is disabled (i.e., with `--offline`)",
+            "error".red().bold(),
+            ":".bold()
         )?;
         return Ok(ExitStatus::Failure);
     }
-
-    if uv_preview::is_enabled(uv_preview::PreviewFeature::SelfManagement)
-        || std::env::current_exe()?
-            .with_file_name(RECEIPT_NAME)
-            .try_exists()?
-    {
-        return self_update_native::self_update(version, token, dry_run, printer, client_builder)
-            .await;
-    }
-
-    let mut updater = AxoUpdater::new_for("uv");
-    let updater_client = client_builder.build()?;
-    updater
-        .set_client(updater_client.raw_client().clone())
-        .disable_installer_output();
-
-    if let Some(ref token) = token {
-        updater.set_github_token(token);
-    }
-
-    // Load the "install receipt" for the current binary. If the receipt is not found, then
-    // uv was likely installed via a package manager.
-    let Ok(updater) = updater.load_receipt() else {
-        debug!("No receipt found; assuming uv was installed via a package manager");
-        writeln!(
-            printer.stderr_important(),
-            "{}",
-            format_args!(
-                concat!(
-                    "{}{} Self-update is only available for uv binaries installed via the standalone installation scripts.",
-                    "\n",
-                    "\n",
-                    "If you installed uv with pip, brew, or another package manager, update uv with `pip install --upgrade`, `brew upgrade`, or similar."
-                ),
-                "error".red().bold(),
-                ":".bold()
-            )
-        )?;
-        return Ok(ExitStatus::Error);
-    };
-
-    // If we know what our version is, ignore whatever the receipt thinks it is!
-    // This makes us behave better if someone manually installs a random version of uv
-    // in a way that doesn't update the receipt.
-    if let Ok(version) = env!("CARGO_PKG_VERSION").parse() {
-        // This is best-effort, it's fine if it fails (also it can't actually fail)
-        let _ = updater.set_current_version(version);
-    }
-
-    // Ensure the receipt is for the current binary. If it's not, then the user likely has multiple
-    // uv binaries installed, and the current binary was _not_ installed via the standalone
-    // installation scripts.
-    if !updater.check_receipt_is_for_this_executable()? {
-        let current_exe = std::env::current_exe()?;
-        let receipt_prefix = updater.install_prefix_root()?;
-
-        writeln!(
-            printer.stderr_important(),
-            "{}",
-            format_args!(
-                concat!(
-                    "{}{} Self-update is only available for uv binaries installed via the standalone installation scripts.",
-                    "\n",
-                    "\n",
-                    "The current executable is at `{}` but the standalone installer was used to install uv to `{}`. Are multiple copies of uv installed?"
-                ),
-                "error".red().bold(),
-                ":".bold(),
-                current_exe.simplified_display().bold().cyan(),
-                receipt_prefix.simplified_display().bold().cyan()
-            )
-        )?;
-        return Ok(ExitStatus::Error);
-    }
-
-    writeln!(
-        printer.stderr(),
-        "{}",
-        format_args!(
-            "{}{} Checking for updates...",
-            "info".cyan().bold(),
-            ":".bold()
-        )
-    )?;
-
-    if is_official_public_uv_install(updater.source.as_ref()) {
-        debug!("Using official public self-update path");
-
-        let retry_policy = client_builder.retry_policy();
-        let client = client_builder.clone().retries(0).build()?;
-        let constraints = official_target_version_specifiers(version.as_deref())?;
-
-        let resolved = find_matching_version(
-            Binary::Uv,
-            constraints.as_ref(),
-            None,
-            &client,
-            &retry_policy,
-        )
+    let executable = fs_err::canonicalize(std::env::current_exe()?)?;
+    let installation = LockedInstallation::acquire(
+        executable
+            .parent()
+            .context("Executable has no parent directory")?,
+    )
+    .await?;
+    let (_, receipt) = InstallReceipt::for_executable(&executable)?;
+    let current = Version::from_str(env!("CARGO_PKG_VERSION"))?;
+    // Another process may have replaced this executable while we waited for the lock. Receipts
+    // can be stale after a manual replacement, so compare the installed build itself.
+    let installed = Command::new(&executable)
+        .arg("--version")
+        .env(EnvVars::UV_NO_CONFIG, "1")
+        .output()
         .await
-        .with_context(|| match version.as_deref() {
-            Some(version) => format!("Failed to resolve uv version `{version}`"),
-            None => "Failed to resolve the latest uv version".to_string(),
-        })?;
-
-        debug!("Resolved self-update target to `uv=={}`", resolved.version);
-
-        let current_version = Pep440Version::from_str(env!("CARGO_PKG_VERSION"))
-            .context("Failed to parse the current uv version")?;
-        if !is_update_needed(&current_version, &resolved.version, version.is_some()) {
-            writeln!(
-                printer.stderr(),
-                "{}",
-                format_args!(
-                    "{}{} You're already on version {} of uv{}.",
-                    "success".green().bold(),
-                    ":".bold(),
-                    format!("v{}", env!("CARGO_PKG_VERSION")).bold().cyan(),
-                    if version.is_none() {
-                        " (the latest version)".to_string()
-                    } else {
-                        String::new()
-                    }
-                )
-            )?;
-            return Ok(ExitStatus::Success);
-        }
-
-        if dry_run {
-            writeln!(
-                printer.stderr_important(),
-                "Would update uv from {} to {}",
-                format!("v{}", env!("CARGO_PKG_VERSION")).bold().white(),
-                format!("v{}", resolved.version).bold().white(),
-            )?;
-            return Ok(ExitStatus::Success);
-        }
-
-        return run_official_updater(
-            updater,
-            &current_version,
-            &resolved.version,
-            printer,
-            client_builder,
-            token.as_deref(),
-        )
-        .await;
-    }
-
-    debug!("Using custom self-update path");
-
-    let update_request = if let Some(version) = version {
-        UpdateRequest::SpecificTag(version)
-    } else {
-        UpdateRequest::Latest
-    };
-
-    updater.configure_version_specifier(update_request.clone());
-
-    if dry_run {
-        // TODO(charlie): `updater.fetch_release` isn't public, so we can't say what the latest
-        // version is.
-        if updater.is_update_needed().await? {
-            let version = match update_request {
-                UpdateRequest::Latest | UpdateRequest::LatestMaybePrerelease => {
-                    "the latest version".to_string()
-                }
-                UpdateRequest::SpecificTag(version) | UpdateRequest::SpecificVersion(version) => {
-                    format!("v{version}")
-                }
-            };
-            writeln!(
-                printer.stderr_important(),
-                "Would update uv from {} to {}",
-                format!("v{}", env!("CARGO_PKG_VERSION")).bold().white(),
-                version.bold().white(),
-            )?;
-        } else {
-            writeln!(
-                printer.stderr(),
-                "{}",
-                format_args!(
-                    "You're on the latest version of uv ({})",
-                    format!("v{}", env!("CARGO_PKG_VERSION")).bold().white()
-                )
-            )?;
-        }
+        .context("Failed to check the installed uv executable")?;
+    let expected = format!("uv {}", uv_cli::version::uv_self_version());
+    anyhow::ensure!(
+        installed.status.success()
+            && std::str::from_utf8(&installed.stdout)
+                .is_ok_and(|output| output.trim_end() == expected),
+        "The installed uv version changed; run `uv self update` again"
+    );
+    let client = client_builder.clone().retries(0).build()?;
+    let target = uv_platform::build_target();
+    writeln!(printer.stderr(), "Checking for updates...")?;
+    let mut release = resolve_release(
+        &receipt.source,
+        version.as_deref(),
+        &target,
+        &client,
+        &client_builder,
+        token.as_deref(),
+    )
+    .await?;
+    let download_url = std::env::var(EnvVars::UV_DOWNLOAD_URL)
+        .ok()
+        .filter(|url| !url.is_empty())
+        .or_else(|| std::env::var("INSTALLER_DOWNLOAD_URL").ok());
+    apply_download_override(&mut release, download_url.as_deref())?;
+    if !is_update_needed(&current, &release.version, version.is_some()) {
+        writeln!(
+            printer.stderr(),
+            "You're already on version {current} of uv."
+        )?;
         return Ok(ExitStatus::Success);
     }
-
-    run_custom_updater(updater, printer, token.is_some()).await
-}
-
-/// Returns `true` if the `source` is the official GitHub repository for uv, or
-/// if an installer base url override environment variable is set.
-fn is_official_public_uv_install(source: Option<&ReleaseSource>) -> bool {
-    is_official_public_uv_install_with_overrides(
-        source,
-        std::env::var_os(EnvVars::UV_INSTALLER_GITHUB_BASE_URL).is_some(),
-        std::env::var_os(EnvVars::UV_INSTALLER_GHE_BASE_URL).is_some(),
-    )
-}
-
-/// Helper function for [`is_official_public_uv_install`] that allows for easier
-/// testing.
-fn is_official_public_uv_install_with_overrides(
-    source: Option<&ReleaseSource>,
-    has_github_base_url_override: bool,
-    has_ghe_base_url_override: bool,
-) -> bool {
-    if has_github_base_url_override || has_ghe_base_url_override {
-        return false;
+    if dry_run {
+        writeln!(
+            printer.stderr_important(),
+            "Would update uv from v{current} to v{}",
+            release.version
+        )?;
+        return Ok(ExitStatus::Success);
     }
-
-    matches!(
-        source,
-        Some(ReleaseSource {
-            release_type: ReleaseSourceType::GitHub,
-            owner,
-            name,
-            app_name,
-        }) if owner == "astral-sh" && name == "uv" && app_name == "uv"
-    )
+    let directory = download_release(&release, &client, &client_builder, token.as_deref()).await?;
+    let source = if release.format == SourceDistExtension::TarGz {
+        directory.path().join(format!("uv-{target}"))
+    } else {
+        directory.path().to_path_buf()
+    };
+    let mut updated = InstallReceipt::new(receipt.install_prefix.clone(), receipt.modify_path);
+    updated.source = receipt.source.clone();
+    updated.version = release.version.to_string();
+    // Older uv releases may not contain all of today's companion executables.
+    updated.binaries.clear();
+    for name in executable_names() {
+        if source.join(name).try_exists()? {
+            updated.binaries.push((*name).to_owned());
+        }
+    }
+    // Releases without native self-management only know the global installer receipt.
+    // Probe the verified executable so the transition does not depend on a release-version cutoff.
+    let legacy_receipt = if release.version < current {
+        !Command::new(source.join(executable_names()[0]))
+            .args(["self", "install", "--help"])
+            .env(EnvVars::UV_NO_CONFIG, "1")
+            .output()
+            .await
+            .context("Failed to check the downloaded uv executable")?
+            .status
+            .success()
+    } else {
+        false
+    };
+    let legacy_receipt = legacy_receipt.then(legacy_receipt_path).transpose()?;
+    installation
+        .install_binaries(
+            &source,
+            &updated.binaries,
+            Some(&updated),
+            Some(&receipt),
+            legacy_receipt.as_deref(),
+        )
+        .await?;
+    writeln!(
+        printer.stderr(),
+        "Updated uv from {current} to {}",
+        release.version
+    )?;
+    Ok(ExitStatus::Success)
 }
 
-/// Parse an explicit `uv self update` target version for the official public case.
-///
-/// To preserve existing tag-based behavior, only exact `major.minor.patch` release versions are
-/// accepted. Inputs that normalize to a different version string, such as `0.10` or `v0.10.0`,
-/// are rejected instead of being silently rewritten.
-pub(super) fn official_target_version_specifiers(
+/// Accept exact public release versions without silently normalizing tag names.
+fn official_target_version_specifiers(
     target_version: Option<&str>,
 ) -> Result<Option<VersionSpecifiers>> {
     let Some(target_version) = target_version else {
         return Ok(None);
     };
-
-    let pep440_version = Pep440Version::from_str(target_version)
+    let version = Version::from_str(target_version)
         .with_context(|| format!("Failed to parse version specifier `{target_version}`"))?;
-    if pep440_version.to_string() != target_version || pep440_version.release().len() < 3 {
+    if version.to_string() != target_version || version.release().len() < 3 {
         warn!(
-            "Rejecting explicit self-update version specifier `{target_version}` after parsing it as `{pep440_version}`"
+            "Rejecting explicit self-update version specifier `{target_version}` after parsing it as `{version}`"
         );
         anyhow::bail!(
             "Failed to parse version specifier `{target_version}`: explicit versions must include an exact major.minor.patch release"
         );
     }
-
     Ok(Some(VersionSpecifiers::from(
-        VersionSpecifier::equals_version(pep440_version),
+        VersionSpecifier::equals_version(version),
     )))
 }
 
-pub(super) fn is_update_needed(
-    current_version: &Pep440Version,
-    target_version: &Pep440Version,
-    has_target_version: bool,
-) -> bool {
-    if has_target_version {
-        current_version != target_version
+fn is_update_needed(current: &Version, target: &Version, explicit: bool) -> bool {
+    if explicit {
+        current != target
     } else {
-        current_version < target_version
+        current < target
     }
-}
-
-/// Given the current and target versions, fetch the installer from Astral's official release
-/// artifacts and run it.
-async fn run_official_updater(
-    updater: &AxoUpdater,
-    current_version: &Pep440Version,
-    target_version: &Pep440Version,
-    printer: Printer,
-    client_builder: BaseClientBuilder<'_>,
-    github_token: Option<&str>,
-) -> Result<ExitStatus> {
-    let custom_astral_mirror = astral_mirror_url_from_env();
-    let installer_urls =
-        official_installer_urls_with_mirror(target_version, custom_astral_mirror.as_deref())?;
-    let temp_dir = TempDir::new()?;
-    let installer_path = temp_dir.path().join(installer_filename());
-    let install_prefix = PathBuf::from(updater.install_prefix_root()?.as_str());
-    // If we can't determine the previous PATH behavior, abort rather than potentially changing the
-    // user's shell configuration unexpectedly.
-    let modify_path = load_receipt_modify_path("uv")
-        .context("Failed to determine whether the existing standalone install modified PATH")?;
-
-    download_installer_from_urls(
-        &installer_urls,
-        &installer_path,
-        client_builder,
-        github_token,
-    )
-    .await?;
-
-    execute_official_installer(
-        &installer_path,
-        &install_prefix,
-        modify_path,
-        target_version,
-        custom_astral_mirror.as_deref(),
-    )
-    .await?;
-
-    let direction = if current_version > target_version {
-        "Downgraded"
-    } else {
-        "Upgraded"
-    };
-    writeln!(
-        printer.stderr(),
-        "{}",
-        format_args!(
-            "{}{} {direction} uv from {} to {}! {}",
-            "success".green().bold(),
-            ":".bold(),
-            format!("v{current_version}").bold().cyan(),
-            format!("v{target_version}").bold().cyan(),
-            format!("https://github.com/astral-sh/uv/releases/tag/{target_version}").cyan(),
-        )
-    )?;
-
-    Ok(ExitStatus::Success)
-}
-
-/// Return the platform-specific standalone installer filename.
-fn installer_filename() -> &'static str {
-    if cfg!(windows) {
-        "uv-installer.ps1"
-    } else {
-        "uv-installer.sh"
-    }
-}
-
-/// Build the mirror-first URL list for the official standalone installer.
-fn official_installer_urls_with_mirror(
-    version: &Pep440Version,
-    astral_mirror_url: Option<&str>,
-) -> Result<Vec<DisplaySafeUrl>> {
-    let astral_mirror_url = custom_astral_mirror_url(astral_mirror_url);
-    let filename = installer_filename();
-    let mirror_prefix = effective_uv_mirror_prefix(astral_mirror_url);
-    let mirror = format!("{mirror_prefix}{version}/{filename}");
-
-    let mut urls = vec![
-        DisplaySafeUrl::parse(&mirror).with_context(|| format!("Failed to parse `{mirror}`"))?,
-    ];
-
-    // When using the default mirror, also fall back to the canonical GitHub URL.
-    if astral_mirror_url.is_none() {
-        let canonical = format!("{UV_GITHUB_RELEASES_DOWNLOAD_PREFIX}{version}/{filename}");
-        urls.push(
-            DisplaySafeUrl::parse(&canonical)
-                .with_context(|| format!("Failed to parse `{canonical}`"))?,
-        );
-    }
-    Ok(urls)
-}
-
-/// Download the official installer from the provided mirror/canonical URL list.
-async fn download_installer_from_urls(
-    urls: &[DisplaySafeUrl],
-    installer_path: &Path,
-    client_builder: BaseClientBuilder<'_>,
-    github_token: Option<&str>,
-) -> Result<()> {
-    let retry_policy = client_builder.retry_policy();
-    // Disable the client's built-in retries here because `fetch_with_url_fallback` already owns
-    // the retry budget across the mirror-first URL list.
-    let client = client_builder
-        .retries(0)
-        .build()
-        .context("Failed to build HTTP client for self-update")?;
-
-    fetch_with_url_fallback(urls, retry_policy, "official uv installer", |url| async {
-        let mut request = client.for_host(&url).get(Url::from(url.clone()));
-        if let Some(github_token) = installer_download_github_token(&url, github_token) {
-            request = request.header("Authorization", format!("Bearer {github_token}"));
-        }
-
-        let response = request
-            .send()
-            .await
-            .map_err(|source| InstallerDownloadError::Download {
-                url: url.clone(),
-                source: source.into(),
-            })?;
-
-        let response =
-            response
-                .error_for_status()
-                .map_err(|source| InstallerDownloadError::Download {
-                    url: url.clone(),
-                    source: source.into(),
-                })?;
-
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|source| InstallerDownloadError::Download {
-                url,
-                source: source.into(),
-            })?;
-
-        fs_err::tokio::write(installer_path, &bytes)
-            .await
-            .map_err(|source| InstallerDownloadError::Write {
-                path: installer_path.to_path_buf(),
-                source,
-            })?;
-
-        Ok::<(), InstallerDownloadError>(())
-    })
-    .await?;
-
-    #[cfg(unix)]
-    {
-        use std::fs::Permissions;
-        use std::os::unix::fs::PermissionsExt;
-
-        fs_err::tokio::set_permissions(installer_path, Permissions::from_mode(0o744)).await?;
-    }
-
-    Ok(())
-}
-
-fn installer_download_github_token<'a>(
-    url: &DisplaySafeUrl,
-    github_token: Option<&'a str>,
-) -> Option<&'a str> {
-    match url.host_str() {
-        Some("github.com") => github_token,
-        _ => None,
-    }
-}
-
-/// Execute the standalone installer while preserving the existing install location and PATH
-/// behavior.
-///
-/// When [`UV_ASTRAL_MIRROR_URL`](EnvVars::UV_ASTRAL_MIRROR_URL) is set, the installer is also
-/// given `UV_DOWNLOAD_URL` pointing at the mirror's uv release directory so the installer itself
-/// fetches the uv archive from the mirror.
-async fn execute_official_installer(
-    installer_path: &Path,
-    install_prefix: &Path,
-    modify_path: bool,
-    target_version: &Pep440Version,
-    astral_mirror_url: Option<&str>,
-) -> Result<(), Box<AxoupdateError>> {
-    let mut command = if cfg!(windows) {
-        let mut command = Command::new("powershell");
-        command.arg("-ExecutionPolicy").arg("ByPass");
-        command.arg(installer_path);
-        command
-    } else {
-        Command::new(installer_path)
-    };
-
-    let to_restore = if cfg!(windows) {
-        let old_path = std::env::current_exe().map_err(AxoupdateError::from)?;
-        let mut previous_path = old_path.as_os_str().to_os_string();
-        previous_path.push(".previous.exe");
-        let previous_path = PathBuf::from(previous_path);
-        fs_err::rename(&old_path, &previous_path).map_err(AxoupdateError::from)?;
-        Some((previous_path, old_path))
-    } else {
-        None
-    };
-
-    command.env_remove(EnvVars::PS_MODULE_PATH);
-    command.env("CARGO_DIST_FORCE_INSTALL_DIR", install_prefix);
-    command.env(EnvVars::UV_INSTALL_DIR, install_prefix);
-    // When a custom Astral mirror is configured, point the installer at the mirrored
-    // uv release directory so it downloads the archive from the mirror too.
-    if let Some(download_url) = installer_download_url(target_version, astral_mirror_url) {
-        command.env(EnvVars::UV_DOWNLOAD_URL, download_url);
-    }
-    if !modify_path {
-        let app_name_env_var = app_name_to_env_var("uv");
-        command.env(format!("{app_name_env_var}_NO_MODIFY_PATH"), "1");
-    }
-
-    let result = command.output().await;
-    let failed = !result.as_ref().is_ok_and(|output| output.status.success());
-
-    if let Some((previous_path, old_path)) = to_restore.as_ref() {
-        if failed {
-            fs_err::rename(previous_path, old_path).map_err(AxoupdateError::from)?;
-        } else {
-            #[cfg(windows)]
-            self_replace::self_delete_at(previous_path)
-                .map_err(|_| AxoupdateError::CleanupFailed {})?;
-        }
-    }
-
-    let output = result.map_err(AxoupdateError::from)?;
-    if output.status.success() {
-        return Ok(());
-    }
-
-    let stdout =
-        (!output.stdout.is_empty()).then(|| String::from_utf8_lossy(&output.stdout).to_string());
-    let stderr =
-        (!output.stderr.is_empty()).then(|| String::from_utf8_lossy(&output.stderr).to_string());
-    Err(Box::new(AxoupdateError::InstallFailed {
-        status: output.status.code(),
-        stdout,
-        stderr,
-    }))
-}
-
-/// Read whether the existing standalone install opted out of PATH modification.
-///
-/// Older receipts that lack this field default to `true` for modifying PATH.
-fn load_receipt_modify_path(app_name: &str) -> Result<bool> {
-    let Some(receipt_path) = find_receipt_path(app_name)? else {
-        anyhow::bail!("Failed to locate the standalone install receipt for `{app_name}`");
-    };
-
-    // Axoupdater does not expose `modify_path`, so we re-read the already-validated receipt.
-    let receipt = fs_err::read(&receipt_path).with_context(|| {
-        format!(
-            "Failed to read install receipt at `{}`",
-            receipt_path.display()
-        )
-    })?;
-    let receipt: StandaloneInstallReceipt =
-        serde_json::from_slice(&receipt).with_context(|| {
-            format!(
-                "Failed to parse install receipt at `{}`",
-                receipt_path.display()
-            )
-        })?;
-    Ok(receipt.modify_path)
-}
-
-/// Find the receipt path for the given app name. Returns `Ok(None)` if the receipt
-/// definitely doesn't exist.
-fn find_receipt_path(app_name: &str) -> Result<Option<PathBuf>> {
-    for prefix in receipt_prefixes(app_name)? {
-        let receipt_path = prefix.join(format!("{app_name}-receipt.json"));
-        if receipt_path.exists() {
-            return Ok(Some(receipt_path));
-        }
-    }
-    Ok(None)
-}
-
-/// List all possible locations for the receipt file for a given app name,
-/// taking into account axoupdater-specific environment variable overrides.
-fn receipt_prefixes(app_name: &str) -> Result<Vec<PathBuf>> {
-    if std::env::var_os(AXOUPDATER_CONFIG_WORKING_DIR).is_some() {
-        return Ok(vec![std::env::current_dir()?]);
-    }
-
-    if let Some(path) = std::env::var_os(AXOUPDATER_CONFIG_PATH) {
-        return Ok(vec![PathBuf::from(path)]);
-    }
-
-    let mut prefixes = Vec::new();
-
-    if let Some(path) = std::env::var_os("XDG_CONFIG_HOME") {
-        let path = PathBuf::from(path).join(app_name);
-        if path.exists() {
-            prefixes.push(path);
-        }
-    }
-
-    #[cfg(windows)]
-    if let Some(path) = std::env::var_os("LOCALAPPDATA") {
-        prefixes.push(PathBuf::from(path).join(app_name));
-    }
-
-    #[cfg(not(windows))]
-    if let Ok(path) = etcetera::home_dir() {
-        prefixes.push(path.join(".config").join(app_name));
-    }
-
-    Ok(prefixes)
-}
-
-/// Runs the regular axoupdater-based update flow, printing the results to the console.
-///
-/// This is used when the Astral-provided official releases are disabled by the user.
-/// See [`is_official_public_uv_install`] for the condition that enables this.
-async fn run_custom_updater(
-    updater: &mut AxoUpdater,
-    printer: Printer,
-    has_token: bool,
-) -> Result<ExitStatus> {
-    match updater.run().await {
-        Ok(Some(result)) => {
-            let direction = if result
-                .old_version
-                .as_ref()
-                .is_some_and(|old_version| *old_version > result.new_version)
-            {
-                "Downgraded"
-            } else {
-                "Upgraded"
-            };
-
-            let version_information = if let Some(old_version) = result.old_version {
-                format!(
-                    "from {} to {}",
-                    format!("v{old_version}").bold().cyan(),
-                    format!("v{}", result.new_version).bold().cyan(),
-                )
-            } else {
-                format!("to {}", format!("v{}", result.new_version).bold().cyan())
-            };
-
-            writeln!(
-                printer.stderr_important(),
-                "{}",
-                format_args!(
-                    "{}{} {direction} uv {}! {}",
-                    "success".green().bold(),
-                    ":".bold(),
-                    version_information,
-                    format!(
-                        "https://github.com/astral-sh/uv/releases/tag/{}",
-                        result.new_version_tag
-                    )
-                    .cyan()
-                )
-            )?;
-        }
-        Ok(None) => {
-            writeln!(
-                printer.stderr(),
-                "{}",
-                format_args!(
-                    "{}{} You're on the latest version of uv ({})",
-                    "success".green().bold(),
-                    ":".bold(),
-                    format!("v{}", env!("CARGO_PKG_VERSION")).bold().cyan()
-                )
-            )?;
-        }
-        Err(err) => {
-            return if let AxoupdateError::Reqwest(err) = err {
-                if err.status() == Some(http::StatusCode::FORBIDDEN) && !has_token {
-                    writeln!(
-                        printer.stderr_important(),
-                        "{}",
-                        format_args!(
-                            "{}{} GitHub API rate limit exceeded. Please provide a GitHub token via the {} option.",
-                            "error".red().bold(),
-                            ":".bold(),
-                            "`--token`".green().bold()
-                        )
-                    )?;
-                    Ok(ExitStatus::Error)
-                } else {
-                    Err(err.into())
-                }
-            } else {
-                Err(err.into())
-            };
-        }
-    }
-
-    Ok(ExitStatus::Success)
-}
-
-#[derive(Debug, Deserialize)]
-struct StandaloneInstallReceipt {
-    #[serde(default = "default_modify_path")]
-    modify_path: bool,
-}
-
-const fn default_modify_path() -> bool {
-    true
 }
 
 #[derive(Debug, Error)]
-enum InstallerDownloadError {
-    #[error("Failed to download installer from: {url}")]
-    Download {
+enum DownloadError {
+    #[error("Failed to download `{url}`")]
+    Http {
         url: DisplaySafeUrl,
         #[source]
         source: WrappedReqwestError,
     },
-
-    #[error("Failed to write installer to: {path}")]
-    Write {
-        path: PathBuf,
+    #[error("Invalid release archive checksum")]
+    InvalidChecksum,
+    #[error("Release archive checksum mismatch: expected {expected}, got {actual}")]
+    ChecksumMismatch { expected: String, actual: String },
+    #[error("Download failed after {retries} retries in {duration:?}")]
+    Retried {
         #[source]
-        source: std::io::Error,
-    },
-
-    #[error(
-        "Request failed after {retries} {subject} in {duration:.1}s",
-        subject = if *retries > 1 { "retries" } else { "retry" },
-        duration = duration.as_secs_f32()
-    )]
-    RetriedError {
-        #[source]
-        err: Box<Self>,
+        error: Box<Self>,
         retries: u32,
         duration: Duration,
     },
-
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
-
     #[error(transparent)]
     SystemTime(#[from] SystemTimeError),
 }
 
-impl RetriableError for InstallerDownloadError {
-    fn should_try_next_url(&self) -> bool {
-        match self {
-            Self::Download { source, .. } => should_try_next_installer_url(source),
-            Self::RetriedError { err, .. } => err.should_try_next_url(),
-            Self::Write { .. } | Self::Io(..) | Self::SystemTime(..) => false,
-        }
-    }
-
+impl RetriableError for DownloadError {
     fn retries(&self) -> u32 {
-        if let Self::RetriedError { retries, .. } = self {
+        if let Self::Retried { retries, .. } = self {
             *retries
         } else {
             0
         }
     }
-
+    fn should_try_next_url(&self) -> bool {
+        matches!(self, Self::Http { .. })
+            || matches!(self, Self::Retried { error, .. } if error.should_try_next_url())
+    }
     fn into_retried(self, retries: u32, duration: Duration) -> Self {
-        Self::RetriedError {
-            err: Box::new(self),
+        Self::Retried {
+            error: Box::new(self),
             retries,
             duration,
         }
     }
 }
 
-fn should_try_next_installer_url(error: &WrappedReqwestError) -> bool {
-    if let Some(error) = error.inner()
-        && (error.status().is_some()
-            || error.is_timeout()
-            || error.is_connect()
-            || error.is_request()
-            || error.is_body()
-            || error.is_decode())
-    {
-        return true;
-    }
-
-    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(error);
-    while let Some(error) = source {
-        if let Some(io_error) = error.downcast_ref::<std::io::Error>()
-            && matches!(
-                io_error.kind(),
-                std::io::ErrorKind::BrokenPipe
-                    | std::io::ErrorKind::ConnectionAborted
-                    | std::io::ErrorKind::ConnectionReset
-                    | std::io::ErrorKind::InvalidData
-                    | std::io::ErrorKind::TimedOut
-                    | std::io::ErrorKind::UnexpectedEof
-            )
-        {
-            return true;
-        }
-        source = error.source();
-    }
-
-    false
-}
-
 #[cfg(test)]
 mod tests {
-    use std::io::{Read, Write};
-    use std::net::TcpListener;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::mpsc::{self, Sender};
-    use std::thread::JoinHandle;
-    use std::time::Duration;
-
     use super::*;
-
-    fn spawn_http_server(
-        response: String,
-    ) -> (DisplaySafeUrl, Arc<AtomicUsize>, Sender<()>, JoinHandle<()>) {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        listener.set_nonblocking(true).unwrap();
-        let addr = listener.local_addr().unwrap();
-        let requests = Arc::new(AtomicUsize::new(0));
-        let requests_clone = Arc::clone(&requests);
-        let (shutdown_tx, shutdown_rx) = mpsc::channel();
-        let handle = std::thread::spawn(move || {
-            loop {
-                if shutdown_rx.try_recv().is_ok() {
-                    return;
-                }
-
-                match listener.accept() {
-                    Ok((mut stream, _)) => {
-                        requests_clone.fetch_add(1, Ordering::SeqCst);
-                        let mut buf = [0u8; 4096];
-                        let _ = stream.read(&mut buf);
-                        stream.write_all(response.as_bytes()).unwrap();
-                        return;
-                    }
-                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
-                        std::thread::sleep(Duration::from_millis(10));
-                    }
-                    Err(err) => panic!("failed to accept connection: {err}"),
-                }
-            }
-        });
-        (
-            DisplaySafeUrl::parse(&format!("http://{addr}/uv-installer.sh")).unwrap(),
-            requests,
-            shutdown_tx,
-            handle,
-        )
-    }
-
-    fn installer_response(body: &str) -> String {
-        format!(
-            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/plain\r\n\r\n{body}",
-            body.len()
-        )
-    }
-
-    fn not_found_response() -> String {
-        "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n".to_string()
-    }
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[test]
-    fn test_is_official_public_uv_install() {
-        let source = ReleaseSource {
-            release_type: ReleaseSourceType::GitHub,
-            owner: "astral-sh".to_string(),
-            name: "uv".to_string(),
-            app_name: "uv".to_string(),
-        };
-
-        assert!(!is_official_public_uv_install_with_overrides(
-            None, false, false,
-        ));
-        assert!(is_official_public_uv_install_with_overrides(
-            Some(&source),
-            false,
-            false,
-        ));
-        assert!(!is_official_public_uv_install_with_overrides(
-            Some(&source),
-            true,
-            false,
-        ));
-        assert!(!is_official_public_uv_install_with_overrides(
-            Some(&source),
-            false,
-            true,
-        ));
-
-        let source = ReleaseSource {
-            owner: "astral-sh".to_string(),
-            name: "ruff".to_string(),
-            app_name: "uv".to_string(),
-            ..source
-        };
-        assert!(!is_official_public_uv_install_with_overrides(
-            Some(&source),
-            false,
-            false,
-        ));
-    }
-
-    #[test]
-    fn test_official_target_version_specifiers() {
+    fn exact_public_versions() {
         assert_eq!(official_target_version_specifiers(None).unwrap(), None);
         assert_eq!(
             official_target_version_specifiers(Some("1.2.3")).unwrap(),
             Some(VersionSpecifiers::from(VersionSpecifier::equals_version(
-                Pep440Version::new([1, 2, 3]),
+                Version::new([1, 2, 3])
             )))
         );
         assert!(official_target_version_specifiers(Some("0.10")).is_err());
@@ -966,342 +519,70 @@ mod tests {
     }
 
     #[test]
-    fn test_official_update_needed() {
-        assert!(!is_update_needed(
-            &Pep440Version::new([1, 2, 3]),
-            &Pep440Version::new([1, 2, 3]),
-            false,
-        ));
-        assert!(is_update_needed(
-            &Pep440Version::new([1, 2, 3]),
-            &Pep440Version::new([1, 2, 4]),
-            false,
-        ));
-        assert!(!is_update_needed(
-            &Pep440Version::new([1, 2, 4]),
-            &Pep440Version::new([1, 2, 3]),
-            false,
-        ));
-        assert!(!is_update_needed(
-            &Pep440Version::new([1, 2, 3]),
-            &Pep440Version::new([1, 2, 3]),
-            true,
-        ));
-        assert!(is_update_needed(
-            &Pep440Version::new([1, 2, 4]),
-            &Pep440Version::new([1, 2, 3]),
-            true,
-        ));
-    }
-
-    #[test]
-    fn test_official_installer_urls() {
-        let urls = official_installer_urls_with_mirror(&Pep440Version::new([1, 2, 3]), None)
-            .unwrap()
-            .into_iter()
-            .map(|url| url.to_string())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            urls,
-            vec![
-                format!(
-                    "https://releases.astral.sh/github/uv/releases/download/1.2.3/{}",
-                    installer_filename()
-                ),
-                format!(
-                    "https://github.com/astral-sh/uv/releases/download/1.2.3/{}",
-                    installer_filename()
-                ),
-            ]
-        );
-    }
-
-    #[test]
-    fn test_official_installer_urls_custom_astral_mirror() {
-        let urls = official_installer_urls_with_mirror(
-            &Pep440Version::new([1, 2, 3]),
-            Some("https://nexus.example.com/repository/releases.astral.sh/"),
-        )
-        .unwrap()
-        .into_iter()
-        .map(|url| url.to_string())
-        .collect::<Vec<_>>();
-        assert_eq!(
-            urls,
-            vec![format!(
-                "https://nexus.example.com/repository/releases.astral.sh/github/uv/releases/download/1.2.3/{}",
-                installer_filename()
-            )]
-        );
-    }
-
-    #[test]
-    fn test_official_installer_urls_empty_astral_mirror_uses_default() {
-        let default_urls =
-            official_installer_urls_with_mirror(&Pep440Version::new([1, 2, 3]), None).unwrap();
-        let empty_urls =
-            official_installer_urls_with_mirror(&Pep440Version::new([1, 2, 3]), Some("")).unwrap();
-        assert_eq!(default_urls, empty_urls);
-    }
-
-    #[test]
-    fn test_installer_download_url_custom_astral_mirror() {
-        assert_eq!(
-            installer_download_url(
-                &Pep440Version::new([1, 2, 3]),
-                Some("https://nexus.example.com/repository/releases.astral.sh/")
-            )
-            .as_deref(),
-            Some(
-                "https://nexus.example.com/repository/releases.astral.sh/github/uv/releases/download/1.2.3"
-            )
-        );
-    }
-
-    #[test]
-    fn test_installer_download_url_empty_astral_mirror_uses_default() {
-        assert_eq!(
-            installer_download_url(&Pep440Version::new([1, 2, 3]), Some("")),
-            None
-        );
-    }
-
-    #[test]
-    fn test_installer_download_github_token() {
-        let mirror = DisplaySafeUrl::parse(
-            "https://releases.astral.sh/github/uv/releases/download/1.2.3/uv-installer.sh",
-        )
-        .unwrap();
-        let github = DisplaySafeUrl::parse(
-            "https://github.com/astral-sh/uv/releases/download/1.2.3/uv-installer.sh",
-        )
-        .unwrap();
-
-        assert_eq!(
-            installer_download_github_token(&mirror, Some("token")),
-            None
-        );
-        assert_eq!(
-            installer_download_github_token(&github, Some("token")),
-            Some("token")
-        );
-        assert_eq!(installer_download_github_token(&github, None), None);
+    fn only_explicit_updates_allow_downgrades() {
+        let current = Version::new([1, 2, 3]);
+        let older = Version::new([1, 2, 2]);
+        let newer = Version::new([1, 2, 4]);
+        assert!(!is_update_needed(&current, &current, false));
+        assert!(!is_update_needed(&current, &current, true));
+        assert!(!is_update_needed(&current, &older, false));
+        assert!(is_update_needed(&current, &older, true));
+        assert!(is_update_needed(&current, &newer, false));
     }
 
     #[tokio::test]
-    async fn test_download_installer_falls_back_to_canonical_url() {
-        let (mirror_url, mirror_requests, mirror_shutdown, mirror_handle) =
-            spawn_http_server(not_found_response());
-        let (canonical_url, canonical_requests, canonical_shutdown, canonical_handle) =
-            spawn_http_server(installer_response("echo canonical installer\n"));
-        let temp_dir = TempDir::new().unwrap();
-        let installer_path = temp_dir.path().join("installer.sh");
-
-        download_installer_from_urls(
-            &[mirror_url, canonical_url],
-            &installer_path,
-            BaseClientBuilder::default(),
-            None,
-        )
-        .await
-        .expect("404 from mirror should fall back to canonical installer URL");
-
-        let _ = mirror_shutdown.send(());
-        let _ = canonical_shutdown.send(());
-        mirror_handle.join().unwrap();
-        canonical_handle.join().unwrap();
-
-        assert_eq!(mirror_requests.load(Ordering::SeqCst), 1);
-        assert_eq!(canonical_requests.load(Ordering::SeqCst), 1);
-        assert_eq!(
-            fs_err::read_to_string(&installer_path).unwrap(),
-            "echo canonical installer\n"
-        );
-    }
-
-    #[test]
-    fn test_standalone_install_receipt_defaults_modify_path_to_true() {
-        let receipt: StandaloneInstallReceipt =
-            serde_json::from_str("{}\n").expect("receipt without modify_path should parse");
-        assert!(receipt.modify_path);
-
-        let receipt: StandaloneInstallReceipt = serde_json::from_str("{\"modify_path\":false}\n")
-            .expect("receipt with explicit modify_path should parse");
-        assert!(!receipt.modify_path);
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn test_download_installer_sets_executable_bit() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let (url, _requests, shutdown_tx, handle) =
-            spawn_http_server(installer_response("echo installer\n"));
-        let temp_dir = TempDir::new().unwrap();
-        let installer_path = temp_dir.path().join("installer.sh");
-
-        download_installer_from_urls(&[url], &installer_path, BaseClientBuilder::default(), None)
-            .await
-            .expect("installer download should succeed");
-
-        let _ = shutdown_tx.send(());
-        handle.join().unwrap();
-
-        let mode = fs_err::metadata(&installer_path)
-            .unwrap()
-            .permissions()
-            .mode();
-        assert_eq!(mode & 0o100, 0o100, "installer should be owner-executable");
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn test_execute_official_installer_reports_failure() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let temp_dir = TempDir::new().unwrap();
-        let installer_path = temp_dir.path().join("installer.sh");
-        let install_prefix = temp_dir.path().join("install-prefix");
-
-        fs_err::write(
-            &installer_path,
-            "#!/bin/sh\nprintf 'hello from stdout\\n'\nprintf 'hello from stderr\\n' >&2\nexit 23\n",
-        )
-        .unwrap();
-        fs_err::set_permissions(&installer_path, std::fs::Permissions::from_mode(0o744)).unwrap();
-
-        let err = execute_official_installer(
-            &installer_path,
-            &install_prefix,
-            true,
-            &Pep440Version::new([1, 2, 3]),
-            None,
-        )
-        .await
-        .expect_err("failing installer should return an error");
-        let AxoupdateError::InstallFailed {
-            status,
-            stdout,
-            stderr,
-        } = *err
-        else {
-            panic!("expected InstallFailed error");
+    async fn checksum_mismatch_does_not_fallback_or_expose_github_token() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/archive.tar.gz"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"corrupted archive".to_vec()))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/fallback.tar.gz"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let release = Release {
+            version: Version::new([9, 9, 9]),
+            urls: vec![
+                DisplaySafeUrl::parse(&format!("{}/archive.tar.gz", server.uri())).unwrap(),
+                DisplaySafeUrl::parse(&format!("{}/fallback.tar.gz", server.uri())).unwrap(),
+            ],
+            checksum_url: None,
+            sha256: Some("a".repeat(64)),
+            format: SourceDistExtension::TarGz,
+            filename: "archive.tar.gz".to_owned(),
+            api_origin: None,
         };
-
-        assert_eq!(status, Some(23));
-        assert_eq!(stdout.as_deref(), Some("hello from stdout\n"));
-        assert_eq!(stderr.as_deref(), Some("hello from stderr\n"));
+        let builder = BaseClientBuilder::default().retries(0);
+        let client = builder.build().unwrap();
+        let error = download_release(&release, &client, &builder, Some("private-token"))
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error.downcast_ref::<DownloadError>(),
+            Some(DownloadError::ChecksumMismatch { .. })
+        ));
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1);
+        assert!(!requests[0].headers.contains_key("authorization"));
     }
 
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn test_execute_official_installer_sets_install_env_vars() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let temp_dir = TempDir::new().unwrap();
-        let output_path = temp_dir.path().join("env.txt");
-        let installer_path = temp_dir.path().join("installer.sh");
-        let install_prefix = temp_dir.path().join("install-prefix");
-
-        fs_err::write(
-            &installer_path,
-            format!(
-                "#!/bin/sh\nset -eu\n{{\nprintf 'CARGO_DIST_FORCE_INSTALL_DIR=%s\\n' \"$CARGO_DIST_FORCE_INSTALL_DIR\"\nprintf 'UV_INSTALL_DIR=%s\\n' \"$UV_INSTALL_DIR\"\nprintf 'UV_NO_MODIFY_PATH=%s\\n' \"${{UV_NO_MODIFY_PATH-}}\"\n}} > \"{}\"\n",
-                output_path.display()
-            ),
-        )
-        .unwrap();
-        fs_err::set_permissions(&installer_path, std::fs::Permissions::from_mode(0o744)).unwrap();
-
-        execute_official_installer(
-            &installer_path,
-            &install_prefix,
-            false,
-            &Pep440Version::new([1, 2, 3]),
-            None,
-        )
-        .await
-        .unwrap();
-
+    #[test]
+    fn sidecar_requires_matching_filename() {
+        let digest = "a".repeat(64);
         assert_eq!(
-            fs_err::read_to_string(&output_path).unwrap(),
-            format!(
-                "CARGO_DIST_FORCE_INSTALL_DIR={}\nUV_INSTALL_DIR={}\nUV_NO_MODIFY_PATH=1\n",
-                install_prefix.display(),
-                install_prefix.display(),
-            )
+            checksum_from_sidecar(format!("{digest}  uv.tar.gz\n").as_bytes(), "uv.tar.gz")
+                .unwrap(),
+            digest
         );
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn test_execute_official_installer_sets_download_url_for_astral_mirror() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let temp_dir = TempDir::new().unwrap();
-        let output_path = temp_dir.path().join("env.txt");
-        let installer_path = temp_dir.path().join("installer.sh");
-        let install_prefix = temp_dir.path().join("install-prefix");
-
-        fs_err::write(
-            &installer_path,
-            format!(
-                "#!/bin/sh\nset -eu\n{{\nprintf 'UV_DOWNLOAD_URL=%s\\n' \"${{UV_DOWNLOAD_URL-}}\"\n}} > \"{}\"\n",
-                output_path.display()
-            ),
-        )
-        .unwrap();
-        fs_err::set_permissions(&installer_path, std::fs::Permissions::from_mode(0o744)).unwrap();
-
-        execute_official_installer(
-            &installer_path,
-            &install_prefix,
-            true,
-            &Pep440Version::new([1, 2, 3]),
-            Some("https://nexus.example.com/repository/releases.astral.sh/"),
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(
-            fs_err::read_to_string(&output_path).unwrap(),
-            "UV_DOWNLOAD_URL=https://nexus.example.com/repository/releases.astral.sh/github/uv/releases/download/1.2.3\n"
+        assert!(
+            checksum_from_sidecar(format!("{digest}  other.tar.gz\n").as_bytes(), "uv.tar.gz")
+                .is_err()
         );
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn test_execute_official_installer_preserves_modify_path_default() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let temp_dir = TempDir::new().unwrap();
-        let output_path = temp_dir.path().join("env.txt");
-        let installer_path = temp_dir.path().join("installer.sh");
-        let install_prefix = temp_dir.path().join("install-prefix");
-
-        fs_err::write(
-            &installer_path,
-            format!(
-                "#!/bin/sh\nset -eu\n{{\nprintf 'UV_NO_MODIFY_PATH=%s\\n' \"${{UV_NO_MODIFY_PATH-}}\"\n}} > \"{}\"\n",
-                output_path.display()
-            ),
-        )
-        .unwrap();
-        fs_err::set_permissions(&installer_path, std::fs::Permissions::from_mode(0o744)).unwrap();
-
-        execute_official_installer(
-            &installer_path,
-            &install_prefix,
-            true,
-            &Pep440Version::new([1, 2, 3]),
-            None,
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(
-            fs_err::read_to_string(&output_path).unwrap(),
-            "UV_NO_MODIFY_PATH=\n"
-        );
+        assert!(checksum_from_sidecar(b"1234", "uv.tar.gz").is_err());
     }
 }

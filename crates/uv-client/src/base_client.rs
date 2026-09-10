@@ -826,14 +826,6 @@ impl BaseClient {
     pub(crate) fn certificate_source(&self) -> CertificateSource {
         self.certificate_source
     }
-
-    /// The reqwest client without middleware.
-    ///
-    /// This strips important features such as retries and authenticating. Only use when passing
-    /// a middleware-enabled client isn't possible.
-    pub fn raw_client(&self) -> &Client {
-        &self.raw_client
-    }
 }
 
 /// Wrapper around [`ClientWithMiddleware`] that manages redirects.

@@ -72,10 +72,6 @@ uv-workspace = { workspace = true, features = ["clap"] }
 anstream = { workspace = true }
 anyhow = { workspace = true }
 async_zip = { workspace = true }
-axoupdater = { workspace = true, features = [
-  "github_releases",
-  "tokio",
-], optional = true }
 clap = { workspace = true, features = ["derive", "string", "wrap_help"] }
 console = { workspace = true }
 ctrlc = { workspace = true }
@@ -86,7 +82,6 @@ etcetera = { workspace = true }
 fs-err = { workspace = true, features = ["tokio"] }
 futures = { workspace = true }
 hex = { workspace = true }
-http = { workspace = true }
 ignore = { workspace = true }
 jiff = { workspace = true }
 indexmap = { workspace = true }
@@ -141,6 +136,7 @@ bytes = { workspace = true }
 filetime = { workspace = true }
 flate2 = { workspace = true, default-features = false }
 hex = { workspace = true }
+http = { workspace = true }
 http-body-util = { workspace = true }
 hyper = { workspace = true }
 hyper-util = { workspace = true }
@@ -166,9 +162,9 @@ native-auth = []
 performance = ["performance-memory-allocator"]
 performance-memory-allocator = ["dep:uv-performance-memory-allocator"]
 
-# Adds self-update functionality. This feature is only enabled for uv's cargo-dist installer
+# Adds self-management functionality. This feature is only enabled for standalone distributions
 # and should be left unselected when building uv for package managers.
-self-update = ["axoupdater", "uv-cli/self-update"]
+self-update = ["uv-cli/self-update"]
 
 # Features for development only.
 tracing-durations-export = ["dep:tracing-durations-export", "uv-resolver/tracing-durations-export", "uv-settings/tracing-durations-export", "uv-test/tracing-durations-export"]
