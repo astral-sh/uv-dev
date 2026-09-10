@@ -7141,11 +7141,10 @@ fn sync_active_script_environment() -> Result<()> {
        "#
     })?;
 
-    // Running `uv sync --script` with `VIRTUAL_ENV` should warn
+    // Running `uv sync --script` with `VIRTUAL_ENV` should not warn.
     uv_snapshot!(context.filters(), context.sync().arg("--script").arg("script.py").env(EnvVars::VIRTUAL_ENV, "foo"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    warning: `VIRTUAL_ENV=foo` does not match the script environment path `[CACHE_DIR]/environments-v2/script-[HASH]` and will be ignored; use `--active` to target the active environment instead
     Creating script environment at: [CACHE_DIR]/environments-v2/script-[HASH]
     Resolved 3 packages in [TIME]
     Prepared 3 packages in [TIME]
@@ -7226,7 +7225,7 @@ fn sync_active_script_environment_json() -> Result<()> {
        "#
     })?;
 
-    // Running `uv sync --script` with `VIRTUAL_ENV` should warn
+    // Running `uv sync --script` with `VIRTUAL_ENV` should not warn.
     uv_snapshot!(context.filters(), context.sync()
         .arg("--script").arg("script.py")
         .arg("--output-format").arg("json")
@@ -7274,7 +7273,6 @@ fn sync_active_script_environment_json() -> Result<()> {
     }
 
     ----- stderr -----
-    warning: `VIRTUAL_ENV=foo` does not match the script environment path `[CACHE_DIR]/environments-v2/script-[HASH]` and will be ignored; use `--active` to target the active environment instead
     Resolved 3 packages in [TIME]
     Prepared 3 packages in [TIME]
     Installed 3 packages in [TIME]
