@@ -183,7 +183,7 @@ async fn test_simultaneous_independent_create_set() {
 
     let mut handles = vec![];
     for i in 0..10 {
-        let name = format!("thread_entry{i}");
+        let name = format!("{}-{}", generate_random_string(), i);
         let handle = tokio::spawn(async move {
             let entry = Entry::new(&name, &name).expect("Can't create entry");
             entry
