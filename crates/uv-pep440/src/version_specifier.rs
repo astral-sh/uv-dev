@@ -79,7 +79,11 @@ impl VersionSpecifiers {
         Self(specifiers.into_boxed_slice())
     }
 
-    /// Returns the [`VersionSpecifiers`] whose union represents the given range.
+    /// Returns conjunctive [`VersionSpecifiers`] approximating the union of the given ranges.
+    ///
+    /// The bounds are expected in ascending, non-overlapping order. Supported exact-version and
+    /// within-major minor-version gaps are preserved; other gaps are ignored, potentially admitting
+    /// additional versions. An empty iterator returns [`Self::empty`], which matches all versions.
     ///
     /// This function is not applicable to ranges involving pre-release versions.
     pub fn from_release_only_bounds<'a>(
@@ -573,7 +577,7 @@ impl VersionSpecifier {
         self.version.any_prerelease()
     }
 
-    /// Returns the version specifiers whose union represents the given range.
+    /// Returns the version specifiers whose conjunction represents the given range.
     ///
     /// This function is not applicable to ranges involving pre-release versions.
     pub fn from_release_only_bounds(
@@ -1216,6 +1220,79 @@ mod tests {
                         );
                     }
                 }
+            }
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_from_release_only_bounds_unsupported_gaps() -> Result<(), VersionSpecifiersParseError> {
+        let cases = [
+            (
+                "patch gap",
+                vec![
+                    (
+                        Included(Version::new([3, 7])),
+                        Excluded(Version::new([3, 8, 5])),
+                    ),
+                    (
+                        Included(Version::new([3, 8, 7])),
+                        Excluded(Version::new([3, 10])),
+                    ),
+                ],
+                ">=3.7,<3.10",
+                Version::new([3, 8, 6]),
+                None,
+            ),
+            (
+                "supported wildcard and unsupported patch gap",
+                vec![
+                    (
+                        Included(Version::new([3, 7])),
+                        Excluded(Version::new([3, 8])),
+                    ),
+                    (
+                        Included(Version::new([3, 9])),
+                        Excluded(Version::new([3, 9, 5])),
+                    ),
+                    (
+                        Included(Version::new([3, 9, 7])),
+                        Excluded(Version::new([4])),
+                    ),
+                ],
+                ">=3.7,!=3.8.*,<4",
+                Version::new([3, 9, 6]),
+                Some(Version::new([3, 8, 5])),
+            ),
+        ];
+
+        for (name, bounds, expected, admitted, preserved_exclusion) in cases {
+            let specifiers = VersionSpecifiers::from_release_only_bounds(
+                bounds
+                    .iter()
+                    .map(|(lower, upper)| (lower.as_ref(), upper.as_ref())),
+            );
+            assert_eq!(specifiers, expected.parse::<VersionSpecifiers>()?, "{name}");
+
+            assert!(
+                !bounds.iter().any(|range| range.contains(&admitted)),
+                "{name}: the original range must exclude {admitted}"
+            );
+            assert!(
+                specifiers.contains(&admitted),
+                "{name}: reconstruction must admit {admitted}"
+            );
+
+            if let Some(excluded) = preserved_exclusion {
+                assert!(
+                    !bounds.iter().any(|range| range.contains(&excluded)),
+                    "{name}: the original range must exclude {excluded}"
+                );
+                assert!(
+                    !specifiers.contains(&excluded),
+                    "{name}: reconstruction must preserve the exclusion of {excluded}"
+                );
             }
         }
 
