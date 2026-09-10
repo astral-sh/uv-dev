@@ -1,4 +1,4 @@
-use std::fmt::Write;
+use std::fmt::{self, Write};
 
 use anyhow::Result;
 use fs_err::File;
@@ -162,6 +162,28 @@ pub(crate) fn pip_show(
         // Print the name, version, and location (e.g., the `site-packages` directory).
         writeln!(printer.stdout(), "Name: {}", distribution.name())?;
         writeln!(printer.stdout(), "Version: {}", distribution.version())?;
+
+        // Additional core metadata is best-effort: some installed metadata can be used for
+        // resolution even when it does not satisfy the complete metadata specification.
+        if let Ok(metadata) = distribution.read_core_metadata() {
+            let mut stdout = printer.stdout();
+            for (name, value) in [
+                ("Summary", metadata.summary.as_deref()),
+                ("Home-page", metadata.home_page.as_deref()),
+                ("Author", metadata.author.as_deref()),
+                ("Author-email", metadata.author_email.as_deref()),
+            ] {
+                write_metadata_field(&mut stdout, name, value)?;
+            }
+            if !write_metadata_field(
+                &mut stdout,
+                "License-Expression",
+                metadata.license_expression.as_deref(),
+            )? {
+                write_metadata_field(&mut stdout, "License", metadata.license.as_deref())?;
+            }
+        }
+
         writeln!(
             printer.stdout(),
             "Location: {}",
@@ -237,4 +259,21 @@ pub(crate) fn pip_show(
     }
 
     Ok(ExitStatus::Success)
+}
+
+/// Write a nonempty metadata field, stripping terminal control sequences from its value.
+fn write_metadata_field(
+    writer: &mut impl Write,
+    name: &str,
+    value: Option<&str>,
+) -> Result<bool, fmt::Error> {
+    let Some(value) = value else {
+        return Ok(false);
+    };
+    let value = anstream::adapter::strip_str(value).to_string();
+    if value.is_empty() {
+        return Ok(false);
+    }
+    writeln!(writer, "{name}: {value}")?;
+    Ok(true)
 }
