@@ -1,0 +1,14 @@
+name: Windows development-build samples
+
+on:
+  push:
+    branches: ["zb/ci-speed-win-dev-candidate-20260909-*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    uses: astral-sh/uv-dev/.github/workflows/build-dev-binaries.yml@f88f94e94418da8ad945fc7e113e5dd1f66d5dcf
+    with:
+      save-rust-cache: "true"
