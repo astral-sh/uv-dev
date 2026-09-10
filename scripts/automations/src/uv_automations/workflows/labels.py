@@ -89,7 +89,7 @@ def plan_labels(
     if len(set(recommendation.labels)) != len(recommendation.labels):
         raise ValueError("Recommended labels must be unique")
     if disallowed := set(recommendation.labels).difference(allowed):
-        raise ValueError(f"Disallowed pull request labels: {sorted(disallowed)!r}")
+        raise ValueError(f"Disallowed labels: {sorted(disallowed)!r}")
     return LabelPlan(recommendation.labels)
 
 
@@ -152,8 +152,10 @@ def apply_labels(
     return LabelApplyOutcome.APPLIED
 
 
-def recommendation_summary(recommendation: LabelRecommendation) -> str:
+def recommendation_summary(
+    recommendation: LabelRecommendation, *, title: str = "Pull request labels"
+) -> str:
     encoded = json.dumps(
         {"labels": recommendation.labels, "summary": recommendation.summary}, indent=2
     )
-    return f"### Pull request labels\n\n```json\n{encoded}\n```\n"
+    return f"### {title}\n\n```json\n{encoded}\n```\n"

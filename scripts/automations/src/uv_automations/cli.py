@@ -12,7 +12,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import assert_never
 
-from uv_automations import commits_cli, issues_cli
+from uv_automations import commits_cli, issue_labels_cli, issues_cli
 from uv_automations.actions import append_summary, write_json_output, write_output
 from uv_automations.github import GitHub
 from uv_automations.json import loads
@@ -51,6 +51,7 @@ class CommandGroup(StrEnum):
     PULL_REQUESTS = "pull-requests"
     COMMITS = "commits"
     ISSUES = "issues"
+    ISSUE_LABELS = "issue-labels"
 
 
 class CommandKind(StrEnum):
@@ -120,7 +121,12 @@ type CoreCommand = (
     | RemoveRebaseLabel
 )
 
-type Command = CoreCommand | commits_cli.CommitCommand | issues_cli.IssueCommand
+type Command = (
+    CoreCommand
+    | commits_cli.CommitCommand
+    | issues_cli.IssueCommand
+    | issue_labels_cli.IssueLabelCommand
+)
 
 
 def _positive_integer(value: str) -> int:
@@ -201,6 +207,7 @@ def create_parser() -> argparse.ArgumentParser:
     _add_pull_request(remove)
     commits_cli.add_commands(commands.add_parser("commits"))
     issues_cli.add_commands(commands.add_parser("issues"))
+    issue_labels_cli.add_commands(commands.add_parser("issue-labels"))
     return parser
 
 
@@ -216,6 +223,8 @@ def parse_command(
             return commits_cli.parse_command(parsed)
         case CommandGroup.ISSUES:
             return issues_cli.parse_command(parsed)
+        case CommandGroup.ISSUE_LABELS:
+            return issue_labels_cli.parse_command(parsed)
     assert_never(group)
 
 
@@ -351,6 +360,14 @@ def run(command: Command) -> None:
             return
         case issues_cli.PrepareIssue():
             issues_cli.run(command)
+            return
+        case (
+            issue_labels_cli.PrepareIssueLabels()
+            | issue_labels_cli.ValidateIssueLabels()
+            | issue_labels_cli.ReportIssueLabels()
+            | issue_labels_cli.ApplyIssueLabels()
+        ):
+            issue_labels_cli.run(command)
             return
     assert_never(command)
 
