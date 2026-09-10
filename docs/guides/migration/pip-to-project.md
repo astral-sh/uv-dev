@@ -285,12 +285,10 @@ supported platform.
 
 ### The `pyproject.toml`
 
-The `pyproject.toml` is a standardized file for Python project metadata. It replaces
-`requirements.in` files, allowing you to represent arbitrary groups of project dependencies. It also
-provides a centralized location for metadata about your project, such as the build system or tool
-settings.
-
-<!-- TODO: Link to the official docs on this or write more -->
+The [`pyproject.toml`](https://packaging.python.org/en/latest/guides/writing-pyproject-toml/) is a
+standardized file for Python project metadata. It replaces `requirements.in` files, allowing you to
+represent arbitrary groups of project dependencies. It also provides a centralized location for
+metadata about your project, such as the build system or tool settings.
 
 For example, the `requirements.in` and `requirements-dev.in` files above can be translated to a
 `pyproject.toml` as follows:
