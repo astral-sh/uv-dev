@@ -1,0 +1,85 @@
+# Bootstrap a uv distribution. Installation and self-management are implemented by uv.
+[CmdletBinding()]
+param(
+    [switch]$NoModifyPath,
+    [switch]$Quiet,
+    [switch]$Help,
+    [switch]$PrintTarget,
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [string[]]$InstallArguments
+)
+$ErrorActionPreference = 'Stop'
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+$Version = '{{version}}'
+$Repository = '{{repository}}'
+$Checksums = @{
+{{#windows_checksums}}
+    '{{target}}' = '{{checksum}}'
+{{/windows_checksums}}
+}
+
+if ($Help) {
+    Write-Output "uv $Version bootstrap installer. Downloads and verifies a distribution, then runs uv self install."
+    return
+}
+
+try { $Architecture = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString() }
+catch { $Architecture = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE } }
+$Target = switch ($Architecture.ToLowerInvariant()) {
+    { $_ -in 'x64', 'amd64' } { 'x86_64-pc-windows-msvc' }
+    { $_ -in 'x86', 'i686' } { 'i686-pc-windows-msvc' }
+    { $_ -in 'arm64', 'aarch64' } { 'aarch64-pc-windows-msvc' }
+    default { throw "Unsupported architecture: $Architecture" }
+}
+if ($PrintTarget) { Write-Output $Target; return }
+if (-not $Checksums.ContainsKey($Target)) { throw "uv $Version has no distribution for $Target" }
+
+$Filename = "uv-$Target.zip"
+$Fallback = $null
+if ($env:UV_INSTALLER_GHE_BASE_URL -and $env:UV_INSTALLER_GITHUB_BASE_URL) { throw 'Cannot set both GitHub and GHE base URLs' }
+if ($env:UV_DOWNLOAD_URL) { $Base = $env:UV_DOWNLOAD_URL }
+elseif ($env:INSTALLER_DOWNLOAD_URL) { $Base = $env:INSTALLER_DOWNLOAD_URL }
+elseif ($env:UV_INSTALLER_GHE_BASE_URL) { $Base = "$($env:UV_INSTALLER_GHE_BASE_URL.TrimEnd('/'))/$Repository/releases/download/$Version" }
+elseif ($env:UV_INSTALLER_GITHUB_BASE_URL) { $Base = "$($env:UV_INSTALLER_GITHUB_BASE_URL.TrimEnd('/'))/$Repository/releases/download/$Version" }
+elseif ($Repository -ne 'astral-sh/uv') { $Base = "https://github.com/$Repository/releases/download/$Version" }
+elseif ($env:UV_ASTRAL_MIRROR_URL) { $Base = "$($env:UV_ASTRAL_MIRROR_URL.TrimEnd('/'))/github/uv/releases/download/$Version" }
+else {
+    $Base = "https://releases.astral.sh/github/uv/releases/download/$Version"
+    $Fallback = "https://github.com/$Repository/releases/download/$Version"
+}
+
+function Download-Archive([string]$Url, [string]$Destination) {
+    $Uri = [Uri]$Url
+    if ($Uri.Scheme -ne 'https') { throw 'Release downloads require HTTPS' }
+    $Headers = @{}
+    $Authenticated = $Uri.Host -eq 'github.com'
+    foreach ($CustomBase in @($env:UV_INSTALLER_GITHUB_BASE_URL, $env:UV_INSTALLER_GHE_BASE_URL)) {
+        if ($CustomBase -and ([Uri]$CustomBase).GetLeftPart([UriPartial]::Authority) -eq $Uri.GetLeftPart([UriPartial]::Authority)) { $Authenticated = $true }
+    }
+    if ($Authenticated -and $env:UV_GITHUB_TOKEN) { $Headers.Authorization = "Bearer $env:UV_GITHUB_TOKEN" }
+    Invoke-WebRequest -UseBasicParsing -Uri $Uri -Headers $Headers -OutFile $Destination
+}
+
+$Temporary = Join-Path ([IO.Path]::GetTempPath()) ("uv-installer-" + [Guid]::NewGuid().ToString('N'))
+$null = New-Item -ItemType Directory -Path $Temporary
+try {
+    $Archive = Join-Path $Temporary $Filename
+    try { Download-Archive "$($Base.TrimEnd('/'))/$Filename" $Archive }
+    catch {
+        if (-not $Fallback) { throw }
+        Download-Archive "$Fallback/$Filename" $Archive
+    }
+    if ((Get-FileHash -Algorithm SHA256 $Archive).Hash.ToLowerInvariant() -ne $Checksums[$Target]) { throw "Checksum mismatch for $Filename" }
+    Expand-Archive -LiteralPath $Archive -DestinationPath $Temporary
+    $Arguments = @('self', 'install', '--preview-features', 'self-management', '--source-repository', $Repository)
+    if ($NoModifyPath) { $Arguments += '--no-modify-path' }
+    if ($Quiet) { $Arguments += '--quiet' }
+    if ($PSBoundParameters.ContainsKey('Verbose')) { $Arguments += '--verbose' }
+    if ($env:UV_PRINT_QUIET -eq '1' -or (-not $env:UV_PRINT_QUIET -and $env:INSTALLER_PRINT_QUIET -eq '1')) { $Arguments += '--quiet' }
+    if ($env:UV_PRINT_VERBOSE -eq '1' -or (-not $env:UV_PRINT_VERBOSE -and $env:INSTALLER_PRINT_VERBOSE -eq '1')) { $Arguments += '--verbose' }
+    $Arguments += $InstallArguments
+    & (Join-Path $Temporary 'uv.exe') @Arguments
+    if ($LASTEXITCODE -ne 0) { throw "uv self install failed with exit code $LASTEXITCODE" }
+} finally {
+    Remove-Item -LiteralPath $Temporary -Recurse -Force
+}

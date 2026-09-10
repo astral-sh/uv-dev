@@ -1,0 +1,159 @@
+#!/bin/sh
+# Bootstrap a uv distribution. Installation and self-management are implemented by uv.
+set -eu
+
+UV_BOOTSTRAP_VERSION='{{version}}'
+UV_BOOTSTRAP_REPOSITORY='{{repository}}'
+
+fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
+
+detect_target() {
+    system=$(uname -s)
+    machine=$(uname -m)
+    case "$system" in
+        CYGWIN*|MSYS*|MINGW*)
+            machine=${PROCESSOR_ARCHITEW6432:-${PROCESSOR_ARCHITECTURE:-$machine}}
+            system=Windows
+            ;;
+        Darwin)
+            if [ "$machine" = x86_64 ] && [ "$(sysctl -n hw.optional.arm64 2>/dev/null || true)" = 1 ]; then machine=arm64; fi
+            ;;
+    esac
+    case "$machine" in
+        x86_64|amd64|AMD64) arch=x86_64 ;;
+        i386|i486|i586|i686|x86) arch=i686 ;;
+        aarch64|arm64|ARM64) arch=aarch64 ;;
+        armv7l|armv8l) arch=armv7 ;;
+        armv6l) arch=arm ;;
+        ppc64le) arch=powerpc64le ;;
+        riscv64) arch=riscv64gc ;;
+        s390x) arch=s390x ;;
+        *) fail "unsupported architecture: $machine" ;;
+    esac
+    case "$system" in
+        Darwin) target=$arch-apple-darwin ;;
+        Windows) target=$arch-pc-windows-msvc ;;
+        Linux)
+            if [ "$(getconf LONG_BIT 2>/dev/null || true)" = 32 ]; then
+                case "$arch" in x86_64) arch=i686 ;; aarch64) arch=armv7 ;; esac
+            fi
+            minimum=17
+            case "$arch" in aarch64) minimum=28 ;; riscv64gc) minimum=31 ;; esac
+            libc=musl
+            glibc=$(getconf GNU_LIBC_VERSION 2>/dev/null || true)
+            case "$glibc" in
+                'glibc '*)
+                    glibc=${glibc#glibc }
+                    major=${glibc%%.*}
+                    minor=${glibc#*.}
+                    minor=${minor%%.*}
+                    case "$major:$minor" in *[!0-9:]*|:*) fail "invalid glibc version: $glibc" ;; esac
+                    if [ "$major" -gt 2 ] || { [ "$major" -eq 2 ] && [ "$minor" -ge "$minimum" ]; }; then libc=gnu; fi
+                    ;;
+            esac
+            case "$arch" in
+                arm) libc=musleabihf ;;
+                armv7) libc=${libc}eabihf ;;
+                powerpc64le|s390x) [ "$libc" = gnu ] || fail "$arch requires glibc 2.17 or later" ;;
+            esac
+            target=$arch-unknown-linux-$libc
+            ;;
+        *) fail "unsupported operating system: $system" ;;
+    esac
+}
+
+checksum_for_target() {
+    case "$target" in
+{{#checksums}}
+        {{target}}) checksum='{{checksum}}' ;;
+{{/checksums}}
+        *) fail "uv $UV_BOOTSTRAP_VERSION has no distribution for $target" ;;
+    esac
+}
+
+download() {
+    url=$1
+    destination=$2
+    authenticated=false
+    case "$url" in https://github.com/*) authenticated=true ;; esac
+    if [ -n "${UV_INSTALLER_GHE_BASE_URL:-}" ]; then
+        case "$url" in "${UV_INSTALLER_GHE_BASE_URL%/}"/*) authenticated=true ;; esac
+    fi
+    if [ -n "${UV_INSTALLER_GITHUB_BASE_URL:-}" ]; then
+        case "$url" in "${UV_INSTALLER_GITHUB_BASE_URL%/}"/*) authenticated=true ;; esac
+    fi
+    if command -v curl >/dev/null 2>&1; then
+        if [ "$authenticated" = true ] && [ -n "${UV_GITHUB_TOKEN:-}" ]; then
+            curl --proto '=https' --tlsv1.2 -fLsS --retry 3 -H "Authorization: Bearer $UV_GITHUB_TOKEN" "$url" -o "$destination"
+        else
+            curl --proto '=https' --tlsv1.2 -fLsS --retry 3 "$url" -o "$destination"
+        fi
+    elif command -v wget >/dev/null 2>&1; then
+        [ "$authenticated" != true ] || [ -z "${UV_GITHUB_TOKEN:-}" ] || fail 'curl is required for authenticated downloads'
+        wget -q "$url" -O "$destination"
+    else
+        fail 'curl or wget is required'
+    fi
+}
+
+verify_archive() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        actual=$(sha256sum "$archive" | cut -d ' ' -f 1)
+    elif command -v shasum >/dev/null 2>&1; then
+        actual=$(shasum -a 256 "$archive" | cut -d ' ' -f 1)
+    elif command -v openssl >/dev/null 2>&1; then
+        actual=$(openssl dgst -sha256 "$archive" | sed 's/^.*= //')
+    else
+        fail 'sha256sum, shasum, or openssl is required'
+    fi
+    [ "$actual" = "$checksum" ] || fail "checksum mismatch for $filename"
+}
+
+main() {
+    for argument in "$@"; do
+        case "$argument" in
+            -h|--help)
+                printf 'uv %s bootstrap installer\n\nDownloads and verifies a distribution, then runs uv self install.\nOptions are forwarded to uv self install.\n  --print-target  Print the selected Rust target without downloading\n' "$UV_BOOTSTRAP_VERSION"
+                return
+                ;;
+        esac
+    done
+    detect_target
+    if [ "${1:-}" = --print-target ]; then printf '%s\n' "$target"; return; fi
+    checksum_for_target
+    case "$target" in *-windows-msvc) extension=zip ;; *) extension=tar.gz ;; esac
+    filename=uv-$target.$extension
+    temporary=$(mktemp -d "${TMPDIR:-/tmp}/uv-installer.XXXXXXXX") || fail 'could not create temporary directory'
+    trap 'rm -rf "$temporary"' 0
+    trap 'exit 1' 1 2 3 15
+    archive=$temporary/$filename
+    fallback=
+    [ -z "${UV_INSTALLER_GHE_BASE_URL:-}" ] || [ -z "${UV_INSTALLER_GITHUB_BASE_URL:-}" ] || fail 'cannot set both GitHub and GHE base URLs'
+    if [ -n "${UV_DOWNLOAD_URL:-}" ]; then base=$UV_DOWNLOAD_URL
+    elif [ -n "${INSTALLER_DOWNLOAD_URL:-}" ]; then base=$INSTALLER_DOWNLOAD_URL
+    elif [ -n "${UV_INSTALLER_GHE_BASE_URL:-}" ]; then base=${UV_INSTALLER_GHE_BASE_URL%/}/$UV_BOOTSTRAP_REPOSITORY/releases/download/$UV_BOOTSTRAP_VERSION
+    elif [ -n "${UV_INSTALLER_GITHUB_BASE_URL:-}" ]; then base=${UV_INSTALLER_GITHUB_BASE_URL%/}/$UV_BOOTSTRAP_REPOSITORY/releases/download/$UV_BOOTSTRAP_VERSION
+    elif [ "$UV_BOOTSTRAP_REPOSITORY" != astral-sh/uv ]; then base=https://github.com/$UV_BOOTSTRAP_REPOSITORY/releases/download/$UV_BOOTSTRAP_VERSION
+    elif [ -n "${UV_ASTRAL_MIRROR_URL:-}" ]; then base=${UV_ASTRAL_MIRROR_URL%/}/github/uv/releases/download/$UV_BOOTSTRAP_VERSION
+    else
+        base=https://releases.astral.sh/github/uv/releases/download/$UV_BOOTSTRAP_VERSION
+        fallback=https://github.com/$UV_BOOTSTRAP_REPOSITORY/releases/download/$UV_BOOTSTRAP_VERSION
+    fi
+    if ! download "${base%/}/$filename" "$archive"; then
+        [ -n "$fallback" ] || fail "could not download $filename"
+        download "$fallback/$filename" "$archive" || fail "could not download $filename"
+    fi
+    verify_archive
+    if [ "$extension" = zip ]; then
+        unzip -q "$archive" -d "$temporary"
+        executable=$temporary/uv.exe
+    else
+        tar -xzf "$archive" -C "$temporary"
+        executable=$temporary/uv-$target/uv
+    fi
+    [ "${UV_PRINT_QUIET:-${INSTALLER_PRINT_QUIET:-0}}" != 1 ] || set -- --quiet "$@"
+    [ "${UV_PRINT_VERBOSE:-${INSTALLER_PRINT_VERBOSE:-0}}" != 1 ] || set -- --verbose "$@"
+    "$executable" self install --preview-features self-management --source-repository "$UV_BOOTSTRAP_REPOSITORY" "$@"
+}
+
+main "$@"
