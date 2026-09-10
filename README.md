@@ -23,6 +23,11 @@ as a filesystem source, not executed as the active build stage. A minimal build 
 --version` succeeded and printed uv 0.12.12. The full Dockerfile and the BuildKit line identifying
 the failing step are therefore needed to determine which stage is trying to execute `/bin/sh`.
 
+A maintainer has now marked the report as lacking enough information to reproduce and requested a
+minimal reproducible example. The requested follow-up includes the uv version, operating system,
+command, and output; for this Docker failure, the complete Dockerfile and full numbered BuildKit
+output remain the essential missing pieces.
+
 ## Reproduction
 
 Outcome: `needs_more_information`.
@@ -77,6 +82,11 @@ including the numbered failing instruction, the build command and build context/
 output from the same build pinned to 0.12.11 are required. Those details will identify which active
 stage is missing `/bin/sh`; the provided line alone only reads files from the distroless image.
 
+The repository bot subsequently recorded that a maintainer considers the issue non-reproducible
+with the information provided and requested an MRE, including the uv version, operating system,
+command, and output. This confirms that investigation is waiting on reporter-supplied reproduction
+details rather than on an identified uv fix.
+
 ## Draft response
 
 `latest` was updated on September 9 and currently resolves to uv 0.12.12 at
@@ -106,7 +116,8 @@ which stage or instruction Docker was executing.
 
 The 0.12.12 release timing is confirmed, but no root cause for the reporter's build failure is
 confirmed. A complete Dockerfile and full BuildKit output could establish a bug and justify
-reclassification.
+reclassification. A maintainer has requested that reproduction information, so the present
+classification and `needs_more_information` reproduction status remain current.
 
 ## Related
 
