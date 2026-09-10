@@ -316,7 +316,6 @@ impl PyVenvConfiguration {
             {
                 *line = Cow::Owned(format!("{key} = {value}"));
                 found = true;
-                break;
             }
         }
         if !found {
