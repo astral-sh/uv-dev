@@ -156,6 +156,28 @@ Additional dependencies can be included, e.g., to include `mkdocs-material` when
 $ uvx --with mkdocs-material mkdocs --help
 ```
 
+Use [`--with-requirements`](../reference/cli.md#uv-tool-run--with-requirements) to read additional
+dependencies from a file instead. For example, a `requirements.in` file can contain unpinned
+requirements:
+
+```text title="requirements.in"
+numpy
+rich
+```
+
+Then run IPython with these packages available:
+
+```console
+$ uvx --with-requirements requirements.in ipython
+```
+
+The same file can be used when
+[installing a persistent tool](../reference/cli.md#uv-tool-install--with-requirements):
+
+```console
+$ uv tool install --with-requirements requirements.in ipython
+```
+
 ## Installing tools
 
 If a tool is used often, it is useful to install it to a persistent environment and add it to the
