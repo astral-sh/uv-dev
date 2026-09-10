@@ -140,42 +140,67 @@ fn installed_metadata_caches_only_successful_reads() -> Result<()> {
 
         fs_err::remove_file(&metadata)?;
         let expected = fs_err::read(&metadata).expect_err("the metadata file is absent");
-        let error = installed
-            .read_metadata()
-            .expect_err("the metadata file is absent");
-        let InstalledDistError::Io(io_error) = &error else {
-            anyhow::bail!("unexpected installed-distribution error: {error:?}");
-        };
-        assert_eq!(io_error.kind(), std::io::ErrorKind::NotFound);
-        assert_eq!(io_error.raw_os_error(), expected.raw_os_error());
-        assert_eq!(error.to_string(), expected.to_string());
+        for error in [
+            installed
+                .read_metadata()
+                .expect_err("the metadata file is absent"),
+            installed
+                .read_core_metadata()
+                .expect_err("the metadata file is absent"),
+        ] {
+            let InstalledDistError::Io(io_error) = &error else {
+                anyhow::bail!("unexpected installed-distribution error: {error:?}");
+            };
+            assert_eq!(io_error.kind(), std::io::ErrorKind::NotFound);
+            assert_eq!(io_error.raw_os_error(), expected.raw_os_error());
+            assert_eq!(error.to_string(), expected.to_string());
+        }
 
         fs_err::write(&metadata, MISSING_NAME_METADATA)?;
-        let error = installed
-            .read_metadata()
-            .expect_err("the metadata does not contain a name");
-        let parse_error = match (&installed.kind, &error) {
-            (
-                InstalledDistKind::Registry(_) | InstalledDistKind::Url(_),
-                InstalledDistError::MetadataParse { path, err },
-            )
-            | (
-                InstalledDistKind::EggInfoFile(_)
-                | InstalledDistKind::EggInfoDirectory(_)
-                | InstalledDistKind::LegacyEditable(_),
-                InstalledDistError::PkgInfoParse { path, err },
-            ) => {
-                assert_eq!(path, &metadata);
-                err
-            }
-            _ => anyhow::bail!("unexpected installed-distribution error: {error:?}"),
-        };
-        assert_missing_name_source(&error, parse_error)?;
+        for error in [
+            installed
+                .read_metadata()
+                .expect_err("the metadata does not contain a name"),
+            installed
+                .read_core_metadata()
+                .expect_err("the metadata does not contain a name"),
+        ] {
+            let parse_error = match (&installed.kind, &error) {
+                (
+                    InstalledDistKind::Registry(_) | InstalledDistKind::Url(_),
+                    InstalledDistError::MetadataParse { path, err },
+                )
+                | (
+                    InstalledDistKind::EggInfoFile(_)
+                    | InstalledDistKind::EggInfoDirectory(_)
+                    | InstalledDistKind::LegacyEditable(_),
+                    InstalledDistError::PkgInfoParse { path, err },
+                ) => {
+                    assert_eq!(path, &metadata);
+                    err
+                }
+                _ => anyhow::bail!("unexpected installed-distribution error: {error:?}"),
+            };
+            assert_missing_name_source(&error, parse_error)?;
+        }
 
         fs_err::write(&metadata, VALID_METADATA)?;
         let cached = installed.read_metadata()?;
         assert_eq!(cached.name.as_ref(), "fixture");
         assert_eq!(cached.version.to_string(), "1.0.0");
+        for summary in ["First summary", "Updated summary"] {
+            fs_err::write(
+                &metadata,
+                format!(
+                    "Metadata-Version: 2.1\nName: fixture\nVersion: 1.0.0\nSummary: {summary}\n"
+                ),
+            )?;
+            assert_eq!(
+                installed.read_core_metadata()?.summary.as_deref(),
+                Some(summary)
+            );
+            assert!(std::ptr::eq(cached, installed.read_metadata()?));
+        }
         fs_err::write(&metadata, MISSING_NAME_METADATA)?;
         assert!(std::ptr::eq(cached, installed.read_metadata()?));
         fs_err::remove_file(&metadata)?;

@@ -431,6 +431,11 @@ impl InstalledDist {
         Ok(self.metadata_cache.get().expect("metadata should be set"))
     }
 
+    /// Read the complete core metadata for the installed distribution.
+    pub fn read_core_metadata(&self) -> Result<uv_pypi_types::Metadata23, InstalledDistError> {
+        self.read_metadata_with(uv_pypi_types::Metadata23::parse)
+    }
+
     /// Read and parse the installed distribution's `METADATA` or `PKG-INFO` file.
     fn read_metadata_with<T>(
         &self,
