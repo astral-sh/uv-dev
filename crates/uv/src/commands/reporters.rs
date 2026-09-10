@@ -262,8 +262,13 @@ impl ProgressReporter {
                     .progress_chars("--"),
             );
             // If the file is larger than 1MB, show a message to indicate that this may take
-            // a while keeping the log concise.
-            if multi_progress.is_hidden() && !*HAS_UV_TEST_NO_CLI_PROGRESS && size > 1024 * 1024 {
+            // a while keeping the log concise. Publishing reports its own status after validating
+            // the registry response.
+            if multi_progress.is_hidden()
+                && !*HAS_UV_TEST_NO_CLI_PROGRESS
+                && direction != Direction::Upload
+                && size > 1024 * 1024
+            {
                 let _ = writeln!(
                     self.printer.stderr(),
                     "{} {} {}",
@@ -275,7 +280,10 @@ impl ProgressReporter {
             progress.set_message(name);
         } else {
             progress.set_style(ProgressStyle::with_template("{wide_msg:.dim} ....").unwrap());
-            if multi_progress.is_hidden() && !*HAS_UV_TEST_NO_CLI_PROGRESS {
+            if multi_progress.is_hidden()
+                && !*HAS_UV_TEST_NO_CLI_PROGRESS
+                && direction != Direction::Upload
+            {
                 let _ = writeln!(
                     self.printer.stderr(),
                     "{} {}",
@@ -321,6 +329,7 @@ impl ProgressReporter {
         if let ProgressBarKind::Numeric { progress, size } = state.bars.remove(&id).unwrap() {
             if multi_progress.is_hidden()
                 && !*HAS_UV_TEST_NO_CLI_PROGRESS
+                && direction != Direction::Upload
                 && size.is_none_or(|size| size > 1024 * 1024)
             {
                 let _ = writeln!(
@@ -709,6 +718,22 @@ impl PublishReporter {
         let reporter = ProgressReporter::new(root, multi_progress, printer);
         Self { reporter, dry_run }
     }
+
+    /// Finish the publication status after the registry has accepted or rejected the upload.
+    pub(crate) fn finish_upload(&self, uploaded: bool) {
+        if !uploaded {
+            self.reporter.root.finish_and_clear();
+            return;
+        }
+
+        let message = self.reporter.root.message();
+        let prefix = "Uploaded".bold().green().to_string();
+        if self.reporter.root.is_hidden() && !*HAS_UV_TEST_NO_CLI_PROGRESS {
+            let _ = writeln!(self.reporter.printer.stderr(), "{prefix} {message}");
+        }
+        self.reporter.root.set_prefix(prefix);
+        self.reporter.root.finish_with_message(message);
+    }
 }
 
 impl uv_publish::Reporter for PublishReporter {
@@ -733,12 +758,17 @@ impl uv_publish::Reporter for PublishReporter {
 
     fn on_upload_ready(&self, name: &DistFilename, size: u64) -> Result<(), fmt::Error> {
         let bytes = human_readable_bytes(size);
-        writeln!(
-            self.reporter.printer.stderr(),
-            "{} {name} {}",
-            "Uploading".bold().green(),
-            format!("({bytes:.1})").dimmed()
-        )
+        let message = format!("{name} {}", format!("({bytes:.1})").dimmed());
+        let prefix = "Uploading".bold().green().to_string();
+        if self.reporter.root.is_hidden() && !*HAS_UV_TEST_NO_CLI_PROGRESS {
+            writeln!(self.reporter.printer.stderr(), "{prefix} {message}")?;
+        }
+        self.reporter
+            .root
+            .set_style(ProgressStyle::with_template("{prefix} {wide_msg}").unwrap());
+        self.reporter.root.set_prefix(prefix);
+        self.reporter.root.set_message(message);
+        Ok(())
     }
 
     fn on_progress(&self, _name: &str, id: usize) {
@@ -942,5 +972,66 @@ impl uv_bin_install::Reporter for BinaryDownloadReporter {
 
     fn on_download_complete(&self, id: usize) {
         self.reporter.on_request_complete(Direction::Download, id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use indicatif::ProgressDrawTarget;
+    use uv_publish::Reporter as _;
+
+    use super::*;
+
+    #[test]
+    fn publish_status_waits_for_registry_result() -> Result<(), fmt::Error> {
+        let name =
+            DistFilename::try_from_normalized_filename("publish_progress-1.0.0-py3-none-any.whl")
+                .expect("valid wheel filename");
+
+        for uploaded in [false, true] {
+            let multi_progress = MultiProgress::with_draw_target(ProgressDrawTarget::hidden());
+            let root = multi_progress.add(ProgressBar::hidden());
+            let state = Arc::new(Mutex::new(BarState::default()));
+            let reporter = PublishReporter {
+                reporter: ProgressReporter {
+                    printer: Printer::new(2, 0, true),
+                    root: root.clone(),
+                    mode: ProgressMode::Multi {
+                        multi_progress,
+                        state: state.clone(),
+                    },
+                },
+                dry_run: false,
+            };
+
+            reporter.on_upload_ready(&name, 2 * 1024 * 1024)?;
+            assert_eq!(root.prefix(), "Uploading".bold().green().to_string());
+            let message = root.message();
+            assert_eq!(message, format!("{name} {}", "(2.0MiB)".dimmed()));
+
+            let id = reporter.on_upload_start(&name.to_string(), Some(2 * 1024 * 1024));
+            reporter.on_upload_progress(id, 17);
+            assert_eq!(
+                state.lock().expect("bar state is not poisoned").bars[&id].position(),
+                17,
+            );
+            reporter.on_upload_complete(id);
+            assert!(
+                !state
+                    .lock()
+                    .expect("bar state is not poisoned")
+                    .bars
+                    .contains_key(&id)
+            );
+            assert!(!root.is_finished());
+            assert_eq!(root.prefix(), "Uploading".bold().green().to_string());
+
+            reporter.finish_upload(uploaded);
+            assert!(root.is_finished());
+            assert_eq!(root.message(), message);
+            let verb = if uploaded { "Uploaded" } else { "Uploading" };
+            assert_eq!(root.prefix(), verb.bold().green().to_string());
+        }
+        Ok(())
     }
 }
