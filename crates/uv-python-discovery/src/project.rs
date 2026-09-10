@@ -83,6 +83,11 @@ pub struct ProjectPythonRequest {
 }
 
 impl ProjectPythonRequest {
+    /// Return the source of the Python request.
+    pub fn source(&self) -> &PythonRequestSource {
+        &self.source
+    }
+
     /// Determine the [`ProjectPythonRequest`] for the current [`Workspace`].
     pub async fn from_request(
         python_request: Option<PythonRequest>,
