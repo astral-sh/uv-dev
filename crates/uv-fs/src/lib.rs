@@ -451,11 +451,11 @@ mod windows_tests {
     }
 }
 
-/// Create a symlink at `dst` pointing to `src` on Unix or copy `src` to `dst` on Windows
+/// Create a symlink at `dst` pointing to `src` on Unix or copy `src` to `dst` on Windows.
 ///
-/// This does not replace an existing symlink or file at `dst`.
+/// On Unix, this does not replace an existing symlink or file at `dst`, or fall back to copying.
 ///
-/// This does not fallback to copying on Unix.
+/// On Windows, this uses [`std::fs::copy`], which can overwrite an existing destination file.
 ///
 /// This function should only be used for files. If targeting a directory, use [`replace_symlink`]
 /// instead; it will use a junction on Windows, which is more performant.
