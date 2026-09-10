@@ -12271,13 +12271,13 @@ fn lock_requires_python_no_wheels() -> Result<()> {
         "#,
     )?;
 
-    uv_snapshot!(context.filters(), context.lock(), @"
+    uv_snapshot!(context.filters(), context.lock().arg("--no-build"), @"
     exit_code: 1 (failure)
     ----- stderr -----
       × No solution found when resolving dependencies:
       ╰─▶ Because dearpygui==1.9.1 has no wheels with a matching Python version tag (e.g., `cp312`) and your project depends on dearpygui==1.9.1, we can conclude that your project's requirements are unsatisfiable.
 
-    hint: Wheels are available for `dearpygui` (v1.9.1) with the following Python ABI tags: `cp37m`, `cp38`, `cp39`, `cp310`, `cp311`
+    hint: Wheels are available for `dearpygui` (v1.9.1) with the following Python version tags: `cp37`, `cp38`, `cp39`, `cp310`, `cp311`
     ");
 
     Ok(())
@@ -40877,7 +40877,7 @@ fn lock_supported_environment_wheel_only_package_requires_compatible_wheels() ->
         )])
         .collect();
 
-    uv_snapshot!(filters, context.lock(), @"
+    uv_snapshot!(filters, context.lock().arg("--no-build"), @"
     exit_code: 1 (failure)
     ----- stderr -----
       × No solution found when resolving dependencies for split (markers: sys_platform == 'linux'):
@@ -40887,7 +40887,7 @@ fn lock_supported_environment_wheel_only_package_requires_compatible_wheels() ->
           we can conclude that pywin32<306 cannot be used.
           And because pywin32>=306 has no Linux-compatible wheels and your project depends on pywin32, we can conclude that your project's requirements are unsatisfiable.
 
-    hint: Wheels are available for `pywin32` (v305) with the following Python ABI tags: `cp36m`, `cp37m`, `cp38`, `cp39`, `cp310`, `cp311`
+    hint: Wheels are available for `pywin32` (v305) with the following Python version tags: `cp36`, `cp37`, `cp38`, `cp39`, `cp310`, `cp311`
     ");
 
     Ok(())
