@@ -1045,6 +1045,7 @@ fn existing_project_environment(
 /// Discover a compatible project environment at `root`.
 fn discover_project_environment(
     root: &Path,
+    source: &PythonRequestSource,
     python_request: Option<&PythonRequest>,
     python_preference: PythonPreference,
     python_arch: Option<PythonArchitecture>,
@@ -1107,6 +1108,13 @@ fn discover_project_environment(
             Ok(Some(environment))
         }
         Err(err) => {
+            if let ProjectEnvironmentPolicy::Compatible = policy
+                && !centralized
+                && let EnvironmentIncompatibilityError::PythonRequest(..) = &err
+                && let PythonRequestSource::DotPythonVersion(_) = source
+            {
+                warn_user!("{err} (from {source})");
+            }
             debug!("{err}");
             Ok(None)
         }
@@ -1401,6 +1409,7 @@ impl ProjectInterpreter {
         cache: &Cache,
         printer: Printer,
     ) -> Result<Self, ProjectError> {
+        let source = project_python.source();
         let python_request = project_python.python_request.as_ref();
         let requires_python = project_python.requires_python();
 
@@ -1428,6 +1437,7 @@ impl ProjectInterpreter {
                 );
                 if let Some(environment) = discover_project_environment(
                     &root,
+                    source,
                     python_request,
                     python_preference,
                     python_arch,
@@ -1450,6 +1460,7 @@ impl ProjectInterpreter {
                     .is_ok_and(|target| is_centralized_environment_path(&target, cache)))
                 && let Some(environment) = discover_project_environment(
                     &project_environment_path,
+                    source,
                     python_request,
                     python_preference,
                     python_arch,
@@ -1486,6 +1497,7 @@ impl ProjectInterpreter {
                 centralized_environment_root(target, python.interpreter(), upgradeable, cache);
             if let Some(environment) = discover_project_environment(
                 &root,
+                source,
                 python_request,
                 python_preference,
                 python_arch,
