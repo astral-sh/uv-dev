@@ -932,7 +932,7 @@ fn python_required_python_major_minor() {
     uv_snapshot!(context.filters(), context.python_find().arg(">3.11.255, <3.12").env(EnvVars::UV_PYTHON_SEARCH_PATH, context.temp_dir.child("child").path()), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: No interpreter found for Python >3.11.[X], <3.12 in virtual environments, managed installations, or search path
+    error: No interpreter found for Python >3.11.255, <3.12 in virtual environments, managed installations, or search path
     ");
 }
 
