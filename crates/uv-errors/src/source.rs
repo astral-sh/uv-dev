@@ -106,6 +106,7 @@ pub struct SourceSnippet<'a> {
     source: SourceFile,
     annotations: Vec<SourceAnnotation<'a>>,
     context_lines: usize,
+    show_source: bool,
 }
 
 impl<'a> SourceSnippet<'a> {
@@ -115,6 +116,7 @@ impl<'a> SourceSnippet<'a> {
             source,
             annotations: Vec::new(),
             context_lines: 0,
+            show_source: true,
         }
     }
 
@@ -153,6 +155,16 @@ impl<'a> SourceSnippet<'a> {
     #[must_use]
     pub fn with_context_lines(mut self, context_lines: usize) -> Self {
         self.context_lines = context_lines;
+        self
+    }
+
+    /// Show a location without exposing the source text.
+    ///
+    /// The first valid primary annotation determines the location, or the first valid annotation
+    /// when there is no primary annotation. Invalid ranges still fall back to the source name.
+    #[must_use]
+    fn without_source_text(mut self) -> Self {
+        self.show_source = false;
         self
     }
 }
@@ -237,6 +249,38 @@ fn source_elements<'a>(snippet: &'a SourceSnippet<'_>) -> Vec<Element<'a>> {
     };
     if source.line_start == 0 || source.line_start.checked_add(lines.last()).is_none() {
         return origin();
+    }
+
+    if !snippet.show_source {
+        let valid = |annotation: &&SourceAnnotation<'_>| {
+            source.text().get(annotation.range.clone()).is_some()
+        };
+        let annotation = snippet
+            .annotations
+            .iter()
+            .filter(valid)
+            .find(|annotation| annotation.kind == AnnotationKind::Primary)
+            .or_else(|| snippet.annotations.iter().find(valid));
+        let Some(annotation) = annotation else {
+            return origin();
+        };
+        let line = lines.line_at(annotation.range.start);
+        let Some(line_range) = lines.range(line, line) else {
+            return origin();
+        };
+        let Some(prefix) = source.text().get(line_range.start..annotation.range.start) else {
+            return origin();
+        };
+        return if path.is_empty() {
+            Vec::new()
+        } else {
+            vec![
+                Origin::path(path.clone())
+                    .line(source.line_start + line)
+                    .char_column(prefix.chars().count() + 1)
+                    .into(),
+            ]
+        };
     }
 
     let mut windows = Vec::new();
@@ -720,6 +764,33 @@ mod tests {
          ::: overflowing-line.toml
         "
         );
+    }
+
+    #[test]
+    fn source_locations_can_omit_sensitive_text() {
+        let source = SourceFile::new(
+            "uv.toml",
+            "token = \"not-for-diagnostics\"\r\nπ = \"private\"\r\n",
+        )
+        .with_line_start(8);
+        let primary = range_of(source.text(), "private");
+        let snippets = [
+            SourceSnippet::new(source.clone())
+                .with_annotation(SourceAnnotation::secondary(0..5))
+                .with_annotation(SourceAnnotation::primary(primary))
+                .without_source_text(),
+            SourceSnippet::new(source.clone())
+                .with_annotation(SourceAnnotation::secondary(0..5))
+                .without_source_text(),
+            SourceSnippet::new(source)
+                .with_annotation(SourceAnnotation::primary(0..usize::MAX))
+                .without_source_text(),
+        ];
+        assert_snapshot!(render(&snippets, Some(80)), @"
+        --> uv.toml:9:6
+        ::: uv.toml:8:1
+        ::: uv.toml
+        ");
     }
 
     #[test]
