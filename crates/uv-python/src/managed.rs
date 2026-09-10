@@ -1385,4 +1385,53 @@ mod tests {
             },
         );
     }
+
+    #[test]
+    fn test_replace_dangling_minor_version_link() -> anyhow::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let platform = Platform::from_env()?;
+        let old_path = temp_dir.path().join(format!("cpython-3.13.1-{platform}"));
+        let new_path = temp_dir.path().join(format!("cpython-3.13.2-{platform}"));
+        fs::create_dir(&old_path)?;
+        fs::create_dir(&new_path)?;
+
+        let old_installation = ManagedPythonInstallation::from_path(&old_path)?;
+        let new_installation = ManagedPythonInstallation::from_path(&new_path)?;
+        let old_link = PythonMinorVersionLink::from_installation(&old_installation)
+            .ok_or_else(|| anyhow::anyhow!("old installation has no minor-version link"))?;
+        let new_link = PythonMinorVersionLink::from_installation(&new_installation)
+            .ok_or_else(|| anyhow::anyhow!("new installation has no minor-version link"))?;
+        assert_eq!(old_link.symlink_directory, new_link.symlink_directory);
+
+        if cfg!(unix) {
+            fs::create_dir(new_path.join("bin"))?;
+        }
+        let payload = b"inert Python installation";
+        fs::write(new_installation.executable(false), payload)?;
+
+        old_installation.ensure_minor_version_link()?;
+        assert!(old_link.exists());
+        fs::remove_dir_all(&old_path)?;
+
+        // The directory entry still exists, but its target has been removed.
+        assert!(fs::symlink_metadata(&new_link.symlink_directory).is_ok());
+        assert_eq!(
+            fs::metadata(&new_link.symlink_directory)
+                .expect_err("minor-version link should be dangling")
+                .kind(),
+            io::ErrorKind::NotFound
+        );
+        assert!(old_link.exists());
+        assert!(!new_link.exists());
+
+        for _ in 0..2 {
+            new_installation.ensure_minor_version_link()?;
+            assert!(new_link.exists());
+            assert!(!old_link.exists());
+            assert_eq!(fs::read(&new_link.symlink_executable)?, payload);
+            assert_eq!(fs::read(new_installation.executable(false))?, payload);
+        }
+
+        Ok(())
+    }
 }
