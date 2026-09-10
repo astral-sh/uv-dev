@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 10428,
+        "title": "Doc and install: avoid security issue on Windows",
+        "url": "https://github.com/astral-sh/uv/issues/10428",
+        "state": "open",
+        "reason": "Closest same-command report: it concerns the documented irm ... | iex pipeline and records a download-to-file workaround, but its trigger is endpoint security blocking fileless execution, not PowerShell 5.1 splitting the script."
+      },
+      {
+        "kind": "issue",
+        "number": 5460,
+        "title": "uv self update: failed to execute installer (status: exit code: 1) on Windows",
+        "url": "https://github.com/astral-sh/uv/issues/5460",
+        "state": "open",
+        "reason": "Adjacent Windows PowerShell/cargo-dist installer compatibility tracker. Its confirmed failure is execution policy when self-update launches a saved script in Windows PowerShell 5.1, whereas this report passes Bypass and fails earlier while piping the standalone installer into Invoke-Expression."
+      },
+      {
+        "kind": "pull_request",
+        "number": 18725,
+        "title": "Publish installers to `/installers/uv/latest` on the mirror",
+        "url": "https://github.com/astral-sh/uv/pull/18725",
+        "state": "merged",
+        "reason": "Infrastructure context for the current URL: it introduced the mirror endpoint now reached by the vanity URL. The endpoint/header difference is only a diagnostic lead; the pull request did not report or fix the PowerShell 5.1 parsing failure."
+      }
+    ],
+    "search_scope": "Exact searches covered PowerShell/Powershell 5.1, install.ps1, irm/iex and their expanded cmdlet names, the screenshot errors “Cannot bind argument ... because it is an empty string,” “MissingTerminatorMultiLineComment,” and “The terminator '#>' is missing,” plus string-array, line-by-line, multiline-comment, and comment-help terms. Conceptual searches covered legacy/Classic PowerShell, Windows installer compatibility, cargo-dist, execution policy, and security/fileless execution. Fix- and version-oriented searches covered uv 0.12.13, cargo-dist 0.32.0, release hosting, and open, closed, and merged pull requests. The strongest candidates and their discussion chains were inspected. astral-sh/uv#2286 was ruled out because it reports the older execution-policy error that Bypass avoids; astral-sh/uv#14583 and astral-sh/uv#3116 were ruled out because installation completed and only PATH refresh failed. No prior item has the same empty-command/multiline-comment failure."
+  },
+  "type": "bug",
+  "type_reason": "The repository documents this PowerShell command, but the supplied Windows PowerShell 5.1 output shows Invoke-Expression receiving an empty command and then an isolated `<#`, so parsing stops before the installer runs. The published installer begins a multiline help comment with `<#`, confirming the immediate incompatibility. The response-format/header explanation remains plausible but unconfirmed. No open issue or pull request already tracks this exact failure, so this is a bug rather than a duplicate.",
+  "summary": "No duplicate was found. The closest reports cover the same piped installer command being blocked by security software (astral-sh/uv#10428) and a different Windows PowerShell 5.1 execution-policy failure during self-update (astral-sh/uv#5460). astral-sh/uv#18725 provides relevant delivery-path context but did not track this parser failure.",
+  "draft_response": "Thanks for the report. The screenshot shows Windows PowerShell 5.1 invoking `iex` with an empty value and then with `<#` by itself. The current installer uses `<# ... #>` for its help block, so the documented one-liner is not executing the downloaded script as one unit in this environment. That is distinct from the execution-policy problem in astral-sh/uv#5460 and the security-software behavior in astral-sh/uv#10428.\n\nAs a workaround, could you download and run the script as a file and confirm whether it completes on the same host?\n\n```powershell\nirm https://astral.sh/uv/install.ps1 -OutFile install-uv.ps1\npowershell -ExecutionPolicy Bypass -File .\\install-uv.ps1\n```\n\nThe output is consistent with line-by-line pipeline handling, but we have not yet confirmed why the response is materialized that way on this PowerShell version."
+}
