@@ -239,7 +239,7 @@ impl<'a> ComponentBuilder<'a> {
             });
 
             for (url, hash) in source_dist.chain(wheels) {
-                if let Ok(uri) = Uri::try_from(url.to_string()) {
+                if let Ok(uri) = Uri::try_from(url.as_ref().to_owned()) {
                     let alg = match hash.algorithm() {
                         UvHashAlgorithm::Md5 => HashAlgorithm::MD5,
                         UvHashAlgorithm::Sha256 => HashAlgorithm::SHA_256,
