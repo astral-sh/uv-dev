@@ -46,6 +46,126 @@ fn lock_without_package_metadata(lock: &str) -> Result<toml_edit::DocumentMut> {
     Ok(lock)
 }
 
+/// A single project's extra does not add a second unsatisfiable conclusion for its base package.
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn lock_unsatisfiable_project_with_extra() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let links = context.temp_dir.child("links");
+    links.create_dir_all()?;
+    for (name, version) in [("demo", "2.0"), ("other", "1.0"), ("other", "2.0")] {
+        let dist_info = format!("{name}-{version}.dist-info");
+        let metadata = format!("Metadata-Version: 2.3\nName: {name}\nVersion: {version}\n");
+        let wheel = "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n";
+        let mut archive = ZipFileWriter::new(Vec::new());
+        for (path, contents) in [
+            (format!("{dist_info}/METADATA"), metadata.as_bytes()),
+            (format!("{dist_info}/WHEEL"), wheel.as_bytes()),
+            (format!("{dist_info}/RECORD"), b""),
+        ] {
+            archive
+                .write_entry_whole(
+                    ZipEntryBuilder::new(path.into(), Compression::Stored),
+                    contents,
+                )
+                .await?;
+        }
+        fs_err::write(
+            links
+                .child(format!("{name}-{version}-py3-none-any.whl"))
+                .path(),
+            archive.close().await?,
+        )?;
+    }
+
+    let command = || {
+        let mut command = context.lock();
+        command
+            .args([
+                "--no-config",
+                "--offline",
+                "--no-index",
+                "--no-build",
+                "--find-links",
+            ])
+            .arg(links.path());
+        command
+    };
+
+    // Conflicting extras still need an explanation that the project requires both of them.
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+            [project]
+            name = "my-project"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+
+            [project.optional-dependencies]
+            extra1 = ["other==1.0"]
+            extra2 = ["other==2.0"]
+        "#})?;
+    uv_snapshot!(context.filters(), command(), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because my-project[extra2] depends on other==2.0 and my-project[extra1] depends on other==1.0, we can conclude that my-project[extra1] and my-project[extra2] are incompatible.
+             And because your project requires my-project[extra1] and my-project[extra2], we can conclude that your project's requirements are unsatisfiable.
+    ");
+
+    let pyproject = indoc! {r#"
+        [project]
+        name = "my-project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["demo>=7"]
+
+        [project.optional-dependencies]
+        dev = ["other>=1"]
+    "#};
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(pyproject)?;
+
+    uv_snapshot!(context.filters(), command(), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because only demo==2.0 is available and your project depends on demo>=7, we can conclude that your project's requirements are unsatisfiable.
+    ");
+
+    // The extra remains useful context when there is more than one workspace member.
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+            {pyproject}
+            [tool.uv.workspace]
+            members = ["member"]
+        "#})?;
+    context
+        .temp_dir
+        .child("member/pyproject.toml")
+        .write_str(indoc! {r#"
+            [project]
+            name = "other-project"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+        "#})?;
+
+    uv_snapshot!(context.filters(), command(), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because only demo==2.0 is available and my-project depends on demo>=7, we can conclude that my-project's requirements are unsatisfiable.
+             And because your workspace requires my-project[dev], we can conclude that your workspace's requirements are unsatisfiable.
+    ");
+
+    Ok(())
+}
+
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_preserves_noncanonical_lock() -> Result<()> {
@@ -20879,7 +20999,6 @@ fn lock_regenerates_dependencies_without_metadata() -> Result<()> {
     ----- stderr -----
     error: No solution found when resolving dependencies for split (markers: python_full_version >= '3.12' and sys_platform != 'win32')
       cause: Because only tqdm{sys_platform != 'win32'}==4.0.0 is available and your project depends on tqdm{sys_platform != 'win32'}>4, we can conclude that your project's requirements are unsatisfiable.
-             And because your project requires project[empty], we can conclude that your project's requirements are unsatisfiable.
     ");
 
     // Requested target extras are part of their optional dependency edges.
