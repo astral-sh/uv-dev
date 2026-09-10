@@ -91,6 +91,65 @@ pub async fn read_constraints(
     )
 }
 
+/// Resolve dependency groups into [`Requirement`]s, including any `tool.uv.sources` overrides.
+async fn resolve_dependency_groups(
+    groups: &BTreeMap<PathBuf, DependencyGroups>,
+    build_dispatch: &BuildDispatch<'_>,
+    client: &RegistryClient,
+) -> Result<Vec<Requirement>, Error> {
+    let mut requirements = Vec::new();
+    for (pyproject_path, groups) in groups {
+        let metadata = SourcedDependencyGroups::from_virtual_project(
+            pyproject_path,
+            None,
+            build_dispatch.locations(),
+            build_dispatch.sources().clone(),
+            build_dispatch.cache(),
+            build_dispatch.workspace_cache(),
+            client.credentials_cache(),
+        )
+        .await
+        .map_err(|source| Error::DependencyGroups {
+            path: pyproject_path.clone(),
+            source: Box::new(source),
+        })?;
+
+        // Complain if dependency groups are named that don't appear.
+        for name in groups.explicit_names() {
+            if !metadata.dependency_groups.contains_key(name) {
+                return Err(Error::MissingGroup {
+                    name: name.clone(),
+                    path: pyproject_path.clone(),
+                });
+            }
+        }
+        // Apply dependency-groups
+        for (group_name, group) in &metadata.dependency_groups {
+            if groups.contains(group_name) {
+                let scope = metadata
+                    .name
+                    .as_ref()
+                    .map_or(RequirementScope::Global, |package| {
+                        RequirementScope::Group {
+                            package: package.clone(),
+                            group: group_name.clone(),
+                        }
+                    });
+                requirements.extend(group.iter().cloned().map(|group| Requirement {
+                    scope: scope.clone(),
+                    origin: Some(RequirementOrigin::Group(
+                        pyproject_path.clone(),
+                        metadata.name.clone(),
+                        group_name.clone(),
+                    )),
+                    ..group
+                }));
+            }
+        }
+    }
+    Ok(requirements)
+}
+
 /// Resolve a set of requirements, similar to running `pip compile`.
 pub async fn resolve(
     requirements: Vec<UnresolvedRequirementSpecification>,
@@ -210,56 +269,7 @@ pub async fn resolve(
             );
         }
 
-        for (pyproject_path, groups) in groups {
-            let metadata = SourcedDependencyGroups::from_virtual_project(
-                pyproject_path,
-                None,
-                build_dispatch.locations(),
-                build_dispatch.sources().clone(),
-                build_dispatch.cache(),
-                build_dispatch.workspace_cache(),
-                client.credentials_cache(),
-            )
-            .await
-            .map_err(|source| Error::DependencyGroups {
-                path: pyproject_path.clone(),
-                source: Box::new(source),
-            })?;
-
-            // Complain if dependency groups are named that don't appear.
-            for name in groups.explicit_names() {
-                if !metadata.dependency_groups.contains_key(name) {
-                    return Err(Error::MissingGroup {
-                        name: name.clone(),
-                        path: pyproject_path.clone(),
-                    });
-                }
-            }
-            // Apply dependency-groups
-            for (group_name, group) in &metadata.dependency_groups {
-                if groups.contains(group_name) {
-                    let scope =
-                        metadata
-                            .name
-                            .as_ref()
-                            .map_or(RequirementScope::Global, |package| {
-                                RequirementScope::Group {
-                                    package: package.clone(),
-                                    group: group_name.clone(),
-                                }
-                            });
-                    requirements.extend(group.iter().cloned().map(|group| Requirement {
-                        scope: scope.clone(),
-                        origin: Some(RequirementOrigin::Group(
-                            pyproject_path.clone(),
-                            metadata.name.clone(),
-                            group_name.clone(),
-                        )),
-                        ..group
-                    }));
-                }
-            }
-        }
+        requirements.extend(resolve_dependency_groups(groups, build_dispatch, client).await?);
 
         requirements
     };
