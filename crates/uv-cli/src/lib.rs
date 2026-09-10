@@ -6558,14 +6558,14 @@ pub struct PythonFindArgs {
     )]
     pub no_project: bool,
 
-    /// Only find system Python interpreters.
+    /// Ignore virtual environments when finding a Python interpreter.
     ///
     /// By default, uv will report the first Python interpreter it would use, including those in an
     /// active virtual environment or a virtual environment in the current working directory or any
     /// parent directory.
     ///
-    /// The `--system` option instructs uv to skip virtual environment Python interpreters and
-    /// restrict its search to the system path.
+    /// This can still find uv-managed Python installations. Use `--no-managed-python` to exclude
+    /// them.
     #[arg(
         long,
         env = EnvVars::UV_SYSTEM_PYTHON,
