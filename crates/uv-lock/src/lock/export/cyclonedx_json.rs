@@ -308,7 +308,7 @@ impl<'a> ComponentBuilder<'a> {
                     };
                     external_references.push(ExternalReference {
                         reference_type: "distribution",
-                        url: url.to_string(),
+                        url: url.as_ref().to_owned(),
                         hashes: [Hash {
                             alg,
                             content: hash.digest().to_string(),
