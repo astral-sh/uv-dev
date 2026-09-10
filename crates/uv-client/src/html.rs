@@ -45,23 +45,11 @@ fn attribute<'a>(tag: &'a HTMLTag<'_>, name: &'a str) -> Option<Cow<'a, str>> {
         .get(name)
         .flatten()
         .map(tl::Bytes::as_utf8_str)
-        .or_else(|| {
-            tag.attributes().iter().find_map(|(attribute_name, value)| {
-                attribute_name
-                    .eq_ignore_ascii_case(name)
-                    .then_some(value)
-                    .flatten()
-            })
-        })
 }
 
 /// Return `true` if the tag has the given case-insensitive HTML attribute name.
 fn has_attribute<'a>(tag: &'a HTMLTag<'_>, name: &'a str) -> bool {
     tag.attributes().contains(name)
-        || tag
-            .attributes()
-            .iter()
-            .any(|(attribute_name, _)| attribute_name.eq_ignore_ascii_case(name))
 }
 
 /// A parsed structure from PyPI "HTML" index format for a single package.
@@ -1842,6 +1830,70 @@ mod tests {
         )
         "#
         );
+    }
+
+    #[test]
+    fn parse_duplicate_attributes() -> Result<(), Error> {
+        let cases = [
+            ("absent", ""),
+            ("empty", r#"data-yanked="""#),
+            ("bare", "data-yanked"),
+            ("upper-first", r#"DATA-YANKED="first" data-yanked="second""#),
+            ("lower-first", r#"data-yanked="first" DATA-YANKED="second""#),
+            ("upper-bare-first", r#"DATA-YANKED data-yanked="second""#),
+            ("lower-bare-first", r#"data-yanked DATA-YANKED="second""#),
+            ("bare-second", r#"data-yanked="first" DATA-YANKED"#),
+            ("empty-first", r#"DATA-YANKED="" data-yanked="second""#),
+        ];
+        let mut observations = Vec::new();
+        for (storage, padding, heap_allocated) in [
+            ("inline", "", false),
+            ("heap", "data-one=one data-two=two data-three=three", true),
+        ] {
+            for (name, attributes) in cases {
+                let text = format!("<A {padding} {attributes}></A>");
+                let dom = tl::parse(&text, tl::ParserOptions::default())?;
+                let tags = dom
+                    .nodes()
+                    .iter()
+                    .filter_map(Node::as_tag)
+                    .collect::<Vec<_>>();
+                assert_eq!(tags.len(), 1);
+                for tag in tags {
+                    assert!(is_tag(tag, b"a"));
+                    assert_eq!(
+                        tag.attributes().unstable_raw().is_heap_allocated(),
+                        heap_allocated
+                    );
+                    let value = attribute(tag, "data-yanked");
+                    let present = has_attribute(tag, "data-yanked");
+                    assert_eq!(value, attribute(tag, "DaTa-YaNkEd"));
+                    assert_eq!(present, has_attribute(tag, "DaTa-YaNkEd"));
+                    observations.push(format!("{storage}/{name}: {value:?}, present={present}"));
+                }
+            }
+        }
+        insta::assert_snapshot!(observations.join("\n"), @r#"
+        inline/absent: None, present=false
+        inline/empty: Some(""), present=true
+        inline/bare: None, present=true
+        inline/upper-first: Some("first"), present=true
+        inline/lower-first: Some("first"), present=true
+        inline/upper-bare-first: None, present=true
+        inline/lower-bare-first: None, present=true
+        inline/bare-second: Some("first"), present=true
+        inline/empty-first: Some(""), present=true
+        heap/absent: None, present=false
+        heap/empty: Some(""), present=true
+        heap/bare: None, present=true
+        heap/upper-first: Some("first"), present=true
+        heap/lower-first: Some("first"), present=true
+        heap/upper-bare-first: None, present=true
+        heap/lower-bare-first: None, present=true
+        heap/bare-second: Some("first"), present=true
+        heap/empty-first: Some(""), present=true
+        "#);
+        Ok(())
     }
 
     // Test parsing project status metadata with emojis in the reason.
