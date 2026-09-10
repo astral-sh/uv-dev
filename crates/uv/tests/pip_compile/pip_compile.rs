@@ -31,8 +31,8 @@ use uv_static::EnvVars;
 use uv_test::archive::write_tar_gz;
 #[cfg(feature = "test-universal")]
 use uv_test::diff_snapshot;
-use uv_test::packse::PackseServer;
 use uv_test::packse::scenario::{ArtifactMetadata, Package, PackageMetadata, Scenario};
+use uv_test::packse::{PackseServer, generate_wheel};
 use uv_test::{DEFAULT_PYTHON_VERSION, TestContext, download_to_disk, uv_snapshot};
 
 #[test]
@@ -5927,6 +5927,85 @@ coverage = ["example[test]", "extras>=0.0.1,<=0.0.2"]
     Resolved 3 packages in [TIME]
     "
     );
+
+    Ok(())
+}
+
+/// Keep the `Requires-Python` cause when the requirement includes an extra.
+#[test]
+fn requires_python_extra_causality() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let name = PackageName::from_str("python-causality")?;
+    let version = Version::from_str("1.0.0")?;
+    let requires_python = ">=3.13".parse()?;
+    let extras = BTreeMap::from([("feature".parse()?, Vec::new())]);
+    let (filename, wheel) = generate_wheel(
+        &name,
+        &version,
+        &[],
+        &extras,
+        Some(&requires_python),
+        "py3-none-any",
+    );
+    context.temp_dir.child(&filename).write_binary(&wheel)?;
+
+    let index = context.temp_dir.child("index");
+    index
+        .child("python-causality/index.html")
+        .write_str(&format!(
+            r#"<a href="../../{filename}" data-requires-python="&gt;=3.13">{filename}</a>"#
+        ))?;
+    let index_url = Url::from_directory_path(index.path()).expect("valid index path");
+    let requirements_in = context.temp_dir.child("requirements.in");
+    requirements_in.write_str("python-causality==1.0.0")?;
+
+    let compile = |python_version: &str| {
+        let mut command = context.pip_compile();
+        command
+            .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+            .arg("--offline")
+            .arg("--no-build")
+            .arg("--default-index")
+            .arg(index_url.as_str())
+            .arg("--python")
+            .arg("3.12")
+            .arg("--python-version")
+            .arg(python_version)
+            .arg("--no-header")
+            .arg("requirements.in");
+        command
+    };
+
+    uv_snapshot!(context.filters(), compile("3.12"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+      × No solution found when resolving dependencies:
+      ╰─▶ Because the requested Python version (>=3.12) does not satisfy Python>=3.13 and python-causality==1.0.0 depends on Python>=3.13, we can conclude that python-causality==1.0.0 cannot be used.
+          And because you require python-causality==1.0.0, we can conclude that your requirements are unsatisfiable.
+
+    hint: The `--python-version` value (>=3.12) includes Python versions that are not supported by your dependencies (e.g., python-causality==1.0.0 only supports >=3.13). Consider using a higher `--python-version` value.
+    ");
+
+    requirements_in.write_str("python-causality[feature]==1.0.0")?;
+    uv_snapshot!(context.filters(), compile("3.12"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+      × No solution found when resolving dependencies:
+      ╰─▶ Because the requested Python version (>=3.12) does not satisfy Python>=3.13 and python-causality[feature]==1.0.0 depends on Python>=3.13, we can conclude that python-causality[feature]==1.0.0 cannot be used.
+          And because you require python-causality[feature]==1.0.0, we can conclude that your requirements are unsatisfiable.
+
+    hint: The `--python-version` value (>=3.12) includes Python versions that are not supported by your dependencies (e.g., python-causality==1.0.0 only supports >=3.13). Consider using a higher `--python-version` value.
+    ");
+
+    uv_snapshot!(context.filters(), compile("3.13"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    python-causality==1.0.0
+        # via -r requirements.in
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
 
     Ok(())
 }
