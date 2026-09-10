@@ -20,7 +20,7 @@ use uv_distribution_types::{
 use uv_normalize::PackageName;
 use uv_pep440::{Version, VersionSpecifier, VersionSpecifiers};
 use uv_pep508::{MarkerEnvironment, MarkerExpression, MarkerTree, MarkerValueVersion};
-use uv_platform_tags::{AbiTag, IncompatibleTag, LanguageTag, PlatformTag, Tags};
+use uv_platform_tags::{AbiTag, Arch, IncompatibleTag, LanguageTag, PlatformTag, Tags};
 
 use crate::candidate_selector::CandidateSelector;
 use crate::error::{ErrorTree, PrefixMatch};
@@ -1166,6 +1166,7 @@ impl PubGrubReportFormatter<'_> {
                 }
             }
             IncompatibleTag::Platform => {
+                let best = tags.and_then(Tags::platform_tag).cloned();
                 // We don't want to report all available platforms, since it's plausible that there
                 // are wheels for the current platform, but at a different ABI. For example, when
                 // solving for Python 3.13 on macOS, `cp312-cp312-macosx_11_0_arm64` could be
@@ -1187,6 +1188,7 @@ impl PubGrubReportFormatter<'_> {
                         package: name.clone(),
                         version: candidate.version().clone(),
                         tags,
+                        best,
                     })
                 }
             }
@@ -1468,6 +1470,35 @@ fn is_compatible_release_upper_bound(version: &Version) -> bool {
     version.dev() == Some(0) && !version.is_pre() && !version.is_post() && !version.is_local()
 }
 
+/// Return the architecture and minimum glibc version encoded in a manylinux platform tag.
+fn manylinux_glibc_version(tag: &PlatformTag) -> Option<(Arch, u16, u16)> {
+    match tag {
+        PlatformTag::Manylinux { major, minor, arch } => Some((*arch, *major, *minor)),
+        PlatformTag::Manylinux1 { arch } => Some((*arch, 2, 5)),
+        PlatformTag::Manylinux2010 { arch } => Some((*arch, 2, 12)),
+        PlatformTag::Manylinux2014 { arch } => Some((*arch, 2, 17)),
+        PlatformTag::Any
+        | PlatformTag::Linux { .. }
+        | PlatformTag::Musllinux { .. }
+        | PlatformTag::Macos { .. }
+        | PlatformTag::Win32
+        | PlatformTag::WinAmd64
+        | PlatformTag::WinArm64
+        | PlatformTag::WinIa64
+        | PlatformTag::Android { .. }
+        | PlatformTag::FreeBsd { .. }
+        | PlatformTag::NetBsd { .. }
+        | PlatformTag::OpenBsd { .. }
+        | PlatformTag::Dragonfly { .. }
+        | PlatformTag::Haiku { .. }
+        | PlatformTag::Illumos { .. }
+        | PlatformTag::Solaris { .. }
+        | PlatformTag::Pyodide { .. }
+        | PlatformTag::PyEmscripten { .. }
+        | PlatformTag::Ios { .. } => None,
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ExcludeNewerVersionDetail {
     version: Version,
@@ -1662,6 +1693,8 @@ pub enum PubGrubHint {
         version: Version,
         // excluded from `PartialEq` and `Hash`
         tags: BTreeSet<PlatformTag>,
+        // excluded from `PartialEq` and `Hash`
+        best: Option<PlatformTag>,
     },
     /// Versions of a package were excluded by `exclude-newer`.
     ExcludeNewer {
@@ -2284,6 +2317,7 @@ impl std::fmt::Display for PubGrubHint {
                 package,
                 version,
                 tags,
+                best,
             } => {
                 let s = if tags.len() == 1 { "" } else { "s" };
                 write!(
@@ -2294,7 +2328,23 @@ impl std::fmt::Display for PubGrubHint {
                     tags.iter()
                         .map(|tag| format!("`{}`", tag.cyan()))
                         .join(", "),
-                )
+                )?;
+                if let Some((arch, major, minor)) = best.as_ref().and_then(manylinux_glibc_version)
+                    && let Some((required_major, required_minor)) = tags
+                        .iter()
+                        .filter_map(manylinux_glibc_version)
+                        .filter_map(|(wheel_arch, major, minor)| {
+                            (wheel_arch == arch).then_some((major, minor))
+                        })
+                        .min()
+                    && (major, minor) < (required_major, required_minor)
+                {
+                    write!(
+                        f,
+                        ". The selected target uses glibc {major}.{minor}, but the listed manylinux wheels for {arch} require glibc {required_major}.{required_minor} or newer"
+                    )?;
+                }
+                Ok(())
             }
             Self::ExcludeNewer {
                 package,
@@ -2785,6 +2835,82 @@ mod tests {
     use uv_pep508::{MarkerEnvironment, MarkerEnvironmentBuilder};
 
     use super::*;
+
+    fn platform_hint(best: Option<&str>, available: &[&str]) -> PubGrubHint {
+        PubGrubHint::PlatformTags {
+            package: "example".parse().expect("valid package name"),
+            version: Version::new([1_u64]),
+            tags: available
+                .iter()
+                .map(|tag| tag.parse().expect("valid platform tag"))
+                .collect(),
+            best: best.map(|tag| tag.parse().expect("valid platform tag")),
+        }
+    }
+
+    #[test]
+    fn platform_hint_explains_only_newer_same_architecture_glibc() {
+        let check = |best, available: &[&str], suffix: &str| {
+            let original = platform_hint(None, available).to_string();
+            assert_eq!(
+                platform_hint(best, available).to_string(),
+                format!("{original}{suffix}")
+            );
+        };
+
+        check(
+            Some("manylinux_2_28_x86_64"),
+            &[
+                "manylinux_2_34_x86_64",
+                "manylinux_2_31_x86_64",
+                "manylinux2014_aarch64",
+                "macosx_11_0_arm64",
+            ],
+            ". The selected target uses glibc 2.28, but the listed manylinux wheels for x86_64 require glibc 2.31 or newer",
+        );
+        check(
+            Some("manylinux1_x86_64"),
+            &["manylinux2014_x86_64", "manylinux2010_x86_64"],
+            ". The selected target uses glibc 2.5, but the listed manylinux wheels for x86_64 require glibc 2.12 or newer",
+        );
+        check(
+            Some("manylinux2010_x86_64"),
+            &["manylinux2014_x86_64"],
+            ". The selected target uses glibc 2.12, but the listed manylinux wheels for x86_64 require glibc 2.17 or newer",
+        );
+        check(
+            Some("manylinux2014_aarch64"),
+            &["manylinux_2_28_aarch64"],
+            ". The selected target uses glibc 2.17, but the listed manylinux wheels for aarch64 require glibc 2.28 or newer",
+        );
+        for available in [
+            &["manylinux_2_28_x86_64"][..],
+            &["manylinux1_x86_64", "manylinux_2_31_x86_64"],
+            &["manylinux_2_31_aarch64"],
+            &["musllinux_1_2_x86_64"],
+            &["linux_x86_64"],
+            &["macosx_11_0_arm64"],
+            &[],
+        ] {
+            check(Some("manylinux_2_28_x86_64"), available, "");
+        }
+        for best in [None, Some("linux_x86_64"), Some("macosx_11_0_arm64")] {
+            check(best, &["manylinux_2_31_x86_64"], "");
+        }
+    }
+
+    #[test]
+    fn platform_hint_target_does_not_change_deduplication() {
+        let mut hints = IndexSet::new();
+        assert!(hints.insert(platform_hint(
+            Some("manylinux_2_28_x86_64"),
+            &["manylinux_2_31_x86_64"],
+        )));
+        assert!(!hints.insert(platform_hint(
+            Some("manylinux_2_17_x86_64"),
+            &["manylinux_2_28_x86_64"],
+        )));
+    }
 
     fn derived(
         cause1: DerivationTree<PubGrubPackage, Range<Version>, UnavailableReason>,
