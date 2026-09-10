@@ -1,0 +1,27 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 8635,
+        "title": "Can't use uv docker image as a command-line tool",
+        "url": "https://github.com/astral-sh/uv/issues/8635",
+        "state": "closed",
+        "reason": "Maintainers confirm that ghcr.io/astral-sh/uv:latest is intentionally distroless and lacks /bin/sh. It differs because astral-sh/uv#8635 executes the image, while this report uses it only as a COPY source."
+      },
+      {
+        "kind": "pull_request",
+        "number": 21558,
+        "title": "Bump version to 0.12.12",
+        "url": "https://github.com/astral-sh/uv/pull/21558",
+        "state": "merged",
+        "reason": "This release PR moved latest to 0.12.12 on 2026-09-09. Its changes and release notes contain no Docker image-layout change relevant to the reported failure."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests for the exact runc and /bin/sh errors, the image reference, COPY form, python:3.12-slim, BuildKit, distroless behavior, image digests, releases, and latest-tag changes. Also inspected recent Docker workflow history and the 0.12.11-to-0.12.12 release delta. astral-sh/uv#11961 was ruled out as an installer-download failure, astral-sh/uv#8428 as a registry denial, and astral-sh/uv#16350 and astral-sh/uv#15271 as publishing/annotation problems. A minimal build with current latest and python:3.12-slim succeeded."
+  },
+  "type": "question",
+  "type_reason": "The issue primarily requests release and pinning clarification, and incorrect uv behavior is not established. latest did move to 0.12.12, but the documented COPY pattern works with the current image. The complete Dockerfile and failing BuildKit step are needed to identify which stage is attempting to execute /bin/sh.",
+  "summary": "astral-sh/uv#8635 confirms the source image intentionally lacks a shell but does not track COPY failures. astral-sh/uv#21558 identifies the recent 0.12.12 update without changing the image layout. The supplied snippet does not reproduce the failure.",
+  "draft_response": "`latest` was updated on September 9 and currently resolves to uv 0.12.12 at `sha256:73d2665b478d8fa2de1cf105c6841f8e9cb6b09e568fc7700440c09f8fcd7ac4`. The immediately previous image is `ghcr.io/astral-sh/uv:0.12.11`, with multi-platform index digest `sha256:79c6f4776b851471cc73b7d21d0cc834bb94383c292e83640d27eff512864df7`.\n\nThe `latest` image is intentionally distroless and does not contain `/bin/sh`, as discussed in astral-sh/uv#8635. However, `COPY --from=...` does not execute that source image. I tested the shown pattern with the current `latest` and `python:3.12-slim`; the copy and a subsequent `uv --version` succeeded. astral-sh/uv#21558 also did not change the Docker image layout.\n\nPinning 0.12.11 or its digest will make the input reproducible. To identify the failure, please share the complete Dockerfile, the BuildKit line naming the failing step, and the full output for both `latest` and 0.12.11. That will show which stage is trying to execute `/bin/sh`."
+}

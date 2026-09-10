@@ -1,21 +1,93 @@
-# Issue context
+# ghcr.io/astral-sh/uv:latest causing Docker build failure
 
-Issue: owner/repository#number
+Issue: astral-sh/uv#21576
 
-Classification: bug, enhancement, duplicate, or question
+Classification: question
 
 ## Summary
 
-Describe the reported behavior or requested capability and summarize the most important findings.
+The reporter copies `/uv` and `/uvx` from `ghcr.io/astral-sh/uv:latest` into a
+`python:3.12-slim` stage, then sees Docker fail while starting a container because `/bin/sh` is
+missing. They ask whether `latest` changed and for the previously working version or digest.
+
+The tag did change shortly before the report. `latest` now resolves to uv 0.12.12, published on
+2026-09-09, with multi-platform index digest
+`sha256:73d2665b478d8fa2de1cf105c6841f8e9cb6b09e568fc7700440c09f8fcd7ac4`. The immediately
+preceding release is `ghcr.io/astral-sh/uv:0.12.11`, whose multi-platform index digest is
+`sha256:79c6f4776b851471cc73b7d21d0cc834bb94383c292e83640d27eff512864df7`.
+
+The source image is intentionally distroless and has never been expected to contain `/bin/sh`.
+That does not by itself explain this report: an external image referenced by `COPY --from` is read
+as a filesystem source, not executed as the active build stage. A minimal build using the current
+`latest`, `python:3.12-slim`, the reported `COPY`, and a subsequent `RUN test -x /bin/sh && uv
+--version` succeeded and printed uv 0.12.12. The full Dockerfile and the BuildKit line identifying
+the failing step are therefore needed to determine which stage is trying to execute `/bin/sh`.
 
 ## Draft response
 
-Draft a proposed reply for maintainer review.
+`latest` was updated on September 9 and currently resolves to uv 0.12.12 at
+`sha256:73d2665b478d8fa2de1cf105c6841f8e9cb6b09e568fc7700440c09f8fcd7ac4`. The immediately
+previous image is `ghcr.io/astral-sh/uv:0.12.11`, with multi-platform index digest
+`sha256:79c6f4776b851471cc73b7d21d0cc834bb94383c292e83640d27eff512864df7`.
+
+The `latest` image is intentionally distroless and does not contain `/bin/sh`, as discussed in
+astral-sh/uv#8635. However, `COPY --from=...` does not execute that source image. I tested the shown
+COPY pattern with the current `latest` and `python:3.12-slim`; the copy and a subsequent `uv
+--version` both succeeded. astral-sh/uv#21558 also did not change the Docker image layout.
+
+Pinning 0.12.11 or its digest will make the input reproducible, but to identify this failure,
+please share the complete Dockerfile, the BuildKit line identifying the failing step, and the full
+output for both `latest` and 0.12.11. That will show which build stage is trying to execute
+`/bin/sh`.
 
 ## Classification
 
-Explain why the selected classification fits, distinguishing confirmed findings from hypotheses.
+This is a `question`. The issue primarily requests confirmation of a moving tag and pinning
+guidance, both of which can be answered from the published releases and image manifests. The
+reported failure does not currently establish incorrect uv behavior: the only Dockerfile line
+provided follows the documented installation pattern and succeeds with the current image. The
+error establishes that an active Docker build stage lacks `/bin/sh`, but the report does not show
+which stage or instruction Docker was executing.
+
+The 0.12.12 release timing is confirmed, but no root cause for the reporter's build failure is
+confirmed. A complete Dockerfile and full BuildKit output could establish a bug and justify
+reclassification.
 
 ## Related
 
-List related issues or pull requests, explain their relationship, or state that none were found.
+- astral-sh/uv#8635 — “Can't use uv docker image as a command-line tool” (closed). Maintainers
+  explicitly confirm that `ghcr.io/astral-sh/uv:latest` contains only uv binaries and therefore has
+  no `/bin/sh`. This is the closest shell-related discussion but is not a duplicate: it concerns
+  executing uv inside the distroless container, while astral-sh/uv#21576 uses that image only as a
+  `COPY` source.
+- astral-sh/uv#21558 — “Bump version to 0.12.12” (merged). This is the release update behind the
+  current `latest` tag. Its changed files and the 0.12.12 release notes show a version bump, code
+  signing for macOS and Windows artifacts, and an unrelated hash-cutoff fix; it does not change the
+  Docker image layout.
+
+## Supporting evidence
+
+- The repository's Docker guide describes `latest` as a distroless image and documents the exact
+  `COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/` installation pattern.
+- The published `latest` and `0.12.12` tags resolve to the same OCI index and identify version
+  0.12.12; the release was published on 2026-09-09. Version 0.12.11 was published on 2026-09-08.
+- A clean minimal BuildKit build on Linux using `python:3.12-slim` and the current `latest` completed
+  the copy and executed uv successfully. This rules out the supplied snippet as a reproduction but
+  does not rule out a problem elsewhere in the reporter's Dockerfile or build environment.
+- Recent Docker workflow history contains no image-layout change associated with 0.12.12. The
+  nearby workflow changes update artifact-attestation tooling, CI settings, runners, or add Python
+  3.15 release-candidate derived images.
+
+## Search coverage
+
+Literal searches covered `stat /bin/sh`, `/bin/sh: no such file or directory`,
+`ghcr.io/astral-sh/uv:latest`, the reported `COPY --from` form, `python:3.12-slim`, BuildKit, and
+image digests across open and closed issues and open, closed, and merged pull requests. Conceptual
+searches covered distroless shell behavior, Docker stage selection, reproducible image pinning,
+container publishing, manifest annotations, image releases, and moving `latest` tags. Fix-oriented
+checks covered recent merged Docker workflow changes and the 0.12.11-to-0.12.12 release delta.
+
+astral-sh/uv#11961 was inspected but ruled out because it concerns downloading and running an
+installer rather than copying binaries. astral-sh/uv#8428 is a registry pull-denial report, and
+astral-sh/uv#16350 and astral-sh/uv#15271 concern publishing rate limits and annotations; none match
+container initialization or the reported shell error.
