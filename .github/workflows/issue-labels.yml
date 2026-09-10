@@ -1,0 +1,211 @@
+# Recommend and apply labels after issue triage.
+name: "Issue labels"
+
+on:
+  workflow_call:
+    inputs:
+      issue:
+        description: "An issue URL or number"
+        required: true
+        type: string
+      triage-result:
+        description: "The structured issue-triage result"
+        required: false
+        default: ""
+        type: string
+      issue-context:
+        description: "The verified issue snapshot used for triage"
+        required: false
+        default: ""
+        type: string
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: "An issue URL or number"
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: issue-labels-${{ github.repository }}-${{ inputs.issue }}
+  cancel-in-progress: true
+
+env:
+  UV_LOCKED: 1
+
+jobs:
+  labels:
+    if: github.repository == 'astral-sh/uv'
+    runs-on: ubuntu-latest
+    environment: automations
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    outputs:
+      result: ${{ steps.labels.outputs.final-message }}
+      issue-number: ${{ steps.prepare.outputs.issue-number }}
+      revision: ${{ steps.prepare.outputs.revision }}
+      existing-labels: ${{ steps.prepare.outputs.existing-labels }}
+      issue-type: ${{ steps.prepare.outputs.issue-type }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+
+      - name: "Set up trusted Python automations"
+        id: automations
+        uses: ./.github/actions/setup-automations
+
+      - name: "Checkout label policy"
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          path: label-policy
+          sparse-checkout: .github/allowed-issue-labels.json
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: "Collect issue label context"
+        id: prepare
+        run: |
+          "$AUTOMATIONS_PYTHON" -I -m uv_automations issue-labels prepare \
+            --repo "$GITHUB_REPOSITORY" \
+            --issue "$ISSUE" \
+            --checkout "$GITHUB_WORKSPACE" \
+            --allowed label-policy/.github/allowed-issue-labels.json \
+            --triage-result "$TRIAGE_RESULT" \
+            --triage-issue "$TRIAGE_ISSUE" \
+            --github-output "$GITHUB_OUTPUT"
+        env:
+          AUTOMATIONS_PYTHON: ${{ steps.automations.outputs.python }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE: ${{ inputs.issue }}
+          TRIAGE_RESULT: ${{ inputs.triage-result }}
+          TRIAGE_ISSUE: ${{ inputs.issue-context }}
+
+      - name: "Determine issue labels"
+        id: labels
+        if: steps.prepare.outputs.ready == 'true'
+        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56 # v1.11
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          codex-version: "0.147.0"
+          codex-home: "agents/codex"
+          permission-profile: "issue-labels"
+          safety-strategy: drop-sudo
+          allow-users: "*"
+          prompt-file: "agents/prompts/issue-labels.md"
+          output-schema-file: "agents/schemas/issue-labels.json"
+
+      - name: "Write label recommendations"
+        if: steps.labels.outputs.final-message != ''
+        run: |
+          "$AUTOMATIONS_PYTHON" -I -m uv_automations issue-labels report \
+            --summary "$GITHUB_STEP_SUMMARY" <<< "$LABEL_RESULT"
+        env:
+          AUTOMATIONS_PYTHON: ${{ steps.automations.outputs.python }}
+          LABEL_RESULT: ${{ steps.labels.outputs.final-message }}
+
+  validate:
+    needs: labels
+    if: needs.labels.outputs.result != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      labels: ${{ steps.validate.outputs.labels }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+
+      - name: "Set up trusted Python automations"
+        id: automations
+        uses: ./.github/actions/setup-automations
+
+      - name: "Checkout label policy"
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          path: label-policy
+          sparse-checkout: .github/allowed-issue-labels.json
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: "Validate recommended labels"
+        id: validate
+        run: |
+          "$AUTOMATIONS_PYTHON" -I -m uv_automations issue-labels validate \
+            --allowed label-policy/.github/allowed-issue-labels.json \
+            --existing "$EXISTING_LABELS" \
+            --issue-type "$ISSUE_TYPE" \
+            --github-output "$GITHUB_OUTPUT" <<< "$LABEL_RESULT"
+        env:
+          AUTOMATIONS_PYTHON: ${{ steps.automations.outputs.python }}
+          EXISTING_LABELS: ${{ needs.labels.outputs.existing-labels }}
+          ISSUE_TYPE: ${{ needs.labels.outputs.issue-type }}
+          LABEL_RESULT: ${{ needs.labels.outputs.result }}
+
+  apply:
+    needs: [labels, validate]
+    if: >-
+      needs.validate.outputs.labels != '' &&
+      fromJSON(needs.validate.outputs.labels)[0] != null
+    runs-on: ubuntu-slim
+    environment: automations
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      id-token: write # for the repository label credential broker
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+
+      - name: "Set up trusted Python automations"
+        id: automations
+        uses: ./.github/actions/setup-automations
+
+      - name: "Checkout label policy"
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          path: label-policy
+          sparse-checkout: .github/allowed-issue-labels.json
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: "Get repository label token"
+        id: token
+        uses: open-security-tools/ost-simple-sts@9e012247e07c39080fb6a832dbfbcfeacebc19c4
+        with:
+          exchange-url: ${{ secrets.STS_API_URL }}/exchange
+          audience: ${{ secrets.STS_API_URL }}
+          repository: ${{ github.repository }}
+          permissions: |
+            issues: write
+
+      - name: "Apply recommended labels"
+        run: |
+          "$AUTOMATIONS_PYTHON" -I -m uv_automations issue-labels apply \
+            --repo "$GITHUB_REPOSITORY" \
+            --issue "$ISSUE_NUMBER" \
+            --allowed label-policy/.github/allowed-issue-labels.json \
+            --expected-revision "$EXPECTED_REVISION" \
+            --issue-type "$ISSUE_TYPE" \
+            --summary "$GITHUB_STEP_SUMMARY" <<< "$LABELS"
+        env:
+          AUTOMATIONS_PYTHON: ${{ steps.automations.outputs.python }}
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          LABELS: ${{ needs.validate.outputs.labels }}
+          ISSUE_NUMBER: ${{ needs.labels.outputs.issue-number }}
+          EXPECTED_REVISION: ${{ needs.labels.outputs.revision }}
+          ISSUE_TYPE: ${{ needs.labels.outputs.issue-type }}

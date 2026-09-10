@@ -4,8 +4,8 @@ This internal Python 3.14+ package moves workflow logic out of shell and `jq` wi
 GitHub Actions as the scheduler. Actions still owns triggers, permissions, concurrency, runners, job
 dependencies, and credential acquisition.
 
-The first consumers are pull-request labeling, conflicted-pull-request discovery, verified issue
-collection, and commit transport for the regression-test and bug-fix workflows:
+The first consumers are pull-request and issue labeling, conflicted-pull-request discovery, verified
+issue collection, and commit transport for the regression-test and bug-fix workflows:
 
 ```console
 uv run --project scripts/automations --locked --no-dev uv-automations labels validate --allowed .github/allowed-pull-request-labels.json
@@ -32,10 +32,13 @@ less-trusted job or make its credentials available to an agent.
 
 `pull-request-labels.yml` now calls `labels prepare`, `labels report`, `labels validate`, and
 `labels apply`. Preparation records the inspected head, and publication checks that the pull request
-is still open at that head. `pull-request-conflicts.yml` calls `pull-requests identify` and
-`pull-requests remove-rebase-label`; Python owns dispatch verification, repository-ID checks, the
-writable-head filter, the matrix limit, and idempotent cleanup. The actual rebase remains a separate
-reusable workflow until its artifact and Git operations are migrated.
+is still open at that head. `issue-labels.yml` uses the corresponding `issue-labels` stages and
+shares the verified `IssueRef`/`Issue` contract with issue triage. It consumes the triage result,
+loads an issue-specific allowlist from `main`, preserves existing classifications, and rechecks the
+issue contents and current labels before additive publication. `pull-request-conflicts.yml` calls
+`pull-requests identify` and `pull-requests remove-rebase-label`; Python owns dispatch verification,
+repository-ID checks, the writable-head filter, the matrix limit, and idempotent cleanup. The actual
+rebase remains a separate reusable workflow until its artifact and Git operations are migrated.
 
 ## Library shape
 
