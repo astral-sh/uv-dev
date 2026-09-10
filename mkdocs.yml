@@ -269,6 +269,7 @@ nav:
       - Contributing: reference/contributing.md
       - Internals:
           - reference/internals/index.md
+          - Diagnostics: reference/internals/diagnostics.md
           - Resolver: reference/internals/resolver.md
           - Workspace Metadata: reference/internals/metadata.md
       - Benchmarks: reference/benchmarks.md
