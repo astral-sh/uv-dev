@@ -1,3 +1,4 @@
+use anyhow::Result;
 use uv_static::EnvVars;
 
 use uv_test::uv_snapshot;
@@ -952,6 +953,57 @@ fn help_flag_subsubcommand() {
       -h, --help
               Display the concise help for this command
     "#);
+}
+
+#[test]
+fn help_uvx() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    let help = |query: &[&str]| {
+        let mut command = context.help();
+        command
+            .args(["--offline", "--no-python-downloads", "--no-pager"])
+            .args(query);
+        command
+    };
+
+    let canonical = help(&["tool", "run"]).output()?;
+    assert!(canonical.status.success());
+    assert!(!canonical.stdout.is_empty());
+
+    let alias = help(&["uvx"]).output()?;
+    assert!(alias.status.success());
+    assert_eq!(alias.stdout, canonical.stdout);
+    assert_eq!(alias.stderr, canonical.stderr);
+
+    uv_snapshot!(context.filters(), help(&["uvx", "unknown"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: There is no command `uvx unknown` for `uv`. Did you mean one of:
+        auth
+        run
+        init
+        add
+        remove
+        version
+        sync
+        lock
+        export
+        tree
+        format
+        check
+        audit
+        tool
+        python
+        pip
+        venv
+        build
+        publish
+        workspace
+        cache
+        self
+        generate-shell-completion
+    ");
+    Ok(())
 }
 
 #[test]
