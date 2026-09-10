@@ -1,0 +1,15 @@
+name: Linux isolated-keyring two-shard samples
+
+on:
+  push:
+    branches: ["zb/ci-speed-linux-isolated-candidate-20260909-*"]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    uses: astral-sh/uv-dev/.github/workflows/test.yml@05873129c79244c6d00f9c4ba0413f4032643cb2
+    with:
+      save-rust-cache: "true"
+      test-macos: "false"
