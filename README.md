@@ -23,6 +23,60 @@ as a filesystem source, not executed as the active build stage. A minimal build 
 --version` succeeded and printed uv 0.12.12. The full Dockerfile and the BuildKit line identifying
 the failing step are therefore needed to determine which stage is trying to execute `/bin/sh`.
 
+## Reproduction
+
+Outcome: `needs_more_information`.
+
+On Linux x86_64 with Docker Engine 28.0.4, Buildx 0.37.0, and the installed uv 0.12.12, the
+reported installation pattern was reconstructed in a clean temporary directory:
+
+```dockerfile
+FROM python:3.12-slim
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+RUN test -x /bin/sh && uv --version && python --version
+```
+
+```console
+$ docker buildx build --pull --no-cache --progress=plain --load .
+#7 [stage-0 2/3] COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+#7 DONE 0.1s
+#8 [stage-0 3/3] RUN test -x /bin/sh && uv --version && python --version
+#8 0.143 uv 0.12.12 (x86_64-unknown-linux-musl)
+#8 0.145 Python 3.12.14
+#8 DONE 0.2s
+```
+
+BuildKit resolved `python:3.12-slim` to
+`sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea` and `latest` to
+`sha256:73d2665b478d8fa2de1cf105c6841f8e9cb6b09e568fc7700440c09f8fcd7ac4`. The same build with
+`ghcr.io/astral-sh/uv:0.12.11` at
+`sha256:79c6f4776b851471cc73b7d21d0cc834bb94383c292e83640d27eff512864df7` also succeeded and
+printed uv 0.12.11. Thus the supplied `COPY` line does not reproduce the reported failure, and
+pinning the immediately previous image does not change this result.
+
+A focused stage-selection variant does reproduce the exact error:
+
+```dockerfile
+ARG UV_IMAGE=ghcr.io/astral-sh/uv:latest
+FROM ${UV_IMAGE}
+RUN uv --version
+```
+
+It fails before uv runs with `exec: "/bin/sh": stat /bin/sh: no such file or directory`. The same
+variant fails identically with 0.12.11. This is expected because both tags use the repository's
+`FROM scratch` distroless image, but it does not establish that the reporter's omitted Dockerfile
+selects the uv image as the active stage.
+
+The 0.12.12 changelog and astral-sh/uv#21558 contain a release/version update, code-signing notes,
+and an unrelated hash-cutoff fix; they contain no Docker image layout change. Literal searches of
+`crates/uv/tests/` and `crates/uv-client/tests/it/` found no integration test that builds the
+published Docker image or covers this external-stage COPY pattern.
+
+To reproduce or diagnose the reported build, the complete Dockerfile, the full BuildKit output
+including the numbered failing instruction, the build command and build context/target, and the
+output from the same build pinned to 0.12.11 are required. Those details will identify which active
+stage is missing `/bin/sh`; the provided line alone only reads files from the distroless image.
+
 ## Draft response
 
 `latest` was updated on September 9 and currently resolves to uv 0.12.12 at
@@ -35,10 +89,11 @@ astral-sh/uv#8635. However, `COPY --from=...` does not execute that source image
 COPY pattern with the current `latest` and `python:3.12-slim`; the copy and a subsequent `uv
 --version` both succeeded. astral-sh/uv#21558 also did not change the Docker image layout.
 
-Pinning 0.12.11 or its digest will make the input reproducible, but to identify this failure,
-please share the complete Dockerfile, the BuildKit line identifying the failing step, and the full
-output for both `latest` and 0.12.11. That will show which build stage is trying to execute
-`/bin/sh`.
+Pinning 0.12.11 or its digest will make the image input reproducible, but it will not fix a build
+instruction that runs in the distroless uv stage: that stage has no `/bin/sh` in either 0.12.11 or
+0.12.12. To identify this failure, please share the complete Dockerfile, the BuildKit line
+identifying the failing step, and the full output for both `latest` and 0.12.11. That will show
+which build stage is trying to execute `/bin/sh`.
 
 ## Classification
 
@@ -74,6 +129,9 @@ reclassification.
 - A clean minimal BuildKit build on Linux using `python:3.12-slim` and the current `latest` completed
   the copy and executed uv successfully. This rules out the supplied snippet as a reproduction but
   does not rule out a problem elsewhere in the reporter's Dockerfile or build environment.
+- Repeating the COPY build with 0.12.11 also succeeded. Making either 0.12.12 or 0.12.11 the active
+  stage reproduced the shell error, confirming that the shell-free image layout is not new in
+  0.12.12 and that the omitted stage selection is material.
 - Recent Docker workflow history contains no image-layout change associated with 0.12.12. The
   nearby workflow changes update artifact-attestation tooling, CI settings, runners, or add Python
   3.15 release-candidate derived images.

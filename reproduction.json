@@ -1,0 +1,4 @@
+{
+  "reproduction": "needs_more_information",
+  "reason": "On Linux x86_64 with Docker 28.0.4 and Buildx 0.37.0, a clean `python:3.12-slim` build using the reported `COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/` succeeded and ran uv 0.12.12 and Python 3.12.14. The same build succeeded with uv 0.12.11. Making either distroless uv image the active stage reproduced the exact missing `/bin/sh` error, so the complete Dockerfile, failing BuildKit instruction, build command/target, and full output are needed to identify which stage is active."
+}
