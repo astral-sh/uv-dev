@@ -5,6 +5,7 @@ use std::fmt::{self, Write};
 use owo_colors::OwoColorize;
 
 use crate::line_wrap::wrap_text;
+use crate::source::{SourceLevel, SourceSnippet, write_snippets};
 
 /// User-facing presentation data for one error in a source chain.
 ///
@@ -13,6 +14,7 @@ use crate::line_wrap::wrap_text;
 #[derive(Default)]
 pub struct Diagnostic<'a> {
     pub(crate) message: Option<Cow<'a, str>>,
+    pub(crate) snippets: Vec<SourceSnippet<'a>>,
     pub(crate) info: Vec<Info<'a>>,
     pub(crate) source: Option<Box<Self>>,
 }
@@ -22,6 +24,7 @@ impl<'a> Diagnostic<'a> {
     pub fn new(message: impl Into<Cow<'a, str>>) -> Self {
         Self {
             message: Some(message.into()),
+            snippets: Vec::new(),
             info: Vec::new(),
             source: None,
         }
@@ -31,6 +34,14 @@ impl<'a> Diagnostic<'a> {
     #[must_use]
     pub fn with_info(mut self, info: Info<'a>) -> Self {
         self.info.push(info);
+        self
+    }
+
+    /// Show an annotated source location for this error.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_snippet(mut self, snippet: SourceSnippet<'a>) -> Self {
+        self.snippets.push(snippet);
         self
     }
 
@@ -50,6 +61,7 @@ impl<'a> Diagnostic<'a> {
 pub struct Info<'a> {
     message: Cow<'a, str>,
     details: Option<Cow<'a, str>>,
+    snippets: Vec<SourceSnippet<'a>>,
 }
 
 impl<'a> Info<'a> {
@@ -58,6 +70,7 @@ impl<'a> Info<'a> {
         Self {
             message: message.into(),
             details: None,
+            snippets: Vec::new(),
         }
     }
 
@@ -66,6 +79,14 @@ impl<'a> Info<'a> {
     #[must_use]
     pub fn with_details(mut self, details: impl Into<Cow<'a, str>>) -> Self {
         self.details = Some(details.into());
+        self
+    }
+
+    /// Show an annotated source location for this context.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_snippet(mut self, snippet: SourceSnippet<'a>) -> Self {
+        self.snippets.push(snippet);
         self
     }
 }
@@ -123,6 +144,7 @@ pub(crate) fn write_info(
                 }
             }
         }
+        write_snippets(stream, &info.snippets, width, SourceLevel::Info)?;
     }
     Ok(())
 }
