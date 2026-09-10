@@ -10,7 +10,7 @@ use uv_errors::{Diagnostic, SourceFile, SourceSnippet};
 /// expose the original error as a source can instead retain a [`SourceFile`] beside that source.
 #[derive(Debug)]
 pub struct ParseError<E> {
-    error: E,
+    error: Box<E>,
     document: Option<SourceFile>,
 }
 
@@ -18,7 +18,7 @@ impl<E> ParseError<E> {
     /// Retain the exact decoded document passed to the parser.
     pub fn new(error: E, document: SourceFile) -> Self {
         Self {
-            error,
+            error: Box::new(error),
             document: Some(document),
         }
     }
@@ -37,7 +37,7 @@ impl<E> ParseError<E> {
 impl<E> From<E> for ParseError<E> {
     fn from(error: E) -> Self {
         Self {
-            error,
+            error: Box::new(error),
             document: None,
         }
     }
@@ -64,7 +64,7 @@ pub fn diagnostic_for_span<'a>(
     span: Option<Range<usize>>,
     document: &SourceFile,
 ) -> Option<Diagnostic<'a>> {
-    let snippet = SourceSnippet::new(document.clone(), span?)?;
+    let snippet = SourceSnippet::from_span(document.clone(), span?)?;
     Some(Diagnostic::new(message).with_snippet(snippet))
 }
 

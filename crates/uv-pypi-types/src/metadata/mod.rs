@@ -37,7 +37,7 @@ pub enum MetadataError {
     InvalidPyprojectTomlSyntax {
         #[source]
         source: toml_edit::TomlError,
-        document: SourceFile,
+        document: Box<SourceFile>,
     },
     #[error(transparent)]
     InvalidPyprojectTomlSchema(ParseError<toml_edit::de::Error>),

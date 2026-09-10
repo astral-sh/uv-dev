@@ -28,7 +28,7 @@ impl PyProjectToml {
         let pyproject_toml = toml_edit::Document::from_str(toml).map_err(|error| {
             MetadataError::InvalidPyprojectTomlSyntax {
                 source: error,
-                document: SourceFile::new(source.to_string(), toml),
+                document: Box::new(SourceFile::new(source.to_string(), toml)),
             }
         })?;
         let pyproject_toml =
