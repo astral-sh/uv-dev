@@ -522,6 +522,9 @@ fn help_subcommand() {
               Normally, configuration files are discovered in the current directory, parent directories,
               or user configuration directories.
 
+              This does not disable discovery of the current project or workspace. When using `uv run`,
+              use `--no-project` to run without a project.
+
               [env: UV_NO_CONFIG=]
 
       -h, --help
@@ -804,6 +807,9 @@ fn help_subsubcommand() {
 
               Normally, configuration files are discovered in the current directory, parent directories,
               or user configuration directories.
+
+              This does not disable discovery of the current project or workspace. When using `uv run`,
+              use `--no-project` to run without a project.
 
               [env: UV_NO_CONFIG=]
 

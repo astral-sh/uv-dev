@@ -173,6 +173,9 @@ pub struct TopLevelArgs {
     ///
     /// Normally, configuration files are discovered in the current directory,
     /// parent directories, or user configuration directories.
+    ///
+    /// This does not disable discovery of the current project or workspace. When using `uv run`,
+    /// use `--no-project` to run without a project.
     #[arg(global = true, long, env = EnvVars::UV_NO_CONFIG, value_parser = clap::builder::BoolishValueParser::new(), help_heading = "Global options")]
     pub no_config: bool,
 
