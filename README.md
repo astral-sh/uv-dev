@@ -2,99 +2,150 @@
 
 Issue: astral-sh/uv#21602
 
-Classification: bug
+Classification: bug, reproduction needs more information
 
 ## Summary
 
-The documented standalone-install command fails before installation under Windows PowerShell
-5.1.26100.8655:
+The report shows the documented Windows standalone-install command failing before installation on
+Windows PowerShell 5.1.26100.8655:
 
 ```powershell
 powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
 ```
 
-The screenshot shows `Invoke-Expression` first rejecting an empty `Command` value and then parsing
-`<#` by itself, producing `MissingTerminatorMultiLineComment`. The currently published installer
-does begin a multiline comment-based help block with `<#`, so the immediate incompatibility is
-supported by the report and published script. The suggestion that response handling or headers
-cause Windows PowerShell 5.1 to enumerate the download line-by-line is plausible, but has not been
-confirmed independently.
+The screenshot contains two errors from `Invoke-Expression`: an empty `Command` value followed by
+an isolated `<#` whose multiline-comment terminator is missing. The uv 0.12.13 installer currently
+served by that URL has a blank line followed by a `<# ... #>` comment-based help block at the same
+position. This is consistent with the script being supplied to `Invoke-Expression` one line at a
+time, but the required Windows PowerShell 5.1 response behavior could not be tested independently
+on the available Linux runner.
 
-No existing issue or pull request tracks this exact empty-command/multiline-comment failure. The
-closest items cover other failure modes involving the same PowerShell installer path.
+The final mirror response currently has no `Content-Type` header. That is a useful diagnostic lead,
+not a confirmed cause: PowerShell Core 6.0.0 and 7.6.5 both materialized the same live response as
+one `System.String` in independent checks.
 
-## Draft response
+## Reproduction
 
-Thanks for the report. The screenshot shows Windows PowerShell 5.1 invoking `iex` with an empty
-value and then with `<#` by itself. The current installer uses `<# ... #>` for its help block, so
-the documented one-liner is not executing the downloaded script as one unit in this environment.
-That is distinct from the execution-policy problem in astral-sh/uv#5460 and the security-software
-behavior in astral-sh/uv#10428.
+Outcome: `needs_more_information`.
 
-As a workaround, could you download and run the script as a file and confirm whether it completes
-on the same host?
+The available environment was Linux x86_64 with installed `uv 0.12.13` and PowerShell Core 7.6.5;
+Windows PowerShell 5.1 was not available. The command does not use Python. The live vanity URL
+redirected to
+`https://releases.astral.sh/installers/uv/latest/uv-installer.ps1`, which served the uv 0.12.13
+installer without a `Content-Type` header. A pinned
+`https://astral.sh/uv/0.12.13/install.ps1` request also reached the mirror and had the same response
+shape.
+
+The download stage was checked without executing the remotely downloaded installer:
 
 ```powershell
-irm https://astral.sh/uv/install.ps1 -OutFile install-uv.ps1
+$response = Invoke-RestMethod https://astral.sh/uv/install.ps1
+$response.GetType().FullName
+($response -split "`n").Count
+```
+
+PowerShell Core 7.6.5 returned `System.String` containing 677 lines. A temporary PowerShell Core
+6.0.0 installation returned the same type and line count. These are compatibility variants, not a
+substitute for Windows PowerShell 5.1, so they do not disprove the report.
+
+A harmless temporary fixture reproduced the screenshot's parser errors when it was deliberately
+enumerated by line:
+
+```powershell
+# harmless fixture matching the installer's leading structure
+
+<#
+.SYNOPSIS
+Minimal reproduction
+#>
+
+'reached-script-body'
+```
+
+```powershell
+Get-Content ./minimal.ps1 | Invoke-Expression
+# Cannot bind argument to parameter 'Command' because it is an empty string.
+# The terminator '#>' is missing from the multiline comment.
+
+Get-Content -Raw ./minimal.ps1 | Invoke-Expression
+# reached-script-body
+```
+
+This confirms the proposed line-enumeration mechanism, but it does not confirm that
+`Invoke-RestMethod` produces that enumeration on a clean Windows PowerShell 5.1 host. To complete
+the reproduction, run the following non-executing diagnostics on the affected host and on another
+clean Windows PowerShell 5.1 host if possible:
+
+```powershell
+$response = Invoke-RestMethod https://astral.sh/uv/install.ps1
+$response.GetType().FullName
+@($response).Count
+$PSVersionTable
+(Invoke-WebRequest -UseBasicParsing https://astral.sh/uv/install.ps1).Headers
+```
+
+The Windows edition/build and whether a proxy, endpoint-security product, or content-filtering
+gateway is present are also needed to distinguish PowerShell 5.1 behavior from host-specific HTTP
+response rewriting. Testing the reported download-to-file workaround on the same host would show
+whether only pipeline materialization is affected:
+
+```powershell
+Invoke-RestMethod https://astral.sh/uv/install.ps1 -OutFile install-uv.ps1
 powershell -ExecutionPolicy Bypass -File .\install-uv.ps1
 ```
 
-The output is consistent with line-by-line pipeline handling, but we have not yet confirmed why
-the response is materialized that way on this PowerShell version.
+No existing integration test exercises the documented `Invoke-RestMethod | Invoke-Expression`
+standalone-install path. `crates/uv/tests/it/self_update.rs` covers `uv self update` and mocked
+release metadata/download selection; it downloads an installer to a file and is not coverage for
+PowerShell's pipeline response handling.
+
+## Draft response
+
+Thanks for the report. The screenshot is consistent with the downloaded script being passed to
+`Invoke-Expression` one line at a time: a harmless fixture with the same blank line and `<# ... #>`
+structure produces the same two errors when enumerated by line. We have not yet independently
+confirmed why the live response is enumerated on Windows PowerShell 5.1; PowerShell Core 6.0.0 and
+7.6.5 both receive it as one string.
+
+Could you share the output of the non-executing response-type, header, and `$PSVersionTable`
+diagnostics above, plus the Windows edition/build and whether a proxy or endpoint-security product
+is in the request path? Please also confirm whether downloading the script with `-OutFile` and
+running the saved file works on the same host.
 
 ## Classification
 
-This is a bug. The repository presents the reported command as the Windows installation method,
-but the captured output establishes that it cannot parse the published installer under the stated
-Windows PowerShell version. The failure occurs before download or installation logic runs.
+Keep the bug classification provisionally. The repository documents the reported command as the
+Windows installation method, and the screenshot establishes a real pre-install parse failure on the
+reported host. Independent evidence confirms what produces those exact errors, but does not yet
+establish whether the trigger is Windows PowerShell 5.1 itself, the headerless mirror response, or a
+host/network-specific transformation.
 
-It is not a duplicate: none of the searched open or closed issues, or open, closed, and merged pull
-requests, reported the same empty `Command` followed by an isolated `<#` and
-`MissingTerminatorMultiLineComment`. Similar issues instead involve execution policy, endpoint
-security, networking, or PATH refresh.
+This is not currently identified as a duplicate. The closest issues cover different failure modes
+involving the same PowerShell installer path.
 
 ## Related
 
 - astral-sh/uv#10428 (open issue), “Doc and install: avoid security issue on Windows”: the closest
-  same-command report. It concerns the documented `irm ... | iex` pipeline and records a
-  download-to-file workaround, but the trigger is endpoint security blocking fileless execution,
-  not PowerShell 5.1 splitting the script.
+  same-command report. It concerns endpoint security blocking fileless execution and records a
+  download-to-file workaround, not the empty-command and isolated-comment parser errors.
 - astral-sh/uv#5460 (open issue), “uv self update: failed to execute installer (status: exit code:
   1) on Windows”: an adjacent Windows PowerShell/cargo-dist installer compatibility tracker. Its
   confirmed failure is execution policy when self-update launches a saved script in Windows
-  PowerShell 5.1; astral-sh/uv#21602 already uses `-ExecutionPolicy ByPass` and fails earlier while
-  piping the standalone installer into `Invoke-Expression`.
+  PowerShell 5.1; astral-sh/uv#21602 already uses `-ExecutionPolicy ByPass` and fails while piping
+  the standalone installer into `Invoke-Expression`.
 - astral-sh/uv#18725 (merged pull request), “Publish installers to `/installers/uv/latest` on the
-  mirror”: delivery-path context for the exact current URL. It introduced publishing the latest
-  PowerShell installer at the mirror endpoint now reached by the vanity URL. The endpoint/header
-  difference is only a diagnostic lead; this pull request neither reported nor fixed the
-  PowerShell 5.1 parsing failure.
+  mirror”: delivery-path context for the current URL. It introduced publishing the latest
+  PowerShell installer at the mirror endpoint reached by the vanity URL. The endpoint/header
+  difference remains a diagnostic lead; this pull request neither reported nor fixed the observed
+  parser failure.
 
 ## Supporting evidence
 
 - The screenshot contains `ParameterArgumentValidationErrorEmptyStringNotAllowed` followed by
-  `MissingTerminatorMultiLineComment`, with `<#` shown as the input to `iex`.
-- The current published `install.ps1` contains a blank line immediately before a `<# ... #>` help
-  block. That structure explains the two immediate errors if pipeline input is enumerated by line.
-- astral-sh/uv#10428 demonstrates that saving `install.ps1` locally before executing it is already
-  a known alternative for a different `irm ... | iex` failure.
-- The vanity installer URL currently redirects to the mirror location introduced by
-  astral-sh/uv#18725. Older release responses included `Content-Type: application/x-powershell`,
-  while the current mirror response does not expose that header. This correlation is worth testing
-  on Windows PowerShell 5.1, but it does not yet establish the root cause.
-
-## Search coverage and ruled-out candidates
-
-Literal searches covered `PowerShell 5.1` and `Powershell 5.1`, `install.ps1`, `irm`, `iex`,
-`Invoke-RestMethod`, `Invoke-Expression`, and the exact screenshot errors. Conceptual searches
-covered legacy/Classic PowerShell, Windows installer compatibility, string-array and line-by-line
-pipeline behavior, multiline comments, comment-based help, cargo-dist, execution policy, and
-security/fileless execution. Version- and fix-oriented searches covered uv 0.12.13, cargo-dist
-0.32.0, release hosting, and pull requests in every state.
-
-The strongest candidates, their comments, and referenced discussions were inspected.
-astral-sh/uv#2286 uses the exact installer command but reports the older execution-policy error,
-which `-ExecutionPolicy ByPass` avoids. astral-sh/uv#14583 and astral-sh/uv#3116 both reach the
-installation stage and concern PATH refresh afterward. Windows installer reports involving TLS,
-proxy handling, antivirus, architecture, and artifact downloads also fail at materially different
-stages.
+  `MissingTerminatorMultiLineComment`, with `<#` shown as the input to `Invoke-Expression`.
+- The current uv 0.12.13 installer contains a blank line immediately before its `<# ... #>` help
+  block.
+- Supplying an equivalent harmless fixture as enumerated lines produces both reported errors;
+  supplying it as one raw string succeeds.
+- The current final mirror response has no `Content-Type` header, while the canonical GitHub release
+  asset response is `application/octet-stream`. Neither correlation confirms the cause.

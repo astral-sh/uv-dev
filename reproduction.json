@@ -1,0 +1,4 @@
+{
+  "reproduction": "needs_more_information",
+  "reason": "The exact Windows PowerShell 5.1 environment was unavailable. PowerShell Core 6.0.0 and 7.6.5 received the live uv 0.12.13 installer as one System.String. Deliberately enumerating an equivalent harmless script by line reproduced both reported parser errors, confirming the mechanism but not its trigger. Response type/headers, full $PSVersionTable, Windows build, and proxy/security details from the affected host are needed."
+}
