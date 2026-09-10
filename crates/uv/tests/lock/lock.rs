@@ -25757,40 +25757,113 @@ fn lock_repeat_named_index_member() -> Result<()> {
 }
 
 #[cfg(feature = "test-universal")]
-#[test]
-fn lock_unique_named_index() -> Result<()> {
+#[tokio::test]
+async fn lock_unique_named_index() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    let metadata = "Metadata-Version: 2.3\nName: named-index-test\nVersion: 1.0.0\n";
+    let wheel_path = "/files/named_index_test-1.0.0-py3-none-any.whl";
+    let mut writer = ZipFileWriter::new(Vec::new());
+    for (name, contents) in [
+        ("named_index_test-1.0.0.dist-info/METADATA", metadata),
+        (
+            "named_index_test-1.0.0.dist-info/WHEEL",
+            "Wheel-Version: 1.0\nGenerator: uv-test\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+        ),
+        (
+            "named_index_test-1.0.0.dist-info/RECORD",
+            "named_index_test-1.0.0.dist-info/METADATA,,\nnamed_index_test-1.0.0.dist-info/WHEEL,,\nnamed_index_test-1.0.0.dist-info/RECORD,,\n",
+        ),
+    ] {
+        writer
+            .write_entry_whole(
+                ZipEntryBuilder::new(name.into(), Compression::Stored),
+                contents.as_bytes(),
+            )
+            .await?;
+    }
+    let wheel = writer.close().await?;
+    let wheel_size = wheel.len();
+    let wheel_digest = hex::encode(Sha256::digest(&wheel));
+
+    for index in ["first", "second"] {
+        Mock::given(method("GET"))
+            .and(path(format!("/{index}/simple/named-index-test/")))
+            .respond_with(ResponseTemplate::new(404))
+            .expect(1)
+            .mount(&server)
+            .await;
+    }
+    let simple_index = json!({
+        "meta": { "api-version": "1.0" },
+        "name": "named-index-test",
+        "files": [{
+            "filename": "named_index_test-1.0.0-py3-none-any.whl",
+            "url": format!("{}{wheel_path}", server.uri()),
+            "hashes": { "sha256": wheel_digest },
+            "size": wheel_size,
+            "core-metadata": true,
+            "upload-time": "2024-01-01T00:00:00Z",
+        }],
+    });
+    Mock::given(method("GET"))
+        .and(path("/default/simple/named-index-test/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            simple_index.to_string(),
+            "application/vnd.pypi.simple.v1+json",
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("{wheel_path}.metadata")))
+        .respond_with(ResponseTemplate::new(200).set_body_string(metadata))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(wheel_path))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .expect(0)
+        .mount(&server)
+        .await;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
+    pyproject_toml.write_str(&formatdoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["iniconfig"]
+        dependencies = ["named-index-test"]
 
         [[tool.uv.index]]
-        name = "pytorch"
-        url = "https://astral-sh.github.io/pytorch-mirror/whl/cu121"
+        name = "first"
+        url = "{server_url}/first/simple"
 
         [[tool.uv.index]]
-        name = "example"
-        url = "https://astral.sh"
-        "#,
-    )?;
+        name = "second"
+        url = "{server_url}/second/simple"
+        "#, server_url = server.uri()
+    })?;
 
-    // Fall back to PyPI, since `iniconfig` doesn't exist on the PyTorch index.
-    uv_snapshot!(context.filters(), context.lock(), @"
+    // Fall back to the default index, since the package is absent from both named indexes.
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--default-index")
+        .arg(format!("{}/default/simple", server.uri()))
+        .arg("--no-python-downloads"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
     ");
 
-    let lock = fs_err::read_to_string(context.temp_dir.join("uv.lock")).unwrap();
+    let lock = fs_err::read_to_string(context.temp_dir.join("uv.lock"))?;
+    let wheel_size_filter = format!("size = {wheel_size}");
+    let mut filters = context.filters();
+    filters.push((&wheel_digest, "[HASH]"));
+    filters.push((&wheel_size_filter, "size = [SIZE]"));
 
     insta::with_settings!({
-        filters => context.filters(),
+        filters => filters,
     }, {
         assert_snapshot!(
             lock, @r#"
@@ -25802,12 +25875,11 @@ fn lock_unique_named_index() -> Result<()> {
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
-        name = "iniconfig"
-        version = "2.0.0"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz", hash = "sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3", size = 4646, upload-time = "2023-01-07T11:08:11.254Z" }
+        name = "named-index-test"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/default/simple" }
         wheels = [
-            { url = "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374", size = 5892, upload-time = "2023-01-07T11:08:09.864Z" },
+            { url = "http://[LOCALHOST]/files/named_index_test-1.0.0-py3-none-any.whl", hash = "sha256:[HASH]", size = [SIZE], upload-time = "2024-01-01T00:00:00Z" },
         ]
 
         [[package]]
@@ -25815,11 +25887,11 @@ fn lock_unique_named_index() -> Result<()> {
         version = "0.1.0"
         source = { virtual = "." }
         dependencies = [
-            { name = "iniconfig" },
+            { name = "named-index-test" },
         ]
 
         [package.metadata]
-        requires-dist = [{ name = "iniconfig" }]
+        requires-dist = [{ name = "named-index-test" }]
         "#
         );
     });
