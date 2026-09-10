@@ -1,0 +1,15 @@
+name: Linux two-shard samples
+
+on:
+  push:
+    branches: ["zb/ci-speed-linux-candidate-20260909-*"]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    uses: astral-sh/uv-dev/.github/workflows/test.yml@9107a1da350b0f3c90bcfda7ee702eb0aacc9d5f
+    with:
+      save-rust-cache: "true"
+      test-macos: "false"
