@@ -6,6 +6,7 @@ use std::fmt::Write;
 use std::str::FromStr;
 use tracing::{debug, trace};
 
+use uv_auth::AuthPolicy;
 use uv_cache::Cache;
 use uv_cache_key::CanonicalUrl;
 use uv_client::BaseClientBuilder;
@@ -345,8 +346,29 @@ async fn upgrade_tool(
         }
     }
 
+    // A receipt contains a snapshot of the configuration used at install time. Reconcile that
+    // snapshot with unchanged index definitions before combining the arrays, including restoring
+    // credentials that are intentionally omitted from receipts. Consume only one definition per
+    // receipt entry so duplicate or conflicting declarations in user configuration still fail.
+    let mut filesystem = filesystem.clone();
+    if let (Some(stored), Some(configured)) = (
+        receipt.indexes.index.as_mut(),
+        filesystem.indexes.index.as_mut(),
+    ) {
+        for stored in stored {
+            if let Some(position) = configured
+                .iter()
+                .position(|configured| matches_receipt_index(stored, configured))
+            {
+                let mut restored = configured.remove(position);
+                restored.authenticate = stored.authenticate;
+                *stored = restored;
+            }
+        }
+    }
+
     // Resolve the appropriate settings, preferring: CLI > receipt > user.
-    let options = args.clone().combine(receipt.combine(filesystem.clone()));
+    let options = args.clone().combine(receipt.combine(filesystem));
     let settings = ResolverInstallerSettings::try_from(options.clone())?;
 
     let build_constraint_requirements = existing_tool_receipt.build_constraints().to_vec();
@@ -647,6 +669,40 @@ async fn upgrade_tool(
         outcome,
         constraint,
     })
+}
+
+/// Compare an index definition with its credential-free tool receipt representation.
+fn matches_receipt_index(stored: &Index, configured: &Index) -> bool {
+    let mut configured = configured.clone().with_promoted_auth_policy();
+    // A receipt can require authentication even when the credentials that caused promotion
+    // are no longer available. Keep the receipt's higher-precedence requirement in that case.
+    if matches!(
+        (stored.authenticate, configured.authenticate),
+        (AuthPolicy::Always, AuthPolicy::Auto)
+    ) {
+        configured.authenticate = AuthPolicy::Always;
+    }
+    if CanonicalUrl::new(stored.raw_url().clone())
+        != CanonicalUrl::new(configured.raw_url().clone())
+    {
+        return false;
+    }
+    if stored
+        .artifact_base_url
+        .as_ref()
+        .map(|url| url.without_credentials())
+        != configured
+            .artifact_base_url
+            .as_ref()
+            .map(|url| url.without_credentials())
+    {
+        return false;
+    }
+    configured.url = stored.url.clone();
+    configured
+        .artifact_base_url
+        .clone_from(&stored.artifact_base_url);
+    *stored == configured
 }
 
 fn pinned_requirement_version(tool: &Tool, name: &PackageName) -> Option<Version> {
