@@ -67,6 +67,13 @@ name = "pytorch"
 url = "https://download.pytorch.org/whl/cpu"
 ```
 
+By default, when `uv add` receives exactly one index through `--index`, `--default-index`,
+`UV_INDEX`, or `UV_DEFAULT_INDEX`, and that index has a name, it pins the added registry
+dependencies to that index. See [adding an index dependency](./projects/dependencies.md#index) for
+an example of the resulting `tool.uv.sources` entry. To make an index available for resolution
+without automatically adding these per-package pins, define it in `uv.toml` or `pyproject.toml`
+instead.
+
 Similarly, to pull from a different index based on the platform, you can provide a list of sources
 disambiguated by environment markers:
 
