@@ -46,7 +46,7 @@ pub(super) fn find_locked_tool<'lock>(
     let (dependency, installed) = if let Some(dependency) = selection.group(dependency_group) {
         (dependency.clone(), groups.contains(dependency_group))
     } else if let Some(dependency) = selection.production() {
-        (dependency.clone(), groups.prod())
+        (dependency.clone(), groups.includes_non_group_dependencies())
     } else {
         return Ok(None);
     };
