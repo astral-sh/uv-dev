@@ -4,6 +4,8 @@ use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::process::Command;
 
+#[cfg(feature = "test-python-patch")]
+use anyhow::Context;
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
 #[cfg(feature = "test-git")]
@@ -12,12 +14,22 @@ use assert_fs::{
     assert::PathAssert,
     fixture::{FileTouch, FileWriteStr, PathChild, PathCreateDir},
 };
+#[cfg(feature = "test-python-patch")]
+use async_zip::base::write::ZipFileWriter;
+#[cfg(feature = "test-python-patch")]
+use async_zip::{Compression, ZipEntryBuilder};
+#[cfg(feature = "test-python-patch")]
+use futures::executor::block_on;
 use indoc::indoc;
 use insta::assert_snapshot;
 use predicates::prelude::predicate;
+#[cfg(feature = "test-python-patch")]
+use uv_cache::Cache;
 #[cfg(windows)]
 use uv_fs::Simplified;
 use uv_fs::copy_dir_all;
+#[cfg(feature = "test-python-patch")]
+use uv_python::{Interpreter, PythonEnvironment};
 use uv_static::EnvVars;
 
 use uv_test::uv_snapshot;
@@ -4271,116 +4283,168 @@ fn tool_install_python_requests() {
 
 /// Test reinstalling tools with varying `--python` and
 /// `--python-preference` parameters.
-#[ignore = "https://github.com/astral-sh/uv/issues/7473"]
+#[cfg(feature = "test-python-patch")]
 #[test]
-fn tool_install_python_preference() {
-    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
-        .with_filtered_counts()
+fn tool_install_python_preference() -> Result<()> {
+    // The test suite retains 3.13.0 alongside a newer 3.13 patch release. Classify only
+    // 3.13.0 as managed so the same minor version can be selected from either source.
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13", "3.13.0"])
+        .with_versions_as_managed(&["3.13.0"])
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
+    let wheel_dir = context.temp_dir.child("wheels");
+    wheel_dir.create_dir_all()?;
 
-    // Install `black`.
-    uv_snapshot!(context.filters(), context.tool_install()
+    // The wheel contains only metadata. Its entry point is installed, but never executed.
+    let mut writer = ZipFileWriter::new(Vec::new());
+    for (path, contents) in [
+        (
+            "preference_tool-1.0.0.dist-info/METADATA",
+            "Metadata-Version: 2.3\nName: preference-tool\nVersion: 1.0.0\n",
+        ),
+        (
+            "preference_tool-1.0.0.dist-info/WHEEL",
+            "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+        ),
+        (
+            "preference_tool-1.0.0.dist-info/entry_points.txt",
+            "[console_scripts]\npreference-tool = preference_tool:main\n",
+        ),
+        (
+            "preference_tool-1.0.0.dist-info/RECORD",
+            concat!(
+                "preference_tool-1.0.0.dist-info/METADATA,,\n",
+                "preference_tool-1.0.0.dist-info/WHEEL,,\n",
+                "preference_tool-1.0.0.dist-info/entry_points.txt,,\n",
+                "preference_tool-1.0.0.dist-info/RECORD,,\n",
+            ),
+        ),
+    ] {
+        let entry = ZipEntryBuilder::new(path.into(), Compression::Stored);
+        block_on(writer.write_entry_whole(entry, contents.as_bytes()))?;
+    }
+    fs_err::write(
+        wheel_dir.join("preference_tool-1.0.0-py3-none-any.whl"),
+        block_on(writer.close())?,
+    )?;
+
+    let cache = Cache::from_path(context.cache_dir.to_path_buf())
+        .init_no_wait()?
+        .context("No cache contention when checking test interpreters")?;
+    let unmanaged = Interpreter::query(&context.python_versions[1].1, &cache)?;
+    let managed = Interpreter::query(&context.python_versions[2].1, &cache)?;
+    assert_eq!(unmanaged.python_tuple(), managed.python_tuple());
+    assert_ne!(unmanaged.python_version(), managed.python_version());
+
+    let install = || {
+        let mut command = context.tool_install();
+        command
+            .arg("preference-tool")
+            .arg("--find-links")
+            .arg(wheel_dir.as_os_str())
+            .arg("--offline")
+            .arg("--no-index")
+            .arg("--no-build")
+            .arg("--no-config")
+            .env(EnvVars::UV_PYTHON_DOWNLOADS, "never")
+            .env(EnvVars::PATH, bin_dir.as_os_str())
+            .env_remove("GH_TOKEN")
+            .env_remove("GITHUB_TOKEN")
+            .env_remove("GH_ENTERPRISE_TOKEN")
+            .env_remove("GITHUB_ENTERPRISE_TOKEN");
+        command
+    };
+    let assert_interpreter = |expected: &Interpreter| -> Result<()> {
+        let environment = PythonEnvironment::from_root(
+            context.temp_dir.join("tools").join("preference-tool"),
+            &cache,
+        )?;
+        assert_eq!(
+            environment.interpreter().python_version(),
+            expected.python_version()
+        );
+        assert!(environment.uses(expected));
+        Ok(())
+    };
+
+    // Install with Python 3.12.
+    uv_snapshot!(context.filters(), install()
         .arg("-p")
-        .arg("3.12")
-        .arg("black")
-        .env(EnvVars::PATH, bin_dir.as_os_str()), @r###"
+        .arg("3.12"), @r###"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved [N] packages in [TIME]
-    Prepared [N] packages in [TIME]
-    Installed [N] packages in [TIME]
-     + black==24.3.0
-     + click==8.1.7
-     + mypy-extensions==1.0.0
-     + packaging==24.0
-     + pathspec==0.12.1
-     + platformdirs==4.2.0
-    Installed 2 executables: black, blackd
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + preference-tool==1.0.0
+    Installed 1 executable: preference-tool
     "###);
 
     // Install with Python 3.12 (compatible).
-    uv_snapshot!(context.filters(), context.tool_install()
+    uv_snapshot!(context.filters(), install()
         .arg("-p")
-        .arg("3.12")
-        .arg("black")
-        .env(EnvVars::PATH, bin_dir.as_os_str()), @r###"
+        .arg("3.12"), @r###"
     exit_code: 0 (success)
     ----- stderr -----
-    `black` is already installed
+    `preference-tool` is already installed
     "###);
 
-    // Install with system Python 3.11 (different version, incompatible).
-    uv_snapshot!(context.filters(), context.tool_install()
+    // Install with system Python 3.13 (different version, incompatible).
+    uv_snapshot!(context.filters(), install()
         .arg("-p")
-        .arg("3.11")
+        .arg("3.13")
         .arg("--python-preference")
-        .arg("only-system")
-        .arg("black")
-        .env(EnvVars::PATH, bin_dir.as_os_str()), @r###"
+        .arg("only-system"), @r###"
     exit_code: 0 (success)
     ----- stderr -----
-    Ignoring existing environment for `black`: the requested Python interpreter does not match the environment interpreter
-    Resolved [N] packages in [TIME]
-    Prepared [N] packages in [TIME]
-    Installed [N] packages in [TIME]
-     + black==24.3.0
-     + click==8.1.7
-     + mypy-extensions==1.0.0
-     + packaging==24.0
-     + pathspec==0.12.1
-     + platformdirs==4.2.0
-    Installed 2 executables: black, blackd
+    Ignoring existing environment for `preference-tool`: the requested Python interpreter does not match the environment interpreter
+    Resolved 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + preference-tool==1.0.0
+    Installed 1 executable: preference-tool
+    "###);
+    assert_interpreter(&unmanaged)?;
+
+    // Install with system Python 3.13 (compatible).
+    uv_snapshot!(context.filters(), install()
+        .arg("-p")
+        .arg("3.13")
+        .arg("--python-preference")
+        .arg("only-system"), @r###"
+    exit_code: 0 (success)
+    ----- stderr -----
+    `preference-tool` is already installed
     "###);
 
-    // Install with system Python 3.11 (compatible).
-    uv_snapshot!(context.filters(), context.tool_install()
+    // Install with managed Python 3.13 (same minor version, different source).
+    uv_snapshot!(context.filters(), install()
         .arg("-p")
-        .arg("3.11")
+        .arg("3.13")
         .arg("--python-preference")
-        .arg("only-system")
-        .arg("black")
-        .env(EnvVars::PATH, bin_dir.as_os_str()), @r###"
+        .arg("only-managed"), @r###"
     exit_code: 0 (success)
     ----- stderr -----
-    `black` is already installed
+    Ignoring existing environment for `preference-tool`: the requested Python interpreter does not match the environment interpreter
+    Resolved 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + preference-tool==1.0.0
+    Installed 1 executable: preference-tool
+    "###);
+    assert_interpreter(&managed)?;
+
+    // Install with managed Python 3.13 (compatible).
+    uv_snapshot!(context.filters(), install()
+        .arg("-p")
+        .arg("3.13")
+        .arg("--python-preference")
+        .arg("only-managed"), @r###"
+    exit_code: 0 (success)
+    ----- stderr -----
+    `preference-tool` is already installed
     "###);
 
-    // Install with managed Python 3.11 (different source, incompatible).
-    uv_snapshot!(context.filters(), context.tool_install()
-        .arg("-p")
-        .arg("3.11")
-        .arg("--python-preference")
-        .arg("only-managed")
-        .arg("black")
-        .env(EnvVars::PATH, bin_dir.as_os_str()), @r###"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Ignoring existing environment for `black`: the requested Python interpreter does not match the environment interpreter
-    Resolved [N] packages in [TIME]
-    Installed [N] packages in [TIME]
-     + black==24.3.0
-     + click==8.1.7
-     + mypy-extensions==1.0.0
-     + packaging==24.0
-     + pathspec==0.12.1
-     + platformdirs==4.2.0
-    Installed 2 executables: black, blackd
-    "###);
-
-    // Install with managed Python 3.11 (compatible).
-    uv_snapshot!(context.filters(), context.tool_install()
-        .arg("-p")
-        .arg("3.11")
-        .arg("--python-preference")
-        .arg("only-managed")
-        .arg("black")
-        .env(EnvVars::PATH, bin_dir.as_os_str()), @r###"
-    exit_code: 0 (success)
-    ----- stderr -----
-    `black` is already installed
-    "###);
+    Ok(())
 }
 
 /// Test preserving a tool environment when new but incompatible requirements are requested.
