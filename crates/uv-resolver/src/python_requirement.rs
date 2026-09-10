@@ -202,3 +202,144 @@ pub enum PythonRequirementSource {
     /// The discovered Python interpreter.
     Interpreter,
 }
+
+#[cfg(test)]
+mod tests {
+    use std::ops::Bound;
+
+    use uv_distribution_types::RequiresPython;
+    use uv_pep440::Version;
+    use uv_pep508::{MarkerEnvironment, MarkerEnvironmentBuilder};
+
+    use super::{PythonRequirement, PythonRequirementSource};
+
+    fn requires_python(specifiers: &str) -> RequiresPython {
+        RequiresPython::from_specifiers(
+            specifiers.parse().expect("valid Python version specifiers"),
+        )
+    }
+
+    fn python_requirement(source: PythonRequirementSource) -> PythonRequirement {
+        PythonRequirement::new(
+            source,
+            "3.13rc1".parse().expect("valid Python version"),
+            requires_python(">=3.13"),
+            requires_python(">=3.9, <3.14"),
+        )
+    }
+
+    fn assert_cached_marker(requirement: &PythonRequirement) {
+        assert_eq!(
+            requirement.to_marker_tree(),
+            requirement.target().to_marker_tree()
+        );
+    }
+
+    fn assert_metadata_preserved(actual: &PythonRequirement, original: &PythonRequirement) {
+        assert_eq!(actual.exact(), original.exact());
+        assert_eq!(actual.installed(), original.installed());
+        assert_eq!(actual.source(), original.source());
+    }
+
+    #[test]
+    fn cached_marker_is_initialized() {
+        for source in [
+            PythonRequirementSource::PythonVersion,
+            PythonRequirementSource::RequiresPython,
+            PythonRequirementSource::Interpreter,
+        ] {
+            let requirement = python_requirement(source);
+            assert_eq!(requirement.source(), source);
+            assert_eq!(requirement.installed(), &requires_python(">=3.13"));
+            assert_eq!(requirement.target(), &requires_python(">=3.9, <3.14"));
+            assert_cached_marker(&requirement);
+        }
+
+        let marker_environment = MarkerEnvironment::try_from(MarkerEnvironmentBuilder {
+            implementation_name: "cpython",
+            implementation_version: "3.13.0rc1",
+            os_name: "posix",
+            platform_machine: "aarch64",
+            platform_python_implementation: "CPython",
+            platform_release: "1",
+            platform_system: "Linux",
+            platform_version: "1",
+            python_full_version: "3.13.0rc1",
+            python_version: "3.13",
+            sys_platform: "linux",
+        })
+        .expect("valid marker environment");
+        let requirement = PythonRequirement::from_marker_environment(
+            &marker_environment,
+            requires_python(">=3.9, <3.14"),
+        );
+        assert_eq!(
+            requirement,
+            python_requirement(PythonRequirementSource::RequiresPython)
+        );
+        assert_cached_marker(&requirement);
+    }
+
+    #[test]
+    fn cached_marker_is_refreshed_after_narrowing() {
+        let original = python_requirement(PythonRequirementSource::PythonVersion);
+        let expected = requires_python(">=3.11, <3.13");
+        let narrowed = original
+            .narrow(expected.range())
+            .expect("strictly narrower Python range");
+        assert_eq!(narrowed.target(), &expected);
+        assert_ne!(narrowed.to_marker_tree(), original.to_marker_tree());
+        assert_cached_marker(&narrowed);
+        assert_metadata_preserved(&narrowed, &original);
+
+        assert!(original.narrow(original.target().range()).is_none());
+        assert!(
+            original
+                .narrow(requires_python(">=3.8, <3.15").range())
+                .is_none()
+        );
+        assert_eq!(
+            original,
+            python_requirement(PythonRequirementSource::PythonVersion)
+        );
+        assert_cached_marker(&original);
+    }
+
+    #[test]
+    fn cached_marker_is_refreshed_after_splitting() {
+        let original = python_requirement(PythonRequirementSource::Interpreter);
+        for (bound, lower, upper) in [
+            (
+                Bound::Included(Version::new([3, 11])),
+                ">=3.9, <3.11",
+                ">=3.11, <3.14",
+            ),
+            (
+                Bound::Excluded(Version::new([3, 11])),
+                ">=3.9, <=3.11",
+                ">3.11, <3.14",
+            ),
+        ] {
+            let (lower_requirement, upper_requirement) =
+                original.split(bound).expect("interior split point");
+            assert_eq!(lower_requirement.target(), &requires_python(lower));
+            assert_eq!(upper_requirement.target(), &requires_python(upper));
+            for requirement in [lower_requirement, upper_requirement] {
+                assert_ne!(requirement.to_marker_tree(), original.to_marker_tree());
+                assert_cached_marker(&requirement);
+                assert_metadata_preserved(&requirement, &original);
+            }
+        }
+
+        assert!(
+            original
+                .split(Bound::Included(Version::new([3, 9])))
+                .is_none()
+        );
+        assert_eq!(
+            original,
+            python_requirement(PythonRequirementSource::Interpreter)
+        );
+        assert_cached_marker(&original);
+    }
+}
