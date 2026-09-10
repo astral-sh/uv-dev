@@ -116,6 +116,7 @@ plugins:
           - guides/integration/docker.md
           - guides/integration/jupyter.md
           - guides/integration/marimo.md
+          - guides/integration/mypy.md
           - guides/integration/github.md
           - guides/integration/gitlab.md
           - guides/integration/pre-commit.md
@@ -203,6 +204,7 @@ nav:
           - Docker: guides/integration/docker.md
           - Jupyter: guides/integration/jupyter.md
           - marimo: guides/integration/marimo.md
+          - mypy: guides/integration/mypy.md
           - GitHub Actions: guides/integration/github.md
           - GitLab CI/CD: guides/integration/gitlab.md
           - Pre-commit: guides/integration/pre-commit.md
