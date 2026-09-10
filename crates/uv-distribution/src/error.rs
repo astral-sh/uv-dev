@@ -257,14 +257,18 @@ impl Error {
         expected: &[HashDigest],
         actual: &[HashDigest],
     ) -> Self {
+        let format_hashes = |hashes: &[HashDigest]| {
+            hashes
+                .iter()
+                .map(|hash| format!("  {hash}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+
         match (expected.is_empty(), actual.is_empty()) {
             (true, true) => Self::MissingHashes { distribution },
             (true, false) => {
-                let actual = actual
-                    .iter()
-                    .map(|hash| format!("  {hash}"))
-                    .collect::<Vec<_>>()
-                    .join("\n");
+                let actual = format_hashes(actual);
 
                 Self::MissingExpectedHashes {
                     distribution,
@@ -272,11 +276,7 @@ impl Error {
                 }
             }
             (false, true) => {
-                let expected = expected
-                    .iter()
-                    .map(|hash| format!("  {hash}"))
-                    .collect::<Vec<_>>()
-                    .join("\n");
+                let expected = format_hashes(expected);
 
                 Self::MissingActualHashes {
                     distribution,
@@ -284,17 +284,8 @@ impl Error {
                 }
             }
             (false, false) => {
-                let expected = expected
-                    .iter()
-                    .map(|hash| format!("  {hash}"))
-                    .collect::<Vec<_>>()
-                    .join("\n");
-
-                let actual = actual
-                    .iter()
-                    .map(|hash| format!("  {hash}"))
-                    .collect::<Vec<_>>()
-                    .join("\n");
+                let expected = format_hashes(expected);
+                let actual = format_hashes(actual);
 
                 Self::MismatchedHashes {
                     distribution,
@@ -312,7 +303,93 @@ mod tests {
     use std::str::FromStr;
     use uv_distribution_filename::WheelFilename;
     use uv_platform_tags::{Arch, Os, Platform};
+    use uv_pypi_types::HashDigest;
     use uv_python::PythonVariant;
+
+    #[test]
+    fn hash_mismatch_preserves_variant_payloads_and_display() {
+        let distribution = "example==1.0";
+        let expected_raw = [
+            format!("sha512:{}", "b".repeat(128)),
+            format!("sha256:{}", "a".repeat(64)),
+            format!("sha512:{}", "b".repeat(128)),
+        ];
+        let actual_raw = [
+            format!("sha384:{}", "c".repeat(96)),
+            format!("md5:{}", "d".repeat(32)),
+            format!("blake2b:{}", "e".repeat(128)),
+        ];
+        let expected_hashes: Vec<HashDigest> = expected_raw
+            .iter()
+            .map(|hash| hash.parse().unwrap())
+            .collect();
+        let actual_hashes: Vec<HashDigest> = actual_raw
+            .iter()
+            .map(|hash| hash.parse().unwrap())
+            .collect();
+
+        for expected_len in [0, 1, 3] {
+            for actual_len in [0, 1, 3] {
+                let expected = format!("  {}", expected_raw[..expected_len].join("\n  "));
+                let actual = format!("  {}", actual_raw[..actual_len].join("\n  "));
+                let error = Error::hash_mismatch(
+                    distribution.to_string(),
+                    &expected_hashes[..expected_len],
+                    &actual_hashes[..actual_len],
+                );
+
+                let display = match &error {
+                    Error::MissingHashes { distribution: name } => {
+                        assert_eq!((expected_len, actual_len), (0, 0));
+                        assert_eq!(name, distribution);
+                        format!(
+                            "Hash-checking is enabled, but no hashes were provided or computed for: `{distribution}`"
+                        )
+                    }
+                    Error::MissingExpectedHashes {
+                        distribution: name,
+                        actual: hashes,
+                    } => {
+                        assert_eq!(expected_len, 0);
+                        assert_ne!(actual_len, 0);
+                        assert_eq!(name, distribution);
+                        assert_eq!(hashes, &actual);
+                        format!(
+                            "Hash-checking is enabled, but no hashes were provided for: `{distribution}`\n\nComputed:\n{actual}"
+                        )
+                    }
+                    Error::MissingActualHashes {
+                        distribution: name,
+                        expected: hashes,
+                    } => {
+                        assert_ne!(expected_len, 0);
+                        assert_eq!(actual_len, 0);
+                        assert_eq!(name, distribution);
+                        assert_eq!(hashes, &expected);
+                        format!(
+                            "Hash-checking is enabled, but no hashes were computed for: `{distribution}`\n\nExpected:\n{expected}"
+                        )
+                    }
+                    Error::MismatchedHashes {
+                        distribution: name,
+                        expected: expected_hashes,
+                        actual: actual_hashes,
+                    } => {
+                        assert_ne!(expected_len, 0);
+                        assert_ne!(actual_len, 0);
+                        assert_eq!(name, distribution);
+                        assert_eq!(expected_hashes, &expected);
+                        assert_eq!(actual_hashes, &actual);
+                        format!(
+                            "Hash mismatch for `{distribution}`\n\nExpected:\n{expected}\n\nComputed:\n{actual}"
+                        )
+                    }
+                    _ => panic!("unexpected hash mismatch error: {error:?}"),
+                };
+                assert_eq!(error.to_string(), display);
+            }
+        }
+    }
 
     #[test]
     fn built_wheel_error_formats_freethreaded_python() {
