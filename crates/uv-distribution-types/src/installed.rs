@@ -424,42 +424,41 @@ impl InstalledDist {
             return Ok(metadata);
         }
 
-        let metadata = match &self.kind {
-            InstalledDistKind::Registry(_) | InstalledDistKind::Url(_) => {
-                let path = self.install_path().join("METADATA");
-                let contents = fs::read(&path)?;
-                uv_pypi_types::ResolutionMetadata::parse_metadata(&contents).map_err(|err| {
-                    InstalledDistError::MetadataParse {
-                        path: path.clone(),
-                        err: Box::new(err),
-                    }
-                })?
-            }
-            InstalledDistKind::EggInfoFile(_)
-            | InstalledDistKind::EggInfoDirectory(_)
-            | InstalledDistKind::LegacyEditable(_) => {
-                let path = match &self.kind {
-                    InstalledDistKind::EggInfoFile(dist) => Cow::Borrowed(&*dist.path),
-                    InstalledDistKind::EggInfoDirectory(dist) => {
-                        Cow::Owned(dist.path.join("PKG-INFO"))
-                    }
-                    InstalledDistKind::LegacyEditable(dist) => {
-                        Cow::Owned(dist.egg_info.join("PKG-INFO"))
-                    }
-                    _ => unreachable!(),
-                };
-                let contents = fs::read(path.as_ref())?;
-                uv_pypi_types::ResolutionMetadata::parse_metadata(&contents).map_err(|err| {
-                    InstalledDistError::PkgInfoParse {
-                        path: path.to_path_buf(),
-                        err: Box::new(err),
-                    }
-                })?
-            }
-        };
+        let metadata =
+            self.read_metadata_with(uv_pypi_types::ResolutionMetadata::parse_metadata)?;
 
         let _ = self.metadata_cache.set(metadata);
         Ok(self.metadata_cache.get().expect("metadata should be set"))
+    }
+
+    /// Read and parse the installed distribution's `METADATA` or `PKG-INFO` file.
+    fn read_metadata_with<T>(
+        &self,
+        parse: impl FnOnce(&[u8]) -> Result<T, MetadataError>,
+    ) -> Result<T, InstalledDistError> {
+        let path: Cow<'_, Path> = match &self.kind {
+            InstalledDistKind::Registry(_) | InstalledDistKind::Url(_) => {
+                Cow::Owned(self.install_path().join("METADATA"))
+            }
+            InstalledDistKind::EggInfoFile(dist) => Cow::Borrowed(&dist.path),
+            InstalledDistKind::EggInfoDirectory(dist) => Cow::Owned(dist.path.join("PKG-INFO")),
+            InstalledDistKind::LegacyEditable(dist) => Cow::Owned(dist.egg_info.join("PKG-INFO")),
+        };
+        let contents = fs::read(path.as_ref())?;
+        parse(&contents).map_err(|err| match &self.kind {
+            InstalledDistKind::Registry(_) | InstalledDistKind::Url(_) => {
+                InstalledDistError::MetadataParse {
+                    path: path.into_owned(),
+                    err: Box::new(err),
+                }
+            }
+            InstalledDistKind::EggInfoFile(_)
+            | InstalledDistKind::EggInfoDirectory(_)
+            | InstalledDistKind::LegacyEditable(_) => InstalledDistError::PkgInfoParse {
+                path: path.into_owned(),
+                err: Box::new(err),
+            },
+        })
     }
 
     /// Return the supported wheel tags for the distribution from the `WHEEL` file, if available.
