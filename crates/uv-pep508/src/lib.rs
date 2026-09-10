@@ -242,8 +242,9 @@ impl<T: Pep508Url> CacheKey for Requirement<T> {
             extra.as_str().cache_key(state);
         }
 
-        // Retain the presence byte for compatibility with existing cache keys.
         if let Some(version_or_url) = &self.version_or_url {
+            // Preserve the `Option::Some` tag (`1`) before the child's own variant tag
+            // so existing cache keys remain unchanged.
             1u8.cache_key(state);
             version_or_url.cache_key(state);
         } else {
