@@ -1,3 +1,4 @@
+use std::error::Error;
 use std::str::FromStr;
 use std::sync::LazyLock;
 
@@ -6,7 +7,7 @@ use rustc_hash::FxHashMap;
 use version_ranges::Ranges;
 
 use uv_distribution_types::{DerivationChain, DerivationStep};
-use uv_errors::{Hinted, Hints};
+use uv_errors::{Diagnostic, Hinted, Hints};
 use uv_normalize::PackageName;
 use uv_pep440::{Version, strip_local_version_sentinels};
 
@@ -42,8 +43,15 @@ pub(crate) fn write_error_chain(err: &anyhow::Error, printer: Printer) -> std::f
     uv_errors::write_error_chain_with_options(
         err.as_ref(),
         &hints_for_error(err),
-        uv_errors::ErrorOptions::default().with_stream(printer.stderr_important()),
+        uv_errors::ErrorOptions::default()
+            .with_diagnostic(diagnostic_for_error)
+            .with_stream(printer.stderr_important()),
     )
+}
+
+/// Resolve presentation data for one concrete error, without changing its source chain.
+fn diagnostic_for_error<'a>(error: &'a (dyn Error + 'static)) -> Option<Diagnostic<'a>> {
+    uv_publish::diagnostic_for_error(error)
 }
 
 /// Walk an error chain and collect hint strings from all known error types.
