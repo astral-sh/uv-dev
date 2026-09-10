@@ -72,14 +72,7 @@ async fn native_update_verifies_archive_and_migrates_receipt() -> Result<()> {
     assert!(
         context
             .command()
-            .args([
-                "self",
-                "install",
-                "--preview-features",
-                "self-management",
-                "--no-modify-path",
-                "--install-dir"
-            ])
+            .args(["self", "install", "--no-modify-path", "--install-dir"])
             .arg(bin.path())
             .status()?
             .success()
@@ -125,15 +118,7 @@ async fn native_update_verifies_archive_and_migrates_receipt() -> Result<()> {
     let command = || {
         let mut command = context.external_command(executable.path());
         command
-            .args([
-                "self",
-                "update",
-                "9.9.9",
-                "--preview-features",
-                "self-management",
-                "--token",
-                "test-token",
-            ])
+            .args(["self", "update", "9.9.9", "--token", "test-token"])
             .env("AXOUPDATER_CONFIG_PATH", legacy.path())
             .env(EnvVars::UV_INSTALLER_GHE_BASE_URL, server.uri());
         command
@@ -201,14 +186,7 @@ async fn native_update_locks_installation_while_downloading() -> Result<()> {
     assert!(
         context
             .command()
-            .args([
-                "self",
-                "install",
-                "--preview-features",
-                "self-management",
-                "--no-modify-path",
-                "--install-dir"
-            ])
+            .args(["self", "install", "--no-modify-path", "--install-dir"])
             .arg(bin.path())
             .status()?
             .success()
@@ -217,13 +195,7 @@ async fn native_update_locks_installation_while_downloading() -> Result<()> {
     let server = release_server(all_binaries(), Duration::from_secs(2)).await?;
     let update = context
         .external_command(executable.path())
-        .args([
-            "self",
-            "update",
-            "9.9.9",
-            "--preview-features",
-            "self-management",
-        ])
+        .args(["self", "update", "9.9.9"])
         .env(EnvVars::UV_INSTALLER_GHE_BASE_URL, server.uri())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -271,14 +243,7 @@ async fn native_update_removes_only_owned_companions() -> Result<()> {
         assert!(
             context
                 .command()
-                .args([
-                    "self",
-                    "install",
-                    "--preview-features",
-                    "self-management",
-                    "--no-modify-path",
-                    "--install-dir"
-                ])
+                .args(["self", "install", "--no-modify-path", "--install-dir"])
                 .arg(bin.path())
                 .status()?
                 .success()
@@ -294,13 +259,7 @@ async fn native_update_removes_only_owned_companions() -> Result<()> {
         bin.child("another-tool").write_str("keep")?;
         let mut command = context.external_command(executable.path());
         command
-            .args([
-                "self",
-                "update",
-                "9.9.9",
-                "--preview-features",
-                "self-management",
-            ])
+            .args(["self", "update", "9.9.9"])
             .env(EnvVars::UV_INSTALLER_GHE_BASE_URL, server.uri());
         insta::allow_duplicates! {
             uv_snapshot!(context.filters(), command, @"
@@ -336,14 +295,7 @@ async fn native_update_rejects_a_replaced_executable() -> Result<()> {
     assert!(
         context
             .command()
-            .args([
-                "self",
-                "install",
-                "--preview-features",
-                "self-management",
-                "--no-modify-path",
-                "--install-dir"
-            ])
+            .args(["self", "install", "--no-modify-path", "--install-dir"])
             .arg(bin.path())
             .status()?
             .success()
@@ -357,13 +309,7 @@ async fn native_update_rejects_a_replaced_executable() -> Result<()> {
     .await?;
     let mut child = context
         .external_command(executable.path())
-        .args([
-            "self",
-            "update",
-            "--preview-features",
-            "self-management",
-            "--verbose",
-        ])
+        .args(["self", "update", "--verbose"])
         .env(EnvVars::RUST_LOG, "uv_fs=info")
         .stderr(Stdio::piped())
         .spawn()?;

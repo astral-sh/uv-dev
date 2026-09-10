@@ -1,22 +1,19 @@
 # The uv installer
 
-## Native self-management preview
+## Self-management
 
-Standalone distributions can install themselves with
-`uv self install --preview-features self-management`. The command installs the running distribution,
-including its companion executables, in the chosen executable directory. A managed installation
-stores its receipt beside the executables, so separate installation directories can be updated
-independently.
+Standalone distributions can install themselves with `uv self install`. The command installs the
+running distribution, including its companion executables, in the chosen executable directory. A
+managed installation stores its receipt beside the executables, so separate installation directories
+can be updated independently.
 
-For an existing standalone installation, use `uv self update --preview-features self-management` to
-try the native updater. It verifies and installs the release archive directly, and accepts receipts
-from the previous standalone installer. Installations created by `uv self install` use the native
-updater automatically. The public installation scripts still use the existing installation path.
+Use `uv self update` to verify and install the latest release archive directly. The updater accepts
+receipts from older standalone installers and retains the current installation directory. An
+explicit version can be provided to upgrade or downgrade to that release.
 
-Use `uv self uninstall` to remove a native installation, or pass the preview flag to uninstall an
-older standalone installation. This removes only the executables listed in the installation receipt
-and the receipt itself. Shared executable directories, shell configuration, Python installations,
-tools, and caches are left in place.
+Use `uv self uninstall` to remove a managed standalone installation. This removes only the
+executables listed in the installation receipt and the receipt itself. Shared executable
+directories, shell configuration, Python installations, tools, and caches are left in place.
 
 ## Changing the installation path
 

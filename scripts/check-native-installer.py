@@ -177,8 +177,6 @@ def check_legacy_downgrade(directory: Path, version: str) -> None:
             str(current),
             "self",
             "install",
-            "--preview-features",
-            "self-management",
             "--source-repository",
             "astral-sh/uv",
             "--install-dir",

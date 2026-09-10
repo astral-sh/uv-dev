@@ -153,7 +153,7 @@ main() {
     fi
     [ "${UV_PRINT_QUIET:-${INSTALLER_PRINT_QUIET:-0}}" != 1 ] || set -- --quiet "$@"
     [ "${UV_PRINT_VERBOSE:-${INSTALLER_PRINT_VERBOSE:-0}}" != 1 ] || set -- --verbose "$@"
-    "$executable" self install --preview-features self-management --source-repository "$UV_BOOTSTRAP_REPOSITORY" "$@"
+    "$executable" self install --source-repository "$UV_BOOTSTRAP_REPOSITORY" "$@"
 }
 
 main "$@"

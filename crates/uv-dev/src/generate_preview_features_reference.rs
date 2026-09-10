@@ -151,7 +151,6 @@ mod tests {
         - `relocatable-envs-default`: Creates relocatable virtual environments by default.
         - `s3-endpoint`: Allows signing requests to configured S3-compatible endpoints.
         - `sbom-export`: Allows using `uv export --format=cyclonedx1.5`.
-        - `self-management`: Enables native installation and management of standalone uv distributions.
         - `special-conda-env-names`: Stops treating Conda environments named `base` or `root` as special.
         - `tar-codec`: Uses the new `tar-codec` encoding/decoding backend, instead of `astral-tokio-tar`.
         - `target-workspace-discovery`: Uses the directory containing a local `uv run` target, rather than the current working

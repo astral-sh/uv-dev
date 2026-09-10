@@ -71,7 +71,7 @@ try {
     }
     if ((Get-FileHash -Algorithm SHA256 $Archive).Hash.ToLowerInvariant() -ne $Checksums[$Target]) { throw "Checksum mismatch for $Filename" }
     Expand-Archive -LiteralPath $Archive -DestinationPath $Temporary
-    $Arguments = @('self', 'install', '--preview-features', 'self-management', '--source-repository', $Repository)
+    $Arguments = @('self', 'install', '--source-repository', $Repository)
     if ($NoModifyPath) { $Arguments += '--no-modify-path' }
     if ($Quiet) { $Arguments += '--quiet' }
     if ($PSBoundParameters.ContainsKey('Verbose')) { $Arguments += '--verbose' }
