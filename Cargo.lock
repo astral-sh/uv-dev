@@ -7514,6 +7514,7 @@ dependencies = [
  "insta",
  "serde",
  "toml",
+ "toml_edit",
  "uv-errors",
 ]
 

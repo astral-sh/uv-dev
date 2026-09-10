@@ -1,3 +1,6 @@
+#[cfg(test)]
+mod source_map;
+
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Deserializer};

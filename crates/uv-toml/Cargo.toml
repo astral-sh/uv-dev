@@ -22,3 +22,4 @@ uv-errors = { workspace = true }
 [dev-dependencies]
 insta = { workspace = true }
 toml = { workspace = true }
+toml_edit = { workspace = true }
