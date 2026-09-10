@@ -807,21 +807,7 @@ pub fn persist_with_retry_sync(
 pub fn directories(
     path: impl AsRef<Path>,
 ) -> Result<impl Iterator<Item = PathBuf>, std::io::Error> {
-    let entries = match path.as_ref().read_dir() {
-        Ok(entries) => Some(entries),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
-        Err(err) => return Err(err),
-    };
-    Ok(entries
-        .into_iter()
-        .flatten()
-        .filter_map(|entry| match entry {
-            Ok(entry) => Some(entry),
-            Err(err) => {
-                warn!("Failed to read entry: {err}");
-                None
-            }
-        })
+    Ok(read_dir_entries(path.as_ref())?
         .filter(|entry| entry.file_type().is_ok_and(|file_type| file_type.is_dir()))
         .map(|entry| entry.path()))
 }
@@ -830,29 +816,24 @@ pub fn directories(
 ///
 /// If the directory does not exist, returns an empty iterator.
 pub fn entries(path: impl AsRef<Path>) -> Result<impl Iterator<Item = PathBuf>, std::io::Error> {
-    let entries = match path.as_ref().read_dir() {
-        Ok(entries) => Some(entries),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
-        Err(err) => return Err(err),
-    };
-    Ok(entries
-        .into_iter()
-        .flatten()
-        .filter_map(|entry| match entry {
-            Ok(entry) => Some(entry),
-            Err(err) => {
-                warn!("Failed to read entry: {err}");
-                None
-            }
-        })
-        .map(|entry| entry.path()))
+    Ok(read_dir_entries(path.as_ref())?.map(|entry| entry.path()))
 }
 
 /// Iterate over the files in a directory.
 ///
 /// If the directory does not exist, returns an empty iterator.
 pub fn files(path: impl AsRef<Path>) -> Result<impl Iterator<Item = PathBuf>, std::io::Error> {
-    let entries = match path.as_ref().read_dir() {
+    Ok(read_dir_entries(path.as_ref())?
+        .filter(|entry| entry.file_type().is_ok_and(|file_type| file_type.is_file()))
+        .map(|entry| entry.path()))
+}
+
+/// Iterate over the readable entries of a directory.
+#[expect(clippy::disallowed_types, reason = "preserve Path::read_dir errors")]
+fn read_dir_entries(
+    path: &Path,
+) -> Result<impl Iterator<Item = std::fs::DirEntry> + use<>, std::io::Error> {
+    let entries = match path.read_dir() {
         Ok(entries) => Some(entries),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
         Err(err) => return Err(err),
@@ -866,9 +847,7 @@ pub fn files(path: impl AsRef<Path>) -> Result<impl Iterator<Item = PathBuf>, st
                 warn!("Failed to read entry: {err}");
                 None
             }
-        })
-        .filter(|entry| entry.file_type().is_ok_and(|file_type| file_type.is_file()))
-        .map(|entry| entry.path()))
+        }))
 }
 
 /// Returns `true` if a path is a temporary file or directory.
