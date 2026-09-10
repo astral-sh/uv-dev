@@ -17,25 +17,18 @@ The requested capability is a package-to-index mapping outside project or PEP 72
 report proposes three interfaces: sources in `uv.toml`, a per-package source CLI option, or reading
 the target project's uv configuration for local-path tool installs.
 
+In a follow-up, the reporter withdrew the claim that the immediate incident is an uv defect. They
+now attribute it to GitLab's package-forwarding behavior: because each configured GitLab index can
+proxy a miss to PyPI, the first index can report a public package as present before uv reaches the
+internal index that owns the organization's package. Their intended operational resolution is to
+disable GitLab package forwarding and avoid internal names that collide with public packages. This
+is a reporter conclusion and workaround; there is no maintainer response in the discussion yet.
+
 astral-sh/uv#8758 is the canonical match. It already tracks the requirement to pin an internal
 package to an index for tool installs without public fallback, including the dependency-confusion
 risk. The new GitLab forwarding topology is a more specific reproduction of that same missing
 capability. astral-sh/uv#6772 and astral-sh/uv#15529 cover two of the proposed interfaces, while
 merged astral-sh/uv#17455 provides only a partial CLI improvement.
-
-## Draft response
-
-Thanks for the detailed GitLab forwarding example. The missing ability to pin package names to
-specific indexes for tool installs is already tracked in astral-sh/uv#8758, including the
-requirement that resolution must not fall through to a same-named public package.
-
-Sources in `uv.toml` are tracked separately in astral-sh/uv#6772, and reading a local tool target's
-project configuration is tracked in astral-sh/uv#15529. Note that astral-sh/uv#17455 lets the CLI
-select a configured index by name under the `index-by-name` preview feature, but it does not create
-per-package source mappings, so it does not address dependencies spread across forwarding indexes.
-
-Let's centralize the tool pinning discussion in astral-sh/uv#8758; this multi-index GitLab
-reproduction is useful additional context for that design.
 
 ## Classification
 
@@ -51,6 +44,24 @@ Repository code rejects `sources` in `uv.toml`. The documentation also confirms 
 `first-index` strategy stops at the first index on which a package name is available. The reporter's
 proxy-forwarding configuration makes that intentional strategy insufficient to identify which
 private index owns each package, but the resulting tool pinning request is already tracked.
+
+The follow-up does not change the duplicate classification. It retracts the immediate bug claim and
+reduces the need for uv-side action in this deployment, but the package-to-index capability requested
+in the issue body remains the same capability already tracked by astral-sh/uv#8758.
+
+## Current disposition and workaround
+
+The reporter's current position is that GitLab's forwarding configuration, combined with public
+name collisions, causes the observed selection. They plan to address the deployment rather than
+seek a new uv resolution behavior:
+
+1. Disable package forwarding from the self-hosted GitLab registries to PyPI.
+2. Rename or otherwise avoid internal packages whose names collide with packages on PyPI.
+
+Disabling forwarding should allow a registry that does not host a package to return a miss, after
+which uv can continue to the later configured index. Avoiding collisions removes the public package
+that otherwise satisfies the forwarded request. These steps are reported plans, not independently
+verified reproduction results.
 
 ## Related
 
