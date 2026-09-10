@@ -1584,7 +1584,10 @@ impl Edges {
             for (right_range, right_child) in right_edges {
                 let intersection = right_range.intersection(left_range);
                 if intersection.is_empty() {
-                    // TODO(ibraheem): take advantage of the sorted ranges to `break` early
+                    // Subsequent right-hand ranges start later, so none can intersect this range.
+                    if range_ends_before(left_range, right_range) {
+                        break;
+                    }
                     continue;
                 }
 
@@ -1881,6 +1884,21 @@ where
     }
 }
 
+/// Returns `true` if the first range ends before the second range starts.
+fn range_ends_before<T: Ord>(left: &Ranges<T>, right: &Ranges<T>) -> bool {
+    let (Some((_, end)), Some((start, _))) = (left.bounding_range(), right.bounding_range()) else {
+        return false;
+    };
+
+    match (end, start) {
+        (Bound::Included(end), Bound::Included(start)) => end < start,
+        (Bound::Included(end), Bound::Excluded(start))
+        | (Bound::Excluded(end), Bound::Included(start) | Bound::Excluded(start)) => end <= start,
+        (Bound::Unbounded, Bound::Unbounded | Bound::Included(_) | Bound::Excluded(_))
+        | (Bound::Included(_) | Bound::Excluded(_), Bound::Unbounded) => false,
+    }
+}
+
 /// Returns `true` if two disjoint ranges can be conjoined seamlessly without introducing a gap.
 fn can_conjoin<T>(range1: &Ranges<T>, range2: &Ranges<T>) -> bool
 where
@@ -1920,13 +1938,209 @@ impl fmt::Debug for NodeId {
 
 #[cfg(test)]
 mod tests {
-    use super::{INTERNER, NodeId};
+    use std::cell::Cell;
+    use std::cmp::Ordering;
+    use std::ops::Bound::{Excluded, Included, Unbounded};
+
+    use version_ranges::Ranges;
+
+    use super::{Edges, INTERNER, NodeId, SmallVec, can_conjoin};
     use crate::MarkerExpression;
 
     fn expr(s: &str) -> NodeId {
         INTERNER
             .lock()
             .expression(MarkerExpression::from_str(s).unwrap().unwrap())
+    }
+
+    /// The original quadratic implementation, retained as an exact-order oracle.
+    fn apply_ranges_quadratic<T: Clone + Ord>(
+        left_edges: &SmallVec<(Ranges<T>, NodeId)>,
+        left_parent: NodeId,
+        right_edges: &SmallVec<(Ranges<T>, NodeId)>,
+        right_parent: NodeId,
+        mut apply: impl FnMut(NodeId, NodeId) -> NodeId,
+    ) -> SmallVec<(Ranges<T>, NodeId)> {
+        let mut combined = SmallVec::new();
+        for (left_range, left_child) in left_edges {
+            for (right_range, right_child) in right_edges {
+                let intersection = right_range.intersection(left_range);
+                if intersection.is_empty() {
+                    continue;
+                }
+
+                let node = apply(
+                    left_child.negate(left_parent),
+                    right_child.negate(right_parent),
+                );
+
+                match combined.last_mut() {
+                    Some((range, prev)) if *prev == node && can_conjoin(range, &intersection) => {
+                        *range = range.union(&intersection);
+                    }
+                    _ => combined.push((intersection, node)),
+                }
+            }
+        }
+        combined
+    }
+
+    #[test]
+    fn apply_ranges_matches_quadratic() {
+        let first = expr("extra == 'range-first'");
+        let second = expr("extra == 'range-second'");
+        let children = [NodeId::TRUE, NodeId::FALSE, first, second];
+        let outputs = [NodeId::TRUE, first, first.not(), NodeId::FALSE];
+        let bounds = [
+            Unbounded,
+            Included(-1),
+            Excluded(-1),
+            Included(0),
+            Excluded(0),
+            Included(1),
+            Excluded(1),
+        ];
+        let mut maps: Vec<SmallVec<(Ranges<i32>, NodeId)>> = vec![SmallVec::new()];
+        for start in bounds {
+            for end in bounds {
+                let range = Ranges::from_range_bounds((start, end));
+                if range.is_empty() {
+                    continue;
+                }
+
+                // Both a restricted domain and a full partition of the same interval.
+                maps.push(
+                    [(range.clone(), children[maps.len() % children.len()])]
+                        .into_iter()
+                        .collect(),
+                );
+                let mut edges = Edges::from_range(&range);
+                for (index, (_, child)) in edges.iter_mut().enumerate() {
+                    *child = children[index % children.len()];
+                }
+                maps.push(edges);
+            }
+        }
+
+        // Restricted domains need not cover the space between their edges.
+        maps.push(
+            [
+                (Ranges::strictly_lower_than(-1), first),
+                (Ranges::singleton(0), second),
+                (Ranges::strictly_higher_than(1), first),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        // An empty range must not hide a later, nonempty edge.
+        maps.push(
+            [(Ranges::empty(), first), (Ranges::singleton(1), second)]
+                .into_iter()
+                .collect(),
+        );
+        // Even a range containing holes must use its final bound for the early stop.
+        maps.push(
+            [(Ranges::singleton(-1).union(&Ranges::singleton(1)), first)]
+                .into_iter()
+                .collect(),
+        );
+
+        for left_edges in &maps {
+            for right_edges in &maps {
+                for left_parent in [NodeId::TRUE, NodeId::FALSE] {
+                    for right_parent in [NodeId::TRUE, NodeId::FALSE] {
+                        let mut expected_calls = Vec::new();
+                        let expected = apply_ranges_quadratic(
+                            left_edges,
+                            left_parent,
+                            right_edges,
+                            right_parent,
+                            |left, right| {
+                                expected_calls.push((left, right));
+                                outputs[(expected_calls.len() / 2) % outputs.len()]
+                            },
+                        );
+
+                        let mut actual_calls = Vec::new();
+                        let actual = Edges::apply_ranges(
+                            left_edges,
+                            left_parent,
+                            right_edges,
+                            right_parent,
+                            |left, right| {
+                                actual_calls.push((left, right));
+                                outputs[(actual_calls.len() / 2) % outputs.len()]
+                            },
+                        );
+
+                        assert_eq!(actual_calls, expected_calls);
+                        assert_eq!(actual, expected);
+                    }
+                }
+            }
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    struct Counted<'a> {
+        value: u32,
+        comparisons: &'a Cell<usize>,
+    }
+
+    impl PartialEq for Counted<'_> {
+        fn eq(&self, other: &Self) -> bool {
+            self.cmp(other) == Ordering::Equal
+        }
+    }
+
+    impl Eq for Counted<'_> {}
+
+    impl PartialOrd for Counted<'_> {
+        fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+            Some(self.cmp(other))
+        }
+    }
+
+    impl Ord for Counted<'_> {
+        fn cmp(&self, other: &Self) -> Ordering {
+            self.comparisons.set(self.comparisons.get() + 1);
+            self.value.cmp(&other.value)
+        }
+    }
+
+    #[test]
+    fn apply_ranges_skips_later_ranges() {
+        let comparisons = Cell::new(0);
+        let edges: SmallVec<(Ranges<Counted<'_>>, NodeId)> = (0..64)
+            .map(|value| {
+                (
+                    Ranges::singleton(Counted {
+                        value,
+                        comparisons: &comparisons,
+                    }),
+                    NodeId::TRUE,
+                )
+            })
+            .collect();
+
+        comparisons.set(0);
+        let expected =
+            apply_ranges_quadratic(&edges, NodeId::TRUE, &edges, NodeId::TRUE, |_, _| {
+                NodeId::TRUE
+            });
+        let quadratic_comparisons = comparisons.get();
+
+        comparisons.set(0);
+        let actual = Edges::apply_ranges(&edges, NodeId::TRUE, &edges, NodeId::TRUE, |_, _| {
+            NodeId::TRUE
+        });
+        let actual_comparisons = comparisons.get();
+
+        assert_eq!(actual, expected);
+        assert!(
+            actual_comparisons < quadratic_comparisons,
+            "expected fewer comparisons: {actual_comparisons} >= {quadratic_comparisons}"
+        );
     }
 
     #[test]
