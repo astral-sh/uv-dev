@@ -1400,6 +1400,66 @@ async fn proxy_index_rejects_hashless_selected_artifacts() -> Result<()> {
 }
 
 #[tokio::test]
+async fn proxy_index_only_materializes_selected_versions() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let canonical_index = MockServer::start().await;
+    let canonical_artifacts = MockServer::start().await;
+    let physical_index = MockServer::start().await;
+    let physical_artifacts = MockServer::start().await;
+    let unmapped_artifacts = MockServer::start().await;
+    let prerelease = "basic_package-1.0.0rc1-py3-none-any.whl";
+
+    mount_simple(
+        &physical_index,
+        "basic-package",
+        vec![
+            advertised_file(
+                WHEEL_FILENAME,
+                &format!("{}/files/{WHEEL_FILENAME}", physical_artifacts.uri()),
+                Some(WHEEL_HASH),
+            ),
+            advertised_file(
+                prerelease,
+                &format!("{}/files/{prerelease}", unmapped_artifacts.uri()),
+                Some(WHEEL_HASH),
+            ),
+        ],
+        2,
+    )
+    .await;
+    let write_configuration = |dependency| {
+        ProxyConfiguration {
+            canonical_index_url: canonical_index.uri(),
+            canonical_artifact_url: canonical_artifacts.uri(),
+            physical_index_url: physical_index.uri(),
+            physical_artifact_url: physical_artifacts.uri(),
+            dependency,
+            dependency_metadata: Some(("basic-package", "0.1.0")),
+        }
+        .write(&context)
+    };
+    write_configuration("basic-package")?;
+
+    uv_snapshot!(context.filters(), context.lock(), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    write_configuration("basic-package==1.0.0rc1")?;
+    uv_snapshot!(context.filters(), context.lock().arg("--refresh"), @r"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: No proxy artifact URL mapping matches `http://[LOCALHOST]/files/basic_package-1.0.0rc1-py3-none-any.whl`
+    ");
+
+    assert_no_origin_requests(&canonical_index, &canonical_artifacts).await?;
+    assert_no_requests(&physical_artifacts, "configured physical artifact origin").await?;
+    assert_no_requests(&unmapped_artifacts, "unmapped physical artifact origin").await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn proxy_index_rejects_unmapped_artifact_without_origin_fallback() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let canonical_index = MockServer::start().await;

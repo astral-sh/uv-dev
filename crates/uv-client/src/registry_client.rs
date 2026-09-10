@@ -1644,6 +1644,17 @@ pub struct SimpleDetailMetadatum {
     pub metadata: Option<Box<ResolutionMetadata>>,
 }
 
+impl ArchivedSimpleDetailMetadatum {
+    /// Read file upload times without deserializing the release metadata.
+    pub fn upload_times(&self) -> impl Iterator<Item = Option<i64>> {
+        self.files
+            .wheels
+            .iter()
+            .chain(self.files.source_dists.iter())
+            .map(ArchivedCachedFile::upload_time_utc_ms)
+    }
+}
+
 impl SimpleDetailMetadata {
     pub fn iter(&self) -> impl DoubleEndedIterator<Item = &SimpleDetailMetadatum> {
         self.versions.iter()
