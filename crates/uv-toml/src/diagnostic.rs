@@ -64,7 +64,7 @@ pub fn diagnostic_for_span<'a>(
     span: Option<Range<usize>>,
     document: &SourceFile,
 ) -> Option<Diagnostic<'a>> {
-    let snippet = SourceSnippet::new(document.clone(), span?)?;
+    let snippet = SourceSnippet::from_span(document.clone(), span?)?;
     Some(Diagnostic::new(message).with_snippet(snippet))
 }
 

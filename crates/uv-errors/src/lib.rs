@@ -12,8 +12,8 @@ use owo_colors::{AnsiColors, DynColor, OwoColorize};
 use diagnostic::write_info;
 pub use diagnostic::{Diagnostic, DiagnosticFn, Info};
 use line_wrap::{get_wrap_width, wrap_text};
-use source::write_snippets;
-pub use source::{SourceFile, SourceSnippet};
+pub use source::{SourceAnnotation, SourceFile, SourceSnippet};
+use source::{SourceLevel, write_snippets};
 
 /// An error that may carry user-facing hints.
 ///
@@ -391,7 +391,12 @@ pub fn write_error_chain_with_options<C: DynColor + Copy, W: fmt::Write>(
         wrapped_main.trim()
     )?;
     if let Some(diagnostic) = &main_diagnostic {
-        write_snippets(&mut stream, &diagnostic.snippets, color)?;
+        write_snippets(
+            &mut stream,
+            &diagnostic.snippets,
+            width,
+            SourceLevel::for_error(&level),
+        )?;
         write_info(&mut stream, &diagnostic.info, width)?;
     }
 
@@ -427,7 +432,12 @@ pub fn write_error_chain_with_options<C: DynColor + Copy, W: fmt::Write>(
             }
         }
         if let Some(diagnostic) = &source_diagnostic {
-            write_snippets(&mut stream, &diagnostic.snippets, color)?;
+            write_snippets(
+                &mut stream,
+                &diagnostic.snippets,
+                width,
+                SourceLevel::for_error(&level),
+            )?;
             write_info(&mut stream, &diagnostic.info, width)?;
         }
         source_override = source_diagnostic.and_then(|diagnostic| diagnostic.source);
@@ -1062,7 +1072,7 @@ mod tests {
                         Diagnostic::default().with_source(
                             Diagnostic::new("invalid type: integer `42`, expected a string")
                                 .with_snippet(
-                                    SourceSnippet::new(
+                                    SourceSnippet::from_span(
                                         SourceFile::new("pyproject.toml", "version = 42"),
                                         10..12,
                                     )

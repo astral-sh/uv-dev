@@ -5,7 +5,7 @@ use std::fmt::{self, Write};
 use owo_colors::OwoColorize;
 
 use crate::line_wrap::wrap_text;
-use crate::source::SourceSnippet;
+use crate::source::{SourceLevel, SourceSnippet, write_snippets};
 
 /// User-facing presentation data for one error in a source chain.
 ///
@@ -14,7 +14,7 @@ use crate::source::SourceSnippet;
 #[derive(Default)]
 pub struct Diagnostic<'a> {
     pub(crate) message: Option<Cow<'a, str>>,
-    pub(crate) snippets: Vec<SourceSnippet>,
+    pub(crate) snippets: Vec<SourceSnippet<'a>>,
     pub(crate) info: Vec<Info<'a>>,
     pub(crate) source: Option<Box<Self>>,
 }
@@ -37,16 +37,17 @@ impl<'a> Diagnostic<'a> {
         self
     }
 
-    /// Attach a source location to this error.
+    /// Show an annotated source location for this error.
     #[must_use]
-    pub fn with_snippet(mut self, snippet: SourceSnippet) -> Self {
+    pub fn with_snippet(mut self, snippet: SourceSnippet<'a>) -> Self {
         self.snippets.push(snippet);
         self
     }
 
-    /// Supply presentation data for the next actual [`Error::source`] node.
+    /// Supply presentation data for the next error returned by [`Error::source`].
     ///
-    /// This does not add, replace, or remove an error from the source chain.
+    /// This takes precedence over the diagnostic resolver for that error. It does not add a
+    /// source to the error chain, and is ignored if there is no next source.
     #[must_use]
     pub fn with_source(mut self, source: Self) -> Self {
         self.source = Some(Box::new(source));
@@ -58,6 +59,7 @@ impl<'a> Diagnostic<'a> {
 pub struct Info<'a> {
     message: Cow<'a, str>,
     details: Option<Cow<'a, str>>,
+    snippets: Vec<SourceSnippet<'a>>,
 }
 
 impl<'a> Info<'a> {
@@ -66,6 +68,7 @@ impl<'a> Info<'a> {
         Self {
             message: message.into(),
             details: None,
+            snippets: Vec::new(),
         }
     }
 
@@ -74,6 +77,13 @@ impl<'a> Info<'a> {
     #[must_use]
     pub fn with_details(mut self, details: impl Into<Cow<'a, str>>) -> Self {
         self.details = Some(details.into());
+        self
+    }
+
+    /// Show an annotated source location for this context.
+    #[must_use]
+    pub fn with_snippet(mut self, snippet: SourceSnippet<'a>) -> Self {
+        self.snippets.push(snippet);
         self
     }
 }
@@ -132,12 +142,13 @@ pub(crate) fn write_info(
             }
             writeln!(stream, "    {}", "|".cyan().bold())?;
         }
+        write_snippets(stream, &info.snippets, width, SourceLevel::Info)?;
     }
     Ok(())
 }
 
 /// Keep untrusted text inside its diagnostic gutter, including on ANSI-capable terminals.
-pub(crate) fn normalize_details(details: &str) -> Cow<'_, str> {
+fn normalize_details(details: &str) -> Cow<'_, str> {
     if !details.chars().any(|character| {
         (character.is_control() && character != '\n') || is_layout_control(character)
     }) {
@@ -164,7 +175,7 @@ pub(crate) fn normalize_details(details: &str) -> Cow<'_, str> {
     Cow::Owned(normalized)
 }
 
-pub(crate) fn is_layout_control(character: char) -> bool {
+fn is_layout_control(character: char) -> bool {
     matches!(
         character,
         '\u{061c}'
