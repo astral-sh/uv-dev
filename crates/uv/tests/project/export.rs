@@ -3984,7 +3984,7 @@ fn pylock_workspace_member_conflict_markers() -> Result<()> {
     #    uv export --cache-dir [CACHE_DIR] --format pylock.toml --extra a
     lock-version = "1.0"
     created-by = "uv"
-    requires-python = ">=3.12.[X]"
+    requires-python = ">=3.12.0"
 
     [[packages]]
     name = "anyio"

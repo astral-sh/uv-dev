@@ -1347,7 +1347,7 @@ fn create_venv_unknown_python_patch() {
     uv_snapshot!(context.filters(), &mut command, @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: No interpreter found for Python 3.12.[X] in [PYTHON SOURCES]
+    error: No interpreter found for Python 3.12.100 in [PYTHON SOURCES]
     "
     );
 
