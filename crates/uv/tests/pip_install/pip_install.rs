@@ -34,8 +34,8 @@ use uv_test::decode_token;
 use uv_test::find_links::FindLinksServer;
 use uv_test::packse::{PackseServer, generate_wheel};
 use uv_test::{
-    DEFAULT_PYTHON_VERSION, TestContext, apply_filters, download_to_disk, get_bin, uv_snapshot,
-    venv_bin_path,
+    DEFAULT_PYTHON_VERSION, TestContext, apply_filters, copy_dir_ignore, download_to_disk, get_bin,
+    uv_snapshot, venv_bin_path,
 };
 
 fn write_many_files_wheel(path: &Path, source_files: usize) -> Result<()> {
@@ -14897,14 +14897,16 @@ fn install_python_preference() {
 fn config_settings_package() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(&format!(
-        "-e {}",
+    let project = context.temp_dir.child("setuptools_editable");
+    copy_dir_ignore(
         context
             .workspace_root
-            .join("test/packages/setuptools_editable")
-            .display()
-    ))?;
+            .join("test/packages/setuptools_editable"),
+        &project,
+    )?;
+
+    let requirements_txt = context.temp_dir.child("requirements.txt");
+    requirements_txt.write_str(&format!("-e {}", project.display()))?;
 
     // Install the editable package.
     uv_snapshot!(context.filters(), context.pip_install()
@@ -14916,7 +14918,7 @@ fn config_settings_package() -> Result<()> {
     Prepared 2 packages in [TIME]
     Installed 2 packages in [TIME]
      + iniconfig==2.0.0
-     + setuptools-editable==0.1.0 (from file://[WORKSPACE]/test/packages/setuptools_editable)
+     + setuptools-editable==0.1.0 (from file://[TEMP_DIR]/setuptools_editable)
     "
     );
 
@@ -14932,7 +14934,7 @@ fn config_settings_package() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Uninstalled 1 package in [TIME]
-     - setuptools-editable==0.1.0 (from file://[WORKSPACE]/test/packages/setuptools_editable)
+     - setuptools-editable==0.1.0 (from file://[TEMP_DIR]/setuptools_editable)
     ");
 
     // Install the editable package with `editable_mode=compat`, scoped to the package.
@@ -14946,7 +14948,7 @@ fn config_settings_package() -> Result<()> {
     Resolved 2 packages in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + setuptools-editable==0.1.0 (from file://[WORKSPACE]/test/packages/setuptools_editable)
+     + setuptools-editable==0.1.0 (from file://[TEMP_DIR]/setuptools_editable)
     "
     );
 
@@ -14962,7 +14964,7 @@ fn config_settings_package() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Uninstalled 1 package in [TIME]
-     - setuptools-editable==0.1.0 (from file://[WORKSPACE]/test/packages/setuptools_editable)
+     - setuptools-editable==0.1.0 (from file://[TEMP_DIR]/setuptools_editable)
     ");
 
     // Install the editable package with `editable_mode=compat`, by scoped to a different package.
@@ -14976,7 +14978,7 @@ fn config_settings_package() -> Result<()> {
     ----- stderr -----
     Resolved 2 packages in [TIME]
     Installed 1 package in [TIME]
-     + setuptools-editable==0.1.0 (from file://[WORKSPACE]/test/packages/setuptools_editable)
+     + setuptools-editable==0.1.0 (from file://[TEMP_DIR]/setuptools_editable)
     "
     );
 
