@@ -1,0 +1,15 @@
+name: Windows managed-test scheduling samples
+
+on:
+  push:
+    branches: ["zb/ci-speed-managed-candidate-20260909-*"]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    uses: astral-sh/uv-dev/.github/workflows/test.yml@e311378339bd5c0ecc2614a96b9c77a2801e8d1a
+    with:
+      save-rust-cache: "true"
+      test-macos: "false"
