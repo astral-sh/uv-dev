@@ -38,6 +38,11 @@ and comparative logs are still unavailable. They also report a separate package-
 timeout that stops when `ENV UV_COMPILE_BYTECODE=1` is removed; no error output or reproduction was
 provided for that secondary behavior.
 
+A maintainer notes that uv's basic images have never included `sh` and suggests that the reporter's
+parent image may instead have changed. This is an unconfirmed hypothesis, but it makes the exact
+digest resolved for the mutable `python:3.12-slim` tag in the failing build another important input
+for comparison.
+
 ## Reproduction
 
 Outcome: `needs_more_information`.
@@ -90,9 +95,9 @@ published Docker image or covers this external-stage COPY pattern.
 The reporter reports that the same build succeeds when pinned to 0.12.11, but did not provide the
 Dockerfile or comparative logs. To reproduce or diagnose the difference, the complete Dockerfile,
 the full BuildKit output including the numbered failing instruction, the build command and build
-context/target, and output from both 0.12.12 and 0.12.11 are required. Those details will identify
-which active stage is missing `/bin/sh`; the provided line alone only reads files from the
-distroless image.
+context/target, the resolved parent-image digest, and output from both 0.12.12 and 0.12.11 are
+required. Those details will identify which active stage is missing `/bin/sh` and whether the
+mutable parent image differs; the provided line alone only reads files from the distroless image.
 
 The repository bot subsequently recorded that a maintainer considers the issue non-reproducible
 with the information provided and requested an MRE, including the uv version, operating system,
@@ -162,6 +167,9 @@ possibility from being established.
   They separately report that removing `UV_COMPILE_BYTECODE=1` resolves a package-installation
   timeout. These are user-reported observations, not independently reproduced findings, and the
   relationship between the two symptoms is unknown.
+- A maintainer confirms that the basic uv images have never provided `sh` and raises a possible
+  parent-image change. No failing parent-image digest has been supplied, so this remains a
+  hypothesis rather than an established cause.
 - Recent Docker workflow history contains no image-layout change associated with 0.12.12. The
   nearby workflow changes update artifact-attestation tooling, CI settings, runners, or add Python
   3.15 release-candidate derived images.
