@@ -6696,7 +6696,7 @@ fn normalize_url(mut url: DisplaySafeUrl) -> UrlString {
 ///
 /// 1. Removes any sensitive credentials.
 /// 2. Ensures that the lock and install paths are appropriately framed with respect to the
-///    current [`Workspace`].
+///    current [`uv_workspace::Workspace`].
 /// 3. Removes the `origin` field, which is only used in `requirements.txt`.
 /// 4. Simplifies the markers using the provided [`RequiresPython`] instance.
 fn normalize_requirement(

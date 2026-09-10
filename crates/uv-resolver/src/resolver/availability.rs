@@ -91,8 +91,8 @@ impl Display for UnsatisfiableRequirement {
 /// The package version is unavailable and cannot be used. Unlike [`MetadataUnavailable`], this
 /// applies to a single version of the package.
 ///
-/// Most variant are from [`MetadataResponse`] without the error source, since we don't format
-/// the source and we want to merge unavailable messages across versions.
+/// Most variants are from [`crate::MetadataResponse`] without the error source, since we don't
+/// format the source and we want to merge unavailable messages across versions.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum UnavailableVersion {
     /// The version has a dependency whose version specifiers resolve to an empty range.

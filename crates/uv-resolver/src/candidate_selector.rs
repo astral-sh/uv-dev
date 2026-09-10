@@ -738,8 +738,8 @@ impl CandidateSelector {
 
 /// Tracks membership in a range while visiting versions monotonically.
 ///
-/// Unlike [`Range::contains`], which searches the segments for every version, the cursor visits
-/// each segment at most once.
+/// Unlike [`pubgrub::Ranges::contains`], which searches the segments for every version, the cursor
+/// visits each segment at most once.
 struct RangeCursor<'a, Segments> {
     current: (Bound<&'a Version>, Bound<&'a Version>),
     segments: Segments,

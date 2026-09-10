@@ -70,7 +70,7 @@ pub struct TreeDisplay<'env> {
 }
 
 impl<'env> TreeDisplay<'env> {
-    /// Create a new [`DisplayDependencyGraph`] for the set of installed packages.
+    /// Create a new [`Self`] for the set of locked packages.
     pub fn new(
         lock: &'env Lock,
         markers: Option<&'env ResolverMarkerEnvironment>,
