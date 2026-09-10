@@ -104,6 +104,18 @@ class Issue:
         }
 
 
+class IssueState(StrEnum):
+    OPEN = "OPEN"
+    CLOSED = "CLOSED"
+
+
+@dataclass(frozen=True, slots=True)
+class IssueDetails:
+    issue: Issue
+    state: IssueState
+    labels: tuple[str, ...]
+
+
 @dataclass(frozen=True, slots=True)
 class PullRequestRef:
     repository: RepositoryName

@@ -242,6 +242,22 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
 
+  labels:
+    needs: triage
+    if: needs.triage.outputs.result != ''
+    permissions:
+      contents: read
+      id-token: write
+      issues: read
+      pull-requests: read
+    uses: $/.github/workflows/issue-labels.yml
+    with:
+      issue: ${{ fromJSON(needs.triage.outputs.issue-context).url }}
+      triage-result: ${{ needs.triage.outputs.result }}
+      issue-context: ${{ needs.triage.outputs.issue-context }}
+    # The callee activates `automations` and uses its environment-owned credentials.
+    secrets: inherit # zizmor: ignore[secrets-inherit]
+
   reproduce-bug:
     needs: [triage, context]
     if: >-
