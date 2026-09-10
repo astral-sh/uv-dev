@@ -1888,8 +1888,16 @@ pub struct PipOptions {
         "#
     )]
     pub config_settings_package: Option<PackageConfigSettings>,
-    /// The minimum Python version that should be supported by the resolved requirements (e.g.,
-    /// `3.8` or `3.8.17`).
+    /// The Python version to use for resolution (e.g., `3.8` or `3.8.17`).
+    ///
+    /// With `uv pip compile --universal`, this is the minimum supported Python version. Otherwise,
+    /// it is the target Python version used to evaluate environment markers and select compatible
+    /// wheels.
+    ///
+    /// WARNING: This setting also applies to `uv pip install` and `uv pip sync`. It does not select
+    /// the destination environment's interpreter, so the installed distributions may be
+    /// incompatible with that interpreter. To constrain only compilation, pass `--python-version`
+    /// directly to `uv pip compile` instead of setting `python-version` under `[tool.uv.pip]`.
     ///
     /// If a patch version is omitted, the minimum patch version is assumed. For example, `3.8` is
     /// mapped to `3.8.0`.

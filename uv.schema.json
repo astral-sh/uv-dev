@@ -1658,7 +1658,7 @@
           ]
         },
         "python-version": {
-          "description": "The minimum Python version that should be supported by the resolved requirements (e.g.,\n`3.8` or `3.8.17`).\n\nIf a patch version is omitted, the minimum patch version is assumed. For example, `3.8` is\nmapped to `3.8.0`.",
+          "description": "The Python version to use for resolution (e.g., `3.8` or `3.8.17`).\n\nWith `uv pip compile --universal`, this is the minimum supported Python version. Otherwise,\nit is the target Python version used to evaluate environment markers and select compatible\nwheels.\n\nWARNING: This setting also applies to `uv pip install` and `uv pip sync`. It does not select\nthe destination environment's interpreter, so the installed distributions may be\nincompatible with that interpreter. To constrain only compilation, pass `--python-version`\ndirectly to `uv pip compile` instead of setting `python-version` under `[tool.uv.pip]`.\n\nIf a patch version is omitted, the minimum patch version is assumed. For example, `3.8` is\nmapped to `3.8.0`.",
           "anyOf": [
             {
               "$ref": "#/definitions/PythonVersion"
