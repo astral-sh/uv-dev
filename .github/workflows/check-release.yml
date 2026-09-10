@@ -5,30 +5,30 @@ env:
   UV_LOCKED: 1
 
 jobs:
-  dist-plan:
-    name: "dist plan"
+  release-plan:
+    name: "release plan"
     runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
-    env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           submodules: recursive
 
-      - name: "Install uv"
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          cache: ""
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: "0.12.12"
           checksum: "ab9b309d4586403f024e100abaceb396616e178a553e2500c36087d180f09509"
           enable-cache: true
 
-      - name: Run dist plan
+      - name: Plan release
         run: |
-          uv run --locked --only-dev dist plan --output-format=json > plan-dist-manifest.json
-          echo "dist plan completed successfully"
+          python scripts/plan-release.py > plan-dist-manifest.json
           cat plan-dist-manifest.json
-      - name: Compare native release plan
+      - name: Check release manifest invariants
         run: |
-          python3 scripts/plan-release.py --compare plan-dist-manifest.json > native-release-manifest.json
           uv run --locked --script scripts/test-native-release-plan.py
+          uv run --locked --script scripts/test-native-installers.py

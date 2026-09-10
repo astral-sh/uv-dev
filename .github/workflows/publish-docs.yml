@@ -1,7 +1,6 @@
 # Publish the uv documentation.
 #
-# Assumed to run as a subworkflow of .github/workflows/release.yml; specifically, as a post-announce
-# job within `cargo-dist`.
+# Runs after the GitHub release is published by .github/workflows/release.yml.
 name: mkdocs
 
 on:

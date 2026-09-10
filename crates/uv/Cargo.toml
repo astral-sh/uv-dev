@@ -224,9 +224,6 @@ windows-gui-bin = []
 # feature.
 ignored = ["uv-test"]
 
-[package.metadata.dist]
-dist = true
-
 [[bin]]
 name = "uvw"
 required-features = ["windows-gui-bin"]
