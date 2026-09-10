@@ -103,6 +103,19 @@ pub enum ProxyIndexError {
         url: Box<DisplaySafeUrl>,
     },
 
+    /// An index-less locked artifact matches more than one configured canonical index.
+    #[error(
+        "Cannot determine the package index for `{url}` because both `{first}` and `{second}` have matching proxy artifact mappings"
+    )]
+    AmbiguousArtifactIndex {
+        /// The canonical artifact URL whose index is unknown.
+        url: Box<DisplaySafeUrl>,
+        /// The first matching canonical index.
+        first: Box<DisplaySafeUrl>,
+        /// The second matching canonical index.
+        second: Box<DisplaySafeUrl>,
+    },
+
     /// A registry artifact location could not be converted to an absolute URL.
     #[error(transparent)]
     InvalidArtifactUrl(#[from] ToUrlError),
@@ -359,6 +372,35 @@ impl IndexRoute {
 }
 
 impl IndexLocations {
+    /// Identify an index-less locked artifact from its configured canonical artifact prefix.
+    ///
+    /// Multiple indexes can share an artifact host, so overlapping mappings are ambiguous even
+    /// when one prefix is more specific. An explicit lockfile index must take precedence.
+    pub fn canonical_index_for_artifact(
+        &self,
+        url: &DisplaySafeUrl,
+    ) -> Result<Option<&IndexUrl>, ProxyIndexError> {
+        let mut indexes = self.routes.iter().filter_map(|route| {
+            route
+                .artifact_mapping
+                .canonical
+                .as_prefix()
+                .path_suffix(url)
+                .map(|_| route.canonical.as_index_url())
+        });
+        let Some(first) = indexes.next() else {
+            return Ok(None);
+        };
+        if let Some(second) = indexes.next() {
+            return Err(ProxyIndexError::AmbiguousArtifactIndex {
+                url: Box::new(url.clone()),
+                first: Box::new(first.url().clone()),
+                second: Box::new(second.url().clone()),
+            });
+        }
+        Ok(Some(first))
+    }
+
     /// Borrow the configured [`ProxyRoute`] for a canonical index, if any.
     ///
     /// The route contains the configured canonical URL, which may differ from `index` in spelling
@@ -626,6 +668,41 @@ mod tests {
             &index_url("https://pypi.org/simple")?
         );
         assert_eq!(locations.proxy_routes().count(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn index_less_artifact_requires_an_unambiguous_proxy() -> TestResult {
+        let artifact = url("https://files.pythonhosted.org/packages/example/package.whl")?;
+        let locations = pypi_locations(pypi_proxy()?)?;
+        assert_eq!(
+            locations.canonical_index_for_artifact(&artifact)?,
+            Some(&index_url("https://pypi.org/simple")?)
+        );
+        assert!(
+            locations
+                .canonical_index_for_artifact(&url("https://other.example.com/package.whl")?)?
+                .is_none()
+        );
+
+        let other = named_index(
+            "other",
+            "https://other.example.com/simple/",
+            Some("https://files.pythonhosted.org/packages/example/"),
+            None,
+        )?;
+        let other_proxy = named_index(
+            "other-proxy",
+            "https://proxy.example.com/other/simple/",
+            Some("https://proxy.example.com/other/files/"),
+            Some("other"),
+        )?;
+        let locations =
+            IndexLocations::new(vec![pypi_proxy()?, other, other_proxy], Vec::new(), false)?;
+        assert!(matches!(
+            locations.canonical_index_for_artifact(&artifact),
+            Err(ProxyIndexError::AmbiguousArtifactIndex { .. })
+        ));
         Ok(())
     }
 

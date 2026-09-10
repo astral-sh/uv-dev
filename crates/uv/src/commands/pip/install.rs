@@ -551,6 +551,7 @@ pub(crate) async fn pip_install(
             &extras,
             &groups,
             &build_options,
+            &index_locations,
             hash_checking,
         )?
     } else {
