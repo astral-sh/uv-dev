@@ -63,6 +63,18 @@ configuring caching.
 Using `uv cache prune --ci` at the end of the job is recommended to reduce cache size. See the [uv
 cache documentation](../../concepts/cache.md#caching-in-continuous-integration) for more details.
 
+Restoring `UV_CACHE_DIR` makes cached dependencies available to uv, but does not restore packages
+installed into a previous job's Python environment. Run `uv sync` or `uv pip install` in each clean
+job that needs those packages, even when the cache is restored.
+
+To intentionally pass an installed environment required by a later job, create a project-local
+`.venv` and include it in GitLab's [job artifacts](https://docs.gitlab.com/ci/jobs/job_artifacts/).
+Caching `.venv` is an optional optimization; jobs must recreate it if the cache is unavailable.
+GitLab only saves paths inside the project directory, so it cannot preserve a system environment
+such as `/usr/local` this way. Virtual environments are not generally portable: restore one only
+when the jobs use the same absolute project path and compatible platforms and Python images.
+Otherwise, recreate the environment from the project's dependencies.
+
 ## Using `uv pip`
 
 If using the `uv pip` interface instead of the uv project interface, uv requires a virtual
