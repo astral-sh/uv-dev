@@ -71,13 +71,28 @@ jobs:
             'Acquire::http::Timeout "10";' \
             'Acquire::https::Timeout "10";' \
             | sudo tee /etc/apt/apt.conf.d/80-retries > /dev/null
-          sudo apt install -y --no-install-recommends gnome-keyring
+          sudo apt install -y --no-install-recommends dbus-daemon gnome-keyring libglib2.0-bin
 
       - name: "Start gnome-keyring"
-        # run gnome-keyring with 'foobar' as password for the login keyring
-        # this will create a new login keyring and unlock it
-        # the login password doesn't matter, but the keyring must be unlocked for the tests to work
-        run: gnome-keyring-daemon --components=secrets --daemonize --unlock <<< 'foobar'
+        # Native-auth tests need an unlocked keyring on a job-owned session bus.
+        run: |
+          keyring_root="$RUNNER_TEMP/uv-keyring"
+          install -d -m 700 "$keyring_root/data" "$keyring_root/control"
+          DBUS_SESSION_BUS_ADDRESS="$(dbus-daemon --session --address="unix:path=$keyring_root/bus" --fork --print-address=1)"
+          GNOME_KEYRING_CONTROL="$keyring_root/control"
+          export DBUS_SESSION_BUS_ADDRESS GNOME_KEYRING_CONTROL
+          echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS" >> "$GITHUB_ENV"
+          echo "GNOME_KEYRING_CONTROL=$GNOME_KEYRING_CONTROL" >> "$GITHUB_ENV"
+          printf '%s' foobar | XDG_DATA_HOME="$keyring_root/data" gnome-keyring-daemon --control-directory="$GNOME_KEYRING_CONTROL" --components=secrets --daemonize --login
+          XDG_DATA_HOME="$keyring_root/data" gnome-keyring-daemon --control-directory="$GNOME_KEYRING_CONTROL" --components=secrets --start
+          for _ in {1..50}; do
+            if locked="$(gdbus call --session --dest org.freedesktop.secrets --object-path /org/freedesktop/secrets/aliases/default --method org.freedesktop.DBus.Properties.Get org.freedesktop.Secret.Collection Locked 2>&1)" && test "$locked" = '(<false>,)'; then
+              break
+            fi
+            sleep 0.2
+          done
+          printf '%s\n' "$locked"
+          test "$locked" = '(<false>,)'
 
       - name: "Create btrfs filesystem"
         run: |
