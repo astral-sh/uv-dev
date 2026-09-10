@@ -7518,7 +7518,9 @@ dependencies = [
 name = "uv-toml"
 version = "0.0.79"
 dependencies = [
+ "insta",
  "serde",
+ "toml_edit",
 ]
 
 [[package]]

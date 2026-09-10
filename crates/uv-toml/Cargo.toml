@@ -17,3 +17,7 @@ workspace = true
 
 [dependencies]
 serde = { workspace = true }
+
+[dev-dependencies]
+insta = { workspace = true }
+toml_edit = { workspace = true }
