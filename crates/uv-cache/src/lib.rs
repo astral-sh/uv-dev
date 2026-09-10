@@ -1545,10 +1545,81 @@ impl Refresh {
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
+    use std::time::UNIX_EPOCH;
+
+    use uv_cache_info::Timestamp;
+    use uv_normalize::PackageName;
 
     use crate::ArchiveId;
 
-    use super::{Cache, Link};
+    use super::{Cache, CacheEntry, Freshness, Link, Refresh};
+
+    #[test]
+    fn refresh_paths_use_file_identity() {
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("target");
+        let alias = root.path().join("alias");
+        let unrelated = root.path().join("unrelated");
+        let missing = root.path().join("missing");
+        fs_err::write(&target, "target").unwrap();
+        fs_err::hard_link(&target, &alias).unwrap();
+        fs_err::write(&unrelated, "unrelated").unwrap();
+
+        let timestamp = Timestamp::from(UNIX_EPOCH);
+        let entry = CacheEntry::from_path(root.path().join("missing-entry"));
+        let package = PackageName::from_str("unrelated").unwrap();
+        let paths = [&target, &alias, &unrelated, &missing];
+        let policies = [
+            ("none", Refresh::None(timestamp), [false; 4]),
+            ("all", Refresh::All(timestamp), [true; 4]),
+            (
+                "existing target",
+                Refresh::Packages(vec![], vec![target.clone().into_boxed_path()], timestamp),
+                [true, true, false, false],
+            ),
+            (
+                "missing target",
+                Refresh::Packages(vec![], vec![missing.clone().into_boxed_path()], timestamp),
+                [false; 4],
+            ),
+            (
+                "missing then existing target",
+                Refresh::Packages(
+                    vec![],
+                    vec![
+                        missing.clone().into_boxed_path(),
+                        target.clone().into_boxed_path(),
+                    ],
+                    timestamp,
+                ),
+                [true, true, false, false],
+            ),
+        ];
+
+        for (name, refresh, expected) in policies {
+            let cache = Cache::from_path(root.path()).with_refresh(refresh);
+            for (path, expected) in paths.into_iter().zip(expected) {
+                assert_eq!(
+                    cache.must_revalidate_path(path),
+                    expected,
+                    "{name}: {path:?}"
+                );
+
+                // A selected path checks the missing entry, while an unrelated path does not.
+                // Supplying an unrelated package ensures that only the path selects the entry.
+                let freshness = if expected {
+                    Freshness::Missing
+                } else {
+                    Freshness::Fresh
+                };
+                assert_eq!(
+                    cache.freshness(&entry, Some(&package), Some(path)).unwrap(),
+                    freshness,
+                    "{name}: {path:?}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn test_link_round_trip() {
