@@ -1,0 +1,15 @@
+name: Linux runner-capacity samples
+
+on:
+  push:
+    branches: ["zb/ci-speed-linux-capacity-control-20260909-*"]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    uses: astral-sh/uv-dev/.github/workflows/test.yml@fd236d617e959c09b27ababfd5cf8540be6bd22f
+    with:
+      save-rust-cache: "true"
+      test-macos: "false"
