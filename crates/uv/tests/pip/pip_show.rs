@@ -10,6 +10,65 @@ use uv_static::EnvVars;
 
 use uv_test::uv_snapshot;
 
+// These tests exercise dependency, environment, and file-list output. Keep their external-package
+// metadata out of the snapshots; `pip_show_metadata` covers the new fields with authored fixtures.
+// Fail closed if the fields appear out of order, contain another line, or include an unknown field.
+const DESCRIPTIVE_METADATA_FILTER: (&str, &str) = (
+    concat!(
+        r"(?m)^(Name: [^\r\n]*\r?\nVersion: [^\r\n]*\r?\n)",
+        r"(?:Summary: [^\r\n]*\r?\n)?",
+        r"(?:Home-page: [^\r\n]*\r?\n)?",
+        r"(?:Author: [^\r\n]*\r?\n)?",
+        r"(?:Author-email: [^\r\n]*\r?\n)?",
+        r"(?:(?:License-Expression|License): [^\r\n]*\r?\n)?",
+        r"(Location: [^\r\n]*(?:\r?\n|$))",
+    ),
+    "$1$2",
+);
+
+#[cfg(feature = "test-pypi")]
+fn show_filters(context: &uv_test::TestContext) -> Vec<(&str, &str)> {
+    let mut filters = context.filters();
+    filters.push(DESCRIPTIVE_METADATA_FILTER);
+    filters
+}
+
+#[test]
+fn show_descriptive_metadata_filter() {
+    let filtered = uv_test::apply_filters(
+        "Name: fixture\nVersion: 1.0\nSummary: A fixture\nHome-page: https://example.invalid\nAuthor: An author\nAuthor-email: author@example.invalid\nLicense-Expression: MIT\nLocation: site-packages\nRequires: dependency\nRequired-by:\nFiles:\n  fixture.py\n".to_string(),
+        [DESCRIPTIVE_METADATA_FILTER],
+    );
+    insta::assert_snapshot!(filtered, @"
+    Name: fixture
+    Version: 1.0
+    Location: site-packages
+    Requires: dependency
+    Required-by:
+    Files:
+      fixture.py
+    ");
+
+    for fields in [
+        "Summary: First line\nSecond line\n",
+        "Summary: A fixture\nUnexpected: value\n",
+        "Author: An author\nSummary: A fixture\n",
+        "License-Expression: MIT\nLicense: BSD-3-Clause\n",
+    ] {
+        let original = format!("Name: fixture\nVersion: 1.0\n{fields}Location: site-packages\n");
+        assert_eq!(
+            uv_test::apply_filters(original.clone(), [DESCRIPTIVE_METADATA_FILTER]),
+            original,
+        );
+    }
+
+    let unrelated = "Version: 1.0\nSummary: Keep this\nLocation: elsewhere\n";
+    assert_eq!(
+        uv_test::apply_filters(unrelated.to_string(), [DESCRIPTIVE_METADATA_FILTER]),
+        unrelated,
+    );
+}
+
 #[test]
 fn show_empty() {
     let context = uv_test::test_context!("3.12");
@@ -49,7 +108,7 @@ fn show_requires_multiple() -> Result<()> {
     );
 
     context.assert_command("import requests").success();
-    uv_snapshot!(context.filters(), context.pip_show()
+    uv_snapshot!(show_filters(&context), context.pip_show()
         .arg("requests"), @"
     exit_code: 0 (success)
     ----- stdout -----
@@ -90,7 +149,7 @@ fn show_python_version_marker() -> Result<()> {
 
     context.assert_command("import click").success();
 
-    let mut filters = context.filters();
+    let mut filters = show_filters(&context);
     if cfg!(windows) {
         filters.push(("Requires: colorama", "Requires:"));
     }
@@ -134,7 +193,7 @@ fn show_found_single_package() -> Result<()> {
 
     context.assert_command("import markupsafe").success();
 
-    uv_snapshot!(context.filters(), context.pip_show()
+    uv_snapshot!(show_filters(&context), context.pip_show()
         .arg("markupsafe"), @"
     exit_code: 0 (success)
     ----- stdout -----
@@ -178,7 +237,7 @@ fn show_found_multiple_packages() -> Result<()> {
 
     context.assert_command("import markupsafe").success();
 
-    uv_snapshot!(context.filters(), context.pip_show()
+    uv_snapshot!(show_filters(&context), context.pip_show()
         .arg("markupsafe")
         .arg("pip"), @"
     exit_code: 0 (success)
@@ -229,7 +288,7 @@ fn show_found_one_out_of_three() -> Result<()> {
 
     context.assert_command("import markupsafe").success();
 
-    uv_snapshot!(context.filters(), context.pip_show()
+    uv_snapshot!(show_filters(&context), context.pip_show()
         .arg("markupsafe")
         .arg("flask")
         .arg("django"), @"
@@ -348,7 +407,7 @@ fn show_editable() -> Result<()> {
         .assert()
         .success();
 
-    uv_snapshot!(context.filters(), context.pip_show()
+    uv_snapshot!(show_filters(&context), context.pip_show()
         .arg("poetry-editable"), @"
     exit_code: 0 (success)
     ----- stdout -----
@@ -399,7 +458,7 @@ fn show_required_by_multiple() -> Result<()> {
     context.assert_command("import requests").success();
 
     // idna is required by anyio and requests
-    uv_snapshot!(context.filters(), context.pip_show()
+    uv_snapshot!(show_filters(&context), context.pip_show()
         .arg("idna"), @"
     exit_code: 0 (success)
     ----- stdout -----
@@ -438,7 +497,7 @@ fn show_files() {
 
     // Windows has a different files order.
     #[cfg(not(windows))]
-    uv_snapshot!(context.filters(), context.pip_show().arg("requests").arg("--files"), @"
+    uv_snapshot!(show_filters(&context), context.pip_show().arg("requests").arg("--files"), @"
     exit_code: 0 (success)
     ----- stdout -----
     Name: requests
@@ -496,7 +555,7 @@ fn show_target() -> Result<()> {
         .success();
 
     // Show package in the target directory.
-    uv_snapshot!(context.filters(), context.pip_show()
+    uv_snapshot!(show_filters(&context), context.pip_show()
         .arg("markupsafe")
         .arg("--target")
         .arg(target.path()), @"
@@ -542,7 +601,7 @@ fn show_prefix() -> Result<()> {
         .success();
 
     // Show package in the prefix directory.
-    uv_snapshot!(context.filters(), context.pip_show()
+    uv_snapshot!(show_filters(&context), context.pip_show()
         .arg("markupsafe")
         .arg("--prefix")
         .arg(prefix.path()), @"
