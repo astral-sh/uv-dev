@@ -257,11 +257,11 @@ jobs:
   cargo-test-windows:
     timeout-minutes: 15
     runs-on: namespace-profile-windows-2022-x86-64-16x32
-    name: "cargo test on windows ${{ matrix.partition }} of 3"
+    name: "cargo test on windows ${{ matrix.partition }} of 4"
     strategy:
       fail-fast: false
       matrix:
-        partition: [1, 2, 3]
+        partition: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -341,7 +341,7 @@ jobs:
             --features test-python,test-pypi,test-python-managed,test-windows-registry,native-auth,windows-native \
             --workspace \
             --profile ci-windows \
-            --partition hash:${{ matrix.partition }}/3
+            --partition hash:${{ matrix.partition }}/4
 
       - name: "Prune superseded workspace artifacts"
         if: ${{ inputs.save-rust-cache == 'true' && steps.rust-cache.outputs.cache-hit != 'true' }}
