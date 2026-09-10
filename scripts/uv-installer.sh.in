@@ -37,8 +37,8 @@ detect_target() {
             if [ "$(getconf LONG_BIT 2>/dev/null || true)" = 32 ]; then
                 case "$arch" in x86_64) arch=i686 ;; aarch64) arch=armv7 ;; esac
             fi
-            minimum=17
-            case "$arch" in aarch64) minimum=28 ;; riscv64gc) minimum=31 ;; esac
+            minimum={{glibc_default}}
+            case "$arch" in aarch64) minimum={{glibc_aarch64}} ;; riscv64gc) minimum={{glibc_riscv64}} ;; esac
             libc=musl
             glibc=$(getconf GNU_LIBC_VERSION 2>/dev/null || true)
             case "$glibc" in
@@ -54,7 +54,7 @@ detect_target() {
             case "$arch" in
                 arm) libc=musleabihf ;;
                 armv7) libc=${libc}eabihf ;;
-                powerpc64le|s390x) [ "$libc" = gnu ] || fail "$arch requires glibc 2.17 or later" ;;
+                powerpc64le|s390x) [ "$libc" = gnu ] || fail "$arch requires glibc 2.$minimum or later" ;;
             esac
             target=$arch-unknown-linux-$libc
             ;;
