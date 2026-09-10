@@ -179,14 +179,8 @@ jobs:
             exit 0
           fi
 
-          version=$(grep "version = " pyproject.toml | sed -e 's/version = "\(.*\)"/\1/g')
-          if [ "${TAG}" != "${version}" ]; then
-            echo "The input tag does not match the version from pyproject.toml:" >&2
-            echo "${TAG}" >&2
-            echo "${version}" >&2
-            exit 1
-          fi
-          echo "Releasing ${version}"
+          python3 scripts/check_release_versions.py --tag="${TAG}"
+          echo "Releasing ${TAG}"
         env:
           TAG: ${{ needs.docker-plan.outputs.tag }}
           PUSH_DEV: ${{ inputs.push-dev }}
