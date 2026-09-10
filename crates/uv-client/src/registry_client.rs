@@ -1644,16 +1644,10 @@ impl SimpleDetailMetadata {
                     continue;
                 }
             };
-            match version_map.entry(filename.version().clone()) {
-                std::collections::btree_map::Entry::Occupied(mut entry) => {
-                    entry.get_mut().push(&filename, file);
-                }
-                std::collections::btree_map::Entry::Vacant(entry) => {
-                    let mut files = VersionFiles::default();
-                    files.push(&filename, file);
-                    entry.insert(files);
-                }
-            }
+            version_map
+                .entry(filename.version().clone())
+                .or_default()
+                .push(&filename, file);
         }
 
         // Keep file ordering deterministic without sorting the complete Simple API response.
