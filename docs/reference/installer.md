@@ -13,6 +13,11 @@ try the native updater. It verifies and installs the release archive directly, a
 from the previous standalone installer. Installations created by `uv self install` use the native
 updater automatically. The public installation scripts still use the existing installation path.
 
+Use `uv self uninstall` to remove a native installation, or pass the preview flag to uninstall an
+older standalone installation. This removes only the executables listed in the installation receipt
+and the receipt itself. Shared executable directories, shell configuration, Python installations,
+tools, and caches are left in place.
+
 ## Changing the installation path
 
 By default, uv is installed in the user [executable directory](./storage.md#executable-directory).
