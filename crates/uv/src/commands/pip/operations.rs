@@ -41,6 +41,7 @@ use uv_requirements::{
     GroupsSpecification, LookaheadResolver, NamedRequirementsResolver, RequirementsSource,
     RequirementsSpecification, SourceTree, SourceTreeResolution, SourceTreeResolver,
 };
+use uv_requirements_txt::RequirementsTxtRequirement;
 use uv_resolver::{
     DependencyMode, Exclusions, FlatIndex, InMemoryIndex, Manifest, Options, Preference,
     Preferences, PythonRequirement, Resolver, ResolverEnvironment, ResolverOutput, UpgradePackages,
@@ -73,6 +74,7 @@ pub(crate) async fn read_requirements(
         return Err(anyhow::Error::new(ExtrasWithoutSourceError {
             has_editable,
             extra: extras.history().single_extra().cloned(),
+            requirement: ExtrasWithoutSourceError::single_requirement(requirements, extras),
         })
         .into());
     }
@@ -1427,10 +1429,38 @@ impl uv_errors::Hint for Error {
 pub(crate) struct ExtrasWithoutSourceError {
     has_editable: bool,
     extra: Option<ExtraName>,
+    requirement: Option<(PackageName, BTreeSet<ExtraName>)>,
+}
+
+impl ExtrasWithoutSourceError {
+    fn single_requirement(
+        requirements: &[RequirementsSource],
+        extras: &ExtrasSpecification,
+    ) -> Option<(PackageName, BTreeSet<ExtraName>)> {
+        // Only reconstruct an unversioned, semantically unconditional package requirement.
+        if let [RequirementsSource::Package(RequirementsTxtRequirement::Named(requirement))] =
+            requirements
+            && requirement.extras.is_empty()
+            && requirement.version_or_url.is_none()
+            && requirement.marker.is_true()
+            && let Some(extras) = extras.included_names()
+        {
+            let extras: BTreeSet<_> = extras.cloned().collect();
+            (!extras.is_empty()).then(|| (requirement.name.clone(), extras))
+        } else {
+            None
+        }
+    }
 }
 
 impl uv_errors::Hint for ExtrasWithoutSourceError {
     fn hints(&self) -> uv_errors::Hints<'_> {
+        if let Some((package, extras)) = &self.requirement {
+            return uv_errors::Hints::from(format!(
+                "Use `{package}[{}]` syntax instead",
+                extras.iter().join(",")
+            ));
+        }
         let extra = self.extra.as_ref().map_or("extra", ExtraName::as_str);
         uv_errors::Hints::from(if self.has_editable {
             format!("Use `<dir>[{extra}]` syntax or `-r <file>` instead")

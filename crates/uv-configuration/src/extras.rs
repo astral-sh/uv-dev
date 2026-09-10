@@ -160,6 +160,16 @@ impl ExtrasSpecificationInner {
         all_names.filter(move |name| self.contains(name))
     }
 
+    /// Iterate over the included extras after exclusions, if the set is finite.
+    ///
+    /// Returns `None` when all extras are included, since their names are not known.
+    pub fn included_names(&self) -> Option<impl Iterator<Item = &ExtraName>> {
+        match &self.include {
+            IncludeExtras::Some(extras) => Some(self.extra_names(extras.iter())),
+            IncludeExtras::All => None,
+        }
+    }
+
     /// Iterate over all groups the user explicitly asked for on the CLI
     pub fn explicit_names(&self) -> impl Iterator<Item = &ExtraName> {
         let ExtrasSpecificationHistory {
@@ -317,5 +327,115 @@ impl IncludeExtras {
 impl Default for IncludeExtras {
     fn default() -> Self {
         Self::Some(Vec::new())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use uv_normalize::{DefaultExtras, ExtraName};
+
+    use super::{ExtrasSpecification, ExtrasSpecificationInner};
+
+    fn extras(names: &[&str]) -> Vec<ExtraName> {
+        names.iter().map(|name| name.parse().unwrap()).collect()
+    }
+
+    fn included_names(specification: &ExtrasSpecificationInner) -> Option<Vec<&str>> {
+        specification
+            .included_names()
+            .map(|names| names.map(ExtraName::as_str).collect())
+    }
+
+    #[test]
+    fn finite_included_names() {
+        assert_eq!(
+            included_names(&ExtrasSpecification::default()),
+            Some(vec![])
+        );
+        assert_eq!(
+            included_names(&ExtrasSpecification::from_extra(extras(&["dev", "docs"]))),
+            Some(vec!["dev", "docs"])
+        );
+    }
+
+    #[test]
+    fn included_names_apply_exclusions() {
+        let specification = ExtrasSpecification::from_args(
+            extras(&["dev", "docs"]),
+            extras(&["dev", "missing"]),
+            false,
+            vec![],
+            false,
+        );
+        assert_eq!(included_names(&specification), Some(vec!["docs"]));
+
+        let specification = ExtrasSpecification::from_args(
+            extras(&["dev"]),
+            extras(&["dev"]),
+            false,
+            vec![],
+            false,
+        );
+        assert_eq!(included_names(&specification), Some(vec![]));
+    }
+
+    #[test]
+    fn all_included_names_are_unknown() {
+        assert_eq!(
+            included_names(&ExtrasSpecification::from_all_extras()),
+            None
+        );
+        let specification = ExtrasSpecification::from_args(
+            extras(&["dev"]),
+            extras(&["docs"]),
+            false,
+            vec![],
+            true,
+        );
+        assert_eq!(included_names(&specification), None);
+    }
+
+    #[test]
+    fn included_names_apply_defaults_and_only_extras() {
+        let specification = ExtrasSpecification::from_args(
+            extras(&["dev"]),
+            extras(&["docs"]),
+            false,
+            vec![],
+            false,
+        );
+        assert_eq!(
+            included_names(
+                &specification.with_defaults(DefaultExtras::List(extras(&["docs", "test",])))
+            ),
+            Some(vec!["dev", "test"])
+        );
+        assert_eq!(
+            included_names(&specification.with_defaults(DefaultExtras::All)),
+            None
+        );
+
+        let specification = ExtrasSpecification::from_args(
+            extras(&["dev"]),
+            vec![],
+            false,
+            extras(&["docs"]),
+            false,
+        );
+        assert_eq!(
+            included_names(&specification.with_defaults(DefaultExtras::All)),
+            Some(vec!["dev", "docs"])
+        );
+
+        let specification =
+            ExtrasSpecification::from_args(extras(&["dev"]), vec![], true, vec![], false);
+        assert_eq!(
+            included_names(&specification.with_defaults(DefaultExtras::All)),
+            Some(vec!["dev"])
+        );
+        assert_eq!(
+            included_names(&specification.with_defaults(DefaultExtras::List(extras(&["docs"])))),
+            Some(vec!["dev"])
+        );
     }
 }
