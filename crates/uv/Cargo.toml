@@ -37,6 +37,7 @@ uv-flags = { workspace = true }
 uv-fs = { workspace = true }
 uv-git = { workspace = true }
 uv-git-types = { workspace = true }
+uv-globfilter = { workspace = true }
 uv-install-wheel = { workspace = true, default-features = false }
 uv-installer = { workspace = true }
 uv-logging = { workspace = true }

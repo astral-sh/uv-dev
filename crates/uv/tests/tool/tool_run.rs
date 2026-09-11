@@ -2172,8 +2172,7 @@ fn tool_run_hint_version_not_available() {
     exit_code: 2 (failure)
     ----- stderr -----
     error: No interpreter found for Python 3.12 in [PYTHON SOURCES]
-
-    hint: A managed Python download is available for Python 3.12, but Python downloads are set to 'never'
+      hint: A managed Python download is available for Python 3.12, but Python downloads are set to 'never'
     ");
 
     uv_snapshot!(context.filters(), context.tool_run()
@@ -2183,8 +2182,7 @@ fn tool_run_hint_version_not_available() {
     exit_code: 2 (failure)
     ----- stderr -----
     error: No interpreter found for Python 3.12 in [PYTHON SOURCES]
-
-    hint: A managed Python download is available for Python 3.12, but uv is set to offline mode
+      hint: A managed Python download is available for Python 3.12, but uv is set to offline mode
     ");
 
     uv_snapshot!(context.filters(), context.tool_run()
@@ -2194,8 +2192,7 @@ fn tool_run_hint_version_not_available() {
     exit_code: 2 (failure)
     ----- stderr -----
     error: No interpreter found for Python 3.12 in [PYTHON SOURCES]
-
-    hint: A managed Python download is available for Python 3.12, but the Python preference is set to 'only system'
+      hint: A managed Python download is available for Python 3.12, but the Python preference is set to 'only system'
     ");
 
     uv_snapshot!(context.filters(), context.tool_run()
@@ -2207,8 +2204,7 @@ fn tool_run_hint_version_not_available() {
     exit_code: 2 (failure)
     ----- stderr -----
     error: No interpreter found for Python 3.12 in [PYTHON SOURCES]
-
-    hint: A managed Python download is available for Python 3.12, but the Python preference is set to 'only system'
+      hint: A managed Python download is available for Python 3.12, but the Python preference is set to 'only system'
     ");
 }
 
@@ -2772,8 +2768,7 @@ fn tool_run_with_existing_py_script() -> anyhow::Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: It looks like you tried to run a Python script at `script.py`, which is not supported by `uv tool run`
-
-    hint: Use `uv run script.py` instead
+      hint: Use `uv run script.py` instead
     ");
 
     uv_snapshot!(context.filters(), context.tool_run()
@@ -2781,8 +2776,7 @@ fn tool_run_with_existing_py_script() -> anyhow::Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: It looks like you tried to run a Python script at `[TEMP_DIR]/script.py`, which is not supported by `uv tool run`
-
-    hint: Use `uv run [TEMP_DIR]/script.py` instead
+      hint: Use `uv run [TEMP_DIR]/script.py` instead
     ");
     Ok(())
 }
@@ -2798,8 +2792,7 @@ fn tool_run_with_existing_pyw_script() -> anyhow::Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: It looks like you tried to run a Python script at `script.pyw`, which is not supported by `uv tool run`
-
-    hint: Use `uv run script.pyw` instead
+      hint: Use `uv run script.pyw` instead
     ");
     Ok(())
 }
@@ -2814,8 +2807,7 @@ fn tool_run_with_nonexistent_py_script() {
     exit_code: 2 (failure)
     ----- stderr -----
     error: It looks like you provided a Python script to run, which is not supported by `uv tool run`
-
-    hint: We did not find a script at the requested path. If you meant to run a command from the `script-py` package, pass the normalized package name to `--from` to disambiguate, e.g., `uv tool run --from script-py script.py`
+      hint: We did not find a script at the requested path. If you meant to run a command from the `script-py` package, pass the normalized package name to `--from` to disambiguate, e.g., `uv tool run --from script-py script.py`
     ");
 }
 
@@ -2829,8 +2821,7 @@ fn tool_run_with_nonexistent_pyw_script() {
     exit_code: 2 (failure)
     ----- stderr -----
     error: It looks like you provided a Python script to run, which is not supported by `uv tool run`
-
-    hint: We did not find a script at the requested path. If you meant to run a command from the `script-pyw` package, pass the normalized package name to `--from` to disambiguate, e.g., `uv tool run --from script-pyw script.pyw`
+      hint: We did not find a script at the requested path. If you meant to run a command from the `script-pyw` package, pass the normalized package name to `--from` to disambiguate, e.g., `uv tool run --from script-pyw script.pyw`
     ");
 }
 
@@ -2846,8 +2837,7 @@ fn tool_run_with_from_script() {
     exit_code: 2 (failure)
     ----- stderr -----
     error: It looks like you provided a Python script to `--from`, which is not supported
-
-    hint: If you meant to run a command from the `script-py` package, use the normalized package name instead to disambiguate, e.g., `uv tool run --from script-py ruff`
+      hint: If you meant to run a command from the `script-py` package, use the normalized package name instead to disambiguate, e.g., `uv tool run --from script-py ruff`
     ");
 }
 
@@ -2863,8 +2853,7 @@ fn tool_run_with_script_and_from_script() {
     exit_code: 2 (failure)
     ----- stderr -----
     error: It looks like you provided a Python script to `--from`, which is not supported
-
-    hint: If you meant to run a command from the `script-py` package, use the normalized package name instead to disambiguate, e.g., `uv tool run --from script-py other-script.py`
+      hint: If you meant to run a command from the `script-py` package, use the normalized package name instead to disambiguate, e.g., `uv tool run --from script-py other-script.py`
     ");
 }
 
@@ -2949,8 +2938,7 @@ fn tool_run_verbose_hint() {
     error: Failed to run tool
       cause: No solution found when resolving dependencies
       cause: Because nonexistent-package-foo was not found in the package registry and you require nonexistent-package-foo, we can conclude that your requirements are unsatisfiable.
-
-    hint: You provided `--verbose` to `nonexistent-package-foo`. Did you mean to provide it to `uv tool run`? e.g., `uv tool run --verbose nonexistent-package-foo`
+      hint: You provided `--verbose` to `nonexistent-package-foo`. Did you mean to provide it to `uv tool run`? e.g., `uv tool run --verbose nonexistent-package-foo`
     ");
 
     // Test with -v flag
@@ -2962,8 +2950,7 @@ fn tool_run_verbose_hint() {
     error: Failed to run tool
       cause: No solution found when resolving dependencies
       cause: Because nonexistent-package-bar was not found in the package registry and you require nonexistent-package-bar, we can conclude that your requirements are unsatisfiable.
-
-    hint: You provided `-v` to `nonexistent-package-bar`. Did you mean to provide it to `uv tool run`? e.g., `uv tool run -v nonexistent-package-bar`
+      hint: You provided `-v` to `nonexistent-package-bar`. Did you mean to provide it to `uv tool run`? e.g., `uv tool run -v nonexistent-package-bar`
     ");
 
     // Test with -vv flag
@@ -2975,8 +2962,7 @@ fn tool_run_verbose_hint() {
     error: Failed to run tool
       cause: No solution found when resolving dependencies
       cause: Because nonexistent-package-baz was not found in the package registry and you require nonexistent-package-baz, we can conclude that your requirements are unsatisfiable.
-
-    hint: You provided `-vv` to `nonexistent-package-baz`. Did you mean to provide it to `uv tool run`? e.g., `uv tool run -vv nonexistent-package-baz`
+      hint: You provided `-vv` to `nonexistent-package-baz`. Did you mean to provide it to `uv tool run`? e.g., `uv tool run -vv nonexistent-package-baz`
     ");
 
     // Test for false positives
