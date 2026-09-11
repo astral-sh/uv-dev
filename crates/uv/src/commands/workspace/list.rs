@@ -194,7 +194,8 @@ pub(crate) fn find_scripts(
                 }));
             }
         };
-        match Pep723Metadata::parse(&contents) {
+        let source_name = entry.path().portable_display().to_string();
+        match Pep723Metadata::parse_with_name(&contents, source_name) {
             Ok(Some(_)) => Some(Ok(entry.into_path())),
             Ok(None) => None,
             Err(source) => Some(Err(ScriptDiscoveryError::Parse {
