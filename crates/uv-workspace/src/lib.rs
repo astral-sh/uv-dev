@@ -1,3 +1,4 @@
+pub use diagnostics::diagnostic_for_error;
 pub use workspace::{
     DiscoveryOptions, Editability, MemberDiscovery, ProjectEnvironmentSelection, ProjectWorkspace,
     RequiresPythonSources, VirtualProject, Workspace, WorkspaceCache, WorkspaceError,
@@ -5,6 +6,7 @@ pub use workspace::{
 };
 
 pub mod dependency_groups;
+mod diagnostics;
 pub mod pyproject;
 pub mod pyproject_mut;
 mod workspace;

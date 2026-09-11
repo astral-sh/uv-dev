@@ -2,6 +2,7 @@
 
 use std::assert_matches;
 use std::borrow::Cow;
+use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
@@ -18,6 +19,7 @@ use tracing::{debug, trace, warn};
 use uv_cache::Cache;
 use uv_configuration::{ActiveEnvironment, DependencyGroupsWithDefaults, ExcludeDependency};
 use uv_distribution_types::{Index, Requirement, RequirementSource};
+use uv_errors::Diagnostic;
 use uv_fs::{CWD, Simplified, normalize_path};
 use uv_normalize::{DEV_DEPENDENCIES, GroupName, PackageName};
 use uv_once_map::OnceMap;
@@ -28,6 +30,7 @@ use uv_static::EnvVars;
 use uv_warnings::warn_user_once;
 
 use crate::dependency_groups::{DependencyGroupError, FlatDependencyGroup, FlatDependencyGroups};
+use crate::diagnostics::DuplicatePackageDiagnostic;
 use crate::pyproject::{
     OverrideDependency, Project, PyProjectToml, PyprojectTomlError, Source, Sources, ToolUvSources,
     ToolUvWorkspace, WorkspaceReference,
@@ -169,11 +172,33 @@ fn has_intermediate_pyproject(workspace_root: &Path, project_dir: &Path) -> bool
 }
 
 #[derive(Debug, Clone)]
-pub struct WorkspaceError(Arc<WorkspaceErrorKind>);
+pub struct WorkspaceError {
+    kind: Arc<WorkspaceErrorKind>,
+    diagnostic: Option<Arc<DuplicatePackageDiagnostic>>,
+}
+
+impl WorkspaceError {
+    fn duplicate_package(first: &WorkspaceMember, second: &WorkspaceMember) -> Self {
+        Self {
+            kind: Arc::new(WorkspaceErrorKind::DuplicatePackage {
+                name: first.project.name.clone(),
+                first: first.root.clone(),
+                second: second.root.clone(),
+            }),
+            diagnostic: Some(Arc::new(DuplicatePackageDiagnostic::new(first, second))),
+        }
+    }
+
+    pub(crate) fn diagnostic(&self) -> Option<Diagnostic<'_>> {
+        self.diagnostic
+            .as_deref()
+            .map(DuplicatePackageDiagnostic::diagnostic)
+    }
+}
 
 impl AsRef<WorkspaceErrorKind> for WorkspaceError {
     fn as_ref(&self) -> &WorkspaceErrorKind {
-        &self.0
+        &self.kind
     }
 }
 
@@ -182,19 +207,22 @@ where
     T: Into<WorkspaceErrorKind>,
 {
     fn from(error: T) -> Self {
-        Self(Arc::new(error.into()))
+        Self {
+            kind: Arc::new(error.into()),
+            diagnostic: None,
+        }
     }
 }
 
 impl Display for WorkspaceError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        Display::fmt(&self.0, f)
+        Display::fmt(&self.kind, f)
     }
 }
 
 impl Error for WorkspaceError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
-        self.0.source()
+        self.kind.source()
     }
 }
 
@@ -1343,19 +1371,18 @@ impl Workspace {
                     member_root.simplified_display()
                 );
 
-                if let Some(existing) = workspace_members.insert(
-                    project.name.clone(),
-                    WorkspaceMember {
-                        root: member_root.clone(),
-                        project,
-                        pyproject_toml,
-                    },
-                ) {
-                    return Err(WorkspaceError::from(WorkspaceErrorKind::DuplicatePackage {
-                        name: existing.project.name,
-                        first: existing.root.clone(),
-                        second: member_root,
-                    }));
+                let member = WorkspaceMember {
+                    root: member_root,
+                    project,
+                    pyproject_toml,
+                };
+                match workspace_members.entry(member.project.name.clone()) {
+                    Entry::Vacant(entry) => {
+                        entry.insert(member);
+                    }
+                    Entry::Occupied(entry) => {
+                        return Err(WorkspaceError::duplicate_package(entry.get(), &member));
+                    }
                 }
             }
         }
@@ -2315,6 +2342,7 @@ impl VirtualProject {
 mod tests {
     use std::collections::BTreeMap;
     use std::env;
+    use std::error::Error as _;
     use std::path::Path;
     use std::str::FromStr;
     use std::sync::Arc;
@@ -3623,6 +3651,7 @@ foo_bar = ["iniconfig"]
             )?;
 
         let (error, root_escaped) = temporary_test(root.as_ref()).await.unwrap_err();
+        assert!(error.source().is_none());
         let filters = vec![(root_escaped.as_str(), "[ROOT]")];
         insta::with_settings!({filters => filters}, {
             assert_snapshot!(
