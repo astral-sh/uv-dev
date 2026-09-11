@@ -328,6 +328,242 @@ fn lock_recovery_targets_script() -> Result<()> {
     Ok(())
 }
 
+/// Missing-lockfile recovery creates the selected project or script lock without touching peers.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_recovery_creates_selected_targets() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "unrelated"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    context.lock().arg("--offline").assert().success();
+    let unrelated_lock = context.read("uv.lock");
+
+    let selected = context.temp_dir.child("selected's project");
+    selected.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "selected"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--project").arg(selected.path())
+        .arg("--offline")
+        .env(EnvVars::UV_FROZEN, "1"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Unable to find lockfile at `selected's project/uv.lock`, but `UV_FROZEN=1` was provided.
+
+    hint: To create the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/selected's project`, using the original command's working directory and applicable index, constraint, and other resolution options.
+    ");
+
+    context
+        .lock()
+        .arg("--project")
+        .arg(selected.path())
+        .arg("--no-locked")
+        .arg("--no-frozen")
+        .arg("--offline")
+        .env(EnvVars::UV_LOCKED, "1")
+        .env(EnvVars::UV_FROZEN, "1")
+        .assert()
+        .success();
+    assert!(selected.child("uv.lock").path().is_file());
+    assert_eq!(context.read("uv.lock"), unrelated_lock);
+
+    let directory = context.temp_dir.child("scripts");
+    let script = directory.child("selected's script.py");
+    let script_lock = directory.child("selected's script.py.lock");
+    script.write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = []
+        # ///
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--project").arg(directory.path())
+        .arg("--script").arg(script.path())
+        .arg("--locked")
+        .arg("--offline"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Unable to find lockfile at `scripts/selected's script.py.lock`, but `--locked` was provided.
+
+    hint: To create the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/scripts` and `--script` set to `[TEMP_DIR]/scripts/selected's script.py`, using the original command's working directory and applicable index, constraint, and other resolution options.
+    ");
+
+    context
+        .lock()
+        .arg("--project")
+        .arg(directory.path())
+        .arg("--script")
+        .arg(script.path())
+        .arg("--no-locked")
+        .arg("--no-frozen")
+        .arg("--offline")
+        .assert()
+        .success();
+    assert!(script_lock.path().is_file());
+    assert_eq!(context.read("uv.lock"), unrelated_lock);
+
+    Ok(())
+}
+
+/// A missing script lock must be created before retrying an addition with external constraints.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_recovery_creates_before_retrying_add() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario: Scenario = toml::from_str(indoc! {r#"
+        name = "missing-lock-recovery"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.recovery-dependency.versions."1.0.0"]
+        [packages.recovery-dependency.versions."2.0.0"]
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+
+    let selected = context.temp_dir.child("selected's project");
+    let pyproject_toml = selected.child("pyproject.toml");
+    pyproject_toml.write_str(indoc! {r#"
+        [project]
+        name = "selected"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    let original_pyproject = fs_err::read_to_string(&pyproject_toml)?;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("recovery-dependency\n")?;
+    context
+        .temp_dir
+        .child("constraints.txt")
+        .write_str("recovery-dependency==1.0.0\n")?;
+
+    uv_snapshot!(context.filters(), context.add()
+        .arg("--project").arg(selected.path())
+        .arg("--no-sync")
+        .arg("--locked")
+        .arg("-r").arg("requirements.in")
+        .arg("-c").arg("constraints.txt")
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    warning: Indexes specified via `--index-url` will not be persisted to the `pyproject.toml` file; use `--default-index` instead.
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    error: Unable to find lockfile at `selected's project/uv.lock`, but `--locked` was provided.
+
+    hint: To apply the dependency changes and create the lockfile, repeat the original `uv add` command from the same working directory, adding `--no-locked --no-frozen` and keeping the same requirements, constraints, and other options.
+    ");
+    assert_eq!(fs_err::read_to_string(&pyproject_toml)?, original_pyproject);
+    assert!(!selected.child("uv.lock").path().exists());
+
+    context
+        .add()
+        .arg("--project")
+        .arg(selected.path())
+        .arg("--no-sync")
+        .arg("--no-locked")
+        .arg("--no-frozen")
+        .arg("-r")
+        .arg("requirements.in")
+        .arg("-c")
+        .arg("constraints.txt")
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.tree()
+        .arg("--project").arg(selected.path())
+        .arg("--frozen"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    selected v0.1.0
+    └── recovery-dependency v1.0.0
+
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    ");
+
+    let script = context.temp_dir.child("scripts/selected's script.py");
+    let script_lock = context.temp_dir.child("scripts/selected's script.py.lock");
+    script.write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = []
+        # ///
+
+    "#})?;
+    let original_script = fs_err::read_to_string(&script)?;
+    uv_snapshot!(context.filters(), context.add()
+        .arg("--project").arg(selected.path())
+        .arg("--script").arg(script.path())
+        .arg("--locked")
+        .arg("-r").arg("requirements.in")
+        .arg("-c").arg("constraints.txt")
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    warning: Indexes specified via `--index-url` will not be persisted to the script; use `--default-index` instead.
+    warning: `--locked` is a no-op for Python scripts with inline metadata, which always run in isolation
+    error: Unable to find lockfile at `scripts/selected's script.py.lock`, but `--locked` was provided.
+
+    hint: To create the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/selected's project` and `--script` set to `[TEMP_DIR]/scripts/selected's script.py`, using the original command's working directory and applicable index, constraint, and other resolution options. Then repeat the original `uv add` command from the same working directory, adding `--no-locked --no-frozen` and keeping the same requirements, constraints, and other options.
+    ");
+    assert_eq!(fs_err::read_to_string(&script)?, original_script);
+    assert!(!script_lock.path().exists());
+
+    context
+        .lock()
+        .arg("--project")
+        .arg(selected.path())
+        .arg("--script")
+        .arg(script.path())
+        .arg("--no-locked")
+        .arg("--no-frozen")
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    assert!(script_lock.path().is_file());
+
+    context
+        .add()
+        .arg("--project")
+        .arg(selected.path())
+        .arg("--script")
+        .arg(script.path())
+        .arg("--no-locked")
+        .arg("--no-frozen")
+        .arg("-r")
+        .arg("requirements.in")
+        .arg("-c")
+        .arg("constraints.txt")
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.tree()
+        .arg("--project").arg(selected.path())
+        .arg("--script").arg(script.path())
+        .arg("--frozen"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    recovery-dependency v1.0.0
+    ");
+
+    Ok(())
+}
+
 /// Lock recovery retains the workspace member used for Python pin discovery.
 #[cfg(feature = "test-universal")]
 #[test]

@@ -70,7 +70,7 @@ use crate::commands::project::diagnostics::{
     EnvironmentMarkersDiagnostic, PythonRequirementsDiagnostic,
 };
 use crate::commands::project::install_target::InstallTarget;
-use crate::commands::project::lock_target::{LockfileRecovery, LockfileRecoveryAction};
+use crate::commands::project::lock_target::LockfileRecovery;
 use crate::commands::reporters::{PythonDownloadReporter, ResolverReporter};
 use crate::commands::{capitalize, conjunction, pip};
 use crate::printer::Printer;
@@ -146,9 +146,10 @@ pub(crate) enum ProjectError {
     LockFormat(PathBuf, usize, LockedSource, Box<LockfileRecovery>),
 
     #[error(
-        "Unable to find lockfile at `{1}`, but {0} was provided. To create a lockfile, run `uv lock` or `uv sync` without the flag."
+        "Unable to find lockfile at `{lockfile}`, but {0} was provided.",
+        lockfile = .1.lock_path().user_display(),
     )]
-    MissingLockfile(MissingLockfileSource, PathBuf),
+    MissingLockfile(MissingLockfileSource, Box<LockfileRecovery>),
 
     #[error(
         "The lockfile at `uv.lock` needs to be updated, but {1} was provided: Missing workspace member `{0}`."
@@ -445,28 +446,10 @@ impl uv_errors::Hinted for ProjectError {
     fn hints(&self) -> uv_errors::Hints<'_> {
         match self {
             Self::LockMismatch(_, _, _, recovery) | Self::LockWorkspaceMismatch(_, _, recovery) => {
-                match recovery.action() {
-                    LockfileRecoveryAction::UpdateLockfile => uv_errors::Hints::from(format!(
-                        "To update the lockfile, run `uv lock --no-locked --no-frozen` with {}, using the original command's working directory and applicable index, constraint, and other resolution options.",
-                        recovery.selectors(),
-                    )),
-                    LockfileRecoveryAction::RetryAdd => uv_errors::Hints::from(
-                        "To apply the dependency changes and update the lockfile, repeat the original `uv add` command from the same working directory, adding `--no-locked --no-frozen` and keeping the same requirements, constraints, and other options.",
-                    ),
-                }
+                uv_errors::Hints::from(recovery.update_hint())
             }
-            Self::LockFormat(_, _, _, recovery) => {
-                let retry = match recovery.action() {
-                    LockfileRecoveryAction::UpdateLockfile => "",
-                    LockfileRecoveryAction::RetryAdd => {
-                        " Then repeat the original `uv add` command from the same working directory, adding `--no-locked --no-frozen` and keeping the same requirements, constraints, and other options."
-                    }
-                };
-                uv_errors::Hints::from(format!(
-                    "To regenerate the lockfile, run `uv lock --refresh --preview-features lockfile-format-check --no-locked --no-frozen --no-offline` with {}, using the original command's working directory and applicable index, constraint, and other resolution options.{retry}",
-                    recovery.selectors(),
-                ))
-            }
+            Self::MissingLockfile(_, recovery) => uv_errors::Hints::from(recovery.create_hint()),
+            Self::LockFormat(_, _, _, recovery) => uv_errors::Hints::from(recovery.format_hint()),
             Self::OverlappingMarkers {
                 right,
                 replacement,
@@ -501,6 +484,7 @@ impl uv_errors::Hinted for ProjectError {
             Self::LockMismatch(..)
             | Self::LockWorkspaceMismatch(..)
             | Self::LockFormat(..)
+            | Self::MissingLockfile(..)
             | Self::OverlappingMarkers { .. } => self.hints(),
             _ => uv_errors::Hints::none(),
         }
