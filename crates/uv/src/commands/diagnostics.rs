@@ -247,6 +247,7 @@ mod tests {
     use insta::{assert_json_snapshot, assert_snapshot};
     use reqwest::StatusCode;
 
+    use uv_cache::Cache;
     use uv_client::{BaseClientBuilder, Connectivity};
     use uv_configuration::{
         BuildOptions, DependencyGroupsWithDefaults, ExtrasSpecification, InstallOptions,
@@ -271,6 +272,7 @@ mod tests {
     use uv_types::AnyErrorBuild;
     use uv_workspace::dependency_groups::{DependencyGroupError, FlatDependencyGroups};
     use uv_workspace::pyproject::{PyProjectToml, PyprojectTomlError, SourceError};
+    use uv_workspace::{DiscoveryOptions, Workspace, WorkspaceCache, WorkspaceErrorKind};
     use version_ranges::Ranges;
 
     use crate::commands::pip::{self, operations};
@@ -873,6 +875,138 @@ wheels = [{ filename = "example-1.0.0-cp312-cp312-macosx_11_0_arm64.whl", hash =
 
         hint: Define index `private` in the project's `pyproject.toml`
         ");
+    }
+
+    #[tokio::test]
+    async fn formats_workspace_diagnostics_through_lowering_errors() -> anyhow::Result<()> {
+        #[derive(Debug, thiserror::Error)]
+        #[error("Failed to load project metadata")]
+        struct Metadata(#[source] Arc<uv_distribution::Error>);
+
+        let root = assert_fs::TempDir::new()?;
+        root.child("pyproject.toml").write_str(indoc::indoc! {r#"
+            [tool.uv.workspace]
+            members = ["packages/first", "packages/second"]
+        "#})?;
+        for member in ["first", "second"] {
+            root.child(format!("packages/{member}/pyproject.toml"))
+                .write_str(indoc::indoc! {r#"
+                    [project]
+                    name = "duplicate"
+                    version = "1.0"
+                "#})?;
+        }
+        let cache = Cache::from_path(root.path().join(".cache"));
+        let workspace_cache = WorkspaceCache::default();
+        let workspace_error = Workspace::discover(
+            root.path(),
+            &DiscoveryOptions {
+                stop_discovery_at: Some(root.path().to_path_buf()),
+                ..DiscoveryOptions::default()
+            },
+            &cache,
+            &workspace_cache,
+        )
+        .await
+        .expect_err("the workspace has duplicate package names");
+        assert!(matches!(
+            workspace_error.as_ref(),
+            WorkspaceErrorKind::DuplicatePackage { .. }
+        ));
+        assert!(workspace_error.source().is_none());
+
+        let error = Metadata(Arc::new(uv_distribution::Error::MetadataLowering(
+            MetadataError::LoweringError(
+                "dependency".parse()?,
+                Box::new(uv_distribution::LoweringError::Workspace(workspace_error)),
+            ),
+        )));
+        let mut output = String::new();
+        write_error_chain_with_options(
+            &error,
+            &Hints::none(),
+            ErrorOptions::default()
+                .with_format(ErrorFormat::Json)
+                .with_diagnostic(diagnostic_for_error)
+                .with_stream(&mut output),
+        )?;
+        let report: serde_json::Value = serde_json::from_str(&output)?;
+        let errors = report["errors"]
+            .as_array()
+            .expect("the report contains an error chain");
+        assert_eq!(errors.len(), 3);
+        assert_eq!(errors[2]["sources"].as_array().map(Vec::len), Some(1));
+        assert_eq!(errors[2]["info"].as_array().map(Vec::len), Some(1));
+        let root_path = regex::escape(&root.path().portable_display().to_string());
+        insta::with_settings!({filters => [(root_path.as_str(), "[ROOT]")]}, {
+            assert_json_snapshot!(&errors[2], @r#"
+            {
+              "info": [
+                {
+                  "message": "The name was first declared here",
+                  "sources": [
+                    {
+                      "kind": "snippet",
+                      "name": "[ROOT]/packages/first/pyproject.toml",
+                      "windows": [
+                        {
+                          "annotations": [
+                            {
+                              "kind": "secondary",
+                              "label": "first declared here",
+                              "range": {
+                                "end": {
+                                  "byte_column": 18,
+                                  "line": 2
+                                },
+                                "start": {
+                                  "byte_column": 7,
+                                  "line": 2
+                                }
+                              }
+                            }
+                          ],
+                          "line_start": 2,
+                          "text": "name = \"duplicate\"\n"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ],
+              "message": "Two workspace members are both named `duplicate`",
+              "sources": [
+                {
+                  "kind": "snippet",
+                  "name": "[ROOT]/packages/second/pyproject.toml",
+                  "windows": [
+                    {
+                      "annotations": [
+                        {
+                          "kind": "primary",
+                          "label": "duplicate name",
+                          "range": {
+                            "end": {
+                              "byte_column": 18,
+                              "line": 2
+                            },
+                            "start": {
+                              "byte_column": 7,
+                              "line": 2
+                            }
+                          }
+                        }
+                      ],
+                      "line_start": 2,
+                      "text": "name = \"duplicate\"\n"
+                    }
+                  ]
+                }
+              ]
+            }
+            "#);
+        });
+        Ok(())
     }
 
     #[test]

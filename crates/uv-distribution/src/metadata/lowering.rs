@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::error::Error as StdError;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -688,6 +689,34 @@ impl uv_errors::Hinted for LoweringError {
                 declaration_target.description(),
             )),
             _ => uv_errors::Hints::none(),
+        }
+    }
+
+    fn transparent_source(&self) -> Option<&(dyn StdError + 'static)> {
+        match self {
+            Self::GitUrlParse(error) => Some(error),
+            Self::InvalidUrl(error) => Some(error),
+            Self::IndexCredentials(error) => Some(error),
+            Self::InvalidVerbatimUrl(error) => Some(error),
+            Self::Workspace(error) => Some(error),
+            Self::ParsedUrl(error) => Some(error),
+            Self::RelativeTo(error) => Some(error),
+            Self::MissingWorkspaceSource(_)
+            | Self::NonWorkspaceSource(..)
+            | Self::UndeclaredWorkspacePackage(_)
+            | Self::InvalidWorkspaceSource(_)
+            | Self::MoreThanOneGitRef
+            | Self::MissingIndex { .. }
+            | Self::WorkspaceMember
+            | Self::ForbiddenFragment(_)
+            | Self::MissingGitSource(..)
+            | Self::WorkspaceFalse
+            | Self::WorkspaceSourceNotRoot { .. }
+            | Self::EditableFile(_)
+            | Self::PackagedFile(_)
+            | Self::GitFile(_)
+            | Self::GitDirectory(_)
+            | Self::NonUtf8Path(_) => None,
         }
     }
 }
