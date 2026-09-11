@@ -132,12 +132,16 @@ fn run_with_python_version() -> Result<()> {
         .arg("main.py")
         .env_remove(EnvVars::VIRTUAL_ENV);
 
-    uv_snapshot!(context.filters(), command_with_args, @"
+    uv_snapshot!(context.filters(), command_with_args, @r#"
     exit_code: 2 (failure)
     ----- stderr -----
     Using CPython 3.9.[X] interpreter at: [PYTHON-3.9]
     error: The requested interpreter resolved to Python 3.9.[X], which is incompatible with the project's Python requirement: `>=3.11, <4` (from `project.requires-python`)
-    ");
+       --> pyproject.toml:4:19
+        |
+      4 | requires-python = ">=3.11, <4"
+        |                   ^^^^^^^^^^^^ requires Python `>=3.11, <4`
+    "#);
 
     Ok(())
 }
@@ -3748,21 +3752,29 @@ fn run_isolated_incompatible_python() -> Result<()> {
     })?;
 
     // We should reject Python 3.9...
-    uv_snapshot!(context.filters(), context.run().arg("main.py"), @"
+    uv_snapshot!(context.filters(), context.run().arg("main.py"), @r#"
     exit_code: 2 (failure)
     ----- stderr -----
     Using CPython 3.9.[X] interpreter at: [PYTHON-3.9]
     error: The Python request from `.python-version` resolved to Python 3.9.[X], which is incompatible with the project's Python requirement: `>=3.12` (from `project.requires-python`)
     Use `uv python pin` to update the `.python-version` file to a compatible version
-    ");
+       --> pyproject.toml:4:19
+        |
+      4 | requires-python = ">=3.12"
+        |                   ^^^^^^^^ requires Python `>=3.12`
+    "#);
 
     // ...even if `--isolated` is provided.
-    uv_snapshot!(context.filters(), context.run().arg("--isolated").arg("main.py"), @"
+    uv_snapshot!(context.filters(), context.run().arg("--isolated").arg("main.py"), @r#"
     exit_code: 2 (failure)
     ----- stderr -----
     error: The Python request from `.python-version` resolved to Python 3.9.[X], which is incompatible with the project's Python requirement: `>=3.12` (from `project.requires-python`)
     Use `uv python pin` to update the `.python-version` file to a compatible version
-    ");
+       --> pyproject.toml:4:19
+        |
+      4 | requires-python = ">=3.12"
+        |                   ^^^^^^^^ requires Python `>=3.12`
+    "#);
 
     Ok(())
 }
@@ -5657,14 +5669,18 @@ fn run_groups_include_requires_python() -> Result<()> {
     // (This should trigger a conflict)
     uv_snapshot!(context.filters(), context.run()
         .arg("--group").arg("bar")
-        .arg("python").arg("-c").arg("import typing_extensions"), @"
+        .arg("python").arg("-c").arg("import typing_extensions"), @r#"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Found conflicting Python requirements:
     - project: >=3.11
     - project:bar: >=3.13
     - project:dev: >=3.12, <3.13
-    ");
+       --> pyproject.toml:5:27
+        |
+      5 |         requires-python = ">=3.11"
+        |                           ^^^^^^^^ requires Python `>=3.11`
+    "#);
 
     // Explicitly requesting an out-of-range python fails
     uv_snapshot!(context.filters(), context.run()

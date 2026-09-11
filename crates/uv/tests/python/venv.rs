@@ -1118,13 +1118,17 @@ fn create_venv_respects_group_requires_python() -> Result<()> {
         "#
     })?;
 
-    uv_snapshot!(context.filters(), context.venv().arg("--clear").arg("--python").arg("3.11"), @"
+    uv_snapshot!(context.filters(), context.venv().arg("--clear").arg("--python").arg("3.11"), @r#"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Found conflicting Python requirements:
     - foo: <3.12
     - foo:dev: >=3.12
-    "
+       --> pyproject.toml:4:19
+        |
+      4 | requires-python = "<3.12"
+        |                   ^^^^^^^ requires Python `<3.12`
+    "#
     );
 
     Ok(())
