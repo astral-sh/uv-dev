@@ -43,6 +43,10 @@ parent image may instead have changed. This is an unconfirmed hypothesis, but it
 digest resolved for the mutable `python:3.12-slim` tag in the failing build another important input
 for comparison.
 
+After the reporter confirmed that the failure had disappeared, a maintainer ended the current
+investigation and invited them to reopen astral-sh/uv#21576 if they obtain a reproduction. No
+further repository action is pending without an MRE.
+
 ## Reproduction
 
 Outcome: `needs_more_information`.
@@ -103,7 +107,8 @@ line alone only reads files from the distroless image.
 The repository bot subsequently recorded that a maintainer considers the issue non-reproducible
 with the information provided and requested an MRE, including the uv version, operating system,
 command, and output. This confirms that investigation is waiting on reporter-supplied reproduction
-details rather than on an identified uv fix.
+details rather than on an identified uv fix. Once the reporter confirmed they could no longer
+reproduce the failure, a maintainer invited them to reopen astral-sh/uv#21576 if it recurs.
 
 ## Draft response
 
@@ -139,7 +144,8 @@ classification and `needs_more_information` reproduction status remain current. 
 temporary success after rolling back to 0.12.11 raised the possibility of a version-dependent
 regression, but the original setup now works again. Together with the repository reproduction
 succeeding on both versions, the transient result and missing build context prevent a uv regression
-from being established.
+from being established. The maintainer disposition is to take no further action unless the issue is
+reopened with a reproduction.
 
 ## Related
 
