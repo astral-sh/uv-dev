@@ -1,4 +1,5 @@
 //! Find requested Python interpreters and query interpreters for information.
+use std::error::Error as StdError;
 use thiserror::Error;
 
 #[cfg(test)]
@@ -180,6 +181,30 @@ impl uv_errors::Hinted for Error {
             Self::MissingPython(_, Some(hint)) => uv_errors::Hints::from(hint.to_string()),
             Self::Discovery(err) => err.hints(),
             _ => uv_errors::Hints::none(),
+        }
+    }
+
+    fn own_hints(&self) -> uv_errors::Hints<'_> {
+        match self {
+            Self::MissingPython(..) => self.hints(),
+            _ => uv_errors::Hints::none(),
+        }
+    }
+
+    fn transparent_source(&self) -> Option<&(dyn StdError + 'static)> {
+        match self {
+            Self::Io(error) => Some(error),
+            Self::VirtualEnv(error) => Some(error),
+            Self::Query(error) => Some(error),
+            Self::Discovery(error) => Some(error),
+            Self::ManagedPython(error) => Some(error),
+            Self::Download(error) => Some(error),
+            Self::ClientBuild(error) => Some(error),
+            Self::KeyError(error) => Some(error),
+            Self::MissingEnvironment(error) => Some(error),
+            Self::InvalidEnvironment(error) => Some(error),
+            Self::RetryParsing(error) => Some(error),
+            Self::MissingPython(..) => None,
         }
     }
 }

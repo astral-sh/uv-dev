@@ -6936,6 +6936,59 @@ impl uv_errors::Hinted for LockError {
             uv_errors::Hints::none()
         }
     }
+
+    fn transparent_source(&self) -> Option<&(dyn Error + 'static)> {
+        match self.kind.as_ref() {
+            LockErrorKind::InvalidScopedOverride(error) => Some(error),
+            LockErrorKind::InvalidUrl(error) => Some(error),
+            LockErrorKind::GitUrlParse(error) => Some(error),
+            LockErrorKind::DuplicatePackage { .. }
+            | LockErrorKind::DuplicateDependency { .. }
+            | LockErrorKind::DuplicateOptionalDependency { .. }
+            | LockErrorKind::DuplicateDevDependency { .. }
+            | LockErrorKind::MissingExtension { .. }
+            | LockErrorKind::NotPep625Filename { .. }
+            | LockErrorKind::InvalidGitSourceUrl(..)
+            | LockErrorKind::InvalidTimestamp(..)
+            | LockErrorKind::UnrecognizedDependency { .. }
+            | LockErrorKind::Hash { .. }
+            | LockErrorKind::MissingHashAlgorithm { .. }
+            | LockErrorKind::MissingExtraBase { .. }
+            | LockErrorKind::MissingDevBase { .. }
+            | LockErrorKind::InvalidWheelSource { .. }
+            | LockErrorKind::MissingUrl { .. }
+            | LockErrorKind::MissingPath { .. }
+            | LockErrorKind::MissingFilename { .. }
+            | LockErrorKind::NeitherSourceDistNorWheel { .. }
+            | LockErrorKind::NoBinaryNoBuild { .. }
+            | LockErrorKind::NoBinary { .. }
+            | LockErrorKind::NoBuild { .. }
+            | LockErrorKind::IncompatibleWheelOnly { .. }
+            | LockErrorKind::NoBinaryWheelOnly { .. }
+            | LockErrorKind::VerbatimUrl { .. }
+            | LockErrorKind::DistributionRelativePath(..)
+            | LockErrorKind::IndexRelativePath(..)
+            | LockErrorKind::AbsolutePath(..)
+            | LockErrorKind::MissingDependencyVersion { .. }
+            | LockErrorKind::MissingPackageVersion { .. }
+            | LockErrorKind::MissingDependencySource { .. }
+            | LockErrorKind::RequirementRelativePath(..)
+            | LockErrorKind::RequirementVerbatimUrl(..)
+            | LockErrorKind::RegistryVerbatimUrl(..)
+            | LockErrorKind::PathToUrl { .. }
+            | LockErrorKind::UrlToPath { .. }
+            | LockErrorKind::MultipleRootPackages { .. }
+            | LockErrorKind::MissingRootPackage { .. }
+            | LockErrorKind::RootPackageMissingFromLock { .. }
+            | LockErrorKind::DependencyConflictOutsideSubgraph { .. }
+            | LockErrorKind::Resolution { .. }
+            | LockErrorKind::InconsistentVersions { .. }
+            | LockErrorKind::ConflictingExtra { .. }
+            | LockErrorKind::UnreadablePyprojectToml { .. }
+            | LockErrorKind::InvalidPyprojectToml { .. }
+            | LockErrorKind::NonLocalWorkspaceMember { .. } => None,
+        }
+    }
 }
 
 impl std::fmt::Display for LockError {

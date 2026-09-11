@@ -1,3 +1,4 @@
+use std::error::Error as StdError;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -87,6 +88,25 @@ pub enum Error {
     MissingToolPackage(PackageName),
     #[error("Tool `{0}` environment not found at `{1}`")]
     ToolEnvironmentNotFound(PackageName, PathBuf),
+}
+
+impl uv_errors::Hinted for Error {
+    fn transparent_source(&self) -> Option<&(dyn StdError + 'static)> {
+        match self {
+            Self::Io(error) => Some(error),
+            Self::LockedFile(error) => Some(error),
+            Self::VirtualEnvError(error) => Some(error),
+            Self::EnvironmentError(error) => Some(error),
+            Self::ReceiptWrite(..)
+            | Self::ReceiptRead(..)
+            | Self::EntrypointRead(_)
+            | Self::NoExecutableDirectory
+            | Self::MissingToolReceipt(..)
+            | Self::EnvironmentRead(..)
+            | Self::MissingToolPackage(_)
+            | Self::ToolEnvironmentNotFound(..) => None,
+        }
+    }
 }
 
 impl Error {

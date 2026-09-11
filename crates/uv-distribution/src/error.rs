@@ -1,3 +1,4 @@
+use std::error::Error as StdError;
 use std::fmt;
 use std::path::PathBuf;
 
@@ -253,6 +254,65 @@ impl uv_errors::Hinted for Error {
             Self::Client(err) => uv_errors::Hinted::hints(err),
             Self::MetadataLowering(err) => err.hints(),
             _ => uv_errors::Hints::none(),
+        }
+    }
+
+    fn own_hints(&self) -> uv_errors::Hints<'_> {
+        uv_errors::Hints::none()
+    }
+
+    fn transparent_source(&self) -> Option<&(dyn StdError + 'static)> {
+        match self {
+            Self::InvalidUrl(error) => Some(error),
+            Self::Git(error) => Some(error),
+            Self::Reqwest(error) => Some(error),
+            Self::Client(error) => Some(error),
+            Self::ClientBuild(error) => Some(error),
+            Self::CacheInfo(error) => Some(error),
+            Self::Build(error) => Some(error),
+            Self::MetadataLowering(error) => Some(error),
+            Self::ReqwestMiddlewareError(error) => Some(error.as_ref()),
+            Self::InstallWheelError(error) => Some(error),
+            Self::NoBuild
+            | Self::NoBuildPackage(_)
+            | Self::NonFileUrl(_)
+            | Self::CacheRead(_)
+            | Self::CacheWrite(_)
+            | Self::CacheLock(_)
+            | Self::CacheDecode(_)
+            | Self::CacheEncode(_)
+            | Self::CacheWalk(_)
+            | Self::WheelFilename(_)
+            | Self::WheelMetadataNameMismatch { .. }
+            | Self::WheelMetadataVersionMismatch { .. }
+            | Self::WheelFilenameNameMismatch { .. }
+            | Self::WheelFilenameVersionMismatch { .. }
+            | Self::BuiltWheelIncompatibleHostPlatform { .. }
+            | Self::BuiltWheelIncompatibleTargetPlatform { .. }
+            | Self::Metadata(_)
+            | Self::WheelMetadata(..)
+            | Self::ReadInstalled(..)
+            | Self::Extract(..)
+            | Self::MissingPkgInfo
+            | Self::MissingSubdirectory(..)
+            | Self::MissingSourceDistGitLfsArtifacts(..)
+            | Self::MissingWheelGitLfsArtifacts(..)
+            | Self::PkgInfo(_)
+            | Self::MissingPyprojectToml
+            | Self::PyprojectToml(_)
+            | Self::NotFound(_)
+            | Self::CacheHeal(..)
+            | Self::RequiresPython(..)
+            | Self::BaseInterpreter(_)
+            | Self::Join(_)
+            | Self::HashExhaustion(_)
+            | Self::MismatchedHashes { .. }
+            | Self::MismatchedSize { .. }
+            | Self::MissingHashes { .. }
+            | Self::MissingActualHashes { .. }
+            | Self::MissingExpectedHashes { .. }
+            | Self::HashesNotSupportedSourceTree(_)
+            | Self::HashesNotSupportedGit(_) => None,
         }
     }
 }

@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::error::Error as StdError;
 use std::fmt::Write;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -418,6 +419,86 @@ impl uv_errors::Hinted for ProjectError {
             Self::Operation(err) => err.hints(),
             Self::Client(err) => uv_errors::Hinted::hints(err),
             _ => uv_errors::Hints::none(),
+        }
+    }
+
+    fn own_hints(&self) -> uv_errors::Hints<'_> {
+        match self {
+            Self::LockMismatch(..)
+            | Self::LockWorkspaceMismatch(..)
+            | Self::LockFormat(..)
+            | Self::OverlappingMarkers(..) => self.hints(),
+            _ => uv_errors::Hints::none(),
+        }
+    }
+
+    fn transparent_source(&self) -> Option<&(dyn StdError + 'static)> {
+        match self {
+            Self::Conflict(error) => Some(error),
+            Self::DependencyGroup(error) => Some(error),
+            Self::Client(error) => Some(error),
+            Self::ClientBuild(error) => Some(error),
+            Self::Credentials(error) => Some(error),
+            Self::IndexCredentials(error) => Some(error),
+            Self::IndexUrl(error) => Some(error),
+            Self::Python(error) => Some(error),
+            Self::Virtualenv(error) => Some(error),
+            Self::HashStrategy(error) => Some(error),
+            Self::Tags(error) => Some(error),
+            Self::FlatIndex(error) => Some(error),
+            Self::Lock(error) => Some(error),
+            Self::Operation(error) => Some(error),
+            Self::Interpreter(error) => Some(error),
+            Self::Tool(error) => Some(error),
+            Self::Name(error) => Some(error),
+            Self::Requirements(error) => Some(error),
+            Self::Metadata(error) => Some(error),
+            Self::Lowering(error) => Some(error),
+            Self::Workspace(error) => Some(error),
+            Self::PyprojectMut(error) => Some(error),
+            Self::ExtraBuildRequires(error) => Some(error),
+            Self::Fmt(error) => Some(error),
+            Self::CacheInfo(error) => Some(error),
+            Self::Io(error) => Some(error),
+            Self::RetryParsing(error) => Some(error),
+            Self::Accelerator(error) => Some(error),
+            Self::Anyhow(error) => Some(error.as_ref()),
+            Self::LockMismatch(..)
+            | Self::LockFormat(..)
+            | Self::MissingLockfile(..)
+            | Self::LockWorkspaceMismatch(..)
+            | Self::UnsupportedLockVersion(..)
+            | Self::UnparsableLockVersion(..)
+            | Self::LockSerialization(_)
+            | Self::LockedPythonIncompatibility(..)
+            | Self::LockedPlatformIncompatibility(_)
+            | Self::RequestedPythonProjectIncompatibility(..)
+            | Self::DotPythonVersionProjectIncompatibility { .. }
+            | Self::RequiresPythonProjectIncompatibility(..)
+            | Self::RequestedPythonScriptIncompatibility(..)
+            | Self::DotPythonVersionScriptIncompatibility(..)
+            | Self::RequiresPythonScriptIncompatibility(..)
+            | Self::MissingGroupProject(_)
+            | Self::MissingGroupProjects(_)
+            | Self::MissingGroupScript(_)
+            | Self::MissingDefaultGroup(_)
+            | Self::MissingExtraProject(..)
+            | Self::MissingExtraProjects(_)
+            | Self::MissingExtraScript(_)
+            | Self::OverlappingMarkers(..)
+            | Self::DisjointEnvironment(..)
+            | Self::DisjointRequiresPython(_)
+            | Self::EmptyEnvironment
+            | Self::InvalidProjectEnvironmentDir(..)
+            | Self::UvLockParse(_)
+            | Self::PyprojectTomlParse(_)
+            | Self::PyprojectTomlUpdate
+            | Self::Pep723ScriptTomlParse(_)
+            | Self::MalwareFound
+            | Self::Osv(_)
+            | Self::NoSitePackages
+            | Self::InvalidParentEnvironmentPath
+            | Self::DroppedEnvironment => None,
         }
     }
 }

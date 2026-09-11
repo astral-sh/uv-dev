@@ -1,6 +1,7 @@
 use core::fmt;
 use std::borrow::Cow;
 use std::cmp::{Ordering, Reverse};
+use std::error::Error as StdError;
 use std::ffi::OsStr;
 use std::io::{self, Write};
 #[cfg(windows)]
@@ -81,6 +82,35 @@ pub enum Error {
     LibcDetection(#[from] LibcDetectionError),
     #[error(transparent)]
     MacOsDylib(#[from] macos_dylib::Error),
+}
+
+impl uv_errors::Hinted for Error {
+    fn transparent_source(&self) -> Option<&(dyn StdError + 'static)> {
+        match self {
+            Self::Io(error) => Some(error),
+            Self::LockedFile(error) => Some(error),
+            Self::Download(error) => Some(error),
+            Self::PlatformError(error) => Some(error),
+            Self::ImplementationError(error) => Some(error),
+            Self::ExtractError(error) => Some(error),
+            Self::SysconfigError(error) => Some(error),
+            Self::LauncherError(error) => Some(error),
+            Self::NameParseError(error) => Some(error),
+            Self::MacOsDylib(error) => Some(error),
+            Self::InvalidPythonVersion(..)
+            | Self::MissingExecutable(..)
+            | Self::MissingPythonMinorVersionLinkTargetDirectory(..)
+            | Self::CanonicalizeExecutable(..)
+            | Self::LinkExecutable(..)
+            | Self::PythonMinorVersionLinkDirectory(..)
+            | Self::ExecutableDirectory(..)
+            | Self::ReadError(..)
+            | Self::NoExecutableDirectory
+            | Self::NameError(..)
+            | Self::AbsolutePath(..)
+            | Self::LibcDetection(..) => None,
+        }
+    }
 }
 
 /// Compare two build version strings.

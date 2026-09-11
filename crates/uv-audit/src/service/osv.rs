@@ -6,6 +6,7 @@
 //!
 //! [OSV]: https://osv.dev/
 
+use std::error::Error as StdError;
 use std::str::FromStr as _;
 use std::sync::LazyLock;
 
@@ -47,6 +48,16 @@ pub enum Error {
         #[source]
         err: reqwest_middleware::Error,
     },
+}
+
+impl uv_errors::Hinted for Error {
+    fn transparent_source(&self) -> Option<&(dyn StdError + 'static)> {
+        match self {
+            Self::Client(error) => Some(error),
+            Self::ReqwestMiddleware(error) => Some(error),
+            Self::Url(..) | Self::MalformedRecord { .. } => None,
+        }
+    }
 }
 
 /// Package specification for OSV queries.

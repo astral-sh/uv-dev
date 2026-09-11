@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::error::Error as StdError;
 use std::path::{Path, PathBuf};
 
 use thiserror::Error;
@@ -59,6 +60,24 @@ impl uv_errors::Hinted for MetadataError {
         match self {
             Self::LoweringError(_, err) | Self::GroupLoweringError(_, _, err) => err.hints(),
             _ => uv_errors::Hints::none(),
+        }
+    }
+
+    fn own_hints(&self) -> uv_errors::Hints<'_> {
+        uv_errors::Hints::none()
+    }
+
+    fn transparent_source(&self) -> Option<&(dyn StdError + 'static)> {
+        match self {
+            Self::Workspace(error) => Some(error),
+            Self::DependencyGroup(error) => Some(error),
+            Self::MissingPyprojectToml(_)
+            | Self::LoweringError(..)
+            | Self::GroupLoweringError(..)
+            | Self::MissingSourceExtra(..)
+            | Self::IncompleteSourceExtra(..)
+            | Self::MissingSourceGroup(..)
+            | Self::IncompleteSourceGroup(..) => None,
         }
     }
 }

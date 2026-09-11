@@ -6,6 +6,7 @@ use same_file::is_same_file;
 use std::borrow::Cow;
 use std::cmp::Reverse;
 use std::env::consts::EXE_SUFFIX;
+use std::error::Error as StdError;
 use std::fmt::{self, Debug, Formatter};
 use std::sync::atomic::Ordering;
 use std::{env, io, iter};
@@ -316,6 +317,26 @@ impl uv_errors::Hinted for Error {
         match self {
             Self::Query(err, _, _) => err.hints(),
             _ => uv_errors::Hints::none(),
+        }
+    }
+
+    fn own_hints(&self) -> uv_errors::Hints<'_> {
+        uv_errors::Hints::none()
+    }
+
+    fn transparent_source(&self) -> Option<&(dyn StdError + 'static)> {
+        match self {
+            Self::Io(error) => Some(error),
+            Self::VirtualEnv(error) => Some(error),
+            Self::InvalidEnvironmentVariable(error) => Some(error),
+            Self::BuildVersion(error) => Some(error),
+            Self::Query(..)
+            | Self::ManagedPython(_)
+            | Self::InvalidVersionRequest(_)
+            | Self::LatestVersionRequest
+            | Self::SourceNotAllowed(..) => None,
+            #[cfg(windows)]
+            Self::RegistryError(_) => None,
         }
     }
 }
