@@ -55,6 +55,7 @@ fn diagnostic_for_error<'a>(error: &'a (dyn Error + 'static)) -> Option<Diagnost
                 .or_else(|| uv_requirements_txt::diagnostic_for_error(error))
                 .or_else(|| uv_scripts::diagnostic_for_error(error))
                 .or_else(|| uv_distribution::diagnostic_for_error(error))
+                .or_else(|| uv_resolver::diagnostic_for_error(error))
                 .or_else(|| uv_settings::diagnostic_for_error(error))
                 .or_else(|| uv_workspace::pyproject::diagnostic_for_error(error))
                 .or_else(|| uv_workspace::dependency_groups::diagnostic_for_error(error))

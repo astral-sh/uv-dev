@@ -616,6 +616,7 @@ mod tests {
                 url: url.parse().unwrap(),
             },
             origin: None,
+            provenance: None,
         }
     }
 

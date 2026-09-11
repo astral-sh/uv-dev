@@ -36,6 +36,7 @@
 
 use std::borrow::Cow;
 use std::fmt::{Display, Formatter};
+use std::hash::{Hash, Hasher};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -50,11 +51,11 @@ use uv_client::{BaseClient, ClientBuildError};
 use uv_client::{BaseClientBuilder, Connectivity};
 use uv_configuration::{NoBinary, NoBuild, PackageNameSpecifier};
 use uv_distribution_types::{
-    Requirement, UnresolvedRequirement, UnresolvedRequirementSpecification,
+    Requirement, RequirementProvenance, UnresolvedRequirement, UnresolvedRequirementSpecification,
 };
 use uv_errors::SourceFile;
 use uv_fs::{Simplified, normalize_path};
-use uv_pep508::{Pep508Error, RequirementOrigin, VerbatimUrl, expand_env_vars};
+use uv_pep508::{Pep508Error, RequirementOrigin, VerbatimUrl, VersionOrUrl, expand_env_vars};
 use uv_pypi_types::VerbatimParsedUrl;
 #[cfg(feature = "http")]
 use uv_redacted::DisplaySafeUrl;
@@ -109,12 +110,44 @@ enum RequirementsTxtStatement {
 
 /// A [Requirement] with additional metadata from the `requirements.txt`, currently only hashes but in
 /// the future also editable and similar information.
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+#[derive(Clone)]
 pub struct RequirementEntry {
     /// The actual PEP 508 requirement.
     pub requirement: RequirementsTxtRequirement,
     /// Hashes of the downloadable packages.
     pub hashes: Vec<String>,
+    /// The exact named-registry occurrence, retained only for diagnostics.
+    pub provenance: Option<RequirementProvenance>,
+}
+
+impl std::fmt::Debug for RequirementEntry {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        let Self {
+            requirement,
+            hashes,
+            provenance: _,
+        } = self;
+        formatter
+            .debug_struct("RequirementEntry")
+            .field("requirement", requirement)
+            .field("hashes", hashes)
+            .finish()
+    }
+}
+
+impl PartialEq for RequirementEntry {
+    fn eq(&self, other: &Self) -> bool {
+        self.requirement == other.requirement && self.hashes == other.hashes
+    }
+}
+
+impl Eq for RequirementEntry {}
+
+impl Hash for RequirementEntry {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.requirement.hash(state);
+        self.hashes.hash(state);
+    }
 }
 
 // We place the impl here instead of next to `UnresolvedRequirementSpecification` because
@@ -122,16 +155,24 @@ pub struct RequirementEntry {
 // depends on `distribution-types`.
 impl From<RequirementEntry> for UnresolvedRequirementSpecification {
     fn from(value: RequirementEntry) -> Self {
+        let RequirementEntry {
+            requirement,
+            hashes,
+            provenance,
+        } = value;
         Self {
-            requirement: match value.requirement {
+            requirement: match requirement {
                 RequirementsTxtRequirement::Named(named) => {
-                    UnresolvedRequirement::Named(Requirement::from(named))
+                    UnresolvedRequirement::Named(Requirement {
+                        provenance,
+                        ..Requirement::from(named)
+                    })
                 }
                 RequirementsTxtRequirement::Unnamed(unnamed) => {
                     UnresolvedRequirement::Unnamed(unnamed)
                 }
             },
-            hashes: value.hashes,
+            hashes,
         }
     }
 }
@@ -141,6 +182,7 @@ impl From<RequirementsTxtRequirement> for UnresolvedRequirementSpecification {
         Self::from(RequirementEntry {
             requirement: value,
             hashes: vec![],
+            provenance: None,
         })
     }
 }
@@ -232,8 +274,9 @@ impl RequirementsTxt {
             constraints: &mut FxHashSet::default(),
         };
 
+        let source_file = diagnostics::source_file(requirements_txt, content);
         Self::parse_inner(
-            content,
+            &source_file,
             working_dir,
             requirements_dir,
             client_builder,
@@ -245,7 +288,7 @@ impl RequirementsTxt {
         .map_err(|err| RequirementsTxtFileError {
             file: requirements_txt.into(),
             error: Box::new(err),
-            source_file: Some(diagnostics::source_file(requirements_txt, content)),
+            source_file: Some(source_file),
         })
     }
 
@@ -340,8 +383,9 @@ impl RequirementsTxt {
         };
 
         let requirements_dir = requirements_txt.parent().unwrap_or(working_dir);
+        let source_file = diagnostics::source_file(requirements_txt, content);
         let data = Self::parse_inner(
-            &content,
+            &source_file,
             working_dir,
             requirements_dir,
             client_builder,
@@ -353,7 +397,7 @@ impl RequirementsTxt {
         .map_err(|err| RequirementsTxtFileError {
             file: requirements_txt.into(),
             error: Box::new(err),
-            source_file: Some(diagnostics::source_file(requirements_txt, content)),
+            source_file: Some(source_file),
         })?;
 
         Ok(data)
@@ -366,7 +410,7 @@ impl RequirementsTxt {
     /// are resolved against the directory of the containing `requirements.txt` file, to match
     /// `pip`'s behavior.
     async fn parse_inner(
-        content: &str,
+        source_file: &SourceFile,
         working_dir: &Path,
         requirements_dir: &Path,
         client_builder: &BaseClientBuilder<'_>,
@@ -374,6 +418,7 @@ impl RequirementsTxt {
         visited: &mut VisitedFiles<'_>,
         cache: &mut SourceCache,
     ) -> Result<Self, RequirementsTxtParserError> {
+        let content = source_file.text();
         let mut s = Scanner::new(content);
 
         let mut data = Self::default();
@@ -383,6 +428,7 @@ impl RequirementsTxt {
             working_dir,
             requirements_dir,
             requirements_txt,
+            source_file,
         )? {
             match statement {
                 RequirementsTxtStatement::Requirements {
@@ -703,6 +749,7 @@ fn parse_entry(
     working_dir: &Path,
     requirements_dir: &Path,
     requirements_txt: &Path,
+    source_file: &SourceFile,
 ) -> Result<Option<RequirementsTxtStatement>, RequirementsTxtParserError> {
     // Eat all preceding whitespace, this may run us to the end of file
     eat_wrappable_whitespace(s);
@@ -758,21 +805,18 @@ fn parse_entry(
             Some(requirements_txt)
         };
 
-        let (mut requirement, hashes) =
-            parse_requirement_and_hashes(s, content, source, working_dir, true)?;
-        requirement
-            .make_editable()
-            .map_err(|source| RequirementsTxtParserError::NonEditable {
+        let mut entry =
+            parse_requirement_and_hashes(s, content, source, source_file, working_dir, true)?;
+        entry.requirement.make_editable().map_err(|source| {
+            RequirementsTxtParserError::NonEditable {
                 source,
-                requirement: requirement.to_string(),
+                requirement: entry.requirement.to_string(),
                 start,
                 end: s.cursor(),
                 line: calculate_row_column(content, start).0,
-            })?;
-        RequirementsTxtStatement::EditableRequirementEntry(RequirementEntry {
-            requirement,
-            hashes,
-        })
+            }
+        })?;
+        RequirementsTxtStatement::EditableRequirementEntry(entry)
     } else if s.eat_if("-i") || s.eat_if("--index-url") {
         let given = parse_value("--index-url", content, s, |c: char| !is_terminal(c))?;
         let given = unquote(given)
@@ -909,12 +953,14 @@ fn parse_entry(
             Some(requirements_txt)
         };
 
-        let (requirement, hashes) =
-            parse_requirement_and_hashes(s, content, source, working_dir, false)?;
-        RequirementsTxtStatement::RequirementEntry(RequirementEntry {
-            requirement,
-            hashes,
-        })
+        RequirementsTxtStatement::RequirementEntry(parse_requirement_and_hashes(
+            s,
+            content,
+            source,
+            source_file,
+            working_dir,
+            false,
+        )?)
     } else if let Some(char) = s.peek() {
         // Identify an unsupported option, like `--trusted-host`.
         if let Some(option) = UnsupportedOption::iter().find(|option| s.eat_if(option.name())) {
@@ -979,9 +1025,10 @@ fn parse_requirement_and_hashes(
     s: &mut Scanner,
     content: &str,
     source: Option<&Path>,
+    source_file: &SourceFile,
     working_dir: &Path,
     editable: bool,
-) -> Result<(RequirementsTxtRequirement, Vec<String>), RequirementsTxtParserError> {
+) -> Result<RequirementEntry, RequirementsTxtParserError> {
     // PEP 508 requirement
     let start = s.cursor();
     // Termination: s.eat() eventually becomes None
@@ -1056,7 +1103,20 @@ fn parse_requirement_and_hashes(
     } else {
         Vec::new()
     };
-    Ok((requirement, hashes))
+    let provenance = match &requirement {
+        RequirementsTxtRequirement::Named(requirement) => match requirement.version_or_url {
+            Some(VersionOrUrl::VersionSpecifier(_)) | None => {
+                Some(diagnostics::requirement_provenance(source_file, start..end))
+            }
+            Some(VersionOrUrl::Url(_)) => None,
+        },
+        RequirementsTxtRequirement::Unnamed(_) => None,
+    };
+    Ok(RequirementEntry {
+        requirement,
+        hashes,
+        provenance,
+    })
 }
 
 /// Parse `--hash=... --hash ...` after a requirement

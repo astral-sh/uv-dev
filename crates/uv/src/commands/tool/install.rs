@@ -235,6 +235,7 @@ pub(crate) async fn install(
                     conflict: None,
                 },
                 origin: None,
+                provenance: None,
             }
         }
         // Ex) `ruff@latest`
@@ -257,6 +258,7 @@ pub(crate) async fn install(
                     conflict: None,
                 },
                 origin: None,
+                provenance: None,
             }
         }
         // Ex) `python`
@@ -323,6 +325,7 @@ pub(crate) async fn install(
                     conflict: None,
                 },
                 origin: None,
+                provenance: None,
             })
         } else {
             None

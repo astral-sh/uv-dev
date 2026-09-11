@@ -3,6 +3,7 @@ use std::ops::Range;
 use std::path::Path;
 use std::sync::Arc;
 
+use uv_distribution_types::RequirementProvenance;
 use uv_errors::{Diagnostic, Info, SourceAnnotation, SourceFile, SourceSnippet};
 use uv_fs::Simplified;
 use uv_pep508::{Pep508Error, Pep508ErrorSource, split_scheme};
@@ -36,6 +37,19 @@ pub(super) fn source_file(path: &Path, text: impl Into<Arc<str>>) -> SourceFile 
         path.portable_display().to_string()
     };
     SourceFile::new(name, text)
+}
+
+pub(super) fn requirement_provenance(
+    source_file: &SourceFile,
+    range: Range<usize>,
+) -> RequirementProvenance {
+    let show_source = can_show_source(source_file, &range);
+    let provenance = RequirementProvenance::new(source_file.clone(), range);
+    if show_source {
+        provenance.with_source_text()
+    } else {
+        provenance
+    }
 }
 
 impl RequirementsTxtFileError {

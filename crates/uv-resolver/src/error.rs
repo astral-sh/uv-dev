@@ -13,7 +13,9 @@ use tracing::trace;
 
 use uv_distribution_types::{
     DerivationChain, DistErrorKind, IndexCapabilities, IndexLocations, IndexUrl, RequestedDist,
+    RequirementProvenance,
 };
+use uv_errors::Diagnostic;
 use uv_normalize::{ExtraName, InvalidNameError, PackageName};
 use uv_pep440::{LowerBound, Version};
 use uv_pep508::MarkerEnvironment;
@@ -35,6 +37,7 @@ use crate::python_requirement::PythonRequirement;
 use crate::resolution::ConflictingDistributionError;
 use crate::resolver::{
     MetadataUnavailable, ResolverEnvironment, UnavailablePackage, UnavailableReason,
+    UnavailableVersion,
 };
 use crate::{InMemoryIndex, Options};
 
@@ -263,6 +266,50 @@ pub(crate) fn derivation_tree_packages(
     }
 
     packages.into_iter()
+}
+
+/// Retain only unambiguous requirement occurrences cited by the reduced report tree.
+fn derivation_tree_provenance(derivation_tree: &ErrorTree) -> Vec<RequirementProvenance> {
+    let mut provenance = Vec::<RequirementProvenance>::new();
+    let mut seen = FxHashSet::default();
+    let mut trees = vec![derivation_tree];
+
+    while let Some(tree) = trees.pop() {
+        if !seen.insert(std::ptr::from_ref(tree)) {
+            continue;
+        }
+        match tree {
+            DerivationTree::Derived(derived) => {
+                trees.push(&derived.cause2);
+                trees.push(&derived.cause1);
+            }
+            DerivationTree::External(External::Custom(
+                _,
+                _,
+                UnavailableReason::Version(UnavailableVersion::UnsatisfiableDependency(
+                    requirement,
+                )),
+            )) => {
+                let Some(source) = requirement.provenance() else {
+                    continue;
+                };
+                if let Some((index, merged)) =
+                    provenance.iter().enumerate().find_map(|(index, existing)| {
+                        existing
+                            .unambiguous_with(source)
+                            .map(|merged| (index, merged))
+                    })
+                {
+                    provenance[index] = merged;
+                } else {
+                    provenance.push(source.clone());
+                }
+            }
+            DerivationTree::External(_) => {}
+        }
+    }
+
+    provenance
 }
 
 /// Drop an exclusively owned derivation tree without recursing through its children.
@@ -494,8 +541,14 @@ pub struct NoSolutionError {
     tags: Option<Tags>,
     workspace_members: BTreeSet<PackageName>,
     options: Options,
-    /// Cached report and hints, computed once on first access.
-    cached: OnceLock<(String, IndexSet<PubGrubHint>)>,
+    /// Cached report, hints, and source occurrences, computed once on first access.
+    cached: OnceLock<NoSolutionReport>,
+}
+
+struct NoSolutionReport {
+    report: String,
+    hints: IndexSet<PubGrubHint>,
+    provenance: Vec<RequirementProvenance>,
 }
 
 impl NoSolutionError {
@@ -543,9 +596,9 @@ impl NoSolutionError {
         }
     }
 
-    /// Get the cached report and hints, computing them on first access.
-    fn cached(&self) -> &(String, IndexSet<PubGrubHint>) {
-        self.cached.get_or_init(|| self.compute_report_and_hints())
+    /// Get the cached report and its presentation data, computing them on first access.
+    fn cached(&self) -> &NoSolutionReport {
+        self.cached.get_or_init(|| self.compute_report())
     }
 
     /// Given a [`DerivationTree`], collapse any [`External::FromDependencyOf`] incompatibilities
@@ -803,16 +856,28 @@ impl NoSolutionError {
 
     /// Return the formatted report string.
     fn report(&self) -> &str {
-        &self.cached().0
+        &self.cached().report
     }
 
     /// Return the computed PubGrub hints.
     fn pubgrub_hints(&self) -> &IndexSet<PubGrubHint> {
-        &self.cached().1
+        &self.cached().hints
     }
 
-    /// Compute the reduced derivation tree, formatted report string, and hints.
-    fn compute_report_and_hints(&self) -> (String, IndexSet<PubGrubHint>) {
+    pub(crate) fn diagnostic(&self) -> Option<Diagnostic<'_>> {
+        let provenance = &self.cached().provenance;
+        (!provenance.is_empty()).then(|| {
+            provenance
+                .iter()
+                .fold(Diagnostic::default(), |diagnostic, source| {
+                    diagnostic
+                        .with_snippet(source.snippet("no version can satisfy this requirement"))
+                })
+        })
+    }
+
+    /// Compute the reduced derivation tree and the presentation data that refers to it.
+    fn compute_report(&self) -> NoSolutionReport {
         let formatter = PubGrubReportFormatter {
             included_versions: &self.included_versions,
             available_versions: &self.available_versions,
@@ -891,7 +956,11 @@ impl NoSolutionError {
             &mut hints,
         );
 
-        (report, hints)
+        NoSolutionReport {
+            report,
+            hints,
+            provenance: derivation_tree_provenance(&tree),
+        }
     }
 }
 
@@ -1546,22 +1615,32 @@ fn merge_unavailable_versions(
         else {
             return None;
         };
-        (package == other_package && reason == other_reason).then(|| other_versions.union(versions))
+        (package == other_package && reason == other_reason).then(|| {
+            (
+                other_versions.union(versions),
+                reason.clone().with_merged_provenance(other_reason),
+            )
+        })
     };
 
     // Keep the two cases separate to preserve the ordering of the causes.
-    let (unchanged_cause, merged_versions, merged_is_cause2) =
-        if let Some(merged_versions) = merge(&derived.cause2) {
-            (derived.cause1.clone(), merged_versions, true)
+    let (unchanged_cause, merged_versions, merged_reason, merged_is_cause2) =
+        if let Some((merged_versions, merged_reason)) = merge(&derived.cause2) {
+            (derived.cause1.clone(), merged_versions, merged_reason, true)
         } else {
-            let merged_versions = merge(&derived.cause1)?;
-            (derived.cause2.clone(), merged_versions, false)
+            let (merged_versions, merged_reason) = merge(&derived.cause1)?;
+            (
+                derived.cause2.clone(),
+                merged_versions,
+                merged_reason,
+                false,
+            )
         };
 
     let merged_cause = Arc::new(DerivationTree::External(External::Custom(
         package.clone(),
         merged_versions.clone(),
-        reason.clone(),
+        merged_reason,
     )));
     let (cause1, cause2) = if merged_is_cause2 {
         (unchanged_cause, merged_cause)
@@ -1618,7 +1697,7 @@ fn merge_unavailable_siblings(derived: &ErrorDerived) -> Option<ErrorTree> {
         return Some(DerivationTree::External(External::Custom(
             package.clone(),
             versions,
-            reason.clone(),
+            reason.clone().with_merged_provenance(other_reason),
         )));
     }
     if versions.subset_of(term_versions) {
@@ -2013,8 +2092,12 @@ fn simplify_range(
 mod tests {
     use std::assert_matches;
 
+    use uv_distribution_types::Requirement;
+    use uv_errors::SourceFile;
+    use uv_pypi_types::VerbatimParsedUrl;
+
     use super::*;
-    use crate::resolver::UnavailableVersion;
+    use crate::resolver::{UnavailableVersion, UnsatisfiableRequirement};
 
     fn deep_derivation_tree() -> ErrorTree {
         let package = PubGrubPackage::from(PubGrubPackageInner::Root(None));
@@ -2200,6 +2283,129 @@ mod tests {
             panic!("expected a custom incompatibility");
         };
         assert_eq!(versions.to_string(), "==1.0 | >=2.0, <=3.0");
+    }
+
+    #[test]
+    fn merging_unavailable_requirements_keeps_only_unambiguous_provenance()
+    -> Result<(), Box<dyn StdError>> {
+        let package = pubgrub_package("numpy");
+        let requirement = Requirement::from(
+            "pypyp==1,>=1.2".parse::<uv_pep508::Requirement<VerbatimParsedUrl>>()?,
+        );
+        let source = SourceFile::new("requirements.in", "pypyp==1,>=1.2\npypyp==1,>=1.2\n");
+        let first = RequirementProvenance::new(source.clone(), 0..14).with_source_text();
+        let second = RequirementProvenance::new(source, 15..29).with_source_text();
+        let reason = |provenance| -> Result<UnavailableReason, Box<dyn StdError>> {
+            let requirement = Requirement {
+                provenance,
+                ..requirement.clone()
+            };
+            let requirement = UnsatisfiableRequirement::from_requirement(&requirement)
+                .ok_or_else(|| std::io::Error::other("expected an empty requirement range"))?;
+            Ok(UnavailableReason::Version(
+                UnavailableVersion::UnsatisfiableDependency(requirement),
+            ))
+        };
+        let custom = |version_string: &str, reason| {
+            ErrorTree::External(External::Custom(
+                package.clone(),
+                Range::singleton(version(version_string)),
+                reason,
+            ))
+        };
+        let mut outcomes = Vec::new();
+        for (name, other) in [
+            ("same", Some(first.clone())),
+            ("different", Some(second)),
+            ("missing", None),
+        ] {
+            let first_reason = reason(Some(first.clone()))?;
+            let other_reason = reason(other)?;
+            assert_eq!(first_reason, other_reason);
+
+            let siblings = ErrorTree::Derived(Derived {
+                terms: Map::from_iter([(package.clone(), Term::Positive(Range::full()))]),
+                shared_id: None,
+                cause1: Arc::new(custom("1.0", first_reason.clone())),
+                cause2: Arc::new(custom("2.0", other_reason.clone())),
+            });
+            let siblings = collapse_unavailable_versions(siblings);
+
+            let nested = ErrorTree::Derived(Derived {
+                terms: Map::from_iter([(package.clone(), Term::Positive(Range::full()))]),
+                shared_id: None,
+                cause1: Arc::new(ErrorTree::External(External::NoVersions(
+                    pubgrub_package("scipy"),
+                    Range::full(),
+                ))),
+                cause2: Arc::new(custom("2.0", other_reason)),
+            });
+            let nested = merge_unavailable_versions(
+                &package,
+                &Range::singleton(version("1.0")),
+                &first_reason,
+                &nested,
+            )
+            .ok_or_else(|| std::io::Error::other("the equal reasons should merge"))?;
+
+            outcomes.push((
+                name,
+                derivation_tree_provenance(&siblings).len(),
+                derivation_tree_provenance(&nested).len(),
+            ));
+        }
+        insta::assert_debug_snapshot!(outcomes, @r#"
+        [
+            (
+                "same",
+                1,
+                1,
+            ),
+            (
+                "different",
+                0,
+                0,
+            ),
+            (
+                "missing",
+                0,
+                0,
+            ),
+        ]
+        "#);
+        Ok(())
+    }
+
+    #[test]
+    fn provenance_is_deduplicated_across_shared_derivations() -> Result<(), Box<dyn StdError>> {
+        let mut requirement = Requirement::from(
+            "pypyp==1,>=1.2".parse::<uv_pep508::Requirement<VerbatimParsedUrl>>()?,
+        );
+        requirement.provenance = Some(
+            RequirementProvenance::new(
+                SourceFile::new("requirements.in", "pypyp==1,>=1.2\n"),
+                0..14,
+            )
+            .with_source_text(),
+        );
+        let requirement = UnsatisfiableRequirement::from_requirement(&requirement)
+            .ok_or_else(|| std::io::Error::other("expected an empty requirement range"))?;
+        let mut tree = Arc::new(ErrorTree::External(External::Custom(
+            pubgrub_package("numpy"),
+            Range::full(),
+            UnavailableReason::Version(UnavailableVersion::UnsatisfiableDependency(requirement)),
+        )));
+        for shared_id in 0..64 {
+            tree = Arc::new(ErrorTree::Derived(Derived {
+                terms: Map::default(),
+                shared_id: Some(shared_id),
+                cause1: tree.clone(),
+                cause2: tree,
+            }));
+        }
+
+        assert_eq!(derivation_tree_provenance(&tree).len(), 1);
+        Ok(())
     }
 
     /// A derivation that concludes about more than the unavailable package is left alone.

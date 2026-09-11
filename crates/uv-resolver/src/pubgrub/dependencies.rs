@@ -118,13 +118,25 @@ impl PubGrubDependency {
         parent_package: Option<&'a PubGrubPackage>,
     ) -> Result<Vec<Self>, UnsatisfiableRequirement> {
         let mut dependencies = Vec::new();
-        for requirement in requirements {
-            dependencies.extend(Self::from_requirement(
-                conflicts,
-                requirement,
-                group_name,
-                parent_package,
-            )?);
+        let mut requirements = requirements.into_iter();
+        while let Some(requirement) = requirements.next() {
+            match Self::from_requirement(conflicts, requirement, group_name, parent_package) {
+                Ok(requirements) => dependencies.extend(requirements),
+                Err(mut unsatisfiable) => {
+                    // Applicability and overrides have already been resolved. Several surviving
+                    // declarations can produce the same semantic witness, so a source is precise
+                    // only when every equivalent witness identifies the same occurrence.
+                    for requirement in requirements {
+                        if let Some(other) =
+                            UnsatisfiableRequirement::from_requirement(&requirement)
+                            && other == unsatisfiable
+                        {
+                            unsatisfiable.merge_provenance(&other);
+                        }
+                    }
+                    return Err(unsatisfiable);
+                }
+            }
         }
         Ok(dependencies)
     }
