@@ -20,3 +20,8 @@ pub fn init(flags: EnvironmentFlags) -> Result<(), ()> {
 pub fn contains(flag: EnvironmentFlags) -> bool {
     FLAGS.get_or_init(EnvironmentFlags::default).contains(flag)
 }
+
+/// Read a flag without finalizing the process-global configuration.
+pub fn contains_or_default(flag: EnvironmentFlags) -> bool {
+    FLAGS.get().copied().unwrap_or_default().contains(flag)
+}

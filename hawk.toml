@@ -26,6 +26,30 @@ package = "uv-redacted"
 # Keep public APIs that are consumed by downstream Rust integrations.
 
 [[override]]
+lint = "hawk::dead_public"
+crate = "uv_resolver"
+item = "lock::Lock::enable_process_cache"
+kind = "inherent_method"
+level = "expect"
+reason = "entry point for opt-in parsed-lock reuse in embedding processes"
+
+[[override]]
+lint = "hawk::dead_public"
+crate = "uv_resolver"
+item = "lock::Lock::observe_process_cache"
+kind = "inherent_method"
+level = "expect"
+reason = "allows an embedding process to share successful lock parses"
+
+[[override]]
+lint = "hawk::dead_public"
+crate = "uv_resolver"
+item = "lock::Lock::process_cache_stats"
+kind = "inherent_method"
+level = "expect"
+reason = "allows an embedding process to inspect its parsed-lock cache budget"
+
+[[override]]
 lint = "hawk::unnecessary_public"
 crate = "uv_client"
 item = "base_client::BaseClientBuilder::<'a>::custom_client"
