@@ -1,5 +1,18 @@
 # The uv installer
 
+## Native self-management preview
+
+Standalone distributions can install themselves with
+`uv self install --preview-features self-management`. The command installs the running distribution,
+including its companion executables, in the chosen executable directory. A managed installation
+stores its receipt beside the executables, so separate installation directories can be updated
+independently.
+
+For an existing standalone installation, use `uv self update --preview-features self-management` to
+try the native updater. It verifies and installs the release archive directly, and accepts receipts
+from the previous standalone installer. Installations created by `uv self install` use the native
+updater automatically. The public installation scripts still use the existing installation path.
+
 ## Changing the installation path
 
 By default, uv is installed in the user [executable directory](./storage.md#executable-directory).

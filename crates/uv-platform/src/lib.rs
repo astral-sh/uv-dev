@@ -19,6 +19,14 @@ mod host;
 mod libc;
 mod os;
 
+/// The Rust target for which the current executable was built.
+///
+/// Self-updates must retain this target: a statically linked musl executable can be running on
+/// a glibc system that cannot run the corresponding GNU release.
+pub fn build_target() -> String {
+    target_lexicon::HOST.to_string()
+}
+
 #[derive(Error, Debug)]
 pub enum Error {
     #[error("Unknown operating system: {0}")]
