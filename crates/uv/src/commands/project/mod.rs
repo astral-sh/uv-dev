@@ -20,7 +20,9 @@ use uv_configuration::{
     Upgrade,
 };
 use uv_dispatch::{BuildDispatch, SharedState};
-use uv_distribution::{DistributionDatabase, LoweredExtraBuildDependencies, LoweredRequirement};
+use uv_distribution::{
+    DistributionDatabase, IndexDeclarationTarget, LoweredExtraBuildDependencies, LoweredRequirement,
+};
 use uv_distribution_types::{
     ExtraBuildRequirement, ExtraBuildRequires, HashCollection, Index, IndexCredentialsError,
     IndexUrlError, Requirement, RequiresPython, Resolution, UnresolvedRequirement,
@@ -3464,6 +3466,7 @@ pub(crate) async fn script_specification(
         requirements.extend(
             LoweredRequirement::from_non_workspace_requirement(
                 requirement,
+                IndexDeclarationTarget::Script,
                 script_dir.as_ref(),
                 script_sources.as_ref(),
                 &script_indexes,
@@ -3491,6 +3494,7 @@ pub(crate) async fn script_specification(
         constraints.extend(
             LoweredRequirement::from_non_workspace_requirement(
                 requirement,
+                IndexDeclarationTarget::Script,
                 script_dir.as_ref(),
                 script_sources.as_ref(),
                 &script_indexes,
@@ -3521,6 +3525,7 @@ pub(crate) async fn script_specification(
                     overrides.extend(
                         LoweredRequirement::from_non_workspace_requirement(
                             requirement,
+                            IndexDeclarationTarget::Script,
                             script_dir.as_ref(),
                             script_sources.as_ref(),
                             &script_indexes,
@@ -3541,6 +3546,7 @@ pub(crate) async fn script_specification(
                         dependencies.extend(
                             LoweredRequirement::from_non_workspace_requirement(
                                 requirement,
+                                IndexDeclarationTarget::Script,
                                 script_dir.as_ref(),
                                 script_sources.as_ref(),
                                 &script_indexes,
@@ -3620,6 +3626,7 @@ pub(crate) async fn script_extra_build_requires(
             lowered_requirements.extend(
                 LoweredRequirement::from_non_workspace_requirement(
                     requirement,
+                    IndexDeclarationTarget::Script,
                     script_dir.as_ref(),
                     script_sources.as_ref(),
                     &script_indexes,

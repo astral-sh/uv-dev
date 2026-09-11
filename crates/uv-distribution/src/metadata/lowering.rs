@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::error::Error as StdError;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -13,7 +14,7 @@ use uv_distribution_types::{
     Index, IndexCredentialsError, IndexLocations, IndexMetadata, IndexName, Origin, Requirement,
     RequirementSource,
 };
-use uv_errors::SourceSnippet;
+use uv_errors::{Info, SourceSnippet};
 use uv_fs::{Simplified, normalize_absolute_path, normalize_path};
 use uv_git_types::{GitLfs, GitReference, GitUrl, GitUrlParseError};
 use uv_normalize::{ExtraName, GroupName, PackageName};
@@ -39,6 +40,24 @@ enum RequirementOrigin {
     Project,
     /// The `tool.uv.sources` were read from the workspace root.
     Workspace,
+}
+
+/// The metadata document in which a named `tool.uv.sources` index must be declared.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum IndexDeclarationTarget {
+    /// A project's `pyproject.toml`.
+    Project,
+    /// A script's inline metadata.
+    Script,
+}
+
+impl IndexDeclarationTarget {
+    fn description(self) -> &'static str {
+        match self {
+            Self::Project => "the project's `pyproject.toml`",
+            Self::Script => "the script's inline metadata",
+        }
+    }
 }
 
 impl LoweredRequirement {
@@ -256,7 +275,8 @@ impl LoweredRequirement {
                                     name.as_ref().is_some_and(|name| *name == index)
                                 })
                             else {
-                                let hint = missing_index_hint(locations, &index);
+                                let configured_index_origin =
+                                    missing_index_origin(locations, &index);
                                 let (pyproject_dir, pyproject) = match origin {
                                     RequirementOrigin::Project => {
                                         (project_dir, project_pyproject_toml)
@@ -277,7 +297,8 @@ impl LoweredRequirement {
                                 return Err(LoweringError::MissingIndex {
                                     package: requirement.name.clone(),
                                     index,
-                                    hint,
+                                    declaration_target: IndexDeclarationTarget::Project,
+                                    configured_index_origin,
                                     diagnostic,
                                 });
                             };
@@ -349,8 +370,11 @@ impl LoweredRequirement {
 
     /// Lower a [`uv_pep508::Requirement`] in a non-workspace setting (for example, in a PEP 723
     /// script, which runs in an isolated context).
+    ///
+    /// `declaration_target` identifies the metadata document that owns `sources` and `indexes`.
     pub async fn from_non_workspace_requirement<'data>(
         requirement: uv_pep508::Requirement<VerbatimParsedUrl>,
+        declaration_target: IndexDeclarationTarget,
         dir: &'data Path,
         sources: &'data BTreeMap<PackageName, Sources>,
         indexes: &'data [Index],
@@ -463,11 +487,13 @@ impl LoweredRequirement {
                                     name.as_ref().is_some_and(|name| *name == index)
                                 })
                             else {
-                                let hint = missing_index_hint(locations, &index);
+                                let configured_index_origin =
+                                    missing_index_origin(locations, &index);
                                 return Err(LoweringError::MissingIndex {
                                     package: requirement.name.clone(),
                                     index,
-                                    hint,
+                                    declaration_target,
+                                    configured_index_origin,
                                     diagnostic: None,
                                 });
                             };
@@ -600,11 +626,15 @@ pub enum LoweringError {
     MoreThanOneGitRef,
     #[error(transparent)]
     GitUrlParse(#[from] GitUrlParseError),
-    #[error("Package `{package}` references an undeclared index: `{index}`")]
+    #[error(
+        "Package `{package}` references an undeclared index: `{index}`{}",
+        missing_index_display_context(index, *configured_index_origin, *declaration_target)
+    )]
     MissingIndex {
         package: PackageName,
         index: IndexName,
-        hint: Option<String>,
+        declaration_target: IndexDeclarationTarget,
+        configured_index_origin: Option<Origin>,
         diagnostic: Option<Box<SourceSnippet<'static>>>,
     },
     #[error("Workspace members are not allowed in non-workspace contexts")]
@@ -651,10 +681,59 @@ impl uv_errors::Hinted for LoweringError {
     fn hints(&self) -> uv_errors::Hints<'_> {
         match self {
             Self::MissingIndex {
-                hint: Some(hint), ..
-            } => uv_errors::Hints::from(hint.clone()),
+                index,
+                declaration_target,
+                ..
+            } => uv_errors::Hints::from(format!(
+                "Define index `{index}` in {}",
+                declaration_target.description(),
+            )),
             _ => uv_errors::Hints::none(),
         }
+    }
+
+    fn transparent_source(&self) -> Option<&(dyn StdError + 'static)> {
+        match self {
+            Self::GitUrlParse(error) => Some(error),
+            Self::InvalidUrl(error) => Some(error),
+            Self::IndexCredentials(error) => Some(error),
+            Self::InvalidVerbatimUrl(error) => Some(error),
+            Self::Workspace(error) => Some(error),
+            Self::ParsedUrl(error) => Some(error),
+            Self::RelativeTo(error) => Some(error),
+            Self::MissingWorkspaceSource(_)
+            | Self::NonWorkspaceSource(..)
+            | Self::UndeclaredWorkspacePackage(_)
+            | Self::InvalidWorkspaceSource(_)
+            | Self::MoreThanOneGitRef
+            | Self::MissingIndex { .. }
+            | Self::WorkspaceMember
+            | Self::ForbiddenFragment(_)
+            | Self::MissingGitSource(..)
+            | Self::WorkspaceFalse
+            | Self::WorkspaceSourceNotRoot { .. }
+            | Self::EditableFile(_)
+            | Self::PackagedFile(_)
+            | Self::GitFile(_)
+            | Self::GitDirectory(_)
+            | Self::NonUtf8Path(_) => None,
+        }
+    }
+}
+
+impl LoweringError {
+    /// Explain why a configured index is not available to `tool.uv.sources`.
+    pub(crate) fn own_info(&self) -> Option<Info<'static>> {
+        let Self::MissingIndex {
+            index,
+            declaration_target,
+            configured_index_origin,
+            ..
+        } = self
+        else {
+            return None;
+        };
+        missing_index_context(index, *configured_index_origin, *declaration_target).map(Info::new)
     }
 }
 
@@ -677,27 +756,41 @@ impl std::fmt::Display for SourceKind {
     }
 }
 
-/// Generate a hint for a missing index if the index name is found in a configuration file
-/// (e.g., `uv.toml`) rather than in the project's `pyproject.toml`.
-fn missing_index_hint(locations: &IndexLocations, index: &IndexName) -> Option<String> {
-    let config_index = locations
+/// Retain the origin of an index found outside the project's `pyproject.toml`.
+fn missing_index_origin(locations: &IndexLocations, index: &IndexName) -> Option<Origin> {
+    locations
         .simple_indexes()
         .filter(|idx| !matches!(idx.origin, Some(Origin::Cli)))
-        .find(|idx| idx.name.as_ref().is_some_and(|name| *name == *index));
+        .find(|idx| idx.name.as_ref().is_some_and(|name| *name == *index))
+        .and_then(|idx| idx.origin)
+        .filter(|origin| matches!(origin, Origin::User | Origin::System | Origin::Project))
+}
 
-    config_index.and_then(|idx| {
-        let source = match idx.origin {
-            Some(Origin::User) => "a user-level `uv.toml`",
-            Some(Origin::System) => "a system-level `uv.toml`",
-            Some(Origin::Project) => "a project-level `uv.toml`",
-            Some(Origin::Cli | Origin::RequirementsTxt) | None => return None,
-        };
-        Some(format!(
-            "Index `{index}` was found in {source}, but indexes \
-             referenced via `tool.uv.sources` must be defined in the project's \
-             `pyproject.toml`"
-        ))
-    })
+fn missing_index_context(
+    index: &IndexName,
+    origin: Option<Origin>,
+    declaration_target: IndexDeclarationTarget,
+) -> Option<String> {
+    let source = match origin? {
+        Origin::User => "a user-level `uv.toml`",
+        Origin::System => "a system-level `uv.toml`",
+        Origin::Project => "a project-level `uv.toml`",
+        Origin::Cli | Origin::RequirementsTxt => return None,
+    };
+    Some(format!(
+        "Index `{index}` was found in {source}, but indexes \
+         referenced via `tool.uv.sources` must be defined in {}",
+        declaration_target.description(),
+    ))
+}
+
+fn missing_index_display_context(
+    index: &IndexName,
+    origin: Option<Origin>,
+    declaration_target: IndexDeclarationTarget,
+) -> String {
+    missing_index_context(index, origin, declaration_target)
+        .map_or_else(String::new, |context| format!(". {context}"))
 }
 
 /// Convert a Git source into a [`RequirementSource`].
@@ -1074,4 +1167,89 @@ fn git_path(path: &Path) -> Result<PathBuf, LoweringError> {
     path.simple_canonicalize()
         .or_else(|_| normalize_absolute_path(path))
         .map_err(LoweringError::RelativeTo)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::path::Path;
+
+    use uv_auth::CredentialsCache;
+    use uv_cache::Cache;
+    use uv_distribution_types::{Index, IndexLocations, IndexName, IndexUrl, Origin};
+    use uv_normalize::PackageName;
+    use uv_pep508::MarkerTree;
+    use uv_workspace::WorkspaceCache;
+    use uv_workspace::pyproject::{Source, Sources};
+
+    use super::{IndexDeclarationTarget, LoweredRequirement, LoweringError, missing_index_origin};
+
+    #[test]
+    fn missing_index_origin_identifies_configuration() -> anyhow::Result<()> {
+        let name: IndexName = "private".parse()?;
+        for origin in [Origin::User, Origin::System, Origin::Project] {
+            let mut index =
+                Index::from_extra_index_url(IndexUrl::parse("https://example.com/simple", None)?)
+                    .with_origin(origin);
+            index.name = Some(name.clone());
+            let locations = IndexLocations::new(vec![index], Vec::new(), false);
+            assert_eq!(missing_index_origin(&locations, &name), Some(origin));
+        }
+        for origin in [None, Some(Origin::Cli), Some(Origin::RequirementsTxt)] {
+            let mut index =
+                Index::from_extra_index_url(IndexUrl::parse("https://example.com/simple", None)?);
+            index.name = Some(name.clone());
+            index.origin = origin;
+            let locations = IndexLocations::new(vec![index], Vec::new(), false);
+            assert_eq!(missing_index_origin(&locations, &name), None);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn non_workspace_index_target_is_retained() -> anyhow::Result<()> {
+        let name: PackageName = "demo-pkg".parse()?;
+        let sources = BTreeMap::from([(
+            name,
+            [Source::Registry {
+                index: "private".parse()?,
+                marker: MarkerTree::TRUE,
+                extra: None,
+                group: None,
+            }]
+            .into_iter()
+            .collect::<Sources>(),
+        )]);
+        let locations = IndexLocations::default();
+        let cache = Cache::from_path("unused-cache");
+        let workspace_cache = WorkspaceCache::default();
+        let credentials_cache = CredentialsCache::default();
+        for target in [
+            IndexDeclarationTarget::Project,
+            IndexDeclarationTarget::Script,
+        ] {
+            let error = LoweredRequirement::from_non_workspace_requirement(
+                "demo-pkg".parse()?,
+                target,
+                Path::new("."),
+                &sources,
+                &[],
+                &locations,
+                &cache,
+                &workspace_cache,
+                &credentials_cache,
+            )
+            .await
+            .collect::<Result<Vec<_>, _>>()
+            .expect_err("the named index is not declared");
+            let LoweringError::MissingIndex {
+                declaration_target, ..
+            } = error
+            else {
+                panic!("expected an undeclared index error");
+            };
+            assert_eq!(declaration_target, target);
+        }
+        Ok(())
+    }
 }
