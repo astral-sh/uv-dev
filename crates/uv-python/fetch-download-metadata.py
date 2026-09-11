@@ -256,34 +256,36 @@ class CPythonFinder(Finder):
         # Collapse CPython variants to a single flavor per triple and variant
         downloads = []
         for version_downloads in downloads_by_version.values():
-            selected: dict[
-                tuple[PlatformTripleKey, Variant | None],
-                tuple[PythonDownload, tuple[int, int]],
-            ] = {}
-            for download in version_downloads:
-                priority = self._get_priority(download)
-                existing = selected.get((download.triple.key(), download.variant))
-                if existing:
-                    existing_download, existing_priority = existing
-                    # Skip if we have a flavor with higher priority already (indicated by a smaller value)
-                    if priority >= existing_priority:
-                        logger.debug(
-                            "Skipping %s (%s): lower priority than %s (%s)",
-                            download.key(),
-                            download.flavor,
-                            existing_download.key(),
-                            existing_download.flavor,
-                        )
-                        continue
-                selected[(download.triple.key(), download.variant)] = (
-                    download,
-                    priority,
-                )
-
-            # Drop the priorities
-            downloads.extend([download for download, _ in selected.values()])
+            downloads.extend(self._select_flavors(version_downloads))
 
         return downloads
+
+    def _select_flavors(
+        self, downloads: Iterable[PythonDownload]
+    ) -> list[PythonDownload]:
+        selected: dict[
+            tuple[PlatformTripleKey, Variant | None],
+            tuple[PythonDownload, tuple[int, int]],
+        ] = {}
+        for download in downloads:
+            priority = self._get_priority(download)
+            key = (download.triple.key(), download.variant)
+            existing = selected.get(key)
+            if existing:
+                existing_download, existing_priority = existing
+                # A smaller priority value indicates a preferred flavor.
+                if priority >= existing_priority:
+                    logger.debug(
+                        "Skipping %s (%s): lower priority than %s (%s)",
+                        download.key(),
+                        download.flavor,
+                        existing_download.key(),
+                        existing_download.flavor,
+                    )
+                    continue
+            selected[key] = (download, priority)
+
+        return [download for download, _ in selected.values()]
 
     def _parse_ndjson_artifact(
         self, version: Version, release: int, artifact: dict[str, Any]
@@ -469,28 +471,29 @@ class PyPyFinder(Finder):
                 if version["python_version"] in incomplete_versions:
                     continue
 
-                arch = self._normalize_arch(file["arch"])
-                platform = self._normalize_os(file["platform"])
-                libc = "gnu" if platform == "linux" else "none"
-                download = PythonDownload(
-                    release=0,
-                    version=python_version,
-                    triple=PlatformTriple(
-                        platform=platform,
-                        arch=arch,
-                        libc=libc,
-                    ),
-                    flavor="",
-                    implementation=self.implementation,
-                    filename=file["filename"],
-                    url=file["download_url"],
-                    build=pypy_version,
-                )
+                download = self._parse_file(python_version, pypy_version, file)
                 # Only keep the latest pypy version of each arch/platform
-                if (python_version, arch, platform) not in results:
-                    results[(python_version, arch, platform)] = download
+                key = (python_version, download.triple.arch, download.triple.platform)
+                results.setdefault(key, download)
 
         return list(results.values())
+
+    def _parse_file(
+        self, python_version: Version, pypy_version: str, file: dict[str, Any]
+    ) -> PythonDownload:
+        arch = self._normalize_arch(file["arch"])
+        platform = self._normalize_os(file["platform"])
+        libc = "gnu" if platform == "linux" else "none"
+        return PythonDownload(
+            release=0,
+            version=python_version,
+            triple=PlatformTriple(platform=platform, arch=arch, libc=libc),
+            flavor="",
+            implementation=self.implementation,
+            filename=file["filename"],
+            url=file["download_url"],
+            build=pypy_version,
+        )
 
     def _normalize_arch(self, arch: str) -> Arch:
         return Arch(self.ARCH_MAPPING.get(arch, arch), None)
@@ -603,13 +606,9 @@ class PyodideFinder(Finder):
             for download, resp in zip(
                 batch, await asyncio.gather(*checksum_requests), strict=False
             ):
-                try:
-                    resp.raise_for_status()
-                except httpx.HTTPStatusError as e:
-                    if e.response.status_code == 404:
-                        continue
-                    raise
-                download.sha256 = resp.text.strip()
+                checksum = _read_checksum(resp)
+                if checksum is not None:
+                    download.sha256 = checksum
 
 
 class GraalPyFinder(Finder):
@@ -656,46 +655,53 @@ class GraalPyFinder(Finder):
                 continue
             graalpy_version = m.group(1)
             for asset in release["assets"]:
-                url = asset["browser_download_url"]
-                m = self.PLATFORM_RE.search(url)
-                if not m:
+                download = self._parse_asset(release, graalpy_version, asset)
+                if download is None:
                     continue
-                platform = self._normalize_os(m.group(1))
-                arch = self._normalize_arch(m.group(2))
-                libc = "gnu" if platform == "linux" else "none"
-                sha256 = None
-                if digest := asset["digest"]:
-                    sha256 = digest.removeprefix("sha256:")
-                m = self.GRAALPY_ASSET_VERSION_RE.search(asset["name"])
-                if not m:
-                    m = self.CPY_VERSION_RE.search(release["body"])
-                if not m:
-                    continue
-                python_version_str = m.group(1)
-                if not m.group(2):
-                    python_version_str += ".0"
-                python_version = Version.from_str(python_version_str)
-                download = PythonDownload(
-                    release=0,
-                    version=python_version,
-                    triple=PlatformTriple(
-                        platform=platform,
-                        arch=arch,
-                        libc=libc,
-                    ),
-                    flavor=graalpy_version,
-                    implementation=self.implementation,
-                    filename=asset["name"],
-                    url=url,
-                    build=graalpy_version,
-                    sha256=sha256,
-                )
                 # Only keep the latest GraalPy version of each arch/platform
-                key = (python_version, arch, platform)
+                key = (
+                    download.version,
+                    download.triple.arch,
+                    download.triple.platform,
+                )
                 if key not in results or graalpy_version > results[key].build:
                     results[key] = download
 
         return list(results.values())
+
+    def _parse_asset(
+        self, release: dict[str, Any], graalpy_version: str, asset: dict[str, Any]
+    ) -> PythonDownload | None:
+        url = asset["browser_download_url"]
+        m = self.PLATFORM_RE.search(url)
+        if not m:
+            return None
+        platform = self._normalize_os(m.group(1))
+        arch = self._normalize_arch(m.group(2))
+        libc = "gnu" if platform == "linux" else "none"
+        sha256 = None
+        if digest := asset["digest"]:
+            sha256 = digest.removeprefix("sha256:")
+        m = self.GRAALPY_ASSET_VERSION_RE.search(asset["name"])
+        if not m:
+            m = self.CPY_VERSION_RE.search(release["body"])
+        if not m:
+            return None
+        python_version_str = m.group(1)
+        if not m.group(2):
+            python_version_str += ".0"
+        python_version = Version.from_str(python_version_str)
+        return PythonDownload(
+            release=0,
+            version=python_version,
+            triple=PlatformTriple(platform=platform, arch=arch, libc=libc),
+            flavor=graalpy_version,
+            implementation=self.implementation,
+            filename=asset["name"],
+            url=url,
+            build=graalpy_version,
+            sha256=sha256,
+        )
 
     def _normalize_arch(self, arch: str) -> Arch:
         return Arch(self.ARCH_MAPPING.get(arch, arch), None)
@@ -714,13 +720,19 @@ class GraalPyFinder(Finder):
             for download, resp in zip(
                 batch, await asyncio.gather(*checksum_requests), strict=False
             ):
-                try:
-                    resp.raise_for_status()
-                except httpx.HTTPStatusError as e:
-                    if e.response.status_code == 404:
-                        continue
-                    raise
-                download.sha256 = resp.text.strip()
+                checksum = _read_checksum(resp)
+                if checksum is not None:
+                    download.sha256 = checksum
+
+
+def _read_checksum(response: httpx.Response) -> str | None:
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as error:
+        if error.response.status_code == 404:
+            return None
+        raise
+    return response.text.strip()
 
 
 def render(downloads: list[PythonDownload]) -> None:
