@@ -70,6 +70,7 @@ use crate::commands::project::diagnostics::{
     EnvironmentMarkersDiagnostic, PythonRequirementsDiagnostic,
 };
 use crate::commands::project::install_target::InstallTarget;
+use crate::commands::project::lock_target::{LockfileRecovery, LockfileRecoveryAction};
 use crate::commands::reporters::{PythonDownloadReporter, ResolverReporter};
 use crate::commands::{capitalize, conjunction, pip};
 use crate::printer::Printer;
@@ -128,13 +129,21 @@ impl From<FrozenSource> for MissingLockfileSource {
 
 #[derive(thiserror::Error, Debug)]
 pub(crate) enum ProjectError {
-    #[error("The lockfile at `uv.lock` needs to be updated, but `{2}` was provided.")]
-    LockMismatch(Option<Box<Lock>>, Box<Lock>, LockedSource),
+    #[error(
+        "The lockfile at `{lockfile}` needs to be updated, but `{2}` was provided.",
+        lockfile = .3.lock_path().user_display(),
+    )]
+    LockMismatch(
+        Option<Box<Lock>>,
+        Box<Lock>,
+        LockedSource,
+        Box<LockfileRecovery>,
+    ),
 
     #[error(
         "The lockfile at `{0}` has non-canonical formatting at line {1}, but `{2}` was provided."
     )]
-    LockFormat(PathBuf, usize, LockedSource),
+    LockFormat(PathBuf, usize, LockedSource, Box<LockfileRecovery>),
 
     #[error(
         "Unable to find lockfile at `{1}`, but {0} was provided. To create a lockfile, run `uv lock` or `uv sync` without the flag."
@@ -144,7 +153,7 @@ pub(crate) enum ProjectError {
     #[error(
         "The lockfile at `uv.lock` needs to be updated, but {1} was provided: Missing workspace member `{0}`."
     )]
-    LockWorkspaceMismatch(PackageName, MissingLockfileSource),
+    LockWorkspaceMismatch(PackageName, MissingLockfileSource, Box<LockfileRecovery>),
 
     #[error(
         "The lockfile at `uv.lock` uses an unsupported schema version (v{1}, but only v{0} is supported). Downgrade to a compatible uv version, or remove the `uv.lock` prior to running `uv lock` or `uv sync`."
@@ -435,12 +444,29 @@ impl std::fmt::Display for MalwareFindings {
 impl uv_errors::Hinted for ProjectError {
     fn hints(&self) -> uv_errors::Hints<'_> {
         match self {
-            Self::LockMismatch(..) | Self::LockWorkspaceMismatch(..) => {
-                uv_errors::Hints::from("To update the lockfile, run `uv lock`.")
+            Self::LockMismatch(_, _, _, recovery) | Self::LockWorkspaceMismatch(_, _, recovery) => {
+                match recovery.action() {
+                    LockfileRecoveryAction::UpdateLockfile => uv_errors::Hints::from(format!(
+                        "To update the lockfile, run `uv lock --no-locked --no-frozen` with {}, using the original command's working directory and applicable index, constraint, and other resolution options.",
+                        recovery.selectors(),
+                    )),
+                    LockfileRecoveryAction::RetryAdd => uv_errors::Hints::from(
+                        "To apply the dependency changes and update the lockfile, repeat the original `uv add` command from the same working directory, adding `--no-locked --no-frozen` and keeping the same requirements, constraints, and other options.",
+                    ),
+                }
             }
-            Self::LockFormat(..) => uv_errors::Hints::from(
-                "To regenerate the lockfile, run `uv lock --refresh --preview-features lockfile-format-check`.",
-            ),
+            Self::LockFormat(_, _, _, recovery) => {
+                let retry = match recovery.action() {
+                    LockfileRecoveryAction::UpdateLockfile => "",
+                    LockfileRecoveryAction::RetryAdd => {
+                        " Then repeat the original `uv add` command from the same working directory, adding `--no-locked --no-frozen` and keeping the same requirements, constraints, and other options."
+                    }
+                };
+                uv_errors::Hints::from(format!(
+                    "To regenerate the lockfile, run `uv lock --refresh --preview-features lockfile-format-check --no-locked --no-frozen --no-offline` with {}, using the original command's working directory and applicable index, constraint, and other resolution options.{retry}",
+                    recovery.selectors(),
+                ))
+            }
             Self::OverlappingMarkers {
                 right,
                 replacement,
