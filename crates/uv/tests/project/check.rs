@@ -1462,7 +1462,7 @@ fn check_no_sync_locked_rejects_stale_lock_without_update() -> Result<()> {
     warning: `uv check` is experimental and may change without warning. Pass `--preview-features check-command` to disable this warning.
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
-    hint: To update the lockfile, run `uv lock`.
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     "
     );
 

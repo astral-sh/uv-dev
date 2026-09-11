@@ -163,6 +163,7 @@ pub(crate) async fn tree(
     // Update the lockfile, if necessary.
     let lock = match Box::pin(
         LockOperation::new(
+            project_dir,
             mode,
             &settings,
             client_builder,

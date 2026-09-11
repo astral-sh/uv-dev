@@ -1225,9 +1225,9 @@ fn run_pep723_script_lock() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     Resolved 3 packages in [TIME]
-    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+    error: The lockfile at `main.py.lock` needs to be updated, but `--locked` was provided.
 
-    hint: To update the lockfile, run `uv lock`.
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/` and `--script` set to `[TEMP_DIR]/main.py`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     // Re-running the script with `--frozen` should also error, but at runtime.
@@ -2656,7 +2656,7 @@ fn run_locked() -> Result<()> {
     Resolved 2 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
-    hint: To update the lockfile, run `uv lock`.
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     let updated = context.read("uv.lock");

@@ -56,7 +56,7 @@ use crate::commands::pip::loggers::{
 use crate::commands::pip::operations::Modifications;
 use crate::commands::project::install_target::InstallTarget;
 use crate::commands::project::lock::LockMode;
-use crate::commands::project::lock_target::LockTarget;
+use crate::commands::project::lock_target::{LockTarget, LockfileRecoveryAction};
 use crate::commands::project::{
     LinkErrorReporting, PlatformState, ProjectEnvironment, ProjectEnvironmentPolicy, ProjectError,
     ProjectInterpreter, ScriptInterpreter, UniversalState, WorkspacePython,
@@ -787,6 +787,7 @@ pub(crate) async fn add(
 
     match Box::pin(lock_and_sync(
         target,
+        project_dir,
         &mut toml,
         &edits,
         lock_state,
@@ -1073,6 +1074,7 @@ fn edits(
 #[expect(clippy::fn_params_excessive_bools)]
 async fn lock_and_sync(
     mut target: AddTarget,
+    project_dir: &Path,
     toml: &mut PyProjectTomlMut,
     edits: &[DependencyEdit],
     lock_state: UniversalState,
@@ -1103,6 +1105,7 @@ async fn lock_and_sync(
 ) -> Result<(), ProjectError> {
     let mut lock = Box::pin(
         project::lock::LockOperation::new(
+            project_dir,
             if let LockCheck::Enabled(lock_check) = lock_check {
                 LockMode::Locked(target.interpreter(), lock_check)
             } else if dry_run {
@@ -1120,6 +1123,7 @@ async fn lock_and_sync(
             printer,
             preview,
         )
+        .with_recovery_action(LockfileRecoveryAction::RetryAdd)
         .with_constraints(constraints)
         .execute((&target).into()),
     )
@@ -1228,6 +1232,7 @@ async fn lock_and_sync(
             // the addition of the minimum version specifiers.
             lock = Box::pin(
                 project::lock::LockOperation::new(
+                    project_dir,
                     if let LockCheck::Enabled(lock_check) = lock_check {
                         LockMode::Locked(target.interpreter(), lock_check)
                     } else if dry_run {
@@ -1245,6 +1250,7 @@ async fn lock_and_sync(
                     printer,
                     preview,
                 )
+                .with_recovery_action(LockfileRecoveryAction::RetryAdd)
                 .execute((&target).into()),
             )
             .await?

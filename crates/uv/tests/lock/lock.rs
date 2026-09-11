@@ -93,6 +93,648 @@ fn lock_preserves_noncanonical_lock() -> Result<()> {
     Ok(())
 }
 
+/// Recovery from a non-writing command targets the selected project and disables both lock modes.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_recovery_targets_selected_project() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "unrelated"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    context.lock().arg("--offline").assert().success();
+    let unrelated_lock = context.read("uv.lock");
+
+    let selected = context.temp_dir.child("selected's project");
+    let pyproject_toml = selected.child("pyproject.toml");
+    pyproject_toml.write_str(indoc! {r#"
+        [project]
+        name = "selected"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    context
+        .sync()
+        .arg("--project")
+        .arg(selected.path())
+        .arg("--offline")
+        .assert()
+        .success();
+    let original_lock = fs_err::read_to_string(selected.child("uv.lock"))?;
+
+    pyproject_toml.write_str(indoc! {r#"
+        [project]
+        name = "selected"
+        version = "0.2.0"
+        requires-python = ">=3.12"
+    "#})?;
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--directory")
+        .arg(selected.path())
+        .arg("--check")
+        .arg("--locked")
+        .arg("--offline")
+        .env(EnvVars::UV_FROZEN, "1"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    warning: Ignoring `UV_FROZEN` because `--locked` was provided
+    Would use project environment at: .venv
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    Would make no changes
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/selected's project`, using the original command's working directory and applicable index, constraint, and other resolution options.
+    ");
+    assert_eq!(
+        fs_err::read_to_string(selected.child("uv.lock"))?,
+        original_lock
+    );
+
+    context
+        .lock()
+        .arg("--project")
+        .arg(selected.path())
+        .arg("--no-locked")
+        .arg("--no-frozen")
+        .arg("--offline")
+        .env(EnvVars::UV_LOCKED, "1")
+        .env(EnvVars::UV_FROZEN, "1")
+        .assert()
+        .success();
+    let updated_lock = fs_err::read_to_string(selected.child("uv.lock"))?;
+    assert_ne!(updated_lock, original_lock);
+    assert_eq!(context.read("uv.lock"), unrelated_lock);
+
+    // Frozen workspace checks need the same target-aware recovery when a member changes.
+    pyproject_toml.write_str(indoc! {r#"
+        [project]
+        name = "renamed"
+        version = "0.2.0"
+        requires-python = ">=3.12"
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--project")
+        .arg(selected.path())
+        .arg("--check-exists")
+        .arg("--offline")
+        .env(EnvVars::UV_LOCKED, "1"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    warning: Ignoring `UV_LOCKED` because `--check-exists` was provided
+    error: The lockfile at `uv.lock` needs to be updated, but `--check-exists` was provided: Missing workspace member `renamed`.
+
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/selected's project`, using the original command's working directory and applicable index, constraint, and other resolution options.
+    ");
+    assert_eq!(
+        fs_err::read_to_string(selected.child("uv.lock"))?,
+        updated_lock
+    );
+
+    context
+        .lock()
+        .arg("--project")
+        .arg(selected.path())
+        .arg("--no-locked")
+        .arg("--no-frozen")
+        .arg("--offline")
+        .env(EnvVars::UV_LOCKED, "1")
+        .env(EnvVars::UV_FROZEN, "1")
+        .assert()
+        .success();
+    assert_ne!(
+        fs_err::read_to_string(selected.child("uv.lock"))?,
+        updated_lock
+    );
+    assert_eq!(context.read("uv.lock"), unrelated_lock);
+
+    Ok(())
+}
+
+/// Script lock recovery retains the script path and can rewrite formatting-only changes.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_recovery_targets_script() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "unrelated"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    context.lock().arg("--offline").assert().success();
+    let unrelated_lock = context.read("uv.lock");
+
+    let script = context.temp_dir.child("scripts/selected's script.py");
+    let script_lock = context.temp_dir.child("scripts/selected's script.py.lock");
+    script.write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = []
+        # ///
+    "#})?;
+    context
+        .lock()
+        .arg("--script")
+        .arg(script.path())
+        .arg("--offline")
+        .assert()
+        .success();
+    let original_lock = fs_err::read_to_string(&script_lock)?;
+
+    script.write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12, <3.13"
+        # dependencies = []
+        # ///
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--script")
+        .arg(script.path())
+        .arg("--offline")
+        .env(EnvVars::UV_LOCKED, "1"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved in [TIME]
+    error: The lockfile at `scripts/selected's script.py.lock` needs to be updated, but `UV_LOCKED=1` was provided.
+
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/` and `--script` set to `[TEMP_DIR]/scripts/selected's script.py`, using the original command's working directory and applicable index, constraint, and other resolution options.
+    ");
+    assert_eq!(fs_err::read_to_string(&script_lock)?, original_lock);
+
+    context
+        .lock()
+        .arg("--project")
+        .arg(context.temp_dir.path())
+        .arg("--script")
+        .arg(script.path())
+        .arg("--no-locked")
+        .arg("--no-frozen")
+        .arg("--offline")
+        .env(EnvVars::UV_LOCKED, "1")
+        .env(EnvVars::UV_FROZEN, "1")
+        .assert()
+        .success();
+    let canonical_lock = fs_err::read_to_string(&script_lock)?;
+    assert_ne!(canonical_lock, original_lock);
+    assert_eq!(context.read("uv.lock"), unrelated_lock);
+
+    let unformatted_lock = canonical_lock.trim_end_matches('\n');
+    assert_ne!(canonical_lock, unformatted_lock);
+    script_lock.write_str(unformatted_lock)?;
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--script")
+        .arg(script.path())
+        .arg("--check")
+        .arg("--offline")
+        .arg("--preview-features")
+        .arg("lockfile-format-check"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: The lockfile at `selected's script.py.lock` has non-canonical formatting at line 6, but `--check` was provided.
+
+    hint: To regenerate the lockfile, run `uv lock --refresh --preview-features lockfile-format-check --no-locked --no-frozen --no-offline` with `--project` set to `[TEMP_DIR]/` and `--script` set to `[TEMP_DIR]/scripts/selected's script.py`, using the original command's working directory and applicable index, constraint, and other resolution options.
+    ");
+    assert_eq!(fs_err::read_to_string(&script_lock)?, unformatted_lock);
+
+    context
+        .lock()
+        .arg("--project")
+        .arg(context.temp_dir.path())
+        .arg("--script")
+        .arg(script.path())
+        .arg("--refresh")
+        .arg("--preview-features")
+        .arg("lockfile-format-check")
+        .arg("--no-locked")
+        .arg("--no-frozen")
+        .arg("--no-offline")
+        .env(EnvVars::UV_LOCKED, "1")
+        .env(EnvVars::UV_FROZEN, "1")
+        .env(EnvVars::UV_OFFLINE, "1")
+        .assert()
+        .success();
+    assert_eq!(fs_err::read_to_string(&script_lock)?, canonical_lock);
+    assert_eq!(context.read("uv.lock"), unrelated_lock);
+
+    Ok(())
+}
+
+/// Lock recovery retains the workspace member used for Python pin discovery.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_recovery_retains_workspace_member_python_pin() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    let workspace = context.temp_dir.child("workspace");
+    workspace.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "workspace"
+        version = "0.1.0"
+
+        [tool.uv.workspace]
+        members = ["packages/a"]
+    "#})?;
+    workspace.child(".python-version").write_str("3.12\n")?;
+
+    let member = workspace.child("packages/a");
+    let pyproject_toml = member.child("pyproject.toml");
+    pyproject_toml.write_str(indoc! {r#"
+        [project]
+        name = "a"
+        version = "0.1.0"
+    "#})?;
+    member.child(".python-version").write_str("3.13\n")?;
+
+    context
+        .lock()
+        .arg("--project")
+        .arg(member.path())
+        .arg("--offline")
+        .assert()
+        .success();
+    let original_lock = fs_err::read_to_string(workspace.child("uv.lock"))?;
+
+    pyproject_toml.write_str(indoc! {r#"
+        [project]
+        name = "a"
+        version = "0.2.0"
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--project")
+        .arg(member.path())
+        .arg("--locked")
+        .arg("--offline"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    warning: No `requires-python` value found in the workspace. Defaulting to `>=3.13`.
+    Resolved 2 packages in [TIME]
+    error: The lockfile at `workspace/uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/workspace/packages/a`, using the original command's working directory and applicable index, constraint, and other resolution options.
+    ");
+    assert_eq!(
+        fs_err::read_to_string(workspace.child("uv.lock"))?,
+        original_lock
+    );
+
+    context
+        .lock()
+        .arg("--project")
+        .arg(member.path())
+        .arg("--no-locked")
+        .arg("--no-frozen")
+        .arg("--offline")
+        .assert()
+        .success();
+    insta::with_settings!({filters => context.filters()}, {
+        assert_snapshot!(context.read("workspace/uv.lock"), @r#"
+        version = 1
+        revision = 3
+        requires-python = ">=3.13"
+
+        [options]
+        exclude-newer = "2024-03-25T00:00:00Z"
+
+        [manifest]
+        members = [
+            "a",
+            "workspace",
+        ]
+
+        [[package]]
+        name = "a"
+        version = "0.2.0"
+        source = { virtual = "packages/a" }
+
+        [[package]]
+        name = "workspace"
+        version = "0.1.0"
+        source = { virtual = "." }
+        "#);
+    });
+
+    Ok(())
+}
+
+/// Script recovery keeps the directory used for implicit filesystem configuration discovery.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_recovery_retains_script_configuration() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let directory = context.temp_dir.child("script's project");
+    directory
+        .child("uv.toml")
+        .write_str("resolution = \"lowest\"\n")?;
+    let script = directory.child("script.py");
+    let script_lock = directory.child("script.py.lock");
+    script.write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = []
+        # ///
+    "#})?;
+    context
+        .lock()
+        .arg("--project")
+        .arg(directory.path())
+        .arg("--script")
+        .arg(script.path())
+        .arg("--offline")
+        .assert()
+        .success();
+    let original_lock = fs_err::read_to_string(&script_lock)?;
+
+    script.write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12, <3.13"
+        # dependencies = []
+        # ///
+    "#})?;
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--locked")
+        .arg("--offline")
+        .arg(script.path()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved in [TIME]
+    error: The lockfile at `script's project/script.py.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/script's project` and `--script` set to `[TEMP_DIR]/script's project/script.py`, using the original command's working directory and applicable index, constraint, and other resolution options.
+    ");
+    assert_eq!(fs_err::read_to_string(&script_lock)?, original_lock);
+
+    context
+        .lock()
+        .arg("--project")
+        .arg(directory.path())
+        .arg("--script")
+        .arg(script.path())
+        .arg("--no-locked")
+        .arg("--no-frozen")
+        .arg("--offline")
+        .assert()
+        .success();
+    let recovered_lock = fs_err::read_to_string(&script_lock)?;
+    insta::with_settings!({filters => context.filters()}, {
+        assert_snapshot!(recovered_lock, @r#"
+        version = 1
+        revision = 3
+        requires-python = ">=3.12, <3.13"
+
+        [options]
+        resolution-mode = "lowest"
+        exclude-newer = "2024-03-25T00:00:00Z"
+        "#);
+    });
+
+    Ok(())
+}
+
+/// Add recovery repeats the rolled-back operation, including external requirements and constraints.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_recovery_retries_rolled_back_add() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario: Scenario = toml::from_str(indoc! {r#"
+        name = "lock-recovery"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.recovery-dependency.versions."1.0.0"]
+        [packages.recovery-dependency.versions."2.0.0"]
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+
+    let selected = context.temp_dir.child("selected's project");
+    let pyproject_toml = selected.child("pyproject.toml");
+    pyproject_toml.write_str(indoc! {r#"
+        [project]
+        name = "selected"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    let original_pyproject = fs_err::read_to_string(&pyproject_toml)?;
+    context
+        .lock()
+        .arg("--project")
+        .arg(selected.path())
+        .arg("--offline")
+        .assert()
+        .success();
+    let lockfile = selected.child("uv.lock");
+    let original_lock = fs_err::read_to_string(&lockfile)?;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("recovery-dependency\n")?;
+    context
+        .temp_dir
+        .child("constraints.txt")
+        .write_str("recovery-dependency==1.0.0\n")?;
+
+    // Neither the legacy index option nor external constraints are recorded in the manifest.
+    uv_snapshot!(context.filters(), context.add()
+        .arg("--project")
+        .arg(selected.path())
+        .arg("--no-sync")
+        .arg("--locked")
+        .arg("-r").arg("requirements.in")
+        .arg("-c").arg("constraints.txt")
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    warning: Indexes specified via `--index-url` will not be persisted to the `pyproject.toml` file; use `--default-index` instead.
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Resolved 2 packages in [TIME]
+    error: The lockfile at `selected's project/uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To apply the dependency changes and update the lockfile, repeat the original `uv add` command from the same working directory, adding `--no-locked --no-frozen` and keeping the same requirements, constraints, and other options.
+    ");
+    assert_eq!(fs_err::read_to_string(&pyproject_toml)?, original_pyproject);
+    assert_eq!(fs_err::read_to_string(&lockfile)?, original_lock);
+
+    // A formatting check needs a canonical rewrite before the rolled-back addition is retried.
+    lockfile.write_str(original_lock.trim_end_matches('\n'))?;
+    uv_snapshot!(context.filters(), context.add()
+        .arg("--project")
+        .arg(selected.path())
+        .arg("--no-sync")
+        .arg("--locked")
+        .arg("--preview-features").arg("lockfile-format-check")
+        .arg("-r").arg("requirements.in")
+        .arg("-c").arg("constraints.txt")
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    warning: Indexes specified via `--index-url` will not be persisted to the `pyproject.toml` file; use `--default-index` instead.
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    error: The lockfile at `uv.lock` has non-canonical formatting at line 11, but `--locked` was provided.
+
+    hint: To regenerate the lockfile, run `uv lock --refresh --preview-features lockfile-format-check --no-locked --no-frozen --no-offline` with `--project` set to `[TEMP_DIR]/selected's project`, using the original command's working directory and applicable index, constraint, and other resolution options. Then repeat the original `uv add` command from the same working directory, adding `--no-locked --no-frozen` and keeping the same requirements, constraints, and other options.
+    ");
+    assert_eq!(fs_err::read_to_string(&pyproject_toml)?, original_pyproject);
+
+    context
+        .lock()
+        .arg("--project")
+        .arg(selected.path())
+        .arg("--refresh")
+        .arg("--preview-features")
+        .arg("lockfile-format-check")
+        .arg("--no-locked")
+        .arg("--no-frozen")
+        .arg("--no-offline")
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    assert_eq!(fs_err::read_to_string(&lockfile)?, original_lock);
+
+    context
+        .add()
+        .arg("--project")
+        .arg(selected.path())
+        .arg("--no-sync")
+        .arg("--no-locked")
+        .arg("--no-frozen")
+        .arg("-r")
+        .arg("requirements.in")
+        .arg("-c")
+        .arg("constraints.txt")
+        .arg("--index-url")
+        .arg(server.index_url())
+        .env(EnvVars::UV_LOCKED, "1")
+        .env(EnvVars::UV_FROZEN, "1")
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.tree()
+        .arg("--project")
+        .arg(selected.path())
+        .arg("--frozen"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    selected v0.1.0
+    └── recovery-dependency v1.0.0
+
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    ");
+
+    Ok(())
+}
+
+/// Remove and version changes persist on a lock mismatch, so their recovery must not repeat them.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_recovery_keeps_persisted_edits() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let selected = context.temp_dir.child("selected's project");
+    let pyproject_toml = selected.child("pyproject.toml");
+    pyproject_toml.write_str(indoc! {r#"
+        [project]
+        name = "selected"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["removed ; python_version < '0'"]
+    "#})?;
+    context
+        .lock()
+        .arg("--project")
+        .arg(selected.path())
+        .arg("--offline")
+        .assert()
+        .success();
+    let lockfile = selected.child("uv.lock");
+    let original_lock = fs_err::read_to_string(&lockfile)?;
+
+    uv_snapshot!(context.filters(), context.remove()
+        .arg("--project")
+        .arg(selected.path())
+        .arg("--no-sync")
+        .arg("--locked")
+        .arg("--offline")
+        .arg("removed"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Resolved 1 package in [TIME]
+    error: The lockfile at `selected's project/uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/selected's project`, using the original command's working directory and applicable index, constraint, and other resolution options.
+    ");
+    let removed_pyproject = fs_err::read_to_string(&pyproject_toml)?;
+    insta::with_settings!({filters => context.filters()}, {
+        assert_snapshot!(removed_pyproject, @r#"
+        [project]
+        name = "selected"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+        "#);
+    });
+    assert_eq!(fs_err::read_to_string(&lockfile)?, original_lock);
+
+    context
+        .lock()
+        .arg("--project")
+        .arg(selected.path())
+        .arg("--no-locked")
+        .arg("--no-frozen")
+        .arg("--offline")
+        .assert()
+        .success();
+    let removed_lock = fs_err::read_to_string(&lockfile)?;
+    assert_ne!(removed_lock, original_lock);
+
+    uv_snapshot!(context.filters(), context.version()
+        .arg("--project")
+        .arg(selected.path())
+        .arg("--bump").arg("patch")
+        .arg("--no-sync")
+        .arg("--locked")
+        .arg("--offline"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Resolved 1 package in [TIME]
+    error: The lockfile at `selected's project/uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/selected's project`, using the original command's working directory and applicable index, constraint, and other resolution options.
+    ");
+    assert_eq!(fs_err::read_to_string(&lockfile)?, removed_lock);
+
+    context
+        .lock()
+        .arg("--project")
+        .arg(selected.path())
+        .arg("--no-locked")
+        .arg("--no-frozen")
+        .arg("--offline")
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.version()
+        .arg("--project")
+        .arg(selected.path())
+        .arg("--short")
+        .arg("--frozen"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    0.1.1
+    ");
+
+    Ok(())
+}
+
 /// Static project requirements retain their authored locations in resolver explanations.
 #[cfg(feature = "test-universal")]
 #[test]
@@ -4035,7 +4677,7 @@ fn lock_project_with_excludes() -> Result<()> {
     Resolved 8 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
-    hint: To update the lockfile, run `uv lock`.
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     Ok(())
@@ -5118,7 +5760,7 @@ fn lock_conflicting_project_basic1() -> Result<()> {
     Resolved 3 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
-    hint: To update the lockfile, run `uv lock`.
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     Ok(())
@@ -11637,7 +12279,7 @@ fn lock_invalid_hash() -> Result<()> {
     Resolved 4 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
-    hint: To update the lockfile, run `uv lock`.
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     // Install from the lockfile.
@@ -12497,7 +13139,7 @@ fn lock_prerelease_package_configuration() -> Result<()> {
     Resolved 1 package in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
-    hint: To update the lockfile, run `uv lock`.
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     Ok(())
@@ -16994,7 +17636,7 @@ fn lock_sources_url_offline_validates_transitive_source_tree() -> Result<()> {
     Resolved 3 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--check` was provided.
 
-    hint: To update the lockfile, run `uv lock`.
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     Ok(())
@@ -18502,7 +19144,7 @@ fn check_outdated_lock() -> Result<()> {
     Resolved 2 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--check` was provided.
 
-    hint: To update the lockfile, run `uv lock`.
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     // Providing both `--check` and `--locked` is okay
@@ -18513,7 +19155,7 @@ fn check_outdated_lock() -> Result<()> {
     Resolved 2 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--check` was provided.
 
-    hint: To update the lockfile, run `uv lock`.
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     Ok(())
@@ -18558,7 +19200,7 @@ fn check_unformatted_lock() -> Result<()> {
     ----- stderr -----
     error: The lockfile at `uv.lock` has non-canonical formatting at line 13, but `--check` was provided.
 
-    hint: To regenerate the lockfile, run `uv lock --refresh --preview-features lockfile-format-check`.
+    hint: To regenerate the lockfile, run `uv lock --refresh --preview-features lockfile-format-check --no-locked --no-frozen --no-offline` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     uv_snapshot!(context.filters(), context.sync().arg("--locked").arg("--offline").arg("--preview-features").arg("lockfile-format-check"), @"
@@ -18566,7 +19208,7 @@ fn check_unformatted_lock() -> Result<()> {
     ----- stderr -----
     error: The lockfile at `uv.lock` has non-canonical formatting at line 13, but `--locked` was provided.
 
-    hint: To regenerate the lockfile, run `uv lock --refresh --preview-features lockfile-format-check`.
+    hint: To regenerate the lockfile, run `uv lock --refresh --preview-features lockfile-format-check --no-locked --no-frozen --no-offline` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     assert_eq!(context.read("uv.lock"), unformatted);
@@ -18617,7 +19259,7 @@ fn lock_reuses_newer_exclude_newer_timestamp() -> Result<()> {
     Resolved 1 package in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--check` was provided.
 
-    hint: To update the lockfile, run `uv lock`.
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     uv_snapshot!(context.filters(), context.lock()
@@ -18725,7 +19367,7 @@ fn lock_check_allows_relaxed_exclude_newer_package() -> Result<()> {
     Resolved 1 package in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--check` was provided.
 
-    hint: To update the lockfile, run `uv lock`.
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     Ok(())
@@ -19228,7 +19870,7 @@ fn lock_remove_member() -> Result<()> {
     Resolved 5 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
-    hint: To update the lockfile, run `uv lock`.
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     // Re-run without `--locked`.
@@ -19326,7 +19968,7 @@ fn lock_remove_member() -> Result<()> {
     Resolved 1 package in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
-    hint: To update the lockfile, run `uv lock`.
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     // Re-run without `--locked`.
@@ -19462,7 +20104,7 @@ fn lock_add_member_with_build_system() -> Result<()> {
     Resolved 5 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
-    hint: To update the lockfile, run `uv lock`.
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     // Re-run with `--offline`. This should also fail, during the resolve phase.
@@ -19654,7 +20296,7 @@ fn lock_add_member_without_build_system() -> Result<()> {
     Resolved 5 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
-    hint: To update the lockfile, run `uv lock`.
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     // Re-run with `--offline`. This should also fail, during the resolve phase.
@@ -19779,7 +20421,7 @@ fn lock_add_member_without_build_system() -> Result<()> {
     Resolved 5 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
-    hint: To update the lockfile, run `uv lock`.
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     // Re-run without `--locked`.
@@ -19993,7 +20635,7 @@ fn lock_redundant_add_member() -> Result<()> {
     Resolved 4 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
-    hint: To update the lockfile, run `uv lock`.
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     // Re-run without `--locked`.
@@ -20182,7 +20824,7 @@ fn lock_new_constraints() -> Result<()> {
     Resolved 4 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
-    hint: To update the lockfile, run `uv lock`.
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     // Re-run without `--locked`.
@@ -20383,7 +21025,7 @@ fn lock_remove_member_non_project() -> Result<()> {
     Resolved in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
-    hint: To update the lockfile, run `uv lock`.
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     // Re-run without `--locked`.
@@ -20505,7 +21147,7 @@ fn lock_rename_project() -> Result<()> {
     Resolved 2 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
-    hint: To update the lockfile, run `uv lock`.
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     // Re-run without `--locked`.
@@ -20855,7 +21497,7 @@ fn lock_removed_empty_extra() -> Result<()> {
     Resolved 1 package in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
-    hint: To update the lockfile, run `uv lock`.
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     uv_snapshot!(context.filters(), context.lock()
@@ -20868,7 +21510,7 @@ fn lock_removed_empty_extra() -> Result<()> {
     Resolved 1 package in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
-    hint: To update the lockfile, run `uv lock`.
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     Ok(())
@@ -20943,7 +21585,7 @@ fn lock_regenerates_dependencies_without_metadata() -> Result<()> {
     Resolved 10 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
-    hint: To update the lockfile, run `uv lock`.
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     lock["revision"] = toml_edit::value(4);
@@ -20954,7 +21596,7 @@ fn lock_regenerates_dependencies_without_metadata() -> Result<()> {
     Resolved 10 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
-    hint: To update the lockfile, run `uv lock`.
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     uv_snapshot!(context.filters(), context.lock()
@@ -20995,7 +21637,7 @@ fn lock_regenerates_dependencies_without_metadata() -> Result<()> {
     Resolved 10 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
-    hint: To update the lockfile, run `uv lock`.
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     // Incompatible requirements cannot generate the existing locked edge.
@@ -21025,7 +21667,7 @@ fn lock_regenerates_dependencies_without_metadata() -> Result<()> {
     Resolved 10 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
-    hint: To update the lockfile, run `uv lock`.
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     // Development groups use the same canonical dependency builder.
@@ -21039,7 +21681,7 @@ fn lock_regenerates_dependencies_without_metadata() -> Result<()> {
     Resolved 7 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
-    hint: To update the lockfile, run `uv lock`.
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     Ok(())
@@ -21236,7 +21878,7 @@ fn lock_regenerates_activated_empty_extra() -> Result<()> {
     Resolved 4 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
-    hint: To update the lockfile, run `uv lock`.
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     Ok(())
@@ -22393,7 +23035,7 @@ fn lock_regenerates_marker_specific_requested_extras() -> Result<()> {
     Resolved 3 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
-    hint: To update the lockfile, run `uv lock`.
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     Ok(())
@@ -23304,7 +23946,7 @@ fn lock_constrained_environment() -> Result<()> {
     Resolved 8 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
-    hint: To update the lockfile, run `uv lock`.
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     uv_snapshot!(context.filters(), context.lock(), @"
@@ -24937,7 +25579,7 @@ fn lock_add_empty_dependency_group() -> Result<()> {
     Resolved 2 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
-    hint: To update the lockfile, run `uv lock`.
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     // Re-lock the project.
@@ -25012,7 +25654,7 @@ fn lock_add_empty_dependency_group() -> Result<()> {
     Resolved 2 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
-    hint: To update the lockfile, run `uv lock`.
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     // Re-lock the project.
@@ -33629,7 +34271,7 @@ fn lock_dynamic_to_static() -> Result<()> {
     Resolved 1 package in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
-    hint: To update the lockfile, run `uv lock`.
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     uv_snapshot!(context.filters(), context.lock(), @"
@@ -33754,7 +34396,7 @@ fn lock_static_to_dynamic() -> Result<()> {
     Resolved 1 package in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
-    hint: To update the lockfile, run `uv lock`.
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     uv_snapshot!(context.filters(), context.lock(), @"
@@ -33850,7 +34492,7 @@ fn lock_bump_static_version() -> Result<()> {
     Resolved 1 package in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
-    hint: To update the lockfile, run `uv lock`.
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     uv_snapshot!(context.filters(), context.lock(), @"
@@ -35565,9 +36207,9 @@ fn lock_script() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     Resolved 4 packages in [TIME]
-    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+    error: The lockfile at `script.py.lock` needs to be updated, but `--locked` was provided.
 
-    hint: To update the lockfile, run `uv lock`.
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/` and `--script` set to `[TEMP_DIR]/script.py`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     Ok(())
@@ -38119,7 +38761,7 @@ fn lock_empty_extra() -> Result<()> {
     Resolved 3 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
-    hint: To update the lockfile, run `uv lock`.
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     uv_snapshot!(context.filters(), context.lock(), @"
@@ -38151,7 +38793,7 @@ fn lock_empty_extra() -> Result<()> {
     Resolved 3 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
-    hint: To update the lockfile, run `uv lock`.
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     uv_snapshot!(context.filters(), context.lock(), @"
@@ -38966,7 +39608,7 @@ async fn lock_trailing_slash_index_url_in_lockfile_not_pyproject() -> Result<()>
     Resolved 4 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
-    hint: To update the lockfile, run `uv lock`.
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     Ok(())
@@ -39059,7 +39701,7 @@ async fn lock_trailing_slash_index_url_in_pyproject_and_not_lockfile() -> Result
     Resolved 4 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
-    hint: To update the lockfile, run `uv lock`.
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     Ok(())
@@ -39244,7 +39886,7 @@ fn lock_trailing_slash_find_links() -> Result<()> {
     Resolved 2 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
-    hint: To update the lockfile, run `uv lock`.
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     uv_snapshot!(context.filters(), context.lock(), @"
@@ -39725,7 +40367,7 @@ fn lock_exclude_newer_package_absent() -> Result<()> {
     Resolved 1 package in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
-    hint: To update the lockfile, run `uv lock`.
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     Ok(())
@@ -41191,7 +41833,7 @@ fn lock_refresh_deindents_lockfile() -> Result<()> {
     ----- stderr -----
     error: The lockfile at `uv.lock` has non-canonical formatting at line 13, but `--check` was provided.
 
-    hint: To regenerate the lockfile, run `uv lock --refresh --preview-features lockfile-format-check`.
+    hint: To regenerate the lockfile, run `uv lock --refresh --preview-features lockfile-format-check --no-locked --no-frozen --no-offline` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     uv_snapshot!(context.filters(), context.lock().arg("--refresh").arg("--dry-run"), @"
@@ -41805,7 +42447,7 @@ fn lock_no_locked() -> Result<()> {
     Resolved 1 package in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--check` was provided.
 
-    hint: To update the lockfile, run `uv lock`.
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
     assert_eq!(context.read("uv.lock"), lock);
 
@@ -41905,7 +42547,7 @@ fn lock_check_overrides_frozen_environment() -> Result<()> {
     Resolved 1 package in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--check` was provided.
 
-    hint: To update the lockfile, run `uv lock`.
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
     assert_eq!(context.read("uv.lock"), lock);
 
@@ -42004,7 +42646,7 @@ fn lock_frozen_errors_report_source() -> Result<()> {
     ----- stderr -----
     error: The lockfile at `uv.lock` needs to be updated, but `--frozen` was provided: Missing workspace member `renamed`.
 
-    hint: To update the lockfile, run `uv lock`.
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     uv_snapshot!(context.filters(), context.lock().arg("--check-exists"), @"
@@ -42012,7 +42654,7 @@ fn lock_frozen_errors_report_source() -> Result<()> {
     ----- stderr -----
     error: The lockfile at `uv.lock` needs to be updated, but `--check-exists` was provided: Missing workspace member `renamed`.
 
-    hint: To update the lockfile, run `uv lock`.
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     uv_snapshot!(context.filters(), context.lock().env(EnvVars::UV_FROZEN, "1"), @"
@@ -42020,7 +42662,7 @@ fn lock_frozen_errors_report_source() -> Result<()> {
     ----- stderr -----
     error: The lockfile at `uv.lock` needs to be updated, but `UV_FROZEN=1` was provided: Missing workspace member `renamed`.
 
-    hint: To update the lockfile, run `uv lock`.
+    hint: To update the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
     assert_eq!(context.read("uv.lock"), lock);
 

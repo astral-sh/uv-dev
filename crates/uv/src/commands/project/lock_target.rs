@@ -12,6 +12,7 @@ use uv_cache::Cache;
 use uv_configuration::{DependencyGroupsWithDefaults, ExcludeDependency, NoSources, Upgrade};
 use uv_distribution::{IndexDeclarationTarget, LoweredRequirement};
 use uv_distribution_types::{Index, IndexLocations, Requirement, RequiresPython};
+use uv_fs::Simplified;
 use uv_normalize::{GroupName, PackageName};
 use uv_pep508::RequirementOrigin;
 use uv_pypi_types::{Conflicts, SupportedEnvironments, VerbatimParsedUrl};
@@ -32,6 +33,53 @@ pub(crate) enum LockTarget<'lock> {
     Script(&'lock Pep723Script),
 }
 
+/// The operation needed to recover from a lockfile check failure.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum LockfileRecoveryAction {
+    /// Write the selected lockfile. Any authored edits are already present on disk.
+    UpdateLockfile,
+    /// Repeat `uv add`, which rolls back its edits and owns transient external constraints.
+    RetryAdd,
+}
+
+/// Owned inputs for updating the intended lockfile after a failed operation.
+///
+/// [`ProjectError`] boxes this context to keep its platform-native paths out of every error value.
+#[derive(Debug)]
+pub(crate) struct LockfileRecovery {
+    lock_path: PathBuf,
+    // Discovery can start at a workspace member or a script's directory. Selecting the workspace
+    // root instead would change Python pin and filesystem configuration discovery.
+    project_dir: PathBuf,
+    script: Option<PathBuf>,
+    action: LockfileRecoveryAction,
+}
+
+impl LockfileRecovery {
+    /// Return the path to the target's lockfile.
+    pub(crate) fn lock_path(&self) -> &Path {
+        &self.lock_path
+    }
+
+    /// Return the operation needed to retain the original command's inputs.
+    pub(crate) fn action(&self) -> LockfileRecoveryAction {
+        self.action
+    }
+
+    /// Describe the CLI arguments that retain the original discovery and lock targets.
+    pub(crate) fn selectors(&self) -> String {
+        let project = self.project_dir.simplified_display();
+        if let Some(script) = &self.script {
+            format!(
+                "`--project` set to `{project}` and `--script` set to `{}`",
+                script.simplified_display(),
+            )
+        } else {
+            format!("`--project` set to `{project}`")
+        }
+    }
+}
+
 impl<'lock> From<&'lock Workspace> for LockTarget<'lock> {
     fn from(workspace: &'lock Workspace) -> Self {
         Self::Workspace(workspace)
@@ -45,6 +93,23 @@ impl<'lock> From<&'lock Pep723Script> for LockTarget<'lock> {
 }
 
 impl<'lock> LockTarget<'lock> {
+    /// Retain the lock target for recovery instructions after its inputs are dropped.
+    pub(crate) fn recovery_target(
+        self,
+        project_dir: &Path,
+        action: LockfileRecoveryAction,
+    ) -> LockfileRecovery {
+        LockfileRecovery {
+            lock_path: self.lock_path(),
+            project_dir: project_dir.to_path_buf(),
+            script: match self {
+                Self::Workspace(_) => None,
+                Self::Script(script) => Some(script.path.clone()),
+            },
+            action,
+        }
+    }
+
     /// Return the set of requirements that are attached to the target directly, as opposed to being
     /// attached to any members within the target.
     pub(crate) fn requirements(self) -> Vec<uv_pep508::Requirement<VerbatimParsedUrl>> {
@@ -326,14 +391,7 @@ impl<'lock> LockTarget<'lock> {
             // `uv.lock`
             Self::Workspace(workspace) => workspace.install_path().join("uv.lock"),
             // `script.py.lock`
-            Self::Script(script) => {
-                let mut file_name = match script.path.file_name() {
-                    Some(f) => f.to_os_string(),
-                    None => panic!("Script path has no file name"),
-                };
-                file_name.push(".lock");
-                script.path.with_file_name(file_name)
-            }
+            Self::Script(script) => script_lock_path(&script.path),
         }
     }
 
@@ -478,6 +536,13 @@ impl<'lock> LockTarget<'lock> {
             }
         }
     }
+}
+
+/// Return the lockfile path for a PEP 723 script.
+fn script_lock_path(script: &Path) -> PathBuf {
+    let mut path = script.as_os_str().to_os_string();
+    path.push(".lock");
+    PathBuf::from(path)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

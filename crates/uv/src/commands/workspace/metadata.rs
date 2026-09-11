@@ -145,6 +145,7 @@ pub(crate) async fn metadata(
     // Perform the lock operation.
     match Box::pin(
         LockOperation::new(
+            project_dir,
             mode,
             &settings,
             &client_builder,
