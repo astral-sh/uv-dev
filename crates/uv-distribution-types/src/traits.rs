@@ -7,7 +7,7 @@ use crate::error::Error;
 use crate::{
     BuiltDist, CachedDirectUrlDist, CachedDist, CachedRegistryDist, DirectUrlBuiltDist,
     DirectUrlSourceDist, DirectorySourceDist, Dist, DistributionId, GitDirectorySourceDist,
-    GitPathBuiltDist, GitPathSourceDist, InstalledDirectUrlDist, InstalledDist,
+    GitPathBuiltDist, GitPathSourceDist, IndexUrl, InstalledDirectUrlDist, InstalledDist,
     InstalledEggInfoDirectory, InstalledEggInfoFile, InstalledLegacyEditable,
     InstalledRegistryDist, InstalledVersion, LocalDist, PackageId, PathBuiltDist, PathSourceDist,
     RegistryBuiltWheel, RegistrySourceDist, ResourceId, SourceDist, VersionId, VersionOrUrlRef,
@@ -37,6 +37,11 @@ pub trait DistributionMetadata: Name {
             }
             VersionOrUrlRef::Url(url) => VersionId::from_url(url),
         }
+    }
+
+    /// Return the registry index from which the distribution was resolved, if applicable.
+    fn index_url(&self) -> Option<&IndexUrl> {
+        None
     }
 
     /// Returns a unique identifier for a package. A package can either be identified by a name

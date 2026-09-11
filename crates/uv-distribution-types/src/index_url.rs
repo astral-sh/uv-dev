@@ -67,6 +67,11 @@ impl IndexUrl {
         url.path_segments_mut().ok()?.pop_if_empty().pop();
         Some(url)
     }
+
+    /// Returns `true` if this and another URL refer to the same index.
+    pub fn is_same_index(&self, other: &Self) -> bool {
+        is_same_index(self, other)
+    }
 }
 
 #[cfg(feature = "schemars")]

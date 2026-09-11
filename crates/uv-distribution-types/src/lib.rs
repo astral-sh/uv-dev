@@ -1054,11 +1054,19 @@ impl DistributionMetadata for RegistryBuiltWheel {
     fn version_or_url(&self) -> VersionOrUrlRef<'_> {
         VersionOrUrlRef::Version(&self.filename.version)
     }
+
+    fn index_url(&self) -> Option<&IndexUrl> {
+        Some(&self.index)
+    }
 }
 
 impl DistributionMetadata for RegistryBuiltDist {
     fn version_or_url(&self) -> VersionOrUrlRef<'_> {
         self.best_wheel().version_or_url()
+    }
+
+    fn index_url(&self) -> Option<&IndexUrl> {
+        self.best_wheel().index_url()
     }
 }
 
@@ -1091,6 +1099,10 @@ impl DistributionMetadata for GitPathBuiltDist {
 impl DistributionMetadata for RegistrySourceDist {
     fn version_or_url(&self) -> VersionOrUrlRef<'_> {
         VersionOrUrlRef::Version(&self.version)
+    }
+
+    fn index_url(&self) -> Option<&IndexUrl> {
+        Some(&self.index)
     }
 }
 
@@ -1169,6 +1181,17 @@ impl DistributionMetadata for SourceDist {
             Self::Directory(dist) => dist.version_id(),
         }
     }
+
+    fn index_url(&self) -> Option<&IndexUrl> {
+        match self {
+            Self::Registry(dist) => dist.index_url(),
+            Self::DirectUrl(dist) => dist.index_url(),
+            Self::GitPath(dist) => dist.index_url(),
+            Self::GitDirectory(dist) => dist.index_url(),
+            Self::Path(dist) => dist.index_url(),
+            Self::Directory(dist) => dist.index_url(),
+        }
+    }
 }
 
 impl DistributionMetadata for BuiltDist {
@@ -1189,6 +1212,15 @@ impl DistributionMetadata for BuiltDist {
             Self::GitPath(dist) => dist.version_id(),
         }
     }
+
+    fn index_url(&self) -> Option<&IndexUrl> {
+        match self {
+            Self::Registry(dist) => dist.index_url(),
+            Self::DirectUrl(dist) => dist.index_url(),
+            Self::Path(dist) => dist.index_url(),
+            Self::GitPath(dist) => dist.index_url(),
+        }
+    }
 }
 
 impl DistributionMetadata for Dist {
@@ -1203,6 +1235,13 @@ impl DistributionMetadata for Dist {
         match self {
             Self::Built(dist) => dist.version_id(),
             Self::Source(dist) => dist.version_id(),
+        }
+    }
+
+    fn index_url(&self) -> Option<&IndexUrl> {
+        match self {
+            Self::Built(dist) => dist.index_url(),
+            Self::Source(dist) => dist.index_url(),
         }
     }
 }
