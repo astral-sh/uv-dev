@@ -1118,6 +1118,188 @@ fn run_pep723_script_build_constraints() -> Result<()> {
     Ok(())
 }
 
+/// Missing local script locks retain their discovery target without changing CLI or env behavior.
+#[test]
+fn run_missing_script_lockfile_recovery() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let directory = context.temp_dir.child("script's project");
+    directory
+        .child("uv.toml")
+        .write_str("resolution = \"lowest\"\n")?;
+    let script = directory.child("script.py");
+    let script_lock = directory.child("script.py.lock");
+    script.write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = []
+        # ///
+
+        print("ran")
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--locked")
+        .arg("--offline")
+        .arg(script.path()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Unable to find lockfile for Python script, but `--locked` was provided.
+
+    hint: To create the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/script's project` and `--script` set to `[TEMP_DIR]/script's project/script.py`, using the original command's working directory and applicable index, constraint, and other resolution options.
+    ");
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--frozen")
+        .arg("--offline")
+        .arg(script.path()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Unable to find lockfile for Python script, but `--frozen` was provided.
+
+    hint: To create the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/script's project` and `--script` set to `[TEMP_DIR]/script's project/script.py`, using the original command's working directory and applicable index, constraint, and other resolution options.
+    ");
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--offline")
+        .env(EnvVars::UV_LOCKED, "1")
+        .arg(script.path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    ran
+
+    ----- stderr -----
+    warning: No lockfile found for Python script (ignoring `UV_LOCKED=1`). To create the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/script's project` and `--script` set to `[TEMP_DIR]/script's project/script.py`, using the original command's working directory and applicable index, constraint, and other resolution options.
+    ");
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--offline")
+        .env(EnvVars::UV_FROZEN, "1")
+        .arg(script.path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    ran
+
+    ----- stderr -----
+    warning: No lockfile found for Python script (ignoring `--frozen`). To create the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/script's project` and `--script` set to `[TEMP_DIR]/script's project/script.py`, using the original command's working directory and applicable index, constraint, and other resolution options.
+    ");
+    assert!(!script_lock.path().exists());
+
+    context
+        .lock()
+        .arg("--project")
+        .arg(directory.path())
+        .arg("--script")
+        .arg(script.path())
+        .arg("--no-locked")
+        .arg("--no-frozen")
+        .arg("--offline")
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--locked")
+        .arg("--offline")
+        .arg(script.path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    ran
+
+    ----- stderr -----
+    Resolved in [TIME]
+    Checked in [TIME]
+    ");
+
+    Ok(())
+}
+
+/// Stdin and remote scripts must be saved before they can use a lockfile.
+#[tokio::test]
+async fn run_missing_script_lockfile_transient_recovery() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let directory = context.temp_dir.child("configuration");
+    directory
+        .child("uv.toml")
+        .write_str("resolution = \"lowest\"\n")?;
+    let script_contents = indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = []
+        # ///
+
+        print("ran")
+    "#};
+    let input = context.temp_dir.child("input.py");
+    input.write_str(script_contents)?;
+
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--project").arg(directory.path())
+        .arg("--locked")
+        .arg("--offline")
+        .stdin(std::fs::File::open(&input)?)
+        .arg("-"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Unable to find lockfile for Python script, but `--locked` was provided.
+
+    hint: To use a lockfile, save the Python script to a local file, then run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/configuration` and `--script` set to the saved file, using the original command's working directory and applicable index, constraint, and other resolution options. Then repeat the original `uv run` command from the same working directory, replacing the script input with the saved file, setting `--project` to `[TEMP_DIR]/configuration`, and keeping all other options.
+    ");
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/script.py"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(script_contents))
+        .mount(&server)
+        .await;
+    let url = format!("{}/script.py", server.uri());
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--project").arg(directory.path())
+        .arg("--frozen")
+        .arg(&url), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Unable to find lockfile for Python script, but `--frozen` was provided.
+
+    hint: To use a lockfile, save the Python script to a local file, then run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/configuration` and `--script` set to the saved file, using the original command's working directory and applicable index, constraint, and other resolution options. Then repeat the original `uv run` command from the same working directory, replacing the script input with the saved file, setting `--project` to `[TEMP_DIR]/configuration`, and keeping all other options.
+    ");
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--project").arg(directory.path())
+        .env(EnvVars::UV_FROZEN, "1")
+        .arg(&url), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    ran
+
+    ----- stderr -----
+    warning: No lockfile found for Python script (ignoring `--frozen`). To use a lockfile, save the Python script to a local file, then run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/configuration` and `--script` set to the saved file, using the original command's working directory and applicable index, constraint, and other resolution options. Then repeat the original `uv run` command from the same working directory, replacing the script input with the saved file, setting `--project` to `[TEMP_DIR]/configuration`, and keeping all other options.
+    ");
+
+    // Saving elsewhere must not change the discovery directory when locking or running the file.
+    let saved = context.temp_dir.child("elsewhere/saved.py");
+    saved.write_str(script_contents)?;
+    context
+        .lock()
+        .arg("--project")
+        .arg(directory.path())
+        .arg("--script")
+        .arg(saved.path())
+        .arg("--no-locked")
+        .arg("--no-frozen")
+        .arg("--offline")
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--project").arg(directory.path())
+        .arg("--locked")
+        .arg("--offline")
+        .arg(saved.path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    ran
+
+    ----- stderr -----
+    Resolved in [TIME]
+    Checked in [TIME]
+    ");
+
+    Ok(())
+}
+
 /// Run a PEP 723-compatible script with a lockfile.
 #[test]
 fn run_pep723_script_lock() -> Result<()> {
