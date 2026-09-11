@@ -54,10 +54,20 @@ impl SourceFile {
     /// This uses the renderer's LF-delimited line boundaries, including any CR bytes. Producers
     /// can inspect the same text before deciding whether a source excerpt is safe to show. An
     /// invalid UTF-8 range returns `None`.
-    pub fn lines_for_span(&self, span: Range<usize>) -> Option<&str> {
+    #[cfg(test)]
+    fn lines_for_span(&self, span: Range<usize>) -> Option<&str> {
+        self.text().get(self.line_range_for_span(span)?)
+    }
+
+    /// The byte range of the complete lines returned by [`Self::lines_for_span`].
+    ///
+    /// Producers can compare this window with other retained semantic source spans before
+    /// deciding whether an excerpt would expose unrelated fields.
+    #[cfg(test)]
+    fn line_range_for_span(&self, span: Range<usize>) -> Option<Range<usize>> {
         let lines = SourceLines::new(self.text());
         let (first, last) = lines.annotation_lines(&span)?;
-        self.text().get(lines.range(first, last)?)
+        lines.range(first, last)
     }
 }
 
@@ -603,6 +613,28 @@ mod tests {
             None,
         ]
         "#
+        );
+        assert_debug_snapshot!(
+            [
+                source.line_range_for_span(crlf + 1..crlf + 1),
+                source.line_range_for_span(bare_cr..bare_cr),
+                source.line_range_for_span(end..end),
+                source.line_range_for_span(1..2),
+            ],
+            @"
+        [
+            Some(
+                0..11,
+            ),
+            Some(
+                11..19,
+            ),
+            Some(
+                19..19,
+            ),
+            None,
+        ]
+        "
         );
     }
 
