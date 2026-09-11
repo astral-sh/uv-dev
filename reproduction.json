@@ -1,0 +1,4 @@
+{
+  "reproduction": "needs_more_information",
+  "reason": "The Windows-only failure could not be meaningfully tested on the Linux runner. Isolated uv 0.12.10/0.12.11 tests with Python 3.10.21, public PyPI, fresh caches, default/copy modes, and 308–311-character paths all succeeded, but Unix does not exercise LongPathsEnabled. A native Windows rerun needs the loaded uv.toml/pyproject.toml settings, exact project path, cache volume, and explicit hardlink/copy modes. astral-sh/uv#21468 changed the matching persistence path, but existing tests lack Windows long-path coverage."
+}

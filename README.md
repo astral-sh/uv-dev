@@ -6,77 +6,97 @@ Classification: bug
 
 ## Summary
 
-The report provides a controlled Windows 11 comparison for
+The report describes a controlled Windows 11 comparison for
 `uv pip install jupyterlab-widgets==3.0.16`: with `LongPathsEnabled=0`, uv 0.12.10
 succeeds and uv 0.12.11 repeatedly fails while persisting a temporary file to a deeply nested
-path under `site-packages`, ending with OS error 3. Both versions succeed when
+path under `site-packages`, ending with OS error 3. Both versions reportedly succeed when
 `LongPathsEnabled=1`.
 
-The closest repository evidence is astral-sh/uv#21468. It landed between the two reported
-releases and changed merged file copies from an intermediate temporary directory followed by
-`fs_err::rename` to `copy_atomic_sync`, which creates an adjacent `NamedTempFile` and persists it
-to the destination. That is the operation named in the 0.12.11 error. This identifies the leading
-change to test, but repository evidence does not yet confirm the Windows root cause.
+The behavior could not be meaningfully exercised on the available Linux runner because the
+Windows registry setting and Win32 path APIs are essential to the report. A Linux control with
+fresh environments and paths longer than the reported path succeeded in both versions, but that
+result neither confirms nor contradicts the Windows behavior.
 
-An older issue, astral-sh/uv#16877, involved the same package and its long nested paths on Windows,
-but only in symlink mode and with different OS errors. Its fix, astral-sh/uv#16894, made uv
-long-path-aware while explicitly retaining the Windows requirement that `LongPathsEnabled=1`.
-Those items are useful history, not a canonical duplicate for this copy/persist regression.
-
-## Draft response
-
-Thanks for the clear version matrix and reproduction. This is a regression rather than a duplicate
-of astral-sh/uv#16877: that report concerned symlink mode and different Windows errors, while this
-failure occurs while persisting a copied wheel file with `LongPathsEnabled=0`.
-
-astral-sh/uv#21468 landed in 0.12.11 and changed merged wheel copies to use an adjacent temporary
-file that is persisted to the destination, matching the operation in this error. That makes it the
-leading change to investigate, though the root cause still needs to be confirmed on Windows. The
-next step is to run this MRE against that pull request's parent and merge commits with
-`LongPathsEnabled=0` and add Windows coverage once confirmed. In the meantime, the report
-establishes that 0.12.10 or `LongPathsEnabled=1` avoids the failure.
+The report shows that uv loaded both a workspace configuration and a user `uv.toml`, but does not
+include their contents. This matters because astral-sh/uv#21468 changed the copy path used when
+merging a wheel into `site-packages`, while Windows normally defaults to hard links. The active
+link mode, cache location and volume, and whether the displayed project path is exact are needed
+to reconstruct the failing code path reliably.
 
 ## Classification
 
-This is a **bug**. Under the same command and Windows registry setting, installation succeeds in uv
-0.12.10 and fails in uv 0.12.11. The failure is incorrect installation behavior, and no open issue
-or pull request already tracks this specific regression. It should not be classified as a duplicate
-of the closed astral-sh/uv#16877 because that issue exercised symlink creation rather than copied
-wheel-file persistence and produced OS errors 1314/87 rather than OS error 3.
+This remains classified as a **bug** because the reported Windows version matrix is consistent
+with an installation regression, and no existing issue or pull request tracks this exact failure.
+The classification is provisional until the native-Windows reproduction is independently
+observed. It is not a duplicate of astral-sh/uv#16877, which concerned symlink mode and different
+Windows errors.
+
+## Reproduction
+
+Outcome: **needs more information**.
+
+The available host was Linux x86_64, with uv 0.12.13 installed on `PATH`; it cannot toggle or
+observe Windows `LongPathsEnabled`. To provide a controlled comparison, uv 0.12.10 and 0.12.11
+were installed as isolated tools under `/tmp`, configuration discovery was disabled, and each was
+run against public PyPI with a fresh managed Python 3.10.21 environment. Both default and explicit
+copy modes were tested. Each `(version, mode)` combination used a separate fresh `$case` directory;
+the command template was:
+
+```console
+export UV_NO_CONFIG=1
+export UV_CACHE_DIR="$case/cache"
+export UV_TOOL_DIR="$case/tools"
+export UV_TOOL_BIN_DIR="$case/tool-bin"
+export UV_PYTHON_INSTALL_DIR="$case/python"
+
+cd "$case/project-with-a-100-character-path-component"
+uvx --from "uv==$version" uv venv --python 3.10
+uvx --from "uv==$version" uv pip install $mode_args jupyterlab-widgets==3.0.16
+```
+
+The combinations were `version=0.12.10` and `version=0.12.11`, each with `mode_args` empty and
+with `mode_args="--link-mode copy"`.
+
+All four fresh-environment cases succeeded. The reported JavaScript file existed after each
+install at an absolute path 308–311 characters long. This is only a Unix control: Unix does not
+apply the Win32 `MAX_PATH` behavior, so it is not evidence that the report is incorrect.
+
+The release notes and astral-sh/uv#21468 were inspected. That pull request merged between 0.12.10
+and 0.12.11 and replaced a per-file temporary directory plus `fs_err::rename` with
+`copy_atomic_sync`, which creates an adjacent `NamedTempFile` and persists it to the destination.
+The latter operation emits the warning and final error in the report. This is an evidence-backed
+change to test, not a confirmed root cause. astral-sh/uv#21478 also changed adjacent temporary
+paths for overwriting hard links, symlinks, and reflinks in 0.12.11, but the reported
+`Failed to persist temporary file` wording matches the copied-file path.
+
+Existing tests do not cover the reported matrix. In `crates/uv-fs/src/link.rs`,
+`test_merge_overwrites_existing_files` exercises a short-path copy merge, and
+`test_copy_merge_replaces_symlink_and_preserves_permissions` is Unix-only. The
+`crates/uv/tests/it/ecosystem.rs::jupyterlab` test only locks the ecosystem fixture; it does not
+install `jupyterlab-widgets` or exercise Windows long paths. No relevant integration test was
+found under `crates/uv-client/tests/it/`.
+
+An independent reproduction needs a native Windows 11 x86_64 host and the following additions to
+the reported matrix:
+
+- Confirm whether `C:\projects\foo` is the exact project root; the displayed failing target is
+  243 characters, so any anonymized prefix affects the path boundary.
+- Provide the relevant redacted contents of the loaded workspace `pyproject.toml`, user `uv.toml`,
+  and `UV_*` environment settings, especially `link-mode`, `cache-dir`, and index configuration.
+- State whether the cache and virtual environment are on the same Windows volume.
+- Repeat 0.12.10 and 0.12.11 with `LongPathsEnabled=0`, a fresh cache and virtual environment,
+  `--no-config`, public PyPI, and explicit `--link-mode hardlink` and `--link-mode copy`. This will
+  distinguish default hard-link behavior from the merged-copy path changed by astral-sh/uv#21468.
 
 ## Related
 
-- astral-sh/uv#21468 — **Merged pull request, “Avoid per-file temporary directories for merged
-  copies.”** This is the strongest release-specific lead. It landed between 0.12.10 and 0.12.11 and
-  changed merged copies from copying into a temporary directory followed by `fs_err::rename` to
-  `copy_atomic_sync`, which creates an adjacent `NamedTempFile` and persists it to the destination.
-  That is the exact operation and error shown by astral-sh/uv#21611, although Windows causality has
-  not yet been confirmed.
-- astral-sh/uv#16877 — **Closed issue, “Failed to install `jupyterlab-widgets==3.0.16` in Windows via
-  symlink.”** It shares the package, platform, and deeply nested destination path, but differs in the
-  important mechanics: explicit symlink mode, privilege/parameter errors 1314 and 87, and a fix
-  confirmed with long paths enabled. It is adjacent history rather than the same regression.
-- astral-sh/uv#16894 — **Merged pull request, “Add a Windows manifest to uv binaries.”** It fixed
-  astral-sh/uv#16877 by marking uv as long-path-aware and explicitly documented that the Windows
-  `LongPathsEnabled` registry value must also be 1. It does not cover the newly reported behavior
-  with that value set to 0.
-
-## Search and supporting evidence
-
-Searches covered open and closed issues plus open, closed, and merged pull requests. Literal terms
-included `failed to persist temporary file`, `LongPathsEnabled`, `The system cannot find the path
-specified`, `os error 3`, `jupyterlab-widgets`, and the 0.12.10/0.12.11 versions. Conceptual terms
-covered Windows `MAX_PATH` and filename limits, long wheel-install destinations, temporary-file
-persistence, atomic copy/rename behavior, cache paths, and version-specific regressions and fixes.
-
-The 0.12.10…0.12.11 release comparison contains 53 commits and identifies astral-sh/uv#21468 as
-the change directly affecting merged copies. Its diff replaces the older temporary-directory copy
-and rename path with `copy_atomic_sync`; the current Windows implementation of that helper reports
-the same retry and final persistence messages quoted in astral-sh/uv#21611.
-
-Several plausible results were inspected and ruled out as closer matches. astral-sh/uv#8884 is a
-Windows source-build failure caused by uv's long cache/build prefix and was addressed by shortening
-that build layout. astral-sh/uv#2410 concerns overly long cache filenames, while
-astral-sh/uv#4190 collects older cache/source-build failures resolved by enabling long paths. None
-is a final wheel-copy regression introduced in 0.12.11. Reports involving concurrent cache writers
-or antivirus locks use different triggers and OS errors and are not the same problem.
+- astral-sh/uv#21468 — merged pull request, “Avoid per-file temporary directories for merged
+  copies.” It is the strongest release-specific lead and introduced the persistence operation
+  named in the failure, but its Windows causality has not been observed here.
+- astral-sh/uv#21478 — merged pull request, “Create atomic replacement links without temporary
+  directories.” It also landed in 0.12.11 and changed overwrite paths for non-copy link modes, but
+  does not directly match the reported copied-file error wording.
+- astral-sh/uv#16877 — closed issue involving the same package and deeply nested Windows paths,
+  but in symlink mode with OS errors 1314 and 87 rather than copied-file persistence and OS error 3.
+- astral-sh/uv#16894 — merged pull request that added uv's Windows long-path-aware manifest while
+  documenting that Windows must also have `LongPathsEnabled=1`.
