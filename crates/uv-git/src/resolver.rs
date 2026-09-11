@@ -213,6 +213,22 @@ impl GitResolver {
         )
         .await?;
 
+        // A previous lock holder may have resolved this reference while we waited.
+        let url = match url {
+            Cow::Borrowed(url) => {
+                if let Some(precise) = self.get(&reference) {
+                    Cow::Owned(
+                        url.clone()
+                            .with_precise(precise)
+                            .map_err(|error| GitResolverError::Git(error.into()))?,
+                    )
+                } else {
+                    Cow::Borrowed(url)
+                }
+            }
+            Cow::Owned(url) => Cow::Owned(url),
+        };
+
         // Fetch the Git repository.
         let source = if let Some(reporter) = reporter {
             GitSource::new(url.as_ref().clone(), cache, http_settings.offline)
