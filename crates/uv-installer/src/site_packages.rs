@@ -2,6 +2,7 @@ use std::borrow::Cow;
 use std::iter::Flatten;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::sync::atomic::Ordering;
 
 use anyhow::{Context, Result};
 use fs_err as fs;
@@ -9,7 +10,8 @@ use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 
 use uv_configuration::{
-    DependencyMode, ExcludeDependency, Excludes, Override, Overrides, initialize_rayon_once,
+    DependencyMode, ExcludeDependency, Excludes, Override, Overrides, RAYON_PARALLELISM,
+    initialize_rayon_once,
 };
 use uv_distribution_filename::EggInfoFilename;
 use uv_distribution_types::{
@@ -31,8 +33,8 @@ use uv_warnings::warn_user;
 
 use crate::satisfies::RequirementSatisfaction;
 
-/// Small environments avoid starting the installer thread pool just to inspect a few sidecars.
-const MIN_PARALLEL_DIST_INFOS: usize = 64;
+/// Avoid starting the installer thread pool for ordinary-sized environments.
+const MIN_PARALLEL_DIST_INFOS: usize = 1_024;
 /// Bound the number of in-flight reads and results held before reporting the next error.
 const DIST_INFO_READ_BATCH_SIZE: usize = 32;
 
@@ -161,12 +163,13 @@ impl SitePackages {
                 true
             });
 
-            let parallel = site_packages
-                .iter()
-                .filter(|path| path.extension().is_some_and(|ext| ext == "dist-info"))
-                .take(MIN_PARALLEL_DIST_INFOS)
-                .count()
-                == MIN_PARALLEL_DIST_INFOS;
+            let parallel = RAYON_PARALLELISM.load(Ordering::Relaxed) != 1
+                && site_packages
+                    .iter()
+                    .filter(|path| path.extension().is_some_and(|ext| ext == "dist-info"))
+                    .take(MIN_PARALLEL_DIST_INFOS)
+                    .count()
+                    == MIN_PARALLEL_DIST_INFOS;
 
             if parallel {
                 initialize_rayon_once();
