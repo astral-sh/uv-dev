@@ -8,6 +8,7 @@ use uv_auth::CredentialsCache;
 use uv_cache::Cache;
 use uv_configuration::NoSources;
 use uv_distribution_types::{GitDirectorySourceUrl, IndexLocations, Requirement};
+use uv_errors::SourceFile;
 use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep440::{Version, VersionSpecifiers};
 use uv_pypi_types::{HashDigests, ResolutionMetadata};
@@ -23,6 +24,7 @@ pub use crate::metadata::requires_dist::{FlatRequiresDist, RequiresDist};
 mod build_requires;
 mod dependency_groups;
 mod lowering;
+mod requirement_sources;
 mod requires_dist;
 
 #[derive(Debug, Error)]
@@ -125,6 +127,36 @@ impl Metadata {
         workspace_cache: &WorkspaceCache,
         credentials_cache: &CredentialsCache,
     ) -> Result<Self, MetadataError> {
+        Self::from_workspace_with_source(
+            metadata,
+            None,
+            install_path,
+            git_source,
+            locations,
+            sources,
+            editable,
+            cache,
+            workspace_cache,
+            credentials_cache,
+        )
+        .await
+    }
+
+    /// Lower metadata extracted from the retained `pyproject.toml`, when available.
+    ///
+    /// Wheel, `PKG-INFO`, and cached metadata do not establish an authored declaration order.
+    pub(crate) async fn from_workspace_with_source(
+        metadata: ResolutionMetadata,
+        pyproject_source: Option<SourceFile>,
+        install_path: &Path,
+        git_source: Option<&GitWorkspaceMember<'_>>,
+        locations: &IndexLocations,
+        sources: NoSources,
+        editable: bool,
+        cache: &Cache,
+        workspace_cache: &WorkspaceCache,
+        credentials_cache: &CredentialsCache,
+    ) -> Result<Self, MetadataError> {
         // Lower the requirements.
         let requires_dist = uv_pypi_types::RequiresDist {
             name: metadata.name,
@@ -140,6 +172,7 @@ impl Metadata {
             dynamic,
         } = RequiresDist::from_project_maybe_workspace(
             requires_dist,
+            pyproject_source,
             install_path,
             git_source,
             locations,

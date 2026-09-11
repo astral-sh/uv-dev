@@ -10,7 +10,7 @@
 
 use std::borrow::Cow;
 use std::ops::Bound;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -36,6 +36,7 @@ use uv_distribution_types::{
     IndexUrl, PathSourceUrl, RemoteSource, RequirementSource, RequiresPython, SourceDist,
     SourceUrl,
 };
+use uv_errors::SourceFile;
 use uv_fs::{Simplified, rename_with_retry, write_atomic};
 use uv_git::{Fetch, GIT_LFS, GitError, GitHttpSettings, GitResolver};
 use uv_git_types::{GitHubRepository, GitOid, GitUrl};
@@ -792,7 +793,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         // If the metadata is static, return it.
         let dynamic =
             match StaticMetadata::read(source, source_dist_entry.path(), subdirectory).await? {
-                StaticMetadata::Some(metadata) => {
+                StaticMetadata::Some { metadata, .. } => {
                     return Ok(ArchiveMetadata {
                         metadata: Metadata::from_metadata23(metadata),
                         hashes: revision.into_hashes(),
@@ -1191,7 +1192,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
 
         // If the metadata is static, return it.
         let dynamic = match StaticMetadata::read(source, source_entry.path(), None).await? {
-            StaticMetadata::Some(metadata) => {
+            StaticMetadata::Some { metadata, .. } => {
                 return Ok(ArchiveMetadata {
                     metadata: Metadata::from_metadata23(metadata),
                     hashes: revision.into_hashes(),
@@ -1504,26 +1505,31 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .workspace_member_editable(resource.editable);
 
         // If the metadata is static, return it.
-        let dynamic = match StaticMetadata::read(source, resource.install_path, None).await? {
-            StaticMetadata::Some(metadata) => {
-                return Ok(ArchiveMetadata::from(
-                    Metadata::from_workspace(
-                        metadata,
-                        resource.install_path,
-                        None,
-                        self.build_context.locations(),
-                        self.build_context.sources().clone(),
-                        editable,
-                        self.build_context.cache(),
-                        self.build_context.workspace_cache(),
-                        credentials_cache,
-                    )
-                    .await?,
-                ));
-            }
-            StaticMetadata::Dynamic => true,
-            StaticMetadata::None => false,
-        };
+        let dynamic =
+            match StaticMetadata::read_with_pyproject(source, resource.install_path, None).await? {
+                StaticMetadata::Some {
+                    metadata,
+                    pyproject,
+                } => {
+                    return Ok(ArchiveMetadata::from(
+                        Metadata::from_workspace_with_source(
+                            metadata,
+                            pyproject,
+                            resource.install_path,
+                            None,
+                            self.build_context.locations(),
+                            self.build_context.sources().clone(),
+                            editable,
+                            self.build_context.cache(),
+                            self.build_context.workspace_cache(),
+                            credentials_cache,
+                        )
+                        .await?,
+                    ));
+                }
+                StaticMetadata::Dynamic => true,
+                StaticMetadata::None => false,
+            };
 
         let cache_shard = self.build_context.cache().shard(
             CacheBucket::SourceDistributions,
@@ -1762,6 +1768,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 debug!("Found static `requires-dist` for: {}", path.display());
                 let requires_dist = RequiresDist::from_project_maybe_workspace(
                     requires_dist,
+                    None,
                     path,
                     None,
                     self.build_context.locations(),
@@ -2010,7 +2017,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
 
         // If the metadata is static, return it.
         let dynamic = match StaticMetadata::read(source, source_entry.path(), None).await? {
-            StaticMetadata::Some(metadata) => {
+            StaticMetadata::Some { metadata, .. } => {
                 return Ok(ArchiveMetadata {
                     metadata: Metadata::from_metadata23(metadata),
                     hashes: revision.into_hashes(),
@@ -2368,11 +2375,17 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
 
         // If the metadata is static, return it.
         let dynamic =
-            match StaticMetadata::read(source, fetch.path(), resource.subdirectory).await? {
-                StaticMetadata::Some(metadata) => {
+            match StaticMetadata::read_with_pyproject(source, fetch.path(), resource.subdirectory)
+                .await?
+            {
+                StaticMetadata::Some {
+                    metadata,
+                    pyproject,
+                } => {
                     return Ok(ArchiveMetadata::from(
-                        Metadata::from_workspace(
+                        Metadata::from_workspace_with_source(
                             metadata,
+                            pyproject,
                             &path,
                             Some(&git_member),
                             self.build_context.locations(),
@@ -3281,7 +3294,11 @@ pub fn prune(cache: &Cache) -> Result<Removal, Error> {
 #[derive(Debug)]
 enum StaticMetadata {
     /// The metadata was found and successfully read.
-    Some(ResolutionMetadata),
+    Some {
+        metadata: ResolutionMetadata,
+        /// The exact input when the metadata came from an opted-in `pyproject.toml` read.
+        pyproject: Option<SourceFile>,
+    },
     /// The metadata was found, but it was ignored due to a dynamic version.
     Dynamic,
     /// The metadata was not found.
@@ -3295,8 +3312,26 @@ impl StaticMetadata {
         source_root: &Path,
         subdirectory: Option<&Path>,
     ) -> Result<Self, Error> {
+        Self::read_inner(source, source_root, subdirectory, false).await
+    }
+
+    /// Retain the successful PEP 621 input for source-aware requirement lowering.
+    async fn read_with_pyproject(
+        source: &BuildableSource<'_>,
+        source_root: &Path,
+        subdirectory: Option<&Path>,
+    ) -> Result<Self, Error> {
+        Self::read_inner(source, source_root, subdirectory, true).await
+    }
+
+    async fn read_inner(
+        source: &BuildableSource<'_>,
+        source_root: &Path,
+        subdirectory: Option<&Path>,
+        retain_pyproject: bool,
+    ) -> Result<Self, Error> {
         // Attempt to read the `pyproject.toml`.
-        let pyproject_toml = match read_pyproject_toml(source_root, subdirectory).await {
+        let pyproject_toml = match read_pyproject_toml_input(source_root, subdirectory).await {
             Ok(pyproject_toml) => Some(pyproject_toml),
             Err(Error::MissingPyprojectToml) => {
                 debug!("No `pyproject.toml` available for: {source}");
@@ -3307,24 +3342,40 @@ impl StaticMetadata {
 
         // Determine whether the version is static or dynamic.
         let dynamic = pyproject_toml.as_ref().is_some_and(|pyproject_toml| {
-            pyproject_toml.project.as_ref().is_some_and(|project| {
-                project
-                    .dynamic
-                    .as_ref()
-                    .is_some_and(|dynamic| dynamic.iter().any(|field| field == "version"))
-            })
+            pyproject_toml
+                .metadata
+                .project
+                .as_ref()
+                .is_some_and(|project| {
+                    project
+                        .dynamic
+                        .as_ref()
+                        .is_some_and(|dynamic| dynamic.iter().any(|field| field == "version"))
+                })
         });
 
         // Attempt to read static metadata from the `pyproject.toml`.
         if let Some(pyproject_toml) = pyproject_toml {
-            match ResolutionMetadata::parse_pyproject_toml(pyproject_toml, source.version()) {
+            match ResolutionMetadata::parse_pyproject_toml(
+                pyproject_toml.metadata,
+                source.version(),
+            ) {
                 Ok(metadata) => {
                     debug!("Found static `pyproject.toml` for: {source}");
 
                     // Validate the metadata, but ignore it if the metadata doesn't match.
                     match validate_metadata(source, &metadata) {
                         Ok(()) => {
-                            return Ok(Self::Some(metadata));
+                            let pyproject = retain_pyproject.then(|| {
+                                SourceFile::new(
+                                    pyproject_toml.path.portable_display().to_string(),
+                                    pyproject_toml.contents,
+                                )
+                            });
+                            return Ok(Self::Some {
+                                metadata,
+                                pyproject,
+                            });
                         }
                         Err(err) => {
                             debug!("Ignoring `pyproject.toml` for {source}: {err}");
@@ -3366,7 +3417,10 @@ impl StaticMetadata {
                         } else {
                             metadata
                         };
-                        return Ok(Self::Some(metadata));
+                        return Ok(Self::Some {
+                            metadata,
+                            pyproject: None,
+                        });
                     }
                     Err(err) => {
                         debug!("Ignoring `PKG-INFO` for {source}: {err}");
@@ -3613,6 +3667,22 @@ async fn read_pyproject_toml(
     source_tree: &Path,
     subdirectory: Option<&Path>,
 ) -> Result<PyProjectToml, Error> {
+    Ok(read_pyproject_toml_input(source_tree, subdirectory)
+        .await?
+        .metadata)
+}
+
+/// A parsed PEP 621 input before its exact source text is discarded or retained for diagnostics.
+struct PyprojectTomlInput {
+    metadata: PyProjectToml,
+    path: PathBuf,
+    contents: String,
+}
+
+async fn read_pyproject_toml_input(
+    source_tree: &Path,
+    subdirectory: Option<&Path>,
+) -> Result<PyprojectTomlInput, Error> {
     // Read the `pyproject.toml` file.
     let pyproject_toml = match subdirectory {
         Some(subdirectory) => source_tree.join(subdirectory).join("pyproject.toml"),
@@ -3626,9 +3696,13 @@ async fn read_pyproject_toml(
         Err(err) => return Err(Error::CacheRead(err)),
     };
 
-    let pyproject_toml = PyProjectToml::from_toml(&content, pyproject_toml.simplified_display())?;
+    let metadata = PyProjectToml::from_toml(&content, pyproject_toml.simplified_display())?;
 
-    Ok(pyproject_toml)
+    Ok(PyprojectTomlInput {
+        metadata,
+        path: pyproject_toml,
+        contents: content,
+    })
 }
 
 /// Wheel metadata stored in the source distribution cache.
