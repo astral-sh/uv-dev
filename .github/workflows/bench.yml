@@ -51,6 +51,9 @@ jobs:
           cargo run --bin uv -- --config-file test/uv.toml pip compile test/requirements/jupyter.in --universal --exclude-newer 2024-08-08 --cache-dir .cache
           cargo run --bin uv -- --config-file test/uv.toml pip compile test/requirements/airflow.in --universal --exclude-newer 2024-08-08 --cache-dir .cache
 
+      - name: "Prepare immutable benchmark fixtures"
+        run: python3 scripts/benchmark/prepare-fixtures.py
+
       - name: "Build benchmarks"
         run: cargo codspeed build -m walltime --profile profiling -p uv-bench --bench uv --bench workspace_discovery
 
@@ -158,6 +161,9 @@ jobs:
           # Resolve benchmark fixtures without the repository's tooling build policy.
           cargo run --bin uv -- --config-file test/uv.toml pip compile test/requirements/jupyter.in --universal --exclude-newer 2024-08-08 --cache-dir .cache
           cargo run --bin uv -- --config-file test/uv.toml pip compile test/requirements/airflow.in --universal --exclude-newer 2024-08-08 --cache-dir .cache
+
+      - name: "Prepare immutable benchmark fixtures"
+        run: python3 scripts/benchmark/prepare-fixtures.py
 
       - name: "Build benchmarks"
         run: cargo codspeed build --profile profiling -p uv-bench
