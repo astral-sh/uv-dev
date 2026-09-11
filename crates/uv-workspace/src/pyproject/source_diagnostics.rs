@@ -227,4 +227,52 @@ mod tests {
         );
         assert!(diagnostic.is_none());
     }
+
+    #[test]
+    fn non_adjacent_source_markers_conflict() {
+        let source = "[tool.uv.sources]\ndemo = [\n  { index = 'first', marker = \"sys_platform == 'linux'\" },\n  { index = 'middle', marker = \"sys_platform == 'win32'\" },\n  { index = 'last', marker = \"sys_platform == 'linux'\" },\n]\n";
+        let error = PyProjectToml::from_string(source.to_string(), "pyproject.toml")
+            .expect_err("non-adjacent source markers overlap");
+        assert!(matches!(
+            error
+                .source()
+                .and_then(|error| error.downcast_ref::<SourceError>()),
+            Some(SourceError::OverlappingMarkers(..))
+        ));
+        assert_snapshot!(format_error(source), @"
+        error: Failed to parse `tool.uv.sources`
+          cause: Source markers must be disjoint, but the following markers overlap: `sys_platform == 'linux'` and `sys_platform == 'linux'`.
+           --> pyproject.toml:5:30
+          info: The other source is declared here
+           --> pyproject.toml:3:31
+          hint: replace `sys_platform == 'linux'` with `python_version < '0'`
+        ");
+    }
+
+    #[test]
+    fn non_adjacent_source_marker_is_missing() {
+        let source = "[tool.uv.sources]\ndemo = [\n  { index = 'first' },\n  { index = 'middle', marker = \"sys_platform == 'linux'\", extra = 'other' },\n  { index = 'last', marker = \"sys_platform == 'linux'\" },\n]\n";
+        let error = PyProjectToml::from_string(source.to_string(), "pyproject.toml")
+            .expect_err("a non-adjacent source is missing its marker");
+        assert!(matches!(
+            error
+                .source()
+                .and_then(|error| error.downcast_ref::<SourceError>()),
+            Some(SourceError::MissingMarkers)
+        ));
+        assert_snapshot!(format_error(source), @r#"
+        error: Failed to parse `tool.uv.sources`
+          cause: When multiple sources are provided, each source must include a platform marker (e.g., `marker = "sys_platform == 'linux'"`)
+           --> pyproject.toml:3:3
+          info: The other source is declared here
+           --> pyproject.toml:5:30
+        "#);
+    }
+
+    #[test]
+    fn overlapping_source_markers_in_distinct_scopes() {
+        let source = "[tool.uv.sources]\ndemo = [\n  { index = 'first', marker = \"sys_platform == 'linux'\", extra = 'one' },\n  { index = 'middle', marker = \"sys_platform == 'linux'\", group = 'dev' },\n  { index = 'last', marker = \"sys_platform == 'linux'\", extra = 'two' },\n]\n";
+        PyProjectToml::from_string(source.to_string(), "pyproject.toml")
+            .expect("different source scopes may overlap");
+    }
 }
