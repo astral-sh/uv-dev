@@ -20,6 +20,32 @@ use uv_static::EnvVars;
 use walkdir::WalkDir;
 
 #[test]
+fn python_install_failure_quiet() {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_filtered_python_keys()
+        .with_filtered_latest_python_versions()
+        .with_managed_python_dirs()
+        .with_empty_python_install_mirror()
+        .with_filter((r"\(from https://[^)]+\)", "(from [DOWNLOAD_URL])"));
+    let python_cache = context.temp_dir.join("python-cache");
+
+    uv_snapshot!(context.filters(), context.python_install()
+        .args(["3.12", "--offline", "-q"])
+        .env(EnvVars::UV_PYTHON_CACHE_DIR, &python_cache), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to install cpython-3.12.[LATEST]-[PLATFORM]
+      cause: An offline Python installation was requested, but cpython-3.12.[LATEST]-[PLATFORM] (from [DOWNLOAD_URL]) is missing in python-cache
+    ");
+
+    uv_snapshot!(context.filters(), context.python_install()
+        .args(["3.12", "--offline", "-qq"])
+        .env(EnvVars::UV_PYTHON_CACHE_DIR, &python_cache), @"
+    exit_code: 1 (failure)
+    ");
+}
+
+#[test]
 fn python_install() {
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()

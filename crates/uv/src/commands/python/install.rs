@@ -41,7 +41,7 @@ use uv_warnings::warn_user;
 
 use crate::commands::python::{ChangeEvent, ChangeEventKind};
 use crate::commands::reporters::PythonDownloadReporter;
-use crate::commands::{ExitStatus, UvError, conjunction, elapsed};
+use crate::commands::{ExitStatus, UvError, conjunction, diagnostics, elapsed};
 use crate::printer::Printer;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -925,45 +925,43 @@ async fn perform_install(
         {
             match kind {
                 InstallErrorKind::DownloadUnpack => {
-                    write_error_chain_with_options(
-                        err.context(format!("Failed to install {key}")).as_ref(),
-                        &Hints::none(),
-                        ErrorOptions::default().with_stream(printer.stderr()),
+                    diagnostics::write_error_chain(
+                        &err.context(format!("Failed to install {key}")),
+                        printer,
                     )?;
                 }
                 InstallErrorKind::Bin => {
-                    let (level, color) = match bin {
-                        None => ("warning", AnsiColors::Yellow),
+                    let (level, color, stream) = match bin {
+                        None => ("warning", AnsiColors::Yellow, printer.stderr()),
                         Some(false) => continue,
-                        Some(true) => ("error", AnsiColors::Red),
+                        Some(true) => ("error", AnsiColors::Red, printer.stderr_important()),
                     };
-
+                    let err = err.context(format!("Failed to install executable for {key}"));
                     write_error_chain_with_options(
-                        err.context(format!("Failed to install executable for {key}"))
-                            .as_ref(),
-                        &Hints::none(),
+                        err.as_ref(),
+                        &diagnostics::hints_for_error(&err),
                         ErrorOptions::default()
                             .with_level(level)
                             .with_color(color)
-                            .with_stream(printer.stderr()),
+                            .with_stream(stream),
                     )?;
                 }
                 InstallErrorKind::Registry => {
-                    let (level, color) = match registry {
-                        None => ("warning", AnsiColors::Yellow),
+                    let (level, color, stream) = match registry {
+                        None => ("warning", AnsiColors::Yellow, printer.stderr()),
                         Some(false) => continue,
-                        Some(true) => ("error", AnsiColors::Red),
+                        Some(true) => ("error", AnsiColors::Red, printer.stderr_important()),
                     };
 
                     trace!("Error trace: {err:?}");
+                    let err = err.context(format!("Failed to create registry entry for {key}"));
                     write_error_chain_with_options(
-                        err.context(format!("Failed to create registry entry for {key}"))
-                            .as_ref(),
-                        &Hints::none(),
+                        err.as_ref(),
+                        &diagnostics::hints_for_error(&err),
                         ErrorOptions::default()
                             .with_level(level)
                             .with_color(color)
-                            .with_stream(printer.stderr()),
+                            .with_stream(stream),
                     )?;
                 }
             }
