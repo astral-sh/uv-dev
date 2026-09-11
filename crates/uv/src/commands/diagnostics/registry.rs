@@ -74,7 +74,9 @@ pub(super) fn metadata_for_error<'a>(error: &'a (dyn StdError + 'static)) -> Err
         uv_installer::PrepareError => metadata_for_prepare_error,
         pip::operations::Error => ErrorMetadata::hinted,
         ProjectError => ErrorMetadata::hinted,
-        build_frontend::Error => ErrorMetadata::hinted,
+        build_frontend::Error => |error| {
+            ErrorMetadata::hinted(error).with_info(error.own_info())
+        },
         uv_build_frontend::Error => |error| {
             ErrorMetadata::hinted(error).with_info(error.own_info())
         },

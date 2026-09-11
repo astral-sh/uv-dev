@@ -27,7 +27,7 @@ use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, ExtraBuildVariables, Index, IndexLocations,
     PackageConfigSettings, Requirement, SourceDist,
 };
-use uv_errors::{Hinted, Hints};
+use uv_errors::{Hinted, Hints, Info};
 use uv_fs::{Simplified, normalize_path, relative_to};
 use uv_install_wheel::LinkMode;
 use uv_normalize::PackageName;
@@ -117,70 +117,8 @@ impl Hinted for Error {
             Self::BuildDispatch(err) => err.hints(),
             Self::Project(err) => err.hints(),
             Self::Operations(err) => err.hints(),
-            Self::Extract(uv_extract::Error::Tar(err)) => {
-                // TODO(konsti): astral-tokio-tar should use a proper error instead of
-                // encoding everything in strings
-                // NOTE(ww): We check for both messages below because they indicate
-                // different external extraction scenarios; the first is for any
-                // absolute path outside of the target directory, and the second
-                // is specifically for symlinks that point outside.
-                if err.to_string().contains("/bin/python")
-                    && std::error::Error::source(err).is_some_and(|err| {
-                        let err = err.to_string();
-                        err.ends_with("outside of the target directory")
-                            || err.ends_with("external symlinks are not allowed")
-                    })
-                {
-                    Hints::from(
-                        "The source distribution includes a virtual environment. Virtual environments must be excluded from source distributions.",
-                    )
-                } else {
-                    Hints::none()
-                }
-            }
-            Self::Extract(uv_extract::Error::TarCodec(err)) => {
-                let is_python_executable = |path: &Path| {
-                    path.file_name()
-                        .is_some_and(|name| name.to_string_lossy().starts_with("python"))
-                };
-                // An archive entry is only a virtual environment interpreter if it sits in `bin`.
-                let is_virtual_environment_python = |path: &Path| {
-                    path.parent().is_some_and(|parent| parent.ends_with("bin"))
-                        && is_python_executable(path)
-                };
-                let involves_virtual_environment_python = match err {
-                    tar_codec::ExtractError::UnsafePath {
-                        context,
-                        value,
-                        reason,
-                        ..
-                    } => {
-                        // `UnsafePath` carries only the link target, never the entry that
-                        // declared it, and a base interpreter is not required to live in `bin`,
-                        // so the target is matched on its file name alone.
-                        *context == "symbolic-link target"
-                            && matches!(*reason, "is absolute" | "escapes the destination root")
-                            && is_python_executable(Path::new(value))
-                    }
-                    tar_codec::ExtractError::InvalidLink {
-                        path,
-                        target,
-                        reason,
-                        ..
-                    } => {
-                        *reason == "ambient target is not allowed"
-                            && (is_virtual_environment_python(path)
-                                || is_python_executable(Path::new(target)))
-                    }
-                    _ => false,
-                };
-                if involves_virtual_environment_python {
-                    Hints::from(
-                        "The source distribution includes a virtual environment. Virtual environments must be excluded from source distributions.",
-                    )
-                } else {
-                    Hints::none()
-                }
+            Self::Extract(_) if self.includes_virtual_environment() => {
+                Hints::from("Exclude virtual environments from source distributions")
             }
             _ => Hints::none(),
         }
@@ -216,6 +154,71 @@ impl Hinted for Error {
             | Self::InvalidBuiltWheelFilename(_)
             | Self::NameMismatch(..)
             | Self::VersionMismatch(..) => None,
+        }
+    }
+}
+
+impl Error {
+    /// Explain a virtual-environment interpreter rejected while extracting a source distribution.
+    pub(super) fn own_info(&self) -> Option<Info<'static>> {
+        self.includes_virtual_environment()
+            .then(|| Info::new("The source distribution includes a virtual environment"))
+    }
+
+    fn includes_virtual_environment(&self) -> bool {
+        match self {
+            Self::Extract(uv_extract::Error::Tar(err)) => {
+                // TODO(konsti): astral-tokio-tar should use a proper error instead of
+                // encoding everything in strings
+                // NOTE(ww): We check for both messages below because they indicate
+                // different external extraction scenarios; the first is for any
+                // absolute path outside of the target directory, and the second
+                // is specifically for symlinks that point outside.
+                err.to_string().contains("/bin/python")
+                    && std::error::Error::source(err).is_some_and(|err| {
+                        let err = err.to_string();
+                        err.ends_with("outside of the target directory")
+                            || err.ends_with("external symlinks are not allowed")
+                    })
+            }
+            Self::Extract(uv_extract::Error::TarCodec(err)) => {
+                let is_python_executable = |path: &Path| {
+                    path.file_name()
+                        .is_some_and(|name| name.to_string_lossy().starts_with("python"))
+                };
+                // An archive entry is only a virtual environment interpreter if it sits in `bin`.
+                let is_virtual_environment_python = |path: &Path| {
+                    path.parent().is_some_and(|parent| parent.ends_with("bin"))
+                        && is_python_executable(path)
+                };
+                match err {
+                    tar_codec::ExtractError::UnsafePath {
+                        context,
+                        value,
+                        reason,
+                        ..
+                    } => {
+                        // `UnsafePath` carries only the link target, never the entry that
+                        // declared it, and a base interpreter is not required to live in `bin`,
+                        // so the target is matched on its file name alone.
+                        *context == "symbolic-link target"
+                            && matches!(*reason, "is absolute" | "escapes the destination root")
+                            && is_python_executable(Path::new(value))
+                    }
+                    tar_codec::ExtractError::InvalidLink {
+                        path,
+                        target,
+                        reason,
+                        ..
+                    } => {
+                        *reason == "ambient target is not allowed"
+                            && (is_virtual_environment_python(path)
+                                || is_python_executable(Path::new(target)))
+                    }
+                    _ => false,
+                }
+            }
+            _ => false,
         }
     }
 }
@@ -1503,5 +1506,143 @@ impl BuildPlan {
                 }
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error as _;
+    use std::path::PathBuf;
+
+    use insta::assert_json_snapshot;
+    use uv_errors::{ErrorFormat, ErrorOptions, Hinted, Hints, write_error_chain_with_options};
+
+    use crate::commands::diagnostics::diagnostic_for_error;
+
+    use super::Error;
+
+    fn unsafe_path(context: &'static str, value: &str, reason: &'static str) -> Error {
+        Error::Extract(uv_extract::Error::TarCodec(
+            tar_codec::ExtractError::UnsafePath {
+                position: 0,
+                context,
+                value: value.to_owned(),
+                reason,
+            },
+        ))
+    }
+
+    fn invalid_link(path: &str, target: &str, reason: &'static str) -> Error {
+        Error::Extract(uv_extract::Error::TarCodec(
+            tar_codec::ExtractError::InvalidLink {
+                position: 0,
+                path: PathBuf::from(path),
+                target: target.to_owned(),
+                reason,
+            },
+        ))
+    }
+
+    #[test]
+    fn virtual_environment_archive_context_is_separate_from_advice() -> anyhow::Result<()> {
+        let error = unsafe_path(
+            "symbolic-link target",
+            "/usr/local/bin/python3",
+            "is absolute",
+        );
+        assert!(error.source().is_some());
+        let mut output = String::new();
+        write_error_chain_with_options(
+            &error,
+            &Hints::none(),
+            ErrorOptions::default()
+                .with_format(ErrorFormat::Json)
+                .with_diagnostic(diagnostic_for_error)
+                .with_stream(&mut output),
+        )?;
+        let report: serde_json::Value = serde_json::from_str(&output)?;
+
+        assert_json_snapshot!(&report["errors"][0], @r#"
+        {
+          "hints": [
+            {
+              "message": "Exclude virtual environments from source distributions",
+              "ordering": "any"
+            }
+          ],
+          "info": [
+            {
+              "message": "The source distribution includes a virtual environment"
+            }
+          ],
+          "message": "Invalid tar file"
+        }
+        "#);
+        Ok(())
+    }
+
+    #[test]
+    fn virtual_environment_archive_context_uses_extraction_evidence() {
+        let cases = [
+            (
+                unsafe_path("symbolic-link target", "/usr/bin/python3", "is absolute"),
+                true,
+            ),
+            (
+                unsafe_path(
+                    "symbolic-link target",
+                    "../../python3",
+                    "escapes the destination root",
+                ),
+                true,
+            ),
+            (
+                invalid_link(
+                    "demo/.venv/bin/python",
+                    "/runtime/interpreter",
+                    "ambient target is not allowed",
+                ),
+                true,
+            ),
+            (
+                invalid_link(
+                    "demo/run",
+                    "/runtime/python3.12",
+                    "ambient target is not allowed",
+                ),
+                true,
+            ),
+            (
+                unsafe_path("archive member path", "/usr/bin/python3", "is absolute"),
+                false,
+            ),
+            (
+                unsafe_path("symbolic-link target", "/usr/bin/bash", "is absolute"),
+                false,
+            ),
+            (
+                unsafe_path("symbolic-link target", "python3", "is invalid"),
+                false,
+            ),
+            (
+                invalid_link(
+                    "demo/python",
+                    "runtime/interpreter",
+                    "ambient target is not allowed",
+                ),
+                false,
+            ),
+            (
+                invalid_link("demo/.venv/bin/python", "python3", "target does not exist"),
+                false,
+            ),
+            (Error::Extract(uv_extract::Error::EmptyArchive), false),
+        ];
+        for (error, expected) in cases {
+            assert_eq!(error.includes_virtual_environment(), expected);
+            assert_eq!(error.own_info().is_some(), expected);
+            assert_eq!(!error.hints().is_empty(), expected);
+            assert_eq!(!error.own_hints().is_empty(), expected);
+        }
     }
 }
