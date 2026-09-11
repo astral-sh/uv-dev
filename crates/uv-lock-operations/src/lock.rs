@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::error::Error as StdError;
 use std::sync::Arc;
 
 use rustc_hash::FxHashSet;
@@ -16,6 +17,7 @@ use uv_distribution_types::{
     HashCollection, NameRequirementSpecification, RequiresPython, ResolutionRecorder,
     UnresolvedRequirementSpecification,
 };
+use uv_errors::{Diagnostic, ErrorOptions, Hints};
 use uv_git::ResolvedRepositoryReference;
 use uv_lock::{GroupMetadata, Lock, ResolverManifest};
 use uv_normalize::PackageName;
@@ -37,6 +39,12 @@ use uv_workspace::WorkspaceCache;
 
 use crate::lock_target::find_lock_format_error;
 use crate::{LockError, LockTarget, LockValidationError, MissingLockfileSource, ValidatedLock};
+
+fn diagnostic_for_error<'a>(error: &'a (dyn StdError + 'static)) -> Option<Diagnostic<'a>> {
+    uv_settings::diagnostic_for_error(error)
+        .or_else(|| uv_workspace::pyproject::diagnostic_for_error(error))
+        .or_else(|| uv_pypi_types::diagnostic_for_error(error))
+}
 
 /// The result of running a lock operation.
 #[derive(Debug, Clone)]
@@ -826,7 +834,9 @@ async fn do_lock(
                 warn_user_with_chain!(
                     anyhow::Error::from(err)
                         .context("Failed to validate existing lockfile")
-                        .as_ref()
+                        .as_ref(),
+                    Hints::none(),
+                    ErrorOptions::default().with_diagnostic(diagnostic_for_error),
                 );
                 None
             }
