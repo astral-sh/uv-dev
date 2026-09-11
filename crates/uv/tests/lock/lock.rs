@@ -2080,7 +2080,6 @@ async fn lock_sdist_url_locked_build_dependency_hash_mismatch() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to download and build `demo-pkg @ http://[LOCALHOST]/files/demo_pkg-1.0.0.tar.gz`
-      hint: `demo-pkg` was included because `project` (v0.1.0) depends on `demo-pkg`
       cause: Failed to install requirements from `build-system.requires`
       cause: Failed to download `review-dep==1.0.0`
       cause: Hash mismatch for `review-dep==1.0.0`
@@ -2090,6 +2089,8 @@ async fn lock_sdist_url_locked_build_dependency_hash_mismatch() -> Result<()> {
 
              Computed:
                sha256:1aa0f7263e4991934282ab8912e95fdd34f24459d7c4f8b845c2281a04c89807
+
+    hint: `demo-pkg` was included because `project` (v0.1.0) depends on `demo-pkg`
     ");
     assert!(
         !sentinel.exists(),
@@ -2128,7 +2129,6 @@ async fn lock_sdist_url_locked_build_dependency_hash_mismatch() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to download and build `demo-pkg @ http://[LOCALHOST]/files/demo_pkg-1.0.0.tar.gz`
-      hint: `demo-pkg` was included because `project` (v0.1.0) depends on `demo-pkg`
       cause: Failed to install requirements from `build-system.requires`
       cause: Failed to download `review-dep==1.0.0`
       cause: Hash mismatch for `review-dep==1.0.0`
@@ -2138,6 +2138,8 @@ async fn lock_sdist_url_locked_build_dependency_hash_mismatch() -> Result<()> {
 
              Computed:
                sha256:1aa0f7263e4991934282ab8912e95fdd34f24459d7c4f8b845c2281a04c89807
+
+    hint: `demo-pkg` was included because `project` (v0.1.0) depends on `demo-pkg`
     ");
     assert!(
         !sentinel.exists(),
@@ -2506,7 +2508,6 @@ async fn lock_sdist_registry_changed_index_locked_hash_mismatch() -> Result<()> 
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to download and build `demo-pkg==1.0.0`
-      hint: `demo-pkg` (v1.0.0) was included because `project` (v0.1.0) depends on `demo-pkg==1.0.0`
       cause: Hash mismatch for `demo-pkg==1.0.0`
 
              Expected:
@@ -2514,6 +2515,8 @@ async fn lock_sdist_registry_changed_index_locked_hash_mismatch() -> Result<()> 
 
              Computed:
                sha256:883b65920e21bce11c2697819dab77eb70e18d810b2746f49e46155d6ca527bc
+
+    hint: `demo-pkg` (v1.0.0) was included because `project` (v0.1.0) depends on `demo-pkg==1.0.0`
     ");
     assert!(
         !sentinel.exists(),
@@ -2608,7 +2611,6 @@ async fn lock_sdist_registry_missing_index_locked_hash_mismatch() -> Result<()> 
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to download and build `demo-pkg==1.0.0`
-      hint: `demo-pkg` (v1.0.0) was included because `project` (v0.1.0) depends on `demo-pkg==1.0.0`
       cause: Hash mismatch for `demo-pkg==1.0.0`
 
              Expected:
@@ -2616,6 +2618,8 @@ async fn lock_sdist_registry_missing_index_locked_hash_mismatch() -> Result<()> 
 
              Computed:
                sha256:883b65920e21bce11c2697819dab77eb70e18d810b2746f49e46155d6ca527bc
+
+    hint: `demo-pkg` (v1.0.0) was included because `project` (v0.1.0) depends on `demo-pkg==1.0.0`
     ");
     assert!(
         !sentinel.exists(),
@@ -3009,7 +3013,6 @@ fn lock_sdist_path_rejected_archive_not_cached() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to build `demo-pkg @ file://[TEMP_DIR]/demo_pkg-1.0.0.tar.gz`
-      hint: `demo-pkg` was included because `project` (v0.1.0) depends on `demo-pkg`
       cause: Hash mismatch for `demo-pkg @ file://[TEMP_DIR]/demo_pkg-1.0.0.tar.gz`
 
              Expected:
@@ -3017,6 +3020,8 @@ fn lock_sdist_path_rejected_archive_not_cached() -> Result<()> {
 
              Computed:
                sha256:883b65920e21bce11c2697819dab77eb70e18d810b2746f49e46155d6ca527bc
+
+    hint: `demo-pkg` was included because `project` (v0.1.0) depends on `demo-pkg`
     ");
     assert!(
         !sentinel.exists(),
@@ -4187,7 +4192,8 @@ fn lock_project_with_excludes() -> Result<()> {
     ----- stderr -----
     Resolved 8 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     Ok(())
@@ -4354,10 +4360,11 @@ fn lock_project_with_build_constraints() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to download and build `requests==1.2.0`
-      hint: `requests` (v1.2.0) was included because `project` (v0.1.0) depends on `requests==1.2`
       cause: Failed to resolve requirements from `setup.py` build
       cause: No solution found when resolving: `setuptools>=40.8.0`
       cause: Because you require setuptools>=40.8.0 and setuptools==1, we can conclude that your requirements are unsatisfiable.
+
+    hint: `requests` (v1.2.0) was included because `project` (v0.1.0) depends on `requests==1.2`
     ");
 
     Ok(())
@@ -5271,7 +5278,8 @@ fn lock_conflicting_project_basic1() -> Result<()> {
     ----- stderr -----
     Resolved 3 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     Ok(())
@@ -7571,8 +7579,10 @@ fn lock_requires_python() -> Result<()> {
              And because only pygls<=1.3.0 is available, we can conclude that pygls>=1.3.0 cannot be used.
              And because we know from (1) that pygls>=1.1.0,<1.3.0 cannot be used, we can conclude that pygls>=1.1.0 cannot be used.
              And because your project depends on pygls>=1.1.0, we can conclude that your project's requirements are unsatisfiable.
-      hint: While the active Python version is 3.12, the resolution failed for other Python versions supported by your project. Consider limiting your project's supported Python versions using `requires-python`.
-      hint: The `requires-python` value (>=3.7) includes Python versions that are not supported by your dependencies (e.g., pygls>=1.1.0,<=1.2.1 only supports >=3.7.9, <4). Consider using a more restrictive `requires-python` value (like >=3.7.9, <4).
+
+    hint: While the active Python version is 3.12, the resolution failed for other Python versions supported by your project. Consider limiting your project's supported Python versions using `requires-python`.
+
+    hint: The `requires-python` value (>=3.7) includes Python versions that are not supported by your dependencies (e.g., pygls>=1.1.0,<=1.2.1 only supports >=3.7.9, <4). Consider using a more restrictive `requires-python` value (like >=3.7.9, <4).
     ");
 
     // Require >=3.7, and allow locking to a version of `pygls` that is compatible (==1.0.1).
@@ -8194,7 +8204,8 @@ fn lock_requires_python() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: No interpreter found for Python >=3.12 in [PYTHON SOURCES]
-      hint: A managed Python download is available for Python >=3.12, but Python downloads are set to 'never'
+
+    hint: A managed Python download is available for Python >=3.12, but Python downloads are set to 'never'
     ");
 
     Ok(())
@@ -12193,7 +12204,8 @@ fn lock_invalid_hash() -> Result<()> {
     ----- stderr -----
     Resolved 4 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     // Install from the lockfile.
@@ -12201,7 +12213,6 @@ fn lock_invalid_hash() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to download `idna==3.6`
-      hint: `idna` (v3.6) was included because `project` (v0.1.0) depends on `anyio` (v3.7.0) which depends on `idna`
       cause: Hash mismatch for `idna==3.6`
 
              Expected:
@@ -12209,6 +12220,8 @@ fn lock_invalid_hash() -> Result<()> {
 
              Computed:
                sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f
+
+    hint: `idna` (v3.6) was included because `project` (v0.1.0) depends on `anyio` (v3.7.0) which depends on `idna`
     ");
 
     Ok(())
@@ -13052,7 +13065,8 @@ fn lock_prerelease_package_configuration() -> Result<()> {
     ----- stderr -----
     Resolved 1 package in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     Ok(())
@@ -13081,7 +13095,8 @@ fn lock_requires_python_no_wheels() -> Result<()> {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because dearpygui==1.9.1 has no wheels with a matching Python version tag (e.g., `cp312`) and your project depends on dearpygui==1.9.1, we can conclude that your project's requirements are unsatisfiable.
-      hint: Wheels are available for `dearpygui` (v1.9.1) with the following Python ABI tags: `cp37m`, `cp38`, `cp39`, `cp310`, `cp311`
+
+    hint: Wheels are available for `dearpygui` (v1.9.1) with the following Python ABI tags: `cp37m`, `cp38`, `cp39`, `cp310`, `cp311`
     ");
 
     Ok(())
@@ -14466,9 +14481,10 @@ async fn lock_redact_http() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to download `iniconfig==2.0.0`
-      hint: `iniconfig` (v2.0.0) was included because `foo` (v0.1.0) depends on `iniconfig`
       cause: Failed to fetch: `http://[LOCALHOST]/basic-auth/files/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl`
       cause: HTTP status client error (401 Unauthorized) for url (http://[LOCALHOST]/basic-auth/files/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl)
+
+    hint: `iniconfig` (v2.0.0) was included because `foo` (v0.1.0) depends on `iniconfig`
     ");
 
     // Installing from the lockfile should fail without an index.
@@ -14476,9 +14492,10 @@ async fn lock_redact_http() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to download `iniconfig==2.0.0`
-      hint: `iniconfig` (v2.0.0) was included because `foo` (v0.1.0) depends on `iniconfig`
       cause: Failed to fetch: `http://[LOCALHOST]/basic-auth/files/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl`
       cause: HTTP status client error (401 Unauthorized) for url (http://[LOCALHOST]/basic-auth/files/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl)
+
+    hint: `iniconfig` (v2.0.0) was included because `foo` (v0.1.0) depends on `iniconfig`
     ");
 
     // Installing from the lockfile should succeed when credentials are included on the command-line.
@@ -14505,9 +14522,10 @@ async fn lock_redact_http() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to download `iniconfig==2.0.0`
-      hint: `iniconfig` (v2.0.0) was included because `foo` (v0.1.0) depends on `iniconfig`
       cause: Failed to fetch: `http://[LOCALHOST]/basic-auth/files/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl`
       cause: HTTP status client error (401 Unauthorized) for url (http://[LOCALHOST]/basic-auth/files/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl)
+
+    hint: `iniconfig` (v2.0.0) was included because `foo` (v0.1.0) depends on `iniconfig`
     ");
 
     // Installing with credentials from with `UV_INDEX_URL` should succeed.
@@ -15046,7 +15064,8 @@ async fn lock_env_credentials() -> Result<()> {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because iniconfig was not found in the package registry and your project depends on iniconfig, we can conclude that your project's requirements are unsatisfiable.
-      hint: An index URL (http://[LOCALHOST]/basic-auth/simple) could not be queried due to a lack of valid authentication credentials (401 Unauthorized)
+
+    hint: An index URL (http://[LOCALHOST]/basic-auth/simple) could not be queried due to a lack of valid authentication credentials (401 Unauthorized)
     ");
 
     // Provide credentials via environment variables.
@@ -17548,7 +17567,8 @@ fn lock_sources_url_offline_validates_transitive_source_tree() -> Result<()> {
     ----- stderr -----
     Resolved 3 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--check` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     Ok(())
@@ -19055,7 +19075,8 @@ fn check_outdated_lock() -> Result<()> {
     ----- stderr -----
     Resolved 2 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--check` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     // Providing both `--check` and `--locked` is okay
@@ -19065,7 +19086,8 @@ fn check_outdated_lock() -> Result<()> {
     ----- stderr -----
     Resolved 2 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--check` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     Ok(())
@@ -19109,14 +19131,16 @@ fn check_unformatted_lock() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: The lockfile at `uv.lock` has non-canonical formatting at line 13, but `--check` was provided.
-      hint: To regenerate the lockfile, run `uv lock --refresh --preview-features lockfile-format-check`.
+
+    hint: To regenerate the lockfile, run `uv lock --refresh --preview-features lockfile-format-check`.
     ");
 
     uv_snapshot!(context.filters(), context.sync().arg("--locked").arg("--offline").arg("--preview-features").arg("lockfile-format-check"), @"
     exit_code: 1 (failure)
     ----- stderr -----
     error: The lockfile at `uv.lock` has non-canonical formatting at line 13, but `--locked` was provided.
-      hint: To regenerate the lockfile, run `uv lock --refresh --preview-features lockfile-format-check`.
+
+    hint: To regenerate the lockfile, run `uv lock --refresh --preview-features lockfile-format-check`.
     ");
 
     assert_eq!(context.read("uv.lock"), unformatted);
@@ -19166,7 +19190,8 @@ fn lock_reuses_newer_exclude_newer_timestamp() -> Result<()> {
     Resolving despite existing lockfile due to change of exclude newer timestamp from `2024-03-25T00:00:00Z` to `2024-03-24T00:00:00Z`
     Resolved 1 package in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--check` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     uv_snapshot!(context.filters(), context.lock()
@@ -19273,7 +19298,8 @@ fn lock_check_allows_relaxed_exclude_newer_package() -> Result<()> {
     Resolving despite existing lockfile due to change of exclude newer timestamp from `2024-03-25T00:00:00Z` to `2024-03-24T00:00:00Z` for package `project`
     Resolved 1 package in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--check` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     Ok(())
@@ -19775,7 +19801,8 @@ fn lock_remove_member() -> Result<()> {
     ----- stderr -----
     Resolved 5 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     // Re-run without `--locked`.
@@ -19872,7 +19899,8 @@ fn lock_remove_member() -> Result<()> {
     ----- stderr -----
     Resolved 1 package in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     // Re-run without `--locked`.
@@ -20007,7 +20035,8 @@ fn lock_add_member_with_build_system() -> Result<()> {
     ----- stderr -----
     Resolved 5 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     // Re-run with `--offline`. This should also fail, during the resolve phase.
@@ -20017,7 +20046,8 @@ fn lock_add_member_with_build_system() -> Result<()> {
     error: No solution found when resolving dependencies
       cause: Because anyio was not found in the cache and leaf depends on anyio>3, we can conclude that leaf's requirements are unsatisfiable.
              And because your workspace requires leaf, we can conclude that your workspace's requirements are unsatisfiable.
-      hint: Packages were unavailable because the network was disabled. When the network is disabled, registry packages may only be read from the cache.
+
+    hint: Packages were unavailable because the network was disabled. When the network is disabled, registry packages may only be read from the cache.
     ");
 
     // Re-run without `--locked`.
@@ -20198,7 +20228,8 @@ fn lock_add_member_without_build_system() -> Result<()> {
     ----- stderr -----
     Resolved 5 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     // Re-run with `--offline`. This should also fail, during the resolve phase.
@@ -20208,7 +20239,8 @@ fn lock_add_member_without_build_system() -> Result<()> {
     error: No solution found when resolving dependencies
       cause: Because anyio was not found in the cache and leaf depends on anyio>3, we can conclude that leaf's requirements are unsatisfiable.
              And because your workspace requires leaf, we can conclude that your workspace's requirements are unsatisfiable.
-      hint: Packages were unavailable because the network was disabled. When the network is disabled, registry packages may only be read from the cache.
+
+    hint: Packages were unavailable because the network was disabled. When the network is disabled, registry packages may only be read from the cache.
     ");
 
     // Re-run without `--locked`.
@@ -20322,7 +20354,8 @@ fn lock_add_member_without_build_system() -> Result<()> {
     ----- stderr -----
     Resolved 5 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     // Re-run without `--locked`.
@@ -20535,7 +20568,8 @@ fn lock_redundant_add_member() -> Result<()> {
     ----- stderr -----
     Resolved 4 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     // Re-run without `--locked`.
@@ -20723,7 +20757,8 @@ fn lock_new_constraints() -> Result<()> {
     ----- stderr -----
     Resolved 4 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     // Re-run without `--locked`.
@@ -20923,7 +20958,8 @@ fn lock_remove_member_non_project() -> Result<()> {
     warning: No `requires-python` value found in the workspace. Defaulting to `>=3.12`.
     Resolved in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     // Re-run without `--locked`.
@@ -21044,7 +21080,8 @@ fn lock_rename_project() -> Result<()> {
     ----- stderr -----
     Resolved 2 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     // Re-run without `--locked`.
@@ -21540,7 +21577,8 @@ fn lock_removed_empty_extra() -> Result<()> {
     ----- stderr -----
     Resolved 1 package in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     uv_snapshot!(context.filters(), context.lock()
@@ -21552,7 +21590,8 @@ fn lock_removed_empty_extra() -> Result<()> {
     ----- stderr -----
     Resolved 1 package in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     Ok(())
@@ -22189,7 +22228,8 @@ fn lock_regenerates_dynamic_version_scoped_override() -> Result<()> {
     ----- stderr -----
     Resolved 2 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     Ok(())
@@ -22291,7 +22331,8 @@ fn lock_regenerates_incompatible_self_requirement() -> Result<()> {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because your project depends on itself at an incompatible version (project>=2.0.0), we can conclude that your project's requirements are unsatisfiable.
-      hint: The project `project` depends on itself at an incompatible version. This is likely a mistake. If you intended to depend on a third-party package named `project`, consider renaming the project `project` to avoid creating a conflict.
+
+    hint: The project `project` depends on itself at an incompatible version. This is likely a mistake. If you intended to depend on a third-party package named `project`, consider renaming the project `project` to avoid creating a conflict.
     ");
 
     pyproject_toml.write_str(&formatdoc! {r#"
@@ -22309,7 +22350,8 @@ fn lock_regenerates_incompatible_self_requirement() -> Result<()> {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because project[feature] depends on itself at an incompatible version (project>=2.0.0) and your project requires project[feature], we can conclude that your project's requirements are unsatisfiable.
-      hint: The project `project` depends on itself at an incompatible version. This is likely a mistake. If you intended to depend on a third-party package named `project`, consider renaming the project `project` to avoid creating a conflict.
+
+    hint: The project `project` depends on itself at an incompatible version. This is likely a mistake. If you intended to depend on a third-party package named `project`, consider renaming the project `project` to avoid creating a conflict.
     ");
 
     Ok(())
@@ -22413,7 +22455,8 @@ fn lock_regenerates_activated_empty_extra() -> Result<()> {
     ----- stderr -----
     Resolved 4 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     Ok(())
@@ -24177,7 +24220,8 @@ fn lock_regenerates_marker_specific_requested_extras() -> Result<()> {
     ----- stderr -----
     Resolved 3 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     Ok(())
@@ -25087,7 +25131,8 @@ fn lock_constrained_environment() -> Result<()> {
     ----- stderr -----
     Resolved 8 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     uv_snapshot!(context.filters(), context.lock(), @"
@@ -25390,7 +25435,8 @@ fn lock_overlapping_environment() -> Result<()> {
        --> pyproject.toml:9:57
       info: The other environment is declared here
        --> pyproject.toml:9:25
-      hint: replace `python_full_version >= '3.11'` with `python_full_version >= '3.11' and sys_platform == 'win32'`
+
+    hint: replace `python_full_version >= '3.11'` with `python_full_version >= '3.11' and sys_platform == 'win32'`
        --> pyproject.toml:9:57
     ");
 
@@ -25427,7 +25473,8 @@ fn lock_overlapping_environment_non_adjacent() -> Result<()> {
        --> pyproject.toml:12:13
       info: The other environment is declared here
        --> pyproject.toml:10:13
-      hint: make the environment markers disjoint, or remove one of the overlapping environments
+
+    hint: make the environment markers disjoint, or remove one of the overlapping environments
     ");
 
     Ok(())
@@ -25463,7 +25510,8 @@ fn lock_overlapping_required_environment_non_adjacent() -> Result<()> {
        --> pyproject.toml:12:13
       info: The other environment is declared here
        --> pyproject.toml:10:13
-      hint: make the environment markers disjoint, or remove one of the overlapping environments
+
+    hint: make the environment markers disjoint, or remove one of the overlapping environments
     ");
 
     Ok(())
@@ -25495,7 +25543,8 @@ fn lock_overlapping_environment_subsumed() -> Result<()> {
        --> pyproject.toml:9:52
       info: The other environment is declared here
        --> pyproject.toml:9:25
-      hint: make the environment markers disjoint, or remove one of the overlapping environments
+
+    hint: make the environment markers disjoint, or remove one of the overlapping environments
     ");
 
     Ok(())
@@ -25541,7 +25590,8 @@ fn lock_overlapping_environment_workspace_source() -> Result<()> {
        --> [TEMP_DIR]/pyproject.toml:9:5
       info: The other environment is declared here
        --> [TEMP_DIR]/pyproject.toml:7:5
-      hint: replace `sys_platform == 'darwin' or sys_platform == 'linux'` with `sys_platform == 'darwin'`
+
+    hint: replace `sys_platform == 'darwin' or sys_platform == 'linux'` with `sys_platform == 'darwin'`
        --> [TEMP_DIR]/pyproject.toml:9:5
     ");
     Ok(())
@@ -26714,7 +26764,8 @@ fn lock_add_empty_dependency_group() -> Result<()> {
     ----- stderr -----
     Resolved 2 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     // Re-lock the project.
@@ -26788,7 +26839,8 @@ fn lock_add_empty_dependency_group() -> Result<()> {
     ----- stderr -----
     Resolved 2 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     // Re-lock the project.
@@ -27746,7 +27798,8 @@ fn lock_named_index_config_file_hint() -> Result<()> {
       cause: Failed to parse entry: `jinja2`
       cause: Package `jinja2` references an undeclared index: `pytorch`
        --> pyproject.toml:9:28
-      hint: Index `pytorch` was found in a project-level `uv.toml`, but indexes referenced via `tool.uv.sources` must be defined in the project's `pyproject.toml`
+
+    hint: Index `pytorch` was found in a project-level `uv.toml`, but indexes referenced via `tool.uv.sources` must be defined in the project's `pyproject.toml`
     ");
 
     Ok(())
@@ -27800,7 +27853,8 @@ fn lock_named_index_user_config_file_hint() -> Result<()> {
       cause: Failed to parse entry: `jinja2`
       cause: Package `jinja2` references an undeclared index: `pytorch`
        --> pyproject.toml:9:28
-      hint: Index `pytorch` was found in a user-level `uv.toml`, but indexes referenced via `tool.uv.sources` must be defined in the project's `pyproject.toml`
+
+    hint: Index `pytorch` was found in a user-level `uv.toml`, but indexes referenced via `tool.uv.sources` must be defined in the project's `pyproject.toml`
     ");
 
     Ok(())
@@ -30853,7 +30907,8 @@ async fn lock_keyring_explicit_always() -> Result<()> {
     Keyring request for [LOCALHOST]
     error: No solution found when resolving dependencies
       cause: Because iniconfig was not found in the package registry and your project depends on iniconfig, we can conclude that your project's requirements are unsatisfiable.
-      hint: An index URL (http://[LOCALHOST]/basic-auth/simple) could not be queried due to a lack of valid authentication credentials (401 Unauthorized)
+
+    hint: An index URL (http://[LOCALHOST]/basic-auth/simple) could not be queried due to a lack of valid authentication credentials (401 Unauthorized)
     ");
 
     // With valid credentials, we should succeed
@@ -31157,7 +31212,8 @@ fn lock_multiple_sources_conflict() -> Result<()> {
        --> pyproject.toml:11:163
       info: The other source is declared here
        --> pyproject.toml:10:173
-      hint: replace `sys_platform == 'win32'` with `python_full_version != '3.12.*' and sys_platform == 'win32'`
+
+    hint: replace `sys_platform == 'win32'` with `python_full_version != '3.12.*' and sys_platform == 'win32'`
        --> pyproject.toml:11:163
     ");
 
@@ -35390,7 +35446,8 @@ fn lock_dynamic_to_static() -> Result<()> {
     ----- stderr -----
     Resolved 1 package in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     uv_snapshot!(context.filters(), context.lock(), @"
@@ -35514,7 +35571,8 @@ fn lock_static_to_dynamic() -> Result<()> {
     ----- stderr -----
     Resolved 1 package in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     uv_snapshot!(context.filters(), context.lock(), @"
@@ -35609,7 +35667,8 @@ fn lock_bump_static_version() -> Result<()> {
     ----- stderr -----
     Resolved 1 package in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     uv_snapshot!(context.filters(), context.lock(), @"
@@ -35664,7 +35723,6 @@ fn lock_derivation_chain_prod() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to build `wsgiref==0.1.2`
-      hint: `wsgiref` (v0.1.2) was included because `project` (v0.1.0) depends on `wsgiref==0.1.2`
       cause: The build backend returned an error
       cause: Call to `setuptools.build_meta:__legacy__.get_requires_for_build_wheel` failed (exit status: 1)
 
@@ -35685,7 +35743,10 @@ fn lock_derivation_chain_prod() -> Result<()> {
                  print "Setuptools version",version,"or greater has been installed."
                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
              SyntaxError: Missing parentheses in call to 'print'. Did you mean print(...)?
-      hint: Build failures usually indicate a problem with the package or the build environment
+
+    hint: `wsgiref` (v0.1.2) was included because `project` (v0.1.0) depends on `wsgiref==0.1.2`
+
+    hint: Build failures usually indicate a problem with the package or the build environment
     "#);
 
     Ok(())
@@ -35712,7 +35773,6 @@ fn lock_derivation_chain_extra() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to build `wsgiref==0.1.2`
-      hint: `wsgiref` (v0.1.2) was included because `project[wsgi]` (v0.1.0) depends on `wsgiref>=0.1`
       cause: The build backend returned an error
       cause: Call to `setuptools.build_meta:__legacy__.get_requires_for_build_wheel` failed (exit status: 1)
 
@@ -35733,7 +35793,10 @@ fn lock_derivation_chain_extra() -> Result<()> {
                  print "Setuptools version",version,"or greater has been installed."
                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
              SyntaxError: Missing parentheses in call to 'print'. Did you mean print(...)?
-      hint: Build failures usually indicate a problem with the package or the build environment
+
+    hint: `wsgiref` (v0.1.2) was included because `project[wsgi]` (v0.1.0) depends on `wsgiref>=0.1`
+
+    hint: Build failures usually indicate a problem with the package or the build environment
     "#);
 
     Ok(())
@@ -35762,7 +35825,6 @@ fn lock_derivation_chain_group() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to build `wsgiref==0.1.2`
-      hint: `wsgiref` (v0.1.2) was included because `project:wsgi` (v0.1.0) depends on `wsgiref`
       cause: The build backend returned an error
       cause: Call to `setuptools.build_meta:__legacy__.get_requires_for_build_wheel` failed (exit status: 1)
 
@@ -35783,7 +35845,10 @@ fn lock_derivation_chain_group() -> Result<()> {
                  print "Setuptools version",version,"or greater has been installed."
                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
              SyntaxError: Missing parentheses in call to 'print'. Did you mean print(...)?
-      hint: Build failures usually indicate a problem with the package or the build environment
+
+    hint: `wsgiref` (v0.1.2) was included because `project:wsgi` (v0.1.0) depends on `wsgiref`
+
+    hint: Build failures usually indicate a problem with the package or the build environment
     "#);
 
     Ok(())
@@ -35823,7 +35888,6 @@ fn lock_derivation_chain_extended() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to build `wsgiref==0.1.2`
-      hint: `wsgiref` (v0.1.2) was included because `project` (v0.1.0) depends on `child` (v0.1.0) which depends on `wsgiref>=0.1, <0.2`
       cause: The build backend returned an error
       cause: Call to `setuptools.build_meta:__legacy__.get_requires_for_build_wheel` failed (exit status: 1)
 
@@ -35844,7 +35908,10 @@ fn lock_derivation_chain_extended() -> Result<()> {
                  print "Setuptools version",version,"or greater has been installed."
                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
              SyntaxError: Missing parentheses in call to 'print'. Did you mean print(...)?
-      hint: Build failures usually indicate a problem with the package or the build environment
+
+    hint: `wsgiref` (v0.1.2) was included because `project` (v0.1.0) depends on `child` (v0.1.0) which depends on `wsgiref>=0.1, <0.2`
+
+    hint: Build failures usually indicate a problem with the package or the build environment
     "#);
 
     Ok(())
@@ -36441,7 +36508,8 @@ fn lock_self_incompatible() -> Result<()> {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because your project depends on itself at an incompatible version (project==0.2.0), we can conclude that your project's requirements are unsatisfiable.
-      hint: The project `project` depends on itself at an incompatible version. This is likely a mistake. If you intended to depend on a third-party package named `project`, consider renaming the project `project` to avoid creating a conflict.
+
+    hint: The project `project` depends on itself at an incompatible version. This is likely a mistake. If you intended to depend on a third-party package named `project`, consider renaming the project `project` to avoid creating a conflict.
     ");
 
     Ok(())
@@ -36564,7 +36632,8 @@ fn lock_self_extra_to_same_extra_incompatible() -> Result<()> {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because project[foo] depends on itself at an incompatible version (project==0.2.0) and your project requires project[foo], we can conclude that your project's requirements are unsatisfiable.
-      hint: The project `project` depends on itself at an incompatible version. This is likely a mistake. If you intended to depend on a third-party package named `project`, consider renaming the project `project` to avoid creating a conflict.
+
+    hint: The project `project` depends on itself at an incompatible version. This is likely a mistake. If you intended to depend on a third-party package named `project`, consider renaming the project `project` to avoid creating a conflict.
     ");
 
     Ok(())
@@ -36595,7 +36664,8 @@ fn lock_self_extra_to_other_extra_incompatible() -> Result<()> {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because project[foo] depends on itself at an incompatible version (project==0.2.0) and your project requires project[foo], we can conclude that your project's requirements are unsatisfiable.
-      hint: The project `project` depends on itself at an incompatible version. This is likely a mistake. If you intended to depend on a third-party package named `project`, consider renaming the project `project` to avoid creating a conflict.
+
+    hint: The project `project` depends on itself at an incompatible version. This is likely a mistake. If you intended to depend on a third-party package named `project`, consider renaming the project `project` to avoid creating a conflict.
     ");
 
     Ok(())
@@ -36718,7 +36788,8 @@ fn lock_self_extra_incompatible() -> Result<()> {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because project[foo] depends on itself at an incompatible version (project==0.2.0) and your project requires project[foo], we can conclude that your project's requirements are unsatisfiable.
-      hint: The project `project` depends on itself at an incompatible version. This is likely a mistake. If you intended to depend on a third-party package named `project`, consider renaming the project `project` to avoid creating a conflict.
+
+    hint: The project `project` depends on itself at an incompatible version. This is likely a mistake. If you intended to depend on a third-party package named `project`, consider renaming the project `project` to avoid creating a conflict.
     ");
 
     Ok(())
@@ -36834,7 +36905,8 @@ fn lock_self_marker_incompatible() -> Result<()> {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because your project depends on itself at an incompatible version (project{sys_platform == 'win32'}>0.1), we can conclude that your project's requirements are unsatisfiable.
-      hint: The project `project` depends on itself at an incompatible version. This is likely a mistake. If you intended to depend on a third-party package named `project`, consider renaming the project `project` to avoid creating a conflict.
+
+    hint: The project `project` depends on itself at an incompatible version. This is likely a mistake. If you intended to depend on a third-party package named `project`, consider renaming the project `project` to avoid creating a conflict.
     ");
 
     Ok(())
@@ -37281,7 +37353,8 @@ fn lock_script() -> Result<()> {
     ----- stderr -----
     Resolved 4 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     Ok(())
@@ -39832,7 +39905,8 @@ fn lock_empty_extra() -> Result<()> {
     ----- stderr -----
     Resolved 3 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     uv_snapshot!(context.filters(), context.lock(), @"
@@ -39863,7 +39937,8 @@ fn lock_empty_extra() -> Result<()> {
     ----- stderr -----
     Resolved 3 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     uv_snapshot!(context.filters(), context.lock(), @"
@@ -40219,7 +40294,8 @@ fn lock_conflict_for_disjoint_python_version() -> Result<()> {
     error: No solution found when resolving dependencies for split (markers: python_full_version >= '3.11')
       cause: Because pandas==1.5.3 depends on numpy{python_full_version >= '3.10'}>=1.21.0 and your project depends on numpy==1.20.3, we can conclude that your project and pandas==1.5.3 are incompatible.
              And because your project depends on pandas==1.5.3, we can conclude that your project's requirements are unsatisfiable.
-      hint: While the active Python version is 3.9, the resolution failed for other Python versions supported by your project. Consider limiting your project's supported Python versions using `requires-python`.
+
+    hint: While the active Python version is 3.9, the resolution failed for other Python versions supported by your project. Consider limiting your project's supported Python versions using `requires-python`.
     ");
 
     // Check that the resolution passes on the restricted Python environment.
@@ -40428,7 +40504,8 @@ fn lock_conflict_for_disjoint_platform() -> Result<()> {
     ----- stderr -----
     error: No solution found when resolving dependencies for split (markers: sys_platform == 'exotic')
       cause: Because your project depends on numpy{sys_platform == 'exotic'}>=1.24,<1.26 and numpy>=1.26, we can conclude that your project's requirements are unsatisfiable.
-      hint: The resolution failed for an environment that is not the current one, consider limiting the environments with `tool.uv.environments`.
+
+    hint: The resolution failed for an environment that is not the current one, consider limiting the environments with `tool.uv.environments`.
     ");
 
     // Check that the resolution passes on the restricted environment.
@@ -40673,7 +40750,8 @@ async fn lock_trailing_slash_index_url_in_lockfile_not_pyproject() -> Result<()>
     ----- stderr -----
     Resolved 4 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     Ok(())
@@ -40765,7 +40843,8 @@ async fn lock_trailing_slash_index_url_in_pyproject_and_not_lockfile() -> Result
     ----- stderr -----
     Resolved 4 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     Ok(())
@@ -40949,7 +41028,8 @@ fn lock_trailing_slash_find_links() -> Result<()> {
     ----- stderr -----
     Resolved 2 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     uv_snapshot!(context.filters(), context.lock(), @"
@@ -41429,7 +41509,8 @@ fn lock_exclude_newer_package_absent() -> Result<()> {
     Resolving despite existing lockfile due to removal of global exclude newer
     Resolved 1 package in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     Ok(())
@@ -41661,7 +41742,8 @@ fn lock_exclude_newer_hint() -> Result<()> {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because there are no versions of iniconfig and your project depends on iniconfig, we can conclude that your project's requirements are unsatisfiable.
-      hint: `iniconfig` was filtered by `exclude-newer` to only include packages uploaded before 2000-01-01T00:00:00Z. The latest version satisfying the requirement is v2.0.0, published at 2023-01-07T11:08:09.864Z. Consider using `exclude-newer-package` to override the cutoff for this package.
+
+    hint: `iniconfig` was filtered by `exclude-newer` to only include packages uploaded before 2000-01-01T00:00:00Z. The latest version satisfying the requirement is v2.0.0, published at 2023-01-07T11:08:09.864Z. Consider using `exclude-newer-package` to override the cutoff for this package.
     ");
 
     Ok(())
@@ -41708,7 +41790,8 @@ async fn lock_exclude_newer_index_disable() -> Result<()> {
     warning: iniconfig-2.0.0-py3-none-any.whl is missing an upload date, but user provided: 2024-03-25T00:00:00Z
     error: No solution found when resolving dependencies
       cause: Because there are no versions of iniconfig and your project depends on iniconfig>=2, we can conclude that your project's requirements are unsatisfiable.
-      hint: `iniconfig` was filtered by `exclude-newer` to only include packages uploaded before 2024-03-25T00:00:00Z. The latest version satisfying the requirement is v2.0.0. Consider using `exclude-newer-package` to override the cutoff for this package.
+
+    hint: `iniconfig` was filtered by `exclude-newer` to only include packages uploaded before 2024-03-25T00:00:00Z. The latest version satisfying the requirement is v2.0.0. Consider using `exclude-newer-package` to override the cutoff for this package.
     ");
 
     pyproject_toml.write_str(&format!(
@@ -41786,7 +41869,8 @@ async fn lock_exclude_newer_index_value() -> Result<()> {
     warning: iniconfig-2.0.0-py3-none-any.whl is missing an upload date, but user provided: 2025-01-01T00:00:00Z
     error: No solution found when resolving dependencies
       cause: Because there are no versions of iniconfig and your project depends on iniconfig>=2, we can conclude that your project's requirements are unsatisfiable.
-      hint: `iniconfig` was filtered by the index-specific `exclude-newer` setting to only include packages uploaded before 2025-01-01T00:00:00Z. The latest version satisfying the requirement is v2.0.0. Consider updating that index's cutoff, setting it to `false`, or using `exclude-newer-package` to override the cutoff for this package.
+
+    hint: `iniconfig` was filtered by the index-specific `exclude-newer` setting to only include packages uploaded before 2025-01-01T00:00:00Z. The latest version satisfying the requirement is v2.0.0. Consider updating that index's cutoff, setting it to `false`, or using `exclude-newer-package` to override the cutoff for this package.
     ");
 
     uv_snapshot!(context.filters(), context
@@ -41799,7 +41883,8 @@ async fn lock_exclude_newer_index_value() -> Result<()> {
     warning: iniconfig-2.0.0-py3-none-any.whl is missing an upload date, but user provided: 2025-01-01T00:00:00Z
     error: No solution found when resolving dependencies
       cause: Because there are no versions of iniconfig and your project depends on iniconfig>=2, we can conclude that your project's requirements are unsatisfiable.
-      hint: `iniconfig` was filtered by the index-specific `exclude-newer` setting to only include packages uploaded before 2025-01-01T00:00:00Z. The latest version satisfying the requirement is v2.0.0. Consider updating that index's cutoff, setting it to `false`, or using `exclude-newer-package` to override the cutoff for this package.
+
+    hint: `iniconfig` was filtered by the index-specific `exclude-newer` setting to only include packages uploaded before 2025-01-01T00:00:00Z. The latest version satisfying the requirement is v2.0.0. Consider updating that index's cutoff, setting it to `false`, or using `exclude-newer-package` to override the cutoff for this package.
     ");
 
     pyproject_toml.write_str(&format!(
@@ -41864,7 +41949,8 @@ fn lock_exclude_newer_hint_pinned_version() -> Result<()> {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because there is no version of iniconfig==2.0.0 and your project depends on iniconfig==2.0.0, we can conclude that your project's requirements are unsatisfiable.
-      hint: `iniconfig` was filtered by `exclude-newer` to only include packages uploaded before 2022-01-01T00:00:00Z. The requested version, v2.0.0, was published at 2023-01-07T11:08:09.864Z. Consider using `exclude-newer-package` to override the cutoff for this package.
+
+    hint: `iniconfig` was filtered by `exclude-newer` to only include packages uploaded before 2022-01-01T00:00:00Z. The requested version, v2.0.0, was published at 2023-01-07T11:08:09.864Z. Consider using `exclude-newer-package` to override the cutoff for this package.
     ");
 
     Ok(())
@@ -41900,7 +41986,8 @@ fn lock_exclude_newer_hint_compatible_release() -> Result<()> {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because only iniconfig<=1.1.1 is available and your project depends on iniconfig>=2.0,<3.dev0, we can conclude that your project's requirements are unsatisfiable.
-      hint: `iniconfig` was filtered by `exclude-newer` to only include packages uploaded before 2022-01-01T00:00:00Z. The latest version satisfying the requirement is v2.0.0, published at 2023-01-07T11:08:09.864Z. Consider using `exclude-newer-package` to override the cutoff for this package.
+
+    hint: `iniconfig` was filtered by `exclude-newer` to only include packages uploaded before 2022-01-01T00:00:00Z. The latest version satisfying the requirement is v2.0.0, published at 2023-01-07T11:08:09.864Z. Consider using `exclude-newer-package` to override the cutoff for this package.
     ");
 
     Ok(())
@@ -42884,7 +42971,8 @@ fn lock_refresh_deindents_lockfile() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: The lockfile at `uv.lock` has non-canonical formatting at line 13, but `--check` was provided.
-      hint: To regenerate the lockfile, run `uv lock --refresh --preview-features lockfile-format-check`.
+
+    hint: To regenerate the lockfile, run `uv lock --refresh --preview-features lockfile-format-check`.
     ");
 
     uv_snapshot!(context.filters(), context.lock().arg("--refresh").arg("--dry-run"), @"
@@ -42986,7 +43074,8 @@ fn collapsed_error_with_marker_packages() -> Result<()> {
     ----- stderr -----
     error: No solution found when resolving dependencies for split (markers: python_full_version < '3.14' and sys_platform == 'other')
       cause: Because your project depends on anyio{sys_platform == 'other'} and anyio{python_full_version < '3.14'}>=4.4.0, we can conclude that your project's requirements are unsatisfiable.
-      hint: The resolution failed for an environment that is not the current one, consider limiting the environments with `tool.uv.environments`.
+
+    hint: The resolution failed for an environment that is not the current one, consider limiting the environments with `tool.uv.environments`.
     ");
 
     Ok(())
@@ -43072,7 +43161,7 @@ fn lock_unsupported_wheel_url_supported_platform() -> Result<()> {
         .into_iter()
         .chain([(
             // This hint is only shown when the current platform doesn't match the target.
-            r"\n  hint: The resolution failed for an environment that is not the current one[^\n]*",
+            r"\n\nhint: The resolution failed for an environment that is not the current one[^\n]*",
             "",
         )])
         .collect();
@@ -43666,7 +43755,7 @@ fn lock_required_environment_cycle_reports_resolution_error() -> Result<()> {
         .into_iter()
         .chain([(
             // This hint is only shown when the current platform doesn't match the target.
-            r"\n  hint: The resolution failed for an environment that is not the current one[^\n]*",
+            r"\n\nhint: The resolution failed for an environment that is not the current one[^\n]*",
             "",
         )])
         .collect();
@@ -43710,7 +43799,7 @@ fn lock_supported_environment_wheel_only_package_requires_compatible_wheels() ->
         .into_iter()
         .chain([(
             // This hint is only shown when the current platform doesn't match the target.
-            r"\n  hint: The resolution failed for an environment that is not the current one[^\n]*",
+            r"\n\nhint: The resolution failed for an environment that is not the current one[^\n]*",
             "",
         )])
         .collect();
@@ -43724,7 +43813,8 @@ fn lock_supported_environment_wheel_only_package_requires_compatible_wheels() ->
                  pywin32>=306
              we can conclude that pywin32<306 cannot be used.
              And because pywin32>=306 has no Linux-compatible wheels and your project depends on pywin32, we can conclude that your project's requirements are unsatisfiable.
-      hint: Wheels are available for `pywin32` (v305) with the following Python ABI tags: `cp36m`, `cp37m`, `cp38`, `cp39`, `cp310`, `cp311`
+
+    hint: Wheels are available for `pywin32` (v305) with the following Python ABI tags: `cp36m`, `cp37m`, `cp38`, `cp39`, `cp310`, `cp311`
     ");
 
     Ok(())
@@ -43977,7 +44067,8 @@ fn lock_no_locked() -> Result<()> {
     ----- stderr -----
     Resolved 1 package in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--check` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
     assert_eq!(context.read("uv.lock"), lock);
 
@@ -44076,7 +44167,8 @@ fn lock_check_overrides_frozen_environment() -> Result<()> {
     warning: Ignoring `UV_FROZEN` because `--check` was provided
     Resolved 1 package in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--check` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
     assert_eq!(context.read("uv.lock"), lock);
 
@@ -44174,21 +44266,24 @@ fn lock_frozen_errors_report_source() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: The lockfile at `uv.lock` needs to be updated, but `--frozen` was provided: Missing workspace member `renamed`.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     uv_snapshot!(context.filters(), context.lock().arg("--check-exists"), @"
     exit_code: 1 (failure)
     ----- stderr -----
     error: The lockfile at `uv.lock` needs to be updated, but `--check-exists` was provided: Missing workspace member `renamed`.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     uv_snapshot!(context.filters(), context.lock().env(EnvVars::UV_FROZEN, "1"), @"
     exit_code: 1 (failure)
     ----- stderr -----
     error: The lockfile at `uv.lock` needs to be updated, but `UV_FROZEN=1` was provided: Missing workspace member `renamed`.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
     assert_eq!(context.read("uv.lock"), lock);
 
