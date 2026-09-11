@@ -44,15 +44,19 @@ formatter.
 
 | Type               | Contents                                                                                                    |
 | ------------------ | ----------------------------------------------------------------------------------------------------------- |
-| `SourceFile`       | A display name and exact decoded text shared with `Arc<str>`, optionally starting at a later source line.   |
+| `SourceFile`       | A display name and shared decoded text, optionally starting at a later source line.                         |
 | `SourceSnippet`    | A source snapshot, annotations, and a context-window policy. An annotation-free snippet is a file location. |
 | `SourceAnnotation` | A half-open byte range, a primary or contextual role, and an optional short label.                          |
+| `SourceEdit`       | A half-open byte range and exact replacement text in one source snapshot.                                   |
+| `SourceSuggestion` | Validated, non-overlapping edits, explicit applicability, and permission to display the affected lines.     |
 
 A display name may be a local path, a redacted URL, or a label for an argument or standard input.
 Sources are captured when inputs are read or parsed. Formatting should not reopen files: an input
 may have changed, disappeared, come from standard input, or been downloaded. Sharing snapshots
 avoids copying a complete document into every related error. A source interner or database is not
-needed for the initial implementation.
+needed for the initial implementation. Clones also share an immutable line index built when the
+source is retained, so checking many declarations in one file does not repeatedly scan the complete
+input.
 
 Coordinates are zero-based UTF-8 byte offsets into the retained, decoded source, with an exclusive
 end. They are not character indices, display columns, or necessarily offsets into the original file
@@ -81,7 +85,7 @@ Python-specific file model.
 
 The adapter uses upstream [`annotate-snippets`][annotate-snippets] `0.12.16`. That API supports
 source snippets, primary and contextual annotations, [custom level names][annotate-levels],
-title-less groups, location-only origins, and replacement patches. Ruff's [fork
+title-less groups, location-only origins, and [replacement patches][annotate-patches]. Ruff's [fork
 rationale][ruff-fork] illustrates why terminal formatting compatibility should be controlled by uv
 rather than exposed throughout the codebase. No requirement for a fork has been established; one
 should only be necessary if a concrete formatting requirement cannot be expressed through the
@@ -112,12 +116,46 @@ The renderer is not an error classifier. Formatting changes must leave error-cha
 downcasting, hints, command exit codes, quiet-mode behavior, and external-command status propagation
 unchanged. Presentation-only provenance must also stay out of resolver identity and cache keys;
 `uv-distribution-types::Requirement` already excludes its `origin` from equality, ordering, hashing,
-and serialization.
+and serialization. `RequirementOrigin` is not itself a presentation-only field, however:
+`RequirementOrigin::Group` participates in group-scoped explicit-index selection. Exact diagnostic
+occurrences and any future solver-origin arena must remain separate from that semantic context.
+
+## Structured reports and suggestions
+
+The experimental `ErrorReport` uses the same resolved error-chain walk as the text renderer. Its
+`errors` array contains the outer error followed by each actual cause; every entry owns its source
+locations, `info` statements, and ordered hints. Locations declare one-based lines and zero-based
+UTF-8 byte columns. Source excerpts use the same explicit windows as terminal output, and
+location-only sources do not serialize hidden annotations or retained file contents.
+
+The hidden `--error-format=json` option writes one complete JSON object per formatted error chain.
+Transport escaping makes terminal controls and layout controls visible without changing the decoded
+source or replacement text. This does not yet turn stderr into a uniform event stream: standalone
+warnings, progress, Clap argument errors, and subprocess output retain their separate contracts.
+Text remains the default. Neither selecting JSON nor constructing a report changes exit-status
+classification.
+
+`Hint::with_suggestion` attaches edits to the actual hint owner. Applicability is separate from
+mechanical validity: `DisplayOnly` requires manual interpretation, `Unsafe` may change behavior, and
+`Safe` represents the producer's confidence in the intended result. Ruff's [fix model][ruff-fixes]
+illustrates this distinction and the separate question of grouping mutually exclusive edits. uv's
+initial model accepts one retained source per suggestion, rejects invalid or overlapping edits, and
+does not expose an apply operation. Equal hint messages cannot establish edit identity; duplicate
+hints retain edits only when they refer to the same immutable suggestion, using the stricter source
+visibility permission.
+
+The terminal adapter includes a replacement-preview path through `annotate-snippets`. Current
+production edit producers keep their source text private, so previews remain internal until a
+source-safe producer needs that API. The hint retains its exact locations and the JSON
+representation retains the explicit replacement. A source display name is not a file URI, and the
+retained text may have been decoded or redacted. Even a `Safe` edit therefore needs an independently
+verified document identity, version, and byte mapping before an editor or future uv command can
+apply it.
 
 ## Implemented examples
 
-The cost of adoption is mostly the cost of retaining accurate provenance, not drawing snippets. Four
-examples exercise different boundaries:
+The cost of adoption is mostly the cost of retaining accurate provenance, not drawing snippets. The
+implemented examples exercise several boundaries:
 
 - **Requirements files.** Retain decoded inputs for PEP 508 errors and nested `-r` or `-c`
   inclusions. The primary error can point to the invalid requirement, alongside the related include
@@ -131,6 +169,33 @@ examples exercise different boundaries:
 - **Duplicate workspace names.** Retain both parsed project sources at the conflict boundary. The
   second declaration is primary and the first is a related location, including when their original
   spellings normalize to the same package name.
+- **Python requirements.** Direct `project.requires-python` errors retain their parsed declaration.
+  `.python-version` requests retain the selected original occurrence. Dependency-group intersections
+  carry all contributing declarations and include edges, including conflicts that cannot be
+  explained by a single pair of bounds.
+- **PEP 723 metadata.** An extraction map translates normalized TOML spans back to the original
+  commented script, accounting for CRLF, UTF-8, removed prefixes, and EOF. Unknown mappings fall
+  back instead of inventing script columns.
+- **Sources and indexes.** Validation and lowering retain exact original array occurrences before
+  marker, extra, or group filtering. Source-marker conflicts and missing named indexes use
+  location-only output. Source validation checks every pair with matching extra and group selectors.
+  A nonempty marker remainder can carry a display-only edit for the verified TOML value; a fully
+  covered source receives disjointness or removal advice instead of an impossible replacement.
+- **Configured environments.** Supported and required environment lists also check every pair for
+  overlap. Exact workspace-owned arrays can identify both conflicting declarations and offer a
+  display-only edit for a nonempty remainder. Merged configuration and scripts remain unlocated.
+  Fully covered required environments receive no deletion edit because removing an entry can weaken
+  artifact-coverage requirements.
+- **Requirements in resolver errors.** `RequirementProvenance` identifies an exact parse occurrence
+  independently of requirement equality and cache keys. Named registry requirements and nested
+  constraints retain it through lowering, overrides, marker filtering, and the empty-range failure
+  witness. Static PEP 621 metadata can opt in after checking the complete authored dependency and
+  optional-extra sequence; built or cached metadata does not gain guessed source locations.
+- **Unnamed-root dependency explanations.** An insertion ledger records the exact typed clauses
+  passed to PubGrub in each fork. A location is shown only if all clauses for that dependency name
+  are identical and agree on the authored occurrence and semantic source context, and the same
+  clause appears in both the original proof and the final reduced report. A distinct or unlocated
+  contributor leaves the explanation unannotated.
 
 For example, the duplicate-name diagnostic shows both declarations:
 
@@ -147,40 +212,50 @@ error: Two workspace members are both named `example`
     |        --------- first declared here
 ```
 
-These examples do not cover every standalone PEP 508 error, PEP 723 metadata, or resolver conflict.
+For example, an unambiguous requirements-file root can identify the declaration behind a normal
+nonempty dependency clause:
 
-## Further adoption
+```text
+error: No solution found when resolving dependencies
+  cause: Because pypyp was not found in the provided package locations and you require pypyp>=1, we can conclude that your requirements are unsatisfiable.
+   --> requirements.in:2:1
+    |
+  2 | pypyp>=1
+    | ^^^^^^^^ this dependency was declared here
+```
 
-The next changes can remain independently reviewable:
+## Remaining adoption decisions
 
-1. **Direct project Python requirements — small to medium.** Attach locations for direct
-   `[project].requires-python` declarations while the workspace and parsed metadata are still
-   available. The first change should exclude inherited dependency-group bounds: a flattened
-   intersection cannot honestly be attributed to one declaration.
-2. **Python requests and group constraints — medium.** Retain the original `.python-version` text
-   and the selected occurrence. Carry all contributing group declarations through inclusion and
-   intersection. An empty intersection involving several declarations may need all contributors or a
-   typed incompatibility witness, not an arbitrary pair of locations.
-3. **PEP 723 metadata — medium.** Add an extraction map from normalized TOML back to the decoded
-   script, accounting for removed comment prefixes, CRLF, UTF-8, and EOF. A synthetic
-   script-metadata source is a smaller alternative, but must not claim original-script columns.
-4. **Sources, indexes, and marker conflicts — medium.** `SourceMap` already handles dotted keys,
-   inline tables, and array-of-table occurrences. Retain the declaration participating in each
-   validation error; URL-bearing fields should initially allow location-only output.
-5. **Resolver provenance — large.** Carry one-to-many declaration identities through requirement
-   lowering, constraints, overrides, merging, marker transformations, and PubGrub explanations.
-   `RequirementOrigin` identifies a file, project, or group, but not an exact occurrence, and some
-   origins already affect group-scoped source behavior. A separate design must cover provenance
-   identity, memory use, caching, explanation simplification, and remote package metadata.
-6. **Structured output and suggestions — separate design.** Serialize typed messages, locations, and
-   relationships instead of parsing terminal output. Define coordinate units, unavailable source,
-   and schema stability. Typed replacements additionally need applicability, overlapping edit, and
-   changed-file policies. Displaying a possible replacement does not imply that uv can safely apply
-   it.
+The source model and renderer are no longer the main unknowns. Further work has distinct provenance
+and product boundaries:
 
-New transparent or type-erased error owners also need registration and source-contract coverage.
+| Work                          | Current boundary                                                                           | What is still needed                                                                                                                                                                        |
+| ----------------------------- | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| More source-bearing errors    | Representative TOML, requirements, project Python, group, script, source, and index errors | Retain exact occurrences for each new semantic validator; decide whether its complete source lines are safe. Standalone or transformed inputs need explicit coordinate mappings.            |
+| More project metadata         | Known-static PEP 621 dependency order                                                      | Explicit provenance for dependency groups, build requirements, dynamic/backend metadata, `PKG-INFO`, wheels, and remote `METADATA`; never infer declarations from cached normalized values. |
+| General resolver explanations | Empty-range witnesses and unambiguous unnamed-root clauses                                 | Merge-aware one-to-many PubGrub origin identities, with unlocated contributors and source-aware report rewrites.                                                                            |
+| Stable structured output      | Hidden experimental error-chain JSON                                                       | Decide schema evolution, stable codes, source/document identity, and the relationship to warnings, progress, Clap, and child-process output.                                                |
+| Applying suggestions          | Validated single-source edits and explicit applicability                                   | Define source version verification, decoded-to-file byte mappings, multi-file atomicity, conflicting edit groups, and opt-in behavior-changing edits.                                       |
+
+The resolver boundary is substantial. The pinned `astral-pubgrub` `0.6.1` [insertion
+API][pubgrub-insertion] accepts package/range dependencies, while its [exported dependency
+leaves][pubgrub-report] retain only the semantic parent and child clauses. [Coalescing
+dependencies][pubgrub-merge] can combine several parent versions into a new incompatibility. Package
+names, overlapping ranges, and formatted explanations cannot recover which authored occurrences
+contributed to that merged leaf.
+
+A general prerequisite should accept an opaque client origin with each inserted dependency, preserve
+immutable unions of those origins when incompatibilities merge, and expose the resulting origin set
+or complete merge ancestry in the report. Unlocated contributors must remain explicit. uv can then
+map solver-local origins to shared source occurrences and effective marker/source context, without
+changing package/range equality, hashing, solving, or cache keys. Origin unions should be shared or
+interned, and solver-local IDs must stay paired with their fork-local arena. Report simplification
+must drop, retain, or union those origins alongside the actual explanation it rewrites. Remote
+package metadata and Python-compatibility edges can be adopted after that contract exists.
+
+New transparent or type-erased error owners still need registration and source-contract coverage.
 Source-only producers do not need artificial `Hinted` implementations. Full resolver provenance, a
-stable structured format, and automatic edits remain distinct adoption decisions.
+stable structured format, and automatic edits remain independent changes.
 
 [ty-model]:
   https://github.com/astral-sh/ruff/blob/6c8eb98a0295a31b90df12d2307f910376f3bbcc/crates/ruff_db/src/diagnostic/mod.rs#L630-L760
@@ -194,3 +269,13 @@ stable structured format, and automatic edits remain distinct adoption decisions
   https://github.com/astral-sh/ruff/blob/6c8eb98a0295a31b90df12d2307f910376f3bbcc/crates/ruff_annotate_snippets/README.md
 [annotate-trust]:
   https://github.com/rust-lang/annotate-snippets-rs/blob/2d2643cf7c64abbf014ff1df736865074a8b94de/src/level.rs#L70-L125
+[annotate-patches]:
+  https://github.com/rust-lang/annotate-snippets-rs/blob/2d2643cf7c64abbf014ff1df736865074a8b94de/src/snippet.rs#L411-L444
+[ruff-fixes]:
+  https://github.com/astral-sh/ruff/blob/6c8eb98a0295a31b90df12d2307f910376f3bbcc/crates/ruff_diagnostics/src/fix.rs#L8-L55
+[pubgrub-insertion]:
+  https://github.com/astral-sh/pubgrub/blob/233ec98313aa2e5c25dd579c505f3d8594eda2e9/src/internal/core.rs#L123-L205
+[pubgrub-report]:
+  https://github.com/astral-sh/pubgrub/blob/233ec98313aa2e5c25dd579c505f3d8594eda2e9/src/report.rs#L31-L64
+[pubgrub-merge]:
+  https://github.com/astral-sh/pubgrub/blob/233ec98313aa2e5c25dd579c505f3d8594eda2e9/src/internal/incompatibility.rs#L241-L276
