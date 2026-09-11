@@ -2172,8 +2172,7 @@ fn tool_run_hint_version_not_available() {
     exit_code: 2 (failure)
     ----- stderr -----
     error: No interpreter found for Python 3.12 in [PYTHON SOURCES]
-
-    hint: A managed Python download is available for Python 3.12, but Python downloads are set to 'never'
+      info: A managed Python download is available for Python 3.12, but Python downloads are set to 'never'
     ");
 
     uv_snapshot!(context.filters(), context.tool_run()
@@ -2183,8 +2182,7 @@ fn tool_run_hint_version_not_available() {
     exit_code: 2 (failure)
     ----- stderr -----
     error: No interpreter found for Python 3.12 in [PYTHON SOURCES]
-
-    hint: A managed Python download is available for Python 3.12, but uv is set to offline mode
+      info: A managed Python download is available for Python 3.12, but uv is set to offline mode
     ");
 
     uv_snapshot!(context.filters(), context.tool_run()
@@ -2194,8 +2192,7 @@ fn tool_run_hint_version_not_available() {
     exit_code: 2 (failure)
     ----- stderr -----
     error: No interpreter found for Python 3.12 in [PYTHON SOURCES]
-
-    hint: A managed Python download is available for Python 3.12, but the Python preference is set to 'only system'
+      info: A managed Python download is available for Python 3.12, but the Python preference is set to 'only system'
     ");
 
     uv_snapshot!(context.filters(), context.tool_run()
@@ -2207,8 +2204,7 @@ fn tool_run_hint_version_not_available() {
     exit_code: 2 (failure)
     ----- stderr -----
     error: No interpreter found for Python 3.12 in [PYTHON SOURCES]
-
-    hint: A managed Python download is available for Python 3.12, but the Python preference is set to 'only system'
+      info: A managed Python download is available for Python 3.12, but the Python preference is set to 'only system'
     ");
 }
 

@@ -1,25 +1,37 @@
 use std::error::Error;
 use std::sync::Arc;
 
-use uv_errors::Diagnostic;
+use uv_errors::{Diagnostic, Hinted};
 
-use crate::NoSolutionError;
+use crate::{LockError, NoSolutionError, PylockTomlError};
 
-/// Resolve rejection context and retained requirement locations without changing error sources.
+/// Resolve resolver-owned presentation data without changing error sources.
 pub fn diagnostic_for_error<'a>(error: &'a (dyn Error + 'static)) -> Option<Diagnostic<'a>> {
+    if let Some(error) = downcast_error::<NoSolutionError>(error) {
+        return error.diagnostic();
+    }
+    if let Some(error) = downcast_error::<LockError>(error) {
+        let info = error.own_info()?;
+        return Some(
+            Diagnostic::default()
+                .with_hints(error.own_hints())
+                .with_info(info),
+        );
+    }
+    let error = downcast_error::<PylockTomlError>(error)?;
+    let info = error.own_info()?;
+    Some(
+        Diagnostic::default()
+            .with_hints(error.own_hints())
+            .with_info(info),
+    )
+}
+
+fn downcast_error<'a, E: Error + 'static>(error: &'a (dyn Error + 'static)) -> Option<&'a E> {
     error
-        .downcast_ref::<NoSolutionError>()
-        .or_else(|| {
-            error
-                .downcast_ref::<Box<NoSolutionError>>()
-                .map(AsRef::as_ref)
-        })
-        .or_else(|| {
-            error
-                .downcast_ref::<Arc<NoSolutionError>>()
-                .map(AsRef::as_ref)
-        })?
-        .diagnostic()
+        .downcast_ref::<E>()
+        .or_else(|| error.downcast_ref::<Box<E>>().map(AsRef::as_ref))
+        .or_else(|| error.downcast_ref::<Arc<E>>().map(AsRef::as_ref))
 }
 
 #[cfg(test)]

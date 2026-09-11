@@ -32,6 +32,7 @@ use uv_distribution_types::{
     PathSourceDist, RegistryBuiltDist, RegistryBuiltWheel, RegistrySourceDist, RemoteSource,
     RequiresPython, Resolution, ResolvedDist, SourceDist, ToUrlError, UrlString,
 };
+use uv_errors::Info;
 use uv_extract::hash::{HashReader, Hasher};
 use uv_fs::{PortablePathBuf, normalize_path, try_relative_to_if};
 use uv_git::{RepositoryReference, ResolvedRepositoryReference};
@@ -266,15 +267,22 @@ impl std::fmt::Display for PylockTomlError {
 
 impl uv_errors::Hinted for PylockTomlError {
     fn hints(&self) -> uv_errors::Hints<'_> {
-        if let Some(hint) = &self.hint {
-            uv_errors::Hints::from(hint.to_string())
-        } else {
-            uv_errors::Hints::none()
-        }
+        self.hint
+            .as_ref()
+            .and_then(WheelTagHint::actionable_hint)
+            .into_iter()
+            .collect()
     }
 
     fn transparent_source(&self) -> Option<&(dyn StdError + 'static)> {
         Some(self.kind.as_ref())
+    }
+}
+
+impl PylockTomlError {
+    /// Return the wheel-tag mismatch owned by this `pylock.toml` failure.
+    pub(crate) fn own_info(&self) -> Option<Info<'static>> {
+        self.hint.as_ref().map(WheelTagHint::diagnostic_info)
     }
 }
 
@@ -2141,4 +2149,44 @@ where
         .to_timestamp(DateTime::from_parts(date, time))
         .map_err(serde::de::Error::custom)?;
     Ok(Some(timestamp))
+}
+
+#[cfg(test)]
+mod diagnostic_tests {
+    use std::collections::BTreeSet;
+
+    use uv_errors::{ErrorOptions, Hinted, Hints, write_error_chain_with_options};
+    use uv_warnings::anstream;
+
+    use super::*;
+
+    #[test]
+    fn incompatible_wheel_context_comes_from_native_provider() {
+        let package: PackageName = "example".parse().expect("valid package name");
+        let error = PylockTomlError {
+            kind: Box::new(PylockTomlErrorKind::IncompatibleWheelOnly(package.clone())),
+            hint: Some(WheelTagHint::LanguageTags {
+                package,
+                version: Some(Version::new([1, 0])),
+                tags: BTreeSet::from(["cp311".parse().expect("valid language tag")]),
+                best: Some("cp312".parse().expect("valid language tag")),
+            }),
+        };
+        assert!(error.hints().is_empty());
+
+        let mut output = String::new();
+        write_error_chain_with_options(
+            &error,
+            &Hints::none(),
+            ErrorOptions::default()
+                .with_width_override(1000)
+                .with_diagnostic(crate::diagnostic_for_error)
+                .with_stream(&mut output),
+        )
+        .expect("writing to a string cannot fail");
+        insta::assert_snapshot!(anstream::adapter::strip_str(&output), @"
+        error: Package `example` can't be installed because the binary distribution is incompatible with the current platform
+          info: You're using CPython 3.12 (`cp312`), but `example` (v1.0) only has wheels with the following Python implementation tag: `cp311`
+        ");
+    }
 }

@@ -213,8 +213,7 @@ fn python_install_automatic() {
     exit_code: 2 (failure)
     ----- stderr -----
     error: No interpreter found in [PYTHON SOURCES]
-
-    hint: A managed Python download is available, but Python downloads are set to 'never'
+      info: A managed Python download is available, but Python downloads are set to 'never'
     ");
 
     // Otherwise, we should fetch the latest Python version

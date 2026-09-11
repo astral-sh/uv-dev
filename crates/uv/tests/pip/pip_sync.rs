@@ -5984,8 +5984,7 @@ fn pep_751_wheel_only() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Package `torch` can't be installed because it doesn't have a source distribution or wheel for the current platform
-
-    hint: You're using CPython 3.8 (`cp38`), but `torch` (v2.2.1) only has wheels with the following Python implementation tag: `cp312`
+      info: You're using CPython 3.8 (`cp38`), but `torch` (v2.2.1) only has wheels with the following Python implementation tag: `cp312`
     "
     );
 
@@ -6141,8 +6140,7 @@ fn pep_751_direct_url_tags() -> Result<()> {
     ----- stderr -----
     error: Failed to determine installation plan
       cause: A URL (https://files.pythonhosted.org/packages/6b/b0/18f76bba336fa5aecf79d45dcd6c806c280ec44538b3c13671d49099fdd0/MarkupSafe-3.0.2-cp312-cp312-macosx_11_0_arm64.whl) dependency is incompatible with the current platform
-
-    hint: The wheel is compatible with macOS (`macosx_11_0_arm64`), but you're on Linux (`manylinux_2_28_x86_64`)
+      info: The wheel is compatible with macOS (`macosx_11_0_arm64`), but you're on Linux (`manylinux_2_28_x86_64`)
     "
     );
 
@@ -6177,8 +6175,7 @@ fn incompatible_python_version_direct_url() -> Result<()> {
     Resolved 1 package in [TIME]
     error: Failed to determine installation plan
       cause: A URL (https://files.pythonhosted.org/packages/ae/11/7c546fcf42145f29b71e4d6f429e96d8d68e5a7ba1830b2e68d7418f0bbd/numpy-2.3.2-cp313-cp313-win32.whl) dependency is incompatible with the current platform
-
-    hint: The wheel is compatible with CPython 3.13 (`cp313`), but you're using CPython 3.12 (`cp312`)
+      info: The wheel is compatible with CPython 3.13 (`cp313`), but you're using CPython 3.12 (`cp312`)
     "
     );
 
@@ -6201,8 +6198,7 @@ fn incompatible_direct_url_redacts_credentials() -> Result<()> {
     Resolved 1 package in [TIME]
     error: Failed to determine installation plan
       cause: A URL (https://user:****@files.pythonhosted.org/packages/ae/11/7c546fcf42145f29b71e4d6f429e96d8d68e5a7ba1830b2e68d7418f0bbd/numpy-2.3.2-cp313-cp313-win32.whl?X-Amz-Signature=****) dependency is incompatible with the current platform
-
-    hint: The wheel is compatible with CPython 3.13 (`cp313`), but you're using CPython 3.12 (`cp312`)
+      info: The wheel is compatible with CPython 3.13 (`cp313`), but you're using CPython 3.12 (`cp312`)
     "
     );
 
@@ -6225,8 +6221,7 @@ fn incompatible_platform_direct_url() -> Result<()> {
     Resolved 1 package in [TIME]
     error: Failed to determine installation plan
       cause: A URL (https://files.pythonhosted.org/packages/ae/11/7c546fcf42145f29b71e4d6f429e96d8d68e5a7ba1830b2e68d7418f0bbd/numpy-2.3.2-cp313-cp313-win32.whl) dependency is incompatible with the current platform
-
-    hint: The wheel is compatible with Windows (`win32`), but you're on Linux (`manylinux_2_28_x86_64`)
+      info: The wheel is compatible with Windows (`win32`), but you're on Linux (`manylinux_2_28_x86_64`)
     "
     );
 

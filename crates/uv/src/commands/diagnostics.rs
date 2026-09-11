@@ -248,17 +248,24 @@ mod tests {
     use reqwest::StatusCode;
 
     use uv_client::{BaseClientBuilder, Connectivity};
+    use uv_configuration::{
+        BuildOptions, DependencyGroupsWithDefaults, ExtrasSpecification, InstallOptions,
+    };
     use uv_distribution::MetadataError;
     use uv_distribution_types::{DerivationChain, DerivationStep, IsBuildBackendError};
     use uv_errors::{
         ErrorFormat, ErrorOptions, HintOrdering, Hinted, Hints, write_error_chain_with_options,
     };
     use uv_fs::Simplified;
+    use uv_normalize::DefaultExtras;
     use uv_pep440::Version;
+    use uv_pep508::{MarkerEnvironment, MarkerEnvironmentBuilder};
+    use uv_platform_tags::{Arch, Os, Platform, Tags, TagsOptions};
     use uv_publish::PublishSendError;
+    use uv_pypi_types::ResolverMarkerEnvironment;
     use uv_redacted::DisplaySafeUrl;
     use uv_requirements_txt::{RequirementsTxt, SourceCache};
-    use uv_resolver::ResolveError;
+    use uv_resolver::{Lock, PylockTomlError, ResolveError};
     use uv_scripts::Pep723Metadata;
     use uv_settings::FilesystemOptions;
     use uv_types::AnyErrorBuild;
@@ -743,6 +750,97 @@ mod tests {
           ]
         ]
         "#);
+        Ok(())
+    }
+
+    #[test]
+    fn formats_native_lock_context_once_through_wrappers() -> anyhow::Result<()> {
+        let lock: Lock = toml::from_str(
+            r#"
+version = 1
+revision = 3
+requires-python = ">=3.12"
+
+[[package]]
+name = "example"
+version = "1.0.0"
+source = { path = "example-1.0.0-cp312-cp312-macosx_11_0_arm64.whl" }
+wheels = [{ filename = "example-1.0.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:1111111111111111111111111111111111111111111111111111111111111111" }]
+"#,
+        )?;
+        let markers = ResolverMarkerEnvironment::from(MarkerEnvironment::try_from(
+            MarkerEnvironmentBuilder {
+                implementation_name: "cpython",
+                implementation_version: "3.12.0",
+                os_name: "posix",
+                platform_machine: "x86_64",
+                platform_python_implementation: "CPython",
+                platform_release: "",
+                platform_system: "Linux",
+                platform_version: "",
+                python_full_version: "3.12.0",
+                python_version: "3.12",
+                sys_platform: "linux",
+            },
+        )?);
+        let tags = Tags::from_env(
+            Platform::new(
+                Os::Manylinux {
+                    major: 2,
+                    minor: 28,
+                },
+                Arch::X86_64,
+            ),
+            (3, 12),
+            "cpython",
+            (3, 12),
+            TagsOptions {
+                manylinux_compatible: true,
+                ..TagsOptions::default()
+            },
+        )?;
+        let make_error = || {
+            lock.to_resolution(
+                Path::new("."),
+                lock.packages(),
+                None,
+                &markers,
+                &tags,
+                &ExtrasSpecification::default().with_defaults(DefaultExtras::default()),
+                &DependencyGroupsWithDefaults::none(),
+                &BuildOptions::default(),
+                &InstallOptions::default(),
+            )
+            .expect_err("a macOS-only wheel is incompatible with Linux")
+        };
+
+        let direct = make_error();
+        let boxed = Box::new(make_error());
+        let shared = Arc::new(make_error());
+        let transparent = PylockTomlError::from(make_error());
+        let errors: [&(dyn Error + 'static); 4] = [&direct, &boxed, &shared, &transparent];
+        for error in errors {
+            let mut output = String::new();
+            write_error_chain_with_options(
+                error,
+                &Hints::none(),
+                ErrorOptions::default()
+                    .with_format(ErrorFormat::Json)
+                    .with_diagnostic(diagnostic_for_error)
+                    .with_stream(&mut output),
+            )?;
+            let report: serde_json::Value = serde_json::from_str(&output)?;
+            let errors = report["errors"].as_array().expect("structured error chain");
+            assert_eq!(errors.len(), 1);
+            assert_eq!(
+                errors[0]["info"].as_array().expect("owned context").len(),
+                1
+            );
+            assert_eq!(
+                errors[0]["hints"].as_array().expect("owned actions").len(),
+                1
+            );
+        }
         Ok(())
     }
 
