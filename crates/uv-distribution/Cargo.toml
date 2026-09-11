@@ -41,6 +41,7 @@ uv-pypi-types = { workspace = true }
 uv-python = { workspace = true }
 uv-redacted = { workspace = true }
 uv-threads = { workspace = true }
+uv-toml = { workspace = true }
 uv-types = { workspace = true }
 uv-workspace = { workspace = true }
 
@@ -68,6 +69,7 @@ walkdir = { workspace = true }
 [dev-dependencies]
 uv-preview = { workspace = true, features = ["testing"] }
 
+anstream = { workspace = true }
 indoc = { workspace = true }
 insta = { workspace = true }
 
