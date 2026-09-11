@@ -27,7 +27,7 @@ permissions:
 
 jobs:
   cargo-test-linux:
-    uses: astral-sh/github-actions/.github/workflows/nextest.yml@4a67b826d91cd36483b2a7a6a0fa39d966f4638c
+    uses: astral-sh/github-actions/.github/workflows/nextest.yml@e6fe1b51adba9d0b2c847e503fce90e8fb765188
     with:
       name: cargo test on linux
       runs-on: depot-ubuntu-24.04-16
@@ -38,7 +38,7 @@ jobs:
   cargo-test-macos:
     # Run macOS tests on main, or when the CI plan opts in.
     if: ${{ inputs.test-macos == 'true' }}
-    uses: astral-sh/github-actions/.github/workflows/nextest.yml@4a67b826d91cd36483b2a7a6a0fa39d966f4638c
+    uses: astral-sh/github-actions/.github/workflows/nextest.yml@e6fe1b51adba9d0b2c847e503fce90e8fb765188
     with:
       name: cargo test on macos
       runs-on: namespace-profile-macos-15
@@ -47,7 +47,7 @@ jobs:
       save-cache: ${{ inputs.save-rust-cache == 'true' }}
 
   cargo-test-windows:
-    uses: astral-sh/github-actions/.github/workflows/nextest.yml@4a67b826d91cd36483b2a7a6a0fa39d966f4638c
+    uses: astral-sh/github-actions/.github/workflows/nextest.yml@e6fe1b51adba9d0b2c847e503fce90e8fb765188
     with:
       name: cargo test on windows
       runs-on: namespace-profile-windows-2022-x86-64-16x32
