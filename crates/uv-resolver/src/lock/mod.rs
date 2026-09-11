@@ -2041,7 +2041,10 @@ impl Lock {
     /// Use [`Self::from_toml`] when reading lockfiles that might not use uv's
     /// canonical format.
     pub fn from_canonical_toml(input: &str) -> Result<Self, CanonicalLockError> {
-        deserialize::from_str(input)
+        let directory = std::env::current_dir().ok();
+        Requirement::with_deserialization_directory(directory.as_deref(), || {
+            deserialize::from_str(input)
+        })
     }
 
     /// Parses a lockfile, using the canonical fast path when possible.
@@ -2050,10 +2053,17 @@ impl Lock {
     /// TOML parser, preserving its compatibility and error reporting. Lockfiles
     /// that use an unsupported schema version are rejected.
     pub fn from_toml(input: &str) -> Result<Self, LockParseError> {
+        let directory = std::env::current_dir().ok();
+        Requirement::with_deserialization_directory(directory.as_deref(), || {
+            Self::from_toml_scoped(input)
+        })
+    }
+
+    fn from_toml_scoped(input: &str) -> Result<Self, LockParseError> {
         if let Some(lock) = cache::get(input) {
             return Ok(lock);
         }
-        let lock = match Self::from_canonical_toml(input) {
+        let lock = match deserialize::from_str(input) {
             Ok(lock) => lock,
             Err(_) => match toml::from_str(input) {
                 Ok(lock) => lock,

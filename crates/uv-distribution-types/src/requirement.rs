@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::fmt::{Display, Formatter};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -6,7 +7,7 @@ use std::str::FromStr;
 use thiserror::Error;
 use uv_cache_key::{CacheKey, CacheKeyHasher};
 use uv_distribution_filename::DistExtension;
-use uv_fs::{CWD, PortablePath, PortablePathBuf, normalize_path, try_relative_to_if};
+use uv_fs::{PortablePath, PortablePathBuf, normalize_path, try_relative_to_if};
 use uv_git_types::{GitLfs, GitOid, GitReference, GitUrl, GitUrlParseError, OidParseError};
 use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep440::VersionSpecifiers;
@@ -22,8 +23,24 @@ use uv_pypi_types::{
     ParsedGitPathUrl, ParsedPathUrl, ParsedUrl, ParsedUrlError, VerbatimParsedUrl,
 };
 
+thread_local! {
+    static DESERIALIZATION_DIRECTORY: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+}
+
+struct DeserializationDirectory(Option<PathBuf>);
+
+impl Drop for DeserializationDirectory {
+    fn drop(&mut self) {
+        DESERIALIZATION_DIRECTORY.with(|directory| {
+            directory.replace(self.0.take());
+        });
+    }
+}
+
 #[derive(Debug, Error)]
 enum RequirementError {
+    #[error("Failed to resolve the current working directory")]
+    CurrentDirectory(#[source] io::Error),
     #[error(transparent)]
     VerbatimUrlError(#[from] uv_pep508::VerbatimUrlError),
     #[error(transparent)]
@@ -64,6 +81,18 @@ pub struct Requirement {
 }
 
 impl Requirement {
+    /// Scope local requirement URLs to one synchronous deserialization operation.
+    ///
+    /// This avoids repeatedly resolving the process directory without initializing uv's cached
+    /// invocation directory. Nested operations restore the enclosing directory on return.
+    #[doc(hidden)]
+    pub fn with_deserialization_directory<T>(directory: Option<&Path>, f: impl FnOnce() -> T) -> T {
+        let previous = DESERIALIZATION_DIRECTORY
+            .with(|current| current.replace(directory.map(Path::to_path_buf)));
+        let _restore = DeserializationDirectory(previous);
+        f()
+    }
+
     /// Returns whether the markers apply for the given environment.
     ///
     /// When `env` is `None`, this specifically evaluates all marker
@@ -1162,13 +1191,12 @@ impl TryFrom<RequirementSourceWire> for RequirementSource {
                     url: VerbatimUrl::from_url(url),
                 })
             }
-            // TODO(charlie): The use of `CWD` here is incorrect. These should be resolved relative
-            // to the workspace root, but we don't have access to it here. When comparing these
-            // sources in the lockfile, we replace the URL anyway. Ideally, we'd either remove the
-            // URL field or make it optional.
+            // TODO(charlie): These paths should be resolved relative to the workspace root, but
+            // we don't have access to it here. When comparing these sources in the lockfile, we
+            // replace the URL anyway. Ideally, we'd either remove the URL field or make it optional.
             RequirementSourceWire::Path { path } => {
                 let path = Box::<Path>::from(path);
-                let url = VerbatimUrl::from_normalized_path(normalize_path(CWD.join(&path)))?;
+                let url = local_requirement_url(&path)?;
                 Ok(Self::Path {
                     ext: DistExtension::from_path(&path).map_err(|err| {
                         ParsedUrlError::MissingExtensionPath(path.to_path_buf(), err)
@@ -1179,7 +1207,7 @@ impl TryFrom<RequirementSourceWire> for RequirementSource {
             }
             RequirementSourceWire::Directory { directory } => {
                 let directory = Box::<Path>::from(directory);
-                let url = VerbatimUrl::from_normalized_path(normalize_path(CWD.join(&directory)))?;
+                let url = local_requirement_url(&directory)?;
                 Ok(Self::Directory {
                     install_path: directory,
                     editable: Some(false),
@@ -1189,7 +1217,7 @@ impl TryFrom<RequirementSourceWire> for RequirementSource {
             }
             RequirementSourceWire::Editable { editable } => {
                 let editable = Box::<Path>::from(editable);
-                let url = VerbatimUrl::from_normalized_path(normalize_path(CWD.join(&editable)))?;
+                let url = local_requirement_url(&editable)?;
                 Ok(Self::Directory {
                     install_path: editable,
                     editable: Some(true),
@@ -1199,7 +1227,7 @@ impl TryFrom<RequirementSourceWire> for RequirementSource {
             }
             RequirementSourceWire::Virtual { r#virtual } => {
                 let r#virtual = Box::<Path>::from(r#virtual);
-                let url = VerbatimUrl::from_normalized_path(normalize_path(CWD.join(&r#virtual)))?;
+                let url = local_requirement_url(&r#virtual)?;
                 Ok(Self::Directory {
                     install_path: r#virtual,
                     editable: Some(false),
@@ -1211,6 +1239,21 @@ impl TryFrom<RequirementSourceWire> for RequirementSource {
     }
 }
 
+/// Construct the temporary absolute URL used by a deserialized local requirement. Deserialization
+/// can run before an embedding process initializes uv's invocation-specific working directory.
+fn local_requirement_url(path: &Path) -> Result<VerbatimUrl, RequirementError> {
+    let absolute = DESERIALIZATION_DIRECTORY
+        .with(|directory| {
+            if let Some(directory) = directory.borrow().as_ref() {
+                Ok(directory.join(path))
+            } else {
+                std::env::current_dir().map(|directory| directory.join(path))
+            }
+        })
+        .map_err(RequirementError::CurrentDirectory)?;
+    Ok(VerbatimUrl::from_normalized_path(normalize_path(absolute))?)
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -1218,6 +1261,51 @@ mod tests {
     use uv_pep508::{MarkerTree, VerbatimUrl};
 
     use crate::{Requirement, RequirementSource};
+
+    #[test]
+    fn deserialize_relative_directory() {
+        for (serialized, path) in [("child", "child"), (".", ""), ("", "")] {
+            let requirement: Requirement =
+                toml::from_str(&format!("name = 'foo'\ndirectory = '{serialized}'\n")).unwrap();
+            let RequirementSource::Directory {
+                install_path, url, ..
+            } = requirement.source
+            else {
+                panic!("expected directory requirement");
+            };
+            assert_eq!(install_path.as_ref(), std::path::Path::new(path));
+            assert_eq!(
+                url,
+                VerbatimUrl::from_absolute_path(std::env::current_dir().unwrap().join(path))
+                    .unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn deserialization_directory_is_scoped() {
+        fn read() -> VerbatimUrl {
+            let requirement: Requirement =
+                toml::from_str("name = 'foo'\ndirectory = '.'\n").unwrap();
+            let RequirementSource::Directory { url, .. } = requirement.source else {
+                panic!("expected directory requirement");
+            };
+            url
+        }
+
+        let original = read();
+        let first = std::env::current_dir().unwrap().join("first");
+        let second = first.join("second");
+        Requirement::with_deserialization_directory(Some(&first), || {
+            let first_url = VerbatimUrl::from_absolute_path(&first).unwrap();
+            assert_eq!(read(), first_url);
+            Requirement::with_deserialization_directory(Some(&second), || {
+                assert_eq!(read(), VerbatimUrl::from_absolute_path(&second).unwrap());
+            });
+            assert_eq!(read(), first_url);
+        });
+        assert_eq!(read(), original);
+    }
 
     #[test]
     fn roundtrip() {
