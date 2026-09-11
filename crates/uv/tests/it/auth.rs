@@ -68,10 +68,8 @@ async fn add_package_native_auth_realm() -> Result<()> {
     error: Failed to add dependencies
       cause: No solution found when resolving dependencies
       cause: Because anyio was not found in the package registry and your project depends on anyio, we can conclude that your project's requirements are unsatisfiable.
-
-    hint: An index URL (http://[LOCALHOST]/basic-auth/simple) could not be queried due to a lack of valid authentication credentials (401 Unauthorized)
-
-    hint: If you want to add the package regardless of the failed resolution, provide the `--frozen` flag to skip locking and syncing
+      hint: An index URL (http://[LOCALHOST]/basic-auth/simple) could not be queried due to a lack of valid authentication credentials (401 Unauthorized)
+      hint: If you want to add the package regardless of the failed resolution, provide the `--frozen` flag to skip locking and syncing
     "
     );
 
@@ -124,10 +122,8 @@ async fn add_package_native_auth_realm() -> Result<()> {
     error: Failed to add dependencies
       cause: No solution found when resolving dependencies
       cause: Because iniconfig was not found in the package registry and your project depends on iniconfig, we can conclude that your project's requirements are unsatisfiable.
-
-    hint: An index URL (http://[LOCALHOST]/basic-auth/simple) could not be queried due to a lack of valid authentication credentials (401 Unauthorized)
-
-    hint: If you want to add the package regardless of the failed resolution, provide the `--frozen` flag to skip locking and syncing
+      hint: An index URL (http://[LOCALHOST]/basic-auth/simple) could not be queried due to a lack of valid authentication credentials (401 Unauthorized)
+      hint: If you want to add the package regardless of the failed resolution, provide the `--frozen` flag to skip locking and syncing
     "
     );
 
@@ -168,10 +164,8 @@ async fn add_package_native_auth() -> Result<()> {
     error: Failed to add dependencies
       cause: No solution found when resolving dependencies
       cause: Because anyio was not found in the package registry and your project depends on anyio, we can conclude that your project's requirements are unsatisfiable.
-
-    hint: An index URL (http://[LOCALHOST]/basic-auth/simple) could not be queried due to a lack of valid authentication credentials (401 Unauthorized)
-
-    hint: If you want to add the package regardless of the failed resolution, provide the `--frozen` flag to skip locking and syncing
+      hint: An index URL (http://[LOCALHOST]/basic-auth/simple) could not be queried due to a lack of valid authentication credentials (401 Unauthorized)
+      hint: If you want to add the package regardless of the failed resolution, provide the `--frozen` flag to skip locking and syncing
     "
     );
 
@@ -224,10 +218,8 @@ async fn add_package_native_auth() -> Result<()> {
     error: Failed to add dependencies
       cause: No solution found when resolving dependencies
       cause: Because iniconfig was not found in the package registry and your project depends on iniconfig, we can conclude that your project's requirements are unsatisfiable.
-
-    hint: An index URL (http://[LOCALHOST]/basic-auth/simple) could not be queried due to a lack of valid authentication credentials (401 Unauthorized)
-
-    hint: If you want to add the package regardless of the failed resolution, provide the `--frozen` flag to skip locking and syncing
+      hint: An index URL (http://[LOCALHOST]/basic-auth/simple) could not be queried due to a lack of valid authentication credentials (401 Unauthorized)
+      hint: If you want to add the package regardless of the failed resolution, provide the `--frozen` flag to skip locking and syncing
     "
     );
 
