@@ -14,10 +14,19 @@ use uv_pep508::Pep508Error;
 use uv_pypi_types::{DependencyGroupSpecifier, VerbatimParsedUrl};
 
 use crate::pyproject::{DependencyGroupSettings, PyProjectToml, ToolUvDependencyGroups};
+use crate::requires_python::RequiresPythonDeclaration;
 
-use self::diagnostics::{DependencyGroupDiagnostic, DependencyGroupProvenance, GroupInclude};
+use self::diagnostics::{DependencyGroupDiagnostic, DependencyGroupProvenance};
 
-pub use diagnostics::diagnostic_for_error;
+pub use diagnostics::{PythonRequirementsSource, diagnostic_for_error};
+
+/// An exact include occurrence encountered during semantic group traversal.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct GroupInclude {
+    pub group: GroupName,
+    pub index: usize,
+    pub included: GroupName,
+}
 
 /// PEP 735 dependency groups, with any `include-group` entries resolved.
 #[derive(Debug, Default, Clone)]
@@ -26,7 +35,8 @@ pub struct FlatDependencyGroups(BTreeMap<GroupName, FlatDependencyGroup>);
 #[derive(Debug, Default, Clone)]
 pub struct FlatDependencyGroup {
     pub requirements: Vec<uv_pep508::Requirement<VerbatimParsedUrl>>,
-    pub requires_python: Option<VersionSpecifiers>,
+    pub(crate) requires_python: Option<VersionSpecifiers>,
+    pub(crate) requires_python_declarations: Option<BTreeMap<GroupName, RequiresPythonDeclaration>>,
 }
 
 impl FlatDependencyGroups {
@@ -36,6 +46,22 @@ impl FlatDependencyGroups {
     pub fn from_pyproject_toml(
         path: &Path,
         pyproject_toml: &PyProjectToml,
+    ) -> Result<Self, DependencyGroupError> {
+        Self::from_pyproject_toml_inner(path, pyproject_toml, false)
+    }
+
+    /// Retain the authored Python requirements needed for interpreter compatibility diagnostics.
+    pub(crate) fn from_pyproject_toml_with_python_provenance(
+        path: &Path,
+        pyproject_toml: &PyProjectToml,
+    ) -> Result<Self, DependencyGroupError> {
+        Self::from_pyproject_toml_inner(path, pyproject_toml, true)
+    }
+
+    fn from_pyproject_toml_inner(
+        path: &Path,
+        pyproject_toml: &PyProjectToml,
+        collect_python_provenance: bool,
     ) -> Result<Self, DependencyGroupError> {
         // First, collect `tool.uv.dev_dependencies`
         let dev_dependencies = pyproject_toml
@@ -61,28 +87,30 @@ impl FlatDependencyGroups {
             .unwrap_or(&empty_settings);
 
         // Flatten the dependency groups.
-        let mut dependency_groups =
-            Self::from_dependency_groups(&dependency_groups, group_settings.inner()).map_err(
-                |failure| {
-                    let DependencyGroupFailure { error, provenance } = failure;
-                    let error = error.with_dev_dependencies(dev_dependencies);
-                    let diagnostic = provenance
-                        .and_then(|provenance| {
-                            DependencyGroupDiagnostic::new(path, pyproject_toml, &error, provenance)
-                        })
-                        .map(Box::new);
-                    DependencyGroupError {
-                        package: pyproject_toml
-                            .project
-                            .as_ref()
-                            .map(|project| project.name.to_string())
-                            .unwrap_or_default(),
-                        path: path.user_display().to_string(),
-                        error,
-                        diagnostic,
-                    }
-                },
-            )?;
+        let mut dependency_groups = Self::from_dependency_groups(
+            &dependency_groups,
+            group_settings.inner(),
+            collect_python_provenance,
+        )
+        .map_err(|failure| {
+            let DependencyGroupFailure { error, provenance } = failure;
+            let error = error.with_dev_dependencies(dev_dependencies);
+            let diagnostic = provenance
+                .and_then(|provenance| {
+                    DependencyGroupDiagnostic::new(path, pyproject_toml, &error, provenance)
+                })
+                .map(Box::new);
+            DependencyGroupError {
+                package: pyproject_toml
+                    .project
+                    .as_ref()
+                    .map(|project| project.name.to_string())
+                    .unwrap_or_default(),
+                path: path.user_display().to_string(),
+                error,
+                diagnostic,
+            }
+        })?;
 
         // Add the `dev` group, if the legacy `dev-dependencies` is defined.
         //
@@ -107,12 +135,14 @@ impl FlatDependencyGroups {
     fn from_dependency_groups(
         groups: &BTreeMap<&GroupName, &Vec<DependencyGroupSpecifier>>,
         settings: &BTreeMap<GroupName, DependencyGroupSettings>,
+        collect_python_provenance: bool,
     ) -> Result<Self, DependencyGroupFailure> {
         fn resolve_group<'data>(
             resolved: &mut BTreeMap<GroupName, FlatDependencyGroup>,
             groups: &'data BTreeMap<&GroupName, &Vec<DependencyGroupSpecifier>>,
             settings: &BTreeMap<GroupName, DependencyGroupSettings>,
             name: &'data GroupName,
+            collect_python_provenance: bool,
             parents: &mut Vec<&'data GroupName>,
             includes: &mut Vec<GroupInclude>,
         ) -> Result<(), DependencyGroupFailure> {
@@ -153,6 +183,8 @@ impl FlatDependencyGroups {
             parents.push(name);
             let mut requirements = Vec::with_capacity(specifiers.len());
             let mut requires_python_intersection = VersionSpecifiers::empty();
+            let mut requires_python_declarations = collect_python_provenance
+                .then(BTreeMap::<GroupName, RequiresPythonDeclaration>::new);
             for (index, specifier) in specifiers.iter().enumerate() {
                 match specifier {
                     DependencyGroupSpecifier::Requirement(requirement) => {
@@ -179,12 +211,36 @@ impl FlatDependencyGroups {
                             groups,
                             settings,
                             include_group,
+                            collect_python_provenance,
                             parents,
                             includes,
                         )?;
-                        includes.pop();
+                        let include = includes.pop();
                         if let Some(included) = resolved.get(include_group) {
                             requirements.extend(included.requirements.iter().cloned());
+
+                            if let (
+                                Some(declarations),
+                                Some(included_declarations),
+                                Some(include),
+                            ) = (
+                                requires_python_declarations.as_mut(),
+                                included.requires_python_declarations.as_ref(),
+                                include.as_ref(),
+                            ) {
+                                for (declaring_group, declaration) in included_declarations {
+                                    let mut declaration = declaration.clone();
+                                    declaration.includes.insert(include.clone());
+                                    match declarations.entry(declaring_group.clone()) {
+                                        Entry::Vacant(entry) => {
+                                            entry.insert(declaration);
+                                        }
+                                        Entry::Occupied(mut entry) => {
+                                            entry.get_mut().extend_includes(declaration);
+                                        }
+                                    }
+                                }
+                            }
 
                             // Intersect the requires-python for this group with the included group's
                             requires_python_intersection = requires_python_intersection
@@ -209,6 +265,14 @@ impl FlatDependencyGroups {
             let DependencyGroupSettings { requires_python } =
                 settings.get(name).unwrap_or(&empty_settings);
             if let Some(requires_python) = requires_python {
+                if !requires_python.is_empty()
+                    && let Some(declarations) = requires_python_declarations.as_mut()
+                {
+                    declarations.insert(
+                        name.clone(),
+                        RequiresPythonDeclaration::new(requires_python.clone()),
+                    );
+                }
                 // Intersect the requires-python for this group to get the final requires-python
                 // that will be used by interpreter discovery and checking.
                 requires_python_intersection = requires_python_intersection
@@ -237,6 +301,8 @@ impl FlatDependencyGroups {
                     } else {
                         Some(requires_python_intersection)
                     },
+                    requires_python_declarations: requires_python_declarations
+                        .filter(|declarations| !declarations.is_empty()),
                 },
             );
             Ok(())
@@ -261,6 +327,7 @@ impl FlatDependencyGroups {
                 groups,
                 settings,
                 name,
+                collect_python_provenance,
                 &mut parents,
                 &mut includes,
             )?;
@@ -404,9 +471,15 @@ impl std::fmt::Display for Cycle {
 #[cfg(test)]
 mod tests {
     use std::error::Error;
+    use std::fmt::Write;
     use std::path::Path;
+    use std::str::FromStr;
 
     use anyhow::{Context, Result};
+
+    use uv_distribution_types::RequiresPython;
+    use uv_normalize::GroupName;
+    use uv_pep440::VersionSpecifiers;
 
     use crate::pyproject::PyProjectToml;
 
@@ -424,11 +497,244 @@ mod tests {
             .to_string(),
             Path::new("pyproject.toml"),
         )?;
-        let error = FlatDependencyGroups::from_pyproject_toml(Path::new("."), &pyproject)
+        for collect_python_provenance in [false, true] {
+            let error = FlatDependencyGroups::from_pyproject_toml_inner(
+                Path::new("."),
+                &pyproject,
+                collect_python_provenance,
+            )
             .err()
             .context("the dependency groups should contain a cycle")?;
 
-        insta::assert_snapshot!(error.source().context("the cycle error should have a source")?.to_string(), @"Detected a cycle in `dependency-groups`: `inner-a` -> `inner-b` -> `inner-a`");
+            assert!(error.diagnostic.is_some());
+            let message = error
+                .source()
+                .context("the cycle error should have a source")?
+                .to_string();
+            insta::allow_duplicates! {
+                insta::assert_snapshot!(message, @"Detected a cycle in `dependency-groups`: `inner-a` -> `inner-b` -> `inner-a`");
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn group_python_provenance_retains_missing_group_diagnostics() -> Result<()> {
+        let pyproject = PyProjectToml::from_string(
+            "[dependency-groups]\nroot = [{ include-group = 'missing' }]\n".to_string(),
+            Path::new("pyproject.toml"),
+        )?;
+        for collect_python_provenance in [false, true] {
+            let error = FlatDependencyGroups::from_pyproject_toml_inner(
+                Path::new("."),
+                &pyproject,
+                collect_python_provenance,
+            )
+            .err()
+            .context("the included dependency group should be missing")?;
+
+            assert!(error.diagnostic.is_some());
+            let message = error
+                .source()
+                .context("the missing group error should have a source")?
+                .to_string();
+            insta::allow_duplicates! {
+                insta::assert_snapshot!(message, @"Failed to find group `missing` included by `root`");
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn group_python_declarations_retain_diamond_edges() -> Result<()> {
+        let pyproject = PyProjectToml::from_string(
+            r#"
+            [dependency-groups]
+            root = [{ include-group = "left" }, { include-group = "right" }]
+            left = [{ include-group = "leaf" }]
+            right = [{ include-group = "leaf" }]
+            leaf = ["idna"]
+
+            [tool.uv.dependency-groups]
+            leaf = { requires-python = ">=3.12" }
+            "#
+            .to_string(),
+            Path::new("pyproject.toml"),
+        )?;
+        let ordinary = FlatDependencyGroups::from_pyproject_toml(Path::new("."), &pyproject)?;
+        let groups = FlatDependencyGroups::from_pyproject_toml_with_python_provenance(
+            Path::new("."),
+            &pyproject,
+        )?;
+        let ordinary = ordinary
+            .get(&GroupName::from_str("root")?)
+            .context("the ordinary root group should be resolved")?;
+        let root = groups
+            .get(&GroupName::from_str("root")?)
+            .context("the root group should be resolved")?;
+        assert!(ordinary.requires_python_declarations.is_none());
+        assert_eq!(ordinary.requires_python, root.requires_python);
+        assert_eq!(ordinary.requirements, root.requirements);
+        let declarations = root
+            .requires_python_declarations
+            .as_ref()
+            .context("the root group should retain Python provenance")?
+            .iter()
+            .map(|(group, declaration)| {
+                (
+                    group.to_string(),
+                    declaration.specifiers.to_string(),
+                    declaration
+                        .includes
+                        .iter()
+                        .map(|include| {
+                            (
+                                include.group.to_string(),
+                                include.index,
+                                include.included.to_string(),
+                            )
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect::<Vec<_>>();
+        insta::assert_debug_snapshot!(
+            (
+                root.requires_python.as_ref().map(ToString::to_string),
+                root.requirements.iter().map(ToString::to_string).collect::<Vec<_>>(),
+                declarations,
+            ),
+            @r#"
+        (
+            Some(
+                ">=3.12, >=3.12",
+            ),
+            [
+                "idna ; python_full_version >= '3.12'",
+                "idna ; python_full_version >= '3.12'",
+            ],
+            [
+                (
+                    "leaf",
+                    ">=3.12",
+                    [
+                        (
+                            "left",
+                            0,
+                            "leaf",
+                        ),
+                        (
+                            "right",
+                            0,
+                            "leaf",
+                        ),
+                        (
+                            "root",
+                            0,
+                            "left",
+                        ),
+                        (
+                            "root",
+                            1,
+                            "right",
+                        ),
+                    ],
+                ),
+            ],
+        )
+        "#
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn group_python_provenance_does_not_enumerate_paths() -> Result<()> {
+        let levels = 8;
+        let mut source = String::from("[dependency-groups]\n");
+        for index in 0..levels {
+            writeln!(
+                source,
+                "level-{index} = [{{ include-group = 'left-{index}' }}, {{ include-group = 'right-{index}' }}]"
+            )?;
+            writeln!(
+                source,
+                "left-{index} = [{{ include-group = 'level-{}' }}]",
+                index + 1,
+            )?;
+            writeln!(
+                source,
+                "right-{index} = [{{ include-group = 'level-{}' }}]",
+                index + 1,
+            )?;
+        }
+        writeln!(source, "level-{levels} = []")?;
+        writeln!(source, "[tool.uv.dependency-groups]")?;
+        writeln!(source, "level-{levels} = {{ requires-python = '>=3.12' }}")?;
+        let pyproject = PyProjectToml::from_string(source, Path::new("pyproject.toml"))?;
+        let groups = FlatDependencyGroups::from_pyproject_toml_with_python_provenance(
+            Path::new("."),
+            &pyproject,
+        )?;
+        let root = groups
+            .get(&GroupName::from_str("level-0")?)
+            .context("the root group should be resolved")?;
+        let declarations = root
+            .requires_python_declarations
+            .as_ref()
+            .context("the root group should retain Python provenance")?;
+        let declaration = declarations
+            .get(&GroupName::from_str(&format!("level-{levels}"))?)
+            .context("the final group should be the declaring group")?;
+
+        assert_eq!(declarations.len(), 1);
+        assert_eq!(declaration.includes.len(), 4 * levels);
+        assert_eq!(
+            root.requires_python.as_ref().map(VersionSpecifiers::len),
+            Some(1 << levels),
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn group_python_intersection_can_require_three_declarations() -> Result<()> {
+        let pyproject = PyProjectToml::from_string(
+            r#"
+            [dependency-groups]
+            root = [{ include-group = "a" }, { include-group = "b" }, { include-group = "c" }]
+            a = []
+            b = []
+            c = []
+
+            [tool.uv.dependency-groups]
+            a = { requires-python = ">=3.10, <3.13, !=3.10.*" }
+            b = { requires-python = ">=3.10, <3.13, !=3.11.*" }
+            c = { requires-python = ">=3.10, <3.13, !=3.12.*" }
+            "#
+            .to_string(),
+            Path::new("pyproject.toml"),
+        )?;
+        let groups = FlatDependencyGroups::from_pyproject_toml_with_python_provenance(
+            Path::new("."),
+            &pyproject,
+        )?;
+        let root = groups
+            .get(&GroupName::from_str("root")?)
+            .context("the root group should be resolved")?;
+        let declarations = root
+            .requires_python_declarations
+            .as_ref()
+            .context("the root group should retain Python provenance")?
+            .values()
+            .map(|declaration| &declaration.specifiers)
+            .collect::<Vec<_>>();
+
+        assert_eq!(declarations.len(), 3);
+        for (index, first) in declarations.iter().enumerate() {
+            for second in &declarations[index + 1..] {
+                assert!(RequiresPython::intersection([*first, *second].into_iter()).is_some());
+            }
+        }
+        assert!(RequiresPython::intersection(declarations.into_iter()).is_none());
         Ok(())
     }
 }

@@ -5633,12 +5633,16 @@ fn run_groups_requires_python_errors() -> Result<()> {
     // Explicitly requesting an out-of-range python fails
     uv_snapshot!(context.filters(), context.run()
         .arg("-p").arg("3.12")
-        .arg("python").arg("--version"), @"
+        .arg("python").arg("--version"), @r#"
     exit_code: 2 (failure)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    error: The requested interpreter resolved to Python 3.12.[X], which is incompatible with the project's Python requirement: `>=3.13` (from `tool.uv.dependency-groups.dev.requires-python`).
-    ");
+    error: The requested interpreter resolved to Python 3.12.[X], which is incompatible with the project's Python requirement: `>=3.13` (from dependency group `dev`).
+        --> pyproject.toml:14:35
+         |
+      14 |         dev = { requires-python = ">=3.13" }
+         |                                   ^^^^^^^^ group `dev` requires Python `>=3.13`
+    "#);
 
     // Enabling foo we can't find an interpreter
     uv_snapshot!(context.filters(), context.run()
@@ -5723,22 +5727,57 @@ fn run_groups_include_requires_python() -> Result<()> {
     error: Found conflicting Python requirements:
     - project: >=3.11
     - project:bar: >=3.13
-    - project:dev: >=3.12, <3.13
-       --> pyproject.toml:5:27
-        |
-      5 |         requires-python = ">=3.11"
-        |                           ^^^^^^^^ requires Python `>=3.11`
+    - project:baz: >=3.12
+    - project:foo: <3.13
+        --> pyproject.toml:5:27
+         |
+       5 |         requires-python = ">=3.11"
+         |                           ^^^^^^^^ requires Python `>=3.11`
+         |
+        ::: pyproject.toml:16:32
+         |
+      16 |         bar = {requires-python=">=3.13"}
+         |                                ^^^^^^^^ group `bar` requires Python `>=3.13`
+         |
+        ::: pyproject.toml:17:32
+         |
+      17 |         baz = {requires-python=">=3.12"}
+         |                                ^^^^^^^^ group `baz` requires Python `>=3.12`
+         |
+        ::: pyproject.toml:15:32
+         |
+      15 |         foo = {requires-python="<3.13"}
+         |                                ^^^^^^^ group `foo` requires Python `<3.13`
+      info: Group `baz` is included by `dev` here
+        --> pyproject.toml:12:69
+         |
+      12 |         dev = ["sniffio", {include-group = "foo"}, {include-group = "baz"}]
+         |                                                                     ----- included here
+      info: Group `foo` is included by `dev` here
+        --> pyproject.toml:12:44
+         |
+      12 |         dev = ["sniffio", {include-group = "foo"}, {include-group = "baz"}]
+         |                                            ----- included here
     "#);
 
     // Explicitly requesting an out-of-range python fails
     uv_snapshot!(context.filters(), context.run()
         .arg("-p").arg("3.13")
-        .arg("python").arg("-c").arg("import typing_extensions"), @"
+        .arg("python").arg("-c").arg("import typing_extensions"), @r#"
     exit_code: 2 (failure)
     ----- stderr -----
     Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
-    error: The requested interpreter resolved to Python 3.13.[X], which is incompatible with the project's Python requirement: `==3.12.*` (from `tool.uv.dependency-groups.dev.requires-python`).
-    ");
+    error: The requested interpreter resolved to Python 3.13.[X], which is incompatible with the project's Python requirement: `==3.12.*` (from dependency group `foo`).
+        --> pyproject.toml:15:32
+         |
+      15 |         foo = {requires-python="<3.13"}
+         |                                ^^^^^^^ group `foo` requires Python `<3.13`
+      info: Group `foo` is included by `dev` here
+        --> pyproject.toml:12:44
+         |
+      12 |         dev = ["sniffio", {include-group = "foo"}, {include-group = "baz"}]
+         |                                            ----- included here
+    "#);
     Ok(())
 }
 

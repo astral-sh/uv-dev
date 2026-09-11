@@ -9497,12 +9497,148 @@ fn sync_python_version_source_group_intersection() -> Result<()> {
         child = { requires-python = ">=3.13" }
     "#})?;
 
-    uv_snapshot!(context.filters(), context.sync().arg("--only-group").arg("parent").arg("--offline"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--only-group").arg("parent").arg("--offline"), @r#"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Found conflicting Python requirements:
-    - project:parent: <3.13, >=3.13
-    ");
+    - project:child: >=3.13
+    - project:parent: <3.13
+        --> pyproject.toml:11:29
+         |
+      11 | child = { requires-python = ">=3.13" }
+         |                             ^^^^^^^^ group `child` requires Python `>=3.13`
+         |
+        ::: pyproject.toml:10:30
+         |
+      10 | parent = { requires-python = "<3.13" }
+         |                              ^^^^^^^ group `parent` requires Python `<3.13`
+      info: Group `child` is included by `parent` here
+       --> pyproject.toml:6:29
+        |
+      6 | parent = [{ include-group = "child" }]
+        |                             ------- included here
+    "#);
+
+    Ok(())
+}
+
+#[test]
+fn sync_python_version_source_inherited_group() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let source = indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+
+        [dependency-groups]
+        parent = ["private @ https://user:sentinel-secret@example.com/private-1.0.0-py3-none-any.whl", { include-group = "Child.Bound" }]
+        "Child.Bound" = []
+
+        [tool.uv.dependency-groups]
+        "Child.Bound" = { requires-python = ">=3.13" }
+    "#};
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(source)?;
+
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--only-group").arg("parent")
+        .arg("--python").arg("3.12")
+        .arg("--offline"), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    error: The requested interpreter resolved to Python 3.12.[X], which is incompatible with the project's Python requirement: `>=3.13` (from dependency group `child-bound`).
+        --> pyproject.toml:10:37
+         |
+      10 | "Child.Bound" = { requires-python = ">=3.13" }
+         |                                     ^^^^^^^^ group `child-bound` requires Python `>=3.13`
+      info: Group `child-bound` is included by `parent` here
+       --> pyproject.toml:6:114
+    "#);
+
+    // The authored tilde specifier belongs to the included group as well.
+    pyproject_toml.write_str(&source.replace(">=3.13", "~=3.13"))?;
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--only-group").arg("parent")
+        .arg("--python").arg("3.12")
+        .arg("--offline"), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    warning: The `requires-python` specifier (`~=3.13`) from dependency group `child-bound` uses the tilde specifier (`~=`) without a patch version. This will be interpreted as `>=3.13, <4`. Did you mean `~=3.13.0` to constrain the version as `>=3.13.0, <3.14`? We recommend only using the tilde specifier with a patch version to avoid ambiguity.
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    error: The requested interpreter resolved to Python 3.12.[X], which is incompatible with the project's Python requirement: `>=3.13, <4` (from dependency group `child-bound`).
+        --> pyproject.toml:10:37
+         |
+      10 | "Child.Bound" = { requires-python = "~=3.13" }
+         |                                     ^^^^^^^^ group `child-bound` requires Python `~=3.13`
+      info: Group `child-bound` is included by `parent` here
+       --> pyproject.toml:6:114
+    "#);
+
+    Ok(())
+}
+
+/// Each pair of bounds admits one Python minor version, but all three together admit none.
+#[test]
+fn sync_python_version_source_three_way_intersection() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+
+        [dependency-groups]
+        root = [{ include-group = "a" }, { include-group = "b" }, { include-group = "c" }]
+        a = []
+        b = []
+        c = []
+
+        [tool.uv.dependency-groups]
+        a = { requires-python = ">=3.10, <3.13, !=3.10.*" }
+        b = { requires-python = ">=3.10, <3.13, !=3.11.*" }
+        c = { requires-python = ">=3.10, <3.13, !=3.12.*" }
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.sync().arg("--only-group").arg("root").arg("--offline"), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Found conflicting Python requirements:
+    - project:a: !=3.10.*, >=3.10, <3.13
+    - project:b: >=3.10, !=3.11.*, <3.13
+    - project:c: >=3.10, !=3.12.*, <3.13
+        --> pyproject.toml:12:25
+         |
+      12 | a = { requires-python = ">=3.10, <3.13, !=3.10.*" }
+         |                         ^^^^^^^^^^^^^^^^^^^^^^^^^ group `a` requires Python `!=3.10.*, >=3.10, <3.13`
+         |
+        ::: pyproject.toml:13:25
+         |
+      13 | b = { requires-python = ">=3.10, <3.13, !=3.11.*" }
+         |                         ^^^^^^^^^^^^^^^^^^^^^^^^^ group `b` requires Python `>=3.10, !=3.11.*, <3.13`
+         |
+        ::: pyproject.toml:14:25
+         |
+      14 | c = { requires-python = ">=3.10, <3.13, !=3.12.*" }
+         |                         ^^^^^^^^^^^^^^^^^^^^^^^^^ group `c` requires Python `>=3.10, !=3.12.*, <3.13`
+      info: Group `a` is included by `root` here
+       --> pyproject.toml:6:27
+        |
+      6 | root = [{ include-group = "a" }, { include-group = "b" }, { include-group = "c" }]
+        |                           --- included here
+      info: Group `b` is included by `root` here
+       --> pyproject.toml:6:52
+        |
+      6 | root = [{ include-group = "a" }, { include-group = "b" }, { include-group = "c" }]
+        |                                                    --- included here
+      info: Group `c` is included by `root` here
+       --> pyproject.toml:6:77
+        |
+      6 | root = [{ include-group = "a" }, { include-group = "b" }, { include-group = "c" }]
+        |                                                                             --- included here
+    "#);
 
     Ok(())
 }

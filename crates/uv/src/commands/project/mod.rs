@@ -57,7 +57,10 @@ use uv_types::{BuildIsolation, EmptyInstalledPackages, HashStrategy, SourceTreeE
 use uv_warnings::{warn_user, warn_user_once};
 use uv_workspace::dependency_groups::DependencyGroupError;
 use uv_workspace::pyproject::{ExtraBuildDependency, PyProjectToml};
-use uv_workspace::{ProjectEnvironmentSelection, RequiresPythonSources, Workspace, WorkspaceCache};
+use uv_workspace::{
+    ProjectEnvironmentSelection, RequiresPythonSources, Workspace, WorkspaceCache,
+    WorkspaceRequiresPython,
+};
 
 use crate::commands::pip::loggers::{InstallLogger, ResolveLogger};
 use crate::commands::pip::operations::{Changelog, Modifications};
@@ -665,18 +668,22 @@ impl PlatformState {
 
 /// Compute the `Requires-Python` bound for the [`Workspace`].
 ///
-/// For a [`Workspace`] with multiple packages, the `Requires-Python` bound is the union of the
+/// For a [`Workspace`] with multiple packages, the `Requires-Python` bound is the intersection of the
 /// `Requires-Python` bounds of all the packages.
 pub(crate) fn find_requires_python(
     workspace: &Workspace,
     groups: &DependencyGroupsWithDefaults,
 ) -> Result<Option<RequiresPython>, ProjectError> {
-    let requires_python = workspace.requires_python(groups)?;
+    let WorkspaceRequiresPython {
+        requirements: requires_python,
+        declarations,
+    } = workspace.requires_python(groups)?;
     // If there are no `Requires-Python` specifiers in the workspace, return `None`.
     if requires_python.is_empty() {
         return Ok(None);
     }
-    for ((package, group), specifiers) in &requires_python {
+    for ((package, group), declaration) in &declarations {
+        let specifiers = &declaration.specifiers;
         if let [spec] = &specifiers[..] {
             if let Some(spec) = TildeVersionSpecifier::from_specifier_ref(spec) {
                 if spec.has_patch() {
@@ -685,17 +692,19 @@ pub(crate) fn find_requires_python(
                 let (lower, upper) = spec.bounding_specifiers();
                 let spec_0 = spec.with_patch_version(0);
                 let (lower_0, upper_0) = spec_0.bounding_specifiers();
+                let location = match group {
+                    Some(group) if workspace.packages().len() > 1 => {
+                        format!("from workspace member `{package}`'s dependency group `{group}`")
+                    }
+                    Some(group) => format!("from dependency group `{group}`"),
+                    None => format!("in `{package}`"),
+                };
                 warn_user_once!(
-                    "The `requires-python` specifier (`{spec}`) in `{package}{group}` \
+                    "The `requires-python` specifier (`{spec}`) {location} \
                     uses the tilde specifier (`~=`) without a patch version. This will be \
                     interpreted as `{lower}, {upper}`. Did you mean `{spec_0}` to constrain the \
                     version as `{lower_0}, {upper_0}`? We recommend only using \
-                    the tilde specifier with a patch version to avoid ambiguity.",
-                    group = if let Some(group) = group {
-                        format!(":{group}")
-                    } else {
-                        String::new()
-                    },
+                    the tilde specifier with a patch version to avoid ambiguity."
                 );
             }
         }
@@ -705,8 +714,11 @@ pub(crate) fn find_requires_python(
     {
         Ok(Some(requires_python))
     } else {
-        let diagnostic =
-            PythonRequirementsDiagnostic::new(workspace, &requires_python).map(Box::new);
+        let diagnostic = PythonRequirementsDiagnostic::new(workspace, &declarations).map(Box::new);
+        let requires_python = declarations
+            .into_iter()
+            .map(|(source, declaration)| (source, declaration.specifiers))
+            .collect();
         Err(ProjectError::DisjointRequiresPython(
             requires_python,
             diagnostic,
@@ -729,16 +741,23 @@ pub(crate) fn validate_project_requires_python(
         return Ok(());
     }
 
-    // Find all the individual requires_python constraints that conflict
-    let conflicting_requires = workspace
+    // Report the authored declarations, not the effective range of an including group.
+    let mut declarations = workspace
         .and_then(|workspace| workspace.requires_python(groups).ok())
-        .into_iter()
-        .flatten()
-        .filter(|(.., requires)| !requires.contains(interpreter.python_version()))
-        .collect::<RequiresPythonSources>();
+        .map(|requires_python| requires_python.declarations)
+        .unwrap_or_default();
+    declarations.retain(|_, declaration| {
+        !declaration
+            .specifiers
+            .contains(interpreter.python_version())
+    });
     let workspace_non_trivial = workspace.is_some_and(|workspace| workspace.packages().len() > 1);
-    let diagnostic = workspace
-        .and_then(|workspace| PythonRequirementsDiagnostic::new(workspace, &conflicting_requires));
+    let diagnostic =
+        workspace.and_then(|workspace| PythonRequirementsDiagnostic::new(workspace, &declarations));
+    let conflicting_requires = declarations
+        .into_iter()
+        .map(|(source, declaration)| (source, declaration.specifiers))
+        .collect::<RequiresPythonSources>();
 
     match source {
         PythonRequestSource::UserRequest => {
@@ -3693,10 +3712,10 @@ fn format_optional_requires_python_sources(
         if let Some(group) = group {
             if workspace_non_trivial {
                 return format!(
-                    " (from workspace member `{package}`'s `tool.uv.dependency-groups.{group}.requires-python`)."
+                    " (from workspace member `{package}`'s dependency group `{group}`)."
                 );
             }
-            return format!(" (from `tool.uv.dependency-groups.{group}.requires-python`).");
+            return format!(" (from dependency group `{group}`).");
         }
         if workspace_non_trivial {
             return format!(" (from workspace member `{package}`'s `project.requires-python`).");
