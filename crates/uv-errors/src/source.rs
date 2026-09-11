@@ -43,7 +43,7 @@ impl SourceFile {
     }
 
     /// The exact decoded text used to calculate annotation ranges.
-    fn text(&self) -> &str {
+    pub fn text(&self) -> &str {
         &self.text
     }
 
@@ -52,8 +52,7 @@ impl SourceFile {
     /// This uses the renderer's LF-delimited line boundaries, including any CR bytes. Producers
     /// can inspect the same text before deciding whether a source excerpt is safe to show. An
     /// invalid UTF-8 range returns `None`.
-    #[cfg(test)]
-    fn lines_for_span(&self, span: Range<usize>) -> Option<&str> {
+    pub fn lines_for_span(&self, span: Range<usize>) -> Option<&str> {
         self.text().get(self.line_range_for_span(span)?)
     }
 
@@ -61,7 +60,6 @@ impl SourceFile {
     ///
     /// Producers can compare this window with other retained semantic source spans before
     /// deciding whether an excerpt would expose unrelated fields.
-    #[cfg(test)]
     fn line_range_for_span(&self, span: Range<usize>) -> Option<Range<usize>> {
         let lines = SourceLines::new(self.text());
         let (first, last) = lines.annotation_lines(&span)?;
@@ -84,15 +82,15 @@ impl fmt::Debug for SourceFile {
 
 /// An annotation on a byte range in a [`SourceFile`].
 #[derive(Clone, Debug)]
-struct SourceAnnotation<'a> {
+pub struct SourceAnnotation<'a> {
     range: Range<usize>,
     label: Option<Cow<'a, str>>,
     kind: AnnotationKind,
 }
 
-impl SourceAnnotation<'_> {
+impl<'a> SourceAnnotation<'a> {
     /// Identify the source text responsible for the diagnostic.
-    fn primary(range: Range<usize>) -> Self {
+    pub fn primary(range: Range<usize>) -> Self {
         Self {
             range,
             label: None,
@@ -101,21 +99,17 @@ impl SourceAnnotation<'_> {
     }
 
     /// Identify related source text that helps explain the diagnostic.
-    #[cfg(test)]
-    fn secondary(range: Range<usize>) -> Self {
+    pub fn secondary(range: Range<usize>) -> Self {
         Self {
             range,
             label: None,
             kind: AnnotationKind::Context,
         }
     }
-}
 
-#[cfg(test)]
-impl<'a> SourceAnnotation<'a> {
     /// Describe why the source text is highlighted.
     #[must_use]
-    fn with_label(mut self, label: impl Into<Cow<'a, str>>) -> Self {
+    pub fn with_label(mut self, label: impl Into<Cow<'a, str>>) -> Self {
         self.label = Some(label.into());
         self
     }
@@ -136,7 +130,7 @@ pub struct SourceSnippet<'a> {
 
 impl<'a> SourceSnippet<'a> {
     /// Refer to a source without inventing a location within it.
-    fn new(source: SourceFile) -> Self {
+    pub fn new(source: SourceFile) -> Self {
         Self {
             source,
             annotations: Vec::new(),
@@ -170,7 +164,7 @@ impl<'a> SourceSnippet<'a> {
 
     /// Add a primary or secondary source annotation.
     #[must_use]
-    fn with_annotation(mut self, annotation: SourceAnnotation<'a>) -> Self {
+    pub fn with_annotation(mut self, annotation: SourceAnnotation<'a>) -> Self {
         self.annotations.push(annotation);
         self
     }
@@ -187,9 +181,8 @@ impl<'a> SourceSnippet<'a> {
     ///
     /// The first valid primary annotation determines the location, or the first valid annotation
     /// when there is no primary annotation. Invalid ranges still fall back to the source name.
-    #[cfg(test)]
     #[must_use]
-    fn without_source_text(mut self) -> Self {
+    pub fn without_source_text(mut self) -> Self {
         self.show_source = false;
         self
     }

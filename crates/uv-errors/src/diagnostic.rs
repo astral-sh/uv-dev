@@ -103,9 +103,8 @@ impl<'a> Info<'a> {
     }
 
     /// Show an annotated source location for this context.
-    #[cfg(test)]
     #[must_use]
-    pub(crate) fn with_snippet(mut self, snippet: SourceSnippet<'a>) -> Self {
+    pub fn with_snippet(mut self, snippet: SourceSnippet<'a>) -> Self {
         self.snippets.push(snippet);
         self
     }
