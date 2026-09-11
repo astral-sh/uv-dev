@@ -5521,19 +5521,20 @@ fn tool_install_with_executables_from_no_entrypoints() {
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
+    let tool_dir = context.temp_dir.child("tools");
     let bin_dir = context.temp_dir.child("bin");
 
-    // Try to install flask with executables from requests (which has no executables)
+    // Requests has no executables, but its extras and version pin still select the dependency.
     uv_snapshot!(context.filters(), context.tool_install()
         .arg("--with-executables-from")
-        .arg("requests")
+        .arg("requests[socks]==2.31.0")
         .arg("flask")
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stdout -----
     No executables are provided by package `requests`
 
-    hint: Use `--with requests` to include `requests` as a dependency without installing its executables
+    hint: Re-run the original command with the same requirement for `requests` passed to `--with` instead of `--with-executables-from`, keeping the other installation options
 
     ----- stderr -----
     Resolved [N] packages in [TIME]
@@ -5548,11 +5549,41 @@ fn tool_install_with_executables_from_no_entrypoints() {
      + itsdangerous==2.1.2
      + jinja2==3.1.3
      + markupsafe==2.1.5
+     + pysocks==1.7.1
      + requests==2.31.0
      + urllib3==2.2.1
      + werkzeug==3.0.1
     Installed 1 executable: flask
     ");
+
+    // Apply the suggested selector change without reconstructing the requirement.
+    uv_snapshot!(context.filters(), context.tool_install()
+        .arg("--with")
+        .arg("requests[socks]==2.31.0")
+        .arg("flask")
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    `flask` is already installed
+    ");
+
+    insta::with_settings!({
+        filters => context.filters(),
+    }, {
+        assert_snapshot!(fs_err::read_to_string(tool_dir.join("flask").join("uv-receipt.toml")).unwrap(), @r#"
+        [tool]
+        requirements = [
+            { name = "flask" },
+            { name = "requests", extras = ["socks"], specifier = "==2.31.0" },
+        ]
+        entrypoints = [
+            { name = "flask", install-path = "[TEMP_DIR]/bin/flask", from = "flask" },
+        ]
+
+        [tool.options]
+        exclude-newer = "2024-03-25T00:00:00Z"
+        "#);
+    });
 }
 
 #[test]

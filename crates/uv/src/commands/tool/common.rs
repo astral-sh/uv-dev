@@ -72,8 +72,7 @@ impl Hinted for NoExecutablesError {
     fn hints(&self) -> Hints<'_> {
         match self {
             Self::Dependency { package } => Hints::from(format!(
-                "Use `--with {}` to include `{}` as a dependency without installing its executables",
-                package.cyan(),
+                "Re-run the original command with the same requirement for `{}` passed to `--with` instead of `--with-executables-from`, keeping the other installation options",
                 package.cyan(),
             )),
             Self::Root {
@@ -1018,7 +1017,7 @@ mod tests {
             @"
         No executables are provided by package `idna`
 
-        hint: Use `--with idna` to include `idna` as a dependency without installing its executables
+        hint: Re-run the original command with the same requirement for `idna` passed to `--with` instead of `--with-executables-from`, keeping the other installation options
         "
         );
         Ok(())
