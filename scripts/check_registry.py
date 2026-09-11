@@ -119,6 +119,21 @@ def filter_snapshot(snapshot: str) -> str:
     return snapshot
 
 
+def check_registry_snapshot(actual_registry: str) -> None:
+    for expected in expected_registry:
+        if filter_snapshot(expected) not in filter_snapshot(actual_registry):
+            print("Registry mismatch:")
+            print("Expected Snippet:")
+            print("=" * 80)
+            print(filter_snapshot(expected))
+            print("=" * 80)
+            print("Actual:")
+            print("=" * 80)
+            print(filter_snapshot(actual_registry))
+            print("=" * 80)
+            sys.exit(1)
+
+
 def main(uv: str):
     # `py --list-paths` output
     py_311_line = r" -V:Astral/CPython3.11.11 C:\Users\runneradmin\AppData\Roaming\uv\python\cpython-3.11.11-windows-x86_64-none\python.exe"
@@ -142,18 +157,7 @@ def main(uv: str):
         actual_registry = subprocess.check_output(
             ["powershell", "-Command", list_registry_command], text=True
         )
-        for expected in expected_registry:
-            if filter_snapshot(expected) not in filter_snapshot(actual_registry):
-                print("Registry mismatch:")
-                print("Expected Snippet:")
-                print("=" * 80)
-                print(filter_snapshot(expected))
-                print("=" * 80)
-                print("Actual:")
-                print("=" * 80)
-                print(filter_snapshot(actual_registry))
-                print("=" * 80)
-                sys.exit(1)
+        check_registry_snapshot(actual_registry)
         listed_interpreters = subprocess.check_output(["py", "--list-paths"], text=True)
         py_listed = set(listed_interpreters.splitlines())
         if (
