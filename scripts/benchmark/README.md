@@ -17,6 +17,12 @@ from the same lockfile and cached package artifacts.
 Pass `--discovery` to also install the pinned Python 3.10, 3.12, and 3.13 interpreters used by the
 Python discovery workloads.
 
+Network workloads use `serve-fixtures.py` with the pinned Python 3.11 interpreter. It serves the
+prepared wheels, their actual core metadata, and Simple API listings derived from those wheels or an
+immutable lockfile. The server binds an ephemeral loopback port and applies a fixed 20 ms request
+delay to model an ordinary remote index without relying on live service timing. Wheel responses
+support byte ranges; only locally prepared artifact bodies can be downloaded.
+
 ## Getting Started
 
 From the `scripts/benchmark` directory:
