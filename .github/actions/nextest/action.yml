@@ -24,19 +24,20 @@ runs:
           'RUSTC_BOOTSTRAP=1' \
           'RUSTUP_MAX_RETRIES=10' \
           'UV_LOCKED=1' >> "$GITHUB_ENV"
-    - uses: $/.github/actions/nextest-linux
+    # Local paths support the self-hosted runner versions used for these suites.
+    - uses: ./.github/actions/nextest-linux # zizmor: ignore[self-repository]
       if: runner.os == 'Linux'
       with:
         partition: ${{ inputs.partition }}
         partitions: ${{ inputs.partitions }}
         save-cache: ${{ inputs.save-cache }}
-    - uses: $/.github/actions/nextest-macos
+    - uses: ./.github/actions/nextest-macos # zizmor: ignore[self-repository]
       if: runner.os == 'macOS'
       with:
         partition: ${{ inputs.partition }}
         partitions: ${{ inputs.partitions }}
         save-cache: ${{ inputs.save-cache }}
-    - uses: $/.github/actions/nextest-windows
+    - uses: ./.github/actions/nextest-windows # zizmor: ignore[self-repository]
       if: runner.os == 'Windows'
       with:
         partition: ${{ inputs.partition }}
