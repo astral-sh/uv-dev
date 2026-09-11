@@ -277,14 +277,14 @@ fn hint_build_dependency(package_name: Option<&PackageName>, package: &str) -> S
         || "the package".to_owned(),
         |name| format!("`{}`", name.cyan()),
     );
-    let mut message = format!(
+    let message = format!(
         "If {first_party} is a first-party package, add `{}` to its `{}`.",
         package.cyan(),
         "build-system.requires".green(),
     );
     if let Some(package_name) = package_name {
-        message.push_str(&format!(
-            " Otherwise, either add it to your `pyproject.toml` under:\n\
+        format!(
+            "{message} Otherwise, either add it to your `pyproject.toml` under:\n\
             \n\
                 [tool.uv.extra-build-dependencies]\n\
                 {} = [\"{}\"]\n\
@@ -294,15 +294,14 @@ fn hint_build_dependency(package_name: Option<&PackageName>, package: &str) -> S
             package.cyan(),
             package.cyan(),
             "--no-build-isolation".green(),
-        ));
+        )
     } else {
-        message.push_str(&format!(
-            " Otherwise, install `{}` into the environment used by the original command and re-run that command with `{}`.",
+        format!(
+            "{message} Otherwise, install `{}` into the environment used by the original command and re-run that command with `{}`.",
             package.cyan(),
             "--no-build-isolation".green(),
-        ));
+        )
     }
-    message
 }
 
 impl Display for MissingHeaderCause {
