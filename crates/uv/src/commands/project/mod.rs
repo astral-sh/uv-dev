@@ -31,7 +31,7 @@ use uv_git::ResolvedRepositoryReference;
 use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
 use uv_normalize::{DEV_DEPENDENCIES, DefaultGroups, ExtraName, GroupName, PackageName};
 use uv_pep440::{TildeVersionSpecifier, Version, VersionSpecifiers};
-use uv_pep508::MarkerTreeContents;
+use uv_pep508::{MarkerTree, MarkerTreeContents};
 use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::{ConflictItem, ConflictKind, ConflictSet, Conflicts};
 use uv_python::managed::{ManagedPythonInstallation, PythonMinorVersionLink};
@@ -244,9 +244,13 @@ pub(crate) enum ProjectError {
     MissingExtraScript(ExtraName),
 
     #[error(
-        "Supported environments must be disjoint, but the following markers overlap: `{0}` and `{1}`"
+        "Supported environments must be disjoint, but the following markers overlap: `{left}` and `{right}`"
     )]
-    OverlappingMarkers(String, String, String),
+    OverlappingMarkers {
+        left: String,
+        right: String,
+        replacement: MarkerTree,
+    },
 
     #[error("Environment markers `{0}` don't overlap with Python requirement `{1}`")]
     DisjointEnvironment(MarkerTreeContents, VersionSpecifiers),
@@ -432,8 +436,16 @@ impl uv_errors::Hinted for ProjectError {
             Self::LockFormat(..) => uv_errors::Hints::from(
                 "To regenerate the lockfile, run `uv lock --refresh --preview-features lockfile-format-check`.",
             ),
-            Self::OverlappingMarkers(_, rhs, replacement) => {
-                uv_errors::Hints::from(format!("replace `{rhs}` with `{replacement}`"))
+            Self::OverlappingMarkers {
+                right, replacement, ..
+            } => {
+                let Some(replacement) = replacement.contents().filter(|_| !replacement.is_false())
+                else {
+                    return uv_errors::Hints::from(
+                        "make the environment markers disjoint, or remove one of the overlapping environments",
+                    );
+                };
+                uv_errors::Hints::from(format!("replace `{right}` with `{replacement}`"))
             }
             Self::Lock(err) => err.hints(),
             Self::Python(err) => err.hints(),
@@ -448,7 +460,7 @@ impl uv_errors::Hinted for ProjectError {
             Self::LockMismatch(..)
             | Self::LockWorkspaceMismatch(..)
             | Self::LockFormat(..)
-            | Self::OverlappingMarkers(..) => self.hints(),
+            | Self::OverlappingMarkers { .. } => self.hints(),
             _ => uv_errors::Hints::none(),
         }
     }
@@ -506,7 +518,7 @@ impl uv_errors::Hinted for ProjectError {
             | Self::MissingExtraProject(..)
             | Self::MissingExtraProjects(_)
             | Self::MissingExtraScript(_)
-            | Self::OverlappingMarkers(..)
+            | Self::OverlappingMarkers { .. }
             | Self::DisjointEnvironment(..)
             | Self::DisjointRequiresPython(..)
             | Self::EmptyEnvironment

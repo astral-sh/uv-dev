@@ -23572,6 +23572,101 @@ fn lock_overlapping_environment() -> Result<()> {
     Ok(())
 }
 
+/// Non-adjacent supported environments must also be disjoint.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_overlapping_environment_non_adjacent() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+
+        [tool.uv]
+        environments = [
+            "sys_platform == 'linux'",
+            "sys_platform == 'win32'",
+            "sys_platform == 'linux'",
+        ]
+        "#,
+    )?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--offline").arg("--no-index"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Supported environments must be disjoint, but the following markers overlap: `sys_platform == 'linux'` and `sys_platform == 'linux'`
+      hint: make the environment markers disjoint, or remove one of the overlapping environments
+    ");
+
+    Ok(())
+}
+
+/// Required environments use the same all-pairs validation.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_overlapping_required_environment_non_adjacent() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+
+        [tool.uv]
+        required-environments = [
+            "sys_platform == 'linux'",
+            "sys_platform == 'win32'",
+            "sys_platform == 'linux'",
+        ]
+        "#,
+    )?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--offline").arg("--no-index"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Supported environments must be disjoint, but the following markers overlap: `sys_platform == 'linux'` and `sys_platform == 'linux'`
+      hint: make the environment markers disjoint, or remove one of the overlapping environments
+    ");
+
+    Ok(())
+}
+
+/// A wholly covered environment must not produce a false-marker replacement hint.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_overlapping_environment_subsumed() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+
+        [tool.uv]
+        environments = ["sys_platform != 'win32'", "sys_platform == 'linux'"]
+        "#,
+    )?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--offline").arg("--no-index"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Supported environments must be disjoint, but the following markers overlap: `sys_platform != 'win32'` and `sys_platform == 'linux'`
+      hint: make the environment markers disjoint, or remove one of the overlapping environments
+    ");
+
+    Ok(())
+}
+
 /// Lock a non-project workspace root with forked dev dependencies.
 #[cfg(feature = "test-universal")]
 #[test]
