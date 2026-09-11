@@ -2,6 +2,7 @@ mod diagnostic;
 mod line_wrap;
 mod report;
 mod source;
+mod structured;
 
 use std::borrow::Cow;
 use std::error::Error;
@@ -16,6 +17,7 @@ use line_wrap::{get_wrap_width, wrap_text};
 use report::resolve_error_chain;
 pub use source::{SourceAnnotation, SourceFile, SourceSnippet};
 use source::{SourceLevel, write_snippets};
+use structured::ErrorReport;
 
 /// An error that may carry user-facing hints.
 ///

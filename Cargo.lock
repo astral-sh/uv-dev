@@ -6651,6 +6651,8 @@ dependencies = [
  "indoc",
  "insta",
  "owo-colors",
+ "serde",
+ "serde_json",
  "terminal_size",
  "textwrap",
  "thiserror",
