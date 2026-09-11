@@ -187,13 +187,65 @@ impl From<RequirementsTxtRequirement> for UnresolvedRequirementSpecification {
     }
 }
 
+/// A named requirement included as a constraint, with presentation-only source provenance.
+#[derive(Clone)]
+pub struct ConstraintEntry {
+    /// The actual PEP 508 requirement.
+    requirement: uv_pep508::Requirement<VerbatimParsedUrl>,
+    /// The exact named-registry occurrence, retained only for diagnostics.
+    provenance: Option<RequirementProvenance>,
+}
+
+impl std::fmt::Debug for ConstraintEntry {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        let Self {
+            requirement,
+            provenance: _,
+        } = self;
+        std::fmt::Debug::fmt(requirement, formatter)
+    }
+}
+
+impl Display for ConstraintEntry {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        Display::fmt(&self.requirement, formatter)
+    }
+}
+
+impl PartialEq for ConstraintEntry {
+    fn eq(&self, other: &Self) -> bool {
+        self.requirement == other.requirement
+    }
+}
+
+impl Eq for ConstraintEntry {}
+
+impl Hash for ConstraintEntry {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.requirement.hash(state);
+    }
+}
+
+impl From<ConstraintEntry> for Requirement {
+    fn from(value: ConstraintEntry) -> Self {
+        let ConstraintEntry {
+            requirement,
+            provenance,
+        } = value;
+        Self {
+            provenance,
+            ..Self::from(requirement)
+        }
+    }
+}
+
 /// Parsed and flattened requirements.txt with requirements and constraints
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct RequirementsTxt {
     /// The actual requirements with the hashes.
     pub requirements: Vec<RequirementEntry>,
     /// Constraints included with `-c`.
-    pub constraints: Vec<uv_pep508::Requirement<VerbatimParsedUrl>>,
+    pub constraints: Vec<ConstraintEntry>,
     /// Editables with `-e`.
     pub editables: Vec<RequirementEntry>,
     /// The index URL, specified with `--index-url`.
@@ -569,9 +621,17 @@ impl RequirementsTxt {
                     // from `pip`, which seems to treat `-r` requirements in constraints files as
                     // _requirements_, but we don't want to support that.
                     for entry in sub_constraints.requirements {
-                        match entry.requirement {
+                        let RequirementEntry {
+                            requirement,
+                            hashes: _,
+                            provenance,
+                        } = entry;
+                        match requirement {
                             RequirementsTxtRequirement::Named(requirement) => {
-                                data.constraints.push(requirement);
+                                data.constraints.push(ConstraintEntry {
+                                    requirement,
+                                    provenance,
+                                });
                             }
                             RequirementsTxtRequirement::Unnamed(_) => {
                                 return Err(RequirementsTxtParserError::UnnamedConstraint {
@@ -1662,6 +1722,7 @@ fn calculate_row_column(content: &str, position: usize) -> (usize, usize) {
 #[cfg(test)]
 mod test {
     use std::collections::BTreeSet;
+    use std::hash::{DefaultHasher, Hash, Hasher};
     use std::path::{Path, PathBuf};
 
     use anyhow::Result;
@@ -1674,9 +1735,66 @@ mod test {
     use test_case::test_case;
     use unscanny::Scanner;
 
+    use uv_distribution_types::{Requirement, RequirementProvenance};
+    use uv_errors::SourceFile;
     use uv_fs::Simplified;
+    use uv_pep508::RequirementOrigin;
+    use uv_pypi_types::VerbatimParsedUrl;
 
-    use crate::{RequirementsTxt, calculate_row_column};
+    use crate::{ConstraintEntry, RequirementsTxt, calculate_row_column};
+
+    #[test]
+    fn constraint_provenance_is_not_requirement_identity() -> Result<()> {
+        let requirement = "pypyp==1,>=1.2"
+            .parse::<uv_pep508::Requirement<VerbatimParsedUrl>>()?
+            .with_origin(RequirementOrigin::File(PathBuf::from("first.in")));
+        let provenance =
+            RequirementProvenance::new(SourceFile::new("first.in", "pypyp==1,>=1.2\n"), 0..14);
+        let first = ConstraintEntry {
+            requirement: requirement.clone(),
+            provenance: Some(provenance.clone()),
+        };
+        let second = ConstraintEntry {
+            requirement: requirement.clone(),
+            provenance: Some(RequirementProvenance::new(
+                SourceFile::new("second.in", "pypyp==1,>=1.2\n"),
+                0..14,
+            )),
+        };
+        let plain = ConstraintEntry {
+            requirement: requirement.clone(),
+            provenance: None,
+        };
+        assert_eq!(first, second);
+        assert_eq!(first, plain);
+
+        let mut expected_hash = DefaultHasher::new();
+        requirement.hash(&mut expected_hash);
+        for entry in [&first, &second, &plain] {
+            let mut hash = DefaultHasher::new();
+            entry.hash(&mut hash);
+            assert_eq!(hash.finish(), expected_hash.finish());
+        }
+
+        let other_origin = ConstraintEntry {
+            requirement: requirement
+                .clone()
+                .with_origin(RequirementOrigin::File(PathBuf::from("other.in"))),
+            provenance: None,
+        };
+        assert_ne!(plain, other_origin);
+
+        let converted = Requirement::from(first);
+        assert_eq!(converted, Requirement::from(requirement));
+        assert!(
+            converted
+                .provenance
+                .as_ref()
+                .and_then(|converted| converted.unambiguous_with(&provenance))
+                .is_some()
+        );
+        Ok(())
+    }
 
     fn workspace_test_data_dir() -> PathBuf {
         Path::new("./test-data").simple_canonicalize().unwrap()

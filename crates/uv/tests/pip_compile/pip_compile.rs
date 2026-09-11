@@ -14345,6 +14345,102 @@ fn no_version_for_direct_dependency_source_privacy() -> Result<()> {
     Ok(())
 }
 
+/// A nested constraint points to the active declaration, not the file that included it.
+#[test]
+fn no_version_for_nested_constraint() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let constraints = context.temp_dir.child("constraints");
+    constraints.create_dir_all()?;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("pypyp\n-c constraints/outer.in\n")?;
+    constraints
+        .child("outer.in")
+        .write_str("# nested constraints\n-c inner.in\n")?;
+    constraints.child("inner.in").write_str(
+        "# authored constraints\npypyp==1,>=1.2 ; python_version < '3.12'\npypyp==1,>=1.2 ; python_version >= '3.12'\n",
+    )?;
+
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .arg("requirements.in")
+        .arg("--offline"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: you require pypyp==1 and pypyp>=1.2, which are incompatible
+       --> constraints/inner.in:3:1
+        |
+      3 | pypyp==1,>=1.2 ; python_version >= '3.12'
+        | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no version can satisfy this requirement
+    ");
+
+    Ok(())
+}
+
+/// Repeated includes of the same constraint file retain its one authored occurrence.
+#[test]
+fn no_version_for_nested_constraint_repeated_include() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let constraints = context.temp_dir.child("constraints");
+    constraints.create_dir_all()?;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("pypyp\n-c constraints/left.in\n-c constraints/right.in\n")?;
+    constraints.child("left.in").write_str("-c shared.in\n")?;
+    constraints
+        .child("right.in")
+        .write_str("-r ./shared.in\n")?;
+    constraints
+        .child("shared.in")
+        .write_str("# shared constraint\npypyp==1,>=1.2\n")?;
+
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .arg("requirements.in")
+        .arg("--offline"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: you require pypyp==1 and pypyp>=1.2, which are incompatible
+       --> constraints/shared.in:2:1
+        |
+      2 | pypyp==1,>=1.2
+        | ^^^^^^^^^^^^^^ no version can satisfy this requirement
+    ");
+
+    Ok(())
+}
+
+/// Equal-looking declarations in different constraint files do not have one source location.
+#[test]
+fn no_version_for_nested_constraint_duplicate_occurrences() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let constraints = context.temp_dir.child("constraints");
+    constraints.create_dir_all()?;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("pypyp\n-c constraints/left.in\n-c constraints/right.in\n")?;
+    constraints
+        .child("left.in")
+        .write_str("# constraint\npypyp==1,>=1.2\n")?;
+    constraints
+        .child("right.in")
+        .write_str("# constraint\npypyp==1,>=1.2\n")?;
+
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .arg("requirements.in")
+        .arg("--offline"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: you require pypyp==1 and pypyp>=1.2, which are incompatible
+    ");
+
+    Ok(())
+}
+
 /// Compile against a dedicated platform, which may differ from the current platform.
 #[test]
 fn python_platform() -> Result<()> {
