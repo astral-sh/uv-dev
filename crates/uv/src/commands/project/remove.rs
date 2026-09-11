@@ -12,6 +12,7 @@ use uv_client::BaseClientBuilder;
 use uv_configuration::{
     ActiveEnvironment, Concurrency, DependencyGroups, DryRun, ExtrasSpecification, InstallOptions,
 };
+use uv_errors::{Hinted, Hints, Info};
 use uv_fs::Simplified;
 use uv_normalize::PackageName;
 use uv_normalize::{DEV_DEPENDENCIES, DefaultExtras, DefaultGroups};
@@ -464,36 +465,201 @@ pub(crate) struct DependencyNotFoundError {
     found_in: Vec<DependencyType>,
 }
 
-impl uv_errors::Hinted for DependencyNotFoundError {
-    fn hints(&self) -> uv_errors::Hints<'_> {
+impl Hinted for DependencyNotFoundError {
+    fn hints(&self) -> Hints<'_> {
+        let selector = |dependency_type: &DependencyType| match dependency_type {
+            DependencyType::Production => None,
+            DependencyType::Dev => Some("--dev".to_owned()),
+            DependencyType::Optional(group) => Some(format!("--optional {group}")),
+            DependencyType::Group(group) => Some(format!("--group {group}")),
+        };
+        let selected = selector(&self.dependency_type);
         self.found_in
             .iter()
-            .map(|dep_ty| match dep_ty {
-                DependencyType::Production => {
-                    format!("`{}` is a production dependency", self.package)
-                }
-                DependencyType::Dev => {
-                    format!(
-                        "`{}` is a development dependency (try: `{}`)",
-                        self.package,
-                        format!("uv remove {} --dev", self.package).bold(),
-                    )
-                }
-                DependencyType::Optional(group) => {
-                    format!(
-                        "`{}` is an optional dependency (try: `{}`)",
-                        self.package,
-                        format!("uv remove {} --optional {group}", self.package).bold(),
-                    )
-                }
-                DependencyType::Group(group) => {
-                    format!(
-                        "`{}` is in the `{group}` group (try: `{}`)",
-                        self.package,
-                        format!("uv remove {} --group {group}", self.package).bold(),
-                    )
+            .map(|dependency_type| {
+                // Correct only the dependency selector so other options still select the same
+                // project, workspace member, or script when the command is repeated.
+                let action = match (selected.as_deref(), selector(dependency_type)) {
+                    (Some(selected), Some(replacement)) => format!(
+                        "Re-run the command with `{}` instead of `{}`",
+                        replacement.bold(),
+                        selected.bold(),
+                    ),
+                    (None, Some(replacement)) => {
+                        format!("Re-run the command with `{}`", replacement.bold())
+                    }
+                    (Some(selected), None) => {
+                        format!("Re-run the command without `{}`", selected.bold())
+                    }
+                    (None, None) => "Re-run the command".to_owned(),
+                };
+                match dependency_type {
+                    DependencyType::Production => {
+                        format!("{action} to remove the production dependency")
+                    }
+                    DependencyType::Dev => {
+                        format!("{action} to remove the development dependency")
+                    }
+                    DependencyType::Optional(_) => {
+                        format!("{action} to remove the optional dependency")
+                    }
+                    DependencyType::Group(group) => {
+                        format!("{action} to remove the dependency from the `{group}` group")
+                    }
                 }
             })
             .collect()
+    }
+}
+
+impl DependencyNotFoundError {
+    /// Describe the dependency declarations that were found in other tables.
+    pub(crate) fn own_info(&self) -> Vec<Info<'static>> {
+        self.found_in
+            .iter()
+            .map(|dependency_type| {
+                Info::new(match dependency_type {
+                    DependencyType::Production => {
+                        format!("`{}` is a production dependency", self.package)
+                    }
+                    DependencyType::Dev => {
+                        format!("`{}` is a development dependency", self.package)
+                    }
+                    DependencyType::Optional(group) => {
+                        format!(
+                            "`{}` is an optional dependency in the `{group}` extra",
+                            self.package
+                        )
+                    }
+                    DependencyType::Group(group) => {
+                        format!("`{}` is in the `{group}` group", self.package)
+                    }
+                })
+            })
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use insta::assert_json_snapshot;
+    use uv_errors::{ErrorFormat, ErrorOptions, Hints, write_error_chain_with_options};
+    use uv_workspace::pyproject::DependencyType;
+
+    use crate::commands::diagnostics::diagnostic_for_error;
+    use crate::commands::pip::operations;
+
+    use super::DependencyNotFoundError;
+
+    #[test]
+    fn dependency_locations_are_separate_from_removal_commands() -> anyhow::Result<()> {
+        let error = DependencyNotFoundError {
+            package: "requests".parse()?,
+            dependency_type: DependencyType::Group("missing".parse()?),
+            found_in: vec![
+                DependencyType::Production,
+                DependencyType::Dev,
+                DependencyType::Optional("speedups".parse()?),
+                DependencyType::Group("lint".parse()?),
+            ],
+        };
+        let error = operations::Error::Anyhow(anyhow::Error::new(error));
+        let mut output = String::new();
+        write_error_chain_with_options(
+            &error,
+            &Hints::none(),
+            ErrorOptions::default()
+                .with_format(ErrorFormat::Json)
+                .with_diagnostic(diagnostic_for_error)
+                .with_stream(&mut output),
+        )?;
+        let report: serde_json::Value = serde_json::from_str(&output)?;
+        assert_json_snapshot!(&report["errors"], @r#"
+        [
+          {
+            "hints": [
+              {
+                "message": "Re-run the command without `--group missing` to remove the production dependency",
+                "ordering": "any"
+              },
+              {
+                "message": "Re-run the command with `--dev` instead of `--group missing` to remove the development dependency",
+                "ordering": "any"
+              },
+              {
+                "message": "Re-run the command with `--optional speedups` instead of `--group missing` to remove the optional dependency",
+                "ordering": "any"
+              },
+              {
+                "message": "Re-run the command with `--group lint` instead of `--group missing` to remove the dependency from the `lint` group",
+                "ordering": "any"
+              }
+            ],
+            "info": [
+              {
+                "message": "`requests` is a production dependency"
+              },
+              {
+                "message": "`requests` is a development dependency"
+              },
+              {
+                "message": "`requests` is an optional dependency in the `speedups` extra"
+              },
+              {
+                "message": "`requests` is in the `lint` group"
+              }
+            ],
+            "message": "The dependency `requests` could not be found in `dependency-groups.missing`"
+          }
+        ]
+        "#);
+        Ok(())
+    }
+
+    #[test]
+    fn removal_advice_only_changes_the_dependency_selector() -> anyhow::Result<()> {
+        let errors = [
+            DependencyNotFoundError {
+                package: "requests".parse()?,
+                dependency_type: DependencyType::Production,
+                found_in: vec![DependencyType::Group("lint".parse()?)],
+            },
+            DependencyNotFoundError {
+                package: "requests".parse()?,
+                dependency_type: DependencyType::Dev,
+                found_in: vec![DependencyType::Production],
+            },
+        ];
+        let mut hints = Vec::new();
+        for error in errors {
+            let mut output = String::new();
+            write_error_chain_with_options(
+                &error,
+                &Hints::none(),
+                ErrorOptions::default()
+                    .with_format(ErrorFormat::Json)
+                    .with_diagnostic(diagnostic_for_error)
+                    .with_stream(&mut output),
+            )?;
+            let report: serde_json::Value = serde_json::from_str(&output)?;
+            hints.push(report["errors"][0]["hints"].clone());
+        }
+        assert_json_snapshot!(hints, @r#"
+        [
+          [
+            {
+              "message": "Re-run the command with `--group lint` to remove the dependency from the `lint` group",
+              "ordering": "any"
+            }
+          ],
+          [
+            {
+              "message": "Re-run the command without `--dev` to remove the production dependency",
+              "ordering": "any"
+            }
+          ]
+        ]
+        "#);
+        Ok(())
     }
 }

@@ -6,7 +6,7 @@ use owo_colors::OwoColorize;
 use thiserror::Error;
 use tracing::{Level, debug, enabled, warn};
 
-use uv_errors::{Hinted, Hints};
+use uv_errors::{Hinted, Hints, Info};
 
 use uv_cache::Cache;
 use uv_client::{BaseClientBuilder, FlatIndexClient, RegistryClientBuilder};
@@ -67,10 +67,19 @@ pub(crate) struct ExternallyManagedError {
 impl Hinted for ExternallyManagedError {
     fn hints(&self) -> Hints<'_> {
         if self.system {
-            Hints::from("Virtual environments were not considered due to the `--system` flag")
+            Hints::none()
         } else {
             Hints::from("Consider creating a virtual environment, e.g., with `uv venv`")
         }
+    }
+}
+
+impl ExternallyManagedError {
+    /// Explain why virtual environments were excluded from environment discovery.
+    pub(crate) fn own_info(&self) -> Option<Info<'static>> {
+        self.system.then(|| {
+            Info::new("Virtual environments were not considered due to the `--system` flag")
+        })
     }
 }
 
@@ -700,4 +709,64 @@ pub(crate) async fn pip_install(
     }
 
     Ok(ExitStatus::Success)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use insta::assert_json_snapshot;
+    use uv_errors::{ErrorFormat, ErrorOptions, Hints, write_error_chain_with_options};
+
+    use crate::commands::diagnostics::diagnostic_for_error;
+    use crate::commands::pip::operations;
+
+    use super::ExternallyManagedError;
+
+    #[test]
+    fn externally_managed_context_is_separate_from_advice() -> anyhow::Result<()> {
+        let mut reports = Vec::new();
+        for system in [true, false] {
+            let error = ExternallyManagedError {
+                message: "The interpreter is externally managed".to_string(),
+                root: PathBuf::from("python"),
+                system,
+            };
+            let error = operations::Error::Anyhow(anyhow::Error::new(error));
+            let mut output = String::new();
+            write_error_chain_with_options(
+                &error,
+                &Hints::none(),
+                ErrorOptions::default()
+                    .with_format(ErrorFormat::Json)
+                    .with_diagnostic(diagnostic_for_error)
+                    .with_stream(&mut output),
+            )?;
+            let report: serde_json::Value = serde_json::from_str(&output)?;
+            reports.push(report["errors"][0].clone());
+        }
+
+        assert_json_snapshot!(reports, @r#"
+        [
+          {
+            "info": [
+              {
+                "message": "Virtual environments were not considered due to the `--system` flag"
+              }
+            ],
+            "message": "The interpreter is externally managed"
+          },
+          {
+            "hints": [
+              {
+                "message": "Consider creating a virtual environment, e.g., with `uv venv`",
+                "ordering": "any"
+              }
+            ],
+            "message": "The interpreter is externally managed"
+          }
+        ]
+        "#);
+        Ok(())
+    }
 }

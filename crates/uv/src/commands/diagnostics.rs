@@ -7,7 +7,7 @@ use rustc_hash::FxHashMap;
 use version_ranges::Ranges;
 
 use uv_distribution_types::{DerivationChain, DerivationStep};
-use uv_errors::{Diagnostic, Hints};
+use uv_errors::{Diagnostic, Hints, Info};
 use uv_normalize::PackageName;
 use uv_pep440::{Version, strip_local_version_sentinels};
 
@@ -44,15 +44,18 @@ pub(crate) fn write_error_chain(err: &anyhow::Error, printer: Printer) -> std::f
 }
 
 /// Resolve presentation data for one concrete error, without changing its source chain.
-fn diagnostic_for_error<'a>(error: &'a (dyn Error + 'static)) -> Option<Diagnostic<'a>> {
+pub(super) fn diagnostic_for_error<'a>(error: &'a (dyn Error + 'static)) -> Option<Diagnostic<'a>> {
     // Transparent wrappers display their inner root without exposing it as a separate source.
     // Resolve that root's presentation and hints at this same visible node.
-    let mut presentation = None;
+    let mut presentation: Option<Diagnostic<'a>> = None;
     let mut owners = Vec::new();
     let mut current = Some(error);
     while let Some(error) = current {
-        if presentation.is_none() {
-            presentation = uv_publish::diagnostic_for_error(error)
+        let metadata = metadata_for_error(error);
+        // A smart pointer has no presentation of its own. Some native providers also accept
+        // boxed errors, so resolving both nodes would duplicate the inner error's context.
+        if !metadata.is_smart_pointer
+            && let Some(native) = uv_publish::diagnostic_for_error(error)
                 .or_else(|| uv_requirements_txt::diagnostic_for_error(error))
                 .or_else(|| uv_scripts::diagnostic_for_error(error))
                 .or_else(|| uv_distribution::diagnostic_for_error(error))
@@ -61,33 +64,38 @@ fn diagnostic_for_error<'a>(error: &'a (dyn Error + 'static)) -> Option<Diagnost
                 .or_else(|| uv_workspace::pyproject::diagnostic_for_error(error))
                 .or_else(|| uv_workspace::dependency_groups::diagnostic_for_error(error))
                 .or_else(|| uv_workspace::diagnostic_for_error(error))
-                .or_else(|| crate::commands::project::diagnostics::diagnostic_for_error(error));
+                .or_else(|| crate::commands::project::diagnostics::diagnostic_for_error(error))
+        {
+            presentation = Some(match presentation {
+                Some(presentation) => native.with_presentation_override(presentation),
+                None => native,
+            });
         }
-        let metadata = metadata_for_error(error);
-        owners.push(metadata.hints);
         current = metadata.transparent;
+        owners.push(metadata);
     }
 
-    // Native inner hints precede any additional suggestions owned by a transparent wrapper.
+    // Native inner context precedes any additions owned by a transparent wrapper.
     // This collection is independent of which presentation override takes precedence.
+    let mut info = Vec::new();
     let mut hints = Hints::none();
     for owner in owners.into_iter().rev() {
-        hints.extend(owner);
+        info.extend(owner.info);
+        hints.extend(owner.hints);
     }
-    if hints.is_empty() {
+    if hints.is_empty() && info.is_empty() {
         presentation
     } else {
-        Some(presentation.unwrap_or_default().with_hints(hints))
+        Some(
+            info.into_iter()
+                .fold(presentation.unwrap_or_default(), Diagnostic::with_info)
+                .with_hints(hints),
+        )
     }
 }
 
-/// Format package context that should follow a distribution error as hints.
-pub(crate) fn dist_hints(
-    name: &PackageName,
-    version: Option<&Version>,
-    chain: &DerivationChain,
-    cause_hints: Hints<'_>,
-) -> Hints<'static> {
+/// Suggest corrected package names and retain actionable suggestions from a distribution error.
+pub(crate) fn dist_hints(name: &PackageName, cause_hints: Hints<'_>) -> Hints<'static> {
     let mut hints = Hints::none();
     if let Some(suggestion) = SUGGESTIONS.get(name) {
         hints.push(format!(
@@ -96,11 +104,18 @@ pub(crate) fn dist_hints(
             suggestion.cyan(),
             suggestion.cyan(),
         ));
-    } else if !chain.is_empty() {
-        hints.push(format_chain(name, version, chain));
     }
     hints.extend(cause_hints);
     hints.into_owned()
+}
+
+/// Explain why a distribution was included in the resolution.
+fn dist_info(
+    name: &PackageName,
+    version: Option<&Version>,
+    chain: &DerivationChain,
+) -> Option<Info<'static>> {
+    (!chain.is_empty()).then(|| Info::new(format_chain(name, version, chain)))
 }
 
 /// Format a [`DerivationChain`] as a human-readable error message.
@@ -229,13 +244,15 @@ mod tests {
     use std::sync::Arc;
 
     use assert_fs::prelude::*;
-    use insta::assert_snapshot;
+    use insta::{assert_json_snapshot, assert_snapshot};
     use reqwest::StatusCode;
 
     use uv_client::{BaseClientBuilder, Connectivity};
     use uv_distribution::MetadataError;
-    use uv_distribution_types::{DerivationChain, IsBuildBackendError};
-    use uv_errors::{ErrorOptions, HintOrdering, Hinted, Hints, write_error_chain_with_options};
+    use uv_distribution_types::{DerivationChain, DerivationStep, IsBuildBackendError};
+    use uv_errors::{
+        ErrorFormat, ErrorOptions, HintOrdering, Hinted, Hints, write_error_chain_with_options,
+    };
     use uv_fs::Simplified;
     use uv_pep440::Version;
     use uv_publish::PublishSendError;
@@ -247,6 +264,7 @@ mod tests {
     use uv_types::AnyErrorBuild;
     use uv_workspace::dependency_groups::{DependencyGroupError, FlatDependencyGroups};
     use uv_workspace::pyproject::{PyProjectToml, PyprojectTomlError, SourceError};
+    use version_ranges::Ranges;
 
     use crate::commands::pip::{self, operations};
     use crate::commands::project::ProjectError;
@@ -653,6 +671,79 @@ mod tests {
         hint: `sklearn` is often confused for `scikit-learn`. Did you mean to install
               `scikit-learn` instead?
         ");
+    }
+
+    #[test]
+    fn formats_distribution_context_at_its_owner() -> anyhow::Result<()> {
+        let chain = [DerivationStep::new(
+            "foo".parse()?,
+            None,
+            None,
+            Some(Version::new([1, 0])),
+            Ranges::full(),
+        )]
+        .into_iter()
+        .collect();
+        let error = ResolveError::Dependencies(
+            Box::new(ResolveError::Distribution(uv_distribution::Error::NoBuild)),
+            "bar".parse()?,
+            Version::new([2, 0]),
+            chain,
+        );
+        let error = operations::Error::Resolve(error);
+
+        assert!(error.hints().is_empty());
+        assert_snapshot!(format_error(&error), @"
+        error: Failed to resolve dependencies for package `bar==2.0`
+          info: `bar` (v2.0) was included because `foo` (v1.0) depends on `bar`
+          cause: Building source distributions is disabled
+        ");
+        Ok(())
+    }
+
+    #[test]
+    fn formats_context_once_through_smart_pointer_owners() -> anyhow::Result<()> {
+        let boxed = Box::new(PublishSendError::Status(
+            StatusCode::BAD_REQUEST,
+            "Invalid package metadata".to_string(),
+        ));
+        let shared = Arc::new(PublishSendError::Status(
+            StatusCode::BAD_REQUEST,
+            "Invalid package metadata".to_string(),
+        ));
+        let errors: [&(dyn Error + 'static); 2] = [&boxed, &shared];
+        let mut reports = Vec::new();
+        for error in errors {
+            let mut output = String::new();
+            write_error_chain_with_options(
+                error,
+                &Hints::none(),
+                ErrorOptions::default()
+                    .with_format(ErrorFormat::Json)
+                    .with_diagnostic(diagnostic_for_error)
+                    .with_stream(&mut output),
+            )?;
+            let report: serde_json::Value = serde_json::from_str(&output)?;
+            reports.push(report["errors"][0]["info"].clone());
+        }
+
+        assert_json_snapshot!(reports, @r#"
+        [
+          [
+            {
+              "details": "Invalid package metadata",
+              "message": "The server included the following context:"
+            }
+          ],
+          [
+            {
+              "details": "Invalid package metadata",
+              "message": "The server included the following context:"
+            }
+          ]
+        ]
+        "#);
+        Ok(())
     }
 
     #[test]

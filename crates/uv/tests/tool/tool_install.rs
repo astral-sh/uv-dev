@@ -3128,6 +3128,7 @@ fn tool_install_uninstallable() {
     Resolved 1 package in [TIME]
     error: Failed to build `pyenv==0.0.1`
       cause: The build backend returned an error
+      info: Build failures usually indicate a problem with the package or the build environment
       cause: Call to `setuptools.build_meta:__legacy__.build_wheel` failed (exit status: 1)
 
              [stdout]
@@ -3144,8 +3145,6 @@ fn tool_install_uninstallable() {
 
              https://github.com/pyenv/pyenv#installation
              #
-
-    hint: Build failures usually indicate a problem with the package or the build environment
     ");
 
     // Ensure the tool environment is not created.
