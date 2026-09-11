@@ -142,15 +142,6 @@ impl TextStoreMode {
 }
 
 #[derive(Clone)]
-enum S3CredentialState {
-    /// The S3 credential state has not yet been initialized.
-    Uninitialized,
-    /// The S3 credential state has been initialized, with either a signer or `None` if
-    /// no S3 endpoint is configured.
-    Initialized(Option<Arc<Authentication>>),
-}
-
-#[derive(Clone)]
 enum GcsCredentialState {
     /// The GCS credential state has not yet been initialized.
     Uninitialized,
@@ -183,8 +174,6 @@ pub struct AuthMiddleware {
     /// Set all endpoints as needing authentication. We never try to send an
     /// unauthenticated request, avoiding cloning an uncloneable request.
     only_authenticated: bool,
-    /// Cached S3 credentials to avoid running the credential helper multiple times.
-    s3_credential_state: Mutex<S3CredentialState>,
     /// Cached GCS credentials to avoid running the credential helper multiple times.
     gcs_credential_state: Mutex<GcsCredentialState>,
     /// Cached Azure credentials to avoid running the credential helper multiple times.
@@ -208,7 +197,6 @@ impl AuthMiddleware {
             cache: Arc::new(CredentialsCache::default()),
             indexes: Indexes::new(),
             only_authenticated: false,
-            s3_credential_state: Mutex::new(S3CredentialState::Uninitialized),
             gcs_credential_state: Mutex::new(GcsCredentialState::Uninitialized),
             azure_credential_state: Mutex::new(AzureCredentialState::Uninitialized),
             preview: Preview::default(),
@@ -687,25 +675,11 @@ impl AuthMiddleware {
         }
 
         if is_s3_endpoint {
-            let mut s3_state = self.s3_credential_state.lock().await;
-
-            // If the S3 credential state is uninitialized, initialize it.
-            let credentials = match &*s3_state {
-                S3CredentialState::Uninitialized => {
-                    trace!("Initializing S3 credentials for {url}");
-                    let signer = S3EndpointProvider::create_signer();
-                    let credentials = Arc::new(Authentication::from(signer));
-                    *s3_state = S3CredentialState::Initialized(Some(credentials.clone()));
-                    Some(credentials)
-                }
-                S3CredentialState::Initialized(credentials) => credentials.clone(),
-            };
-
-            if let Some(credentials) = credentials {
-                debug!("Found S3 credentials for {url}");
-                self.cache().fetches.done(key, Some(credentials.clone()));
-                return Ok(Some(credentials));
-            }
+            let signer = S3EndpointProvider::create_signer();
+            let credentials = Arc::new(Authentication::from(signer));
+            debug!("Found S3 credentials for {url}");
+            self.cache().fetches.done(key, Some(credentials.clone()));
+            return Ok(Some(credentials));
         }
 
         if is_gcs_endpoint {
