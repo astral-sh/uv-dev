@@ -244,7 +244,7 @@ impl RequirementsTxt {
         .await
         .map_err(|err| RequirementsTxtFileError {
             file: requirements_txt.into(),
-            error: err,
+            error: Box::new(err),
             source_file: Some(diagnostics::source_file(requirements_txt, content)),
         })
     }
@@ -273,10 +273,10 @@ impl RequirementsTxt {
             {
                 return Err(RequirementsTxtFileError {
                     file: requirements_txt.into(),
-                    error: RequirementsTxtParserError::Io(io::Error::new(
+                    error: Box::new(RequirementsTxtParserError::Io(io::Error::new(
                         io::ErrorKind::InvalidInput,
                         "Remote file not supported without `http` feature",
-                    )),
+                    ))),
                     source_file: None,
                 });
             }
@@ -286,10 +286,10 @@ impl RequirementsTxt {
                 let url = requirements_txt.display().to_string();
                 let url = DisplaySafeUrl::parse(&url).map_err(|err| RequirementsTxtFileError {
                     file: requirements_txt.into(),
-                    error: RequirementsTxtParserError::InvalidUrl(
+                    error: Box::new(RequirementsTxtParserError::InvalidUrl(
                         requirements_txt.display().to_string(),
                         err,
-                    ),
+                    )),
                     source_file: None,
                 })?;
 
@@ -297,12 +297,12 @@ impl RequirementsTxt {
                 if client_builder.is_offline() {
                     return Err(RequirementsTxtFileError {
                         file: requirements_txt.into(),
-                        error: RequirementsTxtParserError::Io(io::Error::new(
+                        error: Box::new(RequirementsTxtParserError::Io(io::Error::new(
                             io::ErrorKind::InvalidInput,
                             format!(
                                 "Network connectivity is disabled, but a remote requirements file was requested: {url}"
                             ),
-                        )),
+                        ))),
                         source_file: None,
                     });
                 }
@@ -310,14 +310,17 @@ impl RequirementsTxt {
                     .build()
                     .map_err(|err| RequirementsTxtFileError {
                         file: requirements_txt.into(),
-                        error: RequirementsTxtParserError::ClientBuild(url.clone(), Box::new(err)),
+                        error: Box::new(RequirementsTxtParserError::ClientBuild(
+                            url.clone(),
+                            Box::new(err),
+                        )),
                         source_file: None,
                     })?;
                 let content = read_url_to_string(&requirements_txt, client)
                     .await
                     .map_err(|err| RequirementsTxtFileError {
                         file: requirements_txt.into(),
-                        error: err,
+                        error: Box::new(err),
                         source_file: None,
                     })?;
                 cache.insert(requirements_txt.to_path_buf(), content.clone());
@@ -329,7 +332,7 @@ impl RequirementsTxt {
                 .await
                 .map_err(|err| RequirementsTxtFileError {
                     file: requirements_txt.into(),
-                    error: RequirementsTxtParserError::Io(err),
+                    error: Box::new(RequirementsTxtParserError::Io(err)),
                     source_file: None,
                 })?;
             cache.insert(requirements_txt.to_path_buf(), content.clone());
@@ -349,7 +352,7 @@ impl RequirementsTxt {
         .await
         .map_err(|err| RequirementsTxtFileError {
             file: requirements_txt.into(),
-            error: err,
+            error: Box::new(err),
             source_file: Some(diagnostics::source_file(requirements_txt, content)),
         })?;
 
@@ -1153,7 +1156,7 @@ async fn read_url_to_string(
 #[derive(Debug)]
 pub struct RequirementsTxtFileError {
     file: Box<Path>,
-    error: RequirementsTxtParserError,
+    error: Box<RequirementsTxtParserError>,
     /// The decoded input used by the parser, retained only when parsing fails.
     source_file: Option<SourceFile>,
 }
@@ -1365,7 +1368,7 @@ impl std::error::Error for RequirementsTxtParserError {
 
 impl Display for RequirementsTxtFileError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match &self.error {
+        match self.error.as_ref() {
             RequirementsTxtParserError::Io(err) => err.fmt(f),
             RequirementsTxtParserError::Url { url, start, .. } => {
                 write!(
@@ -1509,7 +1512,7 @@ impl Display for RequirementsTxtFileError {
 
 impl std::error::Error for RequirementsTxtFileError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        self.error.source()
+        self.error.as_ref().source()
     }
 }
 

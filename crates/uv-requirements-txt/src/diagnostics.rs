@@ -42,7 +42,7 @@ impl RequirementsTxtFileError {
     fn diagnostic(&self) -> Option<Diagnostic<'_>> {
         let source_file = self.source_file.as_ref()?;
 
-        let diagnostic = match &self.error {
+        let diagnostic = match self.error.as_ref() {
             RequirementsTxtParserError::NonEditable {
                 source: MakeEditableError::Registry,
                 start,
