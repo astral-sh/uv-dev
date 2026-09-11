@@ -52,9 +52,8 @@ impl<'a> Diagnostic<'a> {
     }
 
     /// Show an annotated source location for this error.
-    #[cfg(test)]
     #[must_use]
-    pub(crate) fn with_snippet(mut self, snippet: SourceSnippet<'a>) -> Self {
+    pub fn with_snippet(mut self, snippet: SourceSnippet<'a>) -> Self {
         self.snippets.push(snippet);
         self
     }
@@ -64,9 +63,8 @@ impl<'a> Diagnostic<'a> {
     /// This takes precedence over the diagnostic resolver's presentation for that error. Hints
     /// owned by the source error are retained, followed by any hints supplied here. This does not
     /// add a source to the error chain, and is ignored if there is no next source.
-    #[cfg(test)]
     #[must_use]
-    pub(crate) fn with_source(mut self, source: Self) -> Self {
+    pub fn with_source(mut self, source: Self) -> Self {
         self.source = Some(Box::new(source));
         self
     }
@@ -105,9 +103,8 @@ impl<'a> Info<'a> {
     }
 
     /// Show an annotated source location for this context.
-    #[cfg(test)]
     #[must_use]
-    pub(crate) fn with_snippet(mut self, snippet: SourceSnippet<'a>) -> Self {
+    pub fn with_snippet(mut self, snippet: SourceSnippet<'a>) -> Self {
         self.snippets.push(snippet);
         self
     }

@@ -256,6 +256,30 @@ fn invalid_requirements_txt_nested_includes() -> Result<()> {
     Ok(())
 }
 
+/// A source window must not expose a credentialed entry separated by a bare carriage return.
+#[test]
+fn invalid_requirements_txt_with_carriage_return_credentials() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str("--index-url https://user:password@example.com/simple\rflask==1.0.x\r")?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--offline")
+        .arg("-r")
+        .arg("requirements.txt"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Couldn't parse requirement in `requirements.txt` at position 53
+      cause: after parsing `1.0`, found `.x`, which is not part of a valid version
+             flask==1.0.x
+                  ^^^^^^^
+    ");
+
+    Ok(())
+}
+
 /// Use the decoded stdin contents instead of attempting to read the input a second time.
 #[test]
 fn invalid_requirements_txt_from_stdin() -> Result<()> {

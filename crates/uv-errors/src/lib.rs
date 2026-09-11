@@ -12,6 +12,7 @@ use owo_colors::{AnsiColors, DynColor, OwoColorize};
 pub use diagnostic::{Diagnostic, DiagnosticFn, Info};
 use diagnostic::{write_hints, write_info};
 use line_wrap::{get_wrap_width, wrap_text};
+pub use source::{SourceAnnotation, SourceFile, SourceSnippet};
 use source::{SourceLevel, write_snippets};
 
 /// An error that may carry user-facing hints.
