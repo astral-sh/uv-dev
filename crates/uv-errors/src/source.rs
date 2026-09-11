@@ -32,7 +32,7 @@ impl SourceFile {
     /// The excerpt must start at a line boundary, and annotation ranges must be relative to the
     /// excerpt. An invalid line number causes the renderer to show only the source name.
     #[must_use]
-    fn with_line_start(mut self, line_start: usize) -> Self {
+    pub fn with_line_start(mut self, line_start: usize) -> Self {
         self.line_start = line_start;
         self
     }

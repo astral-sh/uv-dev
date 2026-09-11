@@ -19,12 +19,15 @@ workspace = true
 [dependencies]
 uv-configuration = { workspace = true }
 uv-distribution-types = { workspace = true }
+uv-errors = { workspace = true }
+uv-fs = { workspace = true }
 uv-normalize = { workspace = true }
 uv-pep440 = { workspace = true }
 uv-pep508 = { workspace = true }
 uv-pypi-types = { workspace = true }
 uv-redacted = { workspace = true }
 uv-settings = { workspace = true }
+uv-toml = { workspace = true }
 uv-warnings = { workspace = true }
 uv-workspace = { workspace = true }
 
@@ -37,3 +40,6 @@ thiserror = { workspace = true }
 toml = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
+
+[dev-dependencies]
+insta = { workspace = true }
