@@ -1,0 +1,12 @@
+{
+  "outcome": "fixed",
+  "summary": "Locked registry hashes are now scoped to their originating index, allowing valid isolated build dependencies from another configured index while retaining verification for locked-index artifacts. The parent regression test now asserts successful synchronization.",
+  "validation": [
+    "cargo test -p uv --test lock lock_editable_build_dependency_cross_index",
+    "cargo test -p uv --test lock lock_sdist_url_locked_build_dependency_hash_mismatch",
+    "cargo test -p uv-resolver hash_strategy_includes_direct_and_local_wheels",
+    "cargo +stable clippy -p uv-distribution-types -p uv-types -p uv-resolver --all-targets -- -D warnings",
+    "cargo +stable fmt --all -- --check"
+  ],
+  "pull_request": "https://github.com/astral-sh/uv-dev/pull/1442"
+}

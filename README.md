@@ -106,3 +106,24 @@ with `target.lock().hash_strategy(target.install_path())`. In
 `crates/uv-resolver/src/lock/mod.rs`, registry hashes are collected under a registry
 name/version identity. The observed 0.12.10-to-0.12.11 boundary and controlled two-wheel digests are
 consistent with that lock-derived policy being applied to the alternate build-resolution artifact.
+
+## Fix
+
+Outcome: **fixed**.
+
+Lock-derived hash verification now records the registry indexes associated with each locked
+package/version. Distribution metadata exposes the resolved registry index, and hash validation
+uses the locked hashes only when that distribution comes from the same logical index. This keeps
+verification for a locked artifact served from its recorded index, including equivalent index URLs
+with differing credential forms, while allowing an isolated build dependency to use a valid
+same-name/version artifact from another configured index.
+
+The parent integration regression in
+`crates/uv/tests/lock/lock.rs::lock_editable_build_dependency_cross_index` now asserts a successful
+`uv sync --frozen --no-cache --no-install-project` and installation of both the editable dependency
+and its runtime dependency. The neighboring
+`lock_sdist_url_locked_build_dependency_hash_mismatch` test still confirms that changed bytes from
+the locked index are rejected. Focused validation also covered the lockfile hash-strategy unit test,
+formatting, and Clippy for the affected library crates.
+
+Pull request: https://github.com/astral-sh/uv-dev/pull/1442
