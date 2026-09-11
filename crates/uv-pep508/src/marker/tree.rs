@@ -685,7 +685,10 @@ impl Display for MarkerExpression {
                 key,
                 versions,
                 operator,
-            } => write!(f, "{key} {operator} '{}'", versions.iter().format(" ")),
+            } => {
+                let versions = versions.iter().map(ToString::to_string).join(" ");
+                write!(f, "{key} {operator} '{versions}'")
+            }
             Self::String {
                 key,
                 operator,
@@ -1798,21 +1801,30 @@ impl Display for MarkerTreeContents {
 
         // Write the output in DNF form.
         let dnf = self.0.to_dnf();
-        let [conjunction] = &dnf[..] else {
-            for (index, conjunction) in dnf.iter().enumerate() {
-                if index > 0 {
-                    f.write_str(" or ")?;
-                }
-                if conjunction.len() == 1 {
-                    write!(f, "{}", conjunction.iter().format(" and "))?;
-                } else {
-                    write!(f, "({})", conjunction.iter().format(" and "))?;
-                }
-            }
-            return Ok(());
+        let format_conjunction = |conjunction: &Vec<MarkerExpression>| {
+            conjunction
+                .iter()
+                .map(MarkerExpression::to_string)
+                .collect::<Vec<String>>()
+                .join(" and ")
         };
 
-        write!(f, "{}", conjunction.iter().format(" and "))
+        let expr = match &dnf[..] {
+            [conjunction] => format_conjunction(conjunction),
+            _ => dnf
+                .iter()
+                .map(|conjunction| {
+                    if conjunction.len() == 1 {
+                        format_conjunction(conjunction)
+                    } else {
+                        format!("({})", format_conjunction(conjunction))
+                    }
+                })
+                .collect::<Vec<String>>()
+                .join(" or "),
+        };
+
+        f.write_str(&expr)
     }
 }
 
