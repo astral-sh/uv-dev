@@ -75,7 +75,7 @@ runs:
         UV_INTERNAL__TEST_ALT_FS: "\\\\localhost\\uv-alt-fs"
         UV_INTERNAL__TEST_SMB_FS: "\\\\localhost\\uv-alt-fs"
         UV_INTERNAL__TEST_LOWLINKS_FS: "C:\\uv"
-      uses: astral-sh/github-actions/nextest@6c67cf44d8ad909f0c4370aad55c952d053bbe3b
+      uses: astral-sh/github-actions/nextest@583fb5711db77c8554775b551079742d8a341e91
       with:
         name: windows
         partition: ${{ inputs.partition }}
