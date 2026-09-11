@@ -155,6 +155,7 @@ mod tests {
                 group,
             },
             origin: None,
+            provenance: None,
         };
 
         let mut map = ForkMap::default();

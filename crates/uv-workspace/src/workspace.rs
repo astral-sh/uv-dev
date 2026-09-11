@@ -615,6 +615,7 @@ impl Workspace {
                 },
                 scope: RequirementScope::Global,
                 origin: None,
+                provenance: None,
             })
         })
     }
@@ -751,6 +752,7 @@ impl Workspace {
                 },
                 scope: RequirementScope::Global,
                 origin: None,
+                provenance: None,
             })
         })
     }

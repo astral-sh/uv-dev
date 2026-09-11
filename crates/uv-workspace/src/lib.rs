@@ -5,8 +5,8 @@ pub use requires_python::{
 };
 pub use workspace::{
     DefaultGroupsError, DiscoveryOptions, Editability, MemberDiscovery,
-    ProjectEnvironmentSelection, ProjectWorkspace, VirtualProject,
-    Workspace, WorkspaceCache, WorkspaceError, WorkspaceErrorKind, WorkspaceMember,
+    ProjectEnvironmentSelection, ProjectWorkspace, VirtualProject, Workspace, WorkspaceCache,
+    WorkspaceError, WorkspaceErrorKind, WorkspaceMember,
 };
 
 pub mod dependency_groups;
