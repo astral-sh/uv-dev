@@ -4545,11 +4545,11 @@ fn sync_default_groups_gibberish() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to parse: `pyproject.toml`
-      cause: TOML parse error at line 14, column 26
-                |
-             14 |         default-groups = "gibberish"
-                |                          ^^^^^^^^^^^
-             default-groups must be "all" or a ["list", "of", "groups"]
+      cause: default-groups must be "all" or a ["list", "of", "groups"]
+        --> pyproject.toml:14:26
+         |
+      14 |         default-groups = "gibberish"
+         |                          ^^^^^^^^^^^
     "#);
 
     Ok(())
@@ -16136,11 +16136,11 @@ fn sync_fails_ambiguous_url() -> Result<()> {
       ambiguous user/pass authority in URL (not percent-encoded?): https:***@domain/a/b/c
 
     error: Failed to parse: `pyproject.toml`
-      cause: TOML parse error at line 10, column 15
-                |
-             10 |         url = "https://user/name:password@domain/a/b/c"
-                |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-             ambiguous user/pass authority in URL (not percent-encoded?): https:***@domain/a/b/c
+      cause: ambiguous user/pass authority in URL (not percent-encoded?): https:***@domain/a/b/c
+        --> pyproject.toml:10:15
+         |
+      10 |         url = "https://user/name:password@domain/a/b/c"
+         |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
     "#);
 
     Ok(())

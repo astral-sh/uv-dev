@@ -13620,11 +13620,11 @@ async fn add_invalid_ignore_error_code() -> Result<()> {
       1234 is not a valid HTTP status code
 
     error: Failed to parse: `pyproject.toml`
-      cause: TOML parse error at line 9, column 22
-               |
-             9 | ignore-error-codes = [401, 403, 1234]
-               |                      ^^^^^^^^^^^^^^^^
-             1234 is not a valid HTTP status code
+      cause: 1234 is not a valid HTTP status code
+       --> pyproject.toml:9:22
+        |
+      9 | ignore-error-codes = [401, 403, 1234]
+        |                      ^^^^^^^^^^^^^^^^
     "
     );
 
@@ -13651,13 +13651,13 @@ fn add_invalid_requires_python() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to parse: `pyproject.toml`
-      cause: TOML parse error at line 4, column 19
-               |
-             4 | requires-python = "3.12"
-               |                   ^^^^^^
-             Failed to parse version: Unexpected end of version specifier, expected operator. Did you mean `==3.12`?:
+      cause: Failed to parse version: Unexpected end of version specifier, expected operator. Did you mean `==3.12`?:
              3.12
              ^^^^
+       --> pyproject.toml:4:19
+        |
+      4 | requires-python = "3.12"
+        |                   ^^^^^^
     "#);
 
     Ok(())

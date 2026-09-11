@@ -4430,13 +4430,13 @@ fn override_dependency_from_workspace_invalid_syntax() -> Result<()> {
               ^^^^^^
 
     error: Failed to parse: `pyproject.toml`
-      cause: TOML parse error at line 10, column 7
-                |
-             10 |       "werkzeug=2.3.0"
-                |       ^^^^^^^^^^^^^^^^
-             no such comparison operator "=", must be one of ~= == != <= >= < > ===
+      cause: no such comparison operator "=", must be one of ~= == != <= >= < > ===
              werkzeug=2.3.0
                      ^^^^^^
+        --> pyproject.toml:10:7
+         |
+      10 |       "werkzeug=2.3.0"
+         |       ^^^^^^^^^^^^^^^^
     "#
     );
 
