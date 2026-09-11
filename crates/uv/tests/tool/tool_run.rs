@@ -2769,7 +2769,7 @@ fn tool_run_with_existing_py_script() -> anyhow::Result<()> {
     ----- stderr -----
     error: It looks like you tried to run a Python script at `script.py`, which is not supported by `uv tool run`
 
-    hint: Use `uv run script.py` instead
+    hint: Use `uv run` instead of `uv tool run` to run the script
     ");
 
     uv_snapshot!(context.filters(), context.tool_run()
@@ -2778,7 +2778,7 @@ fn tool_run_with_existing_py_script() -> anyhow::Result<()> {
     ----- stderr -----
     error: It looks like you tried to run a Python script at `[TEMP_DIR]/script.py`, which is not supported by `uv tool run`
 
-    hint: Use `uv run [TEMP_DIR]/script.py` instead
+    hint: Use `uv run` instead of `uv tool run` to run the script
     ");
     Ok(())
 }
@@ -2795,7 +2795,7 @@ fn tool_run_with_existing_pyw_script() -> anyhow::Result<()> {
     ----- stderr -----
     error: It looks like you tried to run a Python script at `script.pyw`, which is not supported by `uv tool run`
 
-    hint: Use `uv run script.pyw` instead
+    hint: Use `uv run` instead of `uv tool run` to run the script
     ");
     Ok(())
 }
@@ -2810,8 +2810,9 @@ fn tool_run_with_nonexistent_py_script() {
     exit_code: 2 (failure)
     ----- stderr -----
     error: It looks like you provided a Python script to run, which is not supported by `uv tool run`
+      info: No Python script was found at `script.py`
 
-    hint: We did not find a script at the requested path. If you meant to run a command from the `script-py` package, pass the normalized package name to `--from` to disambiguate, e.g., `uv tool run --from script-py script.py`
+    hint: If you meant to run `script.py` from the `script-py` package, add `--from script-py` before `script.py` in the `uv tool run` command
     ");
 }
 
@@ -2825,8 +2826,9 @@ fn tool_run_with_nonexistent_pyw_script() {
     exit_code: 2 (failure)
     ----- stderr -----
     error: It looks like you provided a Python script to run, which is not supported by `uv tool run`
+      info: No Python script was found at `script.pyw`
 
-    hint: We did not find a script at the requested path. If you meant to run a command from the `script-pyw` package, pass the normalized package name to `--from` to disambiguate, e.g., `uv tool run --from script-pyw script.pyw`
+    hint: If you meant to run `script.pyw` from the `script-pyw` package, add `--from script-pyw` before `script.pyw` in the `uv tool run` command
     ");
 }
 
@@ -2843,7 +2845,7 @@ fn tool_run_with_from_script() {
     ----- stderr -----
     error: It looks like you provided a Python script to `--from`, which is not supported
 
-    hint: If you meant to run a command from the `script-py` package, use the normalized package name instead to disambiguate, e.g., `uv tool run --from script-py ruff`
+    hint: If you meant to run `ruff` from the `script-py` package, replace the `--from` value in `uv tool run` with `script-py`
     ");
 }
 
@@ -2860,7 +2862,7 @@ fn tool_run_with_script_and_from_script() {
     ----- stderr -----
     error: It looks like you provided a Python script to `--from`, which is not supported
 
-    hint: If you meant to run a command from the `script-py` package, use the normalized package name instead to disambiguate, e.g., `uv tool run --from script-py other-script.py`
+    hint: If you meant to run `other-script.py` from the `script-py` package, replace the `--from` value in `uv tool run` with `script-py`
     ");
 }
 
@@ -2943,10 +2945,11 @@ fn tool_run_verbose_hint() {
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to run tool
+      info: The `--verbose` flag was passed to `nonexistent-package-foo`
       cause: No solution found when resolving dependencies
       cause: Because nonexistent-package-foo was not found in the package registry and you require nonexistent-package-foo, we can conclude that your requirements are unsatisfiable.
 
-    hint: You provided `--verbose` to `nonexistent-package-foo`. Did you mean to provide it to `uv tool run`? e.g., `uv tool run --verbose nonexistent-package-foo`
+    hint: To enable verbose output from `uv tool run`, move `--verbose` before `nonexistent-package-foo`
     ");
 
     // Test with -v flag
@@ -2956,10 +2959,11 @@ fn tool_run_verbose_hint() {
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to run tool
+      info: The `-v` flag was passed to `nonexistent-package-bar`
       cause: No solution found when resolving dependencies
       cause: Because nonexistent-package-bar was not found in the package registry and you require nonexistent-package-bar, we can conclude that your requirements are unsatisfiable.
 
-    hint: You provided `-v` to `nonexistent-package-bar`. Did you mean to provide it to `uv tool run`? e.g., `uv tool run -v nonexistent-package-bar`
+    hint: To enable verbose output from `uv tool run`, move `-v` before `nonexistent-package-bar`
     ");
 
     // Test with -vv flag
@@ -2969,10 +2973,11 @@ fn tool_run_verbose_hint() {
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to run tool
+      info: The `-vv` flag was passed to `nonexistent-package-baz`
       cause: No solution found when resolving dependencies
       cause: Because nonexistent-package-baz was not found in the package registry and you require nonexistent-package-baz, we can conclude that your requirements are unsatisfiable.
 
-    hint: You provided `-vv` to `nonexistent-package-baz`. Did you mean to provide it to `uv tool run`? e.g., `uv tool run -vv nonexistent-package-baz`
+    hint: To enable verbose output from `uv tool run`, move `-vv` before `nonexistent-package-baz`
     ");
 
     // Test for false positives
