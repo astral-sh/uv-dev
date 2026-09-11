@@ -207,16 +207,22 @@ mod tests {
     #[test]
     fn overlapping_source_occurrences() {
         let source = "# café\r\n[tool.uv.sources]\r\n\"My.Package\" = [\r\n  { index = 'private', marker = \"sys_platform == 'linux'\", extra = 'other' },\r\n  { url = 'https://example.com/one.whl', marker = \"sys_platform == 'linux'\" },\r\n  { url = 'https://example.com/two.whl', marker = \"python_version >= '3.12'\" },\r\n]\r\n";
-        assert_snapshot!(format_error(source), @"
+        assert_snapshot!(format_error(source), @r#"
         error: Failed to parse `tool.uv.sources`
           cause: Source markers must be disjoint, but the following markers overlap: `sys_platform == 'linux'` and `python_full_version >= '3.12'`.
-           --> pyproject.toml:6:63
+           --> pyproject.toml:6:51
+            |
+          6 |   { url = 'https://example.com/two.whl', marker = "python_version >= '3.12'" },
+            |                                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^
           info: The other source is declared here
-           --> pyproject.toml:5:63
+           --> pyproject.toml:5:51
+            |
+          5 |   { url = 'https://example.com/one.whl', marker = "sys_platform == 'linux'" },
+            |                                                   -------------------------
 
         hint: replace `python_full_version >= '3.12'` with `python_full_version >= '3.12' and sys_platform != 'linux'`
-           --> pyproject.toml:6:63
-        ");
+           --> pyproject.toml:6:51
+        "#);
     }
 
     #[test]
@@ -226,8 +232,14 @@ mod tests {
         error: Failed to parse `tool.uv.sources`
           cause: When multiple sources are provided, each source must include a platform marker (e.g., `marker = "sys_platform == 'linux'"`)
            --> pyproject.toml:4:1
+            |
+          4 | [[tool.uv.sources.demo]]
+            | ^^^^^^^^^^^^^^^^^^^^^^^^
           info: The other source is declared here
            --> pyproject.toml:3:10
+            |
+          3 | marker = "sys_platform == 'linux'"
+            |          -------------------------
         "#);
     }
 
@@ -237,6 +249,9 @@ mod tests {
         error: Failed to parse `tool.uv.sources`
           cause: Must provide at least one source
            --> pyproject.toml:1:24
+            |
+          1 | tool.uv.sources.demo = []
+            |                        ^^
         ");
     }
 
@@ -268,15 +283,21 @@ mod tests {
                 .and_then(|error| error.downcast_ref::<SourceError>()),
             Some(SourceError::OverlappingMarkers { .. })
         ));
-        assert_snapshot!(format_error(source), @"
+        assert_snapshot!(format_error(source), @r#"
         error: Failed to parse `tool.uv.sources`
           cause: Source markers must be disjoint, but the following markers overlap: `sys_platform == 'linux'` and `sys_platform == 'linux'`.
            --> pyproject.toml:5:30
+            |
+          5 |   { index = 'last', marker = "sys_platform == 'linux'" },
+            |                              ^^^^^^^^^^^^^^^^^^^^^^^^^
           info: The other source is declared here
            --> pyproject.toml:3:31
+            |
+          3 |   { index = 'first', marker = "sys_platform == 'linux'" },
+            |                               -------------------------
 
         hint: make the source markers disjoint, or remove one of the overlapping sources
-        ");
+        "#);
     }
 
     #[test]
@@ -294,8 +315,14 @@ mod tests {
         error: Failed to parse `tool.uv.sources`
           cause: When multiple sources are provided, each source must include a platform marker (e.g., `marker = "sys_platform == 'linux'"`)
            --> pyproject.toml:3:3
+            |
+          3 |   { index = 'first' },
+            |   ^^^^^^^^^^^^^^^^^^^
           info: The other source is declared here
            --> pyproject.toml:5:30
+            |
+          5 |   { index = 'last', marker = "sys_platform == 'linux'" },
+            |                              -------------------------
         "#);
     }
 

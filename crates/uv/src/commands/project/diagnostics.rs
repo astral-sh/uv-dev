@@ -292,6 +292,9 @@ mod tests {
             @"
         error: Python requirements are incompatible
            --> pyproject.toml:1:31
+            |
+          1 | project = { requires-python = '>=3.12', version = '0.1.0' }
+            |                               ^^^^^^^^ requires Python `>=3.12`
         "
         );
         assert_snapshot!(
@@ -302,6 +305,9 @@ mod tests {
             @"
         error: Python requirements are incompatible
            --> pyproject.toml:2:19
+            |
+          2 | requires-python = '>=3.12' # required by the application
+            |                   ^^^^^^^^ requires Python `>=3.12`
         "
         );
         assert_snapshot!(
@@ -309,10 +315,15 @@ mod tests {
                 "[project]\nrequires-python = \"\"\"\n>=3.12\"\"\"\n",
                 ">=3.12",
             )?,
-            @"
+            @r#"
         error: Python requirements are incompatible
            --> pyproject.toml:2:19
-        "
+            |
+          2 |   requires-python = """
+            |  ___________________^
+          3 | | >=3.12"""
+            | |_________^ requires Python `>=3.12`
+        "#
         );
         Ok(())
     }
