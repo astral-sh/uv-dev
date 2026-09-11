@@ -34,6 +34,11 @@ path = "benches/fs_metadata.rs"
 harness = false
 
 [[bench]]
+name = "installed_sidecar_reads"
+path = "benches/installed_sidecar_reads.rs"
+harness = false
+
+[[bench]]
 name = "uv_pep440"
 path = "benches/uv_pep440.rs"
 harness = false

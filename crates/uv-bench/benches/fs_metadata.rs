@@ -8,7 +8,6 @@ extern crate uv_performance_memory_allocator;
 
 use std::env;
 use std::hint::black_box;
-use std::path::Path;
 use std::process::Command;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main, measurement::WallTime};
@@ -16,12 +15,14 @@ use sha2::{Digest, Sha256};
 
 use uv_cache::{ArchiveFileId, ArchiveId, Cache};
 use uv_cache_info::CacheInfo;
-use uv_distribution_types::{BuildInfo, Name};
+use uv_distribution_types::Name;
 use uv_installer::SitePackages;
 use uv_python::{Interpreter, PythonEnvironment, Target};
 
 #[path = "fs_metadata/hardlinks.rs"]
 mod hardlinks;
+#[path = "fixtures/installed_packages.rs"]
+mod installed_packages;
 
 fn is_codspeed_simulation() -> bool {
     matches!(
@@ -48,47 +49,6 @@ fn python_environment() -> PythonEnvironment {
     PythonEnvironment::from_interpreter(interpreter)
 }
 
-fn create_installed_packages(root: &Path, package_count: usize, sidecars: bool) {
-    let cache_info =
-        serde_json::to_vec(&CacheInfo::default()).expect("Failed to encode cache info");
-    let build_info =
-        serde_json::to_vec(&BuildInfo::default()).expect("Failed to encode build info");
-
-    for index in 0..package_count {
-        let module = format!("metadata_bench_{index:04}");
-        let name = module.replace('_', "-");
-        fs_err::create_dir(root.join(&module)).expect("Failed to create package directory");
-        let dist_info = root.join(format!("{module}-1.0.0.dist-info"));
-        fs_err::create_dir(&dist_info).expect("Failed to create dist-info directory");
-        fs_err::write(
-            dist_info.join("METADATA"),
-            format!("Metadata-Version: 2.1\nName: {name}\nVersion: 1.0.0\n"),
-        )
-        .expect("Failed to write package metadata");
-        fs_err::write(
-            dist_info.join("WHEEL"),
-            "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
-        )
-        .expect("Failed to write wheel metadata");
-
-        if sidecars {
-            fs_err::write(dist_info.join("uv_cache.json"), &cache_info)
-                .expect("Failed to write cache info");
-            fs_err::write(dist_info.join("uv_build.json"), &build_info)
-                .expect("Failed to write build info");
-            let direct_url = serde_json::json!({
-                "url": format!("https://example.com/{module}-1.0.0-py3-none-any.whl"),
-                "archive_info": {},
-            });
-            fs_err::write(
-                dist_info.join("direct_url.json"),
-                serde_json::to_vec(&direct_url).expect("Failed to encode direct URL"),
-            )
-            .expect("Failed to write direct URL");
-        }
-    }
-}
-
 fn installed_package_sidecars(criterion: &mut Criterion<WallTime>) {
     if is_codspeed_simulation() {
         return;
@@ -96,10 +56,14 @@ fn installed_package_sidecars(criterion: &mut Criterion<WallTime>) {
 
     let base_environment = python_environment();
     let mut group = criterion.benchmark_group("installed_package_sidecars");
-    for sidecars in [false, true] {
-        for package_count in [50, 500, 2_000] {
+    for sidecars in [
+        installed_packages::Sidecars::Missing,
+        installed_packages::Sidecars::Present,
+        installed_packages::Sidecars::Mixed,
+    ] {
+        for package_count in [50, 500, 1_024, 2_000] {
             let root = tempfile::tempdir().expect("Failed to create site-packages fixture");
-            create_installed_packages(root.path(), package_count, sidecars);
+            installed_packages::create(root.path(), package_count, sidecars);
             let environment = base_environment
                 .clone()
                 .with_target(Target::from(root.path().to_path_buf()))
@@ -118,7 +82,7 @@ fn installed_package_sidecars(criterion: &mut Criterion<WallTime>) {
             drop(packages);
 
             group.bench_with_input(
-                BenchmarkId::new(if sidecars { "present" } else { "missing" }, package_count),
+                BenchmarkId::new(sidecars.name(), package_count),
                 &environment,
                 |bencher, environment| {
                     bencher.iter(|| {
