@@ -100,14 +100,20 @@ fn workspace_list_duplicate_names_keep_inline_fields() -> Result<()> {
         "#},
     )?;
 
-    uv_snapshot!(context.filters(), context.workspace_list(), @"
+    uv_snapshot!(context.filters(), context.workspace_list(), @r#"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Two workspace members are both named `example`
        --> second/pyproject.toml:1:20
+        |
+      1 | project = { name = "example", version = "0.2.0", urls = { documentation = "https://example.com/second" } }
+        |                    ^^^^^^^^^ duplicate name
       info: The name was first declared here
        --> first/pyproject.toml:1:20
-    ");
+        |
+      1 | project = { name = "example", version = "0.1.0", urls = { documentation = "https://example.com/first" } }
+        |                    --------- first declared here
+    "#);
 
     Ok(())
 }
@@ -127,14 +133,20 @@ fn workspace_list_duplicate_names_keep_dotted_or_commented_fields() -> Result<()
         "#},
     )?;
 
-    uv_snapshot!(context.filters(), context.workspace_list(), @"
+    uv_snapshot!(context.filters(), context.workspace_list(), @r#"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Two workspace members are both named `example`
        --> second/pyproject.toml:2:8
+        |
+      2 | name = "example" # same published package
+        |        ^^^^^^^^^ duplicate name
       info: The name was first declared here
        --> first/pyproject.toml:1:16
-    ");
+        |
+      1 | project.name = "example"
+        |                --------- first declared here
+    "#);
 
     Ok(())
 }

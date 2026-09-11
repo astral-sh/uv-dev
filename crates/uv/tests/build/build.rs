@@ -1906,18 +1906,21 @@ fn build_named_index_config_file_hint() -> Result<()> {
         "#,
     )?;
 
-    uv_snapshot!(context.filters(), context.build().current_dir(project.path()), @"
+    uv_snapshot!(context.filters(), context.build().current_dir(project.path()), @r#"
     exit_code: 2 (failure)
     ----- stderr -----
     Building source distribution...
     error: Failed to build `[TEMP_DIR]/project`
       cause: Failed to parse entry: `hatchling`
       cause: Package `hatchling` references an undeclared index: `privindex`
-       --> pyproject.toml:12:31
+        --> pyproject.toml:12:31
+         |
+      12 |         hatchling = { index = "privindex" }
+         |                               ^^^^^^^^^^^ undeclared index
       info: Index `privindex` was found in a project-level `uv.toml`, but indexes referenced via `tool.uv.sources` must be defined in the project's `pyproject.toml`
 
     hint: Define index `privindex` in the project's `pyproject.toml`
-    ");
+    "#);
 
     Ok(())
 }

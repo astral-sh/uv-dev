@@ -459,6 +459,9 @@ mod tests {
             @"
         error: The pinned Python request is incompatible
            --> .python-version:2:1
+            |
+          2 | ./toolchains/python
+            | ^^^^^^^^^^^^^^^^^^^ Python request
         "
         );
         Ok(())
