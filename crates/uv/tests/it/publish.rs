@@ -182,7 +182,7 @@ fn no_credentials() {
     ----- stderr -----
     Publishing 1 file to https://test.pypi.org/legacy/
     Note: Neither credentials nor keyring are configured, and there was an error fetching the trusted publishing token. If you don't want to use trusted publishing, you can ignore this error, but you need to provide credentials.
-    error: Trusted publishing failed
+    warning: Trusted publishing failed
       cause: Failed to obtain OIDC token: is the `id-token: write` permission missing?
       cause: GitHub Actions detection error
       cause: insufficient permissions: missing ACTIONS_ID_TOKEN_REQUEST_URL
@@ -1016,7 +1016,6 @@ async fn trusted_publishing_dry_run() {
       cause: Failed to read metadata
       cause: Failed to read from zip file
       cause: unable to locate the end of central directory record
-    Found issues with 1 file
     "
     );
 
@@ -1276,16 +1275,15 @@ fn dry_run_reports_all_errors() {
     ----- stderr -----
     Checking 2 files against https://test.pypi.org/legacy/
     Checking a-1.0.0-py3-none-any.whl ([SIZE]B)
+    Checking b-1.0.0-py3-none-any.whl ([SIZE]B)
     error: Failed to publish: `a-1.0.0-py3-none-any.whl`
       cause: Failed to read metadata
       cause: Failed to read from zip file
       cause: unable to locate the end of central directory record
-    Checking b-1.0.0-py3-none-any.whl ([SIZE]B)
     error: Failed to publish: `b-1.0.0-py3-none-any.whl`
       cause: Failed to read metadata
       cause: Failed to read from zip file
       cause: unable to locate the end of central directory record
-    Found issues with 2 files
     "
     );
 
@@ -1377,14 +1375,13 @@ async fn publish_invalid_attestations() {
     ----- stderr -----
     Checking 2 files against http://[LOCALHOST]/upload
     Checking basic_app-0.1.0-py3-none-any.whl ([SIZE]KiB)
+    Checking ok-1.0.0-py3-none-any.whl ([SIZE]B)
     error: Failed to publish: `[WORKSPACE]/test/links/basic_app-0.1.0-py3-none-any.whl`
       cause: Invalid PEP 740 attestation (not JSON): `[TEMP_DIR]/basic_app-0.1.0-py3-none-any.whl.publish.attestation`
       cause: EOF while parsing an object at line 1 column 1
-    Checking ok-1.0.0-py3-none-any.whl ([SIZE]B)
     error: Failed to publish: `[WORKSPACE]/test/links/ok-1.0.0-py3-none-any.whl`
       cause: Invalid PEP 740 attestation (not JSON): `[TEMP_DIR]/ok-1.0.0-py3-none-any.whl.publish.attestation`
       cause: EOF while parsing an object at line 1 column 1
-    Found issues with 2 files
     ");
 
     server.verify().await;

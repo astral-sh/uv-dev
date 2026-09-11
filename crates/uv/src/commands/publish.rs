@@ -4,7 +4,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result, bail};
 use console::Term;
 use owo_colors::OwoColorize;
-use tracing::{debug, info, trace};
+use tracing::{debug, info};
 use uv_auth::Credentials;
 use uv_cache::Cache;
 use uv_client::{
@@ -12,17 +12,16 @@ use uv_client::{
 };
 use uv_configuration::{KeyringProviderType, TrustedPublishing};
 use uv_distribution_types::{IndexLocations, IndexUrl};
-use uv_errors::{ErrorOptions, Hints, write_error_chain_with_options};
 use uv_publish::{
     PreparedDistribution, PublishFinalizeError, PublishOutcome, PublishSession,
     PublishingCredentials, TrustedPublishResult, UploadOutcome, check_trusted_publishing,
 };
 use uv_redacted::DisplaySafeUrl;
 use uv_settings::EnvironmentOptions;
-use uv_warnings::{warn_user, warn_user_once};
+use uv_warnings::{warn_user, warn_user_once, warn_user_with_chain};
 
 use crate::commands::reporters::PublishReporter;
-use crate::commands::{ExitStatus, diagnostics};
+use crate::commands::{ExitStatus, UvError};
 use crate::printer::Printer;
 
 pub(crate) async fn publish(
@@ -186,7 +185,7 @@ async fn publish_files(
     dry_run: bool,
     printer: Printer,
 ) -> Result<PublishOutcome> {
-    let mut error_count: usize = 0;
+    let mut errors = Vec::new();
 
     for prepared in distributions {
         let reporter = Arc::new(PublishReporter::single(printer, dry_run));
@@ -196,16 +195,13 @@ async fn publish_files(
                 if !dry_run {
                     return Err(err);
                 }
-                diagnostics::write_error_chain(&err, printer)?;
-                error_count += 1;
+                errors.push(UvError::user(err));
             }
         }
     }
 
-    if error_count > 0 {
-        let failed = if error_count == 1 { "file" } else { "files" };
-        writeln!(printer.stderr(), "Found issues with {error_count} {failed}")?;
-        return Ok(PublishOutcome::Failed);
+    if !errors.is_empty() {
+        return Err(UvError::batch(errors).into());
     }
 
     Ok(if dry_run {
@@ -385,14 +381,11 @@ async fn gather_credentials(
             publishing, you can ignore this error, but you need to provide credentials."
         )?;
 
-        trace!("Error trace: {err:?}");
-        write_error_chain_with_options(
+        warn_user_with_chain!(
             anyhow::Error::from(err)
                 .context("Trusted publishing failed")
-                .as_ref(),
-            &Hints::none(),
-            ErrorOptions::default().with_stream(printer.stderr()),
-        )?;
+                .as_ref()
+        );
     }
 
     // If applicable, fetch the password from the keyring eagerly to avoid user confusion about
