@@ -302,9 +302,9 @@ pub(super) fn benchmark_cache_info(
             });
         });
 
-        if name == "io-uring-64" {
+        if matches!(name, "io-uring-64" | "io-uring-256") {
             group.bench_function(
-                BenchmarkId::new("io-uring-64-fresh-ring", &fixture.name),
+                BenchmarkId::new(format!("{name}-fresh-ring"), &fixture.name),
                 |bencher| {
                     bencher.iter_custom(|iterations| {
                         isolated_time(
