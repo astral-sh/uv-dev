@@ -1162,15 +1162,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "crossbeam-channel"
-version = "0.5.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "82b8f8f868b36967f9606790d1903570de9ceaf870a7bf9fbbd3016d636a2cb2"
-dependencies = [
- "crossbeam-utils",
-]
-
-[[package]]
 name = "crossbeam-deque"
 version = "0.8.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1453,16 +1444,6 @@ dependencies = [
  "option-ext",
  "redox_users",
  "windows-sys 0.60.2",
-]
-
-[[package]]
-name = "diskus"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec07379c016f78e7ddcd953663b9ed17928ff384928d34d824ed7e463bd3d908"
-dependencies = [
- "crossbeam-channel",
- "rayon",
 ]
 
 [[package]]
@@ -5875,7 +5856,6 @@ dependencies = [
  "clap",
  "console",
  "ctrlc",
- "diskus",
  "dotenvy",
  "dunce",
  "embed-manifest",
