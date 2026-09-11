@@ -3,11 +3,9 @@ use std::fmt::Write;
 use anyhow::{Context, Result};
 use uv_cli::SelfUninstallArgs;
 use uv_fs::Simplified;
-use uv_preview::PreviewFeature;
 
 use super::self_install::{
-    InstallReceipt, LockedInstallation, LockedLegacyReceipt, RECEIPT_NAME, executable_names,
-    legacy_receipt_path,
+    InstallReceipt, LockedInstallation, LockedLegacyReceipt, executable_names, legacy_receipt_path,
 };
 use crate::commands::ExitStatus;
 use crate::printer::Printer;
@@ -17,11 +15,6 @@ pub(crate) async fn self_uninstall(
     printer: Printer,
 ) -> Result<ExitStatus> {
     let executable = fs_err::canonicalize(std::env::current_exe()?)?;
-    anyhow::ensure!(
-        uv_preview::is_enabled(PreviewFeature::SelfManagement)
-            || executable.with_file_name(RECEIPT_NAME).try_exists()?,
-        "Native self-uninstallation is experimental; pass `--preview-features self-management` to enable it"
-    );
     let _installation = LockedInstallation::acquire(
         executable
             .parent()

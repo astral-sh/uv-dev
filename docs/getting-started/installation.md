@@ -155,10 +155,8 @@ When uv is installed via the standalone installer, it can update itself on-deman
 $ uv self update
 ```
 
-!!! tip
-
-    Updating uv will re-run the installer and can modify your shell profiles. To disable this
-    behavior, set `UV_NO_MODIFY_PATH=1`.
+Self-updates retain the installation directory and do not change shell profiles. To configure a
+different installation location or update `PATH`, use `uv self install`.
 
 When another installation method is used, self-updates are disabled. Use the package manager's
 upgrade method instead. For example, with `pip`:
@@ -262,7 +260,16 @@ If you need to remove uv from your system, follow these steps:
         Before removing the binaries, you may want to remove any data that uv has stored. See the
         [storage reference](../reference/storage.md) for details on where uv stores data.
 
-2.  Remove the uv, uvx, and uvw binaries:
+2.  Remove a managed standalone installation:
+
+    ```console
+    $ uv self uninstall
+    ```
+
+    This removes the installed executables and their receipt, but leaves shared directories and
+    shell configuration in place. If uv was installed with a package manager, use that package
+    manager's uninstall command instead. For an unmanaged installation, remove the binaries
+    manually:
 
     === "macOS and Linux"
 

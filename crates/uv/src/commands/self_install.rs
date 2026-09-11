@@ -6,7 +6,6 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use uv_cli::SelfInstallArgs;
 use uv_fs::{LockedFile, LockedFileMode, Simplified};
-use uv_preview::PreviewFeature;
 use uv_static::EnvVars;
 
 use crate::commands::ExitStatus;
@@ -79,7 +78,7 @@ const fn default_modify_path() -> bool {
     true
 }
 
-pub(super) const RECEIPT_NAME: &str = ".uv-receipt.json";
+const RECEIPT_NAME: &str = ".uv-receipt.json";
 
 pub(super) fn legacy_receipt_path() -> Result<PathBuf> {
     if std::env::var_os("AXOUPDATER_CONFIG_WORKING_DIR").is_some() {
@@ -448,10 +447,6 @@ fn update_ci_path(directory: &Path, path: &Path) -> Result<()> {
 }
 
 pub(crate) async fn self_install(args: SelfInstallArgs, printer: Printer) -> Result<ExitStatus> {
-    anyhow::ensure!(
-        uv_preview::is_enabled(PreviewFeature::SelfManagement),
-        "Native self-installation is experimental; pass `--preview-features self-management` to enable it"
-    );
     let unmanaged = args.unmanaged.is_some();
     let destination = args
         .unmanaged

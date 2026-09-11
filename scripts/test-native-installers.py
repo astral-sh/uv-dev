@@ -208,8 +208,6 @@ class NativeInstallers(unittest.TestCase):
                 [
                     "self",
                     "install",
-                    "--preview-features",
-                    "self-management",
                     "--source-repository",
                     "example/uv",
                     "--no-modify-path",

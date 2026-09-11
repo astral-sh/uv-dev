@@ -9,30 +9,13 @@ use uv_fs::{LockedFile, LockedFileMode};
 use uv_test::uv_snapshot;
 
 #[test]
-fn requires_preview() {
-    let context = uv_test::test_context_with_versions!(&[]);
-    uv_snapshot!(context.command().args(["self", "install"]), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Native self-installation is experimental; pass `--preview-features self-management` to enable it
-    ");
-}
-
-#[test]
 #[cfg(any(not(windows), feature = "windows-gui-bin"))]
 fn installs_running_distribution() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[]);
     let bin = context.temp_dir.child("bin");
     let mut command = context.command();
     command
-        .args([
-            "self",
-            "install",
-            "--preview-features",
-            "self-management",
-            "--no-modify-path",
-            "--install-dir",
-        ])
+        .args(["self", "install", "--no-modify-path", "--install-dir"])
         .arg(bin.path());
     let output = command.output()?;
     assert!(
@@ -69,14 +52,7 @@ fn reinstalls_missing_executable_with_matching_receipt() -> Result<()> {
     let bin = context.temp_dir.child("bin");
     let mut command = context.command();
     command
-        .args([
-            "self",
-            "install",
-            "--preview-features",
-            "self-management",
-            "--no-modify-path",
-            "--install-dir",
-        ])
+        .args(["self", "install", "--no-modify-path", "--install-dir"])
         .arg(bin.path());
     assert!(command.status()?.success());
     let executable = bin.child(format!("uv{}", std::env::consts::EXE_SUFFIX));
@@ -120,13 +96,7 @@ fn unmanaged_install_has_no_receipt() -> Result<()> {
     assert!(
         context
             .command()
-            .args([
-                "self",
-                "install",
-                "--preview-features",
-                "self-management",
-                "--unmanaged"
-            ])
+            .args(["self", "install", "--unmanaged"])
             .arg(bin.path())
             .env("GITHUB_PATH", github_path.path())
             .status()?
@@ -146,14 +116,7 @@ fn uninstall_removes_only_owned_files() -> Result<()> {
     assert!(
         context
             .command()
-            .args([
-                "self",
-                "install",
-                "--preview-features",
-                "self-management",
-                "--no-modify-path",
-                "--install-dir"
-            ])
+            .args(["self", "install", "--no-modify-path", "--install-dir"])
             .arg(bin.path())
             .status()?
             .success()
@@ -195,14 +158,7 @@ async fn uninstall_reads_receipt_after_waiting_for_installation() -> Result<()> 
     assert!(
         context
             .command()
-            .args([
-                "self",
-                "install",
-                "--preview-features",
-                "self-management",
-                "--no-modify-path",
-                "--install-dir"
-            ])
+            .args(["self", "install", "--no-modify-path", "--install-dir"])
             .arg(bin.path())
             .status()?
             .success()
@@ -217,13 +173,7 @@ async fn uninstall_reads_receipt_after_waiting_for_installation() -> Result<()> 
     .await?;
     let mut child = context
         .external_command(executable.path())
-        .args([
-            "self",
-            "uninstall",
-            "--preview-features",
-            "self-management",
-            "--verbose",
-        ])
+        .args(["self", "uninstall", "--verbose"])
         .env(uv_static::EnvVars::RUST_LOG, "uv_fs=info")
         .stderr(Stdio::piped())
         .spawn()?;
@@ -298,14 +248,7 @@ async fn check_global_receipt_cleanup(unmanaged: bool, native_receipt: bool) -> 
         assert!(
             context
                 .command()
-                .args([
-                    "self",
-                    "install",
-                    "--preview-features",
-                    "self-management",
-                    "--no-modify-path",
-                    "--install-dir",
-                ])
+                .args(["self", "install", "--no-modify-path", "--install-dir",])
                 .arg(bin.path())
                 .status()?
                 .success()
@@ -338,7 +281,7 @@ async fn check_global_receipt_cleanup(unmanaged: bool, native_receipt: bool) -> 
         command
     };
     let mut child = command
-        .args(["--preview-features", "self-management", "--verbose"])
+        .arg("--verbose")
         .env("AXOUPDATER_CONFIG_PATH", legacy.path())
         .env(uv_static::EnvVars::RUST_LOG, "uv_fs=info")
         .stderr(Stdio::piped())
@@ -403,13 +346,7 @@ fn native_install_configures_standalone_profiles() -> Result<()> {
         .write_str("# existing bash\n")?;
     let mut command = context.command();
     command
-        .args([
-            "self",
-            "install",
-            "--preview-features",
-            "self-management",
-            "--install-dir",
-        ])
+        .args(["self", "install", "--install-dir"])
         .arg(bin.path())
         .env("GITHUB_PATH", github_path.path())
         .env("ZDOTDIR", zsh.path())
@@ -446,13 +383,7 @@ fn disable_update_omits_receipt() -> Result<()> {
     assert!(
         context
             .command()
-            .args([
-                "self",
-                "install",
-                "--preview-features",
-                "self-management",
-                "--install-dir"
-            ])
+            .args(["self", "install", "--install-dir"])
             .arg(bin.path())
             .env(uv_static::EnvVars::UV_DISABLE_UPDATE, "1")
             .env(uv_static::EnvVars::UV_NO_MODIFY_PATH, "1")

@@ -229,8 +229,6 @@ pub mod test {
 #[repr(u64)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PreviewMetadata)]
 pub enum PreviewFeature {
-    /// Enables native installation and management of standalone uv distributions.
-    SelfManagement,
     /// Allows [installing `python` and `python3` executables](./python-versions.md#installing-python-executables).
     PythonInstallDefault,
     /// Allows `--output-format json` for various uv commands.
