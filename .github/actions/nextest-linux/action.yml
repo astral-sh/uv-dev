@@ -98,7 +98,7 @@ runs:
         UV_INTERNAL__TEST_NOCOW_FS: /tmpfs
         UV_INTERNAL__TEST_ALT_FS: /tmpfs
         UV_INTERNAL__TEST_LOWLINKS_FS: /minix
-      uses: astral-sh/github-actions/nextest@4a67b826d91cd36483b2a7a6a0fa39d966f4638c
+      uses: astral-sh/github-actions/nextest@e6fe1b51adba9d0b2c847e503fce90e8fb765188
       with:
         name: linux
         partition: ${{ inputs.partition }}
