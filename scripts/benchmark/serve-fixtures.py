@@ -26,6 +26,8 @@ class Fixtures:
     def __init__(self, directory: Path, manifest: Path, lockfiles: list[Path]) -> None:
         self.files: dict[str, Path] = {}
         self.metadata: dict[str, bytes] = {}
+        self.vulnerabilities: dict[str, dict] = {}
+        self.osv_queries: dict[tuple[str, str], list[str]] = {}
         packages: dict[str, dict[str, dict]] = {}
         for lockfile in lockfiles:
             with lockfile.open("rb") as file:
@@ -51,6 +53,12 @@ class Fixtures:
         for item in json.loads(manifest.read_text()):
             filename = item["filename"]
             path = directory / filename
+            if queries := item.get("osv-queries"):
+                record = json.loads(path.read_text())
+                self.vulnerabilities[record["id"]] = record
+                for query in queries:
+                    key = (normalize(query["name"]), query["version"])
+                    self.osv_queries.setdefault(key, []).append(record["id"])
             if not filename.endswith(".whl"):
                 continue
             if not path.is_file():
@@ -123,10 +131,44 @@ class Handler(BaseHTTPRequestHandler):
         self.handle_request(head=False)
 
     def do_POST(self) -> None:
-        if urlsplit(self.path).path == "/reset":
+        path = urlsplit(self.path).path
+        if path == "/reset":
             with self.server.counts_lock:
                 self.server.counts.clear()
             self.respond(b"{}", "application/json")
+        elif path in {"/osv/v1/querybatch", "/osv/v1/query"}:
+            with self.server.counts_lock:
+                self.server.counts[f"POST {path}"] += 1
+            time.sleep(self.server.delay)
+            request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+
+            def identifiers(query: dict) -> list[str]:
+                package = query["package"]
+                if package["ecosystem"] != "PyPI":
+                    return []
+                return self.server.fixtures.osv_queries.get(
+                    (normalize(package["name"]), query["version"]), []
+                )
+
+            if path.endswith("querybatch"):
+                response = {
+                    "results": [
+                        {
+                            "vulns": [
+                                {"id": identifier} for identifier in identifiers(query)
+                            ]
+                        }
+                        for query in request["queries"]
+                    ]
+                }
+            else:
+                response = {
+                    "vulns": [
+                        self.server.fixtures.vulnerabilities[identifier]
+                        for identifier in identifiers(request)
+                    ]
+                }
+            self.respond(json.dumps(response).encode(), "application/json")
         else:
             self.send_error(404)
 
@@ -147,7 +189,12 @@ class Handler(BaseHTTPRequestHandler):
             self.server.counts[f"{self.command} {path}"] += 1
         time.sleep(self.server.delay)
         parts = path.strip("/").split("/")
-        if len(parts) == 2 and parts[0] in {
+        if len(parts) == 4 and parts[:3] == ["osv", "v1", "vulns"]:
+            record = self.server.fixtures.vulnerabilities.get(parts[3])
+            if record is not None:
+                self.respond(json.dumps(record).encode(), "application/json", head=head)
+                return
+        elif len(parts) == 2 and parts[0] in {
             "simple",
             "simple-a",
             "simple-b",
