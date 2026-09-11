@@ -9,7 +9,7 @@ use anyhow::{Context, Error, Result};
 use futures::{StreamExt, join};
 use indexmap::IndexSet;
 use itertools::Itertools;
-use owo_colors::{AnsiColors, OwoColorize};
+use owo_colors::OwoColorize;
 use rustc_hash::{FxHashMap, FxHashSet};
 use tokio::sync::mpsc;
 use tracing::{debug, trace, warn};
@@ -17,7 +17,7 @@ use tracing::{debug, trace, warn};
 use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
 use uv_configuration::Concurrency;
-use uv_errors::{ErrorOptions, Hints, write_error_chain_with_options};
+use uv_errors::Hints;
 use uv_fs::Simplified;
 use uv_platform::{Arch, Libc};
 use uv_preview::{Preview, PreviewFeature};
@@ -37,7 +37,7 @@ use uv_python::{
 };
 use uv_shell::Shell;
 use uv_trampoline_builder::{Launcher, LauncherKind};
-use uv_warnings::warn_user;
+use uv_warnings::{warn_user, warn_user_with_chain};
 
 use crate::commands::python::{ChangeEvent, ChangeEventKind};
 use crate::commands::reporters::PythonDownloadReporter;
@@ -911,66 +911,49 @@ async fn perform_install(
     }
 
     if !errors.is_empty() {
-        // If there are only side-effect install errors and the user didn't opt-in, we're only going
-        // to warn
-        let fatal = !errors.iter().all(|(kind, _, _)| match kind {
-            InstallErrorKind::Bin => bin.is_none(),
-            InstallErrorKind::Registry => registry.is_none(),
-            InstallErrorKind::DownloadUnpack => false,
-        });
-
+        let mut failures = Vec::new();
         for (kind, key, err) in errors
             .into_iter()
             .sorted_unstable_by(|(_, key_a, _), (_, key_b, _)| key_a.cmp(key_b))
         {
-            match kind {
+            let (fatal, err) = match kind {
                 InstallErrorKind::DownloadUnpack => {
-                    write_error_chain_with_options(
-                        err.context(format!("Failed to install {key}")).as_ref(),
-                        &Hints::none(),
-                        ErrorOptions::default().with_stream(printer.stderr()),
-                    )?;
+                    (true, err.context(format!("Failed to install {key}")))
                 }
                 InstallErrorKind::Bin => {
-                    let (level, color) = match bin {
-                        None => ("warning", AnsiColors::Yellow),
+                    let fatal = match bin {
+                        None => false,
                         Some(false) => continue,
-                        Some(true) => ("error", AnsiColors::Red),
+                        Some(true) => true,
                     };
-
-                    write_error_chain_with_options(
-                        err.context(format!("Failed to install executable for {key}"))
-                            .as_ref(),
-                        &Hints::none(),
-                        ErrorOptions::default()
-                            .with_level(level)
-                            .with_color(color)
-                            .with_stream(printer.stderr()),
-                    )?;
+                    (
+                        fatal,
+                        err.context(format!("Failed to install executable for {key}")),
+                    )
                 }
                 InstallErrorKind::Registry => {
-                    let (level, color) = match registry {
-                        None => ("warning", AnsiColors::Yellow),
+                    let fatal = match registry {
+                        None => false,
                         Some(false) => continue,
-                        Some(true) => ("error", AnsiColors::Red),
+                        Some(true) => true,
                     };
 
                     trace!("Error trace: {err:?}");
-                    write_error_chain_with_options(
-                        err.context(format!("Failed to create registry entry for {key}"))
-                            .as_ref(),
-                        &Hints::none(),
-                        ErrorOptions::default()
-                            .with_level(level)
-                            .with_color(color)
-                            .with_stream(printer.stderr()),
-                    )?;
+                    (
+                        fatal,
+                        err.context(format!("Failed to create registry entry for {key}")),
+                    )
                 }
+            };
+            if fatal {
+                failures.push(UvError::user(err));
+            } else {
+                warn_user_with_chain!(err.as_ref());
             }
         }
 
-        if fatal {
-            return Ok(ExitStatus::Failure);
+        if !failures.is_empty() {
+            return Err(UvError::batch(failures).into());
         }
     }
 

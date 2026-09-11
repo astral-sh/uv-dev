@@ -20,6 +20,49 @@ use uv_static::EnvVars;
 use walkdir::WalkDir;
 
 #[test]
+fn python_install_failure_quiet() {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_filtered_python_keys()
+        .with_filtered_latest_python_versions()
+        .with_managed_python_dirs()
+        .with_empty_python_install_mirror()
+        .with_filter((r"\(from https://[^)]+\)", "(from [DOWNLOAD_URL])"));
+    let python_cache = context.temp_dir.join("python-cache");
+
+    uv_snapshot!(context.filters(), context.python_install()
+        .args(["3.12", "--offline", "-q"])
+        .env(EnvVars::UV_PYTHON_CACHE_DIR, &python_cache), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to install cpython-3.12.[LATEST]-[PLATFORM]
+      cause: An offline Python installation was requested, but cpython-3.12.[LATEST]-[PLATFORM] (from [DOWNLOAD_URL]) is missing in python-cache
+    ");
+
+    uv_snapshot!(context.filters(), context.python_install()
+        .args(["3.12", "--offline", "-qq"])
+        .env(EnvVars::UV_PYTHON_CACHE_DIR, &python_cache), @"
+    exit_code: 1 (failure)
+    ");
+
+    uv_snapshot!(context.filters(), context.python_install()
+        .args(["3.13", "3.12", "--offline", "-q"])
+        .env(EnvVars::UV_PYTHON_CACHE_DIR, &python_cache), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to install cpython-3.12.[LATEST]-[PLATFORM]
+      cause: An offline Python installation was requested, but cpython-3.12.[LATEST]-[PLATFORM] (from [DOWNLOAD_URL]) is missing in python-cache
+    error: Failed to install cpython-3.13.[LATEST]-[PLATFORM]
+      cause: An offline Python installation was requested, but cpython-3.13.[LATEST]-[PLATFORM] (from [DOWNLOAD_URL]) is missing in python-cache
+    ");
+
+    uv_snapshot!(context.filters(), context.python_install()
+        .args(["3.13", "3.12", "--offline", "-qq"])
+        .env(EnvVars::UV_PYTHON_CACHE_DIR, &python_cache), @"
+    exit_code: 1 (failure)
+    ");
+}
+
+#[test]
 fn python_install() {
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
@@ -594,12 +637,30 @@ fn python_install_preview() {
       cause: Executable already exists at `[BIN]/python3.14` but is not managed by uv; use `--force` to replace it
     ");
 
+    uv_snapshot!(context.filters(), context.python_install()
+        .args(["--preview", "3.14", "-q"]), @"
+    exit_code: 0 (success)
+    ");
+
     // With `--bin`, this should error instead of warn
     uv_snapshot!(context.filters(), context.python_install().arg("--preview").arg("--bin").arg("3.14"), @"
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to install executable for cpython-3.14.[LATEST]-[PLATFORM]
       cause: Executable already exists at `[BIN]/python3.14` but is not managed by uv; use `--force` to replace it
+    ");
+
+    uv_snapshot!(context.filters(), context.python_install()
+        .args(["--preview", "--bin", "3.14", "-q"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to install executable for cpython-3.14.[LATEST]-[PLATFORM]
+      cause: Executable already exists at `[BIN]/python3.14` but is not managed by uv; use `--force` to replace it
+    ");
+
+    uv_snapshot!(context.filters(), context.python_install()
+        .args(["--preview", "--bin", "3.14", "-qq"]), @"
+    exit_code: 1 (failure)
     ");
     uv_snapshot!(context.filters(), context.python_install().arg("--preview").arg("3.14").env(EnvVars::UV_PYTHON_INSTALL_BIN, "1"), @"
     exit_code: 1 (failure)
