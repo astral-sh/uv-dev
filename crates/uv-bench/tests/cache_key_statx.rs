@@ -11,5 +11,7 @@
     )
 ))]
 
-#[path = "../benches/cache_key_backends/statx.rs"]
-mod statx;
+mod statx {
+    include!("../benches/cache_key_backends/statx.rs");
+    include!("cache_key_statx/cases.rs");
+}
