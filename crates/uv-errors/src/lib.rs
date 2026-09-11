@@ -402,12 +402,6 @@ impl<'a, C, W> ErrorOptions<'a, C, W> {
     }
 }
 
-/// Format an error chain and explicitly supplied hints to standard error using the default level
-/// and color.
-pub fn write_error_chain(err: &(dyn Error + 'static), hints: &Hints<'_>) -> fmt::Result {
-    write_error_chain_with_options(err, hints, ErrorOptions::default())
-}
-
 /// Format the [`Debug`] representation of every error in an error chain.
 pub fn debug_error_chain(err: &dyn Error) -> impl fmt::Display + '_ {
     DebugErrorChain(err)
