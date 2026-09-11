@@ -2043,11 +2043,9 @@ impl Lock {
         deserialize::from_str(input)
     }
 
-    /// Parses a lockfile, using the canonical fast path when possible.
+    /// Parses a lockfile with the general TOML parser.
     ///
-    /// Lockfiles not written in uv's canonical layout fall back to the general
-    /// TOML parser, preserving its compatibility and error reporting. Lockfiles
-    /// that use an unsupported schema version are rejected.
+    /// Lockfiles that use an unsupported schema version are rejected.
     pub fn from_toml(input: &str) -> Result<Self, LockParseError> {
         let lock: Self = match toml::from_str(input) {
             Ok(lock) => lock,
