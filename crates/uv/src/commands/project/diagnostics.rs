@@ -5,6 +5,7 @@ use std::str::FromStr;
 use uv_errors::{Diagnostic, SourceAnnotation, SourceFile, SourceSnippet};
 use uv_fs::Simplified;
 use uv_pep440::VersionSpecifiers;
+use uv_python::PythonVersionFile;
 use uv_toml::SourceMap;
 use uv_toml::SourcePathSegment::Key;
 use uv_workspace::{RequiresPythonSources, Workspace};
@@ -83,7 +84,7 @@ pub(crate) fn diagnostic_for_error<'a>(error: &'a (dyn Error + 'static)) -> Opti
     Some(diagnostic.diagnostic())
 }
 
-/// The direct declarations that participated in a project Python compatibility error.
+/// The Python request and direct declarations that participated in a project compatibility error.
 ///
 /// The semantic requirements and their presentation are kept separate: retaining these sources
 /// does not alter workspace identity, requirement intersections, or resolver cache keys.
@@ -118,6 +119,20 @@ impl PythonRequirementsDiagnostic {
             })
             .collect::<Vec<_>>();
         (!sources.is_empty()).then_some(Self { sources })
+    }
+
+    pub(crate) fn with_python_request(
+        file: &PythonVersionFile,
+        diagnostic: Option<Self>,
+    ) -> Option<Self> {
+        let Some(source) = file.version_source() else {
+            return diagnostic;
+        };
+        let mut diagnostic = diagnostic.unwrap_or_else(|| Self {
+            sources: Vec::new(),
+        });
+        diagnostic.sources.insert(0, source);
+        Some(diagnostic)
     }
 
     fn diagnostic(&self) -> Diagnostic<'_> {
