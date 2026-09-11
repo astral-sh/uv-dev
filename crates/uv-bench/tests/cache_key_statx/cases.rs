@@ -125,7 +125,7 @@ mod tests {
         )?;
         let regular = source.join("regular.py");
         fs_err::write(&regular, b"regular\n")?;
-        let old_mtime = UNIX_EPOCH + Duration::from_secs(946_684_800);
+        let old_mtime = UNIX_EPOCH + Duration::from_hours(262_968);
         fs_err::File::open(&regular)?.set_times(FileTimes::new().set_modified(old_mtime))?;
         let expected_ctime = Timestamp::from_path(&regular)?;
         assert_ne!(expected_ctime, Timestamp::from(old_mtime));

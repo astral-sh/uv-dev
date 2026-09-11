@@ -136,7 +136,7 @@ impl Scanner {
         }
     }
 
-    /// Verify that an entire metadata or CacheInfo invocation used the expected ring operations.
+    /// Verify that an entire metadata or `CacheInfo` invocation used the expected ring operations.
     pub(super) fn assert_activity(&self, before: Activity, expected: usize) {
         assert_eq!(
             self.activity.successful - before.successful,
