@@ -408,7 +408,9 @@ fn run_pep723_script() -> Result<()> {
     uv_snapshot!(context.filters(), context.run().arg("--locked").arg("main.py"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Unable to find lockfile for Python script, but `--locked` was provided. To create a lockfile, run `uv lock --script`.
+    error: Unable to find lockfile for Python script, but `--locked` was provided.
+
+    hint: To create the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/` and `--script` set to `[TEMP_DIR]/main.py`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     // Running a script with `UV_LOCKED` should warn (not error).
@@ -418,7 +420,7 @@ fn run_pep723_script() -> Result<()> {
     Hello, world!
 
     ----- stderr -----
-    warning: No lockfile found for Python script (ignoring `UV_LOCKED=1`); run `uv lock --script` to generate a lockfile
+    warning: No lockfile found for Python script (ignoring `UV_LOCKED=1`). To create the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/` and `--script` set to `[TEMP_DIR]/main.py`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     // If the script can't be resolved, we should reference the script.
@@ -1324,7 +1326,9 @@ fn run_pep723_script_lock() -> Result<()> {
     uv_snapshot!(context.filters(), context.run().arg("--locked").arg("main.py"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Unable to find lockfile for Python script, but `--locked` was provided. To create a lockfile, run `uv lock --script`.
+    error: Unable to find lockfile for Python script, but `--locked` was provided.
+
+    hint: To create the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/` and `--script` set to `[TEMP_DIR]/main.py`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     // Explicitly lock the script.
@@ -2751,7 +2755,9 @@ fn run_locked() -> Result<()> {
     uv_snapshot!(context.filters(), context.run().arg("--locked").arg("--").arg("python").arg("--version"), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    error: Unable to find lockfile at `uv.lock`, but `--locked` was provided. To create a lockfile, run `uv lock` or `uv sync` without the flag.
+    error: Unable to find lockfile at `uv.lock`, but `--locked` was provided.
+
+    hint: To create the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     // Lock the initial requirements.
@@ -2910,7 +2916,9 @@ fn run_frozen() -> Result<()> {
     uv_snapshot!(context.filters(), context.run().arg("--frozen").arg("--").arg("python").arg("--version"), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    error: Unable to find lockfile at `uv.lock`, but `--frozen` was provided. To create a lockfile, run `uv lock` or `uv sync` without the flag.
+    error: Unable to find lockfile at `uv.lock`, but `--frozen` was provided.
+
+    hint: To create the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 
     context.lock().assert().success();
