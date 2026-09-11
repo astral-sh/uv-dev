@@ -234,21 +234,111 @@ pub(crate) fn write_snippets(
     Ok(())
 }
 
-/// Select explicit source windows before passing them to the renderer. In particular, unrelated
-/// configuration lines must not become visible just because two annotations are close together.
 fn source_elements<'a>(snippet: &'a SourceSnippet<'_>) -> Vec<Element<'a>> {
+    let Some(view) = source_view(snippet) else {
+        return Vec::new();
+    };
+    let origin = || {
+        view.name
+            .as_ref()
+            .map(|name| Origin::path(name.clone()).into())
+            .into_iter()
+            .collect()
+    };
+    let windows = match view.kind {
+        SourceViewKind::Origin => return origin(),
+        SourceViewKind::Location(position) => {
+            return view
+                .name
+                .as_ref()
+                .map(|name| {
+                    Origin::path(name.clone())
+                        .line(position.line)
+                        .char_column(position.character_column + 1)
+                        .into()
+                })
+                .into_iter()
+                .collect();
+        }
+        SourceViewKind::Windows(windows) => windows,
+    };
+
+    let mut elements = Vec::new();
+    for window in windows {
+        let normalized = NormalizedSource::new(window.text);
+        let mut annotations = Vec::new();
+        for annotation in window.annotations {
+            let mut rendered = annotation
+                .kind
+                .span(normalized.range(annotation.display_range));
+            if let Some(label) = annotation.label {
+                rendered = rendered.label(normalize_single_line(label));
+            }
+            annotations.push(rendered);
+            annotations.extend(
+                annotation
+                    .visible_context
+                    .into_iter()
+                    .map(|range| AnnotationKind::Visible.span(normalized.range(range))),
+            );
+        }
+        let mut rendered = Snippet::source(normalized.text)
+            .line_start(window.line_start)
+            .annotations(annotations);
+        if let Some(name) = &view.name {
+            rendered = rendered.path(name.clone());
+        }
+        elements.push(rendered.into());
+    }
+    elements
+}
+
+/// The explicitly selected, displayable part of one source snapshot.
+struct SourceView<'a> {
+    name: Option<String>,
+    kind: SourceViewKind<'a>,
+}
+
+enum SourceViewKind<'a> {
+    Origin,
+    Location(SourcePosition),
+    Windows(Vec<SourceWindowView<'a>>),
+}
+
+/// A position in the decoded input, with a one-based line and zero-based character column.
+struct SourcePosition {
+    line: usize,
+    character_column: usize,
+}
+
+struct SourceWindowView<'a> {
+    text: &'a str,
+    line_start: usize,
+    annotations: Vec<SourceAnnotationView<'a>>,
+}
+
+struct SourceAnnotationView<'a> {
+    display_range: Range<usize>,
+    label: Option<&'a str>,
+    kind: AnnotationKind,
+    visible_context: Vec<Range<usize>>,
+}
+
+/// Select explicit source windows before handing source text to any renderer. In particular,
+/// unrelated configuration lines must not become visible merely because annotations are nearby.
+fn source_view<'a>(snippet: &'a SourceSnippet<'_>) -> Option<SourceView<'a>> {
     let source = &snippet.source;
     let lines = SourceLines::new(source.text());
-    let path = normalize_single_line(source.name());
-    let origin = || {
-        if path.is_empty() {
-            Vec::new()
-        } else {
-            vec![Origin::path(path.clone()).into()]
-        }
+    let name = normalize_single_line(source.name());
+    let name = (!name.is_empty()).then_some(name);
+    let origin = |name: Option<String>| {
+        name.map(|name| SourceView {
+            name: Some(name),
+            kind: SourceViewKind::Origin,
+        })
     };
     if source.line_start == 0 || source.line_start.checked_add(lines.last()).is_none() {
-        return origin();
+        return origin(name);
     }
 
     if !snippet.show_source {
@@ -261,26 +351,15 @@ fn source_elements<'a>(snippet: &'a SourceSnippet<'_>) -> Vec<Element<'a>> {
             .filter(valid)
             .find(|annotation| annotation.kind == AnnotationKind::Primary)
             .or_else(|| snippet.annotations.iter().find(valid));
-        let Some(annotation) = annotation else {
-            return origin();
+        let Some(position) = annotation
+            .and_then(|annotation| lines.position(annotation.range.start, source.line_start))
+        else {
+            return origin(name);
         };
-        let line = lines.line_at(annotation.range.start);
-        let Some(line_range) = lines.range(line, line) else {
-            return origin();
-        };
-        let Some(prefix) = source.text().get(line_range.start..annotation.range.start) else {
-            return origin();
-        };
-        return if path.is_empty() {
-            Vec::new()
-        } else {
-            vec![
-                Origin::path(path.clone())
-                    .line(source.line_start + line)
-                    .char_column(prefix.chars().count() + 1)
-                    .into(),
-            ]
-        };
+        return name.map(|name| SourceView {
+            name: Some(name),
+            kind: SourceViewKind::Location(position),
+        });
     }
 
     let mut windows = Vec::new();
@@ -309,7 +388,7 @@ fn source_elements<'a>(snippet: &'a SourceSnippet<'_>) -> Vec<Element<'a>> {
         });
     }
     if windows.is_empty() {
-        return origin();
+        return origin(name);
     }
     windows.sort_by_key(|window| window.first);
 
@@ -326,7 +405,7 @@ fn source_elements<'a>(snippet: &'a SourceSnippet<'_>) -> Vec<Element<'a>> {
         }
     }
 
-    let mut elements = Vec::new();
+    let mut windows = Vec::new();
     for mut window in merged {
         let Some(range) = lines.range(window.first, window.last) else {
             continue;
@@ -334,19 +413,12 @@ fn source_elements<'a>(snippet: &'a SourceSnippet<'_>) -> Vec<Element<'a>> {
         let Some(text) = source.text().get(range.clone()) else {
             continue;
         };
-        let normalized = NormalizedSource::new(text);
         let mut annotations = Vec::new();
         window.annotations.sort_unstable();
         for index in window.annotations {
             let annotation = &snippet.annotations[index];
             let visible_range = lines.visible_range(annotation.range.clone());
-            let local = visible_range.start - range.start..visible_range.end - range.start;
-            let mut rendered = annotation.kind.span(normalized.range(local));
-            if let Some(label) = &annotation.label {
-                rendered = rendered.label(normalize_single_line(label));
-            }
-            annotations.push(rendered);
-
+            let mut visible_context = Vec::new();
             if snippet.context_lines > 0
                 && !window.trailing_eof
                 && let Some((first, last)) = lines.annotation_lines(&annotation.range)
@@ -354,31 +426,34 @@ fn source_elements<'a>(snippet: &'a SourceSnippet<'_>) -> Vec<Element<'a>> {
                 if first > window.first
                     && let Some(context) = lines.content_range(window.first, first - 1)
                 {
-                    annotations.push(AnnotationKind::Visible.span(
-                        normalized.range(context.start - range.start..context.end - range.start),
-                    ));
+                    visible_context.push(context.start - range.start..context.end - range.start);
                 }
                 if last < window.last
                     && let Some(context) = lines.content_range(last + 1, window.last)
                 {
-                    annotations.push(AnnotationKind::Visible.span(
-                        normalized.range(context.start - range.start..context.end - range.start),
-                    ));
+                    visible_context.push(context.start - range.start..context.end - range.start);
                 }
             }
+            annotations.push(SourceAnnotationView {
+                display_range: visible_range.start - range.start..visible_range.end - range.start,
+                label: annotation.label.as_deref(),
+                kind: annotation.kind,
+                visible_context,
+            });
         }
-        let mut rendered = Snippet::source(normalized.text)
-            .line_start(source.line_start + window.first)
-            .annotations(annotations);
-        if !path.is_empty() {
-            rendered = rendered.path(path.clone());
-        }
-        elements.push(rendered.into());
+        windows.push(SourceWindowView {
+            text,
+            line_start: source.line_start + window.first,
+            annotations,
+        });
     }
-    if elements.is_empty() {
-        origin()
+    if windows.is_empty() {
+        origin(name)
     } else {
-        elements
+        Some(SourceView {
+            name,
+            kind: SourceViewKind::Windows(windows),
+        })
     }
 }
 
@@ -412,6 +487,17 @@ impl<'a> SourceLines<'a> {
         self.starts
             .partition_point(|start| *start <= offset)
             .saturating_sub(1)
+    }
+
+    fn position(&self, offset: usize, line_start: usize) -> Option<SourcePosition> {
+        self.text.get(..offset)?;
+        let line = self.line_at(offset);
+        let start = *self.starts.get(line)?;
+        let prefix = self.text.get(start..offset)?;
+        Some(SourcePosition {
+            line: line_start.checked_add(line)?,
+            character_column: prefix.chars().count(),
+        })
     }
 
     fn annotation_lines(&self, range: &Range<usize>) -> Option<(usize, usize)> {
