@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 7642,
+        "title": "Using uv on HPC Clusters",
+        "url": "https://github.com/astral-sh/uv/issues/7642",
+        "state": "open",
+        "reason": "Its second request seeks the same package-scoped compiled-wheel cache opt-out for environment-sensitive builds; a maintainer explicitly proposed `--no-cache-package <name>` there."
+      },
+      {
+        "kind": "issue",
+        "number": 7282,
+        "title": "Make metadata caching of local projects opt-in when it is dynamic?",
+        "url": "https://github.com/astral-sh/uv/issues/7282",
+        "state": "open",
+        "reason": "This adjacent discussion establishes `reinstall-package` as the current mechanism for unconditional rebuild and reinstall of dynamic local packages, but it does not request strict cache bypass for arbitrary dependencies."
+      },
+      {
+        "kind": "pull_request",
+        "number": 10170,
+        "title": "Allow environment variables to be included in cache keys",
+        "url": "https://github.com/astral-sh/uv/pull/10170",
+        "state": "merged",
+        "reason": "This supports invalidating local-project builds when declared environment variables change, but it neither selects arbitrary dependencies nor disables cache reads and writes."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests for the proposed flag, package-specific no-cache behavior, `sync`/`run`, forced re-downloads and rebuilds, compiled-wheel caching, dynamic metadata, environment-sensitive builds, `refresh-package`, `reinstall-package`, and cache keys. Inspected candidate comments and reference chains. No pull request implementing package-scoped no-cache semantics was found. astral-sh/uv#10575 was ruled out because it concerns cache reuse across differing build configuration, while astral-sh/uv#15700 concerns mutations propagated through hard-linked files."
+  },
+  "type": "duplicate",
+  "type_reason": "The open astral-sh/uv#7642 tracks the same underlying capability: selectively disabling compiled-wheel caching for a named package whose build depends on external environment state. Its maintainer discussion explicitly identifies the proposed flag, so discussion can be centralized there.",
+  "summary": "astral-sh/uv#7642 is the canonical prior request. astral-sh/uv#7282 and astral-sh/uv#10170 document narrower existing rebuild and invalidation mechanisms but do not provide strict per-package cache bypass.",
+  "draft_response": "This package-scoped cache opt-out is already tracked in astral-sh/uv#7642. The second request there covers compiled packages whose build output depends on external environment state, and the discussion specifically identifies `--no-cache-package <name>` as a possible interface. Let’s centralize the feature discussion there.\n\nFor now, the closest supported workaround is `[tool.uv] reinstall-package = [\"theseus-ai\"]`. That forces the named package to be reinstalled and implies a package refresh, but it does not provide the strict no-read/no-write cache behavior requested here."
+}
