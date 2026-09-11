@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 7686,
+        "title": "Clean up \"performance allocators\" and \"performance flate2\" backends",
+        "url": "https://github.com/astral-sh/uv/pull/7686",
+        "state": "merged",
+        "reason": "This created the dedicated uv-performance-memory-allocator crate and centralized the target-specific mimalloc/jemalloc selection that the new issue proposes extending."
+      },
+      {
+        "kind": "pull_request",
+        "number": 19743,
+        "title": "Upgrade Windows allocator to mimalloc v3",
+        "url": "https://github.com/astral-sh/uv/pull/19743",
+        "state": "open",
+        "reason": "This active experiment modifies the same crate. Its uv-specific timing and RSS results demonstrate allocator tradeoffs, but it evaluates a default Windows upgrade rather than a pure-Rust opt-in."
+      },
+      {
+        "kind": "pull_request",
+        "number": 399,
+        "title": "change global allocator to jemalloc (and mimalloc on Windows)",
+        "url": "https://github.com/astral-sh/uv/pull/399",
+        "state": "merged",
+        "reason": "This introduced uv’s allocator strategy after measuring an approximately 10% resolver improvement, establishing the performance rationale for the current choices. It does not cover rusty_alloc."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests for rusty_alloc, pure Rust allocator, uv-performance-memory-allocator, global allocator, mimalloc, jemalloc, allocator features, C toolchains, build scripts, alternative allocators, allocation performance, and native-dependency portability. Fix-oriented review followed the original allocator-performance work and current mimalloc experiments. astral-sh/uv#396 was ruled out because it is a resolved broad allocation-performance report. astral-sh/uv#14574 and astral-sh/uv#16849 concern specific Android and illumos build failures rather than this general opt-in capability."
+  },
+  "type": "enhancement",
+  "type_reason": "The issue requests a new off-by-default Cargo feature, dependency, and pure-Rust allocator choice. It does not establish incorrect current behavior, and no existing issue or pull request tracks the same integration closely enough to be a duplicate.",
+  "summary": "No duplicate was found. The closest work established and centralized uv’s current allocator strategy and is evaluating another allocator revision with uv-specific performance and memory benchmarks; none provides the requested pure-Rust option.",
+  "draft_response": "Thanks for the proposal. uv’s allocator choices are performance-sensitive: astral-sh/uv#399 introduced the current strategy from uv-specific resolver measurements, astral-sh/uv#7686 centralized it in uv-performance-memory-allocator, and astral-sh/uv#19743 shows that allocator changes can trade timing improvements against peak-memory regressions across uv workloads. The upstream xthread result is a useful lead, but it does not establish a benefit for uv.\n\nA concrete next step would be reproducible uv-specific benchmarks comparing rusty_alloc with the current allocators on representative warm and cold resolution and installation workloads, including wall time and peak RSS on the proposed platforms. An off-by-default feature still adds dependency and configuration maintenance, so we would want that evidence before deciding whether to add it."
+}
