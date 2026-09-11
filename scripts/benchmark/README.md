@@ -14,6 +14,9 @@ Whole-command workloads also need `cargo build --locked --profile profiling --bi
 temporary environment is discarded; measured workloads reconstruct their own environments offline
 from the same lockfile and cached package artifacts.
 
+Pass `--discovery` to also install the pinned Python 3.10, 3.12, and 3.13 interpreters used by the
+Python discovery workloads.
+
 ## Getting Started
 
 From the `scripts/benchmark` directory:
