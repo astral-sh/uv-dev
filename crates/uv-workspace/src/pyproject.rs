@@ -27,7 +27,7 @@ use uv_configuration::{ExcludeDependency, GitLfsSetting, Override};
 use uv_distribution_types::{
     Index, IndexName, MinimumLibcVersion, NameRequirementSpecification, RequirementSource,
 };
-use uv_errors::{Diagnostic, SourceFile};
+use uv_errors::{Diagnostic, SourceFile, SourceSuggestion};
 use uv_fs::{PortablePathBuf, Simplified, try_relative_to_if};
 use uv_git_types::GitReference;
 use uv_macros::OptionsMetadata;
@@ -185,7 +185,10 @@ impl PyProjectToml {
                         )
                         .map(Box::new);
                         return Err(PyprojectTomlError::Source {
-                            error: failure.sources.error,
+                            error: failure
+                                .sources
+                                .error
+                                .with_source_suggestion(diagnostic.as_deref()),
                             diagnostic,
                         });
                     }
@@ -1225,14 +1228,13 @@ impl Sources {
                                 });
                             };
 
-                            let hint = lhs.negate().and(rhs);
-                            let hint = hint
-                                .contents()
-                                .map(|contents| contents.to_string())
-                                .unwrap_or_else(|| "true".to_string());
-
                             return Err(SourcesFailure {
-                                error: SourceError::OverlappingMarkers(left, right, hint),
+                                error: SourceError::OverlappingMarkers {
+                                    left,
+                                    right,
+                                    replacement: lhs.negate().and(rhs),
+                                    suggestion: None,
+                                },
                                 provenance: Box::new(provenance(None)),
                             });
                         }
@@ -1832,8 +1834,15 @@ pub enum SourceError {
     Absolute(#[from] std::io::Error),
     #[error("Path contains invalid characters: `{}`", _0.display())]
     NonUtf8Path(PathBuf),
-    #[error("Source markers must be disjoint, but the following markers overlap: `{0}` and `{1}`.")]
-    OverlappingMarkers(String, String, String),
+    #[error(
+        "Source markers must be disjoint, but the following markers overlap: `{left}` and `{right}`."
+    )]
+    OverlappingMarkers {
+        left: String,
+        right: String,
+        replacement: MarkerTree,
+        suggestion: Option<SourceSuggestion>,
+    },
     #[error(
         "When multiple sources are provided, each source must include a platform marker (e.g., `marker = \"sys_platform == 'linux'\"`)"
     )]
@@ -1842,11 +1851,41 @@ pub enum SourceError {
     EmptySources,
 }
 
+impl SourceError {
+    fn with_source_suggestion(mut self, diagnostic: Option<&SourcesDiagnostic>) -> Self {
+        if let Self::OverlappingMarkers {
+            replacement,
+            suggestion,
+            ..
+        } = &mut self
+        {
+            *suggestion = diagnostic.and_then(|diagnostic| diagnostic.suggestion(*replacement));
+        }
+        self
+    }
+}
+
 impl uv_errors::Hinted for SourceError {
     fn hints(&self) -> uv_errors::Hints<'_> {
         match self {
-            Self::OverlappingMarkers(_, rhs, replacement) => {
-                uv_errors::Hints::from(format!("replace `{rhs}` with `{replacement}`"))
+            Self::OverlappingMarkers {
+                right,
+                replacement,
+                suggestion,
+                ..
+            } => {
+                let Some(replacement) = replacement.contents().filter(|_| !replacement.is_false())
+                else {
+                    return uv_errors::Hints::from(
+                        "make the source markers disjoint, or remove one of the overlapping sources",
+                    );
+                };
+                let mut hint =
+                    uv_errors::Hint::new(format!("replace `{right}` with `{replacement}`"));
+                if let Some(suggestion) = suggestion {
+                    hint = hint.with_suggestion(suggestion.clone());
+                }
+                hint.into()
             }
             _ => uv_errors::Hints::none(),
         }

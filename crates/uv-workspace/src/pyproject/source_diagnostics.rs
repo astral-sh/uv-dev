@@ -1,7 +1,10 @@
 use std::ops::Range;
 use std::str::FromStr;
 
-use uv_errors::{Diagnostic, Info, SourceAnnotation, SourceFile, SourceSnippet};
+use uv_errors::{
+    Diagnostic, Info, SourceAnnotation, SourceEdit, SourceFile, SourceSnippet, SourceSuggestion,
+    SuggestionApplicability,
+};
 use uv_normalize::PackageName;
 use uv_pep508::MarkerTree;
 use uv_toml::SourcePathSegment::{Index, Key};
@@ -28,8 +31,10 @@ pub(super) enum SourcesProvenance {
 /// Source locations retained for a `tool.uv.sources` validation error.
 #[derive(Debug)]
 pub struct SourcesDiagnostic {
-    primary: SourceSnippet<'static>,
-    related: Option<SourceSnippet<'static>>,
+    source: SourceFile,
+    primary: Range<usize>,
+    related: Option<Range<usize>>,
+    replacement: Option<MarkerTree>,
 }
 
 impl SourcesDiagnostic {
@@ -72,11 +77,12 @@ impl SourcesDiagnostic {
                 let primary = marker_span(&map, &path, primary)?;
                 let related = marker_span(&map, &path, related)?;
                 Some(Self {
-                    primary: source_location(source, SourceAnnotation::primary(primary)),
-                    related: Some(source_location(
-                        source,
-                        SourceAnnotation::secondary(related),
-                    )),
+                    source: source.clone(),
+                    primary,
+                    related: Some(related),
+                    replacement: missing
+                        .is_none()
+                        .then(|| left.marker.negate().and(right.marker)),
                 })
             }
             SourcesProvenance::Empty => {
@@ -84,19 +90,39 @@ impl SourcesDiagnostic {
                     return None;
                 }
                 Some(Self {
-                    primary: source_location(source, SourceAnnotation::primary(map.span(&path)?)),
+                    source: source.clone(),
+                    primary: map.span(&path)?,
                     related: None,
+                    replacement: None,
                 })
             }
         }
     }
 
+    /// Propose an edit only for the exact marker pair retained during validation.
+    pub(super) fn suggestion(&self, replacement: MarkerTree) -> Option<SourceSuggestion> {
+        if self.replacement != Some(replacement) || replacement.is_false() {
+            return None;
+        }
+        let replacement = toml_edit::Value::from(replacement.contents()?.to_string()).to_string();
+        // The marker value and adjacent source fields can contain arbitrary user text or
+        // authenticated URLs. Keep this first adopter location-only, even when an edit is exact.
+        SourceSuggestion::new(
+            self.source.clone(),
+            [SourceEdit::new(self.primary.clone(), replacement)],
+            SuggestionApplicability::DisplayOnly,
+        )
+    }
+
     pub(super) fn diagnostic(&self) -> Diagnostic<'_> {
-        let diagnostic = Diagnostic::default().with_snippet(self.primary.clone());
+        let diagnostic = Diagnostic::default().with_snippet(source_location(
+            &self.source,
+            SourceAnnotation::primary(self.primary.clone()),
+        ));
         if let Some(related) = &self.related {
-            diagnostic.with_info(
-                Info::new("The other source is declared here").with_snippet(related.clone()),
-            )
+            diagnostic.with_info(Info::new("The other source is declared here").with_snippet(
+                source_location(&self.source, SourceAnnotation::secondary(related.clone())),
+            ))
         } else {
             diagnostic
         }
@@ -141,9 +167,14 @@ mod tests {
     use std::str::FromStr;
 
     use insta::assert_snapshot;
-    use uv_errors::{ErrorOptions, Hinted, Hints, SourceFile, write_error_chain_with_options};
+    use uv_errors::{
+        ErrorOptions, Hinted, Hints, SourceFile, SuggestionApplicability,
+        write_error_chain_with_options,
+    };
     use uv_normalize::PackageName;
     use uv_pep508::MarkerTree;
+    use uv_toml::SourceMap;
+    use uv_toml::SourcePathSegment::{Index, Key};
 
     use crate::pyproject::{PyProjectToml, SourceError, diagnostic_for_error};
 
@@ -187,6 +218,7 @@ mod tests {
           info: The other source is declared here
            --> pyproject.toml:5:63
           hint: replace `python_full_version >= '3.12'` with `python_full_version >= '3.12' and sys_platform != 'linux'`
+           --> pyproject.toml:6:63
         ");
     }
 
@@ -237,7 +269,7 @@ mod tests {
             error
                 .source()
                 .and_then(|error| error.downcast_ref::<SourceError>()),
-            Some(SourceError::OverlappingMarkers(..))
+            Some(SourceError::OverlappingMarkers { .. })
         ));
         assert_snapshot!(format_error(source), @"
         error: Failed to parse `tool.uv.sources`
@@ -245,7 +277,7 @@ mod tests {
            --> pyproject.toml:5:30
           info: The other source is declared here
            --> pyproject.toml:3:31
-          hint: replace `sys_platform == 'linux'` with `python_version < '0'`
+          hint: make the source markers disjoint, or remove one of the overlapping sources
         ");
     }
 
@@ -274,5 +306,67 @@ mod tests {
         let source = "[tool.uv.sources]\ndemo = [\n  { index = 'first', marker = \"sys_platform == 'linux'\", extra = 'one' },\n  { index = 'middle', marker = \"sys_platform == 'linux'\", group = 'dev' },\n  { index = 'last', marker = \"sys_platform == 'linux'\", extra = 'two' },\n]\n";
         PyProjectToml::from_string(source.to_string(), "pyproject.toml")
             .expect("different source scopes may overlap");
+    }
+
+    #[test]
+    fn marker_suggestion_targets_the_validated_toml_occurrence() {
+        let source = "# café\r\n[tool.uv.sources]\r\n\"My.Package\" = [\r\n  { index = 'other', marker = \"sys_platform == 'linux'\", extra = 'other' },\r\n  { url = 'https://user:secret@example.com/one.whl', marker = \"sys_platform == 'linux'\" },\r\n  { url = 'https://user:secret@example.com/two.whl', marker = \"python_version >= \\u00273.12\\u0027\" },\r\n]\r\n";
+        let error = PyProjectToml::from_string(source.to_string(), "pyproject.toml")
+            .expect_err("source markers overlap");
+        let Some(SourceError::OverlappingMarkers {
+            replacement,
+            suggestion: Some(suggestion),
+            ..
+        }) = error.source().and_then(|error| error.downcast_ref())
+        else {
+            panic!("the actual source error should own the exact suggestion");
+        };
+        assert_eq!(
+            suggestion.applicability(),
+            SuggestionApplicability::DisplayOnly
+        );
+        let [edit] = suggestion.edits() else {
+            panic!("one marker value should be replaced");
+        };
+        let path = [
+            Key("tool"),
+            Key("uv"),
+            Key("sources"),
+            Key("My.Package"),
+            Index(2),
+            Key("marker"),
+        ];
+        let original = SourceMap::parse(source).expect("valid TOML");
+        assert_eq!(Some(edit.range()), original.span(&path));
+
+        let mut updated = suggestion.source().text().to_string();
+        updated.replace_range(edit.range(), edit.replacement());
+        let map = SourceMap::parse(&updated).expect("the edit is valid TOML");
+        assert_eq!(
+            map.string(&path)
+                .and_then(|marker| MarkerTree::from_str(marker).ok()),
+            Some(*replacement)
+        );
+        PyProjectToml::from_string(updated, "pyproject.toml")
+            .expect("the selected source markers are now disjoint");
+        assert!(!format_error(source).contains("secret"));
+    }
+
+    #[test]
+    fn a_fully_covered_marker_does_not_suggest_an_impossible_replacement() {
+        let source = "[tool.uv.sources]\ndemo = [{ index = 'one', marker = \"sys_platform == 'linux'\" }, { index = 'two', marker = \"sys_platform == 'linux'\" }]\n";
+        let error = PyProjectToml::from_string(source.to_string(), "pyproject.toml")
+            .expect_err("the markers are identical");
+        let Some(SourceError::OverlappingMarkers {
+            replacement,
+            suggestion,
+            ..
+        }) = error.source().and_then(|error| error.downcast_ref())
+        else {
+            panic!("expected a marker conflict");
+        };
+        assert!(replacement.is_false());
+        assert!(suggestion.is_none());
+        assert!(!format_error(source).contains("python_version < '0'"));
     }
 }
