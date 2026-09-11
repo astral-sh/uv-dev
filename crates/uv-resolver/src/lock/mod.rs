@@ -2053,16 +2053,33 @@ impl Lock {
     /// TOML parser, preserving its compatibility and error reporting. Lockfiles
     /// that use an unsupported schema version are rejected.
     pub fn from_toml(input: &str) -> Result<Self, LockParseError> {
+        if cache::is_enabled() {
+            return Self::from_toml_shared(input).map(Arc::unwrap_or_clone);
+        }
         let directory = std::env::current_dir().ok();
         Requirement::with_deserialization_directory(directory.as_deref(), || {
             Self::from_toml_scoped(input)
         })
     }
 
+    /// Parses a lockfile into a shared immutable snapshot.
+    ///
+    /// This uses the same parser and compatibility policy as [`Self::from_toml`]. When the
+    /// process cache is enabled, identical inputs can reuse the parsed lock without cloning it.
+    #[doc(hidden)]
+    pub fn from_toml_shared(input: &str) -> Result<Arc<Self>, LockParseError> {
+        let directory = std::env::current_dir().ok();
+        Requirement::with_deserialization_directory(directory.as_deref(), || {
+            if let Some(lock) = cache::get(input) {
+                return Ok(lock);
+            }
+            let lock = Arc::new(Self::from_toml_scoped(input)?);
+            cache::insert(input, &lock);
+            Ok(lock)
+        })
+    }
+
     fn from_toml_scoped(input: &str) -> Result<Self, LockParseError> {
-        if let Some(lock) = cache::get(input) {
-            return Ok(lock);
-        }
         let lock = match deserialize::from_str(input) {
             Ok(lock) => lock,
             Err(_) => match toml::from_str(input) {
@@ -2089,7 +2106,6 @@ impl Lock {
             });
         }
 
-        cache::insert(input, &lock);
         Ok(lock)
     }
 

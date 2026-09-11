@@ -71,9 +71,10 @@ immutable snapshot; a later command reads the new snapshot.
 The parent caches only successfully parsed values under the parser's strict default policy. The
 wheel-filename compatibility flag is part of cache eligibility: a permissively parsed value must
 never satisfy a strict reader. Parse errors are not cached. A miss is parsed normally in the worker
-and sent to the parent for independent parsing and reuse by later workers. The current
-implementation returns an owned clone of `Lock`; moving read-only consumers to `Arc<Lock>` is a
-separate optimization.
+and sent to the parent for independent parsing and reuse by later workers. `uv export`, `uv tree`,
+`uv sync`, and `uv run` retain an `Arc<Lock>` snapshot for frozen reads instead of cloning the
+package graph. Callers that need an owned `Lock` use the same parser and receive an independent
+value.
 
 The initial budget is 32 entries and 128 MiB of source text, with oldest-entry eviction. This bounds
 the number and source size of retained values, not their full heap footprint. Before enabling the

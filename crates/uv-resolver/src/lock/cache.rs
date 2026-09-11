@@ -2,7 +2,7 @@
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use uv_cache_key::hash_digest;
 
@@ -25,7 +25,7 @@ struct Entry {
     // Local requirement URLs are still relative to the deserializing process's directory.
     directory: PathBuf,
     contents: Box<str>,
-    lock: Lock,
+    lock: Arc<Lock>,
     skip_wheel_filename_check: bool,
 }
 
@@ -35,7 +35,7 @@ impl Cache {
         contents: &str,
         directory: &Path,
         skip_wheel_filename_check: bool,
-    ) -> Option<Lock> {
+    ) -> Option<Arc<Lock>> {
         let digest = hash_digest(&contents);
         self.entries
             .iter()
@@ -45,14 +45,14 @@ impl Cache {
                     && entry.digest == digest
                     && entry.contents.as_ref() == contents
             })
-            .map(|entry| entry.lock.clone())
+            .map(|entry| Arc::clone(&entry.lock))
     }
 
     fn insert(
         &mut self,
         contents: &str,
         directory: &Path,
-        lock: &Lock,
+        lock: &Arc<Lock>,
         skip_wheel_filename_check: bool,
     ) -> bool {
         if contents.len() > MAX_SOURCE_BYTES {
@@ -79,7 +79,7 @@ impl Cache {
             digest,
             directory: directory.to_path_buf(),
             contents: contents.into(),
-            lock: lock.clone(),
+            lock: Arc::clone(lock),
             skip_wheel_filename_check,
         });
         true
@@ -90,11 +90,15 @@ pub(super) fn enable() {
     CACHE.get_or_init(Mutex::default);
 }
 
+pub(super) fn is_enabled() -> bool {
+    CACHE.get().is_some()
+}
+
 pub(super) fn observe(observer: fn(&str, bool)) {
     let _ = OBSERVER.set(observer);
 }
 
-pub(super) fn get(contents: &str) -> Option<Lock> {
+pub(super) fn get(contents: &str) -> Option<Arc<Lock>> {
     let cache = CACHE.get()?.lock().ok()?;
     let directory = std::env::current_dir().ok()?;
     let skip_wheel_filename_check =
@@ -109,7 +113,7 @@ pub(super) fn get(contents: &str) -> Option<Lock> {
     lock
 }
 
-pub(super) fn insert(contents: &str, lock: &Lock) {
+pub(super) fn insert(contents: &str, lock: &Arc<Lock>) {
     let Some(cache) = CACHE.get() else {
         return;
     };
@@ -136,6 +140,7 @@ pub(super) fn stats() -> (usize, usize) {
 #[cfg(test)]
 mod tests {
     use std::path::Path;
+    use std::sync::Arc;
 
     use super::{Cache, MAX_ENTRIES};
     use crate::Lock;
@@ -144,12 +149,12 @@ mod tests {
 
     #[test]
     fn cache_identity_includes_contents_directory_and_parser_policy() {
-        let lock = Lock::from_toml(SOURCE).expect("valid lock");
+        let lock = Arc::new(Lock::from_toml(SOURCE).expect("valid lock"));
         let mut cache = Cache::default();
         let directory = Path::new("first");
         assert!(cache.insert(SOURCE, directory, &lock, true));
         assert_eq!(cache.get(SOURCE, directory, false), None);
-        assert_eq!(cache.get(SOURCE, directory, true), Some(lock.clone()));
+        assert_eq!(cache.get(SOURCE, directory, true), Some(Arc::clone(&lock)));
         assert_eq!(cache.get(SOURCE, Path::new("second"), true), None);
         assert_eq!(
             cache.get(&SOURCE.replace("3.12", "3.13"), directory, true),
@@ -157,13 +162,32 @@ mod tests {
         );
 
         assert!(cache.insert(SOURCE, directory, &lock, false));
-        assert_eq!(cache.get(SOURCE, directory, false), Some(lock.clone()));
+        assert_eq!(cache.get(SOURCE, directory, false), Some(Arc::clone(&lock)));
         assert_eq!(cache.get(SOURCE, directory, true), Some(lock));
     }
 
     #[test]
+    fn cache_reuses_shared_snapshots() {
+        let lock = Arc::new(Lock::from_toml(SOURCE).expect("valid lock"));
+        let mut cache = Cache::default();
+        let directory = Path::new("first");
+        assert!(cache.insert(SOURCE, directory, &lock, false));
+
+        let first = cache.get(SOURCE, directory, false).expect("cached lock");
+        let second = cache.get(SOURCE, directory, true).expect("cached lock");
+        assert!(Arc::ptr_eq(&lock, &first));
+        assert!(Arc::ptr_eq(&first, &second));
+
+        let owned = Arc::unwrap_or_clone(first).without_package_metadata();
+        assert_ne!(owned, *lock);
+        let cached = cache.get(SOURCE, directory, false).expect("cached lock");
+        assert!(Arc::ptr_eq(&lock, &cached));
+        assert_eq!(cached.revision(), 3);
+    }
+
+    #[test]
     fn cache_evicts_oldest_entries() {
-        let lock = Lock::from_toml(SOURCE).expect("valid lock");
+        let lock = Arc::new(Lock::from_toml(SOURCE).expect("valid lock"));
         let mut cache = Cache::default();
         let directory = Path::new("first");
         for index in 0..=MAX_ENTRIES {
