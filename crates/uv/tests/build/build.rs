@@ -3446,10 +3446,11 @@ fn venv_included_in_sdist() -> Result<()> {
     Building source distribution...
     error: Failed to build `[TEMP_DIR]/`
       cause: Invalid tar file
+      info: The source distribution includes a virtual environment
       cause: failed to unpack `[CACHE_DIR]/sdists-v9/[TMP]/project-0.1.0/.venv/bin/python`
       cause: symlink path `[PYTHON-3.12]` is absolute, but external symlinks are not allowed
 
-    hint: The source distribution includes a virtual environment. Virtual environments must be excluded from source distributions.
+    hint: Exclude virtual environments from source distributions
     ");
 
     // Point the virtual environment at the test interpreter's `python/3.12/python3` shim to
@@ -3469,9 +3470,10 @@ fn venv_included_in_sdist() -> Result<()> {
     Building source distribution...
     error: Failed to build `[TEMP_DIR]/`
       cause: Invalid tar file
+      info: The source distribution includes a virtual environment
       cause: at byte [OFFSET]: unsafe symbolic-link target "[PYTHON-3.12]": is absolute
 
-    hint: The source distribution includes a virtual environment. Virtual environments must be excluded from source distributions.
+    hint: Exclude virtual environments from source distributions
     "#);
 
     uv_snapshot!(context.filters(), context.build().arg("-q"), @"
@@ -3479,10 +3481,11 @@ fn venv_included_in_sdist() -> Result<()> {
     ----- stderr -----
     error: Failed to build `[TEMP_DIR]/`
       cause: Invalid tar file
+      info: The source distribution includes a virtual environment
       cause: failed to unpack `[CACHE_DIR]/sdists-v9/[TMP]/project-0.1.0/.venv/bin/python`
       cause: symlink path `[PYTHON-3.12]` is absolute, but external symlinks are not allowed
 
-    hint: The source distribution includes a virtual environment. Virtual environments must be excluded from source distributions.
+    hint: Exclude virtual environments from source distributions
     ");
 
     uv_snapshot!(context.filters(), context.build().arg("-qq"), @"
