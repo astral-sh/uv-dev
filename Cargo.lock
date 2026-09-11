@@ -7136,6 +7136,7 @@ dependencies = [
 name = "uv-python"
 version = "0.0.84"
 dependencies = [
+ "anstream",
  "anyhow",
  "assert_fs",
  "astral-reqwest-middleware",
