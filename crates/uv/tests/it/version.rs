@@ -2590,7 +2590,8 @@ fn version_bump_locked_preserves_pyproject() -> Result<()> {
     ----- stderr -----
     Resolved 1 package in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     // A failed version change should leave the project and lockfile consistent.
@@ -2656,7 +2657,8 @@ fn version_bump_locked_readonly_workspace() -> Result<()> {
     ----- stderr -----
     Resolved 1 package in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     assert_snapshot!(context.read("member/pyproject.toml"), @r#"

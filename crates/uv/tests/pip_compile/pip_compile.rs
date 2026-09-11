@@ -15998,7 +15998,8 @@ fn universal_required_environment_find_links_no_build() -> Result<()> {
     error: No solution found when resolving dependencies for split (markers: sys_platform == 'win32')
       cause: Because a==1.0.0 has no Windows-compatible wheels and only a==1.0.0 is available, we can conclude that all versions of a cannot be used.
              And because project depends on a, we can conclude that your requirements are unsatisfiable.
-      hint: The resolution failed for an environment that is not the current one, consider limiting the environments with `tool.uv.environments`.
+
+    hint: The resolution failed for an environment that is not the current one, consider limiting the environments with `tool.uv.environments`.
     ");
 
     Ok(())
@@ -20101,7 +20102,8 @@ fn compile_client_certificate_warning_chain() -> Result<()> {
       cause: unexpected error: private key or certificate not found
     error: No solution found when resolving dependencies
       cause: Because idna was not found in the cache and you require idna==3.6, we can conclude that your requirements are unsatisfiable.
-      hint: Packages were unavailable because the network was disabled. When the network is disabled, registry packages may only be read from the cache.
+
+    hint: Packages were unavailable because the network was disabled. When the network is disabled, registry packages may only be read from the cache.
     ");
     Ok(())
 }
