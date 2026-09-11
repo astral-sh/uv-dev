@@ -17,13 +17,13 @@ use diagnostic::{write_hints, write_info};
 use line_wrap::{get_wrap_width, wrap_text};
 use report::resolve_error_chain;
 pub use source::{SourceAnnotation, SourceFile, SourceSnippet};
-use source::{SourceLevel, write_snippets, write_suggestion};
+use source::{SourceLevel, write_snippets};
 use structured::ErrorReport;
 pub use suggestion::{SourceEdit, SourceSuggestion, SuggestionApplicability};
 
 /// An error that may carry user-facing hints.
 ///
-/// Implement this on error types that want to surface contextual suggestions
+/// Implement this on error types that want to surface actionable suggestions
 /// (e.g., "try `--prerelease=allow`") to the diagnostics layer.
 pub trait Hinted {
     /// Return all hints associated with this error, including forwarded suggestions.
@@ -53,19 +53,20 @@ pub trait Hinted {
     }
 }
 
-/// The display order of a user-facing hint within its owning error.
+/// The display order of a user-facing hint in the report's final hint section.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum HintOrdering {
-    /// Advice that should be shown before the error's other immediate hints.
+    /// Advice that should be shown before the report's other hints.
     First,
     /// Advice with no preferred placement.
     #[default]
     Any,
-    /// General advice that should follow the error's complete source chain.
+    /// General advice that should follow the report's other hints.
     Last,
 }
 
-/// A user-facing hint and its preferred display order.
+/// An actionable suggestion and its preferred display order.
+#[derive(Clone)]
 pub struct Hint<'a> {
     message: Cow<'a, str>,
     ordering: HintOrdering,
@@ -122,7 +123,7 @@ impl From<String> for Hint<'_> {
 ///
 /// Each hint is rendered on its own line, prefixed with the styled `hint:` label.
 /// Hints are grouped by [`HintOrdering`], retaining insertion order within each group.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Hints<'a>(Vec<Hint<'a>>);
 
 impl<'a> Hints<'a> {
@@ -443,9 +444,7 @@ pub fn write_error_chain_with_options<C: DynColor + Copy, W: fmt::Write>(
         diagnostic,
     } = options;
     if format == ErrorFormat::Json {
-        let report = ErrorReport::new(err, diagnostic)
-            .with_level(&level)
-            .with_trailing_hints(hints);
+        let report = ErrorReport::new(err, diagnostic, hints).with_level(&level);
         return structured::write_report(&mut stream, &report);
     }
     let width = get_wrap_width(width_override);
@@ -468,22 +467,11 @@ pub fn write_error_chain_with_options<C: DynColor + Copy, W: fmt::Write>(
         SourceLevel::for_error(&level),
     )?;
     write_info(&mut stream, &main.diagnostic.info, width)?;
-    write_hints(
-        &mut stream,
-        &main.diagnostic.hints,
-        HintOrdering::First,
-        width,
-    )?;
-    write_hints(
-        &mut stream,
-        &main.diagnostic.hints,
-        HintOrdering::Any,
-        width,
-    )?;
 
-    // Keep each owner's hints together while walking the real source chain. Unwinding in reverse
-    // order places general outer advice after more specific source advice.
-    let mut trailing_hints = vec![main.diagnostic.hints];
+    // Hints retain their semantic owners, but all calls to action are displayed after the
+    // complete report. Equal-priority hints follow source-chain order, then explicit report hints.
+    let mut report_hints = Hints::none();
+    report_hints.extend(main.diagnostic.hints);
     for source in sources {
         let msg = source.message();
         // Reserve the display width of the prefix before wrapping the message. Authored lines
@@ -514,33 +502,11 @@ pub fn write_error_chain_with_options<C: DynColor + Copy, W: fmt::Write>(
             SourceLevel::for_error(&level),
         )?;
         write_info(&mut stream, &source.diagnostic.info, width)?;
-        write_hints(
-            &mut stream,
-            &source.diagnostic.hints,
-            HintOrdering::First,
-            width,
-        )?;
-        write_hints(
-            &mut stream,
-            &source.diagnostic.hints,
-            HintOrdering::Any,
-            width,
-        )?;
-        trailing_hints.push(source.diagnostic.hints);
+        report_hints.extend(source.diagnostic.hints);
     }
 
-    for hints in trailing_hints.iter().rev() {
-        write_hints(&mut stream, hints, HintOrdering::Last, width)?;
-    }
-
-    for ordering in [HintOrdering::First, HintOrdering::Any, HintOrdering::Last] {
-        for hint in hints.iter_for_ordering(ordering) {
-            writeln!(&mut stream, "\n{HintPrefix} {}", hint.message)?;
-            if let Some(suggestion) = &hint.suggestion {
-                write_suggestion(&mut stream, suggestion, width)?;
-            }
-        }
-    }
+    report_hints.extend(hints.clone());
+    write_hints(&mut stream, &report_hints, width)?;
 
     Ok(())
 }
@@ -560,7 +526,7 @@ mod tests {
     };
 
     #[test]
-    fn writes_one_json_report_with_outer_trailing_hints() -> Result<(), Box<dyn Error>> {
+    fn writes_one_json_report_with_owned_hint_priorities() -> Result<(), Box<dyn Error>> {
         let error = anyhow!("inner").context("outer");
         let hints = [
             Hint::new("general"),
@@ -594,8 +560,8 @@ mod tests {
                     {
                         "message": "outer",
                         "hints": [
-                            {"message": "specific", "ordering": "last"},
-                            {"message": "general", "ordering": "last"}
+                            {"message": "specific", "ordering": "first"},
+                            {"message": "general", "ordering": "any"}
                         ]
                     },
                     {"message": "inner"}
@@ -1238,7 +1204,7 @@ mod tests {
     }
 
     #[test]
-    fn format_hints_with_their_owner_and_source_subtree() {
+    fn format_hints_after_complete_chain() {
         #[derive(Debug, thiserror::Error)]
         #[error("Outer operation failed")]
         struct Outer(#[source] Middle);
@@ -1294,24 +1260,32 @@ mod tests {
 
         assert_snapshot!(anstream::adapter::strip_str(&output), @"
         error: Outer operation failed
-          hint: Outer first advice
-          hint: Outer immediate advice
           cause: Middle operation failed
           info: Middle context
-          hint: Middle immediate advice
           cause: HTTP error 400 Bad Request
-          hint: HTTP-specific advice
-          hint: HTTP trailing advice
-          hint: Middle trailing advice
-          hint: Outer trailing advice 1
-          hint: Outer trailing advice 2
+
+        hint: Outer first advice
+
+        hint: Outer immediate advice
+
+        hint: Middle immediate advice
+
+        hint: HTTP-specific advice
 
         hint: Explicit report-level fallback
+
+        hint: Outer trailing advice 1
+
+        hint: Outer trailing advice 2
+
+        hint: Middle trailing advice
+
+        hint: HTTP trailing advice
         ");
     }
 
     #[test]
-    fn format_source_override_retains_native_hints() {
+    fn format_source_override_retains_native_context_and_hints() {
         #[derive(Debug, thiserror::Error)]
         #[error("Outer operation failed")]
         struct Outer(#[source] Middle);
@@ -1382,15 +1356,74 @@ mod tests {
         assert_snapshot!(anstream::adapter::strip_str(&output), @"
         error: Outer operation failed
           cause: Presented middle error
-          hint: Middle specific advice
-          hint: Context-dependent middle advice
+          info: Ordinary middle context
           cause: Presented HTTP error
-          hint: HTTP-specific advice
-          hint: Context-dependent HTTP advice
-          hint: HTTP trailing advice
-          hint: Middle trailing advice
-          hint: Presented middle trailing advice
-          hint: Outer trailing advice
+
+        hint: Middle specific advice
+
+        hint: Context-dependent middle advice
+
+        hint: HTTP-specific advice
+
+        hint: Context-dependent HTTP advice
+
+        hint: Outer trailing advice
+
+        hint: Middle trailing advice
+
+        hint: Presented middle trailing advice
+
+        hint: HTTP trailing advice
+        ");
+    }
+
+    #[test]
+    fn format_hints_deduplicates_owners_and_explicit_advice() {
+        #[derive(Debug, thiserror::Error)]
+        #[error("Request failed")]
+        struct Request(#[source] HttpError);
+
+        let error = Request(HttpError);
+        let hints = [
+            Hint::new("Retry the request"),
+            Hint::new("Contact the server administrator").with_ordering(HintOrdering::Last),
+        ]
+        .into_iter()
+        .collect();
+        let mut output = String::new();
+        write_error_chain_with_options(
+            &error,
+            &hints,
+            ErrorOptions::default()
+                .with_diagnostic(|error| {
+                    if error.is::<Request>() {
+                        Some(Diagnostic::default().with_hints(
+                            Hints::from("Retry the request").with_ordering(HintOrdering::Last),
+                        ))
+                    } else if error.is::<HttpError>() {
+                        Some(
+                            Diagnostic::default()
+                                .with_info(Info::new("The server rejected the request"))
+                                .with_hints(
+                                    Hints::from("Retry the request")
+                                        .with_ordering(HintOrdering::First),
+                                ),
+                        )
+                    } else {
+                        None
+                    }
+                })
+                .with_stream(&mut output),
+        )
+        .expect("format diagnostic");
+        assert_snapshot!(anstream::adapter::strip_str(&output), @"
+        error: Request failed
+          cause: HTTP error 400 Bad Request
+          info: The server rejected the request
+
+        hint: Retry the request
+
+        hint: Contact the server administrator
         ");
     }
 
@@ -1412,10 +1445,11 @@ mod tests {
         .unwrap();
         assert_snapshot!(anstream::adapter::strip_str(&output), @"
         error: HTTP error 400 Bad Request
-          hint: First paragraph contains
-                several words.
 
-                  Indented example.
+        hint: First paragraph contains
+              several words.
+
+                Indented example.
         ");
     }
 }
