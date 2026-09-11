@@ -552,7 +552,8 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
     }
 
     // Configure the `Printer`, which controls user-facing output in the CLI.
-    let printer = Printer::new(globals.quiet, globals.verbose, globals.no_progress);
+    let printer = Printer::new(globals.quiet, globals.verbose, globals.no_progress)
+        .with_error_format(globals.error_format);
 
     // Configure the `warn!` macros, which control user-facing warnings in the CLI.
     if globals.quiet > 0 {
@@ -3051,7 +3052,8 @@ where
         cli.top_level.global_args.quiet,
         cli.top_level.global_args.verbose,
         cli.top_level.global_args.no_progress,
-    );
+    )
+    .with_error_format(cli.top_level.global_args.error_format);
 
     // See `min_stack_size` doc comment about `main2`
     let min_stack_size = min_stack_size();

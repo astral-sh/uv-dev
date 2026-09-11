@@ -90,7 +90,7 @@ pub(crate) async fn collect_module_owners(
             cache,
             workspace_cache,
             DryRun::Disabled,
-            Printer::Silent,
+            Printer::silent(),
             preview,
             malware_settings,
         )

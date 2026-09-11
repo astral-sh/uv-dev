@@ -802,15 +802,13 @@ async fn build_package(
     let subdirectory = None;
     let version_id = source.path().file_name().and_then(|name| name.to_str());
 
-    let build_output = match printer {
-        Printer::Default | Printer::NoProgress | Printer::Verbose => {
-            if build_logs && !uv_flags::contains(uv_flags::EnvironmentFlags::HIDE_BUILD_OUTPUT) {
-                BuildOutput::Stderr
-            } else {
-                BuildOutput::Quiet
-            }
-        }
-        Printer::Quiet | Printer::Silent => BuildOutput::Quiet,
+    let build_output = if !printer.is_quiet()
+        && build_logs
+        && !uv_flags::contains(uv_flags::EnvironmentFlags::HIDE_BUILD_OUTPUT)
+    {
+        BuildOutput::Stderr
+    } else {
+        BuildOutput::Quiet
     };
 
     let mut build_results = Vec::new();

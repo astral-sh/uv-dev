@@ -51,6 +51,15 @@ pub enum VersionFormat {
     Json,
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum ErrorFormat {
+    /// Display error reports as human-readable text.
+    #[default]
+    Text,
+    /// Display error reports using the experimental JSON-lines representation.
+    Json,
+}
+
 #[derive(Debug, Default, Clone, Copy, clap::ValueEnum)]
 pub enum PythonListFormat {
     /// Plain text (for humans).
@@ -267,6 +276,13 @@ pub struct GlobalArgs {
         value_name = "COLOR_CHOICE"
     )]
     pub color: Option<ColorChoice>,
+
+    /// Select the experimental output format for error reports.
+    ///
+    /// This does not change argument-parsing errors, standalone warning messages, progress, or
+    /// child-process output. The JSON representation is not a stable protocol.
+    #[arg(global = true, long, value_enum, default_value = "text", hide = true)]
+    pub error_format: ErrorFormat,
 
     /// (Deprecated: use `--system-certs` instead.) Whether to load TLS certificates from the
     /// platform's native certificate store [env: UV_NATIVE_TLS=]
