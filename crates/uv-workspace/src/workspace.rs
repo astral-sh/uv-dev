@@ -23,7 +23,6 @@ use uv_errors::Diagnostic;
 use uv_fs::{CWD, Simplified, normalize_path};
 use uv_normalize::{DEV_DEPENDENCIES, GroupName, PackageName};
 use uv_once_map::OnceMap;
-use uv_pep440::VersionSpecifiers;
 use uv_pep508::{MarkerTree, VerbatimUrl};
 use uv_pypi_types::{ConflictError, Conflicts, SupportedEnvironments, VerbatimParsedUrl};
 use uv_static::EnvVars;
@@ -35,6 +34,7 @@ use crate::pyproject::{
     OverrideDependency, Project, PyProjectToml, PyprojectTomlError, Source, Sources, ToolUvSources,
     ToolUvWorkspace, WorkspaceReference,
 };
+use crate::requires_python::{RequiresPythonDeclaration, WorkspaceRequiresPython};
 
 /// The workspace project environment selected by configuration and command-line options.
 #[derive(Debug)]
@@ -297,8 +297,6 @@ pub struct DiscoveryOptions {
     /// The strategy to use when discovering workspace members.
     pub members: MemberDiscovery,
 }
-
-pub type RequiresPythonSources = BTreeMap<(PackageName, Option<GroupName>), VersionSpecifiers>;
 
 pub type Editability = Option<bool>;
 
@@ -781,43 +779,68 @@ impl Workspace {
         Ok(conflicting)
     }
 
-    /// Returns an iterator over the `requires-python` values for each member of the workspace.
+    /// Return the effective `requires-python` values and the original declarations for each
+    /// selected workspace member and dependency group.
     pub fn requires_python(
         &self,
         groups: &DependencyGroupsWithDefaults,
-    ) -> Result<RequiresPythonSources, DependencyGroupError> {
-        let mut requires = RequiresPythonSources::new();
+    ) -> Result<WorkspaceRequiresPython, DependencyGroupError> {
+        let mut requires = WorkspaceRequiresPython::default();
         for (name, member) in self.packages() {
             // Get the top-level requires-python for this package, which is always active
             //
             // Arguably we could check groups.prod() to disable this, since, the requires-python
             // of the project is *technically* not relevant if you're doing `--only-group`, but,
             // that would be a big surprising change, so let's *not* do that until someone asks!
-            let top_requires = member
+            if let Some(requires_python) = member
                 .pyproject_toml()
                 .project
                 .as_ref()
                 .and_then(|project| project.requires_python.as_ref())
-                .map(|requires_python| ((name.to_owned(), None), requires_python.clone()));
-            requires.extend(top_requires);
+            {
+                requires
+                    .requirements
+                    .insert((name.clone(), None), requires_python.clone());
+                requires.declarations.insert(
+                    (name.clone(), None),
+                    RequiresPythonDeclaration::new(requires_python.clone()),
+                );
+            }
 
             // Get the requires-python for each enabled group on this package
             // We need to do full flattening here because include-group can transfer requires-python
             let dependency_groups =
-                FlatDependencyGroups::from_pyproject_toml(member.root(), &member.pyproject_toml)?;
-            let group_requires =
-                dependency_groups
-                    .into_iter()
-                    .filter_map(move |(group_name, flat_group)| {
-                        if groups.contains(&group_name) {
-                            flat_group.requires_python.map(|requires_python| {
-                                ((name.to_owned(), Some(group_name)), requires_python)
-                            })
-                        } else {
-                            None
+                FlatDependencyGroups::from_pyproject_toml_with_python_provenance(
+                    member.root(),
+                    &member.pyproject_toml,
+                )?;
+            for (group_name, flat_group) in dependency_groups {
+                if !groups.contains(&group_name) {
+                    continue;
+                }
+                let Some(requires_python) = flat_group.requires_python else {
+                    continue;
+                };
+                requires
+                    .requirements
+                    .insert((name.clone(), Some(group_name)), requires_python);
+                let Some(declarations) = flat_group.requires_python_declarations else {
+                    continue;
+                };
+                for (declaring_group, declaration) in declarations {
+                    match requires
+                        .declarations
+                        .entry((name.clone(), Some(declaring_group)))
+                    {
+                        Entry::Vacant(entry) => {
+                            entry.insert(declaration);
                         }
-                    });
-            requires.extend(group_requires);
+                        Entry::Occupied(mut entry) => {
+                            entry.get_mut().extend_includes(declaration);
+                        }
+                    }
+                }
+            }
         }
         Ok(requires)
     }

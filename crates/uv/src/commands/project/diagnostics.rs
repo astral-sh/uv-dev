@@ -1,14 +1,16 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::ops::Range;
 use std::str::FromStr;
 
-use uv_errors::{Diagnostic, SourceAnnotation, SourceFile, SourceSnippet};
-use uv_fs::Simplified;
+use uv_errors::{Diagnostic, Info, SourceAnnotation, SourceFile, SourceSnippet};
+use uv_normalize::PackageName;
 use uv_pep440::VersionSpecifiers;
 use uv_python::PythonVersionFile;
 use uv_toml::SourceMap;
 use uv_toml::SourcePathSegment::Key;
-use uv_workspace::{RequiresPythonSources, Workspace};
+use uv_workspace::dependency_groups::{GroupInclude, PythonRequirementsSource};
+use uv_workspace::{RequiresPythonDeclarations, Workspace};
 
 use super::ProjectError;
 
@@ -84,41 +86,67 @@ pub(crate) fn diagnostic_for_error<'a>(error: &'a (dyn Error + 'static)) -> Opti
     Some(diagnostic.diagnostic())
 }
 
-/// The Python request and direct declarations that participated in a project compatibility error.
+/// The Python request and declarations that participated in a project compatibility error.
 ///
 /// The semantic requirements and their presentation are kept separate: retaining these sources
 /// does not alter workspace identity, requirement intersections, or resolver cache keys.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub(crate) struct PythonRequirementsDiagnostic {
     sources: Vec<SourceSnippet<'static>>,
+    includes: Vec<PythonRequirementInclude>,
+    workspace_non_trivial: bool,
+}
+
+#[derive(Debug)]
+struct PythonRequirementInclude {
+    package: PackageName,
+    include: GroupInclude,
+    source: SourceSnippet<'static>,
 }
 
 impl PythonRequirementsDiagnostic {
     pub(crate) fn new(
         workspace: &Workspace,
-        requires_python: &RequiresPythonSources,
+        requires_python: &RequiresPythonDeclarations,
     ) -> Option<Self> {
-        let sources = requires_python
-            .iter()
-            .filter_map(|((package, group), requires_python)| {
-                // A flattened group bound can contain several inherited declarations. Its map
-                // entry does not identify an individual source location.
-                if group.is_some() {
-                    return None;
+        let mut sources = Vec::new();
+        let mut source_files = BTreeMap::new();
+        let mut includes = Vec::new();
+        let mut seen_includes = BTreeSet::new();
+        for ((package, group), declaration) in requires_python {
+            let Some(member) = workspace.packages().get(package) else {
+                continue;
+            };
+            let source = source_files.entry(package.clone()).or_insert_with(|| {
+                PythonRequirementsSource::new(member.root(), member.pyproject_toml())
+            });
+            sources.push(if let Some(group) = group {
+                source.requires_python_source(group, &declaration.specifiers)
+            } else {
+                project_requires_python_source(
+                    source.source_file(),
+                    source.source_map(),
+                    &declaration.specifiers,
+                )
+            });
+            for include in &declaration.includes {
+                if !seen_includes.insert((package.clone(), include.clone())) {
+                    continue;
                 }
-                let member = workspace.packages().get(package)?;
-                let source = SourceFile::new(
-                    member
-                        .root()
-                        .join("pyproject.toml")
-                        .portable_display()
-                        .to_string(),
-                    member.pyproject_toml().raw.as_str(),
-                );
-                Some(project_requires_python_source(source, requires_python))
-            })
-            .collect::<Vec<_>>();
-        (!sources.is_empty()).then_some(Self { sources })
+                if let Some(source) = source.include_source(include) {
+                    includes.push(PythonRequirementInclude {
+                        package: package.clone(),
+                        include: include.clone(),
+                        source,
+                    });
+                }
+            }
+        }
+        (!sources.is_empty()).then_some(Self {
+            sources,
+            includes,
+            workspace_non_trivial: workspace.packages().len() > 1,
+        })
     }
 
     pub(crate) fn with_python_request(
@@ -128,26 +156,45 @@ impl PythonRequirementsDiagnostic {
         let Some(source) = file.version_source() else {
             return diagnostic;
         };
-        let mut diagnostic = diagnostic.unwrap_or_else(|| Self {
-            sources: Vec::new(),
-        });
+        let mut diagnostic = diagnostic.unwrap_or_default();
         diagnostic.sources.insert(0, source);
         Some(diagnostic)
     }
 
     fn diagnostic(&self) -> Diagnostic<'_> {
-        self.sources
+        let mut diagnostic = self
+            .sources
             .iter()
             .cloned()
-            .fold(Diagnostic::default(), Diagnostic::with_snippet)
+            .fold(Diagnostic::default(), Diagnostic::with_snippet);
+        for related in &self.includes {
+            let message = if self.workspace_non_trivial {
+                format!(
+                    "Group `{}:{}` is included by `{}:{}` here",
+                    related.package,
+                    related.include.included,
+                    related.package,
+                    related.include.group,
+                )
+            } else {
+                format!(
+                    "Group `{}` is included by `{}` here",
+                    related.include.included, related.include.group,
+                )
+            };
+            diagnostic =
+                diagnostic.with_info(Info::new(message).with_snippet(related.source.clone()));
+        }
+        diagnostic
     }
 }
 
 fn project_requires_python_source(
-    source: SourceFile,
+    source: &SourceFile,
+    map: Option<&SourceMap<'_>>,
     requires_python: &VersionSpecifiers,
 ) -> SourceSnippet<'static> {
-    let field = SourceMap::parse(source.text()).ok().and_then(|map| {
+    let field = map.and_then(|map| {
         let path = [Key("project"), Key("requires-python")];
         let declared = VersionSpecifiers::from_str(map.string(&path)?).ok()?;
         // The semantic constraint chooses the declaration, not its rendered spelling.
@@ -161,8 +208,8 @@ fn project_requires_python_source(
     });
     let show_source = field
         .as_ref()
-        .is_some_and(|field| field.is_standalone_assignment(&source));
-    let mut snippet = SourceSnippet::new(source);
+        .is_some_and(|field| field.is_standalone_assignment(source));
+    let mut snippet = SourceSnippet::new(source.clone());
     if let Some(field) = field {
         snippet = snippet.with_annotation(
             SourceAnnotation::primary(field.value)
@@ -212,6 +259,7 @@ mod tests {
 
     use uv_errors::{Diagnostic, ErrorOptions, Hints, SourceFile, write_error_chain_with_options};
     use uv_pep440::VersionSpecifiers;
+    use uv_toml::SourceMap;
 
     use super::{PythonRequirementsDiagnostic, project_requires_python_source};
 
@@ -224,11 +272,15 @@ mod tests {
     }
 
     fn format_source(source: &str, requires_python: &str) -> anyhow::Result<String> {
+        let map = SourceMap::parse(source).ok();
+        let source = SourceFile::new("pyproject.toml", source);
         let error = TestError(PythonRequirementsDiagnostic {
             sources: vec![project_requires_python_source(
-                SourceFile::new("pyproject.toml", source),
+                &source,
+                map.as_ref(),
                 &VersionSpecifiers::from_str(requires_python)?,
             )],
+            ..PythonRequirementsDiagnostic::default()
         });
         let mut output = String::new();
         write_error_chain_with_options(
