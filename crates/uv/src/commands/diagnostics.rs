@@ -51,6 +51,13 @@ pub(crate) fn write_error_chain(err: &anyhow::Error, printer: Printer) -> std::f
 
 /// Resolve presentation data for one concrete error, without changing its source chain.
 fn diagnostic_for_error<'a>(error: &'a (dyn Error + 'static)) -> Option<Diagnostic<'a>> {
+    // This transparent wrapper delegates its message and source to the inner error, so that
+    // error is not itself present in the standard source chain.
+    if let Some(pip::operations::Error::Anyhow(inner)) =
+        error.downcast_ref::<pip::operations::Error>()
+    {
+        return diagnostic_for_error(inner.as_ref());
+    }
     uv_publish::diagnostic_for_error(error)
 }
 
@@ -251,11 +258,38 @@ fn format_chain(name: &PackageName, version: Option<&Version>, chain: &Derivatio
 
 #[cfg(test)]
 mod tests {
-    use insta::assert_debug_snapshot;
+    use insta::{assert_debug_snapshot, assert_snapshot};
+    use reqwest::StatusCode;
 
+    use uv_errors::{ErrorOptions, Hints, write_error_chain_with_options};
+    use uv_publish::PublishSendError;
     use uv_workspace::pyproject::{PyprojectTomlError, SourceError};
 
-    use super::hints_for_error;
+    use super::{diagnostic_for_error, hints_for_error};
+    use crate::commands::pip;
+
+    #[test]
+    fn resolves_diagnostics_through_transparent_operation_errors() -> anyhow::Result<()> {
+        let error = pip::operations::Error::Anyhow(anyhow::Error::new(PublishSendError::Status(
+            StatusCode::BAD_REQUEST,
+            "Use /upload/ instead.".to_string(),
+        )));
+        let mut output = String::new();
+        write_error_chain_with_options(
+            &error,
+            &Hints::none(),
+            ErrorOptions::default()
+                .with_diagnostic(diagnostic_for_error)
+                .with_stream(&mut output),
+        )?;
+        assert_snapshot!(anstream::adapter::strip_str(&output), @"
+        error: Server returned status code 400 Bad Request
+          info: The server included the following context:
+            |
+            | Use /upload/ instead.
+        ");
+        Ok(())
+    }
 
     #[test]
     fn collects_source_hints_through_pyproject_errors() {
