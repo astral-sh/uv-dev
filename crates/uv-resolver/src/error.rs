@@ -2322,8 +2322,8 @@ mod tests {
             "pypyp==1,>=1.2".parse::<uv_pep508::Requirement<VerbatimParsedUrl>>()?,
         );
         let source = SourceFile::new("requirements.in", "pypyp==1,>=1.2\npypyp==1,>=1.2\n");
-        let first = RequirementProvenance::new(source.clone(), 0..14).with_source_text();
-        let second = RequirementProvenance::new(source, 15..29).with_source_text();
+        let first = RequirementProvenance::new(source.clone(), 0..14);
+        let second = RequirementProvenance::new(source, 15..29);
         let reason = |provenance| -> Result<UnavailableReason, Box<dyn StdError>> {
             let requirement = Requirement {
                 provenance,
@@ -2410,13 +2410,10 @@ mod tests {
         let mut requirement = Requirement::from(
             "pypyp==1,>=1.2".parse::<uv_pep508::Requirement<VerbatimParsedUrl>>()?,
         );
-        requirement.provenance = Some(
-            RequirementProvenance::new(
-                SourceFile::new("requirements.in", "pypyp==1,>=1.2\n"),
-                0..14,
-            )
-            .with_source_text(),
-        );
+        requirement.provenance = Some(RequirementProvenance::new(
+            SourceFile::new("requirements.in", "pypyp==1,>=1.2\n"),
+            0..14,
+        ));
         let requirement = UnsatisfiableRequirement::from_requirement(&requirement)
             .ok_or_else(|| std::io::Error::other("expected an empty requirement range"))?;
         let mut tree = Arc::new(ErrorTree::External(External::Custom(

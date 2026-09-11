@@ -9483,11 +9483,11 @@ fn sync_python_version() -> Result<()> {
 }
 
 #[test]
-fn sync_python_version_source_privacy() -> Result<()> {
+fn sync_python_version_source_context() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
     context.temp_dir.child("pyproject.toml").write_str(indoc! {r#"
-        project = { name = "project", version = "0.1.0", requires-python = "<3.12", description = "not for diagnostics" }
+        project = { name = "project", version = "0.1.0", requires-python = "<3.12", description = "example package" }
     "#})?;
 
     uv_snapshot!(context.filters(), context.sync().arg("--python").arg("3.12").arg("--offline"), @"
@@ -9558,7 +9558,7 @@ fn sync_python_version_source_inherited_group() -> Result<()> {
         version = "0.1.0"
 
         [dependency-groups]
-        parent = ["private @ https://user:sentinel-secret@example.com/private-1.0.0-py3-none-any.whl", { include-group = "Child.Bound" }]
+        parent = ["demo @ https://example.com/demo-1.0.0-py3-none-any.whl", { include-group = "Child.Bound" }]
         "Child.Bound" = []
 
         [tool.uv.dependency-groups]

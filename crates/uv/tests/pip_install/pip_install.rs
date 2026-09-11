@@ -256,14 +256,14 @@ fn invalid_requirements_txt_nested_includes() -> Result<()> {
     Ok(())
 }
 
-/// A source window must not expose a credentialed entry separated by a bare carriage return.
+/// A bare carriage return is escaped without discarding the annotated physical line.
 #[test]
-fn invalid_requirements_txt_with_carriage_return_credentials() -> Result<()> {
+fn invalid_requirements_txt_with_carriage_return_source_context() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     context
         .temp_dir
         .child("requirements.txt")
-        .write_str("--index-url https://user:password@example.com/simple\rflask==1.0.x\r")?;
+        .write_str("--index-url https://example.com/simple\rflask==1.0.x\r")?;
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("--offline")

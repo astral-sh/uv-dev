@@ -5,7 +5,7 @@ use std::str::FromStr;
 use uv_distribution_types::RequirementProvenance;
 use uv_errors::SourceFile;
 use uv_normalize::{ExtraName, PackageName};
-use uv_pep508::{Requirement, VersionOrUrl};
+use uv_pep508::Requirement;
 use uv_pypi_types::{RequiresDist, VerbatimParsedUrl};
 use uv_toml::SourcePathSegment::{Index, Key};
 use uv_toml::{SourceMap, SourcePathSegment};
@@ -46,7 +46,7 @@ pub(super) fn project_requirement_sources(
 
     let mut declarations = Vec::new();
     if map.span(&dependencies).is_some() {
-        collect_requirements(source, &map, &dependencies, None, &mut declarations)?;
+        collect_requirements(&map, &dependencies, None, &mut declarations)?;
     }
 
     let optional_dependencies = [Key("project"), Key("optional-dependencies")];
@@ -59,7 +59,6 @@ pub(super) fn project_requirement_sources(
                 return None;
             }
             collect_requirements(
-                source,
                 &map,
                 &[Key("project"), Key("optional-dependencies"), Key(key)],
                 Some(&extra),
@@ -84,14 +83,7 @@ pub(super) fn project_requirement_sources(
     Some(
         declarations
             .into_iter()
-            .map(|declaration| {
-                let provenance = RequirementProvenance::new(source.clone(), declaration.range);
-                if declaration.show_source {
-                    provenance.with_source_text()
-                } else {
-                    provenance
-                }
-            })
+            .map(|declaration| RequirementProvenance::new(source.clone(), declaration.range))
             .collect(),
     )
 }
@@ -99,11 +91,9 @@ pub(super) fn project_requirement_sources(
 struct AuthoredRequirement {
     requirement: Requirement<VerbatimParsedUrl>,
     range: Range<usize>,
-    show_source: bool,
 }
 
 fn collect_requirements(
-    source: &SourceFile,
     map: &SourceMap<'_>,
     parent: &[SourcePathSegment<'_>],
     extra: Option<&ExtraName>,
@@ -117,52 +107,14 @@ fn collect_requirements(
         // emit duplicate warnings, so source attribution is limited to strict requirements.
         let requirement = Requirement::<VerbatimParsedUrl>::from_str(decoded).ok()?;
         let range = map.span(&path)?;
-        let show_source = can_show_requirement(source, range.clone(), decoded, &requirement);
         let requirement = if let Some(extra) = extra {
             requirement.with_extra_marker(extra.clone())
         } else {
             requirement
         };
-        declarations.push(AuthoredRequirement {
-            requirement,
-            range,
-            show_source,
-        });
+        declarations.push(AuthoredRequirement { requirement, range });
     }
     Some(())
-}
-
-/// Show only an isolated registry-requirement array element on one physical line.
-fn can_show_requirement(
-    source: &SourceFile,
-    range: Range<usize>,
-    decoded: &str,
-    requirement: &Requirement<VerbatimParsedUrl>,
-) -> bool {
-    // Marker values and comments can contain arbitrary user text, even when a parsed marker
-    // simplifies to true. URL requirements can contain credentials.
-    if decoded.contains(';') || decoded.contains('#') {
-        return false;
-    }
-    match &requirement.version_or_url {
-        Some(VersionOrUrl::Url(_)) => return false,
-        Some(VersionOrUrl::VersionSpecifier(_)) | None => {}
-    }
-    let Some(window) = source.line_range_for_span(range.clone()) else {
-        return false;
-    };
-    let text = source.text();
-    if text
-        .get(range.clone())
-        .is_none_or(|value| value.contains('\n') || value.contains('\r'))
-    {
-        return false;
-    }
-    text.get(window.start..range.start)
-        .is_some_and(|prefix| prefix.trim().is_empty())
-        && text
-            .get(range.end..window.end)
-            .is_some_and(|suffix| matches!(suffix.trim(), "" | ","))
 }
 
 #[cfg(test)]
@@ -353,13 +305,13 @@ mod tests {
     }
 
     #[test]
-    fn project_requirement_sources_hide_shared_private_lines() -> Result<()> {
-        let source = "[project]\nname = 'root'\nversion = '0.1.0'\ndependencies = [\n  'demo==1,>=2', # https://user:sentinel-secret@example.com/private\n  'other==2,>=3', 'private @ https://user:sentinel-secret@example.com/private-1.0.0-py3-none-any.whl',\n  \"marked==3,>=4; sys_platform != 'sentinel-secret'\",\n]\n";
+    fn project_requirement_sources_keep_shared_lines() -> Result<()> {
+        let source = "[project]\nname = 'root'\nversion = '0.1.0'\ndependencies = [\n  'demo==1,>=2', # required by the application\n  'other==2,>=3', 'direct @ https://example.com/direct-1.0.0-py3-none-any.whl',\n  \"marked==3,>=4; sys_platform != 'win32'\",\n]\n";
         let sources = project_requirement_sources(
             &SourceFile::new("pyproject.toml", source),
             &metadata(source)?,
         )
-        .context("private declarations should still have exact locations")?;
+        .context("each declaration should have an exact source")?;
         insta::assert_snapshot!(render(sources)?, @"
         error: project requirement declarations
            --> pyproject.toml:5:3

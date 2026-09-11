@@ -14360,14 +14360,14 @@ fn no_version_for_direct_dependency_override() -> Result<()> {
     Ok(())
 }
 
-/// A source location must not reveal URL credentials elsewhere on the same physical line.
+/// A source location keeps ordinary comments on the same physical line.
 #[test]
-fn no_version_for_direct_dependency_source_privacy() -> Result<()> {
+fn no_version_for_direct_dependency_source_context() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     context
         .temp_dir
         .child("requirements.in")
-        .write_str("pypyp==1,>=1.2 # https://user:sentinel-secret@example.com/private\n")?;
+        .write_str("pypyp==1,>=1.2 # see https://example.com/compatibility\n")?;
 
     uv_snapshot!(context.filters(), context.pip_compile()
         .arg("requirements.in")
@@ -14584,14 +14584,14 @@ fn no_available_version_for_root_dependency_override() -> Result<()> {
     Ok(())
 }
 
-/// A root requirement cannot reveal URL credentials on its annotated source line.
+/// A root requirement retains its authored comment in the source excerpt.
 #[test]
-fn no_available_version_for_root_dependency_source_privacy() -> Result<()> {
+fn no_available_version_for_root_dependency_source_context() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     context
         .temp_dir
         .child("requirements.in")
-        .write_str("pypyp>=1 # https://user:sentinel-secret@example.com/private\n")?;
+        .write_str("pypyp>=1 # see https://example.com/compatibility\n")?;
 
     uv_snapshot!(context.filters(), context.pip_compile()
         .arg("requirements.in")

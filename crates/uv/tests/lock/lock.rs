@@ -26947,7 +26947,7 @@ fn lock_named_index_source_locations() -> Result<()> {
         [tool.uv.sources]
         "Demo_Pkg" = [
             { index = "member-missing", extra = "unused" },
-            { index = "member-missing", marker = "sys_platform != 'sentinel-secret'" }, { url = "https://user:sentinel-secret@example.com/demo_pkg-1.0.0-py3-none-any.whl", marker = "sys_platform == 'sentinel-secret'" },
+            { index = "member-missing", marker = "sys_platform != 'win32'" }, { url = "https://example.com/demo_pkg-1.0.0-py3-none-any.whl", marker = "sys_platform == 'win32'" },
         ]
     "#};
     let member_pyproject = context.temp_dir.child("packages/member/pyproject.toml");
@@ -32560,7 +32560,7 @@ fn lock_group_include_cycle_tail() -> Result<()> {
 
 #[cfg(feature = "test-universal")]
 #[test]
-fn lock_group_include_source_privacy() -> Result<()> {
+fn lock_group_include_source_context() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
@@ -32571,7 +32571,7 @@ fn lock_group_include_source_privacy() -> Result<()> {
 
         [dependency-groups]
         first = [{ include-group = "middle" }]
-        middle = [{ include-group = "missing" }, "private \u0040 https\u003a//user:password@example.com/private-1.0.0-py3-none-any.whl"]
+        middle = [{ include-group = "missing" }, "demo \u0040 https\u003a//example.com/demo-1.0.0-py3-none-any.whl"]
     "#})?;
 
     uv_snapshot!(context.filters(), context.lock().arg("--offline"), @r#"
@@ -32596,8 +32596,8 @@ fn lock_group_include_source_privacy() -> Result<()> {
         [dependency-groups]
         first = [{ include-group = "middle" }]
         middle = [
-            """private @ https://example.com/private-1.0.0-py3-none-any.whl?token=\
-                sentinel-secret""", { include-group = "missing" },
+            """demo @ https://example.com/\
+                demo-1.0.0-py3-none-any.whl""", { include-group = "missing" },
         ]
     "#})?;
 

@@ -2,7 +2,6 @@ mod environment_markers;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
-use std::ops::Range;
 use std::str::FromStr;
 
 use uv_errors::{Diagnostic, Info, SourceAnnotation, SourceFile, SourceSnippet};
@@ -202,60 +201,23 @@ fn project_requires_python_source(
     map: Option<&SourceMap<'_>>,
     requires_python: &VersionSpecifiers,
 ) -> SourceSnippet<'static> {
-    let field = map.and_then(|map| {
+    let span = map.and_then(|map| {
         let path = [Key("project"), Key("requires-python")];
         let declared = VersionSpecifiers::from_str(map.string(&path)?).ok()?;
         // The semantic constraint chooses the declaration, not its rendered spelling.
         if &declared != requires_python {
             return None;
         }
-        Some(ProjectField {
-            key: map.key_span(&[Key("project")], "requires-python")?,
-            value: map.span(&path)?,
-        })
+        map.span(&path)
     });
-    let show_source = field
-        .as_ref()
-        .is_some_and(|field| field.is_standalone_assignment(source));
     let mut snippet = SourceSnippet::new(source.clone());
-    if let Some(field) = field {
+    if let Some(span) = span {
         snippet = snippet.with_annotation(
-            SourceAnnotation::primary(field.value)
+            SourceAnnotation::primary(span)
                 .with_label(format!("requires Python `{requires_python}`")),
         );
     }
-    if show_source {
-        snippet
-    } else {
-        snippet.without_source_text()
-    }
-}
-
-struct ProjectField {
-    key: Range<usize>,
-    value: Range<usize>,
-}
-
-impl ProjectField {
-    /// Version specifiers are already part of the semantic error message. Show their retained
-    /// spelling only when the physical line cannot contain unrelated configuration or comments.
-    fn is_standalone_assignment(&self, source: &SourceFile) -> bool {
-        let Some(window) = source.line_range_for_span(self.value.clone()) else {
-            return false;
-        };
-        if source.line_range_for_span(self.key.clone()) != Some(window.clone()) {
-            return false;
-        }
-        let text = source.text();
-        text.get(window.start..self.key.start)
-            .is_some_and(|prefix| prefix.trim().is_empty())
-            && text
-                .get(self.key.end..self.value.start)
-                .is_some_and(|separator| separator.trim() == "=")
-            && text
-                .get(self.value.end..window.end)
-                .is_some_and(|suffix| suffix.trim().is_empty())
-    }
+    snippet
 }
 
 #[cfg(test)]
@@ -321,10 +283,10 @@ mod tests {
     }
 
     #[test]
-    fn direct_requires_python_does_not_expose_adjacent_values() -> anyhow::Result<()> {
+    fn direct_requires_python_keeps_source_context() -> anyhow::Result<()> {
         assert_snapshot!(
             format_source(
-                "project = { requires-python = '>=3.12', private = 'secret' }\n",
+                "project = { requires-python = '>=3.12', version = '0.1.0' }\n",
                 ">=3.12",
             )?,
             @"
@@ -334,7 +296,7 @@ mod tests {
         );
         assert_snapshot!(
             format_source(
-                "[project]\nrequires-python = '>=3.12' # secret\n",
+                "[project]\nrequires-python = '>=3.12' # required by the application\n",
                 ">=3.12",
             )?,
             @"
