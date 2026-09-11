@@ -333,10 +333,10 @@ impl Scanner {
 
     fn retire(&mut self) {
         let drained = self.drain_submitted();
-        self.retire_after_drain(drained);
+        self.retire_after_drain(&drained);
     }
 
-    fn retire_after_drain(&mut self, drained: io::Result<()>) {
+    fn retire_after_drain(&mut self, drained: &io::Result<()>) {
         if drained.is_err() {
             // Closing a ring cancels asynchronously. On supported 5.x kernels neither close nor
             // broad cancellation proves that io-wq has stopped using the buffers. Retain this
@@ -501,7 +501,7 @@ impl Request {
         }
         // SAFETY: A successful statx completion initializes the complete kernel-layout buffer.
         // The scanner only returns requests after accounting for every submitted completion.
-        let metadata = unsafe { (*self.metadata.get()).assume_init_read() };
+        let metadata = unsafe { MaybeUninit::assume_init_read(&*self.metadata.get()) };
         if metadata.stx_mask & StatxFlags::TYPE.bits() == 0 {
             return Err(unavailable("statx did not return the file type"));
         }

@@ -258,7 +258,10 @@ mod tests {
             Err(Errno::AGAIN.into())
         });
         assert_eq!(
-            result.err().expect("stalled control must fail").kind(),
+            result
+                .map(drop)
+                .expect_err("stalled control must fail")
+                .kind(),
             io::ErrorKind::WouldBlock
         );
         assert_eq!(attempts.get(), MAX_STALLED_ATTEMPTS);
@@ -334,7 +337,7 @@ mod tests {
 
         // Simulate inaccessible completion control after a real submission. This deliberately
         // retains one bounded batch until the test process exits.
-        scanner.retire_after_drain(Err(Errno::PERM.into()));
+        scanner.retire_after_drain(&Err(Errno::PERM.into()));
         assert_eq!(counter.load(Ordering::SeqCst), 0);
         assert!(scanner.pending.is_none());
         assert!(scanner.ring.is_none());
