@@ -94,6 +94,11 @@ path = "benches/publish_preparation.rs"
 harness = false
 
 [[bench]]
+name = "requirements_files"
+path = "benches/requirements_files.rs"
+harness = false
+
+[[bench]]
 name = "uv_pypi_types"
 path = "benches/uv_pypi_types.rs"
 harness = false
@@ -122,6 +127,7 @@ uv-platform-tags = { workspace = true }
 uv-preview = { workspace = true }
 uv-pypi-types = { workspace = true }
 uv-python = { workspace = true }
+uv-requirements-txt = { workspace = true }
 uv-resolver = { workspace = true }
 uv-types = { workspace = true }
 uv-version = { workspace = true }
