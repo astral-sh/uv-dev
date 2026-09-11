@@ -31,6 +31,8 @@ on:
 
 env:
   ACTIONS_CACHE_MODE: none
+  # uv-dev has its own development cache, separate from uv's production cache.
+  DEPOT_PROJECT_ID: ${{ github.repository == 'astral-sh/uv-dev' && 'c3ht4lmvqh' || '7hd4vdzmw5' }}
   UV_GHCR_IMAGE: ghcr.io/${{ github.repository_owner }}/${{ inputs.push-dev && 'uv-dev' || 'uv' }}
   UV_DOCKERHUB_IMAGE: ${{ !inputs.push-dev && 'docker.io/astral/uv' || '' }}
   UV_LOCKED: 1
@@ -211,7 +213,7 @@ jobs:
         id: build
         uses: depot/build-push-action@98e78adca7817480b8185f474a400b451d74e287 # v1.18.0
         with:
-          project: 7hd4vdzmw5 # astral-sh/uv
+          project: ${{ env.DEPOT_PROJECT_ID }}
           context: .
           platforms: linux/amd64,linux/arm64
           push: ${{ needs.docker-plan.outputs.push }}
@@ -338,7 +340,7 @@ jobs:
         uses: depot/build-push-action@98e78adca7817480b8185f474a400b451d74e287 # v1.18.0
         with:
           context: .
-          project: 7hd4vdzmw5 # astral-sh/uv
+          project: ${{ env.DEPOT_PROJECT_ID }}
           platforms: linux/amd64,linux/arm64
           push: ${{ needs.docker-plan.outputs.push }}
           tags: ${{ steps.meta.outputs.tags }}
