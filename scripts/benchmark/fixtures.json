@@ -1,5 +1,21 @@
 [
   {
+    "filename": "prefect-audit.lock",
+    "url": "https://raw.githubusercontent.com/PrefectHQ/prefect/49301a2cf6c879c45a5a78853249e59e89758018/uv.lock",
+    "sha256": "02dc17a391ae44a1b00858c5ffcea2f7a60cf2be09c01c5d4a74fe85d5ce268e"
+  },
+  {
+    "filename": "prefect-audit.pyproject.toml",
+    "url": "https://raw.githubusercontent.com/PrefectHQ/prefect/49301a2cf6c879c45a5a78853249e59e89758018/pyproject.toml",
+    "sha256": "b579d91067b630697dd7ab409aebde620868b0baf892a5d4ae0e8c03dfe7e339"
+  },
+  {
+    "filename": "GHSA-9hjg-9r4m-mvj7.json",
+    "url": "https://raw.githubusercontent.com/github/advisory-database/22a92599d64cf7f0829ac83465aba971dcae0567/advisories/github-reviewed/2025/06/GHSA-9hjg-9r4m-mvj7/GHSA-9hjg-9r4m-mvj7.json",
+    "sha256": "93bc349bc95817afab07fa47412d10bd0c4219347234cdebee8aa9e179fba113",
+    "osv-queries": [{ "name": "requests", "version": "2.32.3" }]
+  },
+  {
     "filename": "astral-tl-benchmarks.rs",
     "url": "https://raw.githubusercontent.com/astral-sh/astral-tl/04bbd94a054e164a3d057160977197ca25194bc5/benches/tl.rs",
     "sha256": "0b9ea166e8ccf8c05f0fba99f06ecdc8515d88424c0328c07a70e2a8debc1bdd"
