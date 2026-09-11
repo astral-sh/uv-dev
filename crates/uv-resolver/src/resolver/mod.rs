@@ -70,6 +70,8 @@ use crate::resolver::environment::{
 pub(crate) use crate::resolver::fork_map::{ForkMap, ForkSet};
 pub use crate::resolver::index::InMemoryIndex;
 use crate::resolver::indexes::Indexes;
+use crate::resolver::provenance::RootDependencyLedger;
+pub(crate) use crate::resolver::provenance::RootDependencyProof;
 pub use crate::resolver::provider::{
     DefaultResolverProvider, MetadataResponse, PackageVersionsResult, ResolverProvider,
     VersionsResponse, WheelMetadataResult,
@@ -90,6 +92,7 @@ mod environment;
 mod fork_map;
 mod index;
 mod indexes;
+mod provenance;
 mod provider;
 mod reporter;
 mod resolution;
@@ -384,6 +387,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                                 // If unit propagation failed, there is no solution.
                                 return Err(self.convert_no_solution_err(
                                     err,
+                                    state.root_dependencies,
                                     state.fork_urls,
                                     state.fork_indexes,
                                     &state.known_versions.0,
@@ -986,6 +990,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                 version: _,
                 parent: _,
                 source: _,
+                provenance: _,
             } = dependency;
             let url = package.name().and_then(|name| state.fork_urls.get(name));
             let index = package.name().and_then(|name| state.fork_indexes.get(name));
@@ -1994,6 +1999,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                             version: Range::singleton(version.clone()),
                             parent: None,
                             source: DependencySource::Unspecified,
+                            provenance: None,
                         })
                         .collect(),
                 ));
@@ -2022,6 +2028,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                                     version: Range::singleton(version.clone()),
                                     parent: None,
                                     source: DependencySource::Unspecified,
+                                    provenance: None,
                                 })
                         })
                         .collect(),
@@ -2048,6 +2055,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                             version: Range::singleton(version.clone()),
                             parent: None,
                             source: DependencySource::Unspecified,
+                            provenance: None,
                         })
                         .collect(),
                 ));
@@ -2782,6 +2790,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
     fn convert_no_solution_err(
         &self,
         mut err: pubgrub::NoSolutionError<UvDependencyProvider>,
+        root_dependencies: RootDependencyLedger,
         fork_urls: ForkUrls,
         fork_indexes: ForkIndexes,
         known_versions: &FxHashMap<PackageName, Arc<[Version]>>,
@@ -2789,6 +2798,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
         current_environment: MarkerEnvironment,
         visited: &FxHashSet<PackageName>,
     ) -> ResolveError {
+        let root_dependencies = root_dependencies.into_proof(&err, &env, &self.python_requirement);
         err = NoSolutionError::collapse_local_version_segments(NoSolutionError::collapse_proxies(
             err,
         ));
@@ -2919,6 +2929,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
 
         ResolveError::NoSolution(Box::new(NoSolutionError::new(
             err,
+            root_dependencies,
             self.index.clone(),
             included_versions,
             available_versions,
@@ -3033,6 +3044,10 @@ pub(crate) struct ForkState {
     /// in this state. We also ultimately retrieve the final set of version
     /// assignments (to packages) from this state's "partial solution."
     pubgrub: State<UvDependencyProvider>,
+    /// The exact authored occurrences of unambiguous unnamed-root dependency clauses.
+    ///
+    /// This ledger is cloned with the solver state and does not affect dependency identity.
+    root_dependencies: RootDependencyLedger,
     /// The initial package to select. If set, the first iteration over this state will avoid
     /// asking PubGrub for the highest-priority package, and will instead use the provided package.
     initial_id: Option<Id<PubGrubPackage>>,
@@ -3125,6 +3140,7 @@ impl ForkState {
             initial_version: None,
             next: pubgrub.root_package,
             pubgrub,
+            root_dependencies: RootDependencyLedger::default(),
             pins: FilePins::default(),
             fork_urls: ForkUrls::default(),
             fork_indexes: ForkIndexes::default(),
@@ -3159,6 +3175,7 @@ impl ForkState {
                 version,
                 parent: _,
                 source,
+                provenance: _,
             } = dependency;
 
             let mut has_url = false;
@@ -3260,6 +3277,7 @@ impl ForkState {
                 version,
                 parent: _,
                 source: _,
+                provenance: _,
             } = dependency;
 
             let Some(base_package) = package.base_package() else {
@@ -3278,6 +3296,11 @@ impl ForkState {
         // Widen across gaps so rejected adjacent versions merge into contiguous ranges rather
         // than leaving one hole per version.
         let versions = self.widen_version_to_gap(for_version, index, installed_packages);
+        self.root_dependencies.record(
+            &self.pubgrub.package_store[self.next],
+            &versions,
+            &dependencies,
+        );
         let conflict = self.pubgrub.add_package_version_dependencies(
             self.next,
             for_version.clone(),
@@ -3288,6 +3311,7 @@ impl ForkState {
                     version,
                     parent: _,
                     source: _,
+                    provenance: _,
                 } = dependency;
                 (package, version)
             }),

@@ -3960,6 +3960,10 @@ fn compile_yanked_version_indirect() -> Result<()> {
                  attrs>=21.2.0
              we can conclude that attrs>20.3.0,<21.2.0 cannot be used.
              And because you require attrs>20.3.0,<21.2.0, we can conclude that your requirements are unsatisfiable.
+       --> requirements.in:1:1
+        |
+      1 | attrs>20.3.0,<21.2.0
+        | ^^^^^^^^^^^^^^^^^^^^ this dependency was declared here
     "
     );
 
@@ -7505,6 +7509,10 @@ fn no_index_requirements_txt() -> Result<()> {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because tqdm was not found in the provided package locations and you require tqdm, we can conclude that your requirements are unsatisfiable.
+       --> requirements.in:2:1
+        |
+      2 | tqdm
+        | ^^^^ this dependency was declared here
       hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
     "
     );
@@ -7749,6 +7757,10 @@ fn offline_find_links() -> Result<()> {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because tqdm was not found in the cache and you require tqdm, we can conclude that your requirements are unsatisfiable.
+       --> requirements.in:1:1
+        |
+      1 | tqdm
+        | ^^^^ this dependency was declared here
       hint: Packages were unavailable because the network was disabled. When the network is disabled, registry packages may only be read from the cache.
     "
     );
@@ -7764,6 +7776,10 @@ fn offline_find_links() -> Result<()> {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because tqdm was not found in the cache and you require tqdm, we can conclude that your requirements are unsatisfiable.
+       --> requirements.in:1:1
+        |
+      1 | tqdm
+        | ^^^^ this dependency was declared here
       hint: Packages were unavailable because the network was disabled. When the network is disabled, registry packages may only be read from the cache.
     "
     );
@@ -8171,6 +8187,10 @@ fn index_url_in_requirements() -> Result<()> {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because anyio was not found in the package registry and you require anyio<4, we can conclude that your requirements are unsatisfiable.
+       --> requirements.in:2:1
+        |
+      2 | anyio<4
+        | ^^^^^^^ this dependency was declared here
     "
     );
 
@@ -13852,6 +13872,10 @@ fn compile_index_url_first_match_all_versions() -> Result<()> {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because there are no versions of pandas and you require pandas, we can conclude that your requirements are unsatisfiable.
+       --> requirements.in:1:1
+        |
+      1 | pandas
+        | ^^^^^^ this dependency was declared here
     "
     );
 
@@ -14436,6 +14460,200 @@ fn no_version_for_nested_constraint_duplicate_occurrences() -> Result<()> {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: you require pypyp==1 and pypyp>=1.2, which are incompatible
+    ");
+
+    Ok(())
+}
+
+/// A nonempty root requirement is located through the resolver's dependency explanation.
+#[test]
+fn no_available_version_for_root_dependency() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("# café\r\npypyp>=1\r\n")?;
+
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .arg("requirements.in")
+        .arg("--offline")
+        .arg("--no-index"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because pypyp was not found in the provided package locations and you require pypyp>=1, we can conclude that your requirements are unsatisfiable.
+       --> requirements.in:2:1
+        |
+      2 | pypyp>=1
+        | ^^^^^^^^ this dependency was declared here
+      hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
+    ");
+
+    Ok(())
+}
+
+/// Equal clauses from distinct files cannot identify the dependency explanation's occurrence.
+#[test]
+fn no_available_version_for_root_dependency_duplicate_occurrences() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("-r first.in\n-r second.in\n")?;
+    context.temp_dir.child("first.in").write_str("pypyp>=1\n")?;
+    context
+        .temp_dir
+        .child("second.in")
+        .write_str("pypyp>=1\n")?;
+
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .arg("requirements.in")
+        .arg("--offline")
+        .arg("--no-index"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because pypyp was not found in the provided package locations and you require pypyp>=1, we can conclude that your requirements are unsatisfiable.
+      hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
+    ");
+
+    Ok(())
+}
+
+/// A root override supplies the actual dependency clause and its source occurrence.
+#[test]
+fn no_available_version_for_root_dependency_override() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("pypyp>=1\n")?;
+    let overrides = context.temp_dir.child("overrides.in");
+    overrides.write_str("# replacement\npypyp>=2\n")?;
+
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .arg("requirements.in")
+        .arg("--override").arg("overrides.in")
+        .arg("--offline")
+        .arg("--no-index"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because pypyp was not found in the provided package locations and you require pypyp>=2, we can conclude that your requirements are unsatisfiable.
+       --> overrides.in:2:1
+        |
+      2 | pypyp>=2
+        | ^^^^^^^^ this dependency was declared here
+      hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
+    ");
+
+    overrides.write_str("pypyp>=2 ; python_version < '3.12'\n")?;
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .arg("requirements.in")
+        .arg("--override").arg("overrides.in")
+        .arg("--offline")
+        .arg("--no-index"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    # This file was autogenerated by uv via the following command:
+    #    uv pip compile --cache-dir [CACHE_DIR] requirements.in --override overrides.in --offline --no-index
+
+    ----- stderr -----
+    Resolved in [TIME]
+    ");
+
+    Ok(())
+}
+
+/// A root requirement cannot reveal URL credentials on its annotated source line.
+#[test]
+fn no_available_version_for_root_dependency_source_privacy() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("pypyp>=1 # https://user:sentinel-secret@example.com/private\n")?;
+
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .arg("requirements.in")
+        .arg("--offline")
+        .arg("--no-index"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because pypyp was not found in the provided package locations and you require pypyp>=1, we can conclude that your requirements are unsatisfiable.
+       --> requirements.in:1:1
+      hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
+    ");
+
+    Ok(())
+}
+
+/// A source from another universal-resolution fork must not replace the selected occurrence.
+#[cfg(feature = "test-universal")]
+#[test]
+fn no_available_version_for_root_dependency_fork() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("pypyp>=1 ; sys_platform == 'linux'\npypyp>=2 ; sys_platform != 'linux'\n")?;
+    let filters: Vec<_> = context
+        .filters()
+        .into_iter()
+        .chain([(
+            // This hint is only shown when the current platform doesn't match the target.
+            r"\n  hint: The resolution failed for an environment that is not the current one[^\n]*",
+            "",
+        )])
+        .collect();
+
+    uv_snapshot!(filters, context.pip_compile()
+        .arg("requirements.in")
+        .arg("--universal")
+        .arg("--offline")
+        .arg("--no-index"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies for split (markers: sys_platform == 'linux')
+      cause: Because only pypyp{sys_platform == 'linux'}<1 is available and you require pypyp{sys_platform == 'linux'}>=1, we can conclude that your requirements are unsatisfiable.
+       --> requirements.in:1:1
+        |
+      1 | pypyp>=1 ; sys_platform == 'linux'
+        | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this dependency was declared here
+    ");
+
+    Ok(())
+}
+
+/// Overlapping declarations in one fork have no unique root dependency occurrence.
+#[cfg(feature = "test-universal")]
+#[test]
+fn no_available_version_for_root_dependency_fork_ambiguity() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("pypyp>=1 ; sys_platform == 'linux'\npypyp>=2 ; sys_platform != 'win32'\n")?;
+    let filters: Vec<_> = context
+        .filters()
+        .into_iter()
+        .chain([(
+            // This hint is only shown when the current platform doesn't match the target.
+            r"\n  hint: The resolution failed for an environment that is not the current one[^\n]*",
+            "",
+        )])
+        .collect();
+
+    uv_snapshot!(filters, context.pip_compile()
+        .arg("requirements.in")
+        .arg("--universal")
+        .arg("--offline")
+        .arg("--no-index"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies for split (markers: sys_platform == 'linux')
+      cause: Because only pypyp{sys_platform == 'linux'}<1 is available and you require pypyp{sys_platform == 'linux'}>=1, we can conclude that your requirements are unsatisfiable.
     ");
 
     Ok(())
@@ -15640,6 +15858,10 @@ fn compile_enumerate_no_versions() -> Result<()> {
     error: No solution found when resolving dependencies
       cause: Because the current Python version (3.10.[X]) does not satisfy Python>=3.11,<4.0 and all versions of rooster-blue depend on Python>=3.11,<4.0, we can conclude that all versions of rooster-blue cannot be used.
              And because you require rooster-blue, we can conclude that your requirements are unsatisfiable.
+       --> requirements.in:1:1
+        |
+      1 | rooster-blue
+        | ^^^^^^^^^^^^ this dependency was declared here
     ");
 
     Ok(())
@@ -16242,6 +16464,10 @@ fn invalid_platform() -> Result<()> {
                  open3d>=0.16.0
              we can conclude that open3d<0.16.0 cannot be used.
              And because open3d>=0.16.0 has no wheels with a matching platform tag (e.g., `manylinux_2_17_x86_64`) and you require open3d, we can conclude that your requirements are unsatisfiable.
+       --> requirements.in:1:1
+        |
+      1 | open3d
+        | ^^^^^^ this dependency was declared here
       hint: You require CPython 3.10 (`cp310`), but we only found wheels for `open3d` (v0.15.2) with the following Python ABI tags: `cp36m`, `cp37m`, `cp38`, `cp39`
       hint: Wheels are available for `open3d` (v0.18.0) on the following platforms: `manylinux_2_27_aarch64`, `manylinux_2_27_x86_64`, `macosx_11_0_x86_64`, `macosx_13_0_arm64`, `win_amd64`
     ");
@@ -19094,6 +19320,15 @@ fn incompatible_cuda() -> Result<()> {
     error: No solution found when resolving dependencies
       cause: Because torchvision==0.17.1+cu118 depends on system:cuda==11.8 and torch>=2.2.1+cu121 depends on system:cuda==12.1, we can conclude that torch>=2.2.1+cu121 and torchvision==0.17.1+cu118 are incompatible.
              And because you require torch==2.2.1+cu121 and torchvision==0.17.1+cu118, we can conclude that your requirements are unsatisfiable.
+       --> requirements.in:1:1
+        |
+      1 | torch==2.2.1+cu121
+        | ^^^^^^^^^^^^^^^^^^ this dependency was declared here
+        |
+       ::: requirements.in:2:1
+        |
+      2 | torchvision==0.17.1+cu118
+        | ^^^^^^^^^^^^^^^^^^^^^^^^^ this dependency was declared here
     ");
 
     Ok(())

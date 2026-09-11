@@ -36,8 +36,8 @@ use crate::pubgrub::{
 use crate::python_requirement::PythonRequirement;
 use crate::resolution::ConflictingDistributionError;
 use crate::resolver::{
-    MetadataUnavailable, ResolverEnvironment, UnavailablePackage, UnavailableReason,
-    UnavailableVersion,
+    MetadataUnavailable, ResolverEnvironment, RootDependencyProof, UnavailablePackage,
+    UnavailableReason, UnavailableVersion,
 };
 use crate::{InMemoryIndex, Options};
 
@@ -514,6 +514,7 @@ fn narrow_to_known(set: &Range<Version>, versions: &[Version]) -> Range<Version>
 /// A wrapper around [`pubgrub::error::NoSolutionError`] that displays a resolution failure report.
 pub struct NoSolutionError {
     error: StackSafeErrorTree,
+    root_dependencies: RootDependencyProof,
     index: InMemoryIndex,
     /// The versions that were available for each package after `exclude-newer` filtering.
     ///
@@ -549,12 +550,14 @@ struct NoSolutionReport {
     report: String,
     hints: IndexSet<PubGrubHint>,
     provenance: Vec<RequirementProvenance>,
+    root_provenance: Vec<RequirementProvenance>,
 }
 
 impl NoSolutionError {
     /// Create a new [`NoSolutionError`] from a [`pubgrub::NoSolutionError`].
     pub(crate) fn new(
         error: pubgrub::NoSolutionError<UvDependencyProvider>,
+        root_dependencies: RootDependencyProof,
         index: InMemoryIndex,
         included_versions: FxHashMap<PackageName, BTreeSet<Version>>,
         available_versions: FxHashMap<PackageName, BTreeSet<Version>>,
@@ -575,6 +578,7 @@ impl NoSolutionError {
     ) -> Self {
         Self {
             error: StackSafeErrorTree::new(error),
+            root_dependencies,
             index,
             included_versions,
             available_versions,
@@ -865,15 +869,26 @@ impl NoSolutionError {
     }
 
     pub(crate) fn diagnostic(&self) -> Option<Diagnostic<'_>> {
-        let provenance = &self.cached().provenance;
-        (!provenance.is_empty()).then(|| {
-            provenance
+        let report = self.cached();
+        if report.provenance.is_empty() && report.root_provenance.is_empty() {
+            return None;
+        }
+        let diagnostic =
+            report
+                .provenance
                 .iter()
                 .fold(Diagnostic::default(), |diagnostic, source| {
                     diagnostic
                         .with_snippet(source.snippet("no version can satisfy this requirement"))
-                })
-        })
+                });
+        Some(
+            report
+                .root_provenance
+                .iter()
+                .fold(diagnostic, |diagnostic, source| {
+                    diagnostic.with_snippet(source.snippet("this dependency was declared here"))
+                }),
+        )
     }
 
     /// Compute the reduced derivation tree and the presentation data that refers to it.
@@ -960,15 +975,17 @@ impl NoSolutionError {
             report,
             hints,
             provenance: derivation_tree_provenance(&tree),
+            root_provenance: self.root_dependencies.sources(&tree),
         }
     }
 }
 
 impl std::fmt::Debug for NoSolutionError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        // Include every field except `index` (no Debug) and `cached` (derived).
+        // Source occurrences retain input text and are omitted from debug output.
         let Self {
             error,
+            root_dependencies: _,
             index: _,
             included_versions,
             available_versions,

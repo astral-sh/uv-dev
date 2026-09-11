@@ -2630,6 +2630,10 @@ fn find_links_offline_no_match() -> Result<()> {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because numpy was not found in the cache and you require numpy, we can conclude that your requirements are unsatisfiable.
+       --> requirements.txt:1:1
+        |
+      1 | numpy
+        | ^^^^^ this dependency was declared here
       hint: Packages were unavailable because the network was disabled. When the network is disabled, registry packages may only be read from the cache.
     "
     );

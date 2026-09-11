@@ -363,6 +363,10 @@ fn prune_unzipped() -> Result<()> {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because all versions of iniconfig need to be downloaded from a registry and you require iniconfig, we can conclude that your requirements are unsatisfiable.
+       --> requirements.txt:1:1
+        |
+      1 | iniconfig
+        | ^^^^^^^^^ this dependency was declared here
       hint: Packages were unavailable because the network was disabled. When the network is disabled, registry packages may only be read from the cache.
     ");
 
