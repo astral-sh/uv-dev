@@ -16642,8 +16642,7 @@ fn abi_compatibility_on_freethreaded_python() {
     Resolved 1 package in [TIME]
     error: Failed to determine installation plan
       cause: A path ([WORKSPACE]/test/links/abi3_package-1.0.0-cp37-abi3-manylinux_2_17_x86_64.whl) dependency is incompatible with the current platform
-
-    hint: You're using free-threaded CPython 3.14 (`cp314t`), but the wheel was built for the stable ABI (`abi3`), which requires a GIL-enabled interpreter
+      info: You're using free-threaded CPython 3.14 (`cp314t`), but the wheel was built for the stable ABI (`abi3`), which requires a GIL-enabled interpreter
     ");
 
     // A GIL-enabled wheel for the same Python version should also fail
@@ -16659,8 +16658,7 @@ fn abi_compatibility_on_freethreaded_python() {
     Resolved 1 package in [TIME]
     error: Failed to determine installation plan
       cause: A path ([WORKSPACE]/test/links/cpython_package-1.0.0-cp314-cp314-manylinux_2_17_x86_64.whl) dependency is incompatible with the current platform
-
-    hint: You're using free-threaded CPython 3.14 (`cp314t`), but the wheel was built for the CPython 3.14 ABI (`cp314`), which requires a GIL-enabled interpreter
+      info: You're using free-threaded CPython 3.14 (`cp314t`), but the wheel was built for the CPython 3.14 ABI (`cp314`), which requires a GIL-enabled interpreter
     ");
 
     // A wheel with both cp314t (compatible) and abi3 (incompatible) should succeed
@@ -16798,8 +16796,7 @@ fn abi_compatibility_on_nondebug_python_with_debug_wheel() {
     Resolved 1 package in [TIME]
     error: Failed to determine installation plan
       cause: A path (cpython_debug_package/dist/cpython_debug_package-1.0.0-cp314-cp314d-manylinux_2_17_x86_64.whl) dependency is incompatible with the current platform
-
-    hint: The wheel is compatible with CPython 3.14 (`cp314d`), but you're using CPython 3.14 (`cp314`)
+      info: The wheel is compatible with CPython 3.14 (`cp314d`), but you're using CPython 3.14 (`cp314`)
     ");
 }
 

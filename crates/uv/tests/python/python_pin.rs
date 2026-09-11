@@ -537,8 +537,7 @@ fn python_pin_resolve_no_python() {
     exit_code: 2 (failure)
     ----- stderr -----
     error: No interpreter found for Python 3.12 in [PYTHON SOURCES]
-
-    hint: A managed Python download is available for Python 3.12, but Python downloads are set to 'never'
+      info: A managed Python download is available for Python 3.12, but Python downloads are set to 'never'
     ");
 }
 
@@ -656,8 +655,7 @@ fn python_pin_resolve() {
     exit_code: 2 (failure)
     ----- stderr -----
     error: No interpreter found for PyPy in managed installations or search path
-
-    hint: A managed Python download is available for PyPy, but Python downloads are set to 'never'
+      info: A managed Python download is available for PyPy, but Python downloads are set to 'never'
     ");
 
     let python_version = context.read(PYTHON_VERSION_FILENAME);

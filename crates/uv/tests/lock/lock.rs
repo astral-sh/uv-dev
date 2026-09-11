@@ -8045,8 +8045,7 @@ fn lock_requires_python() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: No interpreter found for Python >=3.12 in [PYTHON SOURCES]
-
-    hint: A managed Python download is available for Python >=3.12, but Python downloads are set to 'never'
+      info: A managed Python download is available for Python >=3.12, but Python downloads are set to 'never'
     ");
 
     Ok(())

@@ -8077,8 +8077,7 @@ fn sync_wheel_url_source_error() -> Result<()> {
     ----- stderr -----
     Resolved 3 packages in [TIME]
     error: Distribution `cffi==1.17.1 @ direct+https://files.pythonhosted.org/packages/08/fd/cc2fedbd887223f9f5d170c96e57cbf655df9831a6546c1727ae13fa977a/cffi-1.17.1-cp310-cp310-macosx_11_0_arm64.whl` can't be installed because the binary distribution is incompatible with the current platform
-
-    hint: You're using CPython 3.12 (`cp312`), but `cffi` (v1.17.1) only has wheels with the following Python ABI tag: `cp310`
+      info: You're using CPython 3.12 (`cp312`), but `cffi` (v1.17.1) only has wheels with the following Python ABI tag: `cp310`
     ");
 
     Ok(())
@@ -8122,8 +8121,7 @@ fn sync_wheel_path_source_error() -> Result<()> {
     ----- stderr -----
     Resolved 3 packages in [TIME]
     error: Distribution `cffi==1.17.1 @ path+cffi-1.17.1-cp310-cp310-macosx_11_0_arm64.whl` can't be installed because the binary distribution is incompatible with the current platform
-
-    hint: You're using CPython 3.12 (`cp312`), but `cffi` (v1.17.1) only has wheels with the following Python ABI tag: `cp310`
+      info: You're using CPython 3.12 (`cp312`), but `cffi` (v1.17.1) only has wheels with the following Python ABI tag: `cp310`
     ");
 
     Ok(())
@@ -13524,8 +13522,9 @@ fn sync_required_environment_hint() -> Result<()> {
     ----- stderr -----
     Resolved 2 packages in [TIME]
     error: Distribution `a==1.0.0 @ registry+http://[LOCALHOST]/simple/` can't be installed because it doesn't have a source distribution or wheel for the current platform
+      info: You're on [PLATFORM] (`[TAG]`), but `a` (v1.0.0) only has wheels for the following platform: `macosx_10_0_ppc64`
 
-    hint: You're on [PLATFORM] (`[TAG]`), but `a` (v1.0.0) only has wheels for the following platform: `macosx_10_0_ppc64`; consider adding "sys_platform == '[PLATFORM]' and platform_machine == '[MACHINE]'" to `tool.uv.required-environments` to ensure uv resolves to a version with compatible wheels
+    hint: Add "sys_platform == '[PLATFORM]' and platform_machine == '[MACHINE]'" to `tool.uv.required-environments` to ensure uv resolves `a` to a version with compatible wheels
     "#);
 
     Ok(())
@@ -14143,8 +14142,7 @@ fn sync_python_preference() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: No interpreter found for Python 3.11 in managed installations
-
-    hint: A managed Python download is available for Python 3.11, but Python downloads are set to 'never'
+      info: A managed Python download is available for Python 3.11, but Python downloads are set to 'never'
     ");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -14221,8 +14219,9 @@ fn sync_python_missing_download_hint() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: No interpreter found for Python 3.100 in [PYTHON SOURCES]
+      info: uv embeds available Python downloads and may require an update to install new versions
 
-    hint: uv embeds available Python downloads and may require an update to install new versions. Consider retrying on a newer version of uv.
+    hint: Retry with a newer version of uv
     ");
 
     Ok(())
