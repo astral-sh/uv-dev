@@ -23,7 +23,7 @@ use uv_distribution_types::{
     IndexCapabilities, IndexUrl, Name, NameRequirementSpecification, Requirement,
     RequirementSource, UnresolvedRequirement, UnresolvedRequirementSpecification,
 };
-use uv_errors::{HintOrdering, Hinted, Hints, Info};
+use uv_errors::{Hint, HintOrdering, Hinted, Hints, Info};
 use uv_installer::{BuildSettings, InstallationStrategy, SatisfiesResult, SitePackages};
 use uv_normalize::PackageName;
 use uv_pep440::{VersionSpecifier, VersionSpecifiers};
@@ -101,7 +101,7 @@ pub(crate) struct ToolRunUsageError {
 
 impl Hinted for ToolRunUsageError {
     fn hints(&self) -> Hints<'_> {
-        Hints::from(match &self.context {
+        Hint::new(match &self.context {
             ToolRunUsageContext::UvxRun => {
                 "If you meant to run another tool, remove the `run` argument after `uvx`".to_owned()
             }
@@ -117,6 +117,7 @@ impl Hinted for ToolRunUsageError {
             ),
         })
         .with_ordering(HintOrdering::Last)
+        .into()
     }
 }
 
@@ -1346,7 +1347,7 @@ impl Hinted for ToolRunScriptError {
                 invocation.to_string().cyan(),
             ),
         };
-        Hints::from(message).with_ordering(HintOrdering::Last)
+        Hint::new(message).with_ordering(HintOrdering::Last).into()
     }
 }
 
