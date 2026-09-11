@@ -12,6 +12,7 @@ use uv_client::BaseClientBuilder;
 use uv_configuration::{Concurrency, Constraints, DryRun, HashCheckingMode, TargetTriple};
 use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::{ExtraBuildRequires, Index, Name, Requirement, RequirementSource};
+use uv_errors::HintPrefix;
 use uv_fs::{CWD, Simplified};
 use uv_installer::{InstallationStrategy, Planner, SitePackages};
 use uv_normalize::PackageName;
@@ -239,15 +240,12 @@ impl UpgradeConstraint {
     fn print(&self, name: &PackageName, printer: Printer) -> Result<()> {
         match self {
             Self::PinnedVersion { version } => {
-                let name = name.to_string();
-                let reinstall_command = format!("uv tool install {name}@latest");
-
                 writeln!(
                     printer.stderr(),
-                    "hint: `{}` is pinned to `{}` (installed with an exact version pin); reinstall with `{}` to upgrade to a new version.",
+                    "{HintPrefix} To upgrade `{}` from the exact pin `{}`, repeat its original `{}` command with a relaxed or updated version pin, keeping the other installation options.",
                     name.cyan(),
                     version.to_string().magenta(),
-                    reinstall_command.green(),
+                    "uv tool install".green(),
                 )?;
             }
         }

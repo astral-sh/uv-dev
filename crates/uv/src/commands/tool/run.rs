@@ -22,7 +22,7 @@ use uv_distribution_types::{
     IndexCapabilities, IndexUrl, Name, NameRequirementSpecification, Requirement,
     RequirementSource, UnresolvedRequirement, UnresolvedRequirementSpecification,
 };
-use uv_errors::HintOrdering;
+use uv_errors::{Hint, HintOrdering, Hinted, Hints, Info};
 use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
 use uv_normalize::PackageName;
 use uv_pep440::{VersionSpecifier, VersionSpecifiers};
@@ -81,9 +81,7 @@ impl Display for ToolRunCommand {
 /// Context for invocation mistakes that are specific to `uv tool run` and `uvx`.
 #[derive(Debug)]
 enum ToolRunUsageContext {
-    UvxRun {
-        arguments: String,
-    },
+    UvxRun,
     Verbose {
         verbose_flag: String,
         target: String,
@@ -100,28 +98,45 @@ pub(crate) struct ToolRunUsageError {
     context: ToolRunUsageContext,
 }
 
-impl uv_errors::Hinted for ToolRunUsageError {
-    fn hints(&self) -> uv_errors::Hints<'_> {
-        uv_errors::Hints::from(match &self.context {
-            ToolRunUsageContext::UvxRun { arguments } => format!(
-                "`{}` invokes the `{}` package. Did you mean `{}`?",
-                format!("uvx run {arguments}").green(),
-                "run".cyan(),
-                format!("uvx {arguments}").green()
-            ),
+impl Hinted for ToolRunUsageError {
+    fn hints(&self) -> Hints<'_> {
+        Hint::new(match &self.context {
+            ToolRunUsageContext::UvxRun => {
+                "If you meant to run another tool, remove the `run` argument after `uvx`".to_owned()
+            }
             ToolRunUsageContext::Verbose {
                 verbose_flag,
                 target,
                 invocation_source,
             } => format!(
-                "You provided `{}` to `{}`. Did you mean to provide it to `{}`? e.g., `{}`",
+                "To enable verbose output from `{}`, move `{}` before `{}`",
+                invocation_source.to_string().cyan(),
                 verbose_flag.cyan(),
                 target.cyan(),
-                invocation_source.to_string().cyan(),
-                format!("{invocation_source} {verbose_flag} {target}").green()
             ),
         })
         .with_ordering(HintOrdering::Last)
+        .into()
+    }
+}
+
+impl ToolRunUsageError {
+    /// Explain how the supplied arguments were interpreted.
+    pub(crate) fn own_info(&self) -> Info<'static> {
+        Info::new(match &self.context {
+            ToolRunUsageContext::UvxRun => {
+                "The `run` argument in `uvx run` selects the `run` package".to_owned()
+            }
+            ToolRunUsageContext::Verbose {
+                verbose_flag,
+                target,
+                ..
+            } => format!(
+                "The `{}` flag was passed to `{}`",
+                verbose_flag.cyan(),
+                target.cyan(),
+            ),
+        })
     }
 }
 
@@ -334,12 +349,11 @@ pub(crate) async fn run(
         Err(ProjectError::Operation(err)) => {
             // If the user ran `uvx run ...`, the `run` is likely a mistake. Show a dedicated hint.
             if from.is_none() && invocation_source == ToolRunCommand::Uvx && target == "run" {
-                let rest = args.iter().map(|s| s.to_string_lossy()).join(" ");
                 return Err(UvError::from(err.with_resolution_context("tool"))
                     .map_user(|cause| {
                         ToolRunUsageError {
                             cause,
-                            context: ToolRunUsageContext::UvxRun { arguments: rest },
+                            context: ToolRunUsageContext::UvxRun,
                         }
                         .into()
                     })
@@ -1294,34 +1308,214 @@ pub(crate) enum ToolRunScriptError {
     },
 }
 
-impl uv_errors::Hinted for ToolRunScriptError {
-    fn hints(&self) -> uv_errors::Hints<'_> {
+impl Hinted for ToolRunScriptError {
+    fn hints(&self) -> Hints<'_> {
         let message = match self {
             Self::FromScript {
                 package_name,
                 target,
                 invocation,
             } => format!(
-                "If you meant to run a command from the `{}` package, use the normalized package name instead to disambiguate, e.g., `{}`",
+                "If you meant to run `{}` from the `{}` package, replace the `--from` value in `{}` with `{}`",
+                target.cyan(),
                 package_name.cyan(),
-                format!("{invocation} --from {} {target}", package_name.cyan()).green(),
+                invocation.to_string().cyan(),
+                package_name.green(),
             ),
-            Self::TargetScriptExists { path, .. } => format!(
-                "Use `{}` instead",
-                format!("uv run {}", path.display()).green(),
+            Self::TargetScriptExists { invocation, .. } => format!(
+                "Use `{}` instead of `{}` to run the script",
+                "uv run".green(),
+                invocation.to_string().cyan(),
             ),
             Self::TargetScriptMissing {
                 package_name,
                 target,
                 invocation,
             } => format!(
-                "We did not find a script at the requested path. If you meant to run a command from the `{}` package, pass the normalized package name to `--from` to disambiguate, e.g., `{}`",
+                "If you meant to run `{}` from the `{}` package, add `{}` before `{}` in the `{}` command",
+                target.cyan(),
                 package_name.cyan(),
-                format!("{invocation} --from {package_name} {target}").green(),
+                format!("--from {package_name}").green(),
+                target.cyan(),
+                invocation.to_string().cyan(),
             ),
         };
-        uv_errors::Hints::from(
-            uv_errors::Hint::new(message).with_ordering(uv_errors::HintOrdering::Last),
-        )
+        Hint::new(message).with_ordering(HintOrdering::Last).into()
+    }
+}
+
+impl ToolRunScriptError {
+    /// Describe the unsuccessful script lookup without obscuring the corrective action.
+    pub(crate) fn own_info(&self) -> Option<Info<'static>> {
+        match self {
+            Self::TargetScriptMissing { target, .. } => Some(Info::new(format!(
+                "No Python script was found at `{}`",
+                target.cyan(),
+            ))),
+            Self::FromScript { .. } | Self::TargetScriptExists { .. } => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error;
+    use std::path::PathBuf;
+
+    use insta::assert_json_snapshot;
+    use uv_errors::{ErrorFormat, ErrorOptions, Hints, write_error_chain_with_options};
+
+    use crate::commands::diagnostics::diagnostic_for_error;
+
+    use super::{ToolRunCommand, ToolRunScriptError, ToolRunUsageContext, ToolRunUsageError};
+
+    fn report(error: &(dyn Error + 'static)) -> anyhow::Result<serde_json::Value> {
+        let mut output = String::new();
+        write_error_chain_with_options(
+            error,
+            &Hints::none(),
+            ErrorOptions::default()
+                .with_format(ErrorFormat::Json)
+                .with_diagnostic(diagnostic_for_error)
+                .with_stream(&mut output),
+        )?;
+        let report: serde_json::Value = serde_json::from_str(&output)?;
+        Ok(report["errors"][0].clone())
+    }
+
+    #[test]
+    fn tool_run_usage_context_is_separate_from_actions() -> anyhow::Result<()> {
+        let contexts = [
+            ToolRunUsageContext::UvxRun,
+            ToolRunUsageContext::Verbose {
+                verbose_flag: "-vv".to_owned(),
+                target: "ruff".to_owned(),
+                invocation_source: ToolRunCommand::Uvx,
+            },
+            ToolRunUsageContext::Verbose {
+                verbose_flag: "--verbose".to_owned(),
+                target: "ruff".to_owned(),
+                invocation_source: ToolRunCommand::ToolRun,
+            },
+        ];
+        let reports = contexts
+            .into_iter()
+            .map(|context| {
+                report(&ToolRunUsageError {
+                    cause: anyhow::anyhow!("resolution failed"),
+                    context,
+                })
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+
+        assert_json_snapshot!(reports, @r#"
+        [
+          {
+            "hints": [
+              {
+                "message": "If you meant to run another tool, remove the `run` argument after `uvx`",
+                "ordering": "last"
+              }
+            ],
+            "info": [
+              {
+                "message": "The `run` argument in `uvx run` selects the `run` package"
+              }
+            ],
+            "message": "Failed to run tool"
+          },
+          {
+            "hints": [
+              {
+                "message": "To enable verbose output from `uvx`, move `-vv` before `ruff`",
+                "ordering": "last"
+              }
+            ],
+            "info": [
+              {
+                "message": "The `-vv` flag was passed to `ruff`"
+              }
+            ],
+            "message": "Failed to run tool"
+          },
+          {
+            "hints": [
+              {
+                "message": "To enable verbose output from `uv tool run`, move `--verbose` before `ruff`",
+                "ordering": "last"
+              }
+            ],
+            "info": [
+              {
+                "message": "The `--verbose` flag was passed to `ruff`"
+              }
+            ],
+            "message": "Failed to run tool"
+          }
+        ]
+        "#);
+        Ok(())
+    }
+
+    #[test]
+    fn tool_run_script_context_is_separate_from_actions() -> anyhow::Result<()> {
+        let errors = [
+            ToolRunScriptError::FromScript {
+                package_name: "demo-py".parse()?,
+                target: "serve".to_owned(),
+                invocation: ToolRunCommand::ToolRun,
+            },
+            ToolRunScriptError::TargetScriptExists {
+                path: PathBuf::from("scripts/my script.py"),
+                invocation: ToolRunCommand::Uvx,
+            },
+            ToolRunScriptError::TargetScriptMissing {
+                package_name: "demo-py".parse()?,
+                target: "demo.py".to_owned(),
+                invocation: ToolRunCommand::Uvx,
+            },
+        ];
+        let reports = errors
+            .iter()
+            .map(|error| report(error))
+            .collect::<anyhow::Result<Vec<_>>>()?;
+
+        assert_json_snapshot!(reports, @r#"
+        [
+          {
+            "hints": [
+              {
+                "message": "If you meant to run `serve` from the `demo-py` package, replace the `--from` value in `uv tool run` with `demo-py`",
+                "ordering": "last"
+              }
+            ],
+            "message": "It looks like you provided a Python script to `--from`, which is not supported"
+          },
+          {
+            "hints": [
+              {
+                "message": "Use `uv run` instead of `uvx` to run the script",
+                "ordering": "last"
+              }
+            ],
+            "message": "It looks like you tried to run a Python script at `scripts/my script.py`, which is not supported by `uvx`"
+          },
+          {
+            "hints": [
+              {
+                "message": "If you meant to run `demo.py` from the `demo-py` package, add `--from demo-py` before `demo.py` in the `uvx` command",
+                "ordering": "last"
+              }
+            ],
+            "info": [
+              {
+                "message": "No Python script was found at `demo.py`"
+              }
+            ],
+            "message": "It looks like you provided a Python script to run, which is not supported by `uvx`"
+          }
+        ]
+        "#);
+        Ok(())
     }
 }
