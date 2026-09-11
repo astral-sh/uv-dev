@@ -28,6 +28,16 @@ pub enum InstallError {
     },
 }
 
+impl InstallError {
+    /// Return whether this is an expected user-facing failure.
+    pub fn is_user_failure(&self) -> bool {
+        match self {
+            Self::Wheel { source, .. } => source.is_user_failure(),
+            Self::SymlinkWithoutCache | Self::WorkerPanicked => false,
+        }
+    }
+}
+
 pub struct Installer<'a> {
     venv: &'a PythonEnvironment,
     link_mode: LinkMode,
