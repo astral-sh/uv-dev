@@ -90,13 +90,13 @@ fn workspace_list_duplicate_normalized_names() -> Result<()> {
 }
 
 #[test]
-fn workspace_list_duplicate_names_hide_inline_fields() -> Result<()> {
+fn workspace_list_duplicate_names_keep_inline_fields() -> Result<()> {
     let context = duplicate_name_workspace(
         indoc::indoc! {r#"
-            project = { name = "example", version = "0.1.0", urls = { private = "https://user:first-secret@example.com/" } }
+            project = { name = "example", version = "0.1.0", urls = { documentation = "https://example.com/first" } }
         "#},
         indoc::indoc! {r#"
-            project = { name = "example", version = "0.2.0", urls = { private = "https://user:second-secret@example.com/" } }
+            project = { name = "example", version = "0.2.0", urls = { documentation = "https://example.com/second" } }
         "#},
     )?;
 
@@ -113,16 +113,16 @@ fn workspace_list_duplicate_names_hide_inline_fields() -> Result<()> {
 }
 
 #[test]
-fn workspace_list_duplicate_names_hide_dotted_or_commented_fields() -> Result<()> {
+fn workspace_list_duplicate_names_keep_dotted_or_commented_fields() -> Result<()> {
     let context = duplicate_name_workspace(
         indoc::indoc! {r#"
             project.name = "example"
             project.version = "0.1.0"
-            project.urls = { private = "https://user:first-secret@example.com/" }
+            project.urls = { documentation = "https://example.com/docs" }
         "#},
         indoc::indoc! {r#"
             [project]
-            name = "example" # https://user:second-secret@example.com/
+            name = "example" # same published package
             version = "0.2.0"
         "#},
     )?;
