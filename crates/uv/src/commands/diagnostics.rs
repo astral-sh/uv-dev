@@ -37,6 +37,7 @@ pub(crate) fn write_error_chain(err: &anyhow::Error, printer: Printer) -> std::f
         err.as_ref(),
         &Hints::none(),
         uv_errors::ErrorOptions::default()
+            .with_format(printer.error_format())
             .with_diagnostic(diagnostic_for_error)
             .with_stream(printer.stderr_important()),
     )
