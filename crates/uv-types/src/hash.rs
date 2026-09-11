@@ -7,8 +7,9 @@ use rustc_hash::FxHashMap;
 
 use uv_configuration::HashCheckingMode;
 use uv_distribution_types::{
-    ArchiveHashPolicy, DistributionMetadata, HashCollection, HashValidation, MetadataHashPolicy,
-    Name, Requirement, RequirementSource, Resolution, UnresolvedRequirement, VersionId,
+    ArchiveHashPolicy, DistributionMetadata, HashCollection, HashValidation, IndexUrl,
+    MetadataHashPolicy, Name, Requirement, RequirementSource, Resolution, UnresolvedRequirement,
+    VersionId,
 };
 use uv_normalize::PackageName;
 use uv_pep440::{Operator, Version};
@@ -23,6 +24,7 @@ use uv_redacted::DisplaySafeUrl;
 pub struct HashStrategy {
     collection: HashCollection,
     verification: HashVerification,
+    registry_indexes: Arc<FxHashMap<VersionId, Vec<IndexUrl>>>,
 }
 
 /// The trusted hashes to enforce when retrieving distributions.
@@ -63,6 +65,16 @@ impl HashStrategy {
         self
     }
 
+    /// Scope registry hash verification to the indexes recorded for each package version.
+    #[must_use]
+    pub fn with_registry_indexes(
+        mut self,
+        registry_indexes: Arc<FxHashMap<VersionId, Vec<IndexUrl>>>,
+    ) -> Self {
+        self.registry_indexes = registry_indexes;
+        self
+    }
+
     /// Return the hash collection policy.
     pub fn collection(&self) -> HashCollection {
         self.collection
@@ -78,7 +90,7 @@ impl HashStrategy {
         &self,
         distribution: &T,
     ) -> ArchiveHashPolicy<'_> {
-        self.archive_policy_for_id(|| distribution.version_id())
+        self.archive_policy_for_id(|| distribution.version_id(), distribution.index_url())
     }
 
     /// Return the [`MetadataHashPolicy`] for retrieving the given distribution's metadata.
@@ -88,7 +100,8 @@ impl HashStrategy {
     ) -> MetadataHashPolicy<'_> {
         MetadataHashPolicy {
             collection: self.collection,
-            validation: self.validation_for_id(|| distribution.version_id()),
+            validation: self
+                .validation_for_id(|| distribution.version_id(), distribution.index_url()),
         }
     }
 
@@ -98,27 +111,34 @@ impl HashStrategy {
         name: &PackageName,
         version: &Version,
     ) -> ArchiveHashPolicy<'_> {
-        self.archive_policy_for_id(|| VersionId::from_registry(name.clone(), version.clone()))
+        self.archive_policy_for_id(
+            || VersionId::from_registry(name.clone(), version.clone()),
+            None,
+        )
     }
 
     /// Return the [`ArchiveHashPolicy`] for the given direct URL package.
     ///
     /// A direct URL identifies a single concrete artifact, so every provided digest must match.
     pub fn archive_policy_for_url(&self, url: &DisplaySafeUrl) -> ArchiveHashPolicy<'_> {
-        self.archive_policy_for_id(|| VersionId::from_url(url))
+        self.archive_policy_for_id(|| VersionId::from_url(url), None)
     }
 
     /// Return the [`MetadataHashPolicy`] for a URL whose package name is not yet known.
     pub fn metadata_policy_for_url(&self, url: &DisplaySafeUrl) -> MetadataHashPolicy<'_> {
         MetadataHashPolicy {
             collection: self.collection,
-            validation: self.validation_for_id(|| VersionId::from_url(url)),
+            validation: self.validation_for_id(|| VersionId::from_url(url), None),
         }
     }
 
     /// Return the archive hash policy for a distribution identity.
-    fn archive_policy_for_id(&self, id: impl FnOnce() -> VersionId) -> ArchiveHashPolicy<'_> {
-        let validation = self.validation_for_id(id);
+    fn archive_policy_for_id(
+        &self,
+        id: impl FnOnce() -> VersionId,
+        index: Option<&IndexUrl>,
+    ) -> ArchiveHashPolicy<'_> {
+        let validation = self.validation_for_id(id, index);
         match validation {
             HashValidation::None => match self.collection {
                 HashCollection::None => ArchiveHashPolicy::None,
@@ -129,21 +149,28 @@ impl HashStrategy {
     }
 
     /// Construct an identity only when verification requires a lookup.
-    fn validation_for_id(&self, id: impl FnOnce() -> VersionId) -> HashValidation<'_> {
+    fn validation_for_id(
+        &self,
+        id: impl FnOnce() -> VersionId,
+        index: Option<&IndexUrl>,
+    ) -> HashValidation<'_> {
         match &self.verification {
             HashVerification::IfPresent(hashes) => {
                 let id = id();
                 if let Some(hashes) = hashes.get(&id) {
-                    return hash_validation(&id, hashes);
+                    if self.registry_index_matches(&id, index) {
+                        return hash_validation(&id, hashes);
+                    }
+                    return HashValidation::None;
                 }
                 // `==1.0.0` can also select `1.0.0+local`. If the local version has no hash
                 // of its own, check it against the hash for `1.0.0`.
                 if let VersionId::NameVersion(name, version) = &id
                     && version.is_local()
-                    && let Some(hashes) = hashes.get(&VersionId::from_registry(
-                        name.clone(),
-                        version.clone().without_local(),
-                    ))
+                    && let public_id =
+                        VersionId::from_registry(name.clone(), version.clone().without_local())
+                    && let Some(hashes) = hashes.get(&public_id)
+                    && self.registry_index_matches(&public_id, index)
                 {
                     return HashValidation::Any(hashes);
                 }
@@ -158,6 +185,15 @@ impl HashStrategy {
             HashVerification::None => {}
         }
         HashValidation::None
+    }
+
+    fn registry_index_matches(&self, id: &VersionId, index: Option<&IndexUrl>) -> bool {
+        let Some(index) = index else {
+            return true;
+        };
+        self.registry_indexes
+            .get(id)
+            .is_none_or(|indexes| indexes.iter().any(|locked| locked.is_same_index(index)))
     }
 
     /// Returns `true` if the given registry-based package is allowed.

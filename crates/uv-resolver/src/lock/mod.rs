@@ -1375,9 +1375,10 @@ impl Lock {
     /// hashes for those artifacts.
     pub fn hash_strategy(&self, root: &Path) -> Result<HashStrategy, LockError> {
         let mut hashes: FxHashMap<VersionId, Vec<HashDigest>> = FxHashMap::default();
+        let mut registry_indexes: FxHashMap<VersionId, Vec<IndexUrl>> = FxHashMap::default();
 
         for package in &self.packages {
-            let (id, package_hashes) = match &package.id.source {
+            let (id, package_hashes, registry_index) = match &package.id.source {
                 Source::Registry(_) => {
                     let Some(version) = &package.id.version else {
                         continue;
@@ -1385,6 +1386,7 @@ impl Lock {
                     (
                         VersionId::from_registry(package.id.name.clone(), version.clone()),
                         package.hashes(),
+                        package.index(root)?,
                     )
                 }
                 Source::Direct(url, source) => (
@@ -1393,10 +1395,12 @@ impl Lock {
                         source.subdirectory.clone().map(Path::into_path_buf),
                     ),
                     package.hashes(),
+                    None,
                 ),
                 Source::Path(path) => (
                     VersionId::from_path(&absolute_path(root, path)?),
                     package.hashes(),
+                    None,
                 ),
                 Source::Git(..)
                 | Source::Directory(_)
@@ -1406,10 +1410,16 @@ impl Lock {
             if package_hashes.is_empty() {
                 continue;
             }
-            let digests = hashes.entry(id).or_default();
+            let digests = hashes.entry(id.clone()).or_default();
             for hash in package_hashes {
                 if !digests.contains(&hash) {
                     digests.push(hash);
+                }
+            }
+            if let Some(registry_index) = registry_index {
+                let indexes = registry_indexes.entry(id).or_default();
+                if !indexes.contains(&registry_index) {
+                    indexes.push(registry_index);
                 }
             }
         }
@@ -1417,7 +1427,8 @@ impl Lock {
         if hashes.is_empty() {
             Ok(HashStrategy::default())
         } else {
-            Ok(HashStrategy::verify(Arc::new(hashes)))
+            Ok(HashStrategy::verify(Arc::new(hashes))
+                .with_registry_indexes(Arc::new(registry_indexes)))
         }
     }
 

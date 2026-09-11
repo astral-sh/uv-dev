@@ -1567,11 +1567,11 @@ async fn locked_build_dependency_wheel(module: &str) -> Result<Vec<u8>> {
     Ok(writer.close().await?)
 }
 
-/// A build dependency resolved from another index is incorrectly verified against the locked
+/// A build dependency resolved from another index should not be verified against the locked
 /// runtime artifact.
 #[cfg(feature = "test-universal")]
 #[tokio::test]
-async fn lock_editable_build_dependency_cross_index_hash_mismatch() -> Result<()> {
+async fn lock_editable_build_dependency_cross_index() -> Result<()> {
     let locked_wheel = locked_build_dependency_wheel("LOCKED = True\n").await?;
     let build_wheel = locked_build_dependency_wheel("LOCKED = False\n").await?;
     let locked_digest = hex::encode(Sha256::digest(&locked_wheel));
@@ -1694,26 +1694,18 @@ async fn lock_editable_build_dependency_cross_index_hash_mismatch() -> Result<()
     assert!(lock.contains(&locked_digest));
     assert!(!lock.contains(&build_digest));
 
-    // Rejecting a valid wheel from another configured index makes the lock unusable on the
-    // affected platform; see astral-sh/uv#21608.
+    // The build dependency comes from the default index, so the runtime artifact's hash does not
+    // apply to it.
     uv_snapshot!(context.filters(), context.sync()
         .arg("--frozen")
         .arg("--no-cache")
         .arg("--no-install-project"), @r#"
-    exit_code: 1 (failure)
+    exit_code: 0 (success)
     ----- stderr -----
-      × Failed to build `editable-dep @ file://[TEMP_DIR]/editable-dep`
-      ├─▶ Failed to install requirements from `build-system.requires`
-      ├─▶ Failed to download `review-dep==1.0.0`
-      ╰─▶ Hash mismatch for `review-dep==1.0.0`
-
-          Expected:
-            sha256:[LOCKED_DIGEST]
-
-          Computed:
-            sha256:[BUILD_DIGEST]
-
-    hint: `editable-dep` was included because `project` (v0.1.0) depends on `editable-dep`
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + editable-dep==0.1.0 (from file://[TEMP_DIR]/editable-dep)
+     + review-dep==1.0.0
     "#);
 
     Ok(())
