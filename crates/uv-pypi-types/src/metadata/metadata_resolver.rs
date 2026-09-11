@@ -56,9 +56,13 @@ impl ResolutionMetadata {
         )
         .map_err(MetadataError::Pep440VersionError)?;
         let requires_dist = headers
-            .get_all_values("Requires-Dist")?
-            .map(|requires_dist| LenientRequirement::from_str(&requires_dist))
-            .map_ok(Requirement::from)
+            .get_all_values("Requires-Dist")
+            .map(|requires_dist| -> Result<_, MetadataError> {
+                let requires_dist = requires_dist?;
+                Ok(Requirement::from(LenientRequirement::from_str(
+                    &requires_dist,
+                )?))
+            })
             .collect::<Result<Box<_>, _>>()?;
         let requires_python = headers
             .get_first_value("Requires-Python")?
@@ -66,8 +70,8 @@ impl ResolutionMetadata {
             .transpose()?
             .map(VersionSpecifiers::from);
         let provides_extra = headers
-            .get_all_values("Provides-Extra")?
-            .filter_map(
+            .get_all_values("Provides-Extra")
+            .filter_map_ok(
                 |provides_extra| match ExtraName::from_owned(provides_extra) {
                     Ok(extra_name) => Some(extra_name),
                     Err(err) => {
@@ -76,10 +80,14 @@ impl ResolutionMetadata {
                     }
                 },
             )
-            .collect::<Box<_>>();
-        let dynamic = headers
-            .get_all_values("Dynamic")?
-            .any(|field| field == "Version");
+            .collect::<Result<Box<_>, _>>()?;
+        let mut dynamic = false;
+        for field in headers.get_all_values("Dynamic") {
+            if field? == "Version" {
+                dynamic = true;
+                break;
+            }
+        }
 
         Ok(Self {
             name,
@@ -111,7 +119,8 @@ impl ResolutionMetadata {
 
         // If any of the fields we need are marked as dynamic, we can't use the `PKG-INFO` file.
         let mut dynamic = false;
-        for field in headers.get_all_values("Dynamic")? {
+        for field in headers.get_all_values("Dynamic") {
+            let field = field?;
             match field.as_str() {
                 "Requires-Python" => return Err(MetadataError::DynamicField("Requires-Python")),
                 "Requires-Dist" => return Err(MetadataError::DynamicField("Requires-Dist")),
@@ -136,9 +145,13 @@ impl ResolutionMetadata {
 
         // The remaining fields are required to be present.
         let requires_dist = headers
-            .get_all_values("Requires-Dist")?
-            .map(|requires_dist| LenientRequirement::from_str(&requires_dist))
-            .map_ok(Requirement::from)
+            .get_all_values("Requires-Dist")
+            .map(|requires_dist| -> Result<_, MetadataError> {
+                let requires_dist = requires_dist?;
+                Ok(Requirement::from(LenientRequirement::from_str(
+                    &requires_dist,
+                )?))
+            })
             .collect::<Result<Box<_>, _>>()?;
         let requires_python = headers
             .get_first_value("Requires-Python")?
@@ -146,8 +159,8 @@ impl ResolutionMetadata {
             .transpose()?
             .map(VersionSpecifiers::from);
         let provides_extra = headers
-            .get_all_values("Provides-Extra")?
-            .filter_map(
+            .get_all_values("Provides-Extra")
+            .filter_map_ok(
                 |provides_extra| match ExtraName::from_owned(provides_extra) {
                     Ok(extra_name) => Some(extra_name),
                     Err(err) => {
@@ -156,7 +169,7 @@ impl ResolutionMetadata {
                     }
                 },
             )
-            .collect::<Box<_>>();
+            .collect::<Result<Box<_>, _>>()?;
 
         Ok(Self {
             name,
