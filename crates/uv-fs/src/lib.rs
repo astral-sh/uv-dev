@@ -112,14 +112,6 @@ impl Default for HardlinkScanner {
     }
 }
 
-/// Collect regular files whose only hardlink is their entry in this directory.
-///
-/// See [`HardlinkScanner::files_with_one_hardlink`]. Reuse a [`HardlinkScanner`] when scanning
-/// multiple directories.
-pub fn files_with_one_hardlink(path: &Path) -> io::Result<Option<Vec<PathBuf>>> {
-    HardlinkScanner::new().files_with_one_hardlink(path)
-}
-
 /// Return a path's creation time, including on Linux targets where [`std::fs::Metadata::created`]
 /// does not expose the filesystem birth time.
 pub fn created_time(path: &Path, metadata: &std::fs::Metadata) -> io::Result<SystemTime> {
