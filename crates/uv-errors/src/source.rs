@@ -61,18 +61,16 @@ impl SourceFile {
 
     /// The complete source lines that a zero-context annotation would display for this byte span.
     ///
-    /// This uses the renderer's LF-delimited line boundaries, including any CR bytes. Producers
-    /// can inspect the same text before deciding whether a source excerpt is safe to show. An
-    /// invalid UTF-8 range returns `None`.
-    pub fn lines_for_span(&self, span: Range<usize>) -> Option<&str> {
+    /// This uses the renderer's LF-delimited line boundaries, including any CR bytes. An invalid
+    /// UTF-8 range returns `None`.
+    #[cfg(test)]
+    fn lines_for_span(&self, span: Range<usize>) -> Option<&str> {
         self.text().get(self.line_range_for_span(span)?)
     }
 
     /// The byte range of the complete lines returned by [`Self::lines_for_span`].
-    ///
-    /// Producers can compare this window with other retained semantic source spans before
-    /// deciding whether an excerpt would expose unrelated fields.
-    pub fn line_range_for_span(&self, span: Range<usize>) -> Option<Range<usize>> {
+    #[cfg(test)]
+    fn line_range_for_span(&self, span: Range<usize>) -> Option<Range<usize>> {
         let lines = self.lines();
         let (first, last) = lines.annotation_lines(&span)?;
         lines.range(first, last)
