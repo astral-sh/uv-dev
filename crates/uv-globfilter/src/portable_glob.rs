@@ -49,7 +49,7 @@ impl uv_errors::Hinted for PortableGlobError {
     fn hints(&self) -> uv_errors::Hints<'_> {
         match self {
             Self::InvalidCharacterUv { .. } => {
-                uv_errors::Hints::from("Characters can be escaped with a backslash")
+                uv_errors::Hints::from("Escape the character with a backslash")
             }
             _ => uv_errors::Hints::none(),
         }
@@ -286,7 +286,7 @@ mod tests {
             @r"
         Invalid character `@` at position 3 in glob: `**/@test`
 
-        hint: Characters can be escaped with a backslash
+        hint: Escape the character with a backslash
         "
         );
         // Escaping slashes is not allowed.
