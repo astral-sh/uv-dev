@@ -15,7 +15,7 @@ use uv_distribution_types::{
     DerivationChain, DistErrorKind, IndexCapabilities, IndexLocations, IndexUrl, RequestedDist,
     RequirementProvenance,
 };
-use uv_errors::Diagnostic;
+use uv_errors::{Diagnostic, Hinted, Info};
 use uv_normalize::{ExtraName, InvalidNameError, PackageName};
 use uv_pep440::{LowerBound, Version};
 use uv_pep508::MarkerEnvironment;
@@ -868,19 +868,31 @@ impl NoSolutionError {
         &self.cached().hints
     }
 
+    /// Return the facts explaining why candidate packages were rejected.
+    pub(crate) fn diagnostic_info(&self) -> impl Iterator<Item = Info<'static>> + '_ {
+        self.pubgrub_hints()
+            .iter()
+            .map(PubGrubHint::diagnostic_info)
+    }
+
     pub(crate) fn diagnostic(&self) -> Option<Diagnostic<'_>> {
         let report = self.cached();
-        if report.provenance.is_empty() && report.root_provenance.is_empty() {
+        if report.provenance.is_empty()
+            && report.root_provenance.is_empty()
+            && report.hints.is_empty()
+        {
             return None;
         }
-        let diagnostic =
-            report
-                .provenance
-                .iter()
-                .fold(Diagnostic::default(), |diagnostic, source| {
-                    diagnostic
-                        .with_snippet(source.snippet("no version can satisfy this requirement"))
-                });
+        let mut diagnostic = Diagnostic::default().with_hints(self.hints());
+        for info in self.diagnostic_info() {
+            diagnostic = diagnostic.with_info(info);
+        }
+        let diagnostic = report
+            .provenance
+            .iter()
+            .fold(diagnostic, |diagnostic, source| {
+                diagnostic.with_snippet(source.snippet("no version can satisfy this requirement"))
+            });
         Some(
             report
                 .root_provenance
@@ -1033,7 +1045,7 @@ impl uv_errors::Hinted for NoSolutionError {
     fn hints(&self) -> uv_errors::Hints<'_> {
         self.pubgrub_hints()
             .iter()
-            .map(ToString::to_string)
+            .filter_map(PubGrubHint::actionable_hint)
             .collect()
     }
 }

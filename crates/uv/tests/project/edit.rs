@@ -9550,8 +9550,9 @@ fn add_shadowed_name() -> Result<()> {
     error: Failed to add dependencies
       cause: No solution found when resolving dependencies
       cause: Because dagster-webserver>=1.6.13 depends on your project and your project depends on dagster-webserver==1.6.13, we can conclude that your project's requirements are unsatisfiable.
+      info: The package `dagster-webserver` depends on the package `dagster` but the name is shadowed by your project
 
-    hint: The package `dagster-webserver` depends on the package `dagster` but the name is shadowed by your project. Consider changing the name of the project.
+    hint: Rename the project `dagster` to avoid shadowing the third-party package
 
     hint: If you want to add the package regardless of the failed resolution, provide the `--frozen` flag to skip locking and syncing
     ");
@@ -9564,8 +9565,9 @@ fn add_shadowed_name() -> Result<()> {
       cause: No solution found when resolving dependencies
       cause: Because dagster-webserver==1.6.11 depends on your project and dagster-webserver==1.6.12 depends on your project, we can conclude that dagster-webserver>=1.6.11,<=1.6.12 depends on your project.
              And because dagster-webserver>=1.6.13 depends on your project and your project depends on dagster-webserver>=1.6.11, we can conclude that your project's requirements are unsatisfiable.
+      info: The package `dagster-webserver` depends on the package `dagster` but the name is shadowed by your project
 
-    hint: The package `dagster-webserver` depends on the package `dagster` but the name is shadowed by your project. Consider changing the name of the project.
+    hint: Rename the project `dagster` to avoid shadowing the third-party package
 
     hint: If you want to add the package regardless of the failed resolution, provide the `--frozen` flag to skip locking and syncing
     ");
@@ -9659,8 +9661,9 @@ fn add_warn_index_url() -> Result<()> {
     error: Failed to add dependencies
       cause: No solution found when resolving dependencies
       cause: Because only idna==2.7 is available and your project depends on idna>=3.6, we can conclude that your project's requirements are unsatisfiable.
+      info: `idna` was found on https://test.pypi.org/simple, but not at the requested version (idna>=3.6). A compatible version may be available on a subsequent index (e.g., https://pypi.org/simple). By default, uv only considers versions published on the first index that contains a package, to avoid dependency confusion attacks
 
-    hint: `idna` was found on https://test.pypi.org/simple, but not at the requested version (idna>=3.6). A compatible version may be available on a subsequent index (e.g., https://pypi.org/simple). By default, uv will only consider versions that are published on the first index that contains a given package, to avoid dependency confusion attacks. If all indexes are equally trusted, use `--index-strategy unsafe-best-match` to consider all versions from all indexes, regardless of the order in which they were defined.
+    hint: If all indexes are equally trusted, use `--index-strategy unsafe-best-match` to consider all versions from all indexes
 
     hint: If you want to add the package regardless of the failed resolution, provide the `--frozen` flag to skip locking and syncing
     ");
@@ -13303,8 +13306,7 @@ async fn add_full_url_in_keyring() -> Result<()> {
     error: Failed to add dependencies
       cause: No solution found when resolving dependencies
       cause: Because anyio was not found in the package registry and your project depends on anyio, we can conclude that your project's requirements are unsatisfiable.
-
-    hint: An index URL (http://[LOCALHOST]/basic-auth/simple) could not be queried due to a lack of valid authentication credentials (401 Unauthorized)
+      info: An index URL (http://[LOCALHOST]/basic-auth/simple) could not be queried due to a lack of valid authentication credentials (401 Unauthorized)
 
     hint: If you want to add the package regardless of the failed resolution, provide the `--frozen` flag to skip locking and syncing
     "
@@ -13340,8 +13342,7 @@ async fn add_stop_index_search_early_on_auth_failure() -> Result<()> {
     error: Failed to add dependencies
       cause: No solution found when resolving dependencies
       cause: Because anyio was not found in the package registry and your project depends on anyio, we can conclude that your project's requirements are unsatisfiable.
-
-    hint: An index URL (http://[LOCALHOST]/basic-auth/simple) could not be queried due to a lack of valid authentication credentials (401 Unauthorized)
+      info: An index URL (http://[LOCALHOST]/basic-auth/simple) could not be queried due to a lack of valid authentication credentials (401 Unauthorized)
 
     hint: If you want to add the package regardless of the failed resolution, provide the `--frozen` flag to skip locking and syncing
     "
@@ -13424,8 +13425,9 @@ async fn add_empty_ignore_error_codes() -> Result<()> {
     error: Failed to add dependencies
       cause: No solution found when resolving dependencies
       cause: Because anyio was not found in the package registry and your project depends on anyio, we can conclude that your project's requirements are unsatisfiable.
+      info: An index (http://[LOCALHOST]/) returned a 403 Forbidden error
 
-    hint: An index (http://[LOCALHOST]/) returned a 403 Forbidden error. Check that the index URL is correct and the credentials are valid.
+    hint: Check that the index URL (http://[LOCALHOST]/) is correct and the credentials are valid
 
     hint: If you want to add the package regardless of the failed resolution, provide the `--frozen` flag to skip locking and syncing
     "
@@ -13502,8 +13504,9 @@ async fn lock_forbidden_index_with_available_package() -> Result<()> {
     error: No solution found when resolving dependencies
       cause: Because idna was not found in the package registry and all versions of anyio depend on idna>=2.8, we can conclude that all versions of anyio cannot be used.
              And because your project depends on anyio, we can conclude that your project's requirements are unsatisfiable.
+      info: An index (http://[LOCALHOST]/) returned a 403 Forbidden error, but uv received a successful response from another request to the index
 
-    hint: An index (http://[LOCALHOST]/) returned a 403 Forbidden error, but uv received a successful response from another request to the index. If the failing package is not present on this index, consider adding `ignore-error-codes = [403]` to the index's `[[tool.uv.index]]` entry to continue searching across indexes.
+    hint: If the failing package is not present on http://[LOCALHOST]/, add `ignore-error-codes = [403]` to the index's `[[tool.uv.index]]` entry to continue searching across indexes
     ");
     Ok(())
 }
@@ -13839,8 +13842,7 @@ async fn add_auth_policy_never_with_url_credentials_ignored() -> Result<()> {
       cause: No solution found when resolving dependencies
       cause: Because anyio==4.3.0 could not be fetched from the network (`401 Unauthorized`) and only anyio==4.3.0 is available, we can conclude that all versions of anyio cannot be used.
              And because your project depends on anyio, we can conclude that your project's requirements are unsatisfiable.
-
-    hint: Metadata for `anyio` (v4.3.0) could not be fetched; the server returned: `401 Unauthorized`
+      info: Metadata for `anyio` (v4.3.0) could not be fetched; the server returned: `401 Unauthorized`
 
     hint: If you want to add the package regardless of the failed resolution, provide the `--frozen` flag to skip locking and syncing
     "
@@ -13882,8 +13884,7 @@ async fn add_auth_policy_never_with_env_var_credentials() -> Result<()> {
     error: Failed to add dependencies
       cause: No solution found when resolving dependencies
       cause: Because anyio was not found in the package registry and your project depends on anyio, we can conclude that your project's requirements are unsatisfiable.
-
-    hint: An index URL (http://[LOCALHOST]/basic-auth/simple) could not be queried due to a lack of valid authentication credentials (401 Unauthorized)
+      info: An index URL (http://[LOCALHOST]/basic-auth/simple) could not be queried due to a lack of valid authentication credentials (401 Unauthorized)
 
     hint: If you want to add the package regardless of the failed resolution, provide the `--frozen` flag to skip locking and syncing
     "
@@ -13969,8 +13970,7 @@ async fn add_redirect_cross_origin() -> Result<()> {
     error: Failed to add dependencies
       cause: No solution found when resolving dependencies
       cause: Because anyio was not found in the package registry and your project depends on anyio, we can conclude that your project's requirements are unsatisfiable.
-
-    hint: An index URL (http://[LOCALHOST]/) could not be queried due to a lack of valid authentication credentials (401 Unauthorized)
+      info: An index URL (http://[LOCALHOST]/) could not be queried due to a lack of valid authentication credentials (401 Unauthorized)
 
     hint: If you want to add the package regardless of the failed resolution, provide the `--frozen` flag to skip locking and syncing
     "
@@ -14086,8 +14086,7 @@ async fn add_redirect_with_keyring_cross_origin() -> Result<()> {
     error: Failed to add dependencies
       cause: No solution found when resolving dependencies
       cause: Because anyio was not found in the package registry and your project depends on anyio, we can conclude that your project's requirements are unsatisfiable.
-
-    hint: An index URL (http://[LOCALHOST]/) could not be queried due to a lack of valid authentication credentials (401 Unauthorized)
+      info: An index URL (http://[LOCALHOST]/) could not be queried due to a lack of valid authentication credentials (401 Unauthorized)
 
     hint: If you want to add the package regardless of the failed resolution, provide the `--frozen` flag to skip locking and syncing
     "

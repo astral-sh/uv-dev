@@ -2613,8 +2613,9 @@ fn install_no_index() {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because flask was not found in the provided package locations and you require flask, we can conclude that your requirements are unsatisfiable.
+      info: Packages were unavailable because index lookups were disabled and no additional package locations were provided
 
-    hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
+    hint: Provide additional package locations with `--find-links <uri>`
     "
     );
 
@@ -2634,8 +2635,9 @@ fn install_no_index_version() {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because flask was not found in the provided package locations and you require flask==3.0.0, we can conclude that your requirements are unsatisfiable.
+      info: Packages were unavailable because index lookups were disabled and no additional package locations were provided
 
-    hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
+    hint: Provide additional package locations with `--find-links <uri>`
     "
     );
 
@@ -3883,8 +3885,7 @@ fn install_only_binary_all_and_no_binary_all() {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because all versions of anyio have no usable wheels and you require anyio, we can conclude that your requirements are unsatisfiable.
-
-    hint: Wheels are required for `anyio` because building from source is disabled for all packages (i.e., with `--no-build`)
+      info: Wheels are required for `anyio` because building from source is disabled for all packages (i.e., with `--no-build`)
     "
     );
 
@@ -4005,8 +4006,7 @@ fn only_binary_requirements_txt() {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because django-allauth==0.51.0 has no usable wheels and you require django-allauth==0.51.0, we can conclude that your requirements are unsatisfiable.
-
-    hint: Wheels are required for `django-allauth` because building from source is disabled for `django-allauth` (i.e., with `--no-build-package django-allauth`)
+      info: Wheels are required for `django-allauth` because building from source is disabled for `django-allauth` (i.e., with `--no-build-package django-allauth`)
     "
     );
 }
@@ -4115,8 +4115,9 @@ fn no_prerelease_hint_source_builds() -> Result<()> {
       cause: Failed to resolve requirements from `setup.py` build
       cause: No solution found when resolving: `setuptools>=40.8.0`
       cause: Because only setuptools<=40.4.3 is available and you require setuptools>=40.8.0, we can conclude that your requirements are unsatisfiable.
+      info: `setuptools` was filtered by `exclude-newer` to only include packages uploaded before 2018-10-09T00:00:00Z. The latest version satisfying the requirement is v69.2.0, published at 2024-03-13T11:20:54.103Z.
 
-    hint: `setuptools` was filtered by `exclude-newer` to only include packages uploaded before 2018-10-09T00:00:00Z. The latest version satisfying the requirement is v69.2.0, published at 2024-03-13T11:20:54.103Z. Consider using `exclude-newer-package` to override the cutoff for this package.
+    hint: Use `exclude-newer-package` to override the cutoff for `setuptools`
     "
     );
 
@@ -4404,8 +4405,9 @@ fn no_deps_installed() -> Result<()> {
     error: No solution found when resolving dependencies
       cause: Because child was not found in the provided package locations and parent==1.0.0 depends on child>=2, we can conclude that parent==1.0.0 cannot be used.
              And because parent was not found in the provided package locations and you require parent, we can conclude that your requirements are unsatisfiable.
+      info: Packages were unavailable because index lookups were disabled and no additional package locations were provided
 
-    hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
+    hint: Provide additional package locations with `--find-links <uri>`
     ");
 
     let child = context.site_packages().join("child-1.0.0.dist-info");
@@ -4977,8 +4979,9 @@ fn explicit_prerelease_does_not_fall_back_if_necessary() {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because only a<=0.1.0 is available and you require a>0.1.0, we can conclude that your requirements are unsatisfiable.
+      info: Pre-releases are available for `a` in the requested range (e.g., 1.0.0a1), but pre-releases weren't enabled
 
-    hint: Pre-releases are available for `a` in the requested range (e.g., 1.0.0a1), but pre-releases weren't enabled (try: `--prerelease=allow`)
+    hint: Use `--prerelease=allow` to allow pre-releases
     ");
 }
 
@@ -5090,8 +5093,9 @@ fn explicit_prerelease_disallows_transitive_marker() {
     error: No solution found when resolving dependencies
       cause: Because there is no version of c==2.0.0b1 and all versions of a depend on c==2.0.0b1, we can conclude that all versions of a cannot be used.
              And because you require a, we can conclude that your requirements are unsatisfiable.
+      info: `c` was requested with a pre-release marker (e.g., c==2.0.0b1), but pre-releases weren't enabled
 
-    hint: `c` was requested with a pre-release marker (e.g., c==2.0.0b1), but pre-releases weren't enabled (try: `--prerelease=allow`)
+    hint: Use `--prerelease=allow` to allow pre-releases
     ");
 }
 
@@ -5142,8 +5146,9 @@ fn prerelease_package_disallows_transitive_prerelease() {
     error: No solution found when resolving dependencies
       cause: Because there is no version of c==2.0.0b1 and all versions of a depend on c==2.0.0b1, we can conclude that all versions of a cannot be used.
              And because you require a, we can conclude that your requirements are unsatisfiable.
+      info: `c` was requested with a pre-release marker (e.g., c==2.0.0b1), but pre-releases weren't enabled
 
-    hint: `c` was requested with a pre-release marker (e.g., c==2.0.0b1), but pre-releases weren't enabled (try: `--prerelease-package c=allow`)
+    hint: Use `--prerelease-package c=allow` to allow pre-releases
     ");
 
     context.assert_not_installed("c");
@@ -5249,8 +5254,9 @@ fn prerelease_package_rejected_in_pip_configuration() -> Result<()> {
 
     error: No solution found when resolving dependencies
       cause: Because only a<=0.1.0 is available and you require a>0.1.0, we can conclude that your requirements are unsatisfiable.
+      info: Pre-releases are available for `a` in the requested range (e.g., 1.0.0a1), but pre-releases weren't enabled
 
-    hint: Pre-releases are available for `a` in the requested range (e.g., 1.0.0a1), but pre-releases weren't enabled (try: `--prerelease=allow`)
+    hint: Use `--prerelease=allow` to allow pre-releases
     "#);
 
     Ok(())
@@ -5339,8 +5345,9 @@ fn disallow_transitive_prerelease() {
     error: No solution found when resolving dependencies
       cause: Because there is no version of c==2.0.0b1 and all versions of a depend on c==2.0.0b1, we can conclude that all versions of a cannot be used.
              And because you require a, we can conclude that your requirements are unsatisfiable.
+      info: `c` was requested with a pre-release marker (e.g., c==2.0.0b1), but pre-releases weren't enabled
 
-    hint: `c` was requested with a pre-release marker (e.g., c==2.0.0b1), but pre-releases weren't enabled (try: `--prerelease=allow`)
+    hint: Use `--prerelease=allow` to allow pre-releases
     ");
 
     context.assert_not_installed("a");
@@ -7317,8 +7324,7 @@ async fn install_package_basic_auth_from_keyring_wrong_password() {
     Keyring request for public@[LOCALHOST]
     error: No solution found when resolving dependencies
       cause: Because anyio was not found in the package registry and you require anyio, we can conclude that your requirements are unsatisfiable.
-
-    hint: An index URL (http://[LOCALHOST]/basic-auth/simple) could not be queried due to a lack of valid authentication credentials (401 Unauthorized)
+      info: An index URL (http://[LOCALHOST]/basic-auth/simple) could not be queried due to a lack of valid authentication credentials (401 Unauthorized)
     "
     );
 }
@@ -7359,8 +7365,7 @@ async fn install_package_basic_auth_from_keyring_wrong_username() {
     Keyring request for public@http://[LOCALHOST]
     error: No solution found when resolving dependencies
       cause: Because anyio was not found in the package registry and you require anyio, we can conclude that your requirements are unsatisfiable.
-
-    hint: An index URL (http://[LOCALHOST]/basic-auth/simple) could not be queried due to a lack of valid authentication credentials (401 Unauthorized)
+      info: An index URL (http://[LOCALHOST]/basic-auth/simple) could not be queried due to a lack of valid authentication credentials (401 Unauthorized)
     "
     );
 }
@@ -7508,8 +7513,9 @@ fn reinstall_no_index() {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because anyio was not found in the provided package locations and you require anyio, we can conclude that your requirements are unsatisfiable.
+      info: Packages were unavailable because index lookups were disabled and no additional package locations were provided
 
-    hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
+    hint: Provide additional package locations with `--find-links <uri>`
     "
     );
 }
@@ -7823,8 +7829,9 @@ fn already_installed_local_version_of_remote_package() {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because anyio was not found in the provided package locations and you require anyio==4.2.0, we can conclude that your requirements are unsatisfiable.
+      info: Packages were unavailable because index lookups were disabled and no additional package locations were provided
 
-    hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
+    hint: Provide additional package locations with `--find-links <uri>`
     "
     );
 
@@ -8044,8 +8051,9 @@ fn already_installed_remote_url() {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because uv-public-pypackage was not found in the provided package locations and you require uv-public-pypackage, we can conclude that your requirements are unsatisfiable.
+      info: Packages were unavailable because index lookups were disabled and no additional package locations were provided
 
-    hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
+    hint: Provide additional package locations with `--find-links <uri>`
     ");
 
     // Request installation again with just the full URL
@@ -8081,8 +8089,9 @@ fn already_installed_remote_url() {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because uv-public-pypackage was not found in the provided package locations and you require uv-public-pypackage==0.2.0, we can conclude that your requirements are unsatisfiable.
+      info: Packages were unavailable because index lookups were disabled and no additional package locations were provided
 
-    hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
+    hint: Provide additional package locations with `--find-links <uri>`
     ");
 }
 

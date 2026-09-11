@@ -1038,8 +1038,9 @@ fn lock_exclude_newer_relative_values() -> Result<()> {
     error: No solution found when resolving dependencies
       cause: Because there are no versions of iniconfig and iniconfig==2.0.0 was published after the exclude newer time, we can conclude that all versions of iniconfig cannot be used.
              And because your project depends on iniconfig, we can conclude that your project's requirements are unsatisfiable.
+      info: `iniconfig` was filtered by `exclude-newer` to only include packages uploaded before 2006-12-02T02:07:43Z. The latest version satisfying the requirement is v2.0.0, published at 2023-01-07T11:08:09.864Z.
 
-    hint: `iniconfig` was filtered by `exclude-newer` to only include packages uploaded before 2006-12-02T02:07:43Z. The latest version satisfying the requirement is v2.0.0, published at 2023-01-07T11:08:09.864Z. Consider using `exclude-newer-package` to override the cutoff for this package.
+    hint: Use `exclude-newer-package` to override the cutoff for `iniconfig`
     ");
 
     uv_snapshot!(context.filters(), context

@@ -36,6 +36,8 @@ use crate::resolver::{
 };
 use crate::{Flexibility, InMemoryIndex, Options, ResolverEnvironment, VersionsResponse};
 
+mod diagnostics;
+
 type ReportDerived = Derived<PubGrubPackage, Range<Version>, UnavailableReason>;
 
 #[derive(Debug)]
@@ -1475,6 +1477,29 @@ pub struct ExcludeNewerVersionDetail {
     singleton: bool,
 }
 
+impl ExcludeNewerVersionDetail {
+    /// Describe the matching version that was excluded by the cutoff.
+    fn summary(&self) -> String {
+        match (&self.publish_date, self.singleton) {
+            (Some(publish_date), true) => format!(
+                " The requested version, {}, was published at {}.",
+                format!("v{}", self.version).cyan(),
+                publish_date.cyan()
+            ),
+            (None, true) => String::new(),
+            (Some(publish_date), false) => format!(
+                " The latest version satisfying the requirement is {}, published at {}.",
+                format!("v{}", self.version).cyan(),
+                publish_date.cyan()
+            ),
+            (None, false) => format!(
+                " The latest version satisfying the requirement is {}.",
+                format!("v{}", self.version).cyan()
+            ),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum PubGrubHint {
     /// There are pre-release versions available for a package, but pre-releases weren't enabled
@@ -2302,40 +2327,9 @@ impl std::fmt::Display for PubGrubHint {
                 exclude_newer,
                 matching_version,
             } => {
-                let latest = match matching_version {
-                    Some(ExcludeNewerVersionDetail {
-                        version,
-                        publish_date: Some(publish_date),
-                        singleton: true,
-                    }) => format!(
-                        " The requested version, {}, was published at {}.",
-                        format!("v{version}").cyan(),
-                        publish_date.cyan()
-                    ),
-                    Some(ExcludeNewerVersionDetail {
-                        version: _,
-                        publish_date: None,
-                        singleton: true,
-                    }) => String::new(),
-                    Some(ExcludeNewerVersionDetail {
-                        version,
-                        publish_date: Some(publish_date),
-                        singleton: false,
-                    }) => format!(
-                        " The latest version satisfying the requirement is {}, published at {}.",
-                        format!("v{version}").cyan(),
-                        publish_date.cyan()
-                    ),
-                    Some(ExcludeNewerVersionDetail {
-                        version,
-                        publish_date: None,
-                        singleton: false,
-                    }) => format!(
-                        " The latest version satisfying the requirement is {}.",
-                        format!("v{version}").cyan()
-                    ),
-                    None => String::new(),
-                };
+                let latest = matching_version
+                    .as_ref()
+                    .map_or_else(String::new, ExcludeNewerVersionDetail::summary);
                 match source {
                     EffectiveExcludeNewerSource::Package => write!(
                         f,

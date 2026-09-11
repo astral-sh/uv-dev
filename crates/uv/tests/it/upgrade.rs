@@ -1358,8 +1358,8 @@ fn upgrade_preserves_hard_constraint_no_solution_failure() -> Result<()> {
     let filters: Vec<_> = packse_filters(&context)
         .into_iter()
         .chain([(
-            // This hint is only shown when the current platform doesn't match the target.
-            r"\n\nhint: The resolution failed for an environment that is not the current one[^\n]*",
+            // This context and hint are only shown when the current platform doesn't match the target.
+            r"\n(?:  info: The resolution failed for an environment that is not the current one|\nhint: Limit the environments with `tool\.uv\.environments`)[^\n]*",
             "",
         )])
         .collect();
