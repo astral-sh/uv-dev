@@ -20,6 +20,11 @@ position. This is consistent with the script being supplied to `Invoke-Expressio
 time, but the required Windows PowerShell 5.1 response behavior could not be tested independently
 on the available Linux runner.
 
+A maintainer subsequently tested the same command on Windows PowerShell 5.1.26100.8655—the exact
+patch version reported—and installed uv successfully. The failure therefore is not reproducible
+from the PowerShell version and command alone. Host configuration, Windows build details, request
+intermediaries, and reproduction consistency are now the important missing variables.
+
 The final mirror response currently has no `Content-Type` header. That is a useful diagnostic lead,
 not a confirmed cause: PowerShell Core 6.0.0 and 7.6.5 both materialized the same live response as
 one `System.String` in independent checks.
@@ -27,6 +32,10 @@ one `System.String` in independent checks.
 ## Reproduction
 
 Outcome: `needs_more_information`.
+
+A maintainer could not reproduce the failure on Windows PowerShell 5.1.26100.8655. The exact
+documented command installed uv successfully, so an affected-host reproduction is required to
+identify what causes `Invoke-RestMethod` output to be enumerated there.
 
 The available environment was Linux x86_64 with installed `uv 0.12.13` and PowerShell Core 7.6.5;
 Windows PowerShell 5.1 was not available. The command does not use Python. The live vanity URL
@@ -73,8 +82,8 @@ Get-Content -Raw ./minimal.ps1 | Invoke-Expression
 
 This confirms the proposed line-enumeration mechanism, but it does not confirm that
 `Invoke-RestMethod` produces that enumeration on a clean Windows PowerShell 5.1 host. To complete
-the reproduction, run the following non-executing diagnostics on the affected host and on another
-clean Windows PowerShell 5.1 host if possible:
+the reproduction, the reporter needs to confirm that the failure is consistent and run the
+following non-executing diagnostics on the affected host:
 
 ```powershell
 $response = Invoke-RestMethod https://astral.sh/uv/install.ps1
@@ -86,8 +95,10 @@ $PSVersionTable
 
 The Windows edition/build and whether a proxy, endpoint-security product, or content-filtering
 gateway is present are also needed to distinguish PowerShell 5.1 behavior from host-specific HTTP
-response rewriting. Testing the reported download-to-file workaround on the same host would show
-whether only pipeline materialization is affected:
+response rewriting. The reporter says a locally saved copy worked after removing the block comment,
+but that changed both the delivery path and script content. Testing an otherwise unmodified
+download-to-file workaround on the same host would show whether only pipeline materialization is
+affected:
 
 ```powershell
 Invoke-RestMethod https://astral.sh/uv/install.ps1 -OutFile install-uv.ps1
@@ -99,18 +110,13 @@ standalone-install path. `crates/uv/tests/it/self_update.rs` covers `uv self upd
 release metadata/download selection; it downloads an installer to a file and is not coverage for
 PowerShell's pipeline response handling.
 
-## Draft response
+## Maintainer follow-up
 
-Thanks for the report. The screenshot is consistent with the downloaded script being passed to
-`Invoke-Expression` one line at a time: a harmless fixture with the same blank line and `<# ... #>`
-structure produces the same two errors when enumerated by line. We have not yet independently
-confirmed why the live response is enumerated on Windows PowerShell 5.1; PowerShell Core 6.0.0 and
-7.6.5 both receive it as one string.
-
-Could you share the output of the non-executing response-type, header, and `$PSVersionTable`
-diagnostics above, plus the Windows edition/build and whether a proxy or endpoint-security product
-is in the request path? Please also confirm whether downloading the script with `-OutFile` and
-running the saved file works on the same host.
+A maintainer first reproduced successfully on Windows PowerShell 5.1.26100.6584, then also tested
+the reporter's exact 5.1.26100.8655 patch version and could not reproduce the failure. They requested
+the affected Windows version and confirmation that the behavior is consistent. The diagnostics
+above can determine whether the affected host receives a collection instead of a single string and
+whether an intermediary changes the response.
 
 ## Classification
 
@@ -119,6 +125,12 @@ Windows installation method, and the screenshot establishes a real pre-install p
 reported host. Independent evidence confirms what produces those exact errors, but does not yet
 establish whether the trigger is Windows PowerShell 5.1 itself, the headerless mirror response, or a
 host/network-specific transformation.
+
+The successful maintainer test on the exact reported PowerShell patch version means the issue must
+not be described as a general Windows PowerShell 5.1 or 5.1.26100.8655 incompatibility. It remains a
+provisional bug because the screenshot establishes a real failure on the reporter's host, but its
+scope and priority depend on consistent affected-host reproduction and the missing environmental
+details.
 
 This is not currently identified as a duplicate. The closest issues cover different failure modes
 involving the same PowerShell installer path.
@@ -147,5 +159,9 @@ involving the same PowerShell installer path.
   block.
 - Supplying an equivalent harmless fixture as enumerated lines produces both reported errors;
   supplying it as one raw string succeeds.
+- A maintainer ran the same command successfully on Windows PowerShell 5.1.26100.8655, exactly
+  matching the reporter's PowerShell patch version; they also succeeded on 5.1.26100.6584.
+- The reporter's locally saved, comment-removed copy succeeded, but that experiment changed both
+  the execution path and the script, so it does not distinguish between them.
 - The current final mirror response has no `Content-Type` header, while the canonical GitHub release
   asset response is `application/octet-stream`. Neither correlation confirms the cause.
