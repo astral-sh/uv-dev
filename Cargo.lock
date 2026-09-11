@@ -2992,6 +2992,7 @@ dependencies = [
  "cfg-if",
  "cfg_aliases",
  "libc",
+ "memoffset",
 ]
 
 [[package]]
@@ -5903,6 +5904,7 @@ dependencies = [
  "regex",
  "reqwest",
  "rkyv",
+ "rmp-serde",
  "rustc-hash",
  "self-replace",
  "serde",

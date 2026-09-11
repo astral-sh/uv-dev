@@ -397,6 +397,14 @@ pub struct GlobalArgs {
     /// This setting has no effect when used in the `uv pip` interface.
     #[arg(global = true, long, env = EnvVars::UV_PROJECT, value_hint = ValueHint::DirPath)]
     pub project: Option<PathBuf>,
+
+    /// Enable the experimental session-local uv daemon.
+    #[arg(global = true, long, hide = true, overrides_with = "no_daemon")]
+    pub daemon: bool,
+
+    /// Run this command without the experimental uv daemon.
+    #[arg(global = true, long, hide = true, overrides_with = "daemon")]
+    pub no_daemon: bool,
 }
 
 #[derive(Debug, Copy, Clone, clap::ValueEnum)]

@@ -4,3 +4,4 @@ The internals section provides details about uv's internal components and implem
 
 - [Resolver](./resolver.md)
 - [Workspace Metadata](./metadata.md)
+- [Experimental daemon](./daemon.md)
