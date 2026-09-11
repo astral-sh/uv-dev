@@ -119,6 +119,11 @@ path = "benches/cache_management.rs"
 harness = false
 
 [[bench]]
+name = "virtualenv_creation"
+path = "benches/virtualenv_creation.rs"
+harness = false
+
+[[bench]]
 name = "uv_pypi_types"
 path = "benches/uv_pypi_types.rs"
 harness = false
