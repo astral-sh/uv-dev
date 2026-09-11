@@ -105,7 +105,7 @@ impl IsBuildBackendError for Error {
 impl Hinted for Error {
     fn hints(&self) -> Hints<'_> {
         match self {
-            Self::MissingHeader(err) => Hints::from(err.cause.to_string()),
+            Self::MissingHeader(err) => Hints::from(err.cause.hint_message()),
             Self::Lowering(err) => err.hints(),
             Self::RequirementsResolve(_, err) | Self::RequirementsInstall(_, err) => err.hints(),
             _ => Hints::none(),
@@ -150,6 +150,7 @@ impl Error {
             Self::BuildBackend(_) => Some(Info::new(
                 "Build failures usually indicate a problem with the package or the build environment",
             )),
+            Self::MissingHeader(error) => Some(Info::new(error.cause.context_message())),
             Self::Io(_)
             | Self::Lowering(_)
             | Self::InvalidSourceDist(_)
@@ -161,7 +162,6 @@ impl Error {
             | Self::RequirementsInstall(..)
             | Self::Virtualenv(_)
             | Self::CommandFailed(..)
-            | Self::MissingHeader(_)
             | Self::BuildScriptPath(_)
             | Self::CyclicBuildDependency(_)
             | Self::UnmatchedRuntime(..) => None,
@@ -185,162 +185,129 @@ pub struct MissingHeaderCause {
     version_id: Option<String>,
 }
 
-/// Extract the package name from a version specifier string.
-/// Uses PEP 508 naming rules but more lenient for hinting purposes.
-fn extract_package_name(version_id: &str) -> &str {
-    // https://peps.python.org/pep-0508/#names
-    // ^([A-Z0-9]|[A-Z0-9][A-Z0-9._-]*[A-Z0-9])$ with re.IGNORECASE
-    // Since we're only using this for a hint, we're more lenient than what we would be doing if this was used for parsing
-    let end = version_id
-        .char_indices()
-        .take_while(|(_, char)| matches!(char, 'A'..='Z' | 'a'..='z' | '0'..='9' | '.' | '-' | '_'))
-        .last()
-        .map_or(0, |(i, c)| i + c.len_utf8());
+impl MissingHeaderCause {
+    fn display_name(&self) -> Option<String> {
+        if let Some(package_name) = &self.package_name {
+            Some(if let Some(package_version) = &self.package_version {
+                format!("{package_name}@{package_version}")
+            } else {
+                package_name.to_string()
+            })
+        } else {
+            self.version_id.clone()
+        }
+    }
 
-    if end == 0 {
-        version_id
-    } else {
-        &version_id[..end]
+    fn context_message(&self) -> String {
+        let display_name = self.display_name();
+        match &self.missing_library {
+            MissingLibrary::Header(header) => format!(
+                "The build could not find the \"{}\" header{}",
+                header.cyan(),
+                display_name.map_or_else(String::new, |name| { format!(" for `{}`", name.cyan()) }),
+            ),
+            MissingLibrary::Linker(library) => format!(
+                "The linker could not find the `{}` library{}",
+                library.cyan(),
+                display_name.map_or_else(String::new, |name| { format!(" for `{}`", name.cyan()) }),
+            ),
+            MissingLibrary::BuildDependency(package) => {
+                let subject = display_name.map_or_else(
+                    || "a package".to_owned(),
+                    |name| format!("`{}`", name.cyan()),
+                );
+                format!(
+                    "This error likely indicates that {subject} depends on `{}`, but doesn't declare it as a build dependency",
+                    package.cyan(),
+                )
+            }
+            MissingLibrary::DeprecatedModule(package, version) => format!(
+                "`{}` was removed from the standard library in Python {version}",
+                package.cyan(),
+            ),
+        }
+    }
+
+    fn hint_message(&self) -> String {
+        let display_name = self.display_name();
+        match &self.missing_library {
+            MissingLibrary::Header(header) => format!(
+                "Install a library that provides \"{}\"{}",
+                header.cyan(),
+                display_name.map_or_else(String::new, |name| { format!(" for `{}`", name.cyan()) }),
+            ),
+            MissingLibrary::Linker(library) => format!(
+                "Install a library that provides a shared library for `{}`{} (e.g., `{}`)",
+                library.cyan(),
+                display_name.map_or_else(String::new, |name| { format!(" for `{}`", name.cyan()) }),
+                format!("lib{library}-dev").cyan(),
+            ),
+            MissingLibrary::BuildDependency(package) => {
+                hint_build_dependency(self.package_name.as_ref(), package)
+            }
+            MissingLibrary::DeprecatedModule(package, _) => match &self.package_name {
+                Some(package_name) => {
+                    let example =
+                        self.package_version
+                            .as_ref()
+                            .map_or_else(String::new, |version| {
+                                format!(
+                                    " (like `{}`)",
+                                    format!("{package_name} >{version}").green()
+                                )
+                            });
+                    format!(
+                        "Consider adding a constraint{example} to avoid building a version of `{}` that depends on `{}`.",
+                        package_name.cyan(),
+                        package.cyan(),
+                    )
+                }
+                None => format!(
+                    "Consider adding a constraint to avoid building a package that depends on `{}`.",
+                    package.cyan(),
+                ),
+            },
+        }
     }
 }
 
-/// Write a hint about missing build dependencies.
-fn hint_build_dependency(
-    f: &mut std::fmt::Formatter<'_>,
-    display_name: &str,
-    package_name: &str,
-    package: &str,
-) -> std::fmt::Result {
-    let table_key = if package_name.contains('.') {
-        format!("\"{package_name}\"")
-    } else {
-        package_name.to_string()
-    };
-    write!(
-        f,
-        "This error likely indicates that `{}` depends on `{}`, but doesn't declare it as a build dependency. \
-        If `{}` is a first-party package, consider adding `{}` to its `{}`. \
-        Otherwise, either add it to your `pyproject.toml` under:\n\
-        \n\
-            [tool.uv.extra-build-dependencies]\n\
-            {} = [\"{}\"]\n\
-        \n\
-        or `{}` into the environment and re-run with `{}`.",
-        display_name.cyan(),
-        package.cyan(),
-        package_name.cyan(),
+/// Suggest a build dependency without deriving configuration keys from a display identifier.
+fn hint_build_dependency(package_name: Option<&PackageName>, package: &str) -> String {
+    let first_party = package_name.map_or_else(
+        || "the package".to_owned(),
+        |name| format!("`{}`", name.cyan()),
+    );
+    let mut message = format!(
+        "If {first_party} is a first-party package, add `{}` to its `{}`.",
         package.cyan(),
         "build-system.requires".green(),
-        table_key.cyan(),
-        package.cyan(),
-        format!("uv pip install {package}").green(),
-        "--no-build-isolation".green(),
-    )
+    );
+    if let Some(package_name) = package_name {
+        message.push_str(&format!(
+            " Otherwise, either add it to your `pyproject.toml` under:\n\
+            \n\
+                [tool.uv.extra-build-dependencies]\n\
+                {} = [\"{}\"]\n\
+            \n\
+            or install `{}` into the environment used by the original command and re-run that command with `{}`.",
+            package_name.cyan(),
+            package.cyan(),
+            package.cyan(),
+            "--no-build-isolation".green(),
+        ));
+    } else {
+        message.push_str(&format!(
+            " Otherwise, install `{}` into the environment used by the original command and re-run that command with `{}`.",
+            package.cyan(),
+            "--no-build-isolation".green(),
+        ));
+    }
+    message
 }
 
 impl Display for MissingHeaderCause {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match &self.missing_library {
-            MissingLibrary::Header(header) => {
-                if let (Some(package_name), Some(package_version)) =
-                    (&self.package_name, &self.package_version)
-                {
-                    write!(
-                        f,
-                        "This error likely indicates that you need to install a library that provides \"{}\" for `{}`",
-                        header.cyan(),
-                        format!("{package_name}@{package_version}").cyan(),
-                    )
-                } else if let Some(version_id) = &self.version_id {
-                    write!(
-                        f,
-                        "This error likely indicates that you need to install a library that provides \"{}\" for `{}`",
-                        header.cyan(),
-                        version_id.cyan(),
-                    )
-                } else {
-                    write!(
-                        f,
-                        "This error likely indicates that you need to install a library that provides \"{}\"",
-                        header.cyan(),
-                    )
-                }
-            }
-            MissingLibrary::Linker(library) => {
-                if let (Some(package_name), Some(package_version)) =
-                    (&self.package_name, &self.package_version)
-                {
-                    write!(
-                        f,
-                        "This error likely indicates that you need to install the library that provides a shared library for `{}` for `{}` (e.g., `{}`)",
-                        library.cyan(),
-                        format!("{package_name}@{package_version}").cyan(),
-                        format!("lib{library}-dev").cyan(),
-                    )
-                } else if let Some(version_id) = &self.version_id {
-                    write!(
-                        f,
-                        "This error likely indicates that you need to install the library that provides a shared library for `{}` for `{}` (e.g., `{}`)",
-                        library.cyan(),
-                        version_id.cyan(),
-                        format!("lib{library}-dev").cyan(),
-                    )
-                } else {
-                    write!(
-                        f,
-                        "This error likely indicates that you need to install the library that provides a shared library for `{}` (e.g., `{}`)",
-                        library.cyan(),
-                        format!("lib{library}-dev").cyan(),
-                    )
-                }
-            }
-            MissingLibrary::BuildDependency(package) => {
-                if let (Some(package_name), Some(package_version)) =
-                    (&self.package_name, &self.package_version)
-                {
-                    hint_build_dependency(
-                        f,
-                        &format!("{package_name}@{package_version}"),
-                        package_name.as_str(),
-                        package,
-                    )
-                } else if let Some(version_id) = &self.version_id {
-                    let package_name = extract_package_name(version_id);
-                    hint_build_dependency(f, package_name, package_name, package)
-                } else {
-                    write!(
-                        f,
-                        "This error likely indicates that a package depends on `{}`, but doesn't declare it as a build dependency. If the package is a first-party package, consider adding `{}` to its `{}`. Otherwise, `{}` into the environment and re-run with `{}`.",
-                        package.cyan(),
-                        package.cyan(),
-                        "build-system.requires".green(),
-                        format!("uv pip install {package}").green(),
-                        "--no-build-isolation".green(),
-                    )
-                }
-            }
-            MissingLibrary::DeprecatedModule(package, version) => {
-                if let (Some(package_name), Some(package_version)) =
-                    (&self.package_name, &self.package_version)
-                {
-                    write!(
-                        f,
-                        "`{}` was removed from the standard library in Python {version}. Consider adding a constraint (like `{}`) to avoid building a version of `{}` that depends on `{}`.",
-                        package.cyan(),
-                        format!("{package_name} >{package_version}").green(),
-                        package_name.cyan(),
-                        package.cyan(),
-                    )
-                } else {
-                    write!(
-                        f,
-                        "`{}` was removed from the standard library in Python {version}. Consider adding a constraint to avoid building a package that depends on `{}`.",
-                        package.cyan(),
-                        package.cyan(),
-                    )
-                }
-            }
-        }
+        write!(f, "{}. {}", self.context_message(), self.hint_message())
     }
 }
 
@@ -525,6 +492,7 @@ mod test {
     use std::process::ExitStatus;
     use std::str::FromStr;
     use uv_configuration::BuildOutput;
+    use uv_distribution_types::IsBuildBackendError;
     use uv_errors::{
         Diagnostic, ErrorFormat, ErrorOptions, ErrorWithHints, Hinted, Hints,
         write_error_chain_with_options,
@@ -581,6 +549,175 @@ mod test {
           {
             "message": "Build failures usually indicate a problem with the package or the build environment"
           }
+        ]
+        "#);
+        Ok(())
+    }
+
+    #[test]
+    fn missing_build_context_is_separate_from_advice() -> Result<(), Box<dyn std::error::Error>> {
+        let name = PackageName::from_str("Demo.Pkg")?;
+        let version = Version::new([1, 2]);
+        let cases = [
+            (
+                "demo.c:1:1: fatal error: demo.h: No such file or directory",
+                Some(&name),
+                Some(&version),
+                None,
+            ),
+            (
+                "/usr/bin/ld: cannot find -ldemo: No such file or directory",
+                None,
+                None,
+                Some("demo-pkg-1.2"),
+            ),
+            (
+                "ModuleNotFoundError: No module named 'setuptools'",
+                Some(&name),
+                None,
+                Some("different-display-name-1.2"),
+            ),
+            (
+                "error: invalid command 'bdist_wheel'",
+                None,
+                None,
+                Some("demo-pkg-1.2"),
+            ),
+            (
+                "ModuleNotFoundError: No module named 'distutils'",
+                Some(&name),
+                Some(&version),
+                None,
+            ),
+        ];
+        let mut reports = Vec::new();
+        for (stderr, name, version, version_id) in cases {
+            let output = PythonRunnerOutput {
+                status: ExitStatus::default(),
+                stdout: Vec::new(),
+                stderr: vec![stderr.to_owned()],
+            };
+            let error = Error::from_command_output(
+                "Failed building wheel".to_owned(),
+                &output,
+                BuildOutput::Quiet,
+                name,
+                version,
+                version_id,
+            );
+            assert!(error.is_build_backend_error());
+            assert!(error.is_user_failure());
+            let Error::MissingHeader(ref missing) = error else {
+                panic!("expected a typed missing-build-requirement error");
+            };
+            let fallback = anstream::adapter::strip_str(&missing.cause.to_string()).to_string();
+            let mut output = String::new();
+            write_error_chain_with_options(
+                &error,
+                &Hints::none(),
+                ErrorOptions::default()
+                    .with_format(ErrorFormat::Json)
+                    .with_diagnostic(|error| {
+                        let error = error.downcast_ref::<Error>()?;
+                        Some(
+                            Diagnostic::default()
+                                .with_info(error.own_info()?)
+                                .with_hints(error.own_hints()),
+                        )
+                    })
+                    .with_stream(&mut output),
+            )?;
+            let report: serde_json::Value = serde_json::from_str(&output)?;
+            reports.push((fallback, report["errors"][0].clone()));
+        }
+
+        insta::assert_json_snapshot!(reports, @r#"
+        [
+          [
+            "The build could not find the \"demo.h\" header for `demo-pkg@1.2`. Install a library that provides \"demo.h\" for `demo-pkg@1.2`",
+            {
+              "hints": [
+                {
+                  "message": "Install a library that provides \"demo.h\" for `demo-pkg@1.2`",
+                  "ordering": "last"
+                }
+              ],
+              "info": [
+                {
+                  "message": "The build could not find the \"demo.h\" header for `demo-pkg@1.2`"
+                }
+              ],
+              "message": "The build backend returned an error"
+            }
+          ],
+          [
+            "The linker could not find the `demo` library for `demo-pkg-1.2`. Install a library that provides a shared library for `demo` for `demo-pkg-1.2` (e.g., `libdemo-dev`)",
+            {
+              "hints": [
+                {
+                  "message": "Install a library that provides a shared library for `demo` for `demo-pkg-1.2` (e.g., `libdemo-dev`)",
+                  "ordering": "last"
+                }
+              ],
+              "info": [
+                {
+                  "message": "The linker could not find the `demo` library for `demo-pkg-1.2`"
+                }
+              ],
+              "message": "The build backend returned an error"
+            }
+          ],
+          [
+            "This error likely indicates that `demo-pkg` depends on `setuptools`, but doesn't declare it as a build dependency. If `demo-pkg` is a first-party package, add `setuptools` to its `build-system.requires`. Otherwise, either add it to your `pyproject.toml` under:\n\n[tool.uv.extra-build-dependencies]\ndemo-pkg = [\"setuptools\"]\n\nor install `setuptools` into the environment used by the original command and re-run that command with `--no-build-isolation`.",
+            {
+              "hints": [
+                {
+                  "message": "If `demo-pkg` is a first-party package, add `setuptools` to its `build-system.requires`. Otherwise, either add it to your `pyproject.toml` under:\n\n[tool.uv.extra-build-dependencies]\ndemo-pkg = [\"setuptools\"]\n\nor install `setuptools` into the environment used by the original command and re-run that command with `--no-build-isolation`.",
+                  "ordering": "last"
+                }
+              ],
+              "info": [
+                {
+                  "message": "This error likely indicates that `demo-pkg` depends on `setuptools`, but doesn't declare it as a build dependency"
+                }
+              ],
+              "message": "The build backend returned an error"
+            }
+          ],
+          [
+            "This error likely indicates that `demo-pkg-1.2` depends on `wheel`, but doesn't declare it as a build dependency. If the package is a first-party package, add `wheel` to its `build-system.requires`. Otherwise, install `wheel` into the environment used by the original command and re-run that command with `--no-build-isolation`.",
+            {
+              "hints": [
+                {
+                  "message": "If the package is a first-party package, add `wheel` to its `build-system.requires`. Otherwise, install `wheel` into the environment used by the original command and re-run that command with `--no-build-isolation`.",
+                  "ordering": "last"
+                }
+              ],
+              "info": [
+                {
+                  "message": "This error likely indicates that `demo-pkg-1.2` depends on `wheel`, but doesn't declare it as a build dependency"
+                }
+              ],
+              "message": "The build backend returned an error"
+            }
+          ],
+          [
+            "`distutils` was removed from the standard library in Python 3.12. Consider adding a constraint (like `demo-pkg >1.2`) to avoid building a version of `demo-pkg` that depends on `distutils`.",
+            {
+              "hints": [
+                {
+                  "message": "Consider adding a constraint (like `demo-pkg >1.2`) to avoid building a version of `demo-pkg` that depends on `distutils`.",
+                  "ordering": "last"
+                }
+              ],
+              "info": [
+                {
+                  "message": "`distutils` was removed from the standard library in Python 3.12"
+                }
+              ],
+              "message": "The build backend returned an error"
+            }
+          ]
         ]
         "#);
         Ok(())
@@ -644,7 +781,7 @@ mod test {
         compilation terminated.
         error: command '/usr/bin/gcc' failed with exit code 1
 
-        hint: This error likely indicates that you need to install a library that provides "graphviz/cgraph.h" for `pygraphviz-1.11`
+        hint: Install a library that provides "graphviz/cgraph.h" for `pygraphviz-1.11`
         "#);
     }
 
@@ -686,7 +823,7 @@ mod test {
         collect2: error: ld returned 1 exit status
         error: command '/usr/bin/x86_64-linux-gnu-gcc' failed with exit code 1
 
-        hint: This error likely indicates that you need to install the library that provides a shared library for `ncurses` for `pygraphviz-1.11` (e.g., `libncurses-dev`)
+        hint: Install a library that provides a shared library for `ncurses` for `pygraphviz-1.11` (e.g., `libncurses-dev`)
         ");
     }
 
@@ -730,12 +867,7 @@ mod test {
 
         error: invalid command 'bdist_wheel'
 
-        hint: This error likely indicates that `pygraphviz-1.11` depends on `wheel`, but doesn't declare it as a build dependency. If `pygraphviz-1.11` is a first-party package, consider adding `wheel` to its `build-system.requires`. Otherwise, either add it to your `pyproject.toml` under:
-
-        [tool.uv.extra-build-dependencies]
-        "pygraphviz-1.11" = ["wheel"]
-
-        or `uv pip install wheel` into the environment and re-run with `--no-build-isolation`.
+        hint: If the package is a first-party package, add `wheel` to its `build-system.requires`. Otherwise, install `wheel` into the environment used by the original command and re-run that command with `--no-build-isolation`.
         "#);
     }
 
@@ -772,7 +904,7 @@ mod test {
         import distutils.core
         ModuleNotFoundError: No module named 'distutils'
 
-        hint: `distutils` was removed from the standard library in Python 3.12. Consider adding a constraint (like `pygraphviz >1.11`) to avoid building a version of `pygraphviz` that depends on `distutils`.
+        hint: Consider adding a constraint (like `pygraphviz >1.11`) to avoid building a version of `pygraphviz` that depends on `distutils`.
         ");
     }
 }
