@@ -909,9 +909,8 @@ fn python_find_script_python_not_found() {
     uv_snapshot!(context.filters(), context.python_find().arg("--script").arg("foo.py"), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    No interpreter found in [PYTHON SOURCES]
-
-    hint: A managed Python download is available, but Python downloads are set to 'never'
+    error: No interpreter found in [PYTHON SOURCES]
+      info: A managed Python download is available, but Python downloads are set to 'never'
     ");
 }
 

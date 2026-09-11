@@ -82,7 +82,7 @@ pub(super) fn metadata_for_error<'a>(error: &'a (dyn StdError + 'static)) -> Err
         uv_distribution::MetadataError => ErrorMetadata::hinted,
         uv_dispatch::BuildDispatchError => ErrorMetadata::hinted,
         uv_types::AnyErrorBuild => ErrorMetadata::hinted,
-        uv_python::Error => ErrorMetadata::hinted,
+        uv_python::Error => |error| ErrorMetadata::hinted(error).with_info(error.own_info()),
         uv_python::DiscoveryError => ErrorMetadata::hinted,
         uv_python::InterpreterError => ErrorMetadata::hinted,
         uv_python::downloads::Error => ErrorMetadata::hinted,
@@ -107,7 +107,9 @@ pub(super) fn metadata_for_error<'a>(error: &'a (dyn StdError + 'static)) -> Err
         InvalidUpgradeRequestError => ErrorMetadata::hinted,
         uv_build_backend::Error => ErrorMetadata::hinted,
         uv_globfilter::PortableGlobError => ErrorMetadata::hinted,
-        uv_installer::IncompatibleWheelError => ErrorMetadata::hinted,
+        uv_installer::IncompatibleWheelError => |error| {
+            ErrorMetadata::hinted(error).with_info(error.own_info())
+        },
         uv_python::BrokenLink => ErrorMetadata::hinted,
         uv_resolver::PylockTomlError => ErrorMetadata::hinted,
         uv_resolver::PylockTomlErrorKind => ErrorMetadata::hinted,

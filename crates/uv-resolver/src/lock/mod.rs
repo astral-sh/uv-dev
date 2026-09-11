@@ -40,6 +40,7 @@ use uv_distribution_types::{
     RequiresPython, ResolvedDist, SimplifiedMarkerTree, StaticMetadata, ToUrlError, UrlString,
     VersionId,
 };
+use uv_errors::{Hint, Info};
 use uv_fs::{PortablePath, PortablePathBuf, Simplified, normalize_path, try_relative_to_if};
 use uv_git::{RepositoryReference, ResolvedRepositoryReference};
 use uv_git_types::{GitLfs, GitOid, GitReference, GitUrl, GitUrlParseError};
@@ -6936,11 +6937,11 @@ impl std::error::Error for LockError {
 
 impl uv_errors::Hinted for LockError {
     fn hints(&self) -> uv_errors::Hints<'_> {
-        if let Some(hint) = &self.hint {
-            uv_errors::Hints::from(hint.to_string())
-        } else {
-            uv_errors::Hints::none()
-        }
+        self.hint
+            .as_ref()
+            .and_then(WheelTagHint::actionable_hint)
+            .into_iter()
+            .collect()
     }
 
     fn transparent_source(&self) -> Option<&(dyn Error + 'static)> {
@@ -7004,6 +7005,11 @@ impl std::fmt::Display for LockError {
 }
 
 impl LockError {
+    /// Return the wheel-tag mismatch owned by this lockfile failure.
+    pub fn own_info(&self) -> Option<Info<'static>> {
+        self.hint.as_ref().map(WheelTagHint::diagnostic_info)
+    }
+
     /// Returns true if the [`LockError`] is a resolver error.
     pub fn is_resolution(&self) -> bool {
         matches!(&*self.kind, LockErrorKind::Resolution { .. })
@@ -7067,6 +7073,61 @@ enum WheelTagHint {
 }
 
 impl WheelTagHint {
+    fn diagnostic_info(&self) -> Info<'static> {
+        match self {
+            Self::PlatformTags {
+                package,
+                version,
+                tags,
+                best: Some(best),
+                ..
+            } => {
+                let suffix = if tags.len() == 1 { "" } else { "s" };
+                let best = if let Some(pretty) = best.pretty() {
+                    format!("{} (`{}`)", pretty.cyan(), best.cyan())
+                } else {
+                    format!("`{}`", best.cyan())
+                };
+                let package = if let Some(version) = version {
+                    format!("`{}` ({})", package.cyan(), format!("v{version}").cyan())
+                } else {
+                    format!("`{}`", package.cyan())
+                };
+                Info::new(format!(
+                    "You're on {best}, but {package} only has wheels for the following platform{suffix}: {}",
+                    tags.iter()
+                        .map(|tag| format!("`{}`", tag.cyan()))
+                        .join(", "),
+                ))
+            }
+            Self::LanguageTags { .. }
+            | Self::AbiTags { .. }
+            | Self::PlatformTags { best: None, .. } => Info::new(self.to_string()),
+        }
+    }
+
+    fn actionable_hint(&self) -> Option<Hint<'static>> {
+        match self {
+            Self::PlatformTags {
+                package,
+                best: Some(_),
+                markers,
+                ..
+            } => {
+                let marker = Self::suggest_environment_marker(markers);
+                Some(Hint::new(format!(
+                    "Add {} to `{}` to ensure uv resolves `{}` to a version with compatible wheels",
+                    format!("\"{marker}\"").cyan(),
+                    "tool.uv.required-environments".green(),
+                    package.cyan(),
+                )))
+            }
+            Self::LanguageTags { .. }
+            | Self::AbiTags { .. }
+            | Self::PlatformTags { best: None, .. } => None,
+        }
+    }
+
     /// Generate a [`WheelTagHint`] from the given (incompatible) wheels.
     fn from_wheels(
         name: &PackageName,
@@ -8117,6 +8178,7 @@ pub(crate) fn is_wheel_unreachable(
 #[cfg(test)]
 mod tests {
     use uv_distribution_types::HashCollection;
+    use uv_errors::{ErrorOptions, Hinted, Hints, write_error_chain_with_options};
     use uv_pep440::VersionSpecifiers;
     use uv_pep508::MarkerEnvironmentBuilder;
     use uv_warnings::anstream;
@@ -8147,6 +8209,106 @@ mod tests {
             sys_platform: "darwin",
         })
         .expect("valid marker environment")
+    }
+
+    fn incompatible_wheel_error(hint: WheelTagHint) -> LockError {
+        LockError {
+            kind: Box::new(LockErrorKind::IncompatibleWheelOnly {
+                id: PackageId {
+                    name: "example".parse().expect("valid package name"),
+                    version: Some(Version::new([1, 0])),
+                    source: Source::Path(PathBuf::from("example.whl").into_boxed_path()),
+                },
+            }),
+            hint: Some(hint),
+        }
+    }
+
+    fn format_lock_error(error: &LockError) -> String {
+        let mut output = String::new();
+        write_error_chain_with_options(
+            error,
+            &Hints::none(),
+            ErrorOptions::default()
+                .with_width_override(1000)
+                .with_diagnostic(crate::diagnostic_for_error)
+                .with_stream(&mut output),
+        )
+        .expect("writing to a string cannot fail");
+        anstream::adapter::strip_str(&output).to_string()
+    }
+
+    #[test]
+    fn wheel_tag_diagnostic_separates_platform_action() {
+        let hint = WheelTagHint::PlatformTags {
+            package: "example".parse().expect("valid package name"),
+            version: Some(Version::new([1, 0])),
+            tags: BTreeSet::from(["manylinux_2_28_x86_64".parse().expect("valid platform tag")]),
+            best: Some("macosx_14_0_arm64".parse().expect("valid platform tag")),
+            markers: marker_environment(),
+        };
+        let error = incompatible_wheel_error(hint.clone());
+        assert!(error.own_info().is_some());
+        assert_eq!(error.hints().iter().count(), 1);
+
+        insta::assert_snapshot!(format_lock_error(&error), @r#"
+        error: Distribution `example==1.0 @ path+example.whl` can't be installed because the binary distribution is incompatible with the current platform
+          info: You're on macOS (`macosx_14_0_arm64`), but `example` (v1.0) only has wheels for the following platform: `manylinux_2_28_x86_64`
+
+        hint: Add "sys_platform == 'darwin' and platform_machine == 'arm64'" to `tool.uv.required-environments` to ensure uv resolves `example` to a version with compatible wheels
+        "#);
+        assert_stripped_snapshot!(hint, @r#"You're on macOS (`macosx_14_0_arm64`), but `example` (v1.0) only has wheels for the following platform: `manylinux_2_28_x86_64`; consider adding "sys_platform == 'darwin' and platform_machine == 'arm64'" to `tool.uv.required-environments` to ensure uv resolves to a version with compatible wheels"#);
+    }
+
+    #[test]
+    fn wheel_tag_diagnostic_has_no_action_without_a_known_platform() {
+        let package: PackageName = "example".parse().expect("valid package name");
+        let version = Some(Version::new([1, 0]));
+        let errors = [
+            WheelTagHint::LanguageTags {
+                package: package.clone(),
+                version: version.clone(),
+                tags: BTreeSet::from(["cp311".parse().expect("valid language tag")]),
+                best: Some("cp312".parse().expect("valid language tag")),
+            },
+            WheelTagHint::AbiTags {
+                package: package.clone(),
+                version: version.clone(),
+                tags: BTreeSet::from(["cp311".parse().expect("valid ABI tag")]),
+                best: Some("cp312".parse().expect("valid ABI tag")),
+            },
+            WheelTagHint::PlatformTags {
+                package,
+                version,
+                tags: BTreeSet::from(["manylinux_2_28_x86_64"
+                    .parse()
+                    .expect("valid platform tag")]),
+                best: None,
+                markers: marker_environment(),
+            },
+        ]
+        .map(incompatible_wheel_error);
+
+        for error in &errors {
+            assert!(error.hints().is_empty());
+            assert!(error.own_info().is_some());
+        }
+
+        let output = errors
+            .iter()
+            .map(format_lock_error)
+            .collect::<Vec<_>>()
+            .join("\n");
+        insta::assert_snapshot!(output, @"
+        error: Distribution `example==1.0 @ path+example.whl` can't be installed because the binary distribution is incompatible with the current platform
+          info: You're using CPython 3.12 (`cp312`), but `example` (v1.0) only has wheels with the following Python implementation tag: `cp311`
+
+        error: Distribution `example==1.0 @ path+example.whl` can't be installed because the binary distribution is incompatible with the current platform
+          info: You're using CPython 3.12 (`cp312`), but `example` (v1.0) only has wheels with the following Python ABI tag: `cp311`
+
+        error: Distribution `example==1.0 @ path+example.whl` can't be installed because the binary distribution is incompatible with the current platform
+          info: Wheels are available for `example` (v1.0) on the following platform: `manylinux_2_28_x86_64`
+        ");
     }
 
     #[test]

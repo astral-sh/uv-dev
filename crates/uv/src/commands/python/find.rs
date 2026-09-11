@@ -5,7 +5,6 @@ use std::path::Path;
 use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
 use uv_configuration::{ActiveEnvironment, DependencyGroupsWithDefaults};
-use uv_errors::ErrorWithHints;
 use uv_fs::Simplified;
 use uv_python::{
     ConfigDiscovery, EnvironmentPreference, PythonDownloads, PythonInstallation, PythonPreference,
@@ -164,11 +163,7 @@ pub(crate) async fn find_script(
     .await
     {
         Err(error) => {
-            writeln!(
-                printer.stderr(),
-                "{}",
-                ErrorWithHints::new(&error, uv_errors::Hinted::hints(&error))
-            )?;
+            crate::commands::diagnostics::write_error_chain(&error.into(), printer)?;
             return Ok(ExitStatus::Failure);
         }
         Ok(ScriptInterpreter::Interpreter(interpreter)) => interpreter,

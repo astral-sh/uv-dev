@@ -18,6 +18,7 @@ use uv_distribution_types::{
     ExtraBuildVariables, Hashed, IndexLocations, InstalledDist, Name, PackageConfigSettings,
     RequirementSource, Resolution, ResolvedDist, SourceDist,
 };
+use uv_errors::{Hinted, Info};
 use uv_fs::Simplified;
 use uv_normalize::PackageName;
 use uv_platform_tags::{AbiTag, IncompatibleTag, LanguageTag, PlatformTag, TagCompatibility, Tags};
@@ -34,7 +35,7 @@ use crate::{InstallationStrategy, SitePackages};
 pub struct IncompatibleWheelError {
     /// The dependency source (URL or path, with location).
     kind: IncompatibleWheelKind,
-    /// Optional compatibility hint generated from wheel tags.
+    /// Optional compatibility context generated from wheel tags.
     compatibility_hint: Option<IncompatibleWheelHint>,
 }
 
@@ -53,7 +54,7 @@ impl fmt::Display for IncompatibleWheelKind {
     }
 }
 
-/// A hint describing why a wheel is incompatible.
+/// Details explaining why a wheel is incompatible.
 #[derive(Debug)]
 enum IncompatibleWheelHint {
     /// The wheel targets a different Python version than the current interpreter.
@@ -221,13 +222,14 @@ impl fmt::Display for IncompatibleWheelError {
 
 impl std::error::Error for IncompatibleWheelError {}
 
-impl uv_errors::Hinted for IncompatibleWheelError {
-    fn hints(&self) -> uv_errors::Hints<'_> {
-        if let Some(hint) = &self.compatibility_hint {
-            uv_errors::Hints::from(hint.to_string())
-        } else {
-            uv_errors::Hints::none()
-        }
+impl Hinted for IncompatibleWheelError {}
+
+impl IncompatibleWheelError {
+    /// Return the compatibility mismatch for this wheel.
+    pub fn own_info(&self) -> Option<Info<'static>> {
+        self.compatibility_hint
+            .as_ref()
+            .map(|hint| Info::new(hint.to_string()))
     }
 }
 
@@ -910,7 +912,38 @@ impl Plan {
 mod tests {
     use super::*;
     use std::str::FromStr;
+    use uv_errors::{Diagnostic, ErrorOptions, Hints, write_error_chain_with_options};
     use uv_platform_tags::{Arch, Os, Platform, TagsOptions};
+
+    #[test]
+    fn incompatible_wheel_context_is_not_advice() {
+        let error = IncompatibleWheelError {
+            kind: IncompatibleWheelKind::Path(PathBuf::from("example.whl")),
+            compatibility_hint: Some(IncompatibleWheelHint::Python {
+                wheel_tags: vec!["cp311".parse().expect("valid language tag")],
+                current: Some("cp312".parse().expect("valid language tag")),
+            }),
+        };
+        assert!(error.hints().is_empty());
+
+        let mut output = String::new();
+        write_error_chain_with_options(
+            &error,
+            &Hints::none(),
+            ErrorOptions::default()
+                .with_width_override(1000)
+                .with_diagnostic(|error| {
+                    let error = error.downcast_ref::<IncompatibleWheelError>()?;
+                    Some(Diagnostic::default().with_info(error.own_info()?))
+                })
+                .with_stream(&mut output),
+        )
+        .expect("writing to a string cannot fail");
+        insta::assert_snapshot!(anstream::adapter::strip_str(&output), @"
+        error: A path (example.whl) dependency is incompatible with the current platform
+          info: The wheel is compatible with CPython 3.11 (`cp311`), but you're using CPython 3.12 (`cp312`)
+        ");
+    }
 
     #[test]
     fn test_abi3_on_free_threaded_python_hint() {
