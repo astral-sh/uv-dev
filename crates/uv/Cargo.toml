@@ -94,6 +94,7 @@ itertools = { workspace = true }
 owo-colors = { workspace = true }
 petgraph = { workspace = true }
 rkyv = { workspace = true }
+rmp-serde = { workspace = true }
 rustc-hash = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -152,7 +153,7 @@ tokio-util = { workspace = true }
 wiremock = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
-nix = { workspace = true }
+nix = { workspace = true, features = ["fs", "poll", "process", "socket", "uio", "user"] }
 uv-unix = { workspace = true }
 
 [features]

@@ -4,6 +4,9 @@ use uv_test::pypi_proxy;
 
 mod auth;
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod daemon;
+
 #[cfg(all(feature = "test-pypi", feature = "test-universal"))]
 mod branching_urls;
 

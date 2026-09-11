@@ -3,7 +3,7 @@
 use std::borrow::Cow;
 use std::ffi::OsString;
 use std::fmt::Write;
-use std::io::stdout;
+use std::io::{Write as _, stdout};
 #[cfg(feature = "self-update")]
 use std::ops::Bound;
 use std::path::Path;
@@ -62,6 +62,7 @@ use crate::settings::{
 
 pub(crate) mod child;
 pub mod commands;
+mod daemon;
 mod invocation;
 use invocation::run_with_args;
 #[cfg(not(feature = "self-update"))]
@@ -3023,7 +3024,15 @@ where
     I: IntoIterator<Item = T>,
     T: Into<OsString> + Clone,
 {
-    let args = args.into_iter().map(Into::into).collect::<Vec<_>>();
+    let args = args.into_iter().map(Into::into).collect();
+    let args = match daemon::bootstrap(args) {
+        Ok(daemon::Bootstrap::Continue(args)) => args,
+        Ok(daemon::Bootstrap::Exit(code)) => return code,
+        Err(error) => {
+            let _ = writeln!(std::io::stderr(), "error: {error:#}");
+            return ExitCode::from(2);
+        }
+    };
     #[cfg(windows)]
     uv_windows::install_unhandled_exception_handler();
 
@@ -3047,6 +3056,15 @@ where
             err.exit()
         }
     };
+
+    match daemon::dispatch(&args, &cli) {
+        Ok(Some(code)) => return code,
+        Ok(None) => {}
+        Err(error) => {
+            let _ = writeln!(std::io::stderr(), "error: {error:#}");
+            return ExitCode::from(2);
+        }
+    }
 
     // Configure a printer for failures that escape command execution. The resolved `no_progress`
     // setting can differ due to environment variables, but it does not affect important stderr.
