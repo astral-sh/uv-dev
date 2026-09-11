@@ -59,6 +59,7 @@ fn diagnostic_for_error<'a>(error: &'a (dyn Error + 'static)) -> Option<Diagnost
         return diagnostic_for_error(inner.as_ref());
     }
     uv_publish::diagnostic_for_error(error)
+        .or_else(|| uv_requirements_txt::diagnostic_for_error(error))
 }
 
 /// Walk an error chain and collect hint strings from all known error types.

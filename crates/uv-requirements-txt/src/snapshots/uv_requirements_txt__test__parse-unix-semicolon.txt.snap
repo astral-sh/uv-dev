@@ -19,4 +19,11 @@ RequirementsTxtFileError {
         start: 50,
         end: 107,
     },
+    source_file: Some(
+        SourceFile {
+            name: "test-data/requirements-txt/semicolon.txt",
+            len: 108,
+            line_start: 1,
+        },
+    ),
 }

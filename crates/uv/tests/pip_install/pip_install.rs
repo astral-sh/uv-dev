@@ -200,6 +200,110 @@ fn empty_requirements_txt() -> Result<()> {
     Ok(())
 }
 
+/// Keep the file and include locations when an invalid requirement comes from nested files.
+#[test]
+fn invalid_requirements_txt_nested_includes() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str(indoc! {"
+        --index-url https://user:password@example.com/simple
+        -r sub/requirements.in
+    "})?;
+    context
+        .temp_dir
+        .child("sub/requirements.in")
+        .write_str(indoc! {"
+            # Dépendances
+            -c constraints.txt
+        "})?;
+    context
+        .temp_dir
+        .child("sub/constraints.txt")
+        .write_str(indoc! {r"
+            # café
+            flask==1.0.x \
+                --hash=sha256:abc
+        "})?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--offline")
+        .arg("-r")
+        .arg("requirements.txt"), @r"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to parse included requirements file
+      info: The file was included here
+       --> requirements.txt:2:1
+        |
+      2 | -r sub/requirements.in
+        | ---------------------- included here
+      cause: Failed to parse included requirements file
+      info: The file was included here
+       --> sub/requirements.in:2:1
+        |
+      2 | -c constraints.txt
+        | ------------------ included here
+      cause: Couldn't parse requirement
+      cause: after parsing `1.0`, found `.x`, which is not part of a valid version
+       --> sub/constraints.txt:2:6
+        |
+      2 | flask==1.0.x \
+        |      ^^^^^^^ invalid requirement
+    ");
+
+    Ok(())
+}
+
+/// A source window must not expose a credentialed entry separated by a bare carriage return.
+#[test]
+fn invalid_requirements_txt_with_carriage_return_credentials() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str("--index-url https://user:password@example.com/simple\rflask==1.0.x\r")?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--offline")
+        .arg("-r")
+        .arg("requirements.txt"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Couldn't parse requirement in `requirements.txt` at position 53
+      cause: after parsing `1.0`, found `.x`, which is not part of a valid version
+             flask==1.0.x
+                  ^^^^^^^
+    ");
+
+    Ok(())
+}
+
+/// Use the decoded stdin contents instead of attempting to read the input a second time.
+#[test]
+fn invalid_requirements_txt_from_stdin() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let requirements_txt = context.temp_dir.child("requirements.txt");
+    requirements_txt.write_str("# café\nflask==1.0.x\n")?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("-r")
+        .arg("-")
+        .stdin(File::open(requirements_txt.path())?.into_file()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Couldn't parse requirement
+      cause: after parsing `1.0`, found `.x`, which is not part of a valid version
+       --> <stdin>:2:6
+        |
+      2 | flask==1.0.x
+        |      ^^^^^^^ invalid requirement
+    ");
+
+    Ok(())
+}
+
 /// Compile only distributions installed by the current operation.
 #[test]
 fn compile_bytecode_for_installed_distributions() -> Result<()> {
@@ -1136,6 +1240,58 @@ async fn install_remote_requirements_txt() -> Result<()> {
     );
 
     context.assert_command("import flask").success();
+
+    Ok(())
+}
+
+/// Display a remote source location without revealing the requirements URL's credentials.
+#[tokio::test]
+async fn invalid_remote_requirements_txt() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/requirements.txt"))
+        .and(basic_auth("user", "password"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("# café\nflask==1.0.x\n"))
+        .mount(&server)
+        .await;
+
+    let mut requirements_url = Url::parse(&format!("{}/requirements.txt", server.uri()))?;
+    let _ = requirements_url.set_username("user");
+    let _ = requirements_url.set_password(Some("password"));
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("-r")
+        .arg(requirements_url.as_str()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Couldn't parse requirement
+      cause: after parsing `1.0`, found `.x`, which is not part of a valid version
+       --> http://user:****@[LOCALHOST]/requirements.txt:2:6
+        |
+      2 | flask==1.0.x
+        |      ^^^^^^^ invalid requirement
+    ");
+
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str(&format!("-r {requirements_url}\n"))?;
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("-r")
+        .arg("requirements.txt"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to parse included requirements file
+      info: The file was included here
+       --> requirements.txt:1:1
+      cause: Couldn't parse requirement
+      cause: after parsing `1.0`, found `.x`, which is not part of a valid version
+       --> http://user:****@[LOCALHOST]/requirements.txt:2:6
+        |
+      2 | flask==1.0.x
+        |      ^^^^^^^ invalid requirement
+    ");
 
     Ok(())
 }
@@ -2328,7 +2484,11 @@ fn invalid_editable_no_url() -> Result<()> {
         .arg("requirements.txt"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Unsupported editable requirement in `requirements.txt` at line 1: `black==0.1.0`
+    error: Unsupported editable requirement
+       --> requirements.txt:1:1
+        |
+      1 | -e black==0.1.0
+        | ^^^^^^^^^^^^^^^ not editable
       cause: Registry requirements cannot be editable
 
     hint: Editable requirements must refer to a local directory
@@ -6571,6 +6731,31 @@ fn install_utf16le_requirements() -> Result<()> {
      + tomli==2.0.1
     "
     );
+    Ok(())
+}
+
+/// Source spans use decoded UTF-8 coordinates, not offsets in the UTF-16 input bytes.
+#[test]
+fn invalid_utf16le_requirements() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_binary(&utf8_to_utf16_with_bom_le("# café\r\nflask==1.0.x\r\n"))?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("-r")
+        .arg("requirements.txt"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Couldn't parse requirement
+      cause: after parsing `1.0`, found `.x`, which is not part of a valid version
+       --> requirements.txt:2:6
+        |
+      2 | flask==1.0.x
+        |      ^^^^^^^ invalid requirement
+    ");
+
     Ok(())
 }
 

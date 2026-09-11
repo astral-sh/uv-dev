@@ -16,4 +16,11 @@ RequirementsTxtFileError {
         start: 49,
         end: 68,
     },
+    source_file: Some(
+        SourceFile {
+            name: "test-data/requirements-txt/hash.txt",
+            len: 69,
+            line_start: 1,
+        },
+    ),
 }

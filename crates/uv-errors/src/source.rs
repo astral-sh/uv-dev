@@ -11,7 +11,7 @@ use annotate_snippets::{AnnotationKind, Element, Group, Level, Origin, Renderer,
 /// Ranges refer to the bytes in [`Self::text`], after any decoding or redaction performed by the
 /// producer. The renderer never reopens the file. The name should be safe to display to the user.
 #[derive(Clone)]
-struct SourceFile {
+pub struct SourceFile {
     name: Arc<str>,
     text: Arc<str>,
     line_start: usize,
@@ -19,8 +19,7 @@ struct SourceFile {
 
 impl SourceFile {
     /// Retain the display name and complete decoded contents of a source file.
-    #[cfg(test)]
-    fn new(name: impl Into<Arc<str>>, text: impl Into<Arc<str>>) -> Self {
+    pub fn new(name: impl Into<Arc<str>>, text: impl Into<Arc<str>>) -> Self {
         Self {
             name: name.into(),
             text: text.into(),
@@ -45,7 +44,7 @@ impl SourceFile {
     }
 
     /// The exact decoded text used to calculate annotation ranges.
-    fn text(&self) -> &str {
+    pub fn text(&self) -> &str {
         &self.text
     }
 
@@ -54,8 +53,7 @@ impl SourceFile {
     /// This uses the renderer's LF-delimited line boundaries, including any CR bytes. Producers
     /// can inspect the same text before deciding whether a source excerpt is safe to show. An
     /// invalid UTF-8 range returns `None`.
-    #[cfg(test)]
-    fn lines_for_span(&self, span: Range<usize>) -> Option<&str> {
+    pub fn lines_for_span(&self, span: Range<usize>) -> Option<&str> {
         self.text().get(self.line_range_for_span(span)?)
     }
 
@@ -63,7 +61,6 @@ impl SourceFile {
     ///
     /// Producers can compare this window with other retained semantic source spans before
     /// deciding whether an excerpt would expose unrelated fields.
-    #[cfg(test)]
     fn line_range_for_span(&self, span: Range<usize>) -> Option<Range<usize>> {
         let lines = SourceLines::new(self.text());
         let (first, last) = lines.annotation_lines(&span)?;
@@ -86,16 +83,15 @@ impl fmt::Debug for SourceFile {
 
 /// An annotation on a byte range in a [`SourceFile`].
 #[derive(Clone, Debug)]
-struct SourceAnnotation<'a> {
+pub struct SourceAnnotation<'a> {
     range: Range<usize>,
     label: Option<Cow<'a, str>>,
     kind: AnnotationKind,
 }
 
-#[cfg(test)]
 impl<'a> SourceAnnotation<'a> {
     /// Identify the source text responsible for the diagnostic.
-    fn primary(range: Range<usize>) -> Self {
+    pub fn primary(range: Range<usize>) -> Self {
         Self {
             range,
             label: None,
@@ -104,7 +100,7 @@ impl<'a> SourceAnnotation<'a> {
     }
 
     /// Identify related source text that helps explain the diagnostic.
-    fn secondary(range: Range<usize>) -> Self {
+    pub fn secondary(range: Range<usize>) -> Self {
         Self {
             range,
             label: None,
@@ -114,7 +110,7 @@ impl<'a> SourceAnnotation<'a> {
 
     /// Describe why the source text is highlighted.
     #[must_use]
-    fn with_label(mut self, label: impl Into<Cow<'a, str>>) -> Self {
+    pub fn with_label(mut self, label: impl Into<Cow<'a, str>>) -> Self {
         self.label = Some(label.into());
         self
     }
@@ -126,17 +122,16 @@ impl<'a> SourceAnnotation<'a> {
 /// when even the annotated lines can contain secrets. Invalid byte ranges are ignored; if no
 /// valid annotations remain, only the source name is shown.
 #[derive(Clone, Debug)]
-pub(crate) struct SourceSnippet<'a> {
+pub struct SourceSnippet<'a> {
     source: SourceFile,
     annotations: Vec<SourceAnnotation<'a>>,
     context_lines: usize,
     show_source: bool,
 }
 
-#[cfg(test)]
 impl<'a> SourceSnippet<'a> {
     /// Refer to a source without inventing a location within it.
-    fn new(source: SourceFile) -> Self {
+    pub fn new(source: SourceFile) -> Self {
         Self {
             source,
             annotations: Vec::new(),
@@ -147,12 +142,13 @@ impl<'a> SourceSnippet<'a> {
 
     /// Add a primary or secondary source annotation.
     #[must_use]
-    fn with_annotation(mut self, annotation: SourceAnnotation<'a>) -> Self {
+    pub fn with_annotation(mut self, annotation: SourceAnnotation<'a>) -> Self {
         self.annotations.push(annotation);
         self
     }
 
     /// Opt in to showing this many surrounding lines for each annotation.
+    #[cfg(test)]
     #[must_use]
     fn with_context_lines(mut self, context_lines: usize) -> Self {
         self.context_lines = context_lines;
@@ -164,7 +160,7 @@ impl<'a> SourceSnippet<'a> {
     /// The first valid primary annotation determines the location, or the first valid annotation
     /// when there is no primary annotation. Invalid ranges still fall back to the source name.
     #[must_use]
-    fn without_source_text(mut self) -> Self {
+    pub fn without_source_text(mut self) -> Self {
         self.show_source = false;
         self
     }
