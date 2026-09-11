@@ -289,11 +289,22 @@ impl fmt::Display for HintPrefix {
     }
 }
 
+/// The output representation for an error chain.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorFormat {
+    /// Render a human-readable terminal diagnostic.
+    #[default]
+    Text,
+    /// Serialize an experimental [`ErrorReport`] as one JSON object per line.
+    Json,
+}
+
 /// Options for formatting an error chain.
 #[must_use]
 pub struct ErrorOptions<'a, C = AnsiColors, W = Stderr> {
     level: Cow<'a, str>,
     color: C,
+    format: ErrorFormat,
     width_override: Option<usize>,
     stream: W,
     diagnostic: Option<DiagnosticFn>,
@@ -315,6 +326,7 @@ impl Default for ErrorOptions<'_, AnsiColors, Stderr> {
         Self {
             level: Cow::Borrowed("error"),
             color: AnsiColors::Red,
+            format: ErrorFormat::Text,
             width_override: None,
             stream: Stderr,
             diagnostic: None,
@@ -334,10 +346,17 @@ impl<'a, C, W> ErrorOptions<'a, C, W> {
         ErrorOptions {
             level: self.level,
             color,
+            format: self.format,
             width_override: self.width_override,
             stream: self.stream,
             diagnostic: self.diagnostic,
         }
+    }
+
+    /// Choose the output representation for this report.
+    pub fn with_format(mut self, format: ErrorFormat) -> Self {
+        self.format = format;
+        self
     }
 
     /// Override the terminal width used for wrapping.
@@ -353,6 +372,7 @@ impl<'a, C, W> ErrorOptions<'a, C, W> {
         ErrorOptions {
             level: self.level,
             color: self.color,
+            format: self.format,
             width_override: self.width_override,
             stream,
             diagnostic: self.diagnostic,
@@ -402,10 +422,17 @@ pub fn write_error_chain_with_options<C: DynColor + Copy, W: fmt::Write>(
     let ErrorOptions {
         level,
         color,
+        format,
         width_override,
         mut stream,
         diagnostic,
     } = options;
+    if format == ErrorFormat::Json {
+        let report = ErrorReport::new(err, diagnostic)
+            .with_level(&level)
+            .with_trailing_hints(hints);
+        return structured::write_report(&mut stream, &report);
+    }
     let width = get_wrap_width(width_override);
 
     let (main, sources) = resolve_error_chain(err, diagnostic);
@@ -508,9 +535,55 @@ mod tests {
     use owo_colors::AnsiColors;
 
     use super::{
-        Diagnostic, ErrorOptions, ErrorWithHints, Hint, HintOrdering, Hints, Info,
+        Diagnostic, ErrorFormat, ErrorOptions, ErrorWithHints, Hint, HintOrdering, Hints, Info,
         debug_error_chain, write_error_chain_with_options,
     };
+
+    #[test]
+    fn writes_one_json_report_with_outer_trailing_hints() -> Result<(), Box<dyn Error>> {
+        let error = anyhow!("inner").context("outer");
+        let hints = [
+            Hint::new("general"),
+            Hint::new("specific").with_ordering(HintOrdering::First),
+        ]
+        .into_iter()
+        .collect();
+        let mut output = String::new();
+        write_error_chain_with_options(
+            error.as_ref(),
+            &hints,
+            ErrorOptions::default()
+                .with_level("warning")
+                .with_format(ErrorFormat::Json)
+                .with_width_override(10)
+                .with_stream(&mut output),
+        )?;
+        assert!(output.ends_with('\n'));
+        assert_eq!(output.lines().count(), 1);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&output)?,
+            serde_json::json!({
+                "schema_version": 1,
+                "coordinates": {
+                    "line_base": 1,
+                    "column_base": 0,
+                    "column_encoding": "utf-8"
+                },
+                "level": "warning",
+                "errors": [
+                    {
+                        "message": "outer",
+                        "hints": [
+                            {"message": "specific", "ordering": "last"},
+                            {"message": "general", "ordering": "last"}
+                        ]
+                    },
+                    {"message": "inner"}
+                ]
+            })
+        );
+        Ok(())
+    }
 
     #[test]
     fn extend_deduplicates_matching_hints() {

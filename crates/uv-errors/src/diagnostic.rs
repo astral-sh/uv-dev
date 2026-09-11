@@ -220,7 +220,7 @@ fn normalize_details(details: &str) -> Cow<'_, str> {
     Cow::Owned(normalized)
 }
 
-fn is_layout_control(character: char) -> bool {
+pub(crate) fn is_layout_control(character: char) -> bool {
     matches!(
         character,
         '\u{061c}'

@@ -1,8 +1,10 @@
 use std::error::Error;
+use std::fmt::{self, Write};
 
 use annotate_snippets::AnnotationKind;
 use serde::Serialize;
 
+use crate::diagnostic::is_layout_control;
 use crate::report::{ResolvedError, resolve_error_chain};
 use crate::source::{SourcePosition, SourceViewKind, SourceWindowView, source_view};
 use crate::{Diagnostic, DiagnosticFn, HintOrdering, Hints, Info, SourceSnippet};
@@ -44,6 +46,19 @@ impl ErrorReport {
     #[must_use]
     pub(crate) fn with_level(mut self, level: &str) -> Self {
         self.level = plain_text(level);
+        self
+    }
+
+    /// The legacy formatter's explicitly supplied hints belong to the outer error and are always
+    /// displayed after the complete chain, retaining their relative display order.
+    pub(crate) fn with_trailing_hints(mut self, hints: &Hints<'_>) -> Self {
+        if let Some(root) = self.errors.first_mut() {
+            root.hints
+                .extend(report_hints(hints).into_iter().map(|mut hint| {
+                    hint.ordering = ReportHintOrdering::Last;
+                    hint
+                }));
+        }
         self
     }
 }
@@ -251,6 +266,31 @@ fn plain_text(text: &str) -> String {
     anstream::adapter::strip_str(text).to_string()
 }
 
+/// Write one complete JSON line. Escaping layout controls changes only the JSON transport, not the
+/// decoded source text or the coordinates that refer to it.
+pub(crate) fn write_report(stream: &mut impl Write, report: &ErrorReport) -> fmt::Result {
+    let mut serialized = serde_json::to_string(report).map_err(|_| fmt::Error)?;
+    if serialized
+        .chars()
+        .any(|character| character.is_control() || is_layout_control(character))
+    {
+        let mut escaped = String::with_capacity(serialized.len());
+        for character in serialized.chars() {
+            if character.is_control() || is_layout_control(character) {
+                let mut encoded = [0; 2];
+                for &unit in character.encode_utf16(&mut encoded).iter() {
+                    write!(escaped, "\\u{unit:04x}")?;
+                }
+            } else {
+                escaped.push(character);
+            }
+        }
+        serialized = escaped;
+    }
+    serialized.push('\n');
+    stream.write_str(&serialized)
+}
+
 #[cfg(test)]
 mod tests {
     use std::error::Error;
@@ -262,7 +302,7 @@ mod tests {
         Diagnostic, Hint, HintOrdering, Info, SourceAnnotation, SourceFile, SourceSnippet,
     };
 
-    use super::ErrorReport;
+    use super::{ErrorReport, write_report};
 
     #[derive(Debug, thiserror::Error)]
     #[error("outer")]
@@ -529,5 +569,27 @@ mod tests {
           }
         ]
         "#);
+    }
+
+    #[test]
+    fn json_transport_escapes_layout_controls_without_changing_source() -> Result<(), Box<dyn Error>>
+    {
+        let text = "value = '\u{202e}\u{85}\u{7f}'\n";
+        let error = InputError(vec![
+            SourceSnippet::new(SourceFile::new("input.toml", text))
+                .with_annotation(SourceAnnotation::primary(0..text.len())),
+        ]);
+        let report = ErrorReport::new(&error, Some(input_diagnostic));
+        let mut output = String::new();
+        write_report(&mut output, &report)?;
+        assert!(!output.trim_end_matches('\n').chars().any(|character| {
+            character.is_control() || crate::diagnostic::is_layout_control(character)
+        }));
+        let decoded: serde_json::Value = serde_json::from_str(&output)?;
+        assert_eq!(
+            decoded["errors"][0]["sources"][0]["windows"][0]["text"].as_str(),
+            Some(text)
+        );
+        Ok(())
     }
 }
