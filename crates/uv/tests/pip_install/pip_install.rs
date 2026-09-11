@@ -6605,6 +6605,7 @@ fn no_build_isolation() -> Result<()> {
     ----- stderr -----
     error: Failed to build `anyio @ https://files.pythonhosted.org/packages/db/4d/3970183622f0330d3c23d9b8a5f52e365e50381fd484d08e3285104333d3/anyio-4.3.0.tar.gz`
       cause: The build backend returned an error
+      info: This error likely indicates that `anyio` depends on `setuptools`, but doesn't declare it as a build dependency
       cause: Call to `setuptools.build_meta.prepare_metadata_for_build_wheel` failed (exit status: 1)
 
              [stderr]
@@ -6612,12 +6613,12 @@ fn no_build_isolation() -> Result<()> {
                File "<string>", line 8, in <module>
              ModuleNotFoundError: No module named 'setuptools'
 
-    hint: This error likely indicates that `anyio` depends on `setuptools`, but doesn't declare it as a build dependency. If `anyio` is a first-party package, consider adding `setuptools` to its `build-system.requires`. Otherwise, either add it to your `pyproject.toml` under:
+    hint: If `anyio` is a first-party package, add `setuptools` to its `build-system.requires`. Otherwise, add it to the project's `pyproject.toml` or the script's inline metadata under:
 
           [tool.uv.extra-build-dependencies]
           anyio = ["setuptools"]
 
-          or `uv pip install setuptools` into the environment and re-run with `--no-build-isolation`.
+          Alternatively, install `setuptools` into the environment used by the original command and re-run that command with `--no-build-isolation`.
     "#
     );
 
@@ -6669,6 +6670,7 @@ fn respect_no_build_isolation_env_var() -> Result<()> {
     ----- stderr -----
     error: Failed to build `anyio @ https://files.pythonhosted.org/packages/db/4d/3970183622f0330d3c23d9b8a5f52e365e50381fd484d08e3285104333d3/anyio-4.3.0.tar.gz`
       cause: The build backend returned an error
+      info: This error likely indicates that `anyio` depends on `setuptools`, but doesn't declare it as a build dependency
       cause: Call to `setuptools.build_meta.prepare_metadata_for_build_wheel` failed (exit status: 1)
 
              [stderr]
@@ -6676,12 +6678,12 @@ fn respect_no_build_isolation_env_var() -> Result<()> {
                File "<string>", line 8, in <module>
              ModuleNotFoundError: No module named 'setuptools'
 
-    hint: This error likely indicates that `anyio` depends on `setuptools`, but doesn't declare it as a build dependency. If `anyio` is a first-party package, consider adding `setuptools` to its `build-system.requires`. Otherwise, either add it to your `pyproject.toml` under:
+    hint: If `anyio` is a first-party package, add `setuptools` to its `build-system.requires`. Otherwise, add it to the project's `pyproject.toml` or the script's inline metadata under:
 
           [tool.uv.extra-build-dependencies]
           anyio = ["setuptools"]
 
-          or `uv pip install setuptools` into the environment and re-run with `--no-build-isolation`.
+          Alternatively, install `setuptools` into the environment used by the original command and re-run that command with `--no-build-isolation`.
     "#
     );
 
@@ -10623,6 +10625,7 @@ fn install_build_isolation_package() -> Result<()> {
     ----- stderr -----
     error: Failed to build `iniconfig @ https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz`
       cause: The build backend returned an error
+      info: This error likely indicates that `iniconfig` depends on `hatchling`, but doesn't declare it as a build dependency
       cause: Call to `hatchling.build.prepare_metadata_for_build_wheel` failed (exit status: 1)
 
              [stderr]
@@ -10630,12 +10633,12 @@ fn install_build_isolation_package() -> Result<()> {
                File "<string>", line 8, in <module>
              ModuleNotFoundError: No module named 'hatchling'
 
-    hint: This error likely indicates that `iniconfig` depends on `hatchling`, but doesn't declare it as a build dependency. If `iniconfig` is a first-party package, consider adding `hatchling` to its `build-system.requires`. Otherwise, either add it to your `pyproject.toml` under:
+    hint: If `iniconfig` is a first-party package, add `hatchling` to its `build-system.requires`. Otherwise, add it to the project's `pyproject.toml` or the script's inline metadata under:
 
           [tool.uv.extra-build-dependencies]
           iniconfig = ["hatchling"]
 
-          or `uv pip install hatchling` into the environment and re-run with `--no-build-isolation`.
+          Alternatively, install `hatchling` into the environment used by the original command and re-run that command with `--no-build-isolation`.
     "#
     );
 
