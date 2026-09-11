@@ -319,9 +319,24 @@ pub(crate) struct SourceWindowView<'a> {
 }
 
 impl SourceWindowView<'_> {
-    /// Resolve a byte offset relative to this selected window.
+    /// Index this selected window once when resolving multiple annotation positions.
+    pub(crate) fn position_index(&self) -> SourcePositionIndex<'_> {
+        SourcePositionIndex {
+            lines: SourceLines::new(self.text),
+            line_start: self.line_start,
+        }
+    }
+}
+
+pub(crate) struct SourcePositionIndex<'a> {
+    lines: SourceLines<'a>,
+    line_start: usize,
+}
+
+impl SourcePositionIndex<'_> {
+    /// Resolve a byte offset relative to the selected window.
     pub(crate) fn position(&self, offset: usize) -> Option<SourcePosition> {
-        SourceLines::new(self.text).position(offset, self.line_start)
+        self.lines.position(offset, self.line_start)
     }
 }
 
