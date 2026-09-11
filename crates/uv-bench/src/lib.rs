@@ -294,7 +294,7 @@ impl PreparedEnvironment {
     }
 
     /// Reconcile exactly the dependency groups used to prepare this environment.
-    fn sync_command(&self) -> Command {
+    pub fn sync_command(&self) -> Command {
         let mut command = self.command();
         command
             .args([
