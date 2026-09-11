@@ -403,7 +403,7 @@ impl<'env> LockOperation<'env> {
                 let Some((existing, existing_contents)) = target.read_with_contents().await? else {
                     return Err(ProjectError::MissingLockfile(
                         lock_source.into(),
-                        lock_filename,
+                        Box::new(target.recovery_target(self.project_dir, self.recovery_action)),
                     ));
                 };
 
