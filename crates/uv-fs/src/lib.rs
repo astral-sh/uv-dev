@@ -66,24 +66,58 @@ pub fn hardlink_count(_path: &Path) -> io::Result<u64> {
     ))
 }
 
+/// A reusable scanner for file-store objects that have no external hardlinks.
+pub struct HardlinkScanner {
+    enabled: bool,
+}
+
+impl HardlinkScanner {
+    /// Enable any bulk metadata reads available on this platform.
+    pub fn new() -> Self {
+        Self { enabled: true }
+    }
+
+    /// Always request the caller's ordinary recursive-walk fallback.
+    pub fn disabled() -> Self {
+        Self { enabled: false }
+    }
+
+    /// Collect regular files whose only hardlink is their entry in this directory.
+    ///
+    /// Ignores symlink entries and uses bulk metadata reads on macOS. Returns `None` when the fast
+    /// path is unavailable, required attributes are missing, or subdirectories need a recursive
+    /// walk. No candidates are returned unless the entire directory can use the fast path.
+    ///
+    /// Callers deleting these files must prevent concurrent changes to the directory and hardlink
+    /// counts throughout both the scan and deletion.
+    pub fn files_with_one_hardlink(&mut self, path: &Path) -> io::Result<Option<Vec<PathBuf>>> {
+        if !self.enabled {
+            return Ok(None);
+        }
+        #[cfg(target_os = "macos")]
+        {
+            hardlink_macos::files_with_one_hardlink(path)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = path;
+            Ok(None)
+        }
+    }
+}
+
+impl Default for HardlinkScanner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Collect regular files whose only hardlink is their entry in this directory.
 ///
-/// Ignores symlink entries and uses bulk metadata reads on macOS. Returns `None` when the fast path
-/// is unavailable, required attributes are missing, or subdirectories need a recursive walk.
-/// No candidates are returned unless the entire directory can use the fast path.
-///
-/// Callers deleting these files must prevent concurrent changes to the directory and hardlink
-/// counts throughout both the scan and deletion.
+/// See [`HardlinkScanner::files_with_one_hardlink`]. Reuse a [`HardlinkScanner`] when scanning
+/// multiple directories.
 pub fn files_with_one_hardlink(path: &Path) -> io::Result<Option<Vec<PathBuf>>> {
-    #[cfg(target_os = "macos")]
-    {
-        hardlink_macos::files_with_one_hardlink(path)
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = path;
-        Ok(None)
-    }
+    HardlinkScanner::new().files_with_one_hardlink(path)
 }
 
 /// Return a path's creation time, including on Linux targets where [`std::fs::Metadata::created`]
