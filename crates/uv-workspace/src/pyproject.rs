@@ -6,6 +6,8 @@
 //!
 //! Then lowers them into a dependency specification.
 
+mod source_diagnostics;
+
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::error::Error as StdError;
@@ -42,16 +44,19 @@ use uv_toml::{ParseError, deserialize_unique_map, diagnostic_for_span};
 
 use crate::DefaultGroupsError;
 
+pub use self::source_diagnostics::SourcesDiagnostic;
+use self::source_diagnostics::{SourceMarker, SourcesProvenance};
+
 #[derive(Error, Debug)]
 pub enum PyprojectTomlError {
     #[error(transparent)]
     Toml(#[from] ParseError<toml::de::Error>),
     #[error("Failed to parse `tool.uv.sources`")]
-    Source(
-        #[from]
+    Source {
         #[source]
-        SourceError,
-    ),
+        error: SourceError,
+        diagnostic: Option<Box<SourcesDiagnostic>>,
+    },
     #[error(
         "`pyproject.toml` is using the `[project]` table, but the required `project.name` field is not set"
     )]
@@ -68,6 +73,15 @@ impl From<toml::de::Error> for PyprojectTomlError {
     }
 }
 
+impl From<SourceError> for PyprojectTomlError {
+    fn from(error: SourceError) -> Self {
+        Self::Source {
+            error,
+            diagnostic: None,
+        }
+    }
+}
+
 /// Resolve source presentation for a parsed `pyproject.toml` error.
 pub fn diagnostic_for_error<'a>(error: &'a (dyn StdError + 'static)) -> Option<Diagnostic<'a>> {
     let error = error.downcast_ref::<PyprojectTomlError>().or_else(|| {
@@ -81,9 +95,10 @@ pub fn diagnostic_for_error<'a>(error: &'a (dyn StdError + 'static)) -> Option<D
             error.original().span(),
             error.document()?,
         ),
-        PyprojectTomlError::Source(_)
-        | PyprojectTomlError::MissingName
-        | PyprojectTomlError::MissingVersion => None,
+        PyprojectTomlError::Source { diagnostic, .. } => diagnostic
+            .as_deref()
+            .map(|diagnostic| Diagnostic::default().with_source(diagnostic.diagnostic())),
+        PyprojectTomlError::MissingName | PyprojectTomlError::MissingVersion => None,
     }
 }
 
@@ -162,7 +177,18 @@ impl PyProjectToml {
                     .and_then(|tool| tool.uv)
                     .and_then(|uv| uv.sources);
                 if let Some(sources) = sources {
-                    ToolUvSources::try_from(sources)?;
+                    if let Err(failure) = ToolUvSources::from_wire(sources) {
+                        let diagnostic = SourcesDiagnostic::new(
+                            &document,
+                            &failure.package,
+                            *failure.sources.provenance,
+                        )
+                        .map(Box::new);
+                        return Err(PyprojectTomlError::Source {
+                            error: failure.sources.error,
+                            diagnostic,
+                        });
+                    }
                 }
                 return Err(PyprojectTomlError::Toml(ParseError::new(error, document)));
             }
@@ -860,17 +886,29 @@ impl ToolUvSources {
     pub(crate) fn into_inner(self) -> BTreeMap<PackageName, Sources> {
         self.0
     }
+
+    fn from_wire(wire: ToolUvSourcesWire) -> Result<Self, ToolUvSourcesFailure> {
+        wire.0
+            .into_iter()
+            .map(|(package, sources)| match Sources::from_wire(sources) {
+                Ok(sources) => Ok((package, sources)),
+                Err(sources) => Err(ToolUvSourcesFailure { package, sources }),
+            })
+            .collect::<Result<BTreeMap<_, _>, _>>()
+            .map(Self)
+    }
+}
+
+struct ToolUvSourcesFailure {
+    package: PackageName,
+    sources: SourcesFailure,
 }
 
 impl TryFrom<ToolUvSourcesWire> for ToolUvSources {
     type Error = SourceError;
 
     fn try_from(wire: ToolUvSourcesWire) -> Result<Self, Self::Error> {
-        wire.0
-            .into_iter()
-            .map(|(name, sources)| Sources::try_from(sources).map(|sources| (name, sources)))
-            .collect::<Result<BTreeMap<_, _>, _>>()
-            .map(Self)
+        Self::from_wire(wire).map_err(|failure| failure.sources.error)
     }
 }
 
@@ -1142,6 +1180,78 @@ impl Sources {
     pub fn iter(&self) -> impl Iterator<Item = &Source> {
         self.0.iter()
     }
+
+    fn from_wire(wire: SourcesWire) -> Result<Self, SourcesFailure> {
+        match wire {
+            SourcesWire::One(source) => Ok(Self(vec![source])),
+            SourcesWire::Many(sources) => {
+                for (index, [lhs, rhs]) in sources.array_windows().enumerate() {
+                    if lhs.extra() != rhs.extra() {
+                        continue;
+                    }
+                    if lhs.group() != rhs.group() {
+                        continue;
+                    }
+
+                    let lhs = lhs.marker();
+                    let rhs = rhs.marker();
+                    if !lhs.is_disjoint(rhs) {
+                        let left = SourceMarker { index, marker: lhs };
+                        let right = SourceMarker {
+                            index: index + 1,
+                            marker: rhs,
+                        };
+                        let provenance = |missing| SourcesProvenance::Markers {
+                            count: sources.len(),
+                            left,
+                            right,
+                            missing,
+                        };
+                        let Some(left) = lhs.contents().map(|contents| contents.to_string()) else {
+                            return Err(SourcesFailure {
+                                error: SourceError::MissingMarkers,
+                                provenance: Box::new(provenance(Some(index))),
+                            });
+                        };
+
+                        let Some(right) = rhs.contents().map(|contents| contents.to_string())
+                        else {
+                            return Err(SourcesFailure {
+                                error: SourceError::MissingMarkers,
+                                provenance: Box::new(provenance(Some(index + 1))),
+                            });
+                        };
+
+                        let hint = lhs.negate().and(rhs);
+                        let hint = hint
+                            .contents()
+                            .map(|contents| contents.to_string())
+                            .unwrap_or_else(|| "true".to_string());
+
+                        return Err(SourcesFailure {
+                            error: SourceError::OverlappingMarkers(left, right, hint),
+                            provenance: Box::new(provenance(None)),
+                        });
+                    }
+                }
+
+                // Ensure that there is at least one source.
+                if sources.is_empty() {
+                    return Err(SourcesFailure {
+                        error: SourceError::EmptySources,
+                        provenance: Box::new(SourcesProvenance::Empty),
+                    });
+                }
+
+                Ok(Self(sources))
+            }
+        }
+    }
+}
+
+struct SourcesFailure {
+    error: SourceError,
+    provenance: Box<SourcesProvenance>,
 }
 
 impl FromIterator<Source> for Sources {
@@ -1209,47 +1319,7 @@ impl TryFrom<SourcesWire> for Sources {
     type Error = SourceError;
 
     fn try_from(wire: SourcesWire) -> Result<Self, Self::Error> {
-        match wire {
-            SourcesWire::One(source) => Ok(Self(vec![source])),
-            SourcesWire::Many(sources) => {
-                for [lhs, rhs] in sources.array_windows() {
-                    if lhs.extra() != rhs.extra() {
-                        continue;
-                    }
-                    if lhs.group() != rhs.group() {
-                        continue;
-                    }
-
-                    let lhs = lhs.marker();
-                    let rhs = rhs.marker();
-                    if !lhs.is_disjoint(rhs) {
-                        let Some(left) = lhs.contents().map(|contents| contents.to_string()) else {
-                            return Err(SourceError::MissingMarkers);
-                        };
-
-                        let Some(right) = rhs.contents().map(|contents| contents.to_string())
-                        else {
-                            return Err(SourceError::MissingMarkers);
-                        };
-
-                        let hint = lhs.negate().and(rhs);
-                        let hint = hint
-                            .contents()
-                            .map(|contents| contents.to_string())
-                            .unwrap_or_else(|| "true".to_string());
-
-                        return Err(SourceError::OverlappingMarkers(left, right, hint));
-                    }
-                }
-
-                // Ensure that there is at least one source.
-                if sources.is_empty() {
-                    return Err(SourceError::EmptySources);
-                }
-
-                Ok(Self(sources))
-            }
-        }
+        Self::from_wire(wire).map_err(|failure| failure.error)
     }
 }
 
