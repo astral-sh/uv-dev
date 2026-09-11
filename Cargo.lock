@@ -7679,6 +7679,7 @@ dependencies = [
 name = "uv-workspace"
 version = "0.0.84"
 dependencies = [
+ "anstream",
  "anyhow",
  "assert_fs",
  "clap",
