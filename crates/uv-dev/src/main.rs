@@ -1,7 +1,9 @@
 use std::env;
+use std::error::Error;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time::Instant;
 
 use tracing::{debug, trace};
@@ -13,6 +15,8 @@ use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Layer};
 
 use uv_dev::run;
+use uv_errors::{Diagnostic, ErrorOptions, Hinted, Hints, write_error_chain_with_options};
+use uv_resolver::ResolveError;
 use uv_static::EnvVars;
 
 #[tokio::main(flavor = "current_thread")]
@@ -68,10 +72,28 @@ async fn main() -> ExitCode {
     if let Err(err) = result {
         trace!("Error trace: {err:?}");
         let err = err.context("uv-dev failed");
-        uv_errors::write_error_chain(err.as_ref(), &uv_errors::Hints::none())
-            .expect("writing to stderr should not fail");
+        write_error_chain_with_options(
+            err.as_ref(),
+            &Hints::none(),
+            ErrorOptions::default().with_diagnostic(resolver_diagnostic_for_error),
+        )
+        .expect("writing to stderr should not fail");
         ExitCode::FAILURE
     } else {
         ExitCode::SUCCESS
     }
+}
+
+/// Resolve metadata on resolver roots hidden by a transparent error variant.
+fn resolver_diagnostic_for_error<'a>(error: &'a (dyn Error + 'static)) -> Option<Diagnostic<'a>> {
+    if let Some(diagnostic) = uv_resolver::diagnostic_for_error(error) {
+        return Some(diagnostic);
+    }
+
+    error
+        .downcast_ref::<ResolveError>()
+        .or_else(|| error.downcast_ref::<Box<ResolveError>>().map(AsRef::as_ref))
+        .or_else(|| error.downcast_ref::<Arc<ResolveError>>().map(AsRef::as_ref))?
+        .transparent_source()
+        .and_then(resolver_diagnostic_for_error)
 }
