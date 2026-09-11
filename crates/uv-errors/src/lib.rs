@@ -1,5 +1,6 @@
 mod diagnostic;
 mod line_wrap;
+mod report;
 mod source;
 
 use std::borrow::Cow;
@@ -12,6 +13,7 @@ use owo_colors::{AnsiColors, DynColor, OwoColorize};
 pub use diagnostic::{Diagnostic, DiagnosticFn, Info};
 use diagnostic::{write_hints, write_info};
 use line_wrap::{get_wrap_width, wrap_text};
+use report::resolve_error_chain;
 pub use source::{SourceAnnotation, SourceFile, SourceSnippet};
 use source::{SourceLevel, write_snippets};
 
@@ -404,11 +406,8 @@ pub fn write_error_chain_with_options<C: DynColor + Copy, W: fmt::Write>(
     } = options;
     let width = get_wrap_width(width_override);
 
-    let main_diagnostic = diagnostic.and_then(|diagnostic| diagnostic(err));
-    let main_msg = main_diagnostic
-        .as_ref()
-        .and_then(|diagnostic| diagnostic.message.as_deref())
-        .map_or_else(|| Cow::Owned(err.to_string()), Cow::Borrowed);
+    let (main, sources) = resolve_error_chain(err, diagnostic);
+    let main_msg = main.message();
     let main_padding = " ".repeat(level.len() + 2);
     let wrapped_main = wrap_text(&main_msg, width, &main_padding, &main_padding, "");
     writeln!(
@@ -418,38 +417,31 @@ pub fn write_error_chain_with_options<C: DynColor + Copy, W: fmt::Write>(
         ":".bold(),
         wrapped_main.trim()
     )?;
-    if let Some(diagnostic) = &main_diagnostic {
-        write_snippets(
-            &mut stream,
-            &diagnostic.snippets,
-            width,
-            SourceLevel::for_error(&level),
-        )?;
-        write_info(&mut stream, &diagnostic.info, width)?;
-        write_hints(&mut stream, &diagnostic.hints, HintOrdering::First, width)?;
-        write_hints(&mut stream, &diagnostic.hints, HintOrdering::Any, width)?;
-    }
+    write_snippets(
+        &mut stream,
+        &main.diagnostic.snippets,
+        width,
+        SourceLevel::for_error(&level),
+    )?;
+    write_info(&mut stream, &main.diagnostic.info, width)?;
+    write_hints(
+        &mut stream,
+        &main.diagnostic.hints,
+        HintOrdering::First,
+        width,
+    )?;
+    write_hints(
+        &mut stream,
+        &main.diagnostic.hints,
+        HintOrdering::Any,
+        width,
+    )?;
 
     // Keep each owner's hints together while walking the real source chain. Unwinding in reverse
     // order places general outer advice after more specific source advice.
-    let mut trailing_hints = Vec::new();
-    let mut source_override = main_diagnostic.and_then(|diagnostic| {
-        trailing_hints.push(diagnostic.hints);
-        diagnostic.source
-    });
-    for source in iter::successors(err.source(), |&err| err.source()) {
-        let native_diagnostic = diagnostic.and_then(|diagnostic| diagnostic(source));
-        let source_diagnostic = match (source_override.take(), native_diagnostic) {
-            (Some(presentation), Some(native)) => {
-                Some(native.with_presentation_override(*presentation))
-            }
-            (Some(presentation), None) => Some(*presentation),
-            (None, native) => native,
-        };
-        let msg = source_diagnostic
-            .as_ref()
-            .and_then(|diagnostic| diagnostic.message.as_deref())
-            .map_or_else(|| Cow::Owned(source.to_string()), Cow::Borrowed);
+    let mut trailing_hints = vec![main.diagnostic.hints];
+    for source in sources {
+        let msg = source.message();
         // Reserve the display width of the prefix before wrapping the message. Authored lines
         // retain their own indentation beneath it.
         let wrapped = wrap_text(&msg, width.map(|width| width.saturating_sub(9)), "", "", "");
@@ -471,21 +463,26 @@ pub fn write_error_chain_with_options<C: DynColor + Copy, W: fmt::Write>(
                 }
             }
         }
-        if let Some(diagnostic) = &source_diagnostic {
-            write_snippets(
-                &mut stream,
-                &diagnostic.snippets,
-                width,
-                SourceLevel::for_error(&level),
-            )?;
-            write_info(&mut stream, &diagnostic.info, width)?;
-            write_hints(&mut stream, &diagnostic.hints, HintOrdering::First, width)?;
-            write_hints(&mut stream, &diagnostic.hints, HintOrdering::Any, width)?;
-        }
-        source_override = source_diagnostic.and_then(|diagnostic| {
-            trailing_hints.push(diagnostic.hints);
-            diagnostic.source
-        });
+        write_snippets(
+            &mut stream,
+            &source.diagnostic.snippets,
+            width,
+            SourceLevel::for_error(&level),
+        )?;
+        write_info(&mut stream, &source.diagnostic.info, width)?;
+        write_hints(
+            &mut stream,
+            &source.diagnostic.hints,
+            HintOrdering::First,
+            width,
+        )?;
+        write_hints(
+            &mut stream,
+            &source.diagnostic.hints,
+            HintOrdering::Any,
+            width,
+        )?;
+        trailing_hints.push(source.diagnostic.hints);
     }
 
     for hints in trailing_hints.iter().rev() {
