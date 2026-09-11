@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 21468,
+        "title": "Avoid per-file temporary directories for merged copies",
+        "url": "https://github.com/astral-sh/uv/pull/21468",
+        "state": "merged",
+        "reason": "This is the strongest release-specific lead: it landed between 0.12.10 and 0.12.11 and changed merged copies to use copy_atomic_sync, whose temporary-file persistence operation matches the reported error. Windows causality still needs confirmation."
+      },
+      {
+        "kind": "issue",
+        "number": 16877,
+        "title": "Failed to install `jupyterlab-widgets==3.0.16` in Windows via symlink",
+        "url": "https://github.com/astral-sh/uv/issues/16877",
+        "state": "closed",
+        "reason": "This older report shares the package and deeply nested Windows path, but concerns symlink mode, OS errors 1314/87, and behavior confirmed fixed only with long paths enabled."
+      },
+      {
+        "kind": "pull_request",
+        "number": 16894,
+        "title": "Add a Windows manifest to uv binaries",
+        "url": "https://github.com/astral-sh/uv/pull/16894",
+        "state": "merged",
+        "reason": "This fixed astral-sh/uv#16877 by declaring uv long-path-aware while explicitly requiring LongPathsEnabled=1. It is relevant history but does not cover the new copy/persist regression with LongPathsEnabled=0."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests for exact fragments including “failed to persist temporary file,” LongPathsEnabled, OS error 3, jupyterlab-widgets, and the affected versions. Conceptual searches covered Windows MAX_PATH, wheel installation, temporary-file persistence, copy/rename behavior, cache paths, and release fixes. Comparing 0.12.10 with 0.12.11 identified astral-sh/uv#21468. astral-sh/uv#8884, astral-sh/uv#2410, and astral-sh/uv#4190 were inspected but concern source-build/cache path inflation or older generic path failures; concurrency and antivirus reports have different triggers and errors."
+  },
+  "type": "bug",
+  "type_reason": "The same command and Windows setting succeed in 0.12.10 and fail in 0.12.11. No open issue or pull request already tracks this regression, and the historical long-path reports differ in operation and error, so this is a bug rather than a duplicate.",
+  "summary": "Merged astral-sh/uv#21468 entered 0.12.11 and changed the exact merged-copy persistence path implicated by the log. astral-sh/uv#16877 and astral-sh/uv#16894 provide relevant Windows long-path history but cover symlink behavior with different errors and are not duplicates.",
+  "draft_response": "Thanks for the clear version matrix and reproduction. This is a regression rather than a duplicate of astral-sh/uv#16877: that report concerned symlink mode and different Windows errors, while this failure occurs while persisting a copied wheel file with LongPathsEnabled=0.\n\nastral-sh/uv#21468 landed in 0.12.11 and changed merged wheel copies to use an adjacent temporary file persisted to the destination, matching the operation in this error. That makes it the leading change to investigate, though the root cause still needs confirmation on Windows. The next step is to run this MRE against that pull request’s parent and merge commits with LongPathsEnabled=0 and add Windows coverage once confirmed. In the meantime, the report establishes that 0.12.10 or LongPathsEnabled=1 avoids the failure."
+}
