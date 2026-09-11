@@ -3744,6 +3744,37 @@ fn python_install_upgrade_version_file() {
 }
 
 #[test]
+fn python_install_upgrade_ancestor_versions_file() -> anyhow::Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
+    context
+        .temp_dir
+        .child(".python-version")
+        .write_str("3.13\n")?;
+    context
+        .temp_dir
+        .child(".python-versions")
+        .write_str("3.12.4\n")?;
+    let project = context.temp_dir.child("project");
+    project.create_dir_all()?;
+
+    // Prefer the ancestor's plural version file and reject its patch pin before downloading.
+    uv_snapshot!(context.filters(), context
+        .python_install()
+        .arg("--upgrade")
+        .arg("--offline")
+        .env(EnvVars::UV_PYTHON_DOWNLOADS, "never")
+        .current_dir(project.path()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: `uv python install --upgrade` only accepts minor versions, got: 3.12.4
+      info: The version request came from `[TEMP_DIR]/.python-versions`
+
+    hint: Change the patch version in `[TEMP_DIR]/.python-versions` to upgrade instead
+    ");
+    Ok(())
+}
+
+#[test]
 fn python_install_armv7() {
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()

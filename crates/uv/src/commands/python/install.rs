@@ -175,13 +175,16 @@ impl std::fmt::Display for PythonUpgradeSource {
 pub(crate) struct InvalidUpgradeRequestError {
     command: PythonUpgradeSource,
     request: String,
-    from_version_file: bool,
+    version_file: Option<PathBuf>,
 }
 
 impl Hinted for InvalidUpgradeRequestError {
     fn hints(&self) -> Hints<'_> {
-        if self.from_version_file {
-            Hints::from("Change the patch version in the `.python-version` file to upgrade instead")
+        if let Some(path) = &self.version_file {
+            Hints::from(format!(
+                "Change the patch version in `{}` to upgrade instead",
+                path.user_display(),
+            ))
         } else {
             Hints::none()
         }
@@ -191,8 +194,12 @@ impl Hinted for InvalidUpgradeRequestError {
 impl InvalidUpgradeRequestError {
     /// Identify the configuration source of an unsupported upgrade request.
     pub(crate) fn own_info(&self) -> Option<Info<'static>> {
-        self.from_version_file
-            .then(|| Info::new("The version request came from a `.python-version` file"))
+        self.version_file.as_ref().map(|path| {
+            Info::new(format!(
+                "The version request came from `{}`",
+                path.user_display(),
+            ))
+        })
     }
 }
 
@@ -374,9 +381,8 @@ async fn perform_install(
     // Python downloads are performing their own retries to catch stream errors, disable the
     // default retries to avoid the middleware from performing uncontrolled retries.
     let client = client_builder.retries(0).build()?;
-    // TODO(zanieb): We use this variable to special-case .python-version files, but it'd be nice to
-    // have generalized request source tracking instead
-    let mut is_from_python_version_file = false;
+    // Keep the discovered file so upgrade advice points to the request's actual source.
+    let mut python_version_file = None;
     let requests: Vec<_> = if targets.is_empty() {
         if matches!(
             upgrade,
@@ -409,9 +415,9 @@ async fn perform_install(
                     "Found Python version file at: {}",
                     file.path().user_display()
                 );
+                python_version_file = Some(file.path().to_path_buf());
             })
             .map(PythonVersionFile::into_versions)
-            .inspect(|_| is_from_python_version_file = true)
             .unwrap_or_else(|| {
                 // If no version file is found and no requests were made
                 // TODO(zanieb): We should consider differentiating between a global Python version
@@ -475,7 +481,7 @@ async fn perform_install(
             return Err(UvError::user(InvalidUpgradeRequestError {
                 command: source,
                 request: request.request.to_canonical_string().into_owned(),
-                from_version_file: is_from_python_version_file,
+                version_file: python_version_file,
             })
             .into());
         }
@@ -1403,6 +1409,8 @@ fn matches_build(download_build: Option<&str>, installation_build: Option<&str>)
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use insta::assert_json_snapshot;
     use uv_errors::{ErrorFormat, ErrorOptions, Hints, write_error_chain_with_options};
 
@@ -1416,12 +1424,17 @@ mod tests {
             InvalidUpgradeRequestError {
                 command: PythonUpgradeSource::Install,
                 request: "3.12.1".to_owned(),
-                from_version_file: true,
+                version_file: Some(PathBuf::from(".python-version")),
+            },
+            InvalidUpgradeRequestError {
+                command: PythonUpgradeSource::Install,
+                request: "3.13.1".to_owned(),
+                version_file: Some(PathBuf::from("../shared/.python-versions")),
             },
             InvalidUpgradeRequestError {
                 command: PythonUpgradeSource::Upgrade,
                 request: "3.12.1".to_owned(),
-                from_version_file: false,
+                version_file: None,
             },
         ];
         let mut reports = Vec::new();
@@ -1444,16 +1457,30 @@ mod tests {
           {
             "hints": [
               {
-                "message": "Change the patch version in the `.python-version` file to upgrade instead",
+                "message": "Change the patch version in `.python-version` to upgrade instead",
                 "ordering": "any"
               }
             ],
             "info": [
               {
-                "message": "The version request came from a `.python-version` file"
+                "message": "The version request came from `.python-version`"
               }
             ],
             "message": "`uv python install --upgrade` only accepts minor versions, got: 3.12.1"
+          },
+          {
+            "hints": [
+              {
+                "message": "Change the patch version in `../shared/.python-versions` to upgrade instead",
+                "ordering": "any"
+              }
+            ],
+            "info": [
+              {
+                "message": "The version request came from `../shared/.python-versions`"
+              }
+            ],
+            "message": "`uv python install --upgrade` only accepts minor versions, got: 3.13.1"
           },
           {
             "message": "`uv python upgrade` only accepts minor versions, got: 3.12.1"
