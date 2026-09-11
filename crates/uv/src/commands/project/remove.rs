@@ -334,6 +334,7 @@ pub(crate) async fn remove(
     // Lock and sync the environment, if necessary.
     let lock = match Box::pin(
         project::lock::LockOperation::new(
+            project_dir,
             mode,
             &settings.resolver,
             &client_builder,

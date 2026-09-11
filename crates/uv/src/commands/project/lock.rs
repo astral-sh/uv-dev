@@ -53,7 +53,9 @@ use crate::commands::diagnostics::diagnostic_for_error;
 use crate::commands::locked_requirements::{LockedRequirements, read_lock_requirements};
 use crate::commands::pip::loggers::{DefaultResolveLogger, ResolveLogger, SummaryResolveLogger};
 use crate::commands::project::diagnostics::{EnvironmentMarkersDiagnostic, EnvironmentMarkersKind};
-use crate::commands::project::lock_target::{LockTarget, find_lock_format_error};
+use crate::commands::project::lock_target::{
+    LockTarget, LockfileRecoveryAction, find_lock_format_error,
+};
 use crate::commands::project::{
     MissingLockfileSource, ProjectEnvironmentPolicy, ProjectError, ProjectInterpreter,
     ScriptInterpreter, UniversalState, WorkspacePython, init_script_python_requirement,
@@ -214,6 +216,7 @@ pub(crate) async fn lock(
     // Perform the lock operation.
     match Box::pin(
         LockOperation::new(
+            project_dir,
             mode,
             &settings,
             &client_builder,
@@ -294,7 +297,9 @@ pub(crate) enum LockMode<'env> {
 
 /// A lock operation.
 pub(crate) struct LockOperation<'env> {
+    project_dir: &'env Path,
     mode: LockMode<'env>,
+    recovery_action: LockfileRecoveryAction,
     constraints: Vec<NameRequirementSpecification>,
     refresh: Option<&'env Refresh>,
     check_lockfile_contents: bool,
@@ -311,7 +316,11 @@ pub(crate) struct LockOperation<'env> {
 
 impl<'env> LockOperation<'env> {
     /// Initialize a [`LockOperation`].
+    ///
+    /// `project_dir` is the command's effective discovery directory, which may be a workspace
+    /// member rather than the workspace root.
     pub(crate) fn new(
+        project_dir: &'env Path,
         mode: LockMode<'env>,
         settings: &'env ResolverSettings,
         client_builder: &'env BaseClientBuilder<'env>,
@@ -324,7 +333,9 @@ impl<'env> LockOperation<'env> {
         preview: Preview,
     ) -> Self {
         Self {
+            project_dir,
             mode,
+            recovery_action: LockfileRecoveryAction::UpdateLockfile,
             constraints: vec![],
             refresh: None,
             check_lockfile_contents: false,
@@ -338,6 +349,13 @@ impl<'env> LockOperation<'env> {
             printer,
             preview,
         }
+    }
+
+    /// Set the recovery action for commands whose authored inputs are rolled back on failure.
+    #[must_use]
+    pub(crate) fn with_recovery_action(mut self, action: LockfileRecoveryAction) -> Self {
+        self.recovery_action = action;
+        self
     }
 
     /// Set the external constraints for the [`LockOperation`].
@@ -373,7 +391,11 @@ impl<'env> LockOperation<'env> {
         match self.mode {
             LockMode::Frozen(source) => {
                 // Read the existing lockfile, but don't attempt to lock the project.
-                Ok(LockResult::Unchanged(target.read_frozen(source).await?))
+                Ok(LockResult::Unchanged(
+                    target
+                        .read_frozen(source, self.project_dir, self.recovery_action)
+                        .await?,
+                ))
             }
             LockMode::Locked(interpreter, lock_source) => {
                 // Read the existing lockfile.
@@ -388,7 +410,12 @@ impl<'env> LockOperation<'env> {
                 if self.preview.is_enabled(PreviewFeature::LockfileFormatCheck)
                     && let Some(line) = find_lock_format_error(&existing_contents)
                 {
-                    return Err(ProjectError::LockFormat(lock_filename, line, lock_source));
+                    return Err(ProjectError::LockFormat(
+                        lock_filename,
+                        line,
+                        lock_source,
+                        Box::new(target.recovery_target(self.project_dir, self.recovery_action)),
+                    ));
                 }
 
                 let check_lockfile_contents = if self.check_lockfile_contents {
@@ -424,6 +451,7 @@ impl<'env> LockOperation<'env> {
                         prev.map(Box::new),
                         Box::new(cur),
                         lock_source,
+                        Box::new(target.recovery_target(self.project_dir, self.recovery_action)),
                     ));
                 }
 

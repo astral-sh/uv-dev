@@ -309,6 +309,7 @@ pub(crate) async fn export(
     // Lock the project.
     let lock = match Box::pin(
         LockOperation::new(
+            project_dir,
             mode,
             &settings,
             &client_builder,

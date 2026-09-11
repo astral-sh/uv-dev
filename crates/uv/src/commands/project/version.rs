@@ -122,6 +122,7 @@ pub(crate) async fn project_version(
         if is_read_only {
             return Box::pin(print_frozen_version(
                 project,
+                project_dir,
                 &name,
                 frozen_source,
                 &settings,
@@ -476,6 +477,7 @@ fn update_project(
 /// Do the minimal work to try to find the package in the lockfile and print its version
 async fn print_frozen_version(
     project: VirtualProject,
+    project_dir: &Path,
     name: &PackageName,
     frozen_source: FrozenSource,
     settings: &ResolverInstallerSettings,
@@ -496,6 +498,7 @@ async fn print_frozen_version(
     // Lock and sync the environment, if necessary.
     let lock = match Box::pin(
         project::lock::LockOperation::new(
+            project_dir,
             LockMode::Frozen(frozen_source.into()),
             &settings.resolver,
             &client_builder,
@@ -638,6 +641,7 @@ async fn lock_and_sync(
     // Lock and sync the environment, if necessary.
     let lock = match Box::pin(
         project::lock::LockOperation::new(
+            project_dir,
             mode,
             &settings.resolver,
             &client_builder,

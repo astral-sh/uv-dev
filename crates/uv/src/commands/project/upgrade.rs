@@ -402,6 +402,7 @@ pub(crate) async fn upgrade(
 
     let result = match Box::pin(
         LockOperation::new(
+            project_dir,
             LockMode::DryRun(&interpreter),
             &settings,
             &client_builder,

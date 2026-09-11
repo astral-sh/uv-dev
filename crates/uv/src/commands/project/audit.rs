@@ -185,6 +185,7 @@ pub(crate) async fn audit(
     // Update the lockfile, if necessary.
     let lock = match Box::pin(
         LockOperation::new(
+            project_dir,
             mode,
             &settings,
             &client_builder,
