@@ -1,3 +1,5 @@
+mod environment_markers;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::ops::Range;
@@ -14,6 +16,8 @@ use uv_workspace::{RequiresPythonDeclarations, Workspace};
 
 use super::ProjectError;
 
+pub(crate) use environment_markers::{EnvironmentMarkersDiagnostic, EnvironmentMarkersKind};
+
 /// Resolve presentation data retained by project-level semantic errors.
 pub(crate) fn diagnostic_for_error<'a>(error: &'a (dyn Error + 'static)) -> Option<Diagnostic<'a>> {
     let diagnostic = match error.downcast_ref::<ProjectError>()? {
@@ -21,6 +25,11 @@ pub(crate) fn diagnostic_for_error<'a>(error: &'a (dyn Error + 'static)) -> Opti
         | ProjectError::DotPythonVersionProjectIncompatibility { diagnostic, .. }
         | ProjectError::RequiresPythonProjectIncompatibility(.., diagnostic)
         | ProjectError::DisjointRequiresPython(_, diagnostic) => diagnostic.as_deref()?,
+        ProjectError::OverlappingMarkers { diagnostic, .. } => {
+            return diagnostic
+                .as_deref()
+                .map(EnvironmentMarkersDiagnostic::diagnostic);
+        }
         ProjectError::LockMismatch(..)
         | ProjectError::LockFormat(..)
         | ProjectError::MissingLockfile(..)
@@ -41,7 +50,6 @@ pub(crate) fn diagnostic_for_error<'a>(error: &'a (dyn Error + 'static)) -> Opti
         | ProjectError::MissingExtraProject(..)
         | ProjectError::MissingExtraProjects(_)
         | ProjectError::MissingExtraScript(_)
-        | ProjectError::OverlappingMarkers { .. }
         | ProjectError::DisjointEnvironment(..)
         | ProjectError::EmptyEnvironment
         | ProjectError::InvalidProjectEnvironmentDir(..)
