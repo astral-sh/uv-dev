@@ -6,6 +6,7 @@ use std::str::FromStr;
 use uv_errors::{Diagnostic, Info, SourceAnnotation, SourceFile, SourceSnippet};
 use uv_fs::Simplified;
 use uv_normalize::{DEV_DEPENDENCIES, GroupName};
+use uv_pep440::VersionSpecifiers;
 use uv_pep508::{Requirement, VerbatimUrl, VersionOrUrl};
 use uv_pypi_types::DependencyGroupSpecifier;
 use uv_toml::SourcePathSegment::{Index, Key};
@@ -13,7 +14,7 @@ use uv_toml::{SourceMap, SourcePathSegment};
 
 use crate::pyproject::PyProjectToml;
 
-use super::{DependencyGroupError, DependencyGroupErrorInner};
+use super::{DependencyGroupError, DependencyGroupErrorInner, GroupInclude};
 
 /// Resolve source locations without changing the semantic dependency-group error or its sources.
 pub fn diagnostic_for_error<'a>(error: &'a (dyn Error + 'static)) -> Option<Diagnostic<'a>> {
@@ -31,12 +32,168 @@ pub fn diagnostic_for_error<'a>(error: &'a (dyn Error + 'static)) -> Option<Diag
     Some(Diagnostic::default().with_source(diagnostic))
 }
 
-/// An exact include occurrence encountered during semantic group traversal.
-#[derive(Debug, Clone)]
-pub(super) struct GroupInclude {
-    pub(super) group: GroupName,
-    pub(super) index: usize,
-    pub(super) included: GroupName,
+/// A parsed project source shared by Python-requirement declarations and include locations.
+pub struct PythonRequirementsSource<'a> {
+    source: SourceFile,
+    map: Option<SourceMap<'a>>,
+    visibility: Option<SourceVisibility>,
+}
+
+impl<'a> PythonRequirementsSource<'a> {
+    /// Capture the `pyproject.toml` in this directory without reopening it while rendering.
+    pub fn new(path: &Path, pyproject: &'a PyProjectToml) -> Self {
+        let source = SourceFile::new(
+            path.join("pyproject.toml").portable_display().to_string(),
+            pyproject.raw.as_str(),
+        );
+        let map = SourceMap::parse(&pyproject.raw).ok();
+        let visibility = map
+            .as_ref()
+            .map(|map| SourceVisibility::new(map, pyproject));
+        Self {
+            source,
+            map,
+            visibility,
+        }
+    }
+
+    /// The exact retained source used by this map.
+    pub fn source_file(&self) -> &SourceFile {
+        &self.source
+    }
+
+    /// The source map when the retained syntax could be parsed.
+    pub fn source_map(&self) -> Option<&SourceMap<'a>> {
+        self.map.as_ref()
+    }
+
+    /// Locate an authored dependency-group Python requirement.
+    pub fn requires_python_source(
+        &self,
+        group: &GroupName,
+        requires_python: &VersionSpecifiers,
+    ) -> SourceSnippet<'static> {
+        requires_python_source(&self.source, self.map.as_ref(), group, requires_python)
+    }
+
+    /// Locate an include occurrence without exposing unrelated requirements or marker text.
+    pub fn include_source(&self, include: &GroupInclude) -> Option<SourceSnippet<'static>> {
+        let range = include_span(self.map.as_ref()?, include)?;
+        Some(
+            self.visibility.as_ref()?.restrict(
+                &self.source,
+                range.clone(),
+                SourceSnippet::new(self.source.clone()).with_annotation(
+                    SourceAnnotation::secondary(range).with_label("included here"),
+                ),
+            ),
+        )
+    }
+}
+
+fn requires_python_source(
+    source: &SourceFile,
+    map: Option<&SourceMap<'_>>,
+    group: &GroupName,
+    requires_python: &VersionSpecifiers,
+) -> SourceSnippet<'static> {
+    let field = map.and_then(|map| requires_python_field(map, group, requires_python));
+    let show_source = field.as_ref().is_some_and(|field| field.can_show(source));
+    let mut snippet = SourceSnippet::new(source.clone());
+    if let Some(field) = field {
+        snippet = snippet.with_annotation(
+            SourceAnnotation::primary(field.declaration.value).with_label(format!(
+                "group `{group}` requires Python `{requires_python}`"
+            )),
+        );
+    }
+    if show_source {
+        snippet
+    } else {
+        snippet.without_source_text()
+    }
+}
+
+struct RequiresPythonField {
+    declaration: SourceField,
+    group_assignment: Option<SourceField>,
+}
+
+impl RequiresPythonField {
+    fn can_show(&self, source: &SourceFile) -> bool {
+        self.declaration.is_standalone_assignment(source)
+            || self
+                .group_assignment
+                .as_ref()
+                .is_some_and(|field| field.is_standalone_assignment(source))
+    }
+}
+
+struct SourceField {
+    key: Range<usize>,
+    value: Range<usize>,
+}
+
+impl SourceField {
+    /// Only expose complete physical lines whose sole assignment is known to be safe.
+    fn is_standalone_assignment(&self, source: &SourceFile) -> bool {
+        let Some(window) = source.line_range_for_span(self.value.clone()) else {
+            return false;
+        };
+        if source.line_range_for_span(self.key.clone()) != Some(window.clone()) {
+            return false;
+        }
+        let text = source.text();
+        text.get(window.start..self.key.start)
+            .is_some_and(|prefix| prefix.trim().is_empty())
+            && text
+                .get(self.key.end..self.value.start)
+                .is_some_and(|separator| separator.trim() == "=")
+            && text
+                .get(self.value.end..window.end)
+                .is_some_and(|suffix| suffix.trim().is_empty())
+    }
+}
+
+fn requires_python_field(
+    map: &SourceMap<'_>,
+    group: &GroupName,
+    requires_python: &VersionSpecifiers,
+) -> Option<RequiresPythonField> {
+    let parent = [Key("tool"), Key("uv"), Key("dependency-groups")];
+    let key = original_group_key(map, &parent, group)?;
+    let group_path = [Key("tool"), Key("uv"), Key("dependency-groups"), Key(key)];
+    let path = [
+        Key("tool"),
+        Key("uv"),
+        Key("dependency-groups"),
+        Key(key),
+        Key("requires-python"),
+    ];
+    let declared = VersionSpecifiers::from_str(map.string(&path)?).ok()?;
+    if &declared != requires_python {
+        return None;
+    }
+    let declaration = SourceField {
+        key: map.key_span(&group_path, "requires-python")?,
+        value: map.span(&path)?,
+    };
+    // A common spelling puts the bound in a single-field inline table. Unknown settings may
+    // contain credentials, so a larger inline table is only a location.
+    let group_assignment = if map
+        .keys(&group_path)
+        .is_some_and(|mut keys| keys.next() == Some("requires-python") && keys.next().is_none())
+    {
+        map.key_span(&parent, key)
+            .zip(map.span(&group_path))
+            .map(|(key, value)| SourceField { key, value })
+    } else {
+        None
+    };
+    Some(RequiresPythonField {
+        declaration,
+        group_assignment,
+    })
 }
 
 #[derive(Debug)]
@@ -365,12 +522,13 @@ mod tests {
     use anyhow::{Context, Result};
     use uv_errors::SourceFile;
     use uv_normalize::GroupName;
+    use uv_pep440::VersionSpecifiers;
     use uv_toml::SourceMap;
 
     use crate::dependency_groups::FlatDependencyGroups;
     use crate::pyproject::PyProjectToml;
 
-    use super::{GroupInclude, SourceVisibility, include_span};
+    use super::{GroupInclude, SourceVisibility, include_span, requires_python_field};
 
     #[test]
     fn include_spans_follow_normalized_keys_and_occurrences() -> Result<()> {
@@ -401,9 +559,10 @@ mod tests {
         let pyproject =
             PyProjectToml::from_string(source.to_string(), Path::new("pyproject.toml"))?;
         let groups = pyproject.dependency_groups.iter().flatten().collect();
-        let failure = FlatDependencyGroups::from_dependency_groups(&groups, &BTreeMap::new())
-            .err()
-            .context("the included group should be missing")?;
+        let failure =
+            FlatDependencyGroups::from_dependency_groups(&groups, &BTreeMap::new(), false)
+                .err()
+                .context("the included group should be missing")?;
         insta::assert_debug_snapshot!((ranges, values, failure.provenance), @r#"
         (
             [
@@ -449,9 +608,10 @@ mod tests {
             Path::new("pyproject.toml"),
         )?;
         let groups = pyproject.dependency_groups.iter().flatten().collect();
-        let failure = FlatDependencyGroups::from_dependency_groups(&groups, &BTreeMap::new())
-            .err()
-            .context("the dependency groups should contain a cycle")?;
+        let failure =
+            FlatDependencyGroups::from_dependency_groups(&groups, &BTreeMap::new(), false)
+                .err()
+                .context("the dependency groups should contain a cycle")?;
 
         insta::assert_debug_snapshot!(failure.provenance, @r#"
         Some(
@@ -590,6 +750,74 @@ comment = [{ include-group = "missing" }] # sentinel-secret
         .context("the include should have a source span")?;
 
         insta::assert_debug_snapshot!(SourceVisibility::new(&map, &pyproject).can_show(&source, range), @"false");
+        Ok(())
+    }
+
+    #[test]
+    fn group_python_bounds_use_exact_safe_assignments() -> Result<()> {
+        let group = GroupName::from_str("dev-tools")?;
+        let requires_python = VersionSpecifiers::from_str(">=3.12")?;
+        let cases = [
+            "[tool.uv.dependency-groups.\"Dev.Tools\"]\nrequires-python = '>=3.12'\n",
+            "[tool.uv.dependency-groups]\n\"Dev.Tools\" = { \"requires\\u002dpython\" = \">=3.\\u0031\\u0032\" }\n",
+            "[tool.uv.dependency-groups]\n\"Dev.Tools\" = { requires-python = '>=3.12', private = 'sentinel-secret' }\n",
+            "[tool.uv.dependency-groups]\n\"Dev.Tools\" = { requires-python = '>=3.12' } # sentinel-secret\n",
+            "[tool.uv.dependency-groups]\n\"Dev.Tools\" = { requires-python = '>=3.13' }\n",
+            "[tool.uv.dependency-groups]\n\"Dev.Tools\" = { requires-python = '>=3.12' }\ndev_tools = { requires-python = '>=3.12' }\n",
+        ];
+        let mut locations = Vec::new();
+        for source in cases {
+            let map = SourceMap::parse(source)?;
+            let field = requires_python_field(&map, &group, &requires_python);
+            let source = SourceFile::new("pyproject.toml", source);
+            locations.push(field.map(|field| {
+                (
+                    source
+                        .text()
+                        .get(field.declaration.value.clone())
+                        .map(str::to_string),
+                    field.can_show(&source),
+                )
+            }));
+        }
+        insta::assert_debug_snapshot!(locations, @r#"
+        [
+            Some(
+                (
+                    Some(
+                        "'>=3.12'",
+                    ),
+                    true,
+                ),
+            ),
+            Some(
+                (
+                    Some(
+                        "\">=3.\\u0031\\u0032\"",
+                    ),
+                    true,
+                ),
+            ),
+            Some(
+                (
+                    Some(
+                        "'>=3.12'",
+                    ),
+                    false,
+                ),
+            ),
+            Some(
+                (
+                    Some(
+                        "'>=3.12'",
+                    ),
+                    false,
+                ),
+            ),
+            None,
+            None,
+        ]
+        "#);
         Ok(())
     }
 }
