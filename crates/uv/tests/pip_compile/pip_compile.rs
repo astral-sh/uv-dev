@@ -4783,10 +4783,12 @@ fn error_missing_unnamed_env_var() -> Result<()> {
             .arg("requirements.in"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Couldn't parse requirement in `requirements.in` at position 0
+    error: Couldn't parse requirement
       cause: Expected package name starting with an alphanumeric character, found `$`
-             ${URL}
-             ^
+       --> requirements.in:1:1
+        |
+      1 | ${URL}
+        | ^ invalid requirement
     "
     );
 
@@ -15253,10 +15255,12 @@ fn invalid_extra() -> Result<()> {
         .arg("requirements.in"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Couldn't parse requirement in `requirements.in` at position 0
+    error: Couldn't parse requirement
       cause: Expected an alphanumeric character starting the extra name, found `_`
-             .[_anyio]
-               ^
+       --> requirements.in:1:3
+        |
+      1 | .[_anyio]
+        |   ^ invalid requirement
     ");
 
     // Sync the `anyio` extra. We should reject it.

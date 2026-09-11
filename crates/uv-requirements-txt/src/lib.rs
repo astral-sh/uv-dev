@@ -52,6 +52,7 @@ use uv_configuration::{NoBinary, NoBuild, PackageNameSpecifier};
 use uv_distribution_types::{
     Requirement, UnresolvedRequirement, UnresolvedRequirementSpecification,
 };
+use uv_errors::SourceFile;
 use uv_fs::{Simplified, normalize_path};
 use uv_pep508::{Pep508Error, RequirementOrigin, VerbatimUrl, expand_env_vars};
 use uv_pypi_types::VerbatimParsedUrl;
@@ -59,9 +60,11 @@ use uv_pypi_types::VerbatimParsedUrl;
 use uv_redacted::DisplaySafeUrl;
 use uv_redacted::DisplaySafeUrlError;
 
+pub use crate::diagnostics::diagnostic_for_error;
 pub use crate::requirement::{MakeEditableError, RequirementsTxtRequirement};
 use crate::shquote::unquote;
 
+mod diagnostics;
 mod requirement;
 mod shquote;
 
@@ -242,6 +245,7 @@ impl RequirementsTxt {
         .map_err(|err| RequirementsTxtFileError {
             file: requirements_txt.into(),
             error: err,
+            source_file: Some(diagnostics::source_file(requirements_txt, content)),
         })
     }
 
@@ -273,6 +277,7 @@ impl RequirementsTxt {
                         io::ErrorKind::InvalidInput,
                         "Remote file not supported without `http` feature",
                     )),
+                    source_file: None,
                 });
             }
 
@@ -285,6 +290,7 @@ impl RequirementsTxt {
                         requirements_txt.display().to_string(),
                         err,
                     ),
+                    source_file: None,
                 })?;
 
                 // Avoid constructing a client if network is disabled already
@@ -297,6 +303,7 @@ impl RequirementsTxt {
                                 "Network connectivity is disabled, but a remote requirements file was requested: {url}"
                             ),
                         )),
+                        source_file: None,
                     });
                 }
                 let client = client_builder
@@ -304,12 +311,14 @@ impl RequirementsTxt {
                     .map_err(|err| RequirementsTxtFileError {
                         file: requirements_txt.into(),
                         error: RequirementsTxtParserError::ClientBuild(url.clone(), Box::new(err)),
+                        source_file: None,
                     })?;
                 let content = read_url_to_string(&requirements_txt, client)
                     .await
                     .map_err(|err| RequirementsTxtFileError {
                         file: requirements_txt.into(),
                         error: err,
+                        source_file: None,
                     })?;
                 cache.insert(requirements_txt.to_path_buf(), content.clone());
                 content
@@ -321,6 +330,7 @@ impl RequirementsTxt {
                 .map_err(|err| RequirementsTxtFileError {
                     file: requirements_txt.into(),
                     error: RequirementsTxtParserError::Io(err),
+                    source_file: None,
                 })?;
             cache.insert(requirements_txt.to_path_buf(), content.clone());
             content
@@ -340,6 +350,7 @@ impl RequirementsTxt {
         .map_err(|err| RequirementsTxtFileError {
             file: requirements_txt.into(),
             error: err,
+            source_file: Some(diagnostics::source_file(requirements_txt, content)),
         })?;
 
         Ok(data)
@@ -1143,6 +1154,8 @@ async fn read_url_to_string(
 pub struct RequirementsTxtFileError {
     file: Box<Path>,
     error: RequirementsTxtParserError,
+    /// The decoded input used by the parser, retained only when parsing fails.
+    source_file: Option<SourceFile>,
 }
 
 /// Error parsing requirements.txt, error disambiguation
