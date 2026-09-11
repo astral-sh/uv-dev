@@ -4,6 +4,11 @@
 //! directory enumeration, name parsing, JSON decoding, and index insertion. The `fs_metadata`
 //! benchmark measures the complete production index. Set `UV_BENCH_SITE_PACKAGES` to include an
 //! existing, read-only site-packages directory alongside the generated fixtures.
+//!
+//! The steady-state group reuses its reader or pool within each timed batch. The `_setup` group
+//! includes a fresh pool or ring for every operation. Each batch runs on a fresh submitting thread
+//! with a same-configuration warmup before the timer, so fresh-ring cases do not measure a fresh
+//! process or the submitting task's initial io-wq setup.
 
 // Keep the same allocator as uv, even though no symbols are referenced directly.
 extern crate uv_performance_memory_allocator;
@@ -27,6 +32,9 @@ use uv_pypi_types::DirectUrl;
 
 #[path = "fixtures/installed_packages.rs"]
 mod installed_packages;
+
+#[path = "installed_sidecar_reads/timing.rs"]
+mod timing;
 
 #[cfg(all(
     target_os = "linux",
@@ -207,6 +215,29 @@ fn worker_pool(threads: usize) -> ThreadPool {
         .expect("Failed to create sidecar-reader thread pool")
 }
 
+#[cfg(all(
+    target_os = "linux",
+    any(
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        target_arch = "riscv64",
+        target_arch = "loongarch64",
+        target_arch = "powerpc64"
+    )
+))]
+fn checked_reader(
+    fixture: &Fixture,
+    queue_depth: std::num::NonZeroU32,
+) -> io::Result<uring::Reader> {
+    let mut reader = uring::Reader::new(queue_depth)?;
+    fixture.assert_reads(
+        &reader
+            .read(&fixture.paths)
+            .expect("Failed to probe io_uring sidecar reads"),
+    );
+    Ok(reader)
+}
+
 fn installed_sidecar_read_backends(criterion: &mut Criterion<WallTime>) {
     if matches!(
         env::var("CODSPEED_RUNNER_MODE").as_deref(),
@@ -240,20 +271,35 @@ fn installed_sidecar_read_backends(criterion: &mut Criterion<WallTime>) {
                 u64::try_from(fixture.directories.len()).expect("Package count should fit in u64"),
             ));
             group.bench_function(fixture.benchmark_id("ordinary"), |bencher| {
-                bencher.iter(|| black_box(read_ordinary(black_box(&fixture.paths))));
+                bencher.iter_custom(|iterations| {
+                    timing::isolated_time(
+                        iterations,
+                        || fixture.assert_reads(&read_ordinary(&fixture.paths)),
+                        |()| read_ordinary(black_box(&fixture.paths)),
+                    )
+                });
             });
 
             for threads in [1, 4, 16] {
-                let pool = worker_pool(threads);
-                fixture.assert_reads(&read_with_workers(&fixture.paths, &pool));
                 if include_setup {
-                    drop(pool);
                     group.bench_function(
                         fixture.benchmark_id(&format!("workers-{threads}")),
                         |bencher| {
-                            bencher.iter(|| {
-                                let pool = worker_pool(threads);
-                                black_box(read_with_workers(black_box(&fixture.paths), &pool))
+                            bencher.iter_custom(|iterations| {
+                                timing::isolated_time(
+                                    iterations,
+                                    || {
+                                        let pool = worker_pool(threads);
+                                        fixture.assert_reads(&read_with_workers(
+                                            &fixture.paths,
+                                            &pool,
+                                        ));
+                                    },
+                                    |()| {
+                                        let pool = worker_pool(threads);
+                                        read_with_workers(black_box(&fixture.paths), &pool)
+                                    },
+                                )
                             });
                         },
                     );
@@ -261,8 +307,19 @@ fn installed_sidecar_read_backends(criterion: &mut Criterion<WallTime>) {
                     group.bench_function(
                         fixture.benchmark_id(&format!("workers-{threads}")),
                         |bencher| {
-                            bencher.iter(|| {
-                                black_box(read_with_workers(black_box(&fixture.paths), &pool))
+                            bencher.iter_custom(|iterations| {
+                                timing::isolated_time(
+                                    iterations,
+                                    || {
+                                        let pool = worker_pool(threads);
+                                        fixture.assert_reads(&read_with_workers(
+                                            &fixture.paths,
+                                            &pool,
+                                        ));
+                                        pool
+                                    },
+                                    |pool| read_with_workers(black_box(&fixture.paths), pool),
+                                )
                             });
                         },
                     );
@@ -283,26 +340,32 @@ fn installed_sidecar_read_backends(criterion: &mut Criterion<WallTime>) {
                 let queue_depth =
                     std::num::NonZeroU32::new(queue_depth).expect("non-zero queue depth");
                 // Omit unavailable rings; ordinary-I/O time must not acquire an io_uring label.
-                let Ok(mut reader) = uring::Reader::new(queue_depth) else {
+                // Preflights also need their own submitting task: Linux 5.15 can retain io-wq
+                // worker limits from the first ring used by that task.
+                if !timing::isolated(|| checked_reader(fixture, queue_depth).is_ok()) {
                     continue;
-                };
-                fixture.assert_reads(
-                    &reader
-                        .read(&fixture.paths)
-                        .expect("Failed to probe io_uring sidecar reads"),
-                );
+                }
                 if include_setup {
-                    drop(reader);
                     group.bench_function(
-                        fixture.benchmark_id(&format!("io-uring-{queue_depth}")),
+                        fixture.benchmark_id(&format!("io-uring-{queue_depth}-fresh-ring")),
                         |bencher| {
-                            bencher.iter(|| {
-                                let mut reader = uring::Reader::new(queue_depth)
-                                    .expect("io_uring sidecar reads became unavailable");
-                                black_box(
-                                    reader
-                                        .read(black_box(&fixture.paths))
-                                        .expect("Failed to read sidecars with io_uring"),
+                            bencher.iter_custom(|iterations| {
+                                timing::isolated_time(
+                                    iterations,
+                                    || {
+                                        drop(
+                                            checked_reader(fixture, queue_depth).expect(
+                                                "io_uring sidecar reads became unavailable",
+                                            ),
+                                        );
+                                    },
+                                    |()| {
+                                        let mut reader = uring::Reader::new(queue_depth)
+                                            .expect("io_uring sidecar reads became unavailable");
+                                        reader
+                                            .read(black_box(&fixture.paths))
+                                            .expect("Failed to read sidecars with io_uring")
+                                    },
                                 )
                             });
                         },
@@ -311,11 +374,18 @@ fn installed_sidecar_read_backends(criterion: &mut Criterion<WallTime>) {
                     group.bench_function(
                         fixture.benchmark_id(&format!("io-uring-{queue_depth}")),
                         |bencher| {
-                            bencher.iter(|| {
-                                black_box(
-                                    reader
-                                        .read(black_box(&fixture.paths))
-                                        .expect("Failed to read sidecars with io_uring"),
+                            bencher.iter_custom(|iterations| {
+                                timing::isolated_time(
+                                    iterations,
+                                    || {
+                                        checked_reader(fixture, queue_depth)
+                                            .expect("io_uring sidecar reads became unavailable")
+                                    },
+                                    |reader| {
+                                        reader
+                                            .read(black_box(&fixture.paths))
+                                            .expect("Failed to read sidecars with io_uring")
+                                    },
                                 )
                             });
                         },
