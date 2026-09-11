@@ -1999,6 +1999,7 @@ async fn lock_sdist_url_locked_build_dependency_hash_mismatch() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to download and build `demo-pkg @ http://[LOCALHOST]/files/demo_pkg-1.0.0.tar.gz`
+      info: `demo-pkg` was included because `project` (v0.1.0) depends on `demo-pkg`
       cause: Failed to install requirements from `build-system.requires`
       cause: Failed to download `review-dep==1.0.0`
       cause: Hash mismatch for `review-dep==1.0.0`
@@ -2008,8 +2009,6 @@ async fn lock_sdist_url_locked_build_dependency_hash_mismatch() -> Result<()> {
 
              Computed:
                sha256:1aa0f7263e4991934282ab8912e95fdd34f24459d7c4f8b845c2281a04c89807
-
-    hint: `demo-pkg` was included because `project` (v0.1.0) depends on `demo-pkg`
     ");
     assert!(
         !sentinel.exists(),
@@ -2040,6 +2039,7 @@ async fn lock_sdist_url_locked_build_dependency_hash_mismatch() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to download and build `demo-pkg @ http://[LOCALHOST]/files/demo_pkg-1.0.0.tar.gz`
+      info: `demo-pkg` was included because `project` (v0.1.0) depends on `demo-pkg`
       cause: Failed to install requirements from `build-system.requires`
       cause: Failed to download `review-dep==1.0.0`
       cause: Hash mismatch for `review-dep==1.0.0`
@@ -2049,8 +2049,6 @@ async fn lock_sdist_url_locked_build_dependency_hash_mismatch() -> Result<()> {
 
              Computed:
                sha256:1aa0f7263e4991934282ab8912e95fdd34f24459d7c4f8b845c2281a04c89807
-
-    hint: `demo-pkg` was included because `project` (v0.1.0) depends on `demo-pkg`
     ");
     assert!(
         !sentinel.exists(),
@@ -2375,6 +2373,7 @@ async fn lock_sdist_registry_changed_index_locked_hash_mismatch() -> Result<()> 
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to download and build `demo-pkg==1.0.0`
+      info: `demo-pkg` (v1.0.0) was included because `project` (v0.1.0) depends on `demo-pkg==1.0.0`
       cause: Hash mismatch for `demo-pkg==1.0.0`
 
              Expected:
@@ -2382,8 +2381,6 @@ async fn lock_sdist_registry_changed_index_locked_hash_mismatch() -> Result<()> 
 
              Computed:
                sha256:883b65920e21bce11c2697819dab77eb70e18d810b2746f49e46155d6ca527bc
-
-    hint: `demo-pkg` (v1.0.0) was included because `project` (v0.1.0) depends on `demo-pkg==1.0.0`
     ");
     assert!(
         !sentinel.exists(),
@@ -2478,6 +2475,7 @@ async fn lock_sdist_registry_missing_index_locked_hash_mismatch() -> Result<()> 
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to download and build `demo-pkg==1.0.0`
+      info: `demo-pkg` (v1.0.0) was included because `project` (v0.1.0) depends on `demo-pkg==1.0.0`
       cause: Hash mismatch for `demo-pkg==1.0.0`
 
              Expected:
@@ -2485,8 +2483,6 @@ async fn lock_sdist_registry_missing_index_locked_hash_mismatch() -> Result<()> 
 
              Computed:
                sha256:883b65920e21bce11c2697819dab77eb70e18d810b2746f49e46155d6ca527bc
-
-    hint: `demo-pkg` (v1.0.0) was included because `project` (v0.1.0) depends on `demo-pkg==1.0.0`
     ");
     assert!(
         !sentinel.exists(),
@@ -2879,6 +2875,7 @@ fn lock_sdist_path_rejected_archive_not_cached() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to build `demo-pkg @ file://[TEMP_DIR]/demo_pkg-1.0.0.tar.gz`
+      info: `demo-pkg` was included because `project` (v0.1.0) depends on `demo-pkg`
       cause: Hash mismatch for `demo-pkg @ file://[TEMP_DIR]/demo_pkg-1.0.0.tar.gz`
 
              Expected:
@@ -2886,8 +2883,6 @@ fn lock_sdist_path_rejected_archive_not_cached() -> Result<()> {
 
              Computed:
                sha256:883b65920e21bce11c2697819dab77eb70e18d810b2746f49e46155d6ca527bc
-
-    hint: `demo-pkg` was included because `project` (v0.1.0) depends on `demo-pkg`
     ");
     assert!(
         !sentinel.exists(),
@@ -4207,11 +4202,10 @@ fn lock_project_with_build_constraints() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to download and build `requests==1.2.0`
+      info: `requests` (v1.2.0) was included because `project` (v0.1.0) depends on `requests==1.2`
       cause: Failed to resolve requirements from `setup.py` build
       cause: No solution found when resolving: `setuptools>=40.8.0`
       cause: Because you require setuptools>=40.8.0 and setuptools==1, we can conclude that your requirements are unsatisfiable.
-
-    hint: `requests` (v1.2.0) was included because `project` (v0.1.0) depends on `requests==1.2`
     ");
 
     Ok(())
@@ -11650,6 +11644,7 @@ fn lock_invalid_hash() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to download `idna==3.6`
+      info: `idna` (v3.6) was included because `project` (v0.1.0) depends on `anyio` (v3.7.0) which depends on `idna`
       cause: Hash mismatch for `idna==3.6`
 
              Expected:
@@ -11657,8 +11652,6 @@ fn lock_invalid_hash() -> Result<()> {
 
              Computed:
                sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f
-
-    hint: `idna` (v3.6) was included because `project` (v0.1.0) depends on `anyio` (v3.7.0) which depends on `idna`
     ");
 
     Ok(())
@@ -13918,10 +13911,9 @@ async fn lock_redact_http() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to download `iniconfig==2.0.0`
+      info: `iniconfig` (v2.0.0) was included because `foo` (v0.1.0) depends on `iniconfig`
       cause: Failed to fetch: `http://[LOCALHOST]/basic-auth/files/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl`
       cause: HTTP status client error (401 Unauthorized) for url (http://[LOCALHOST]/basic-auth/files/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl)
-
-    hint: `iniconfig` (v2.0.0) was included because `foo` (v0.1.0) depends on `iniconfig`
     ");
 
     // Installing from the lockfile should fail without an index.
@@ -13929,10 +13921,9 @@ async fn lock_redact_http() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to download `iniconfig==2.0.0`
+      info: `iniconfig` (v2.0.0) was included because `foo` (v0.1.0) depends on `iniconfig`
       cause: Failed to fetch: `http://[LOCALHOST]/basic-auth/files/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl`
       cause: HTTP status client error (401 Unauthorized) for url (http://[LOCALHOST]/basic-auth/files/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl)
-
-    hint: `iniconfig` (v2.0.0) was included because `foo` (v0.1.0) depends on `iniconfig`
     ");
 
     // Installing from the lockfile should succeed when credentials are included on the command-line.
@@ -13959,10 +13950,9 @@ async fn lock_redact_http() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to download `iniconfig==2.0.0`
+      info: `iniconfig` (v2.0.0) was included because `foo` (v0.1.0) depends on `iniconfig`
       cause: Failed to fetch: `http://[LOCALHOST]/basic-auth/files/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl`
       cause: HTTP status client error (401 Unauthorized) for url (http://[LOCALHOST]/basic-auth/files/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl)
-
-    hint: `iniconfig` (v2.0.0) was included because `foo` (v0.1.0) depends on `iniconfig`
     ");
 
     // Installing with credentials from with `UV_INDEX_URL` should succeed.
@@ -33909,7 +33899,9 @@ fn lock_derivation_chain_prod() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to build `wsgiref==0.1.2`
+      info: `wsgiref` (v0.1.2) was included because `project` (v0.1.0) depends on `wsgiref==0.1.2`
       cause: The build backend returned an error
+      info: Build failures usually indicate a problem with the package or the build environment
       cause: Call to `setuptools.build_meta:__legacy__.build_wheel` failed (exit status: 1)
 
              [stderr]
@@ -33929,10 +33921,6 @@ fn lock_derivation_chain_prod() -> Result<()> {
                  print "Setuptools version",version,"or greater has been installed."
                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
              SyntaxError: Missing parentheses in call to 'print'. Did you mean print(...)?
-
-    hint: `wsgiref` (v0.1.2) was included because `project` (v0.1.0) depends on `wsgiref==0.1.2`
-
-    hint: Build failures usually indicate a problem with the package or the build environment
     "#);
 
     Ok(())
@@ -33959,7 +33947,9 @@ fn lock_derivation_chain_extra() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to build `wsgiref==0.1.2`
+      info: `wsgiref` (v0.1.2) was included because `project[wsgi]` (v0.1.0) depends on `wsgiref>=0.1`
       cause: The build backend returned an error
+      info: Build failures usually indicate a problem with the package or the build environment
       cause: Call to `setuptools.build_meta:__legacy__.build_wheel` failed (exit status: 1)
 
              [stderr]
@@ -33979,10 +33969,6 @@ fn lock_derivation_chain_extra() -> Result<()> {
                  print "Setuptools version",version,"or greater has been installed."
                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
              SyntaxError: Missing parentheses in call to 'print'. Did you mean print(...)?
-
-    hint: `wsgiref` (v0.1.2) was included because `project[wsgi]` (v0.1.0) depends on `wsgiref>=0.1`
-
-    hint: Build failures usually indicate a problem with the package or the build environment
     "#);
 
     Ok(())
@@ -34011,7 +33997,9 @@ fn lock_derivation_chain_group() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to build `wsgiref==0.1.2`
+      info: `wsgiref` (v0.1.2) was included because `project:wsgi` (v0.1.0) depends on `wsgiref`
       cause: The build backend returned an error
+      info: Build failures usually indicate a problem with the package or the build environment
       cause: Call to `setuptools.build_meta:__legacy__.build_wheel` failed (exit status: 1)
 
              [stderr]
@@ -34031,10 +34019,6 @@ fn lock_derivation_chain_group() -> Result<()> {
                  print "Setuptools version",version,"or greater has been installed."
                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
              SyntaxError: Missing parentheses in call to 'print'. Did you mean print(...)?
-
-    hint: `wsgiref` (v0.1.2) was included because `project:wsgi` (v0.1.0) depends on `wsgiref`
-
-    hint: Build failures usually indicate a problem with the package or the build environment
     "#);
 
     Ok(())
@@ -34074,7 +34058,9 @@ fn lock_derivation_chain_extended() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to build `wsgiref==0.1.2`
+      info: `wsgiref` (v0.1.2) was included because `project` (v0.1.0) depends on `child` (v0.1.0) which depends on `wsgiref>=0.1, <0.2`
       cause: The build backend returned an error
+      info: Build failures usually indicate a problem with the package or the build environment
       cause: Call to `setuptools.build_meta:__legacy__.build_wheel` failed (exit status: 1)
 
              [stderr]
@@ -34094,10 +34080,6 @@ fn lock_derivation_chain_extended() -> Result<()> {
                  print "Setuptools version",version,"or greater has been installed."
                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
              SyntaxError: Missing parentheses in call to 'print'. Did you mean print(...)?
-
-    hint: `wsgiref` (v0.1.2) was included because `project` (v0.1.0) depends on `child` (v0.1.0) which depends on `wsgiref>=0.1, <0.2`
-
-    hint: Build failures usually indicate a problem with the package or the build environment
     "#);
 
     Ok(())
@@ -34130,9 +34112,8 @@ fn mismatched_name_self_editable() -> Result<()> {
     ----- stderr -----
     Resolved 2 packages in [TIME]
     error: Failed to build `foo @ file://[TEMP_DIR]/`
+      info: `foo` was included because `project` (v0.1.0) depends on `foo`
       cause: Package metadata name `project` does not match given name `foo`
-
-    hint: `foo` was included because `project` (v0.1.0) depends on `foo`
     ");
 
     Ok(())
