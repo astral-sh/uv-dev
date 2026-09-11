@@ -7289,6 +7289,7 @@ dependencies = [
  "futures",
  "hashbrown 0.17.1",
  "indexmap",
+ "insta",
  "itertools 0.14.0",
  "jiff",
  "owo-colors",
