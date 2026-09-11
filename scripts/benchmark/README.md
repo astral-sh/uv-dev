@@ -15,18 +15,33 @@ profile for main-branch baseline imports.
 
 Whole-command workloads also need `cargo build --locked --profile profiling --bin uv`. Run
 `python3 scripts/benchmark/prepare-environments.py` to install the pinned CPython interpreter under
-`.cache/bench-python` and prime the package cache with Prefect's frozen runtime dependencies. The
-temporary environment is discarded; measured workloads reconstruct their own environments offline
-from the same lockfile and cached package artifacts.
+`.cache/bench-python` and prime the package cache with frozen project dependencies. The
+`environments.json` manifest selects Packse's runtime, uv's documentation environment, and Prefect's
+runtime as small, medium, and large package graphs. These workloads share one pinned interpreter.
+The temporary environments are discarded; measured workloads reconstruct their own environments
+offline from the same lockfiles and cached package artifacts.
 
-Pass `--discovery` to also install the pinned Python 3.10, 3.12, and 3.13 interpreters used by the
-Python discovery workloads.
+Pass `--discovery` to also install the pinned Python 3.10 and 3.13 interpreters used by the Python
+discovery workloads.
 
 Network workloads use `serve-fixtures.py` with the pinned Python 3.11 interpreter. It serves the
 prepared wheels, their actual core metadata, and Simple API listings derived from those wheels or an
 immutable lockfile. The server binds an ephemeral loopback port and applies a fixed 20 ms request
 delay to model an ordinary remote index without relying on live service timing. Wheel responses
 support byte ranges; only locally prepared artifact bodies can be downloaded.
+
+## Workload selection
+
+Prefer immutable artifacts and dependency graphs from real projects. Include small, medium, and
+large workloads where different sizes can exercise different paths, and identify the relevant
+dimension: package count, archive entries, artifact bytes, or dependency-graph complexity. A larger
+input is not automatically more representative.
+
+Use CPU simulation for CPU-bound work such as parsing and graph transformations. Use walltime for
+filesystem operations, subprocesses, network requests, and concurrency effects. Keep fixture setup
+outside the measured region, control external services, and inspect the timing distribution and
+run-to-run noise before relying on a benchmark to detect regressions. An ablation should produce a
+repeatable effect that is meaningfully larger than the observed noise.
 
 ## Getting Started
 

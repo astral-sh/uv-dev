@@ -160,6 +160,8 @@ harness = false
 
 [dependencies]
 fs-err = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 tempfile = { workspace = true }
 toml = { workspace = true }
 
@@ -203,7 +205,6 @@ http = { workspace = true }
 jiff = { workspace = true }
 reqwest = { workspace = true }
 reqwest-middleware = { workspace = true }
-serde_json = { workspace = true }
 sha2 = { workspace = true }
 tar-codec = { workspace = true }
 tokio = { workspace = true }
