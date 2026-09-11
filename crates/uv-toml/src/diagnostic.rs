@@ -12,6 +12,7 @@ use uv_errors::{Diagnostic, SourceFile, SourceSnippet};
 pub struct ParseError<E> {
     error: E,
     document: Option<SourceFile>,
+    mapped_span: Option<Range<usize>>,
 }
 
 impl<E> ParseError<E> {
@@ -20,7 +21,22 @@ impl<E> ParseError<E> {
         Self {
             error,
             document: Some(document),
+            mapped_span: None,
         }
+    }
+
+    /// Retain a parser range mapped into a different source snapshot.
+    pub fn new_with_span(error: E, document: SourceFile, span: Range<usize>) -> Self {
+        Self {
+            error,
+            document: Some(document),
+            mapped_span: Some(span),
+        }
+    }
+
+    /// The caller-provided range in the retained source snapshot, when remapped.
+    pub fn mapped_span(&self) -> Option<Range<usize>> {
+        self.mapped_span.clone()
     }
 
     /// The original parser error.
@@ -39,6 +55,7 @@ impl<E> From<E> for ParseError<E> {
         Self {
             error,
             document: None,
+            mapped_span: None,
         }
     }
 }

@@ -47,6 +47,11 @@ impl SourceFile {
         &self.text
     }
 
+    /// The one-based starting line of this source snapshot in its original input.
+    pub fn line_start(&self) -> usize {
+        self.line_start
+    }
+
     /// The complete source lines that a zero-context annotation would display for this byte span.
     ///
     /// This uses the renderer's LF-delimited line boundaries, including any CR bytes. Producers
