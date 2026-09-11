@@ -1331,10 +1331,11 @@ impl Hinted for ToolRunScriptError {
                 target,
                 invocation,
             } => format!(
-                "If you meant to run `{}` from the `{}` package, add `{}` to the `{}` command",
+                "If you meant to run `{}` from the `{}` package, add `{}` before `{}` in the `{}` command",
                 target.cyan(),
                 package_name.cyan(),
                 format!("--from {package_name}").green(),
+                target.cyan(),
                 invocation.to_string().cyan(),
             ),
         };
@@ -1501,7 +1502,7 @@ mod tests {
           {
             "hints": [
               {
-                "message": "If you meant to run `demo.py` from the `demo-py` package, add `--from demo-py` to the `uvx` command",
+                "message": "If you meant to run `demo.py` from the `demo-py` package, add `--from demo-py` before `demo.py` in the `uvx` command",
                 "ordering": "last"
               }
             ],
