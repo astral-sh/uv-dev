@@ -3,7 +3,141 @@ use assert_cmd::assert::OutputAssertExt;
 use assert_fs::fixture::{FileWriteStr, PathChild, PathCreateDir};
 
 use uv_static::EnvVars;
-use uv_test::{copy_dir_ignore, uv_snapshot};
+use uv_test::{TestContext, copy_dir_ignore, uv_snapshot};
+
+fn duplicate_name_workspace(first: &str, second: &str) -> Result<TestContext> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str("[tool.uv.workspace]\nmembers = [\"first\", \"second\"]\n")?;
+    for (name, contents) in [("first", first), ("second", second)] {
+        let member = context.temp_dir.child(name);
+        member.create_dir_all()?;
+        member.child("pyproject.toml").write_str(contents)?;
+    }
+    Ok(context)
+}
+
+#[test]
+fn workspace_list_duplicate_names() -> Result<()> {
+    let context = duplicate_name_workspace(
+        indoc::indoc! {r#"
+            [project]
+            name = "example"
+            version = "0.1.0"
+        "#},
+        indoc::indoc! {r#"
+            [project]
+            name = "example"
+            version = "0.2.0"
+        "#},
+    )?;
+
+    uv_snapshot!(context.filters(), context.workspace_list(), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Two workspace members are both named `example`
+       --> second/pyproject.toml:2:8
+        |
+      2 | name = "example"
+        |        ^^^^^^^^^ duplicate name
+      info: The name was first declared here
+       --> first/pyproject.toml:2:8
+        |
+      2 | name = "example"
+        |        --------- first declared here
+    "#);
+
+    Ok(())
+}
+
+#[test]
+fn workspace_list_duplicate_normalized_names() -> Result<()> {
+    let first = indoc::indoc! {r#"
+        ["project"]
+        description = "https://user:first-secret@example.com/"
+        "name" = 'Example_Pkg'
+        version = "0.1.0"
+        urls = { private = "https://user:second-secret@example.com/" }
+    "#}
+    .replace('\n', "\r\n");
+    let context = duplicate_name_workspace(
+        &first,
+        indoc::indoc! {r#"
+            [project]
+            'name' = "example-pkg"
+            version = "0.2.0"
+        "#},
+    )?;
+
+    uv_snapshot!(context.filters(), context.workspace_list(), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Two workspace members are both named `example-pkg`
+       --> second/pyproject.toml:2:10
+        |
+      2 | 'name' = "example-pkg"
+        |          ^^^^^^^^^^^^^ duplicate name
+      info: The name was first declared here
+       --> first/pyproject.toml:3:10
+        |
+      3 | "name" = 'Example_Pkg'
+        |          ------------- first declared here
+    "#);
+
+    Ok(())
+}
+
+#[test]
+fn workspace_list_duplicate_names_hide_inline_fields() -> Result<()> {
+    let context = duplicate_name_workspace(
+        indoc::indoc! {r#"
+            project = { name = "example", version = "0.1.0", urls = { private = "https://user:first-secret@example.com/" } }
+        "#},
+        indoc::indoc! {r#"
+            project = { name = "example", version = "0.2.0", urls = { private = "https://user:second-secret@example.com/" } }
+        "#},
+    )?;
+
+    uv_snapshot!(context.filters(), context.workspace_list(), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Two workspace members are both named `example`
+       --> second/pyproject.toml:1:20
+      info: The name was first declared here
+       --> first/pyproject.toml:1:20
+    ");
+
+    Ok(())
+}
+
+#[test]
+fn workspace_list_duplicate_names_hide_dotted_or_commented_fields() -> Result<()> {
+    let context = duplicate_name_workspace(
+        indoc::indoc! {r#"
+            project.name = "example"
+            project.version = "0.1.0"
+            project.urls = { private = "https://user:first-secret@example.com/" }
+        "#},
+        indoc::indoc! {r#"
+            [project]
+            name = "example" # https://user:second-secret@example.com/
+            version = "0.2.0"
+        "#},
+    )?;
+
+    uv_snapshot!(context.filters(), context.workspace_list(), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Two workspace members are both named `example`
+       --> second/pyproject.toml:2:8
+      info: The name was first declared here
+       --> first/pyproject.toml:1:16
+    ");
+
+    Ok(())
+}
 
 /// The workspace discovered while resolving settings is reused when the resolved cache root is
 /// unchanged, but not when constructing the resolved cache creates a new root.
