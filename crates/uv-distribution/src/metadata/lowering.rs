@@ -13,6 +13,7 @@ use uv_distribution_types::{
     Index, IndexCredentialsError, IndexLocations, IndexMetadata, IndexName, Origin, Requirement,
     RequirementSource,
 };
+use uv_errors::SourceSnippet;
 use uv_fs::{Simplified, normalize_absolute_path, normalize_path};
 use uv_git_types::{GitLfs, GitReference, GitUrl, GitUrlParseError};
 use uv_normalize::{ExtraName, GroupName, PackageName};
@@ -26,6 +27,7 @@ use uv_redacted::{DisplaySafeUrl, DisplaySafeUrlError};
 use uv_workspace::pyproject::{PyProjectToml, Source, Sources, WorkspaceReference};
 use uv_workspace::{DiscoveryOptions, Workspace, WorkspaceCache, WorkspaceError};
 
+use crate::diagnostics::{SourceOccurrence, missing_index_source};
 use crate::metadata::GitWorkspaceMember;
 
 #[derive(Debug, Clone)]
@@ -45,6 +47,7 @@ impl LoweredRequirement {
         requirement: uv_pep508::Requirement<VerbatimParsedUrl>,
         project_name: Option<&'data PackageName>,
         project_dir: &'data Path,
+        project_pyproject_toml: &'data PyProjectToml,
         project_sources: &'data BTreeMap<PackageName, Sources>,
         project_indexes: &'data [Index],
         extra: Option<&ExtraName>,
@@ -68,9 +71,11 @@ impl LoweredRequirement {
 
         // If the source only applies to a given extra or dependency group, filter it out.
         let sources = sources.map(|sources| {
+            let count = sources.iter().count();
             sources
                 .iter()
-                .filter(|source| {
+                .enumerate()
+                .filter(|(_, source)| {
                     if let Some(target) = source.extra()
                         && extra != Some(target)
                     {
@@ -85,8 +90,8 @@ impl LoweredRequirement {
 
                     true
                 })
-                .cloned()
-                .collect::<Sources>()
+                .map(|(index, source)| (SourceOccurrence { index, count }, source))
+                .collect::<Vec<_>>()
         });
 
         // If you use a package that's part of the workspace...
@@ -102,7 +107,7 @@ impl LoweredRequirement {
                     )));
                 };
 
-                for source in sources.iter() {
+                for (_, source) in sources {
                     match source {
                         Source::Git { .. } => {
                             return Either::Left(std::iter::once(Err(
@@ -164,7 +169,7 @@ impl LoweredRequirement {
         let remaining = {
             // Determine the space covered by the sources.
             let mut total = MarkerTree::FALSE;
-            for source in sources.iter() {
+            for (_, source) in &sources {
                 total = total.or(source.marker());
             }
 
@@ -179,10 +184,10 @@ impl LoweredRequirement {
         };
 
         Either::Right(
-            join_all(sources.into_iter().map(|source| {
+            join_all(sources.into_iter().map(|(occurrence, original_source)| {
                 let requirement = &requirement;
                 async move {
-                    let (source, mut marker) = match source {
+                    let (source, mut marker) = match original_source.clone() {
                         Source::Git {
                             git,
                             subdirectory,
@@ -252,10 +257,28 @@ impl LoweredRequirement {
                                 })
                             else {
                                 let hint = missing_index_hint(locations, &index);
+                                let (pyproject_dir, pyproject) = match origin {
+                                    RequirementOrigin::Project => {
+                                        (project_dir, project_pyproject_toml)
+                                    }
+                                    RequirementOrigin::Workspace => (
+                                        workspace.install_path().as_path(),
+                                        workspace.pyproject_toml(),
+                                    ),
+                                };
+                                let diagnostic = missing_index_source(
+                                    pyproject_dir,
+                                    pyproject,
+                                    &requirement.name,
+                                    occurrence,
+                                    original_source,
+                                )
+                                .map(Box::new);
                                 return Err(LoweringError::MissingIndex {
                                     package: requirement.name.clone(),
                                     index,
                                     hint,
+                                    diagnostic,
                                 });
                             };
                             if let Some(credentials) = index.credentials()? {
@@ -444,6 +467,7 @@ impl LoweredRequirement {
                                     package: requirement.name.clone(),
                                     index,
                                     hint,
+                                    diagnostic: None,
                                 });
                             };
                             if let Some(credentials) = index.credentials()? {
@@ -578,6 +602,7 @@ pub enum LoweringError {
         package: PackageName,
         index: IndexName,
         hint: Option<String>,
+        diagnostic: Option<Box<SourceSnippet<'static>>>,
     },
     #[error("Workspace members are not allowed in non-workspace contexts")]
     WorkspaceMember,

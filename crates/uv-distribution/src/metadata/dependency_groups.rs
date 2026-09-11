@@ -156,6 +156,7 @@ impl SourcedDependencyGroups {
                         requirement,
                         project.project_name(),
                         project.root(),
+                        project.pyproject_toml(),
                         project_sources,
                         project_indexes,
                         None,
