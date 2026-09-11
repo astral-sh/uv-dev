@@ -869,7 +869,7 @@ impl NoSolutionError {
     }
 
     /// Return the facts explaining why candidate packages were rejected.
-    pub fn diagnostic_info(&self) -> impl Iterator<Item = Info<'static>> + '_ {
+    pub(crate) fn diagnostic_info(&self) -> impl Iterator<Item = Info<'static>> + '_ {
         self.pubgrub_hints()
             .iter()
             .map(PubGrubHint::diagnostic_info)
