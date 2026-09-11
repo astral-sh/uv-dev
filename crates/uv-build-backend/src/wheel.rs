@@ -34,7 +34,7 @@ use crate::{
 // which was fastest in wheel-writer benchmarks because it can write final ZIP
 // headers without per-chunk async writes. The 16 MiB limit keeps typical source
 // files on that fast path without buffering very large data files wholesale.
-const WHOLE_FILE_ZIP_ENTRY_LIMIT: u64 = 16 * 1024 * 1024;
+const WHOLE_FILE_ZIP_ENTRY_LIMIT: u64 = 0;
 // Buffer size for the large-file streaming fallback. 128 KiB was enough to cut
 // down read/write loop overhead compared to the 8 KiB default while remaining a
 // small fixed allocation for entries that are too large for `write_entry_whole`.
