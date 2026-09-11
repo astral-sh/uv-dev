@@ -5960,6 +5960,7 @@ dependencies = [
  "uv-shell",
  "uv-static",
  "uv-test",
+ "uv-toml",
  "uv-tool",
  "uv-torch",
  "uv-trampoline-builder",

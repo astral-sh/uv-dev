@@ -8926,13 +8926,22 @@ fn lock_requires_python_disjoint() -> Result<()> {
         "#,
     )?;
 
-    uv_snapshot!(context.filters(), context.lock(), @"
+    uv_snapshot!(context.filters(), context.lock(), @r#"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Found conflicting Python requirements:
     - child: ==3.10
     - project: >=3.12
-    ");
+       --> child/pyproject.toml:5:27
+        |
+      5 |         requires-python = "==3.10"
+        |                           ^^^^^^^^ requires Python `==3.10`
+        |
+       ::: pyproject.toml:5:27
+        |
+      5 |         requires-python = ">=3.12"
+        |                           ^^^^^^^^ requires Python `>=3.12`
+    "#);
 
     Ok(())
 }
@@ -28007,24 +28016,32 @@ fn lock_request_requires_python() -> Result<()> {
     )?;
 
     // Request a version that conflicts with `--requires-python`.
-    uv_snapshot!(context.filters(), context.lock().arg("--python").arg("3.12"), @"
+    uv_snapshot!(context.filters(), context.lock().arg("--python").arg("3.12"), @r#"
     exit_code: 2 (failure)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
     error: The requested interpreter resolved to Python 3.12.[X], which is incompatible with the project's Python requirement: `>=3.8, <=3.10` (from `project.requires-python`)
-    ");
+       --> pyproject.toml:5:27
+        |
+      5 |         requires-python = ">=3.8, <=3.10"
+        |                           ^^^^^^^^^^^^^^^ requires Python `>=3.8, <=3.10`
+    "#);
 
     // Add a `.python-version` file that conflicts.
     let python_version = context.temp_dir.child(".python-version");
     python_version.write_str("3.12")?;
 
-    uv_snapshot!(context.filters(), context.lock(), @"
+    uv_snapshot!(context.filters(), context.lock(), @r#"
     exit_code: 2 (failure)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
     error: The Python request from `.python-version` resolved to Python 3.12.[X], which is incompatible with the project's Python requirement: `>=3.8, <=3.10` (from `project.requires-python`)
     Use `uv python pin` to update the `.python-version` file to a compatible version
-    ");
+       --> pyproject.toml:5:27
+        |
+      5 |         requires-python = ">=3.8, <=3.10"
+        |                           ^^^^^^^^^^^^^^^ requires Python `>=3.8, <=3.10`
+    "#);
 
     Ok(())
 }

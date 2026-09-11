@@ -1144,12 +1144,16 @@ fn mixed_requires_python() -> Result<()> {
     ");
 
     // Running `uv sync` again should fail.
-    uv_snapshot!(context.filters(), context.sync().arg("-p").arg("3.9"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("-p").arg("3.9"), @r#"
     exit_code: 2 (failure)
     ----- stderr -----
     Using CPython 3.9.[X] interpreter at: [PYTHON-3.9]
     error: The requested interpreter resolved to Python 3.9.[X], which is incompatible with the project's Python requirement: `>=3.12` (from workspace member `albatross`'s `project.requires-python`).
-    ");
+       --> pyproject.toml:5:27
+        |
+      5 |         requires-python = ">=3.12"
+        |                           ^^^^^^^^ requires Python `>=3.12`
+    "#);
 
     Ok(())
 }
@@ -9365,12 +9369,16 @@ fn sync_python_version() -> Result<()> {
     ");
 
     // Unless explicitly requested...
-    uv_snapshot!(context.filters(), context.sync().arg("--python").arg("3.10"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--python").arg("3.10"), @r#"
     exit_code: 2 (failure)
     ----- stderr -----
     Using CPython 3.10.[X] interpreter at: [PYTHON-3.10]
     error: The requested interpreter resolved to Python 3.10.[X], which is incompatible with the project's Python requirement: `>=3.11` (from `project.requires-python`)
-    ");
+       --> pyproject.toml:4:19
+        |
+      4 | requires-python = ">=3.11"
+        |                   ^^^^^^^^ requires Python `>=3.11`
+    "#);
 
     // But a pin should take precedence
     uv_snapshot!(context.filters(), context.python_pin().arg("3.12"), @"
@@ -9400,13 +9408,17 @@ fn sync_python_version() -> Result<()> {
     ");
 
     // We should warn on subsequent uses, but respect the pinned version?
-    uv_snapshot!(context.filters(), context.sync(), @"
+    uv_snapshot!(context.filters(), context.sync(), @r#"
     exit_code: 2 (failure)
     ----- stderr -----
     Using CPython 3.10.[X] interpreter at: [PYTHON-3.10]
     error: The Python request from `.python-version` resolved to Python 3.10.[X], which is incompatible with the project's Python requirement: `>=3.11` (from `project.requires-python`)
     Use `uv python pin` to update the `.python-version` file to a compatible version
-    ");
+       --> pyproject.toml:4:19
+        |
+      4 | requires-python = ">=3.11"
+        |                   ^^^^^^^^ requires Python `>=3.11`
+    "#);
 
     // Unless the pin file is outside the project, in which case we should just ignore it entirely
     let child_dir = context.temp_dir.child("child");
@@ -9433,6 +9445,58 @@ fn sync_python_version() -> Result<()> {
      + anyio==3.7.0
      + idna==3.6
      + sniffio==1.3.1
+    ");
+
+    Ok(())
+}
+
+#[test]
+fn sync_python_version_source_privacy() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context.temp_dir.child("pyproject.toml").write_str(indoc! {r#"
+        project = { name = "project", version = "0.1.0", requires-python = "<3.12", description = "not for diagnostics" }
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.sync().arg("--python").arg("3.12").arg("--offline"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    error: The requested interpreter resolved to Python 3.12.[X], which is incompatible with the project's Python requirement: `<3.12` (from `project.requires-python`)
+       --> pyproject.toml:1:68
+    ");
+
+    Ok(())
+}
+
+/// A selected group's flattened bound does not identify one declaration when it includes
+/// another group with a different Python requirement.
+#[test]
+fn sync_python_version_source_group_intersection() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+
+        [dependency-groups]
+        parent = [{ include-group = "child" }]
+        child = []
+
+        [tool.uv.dependency-groups]
+        parent = { requires-python = "<3.13" }
+        child = { requires-python = ">=3.13" }
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.sync().arg("--only-group").arg("parent").arg("--offline"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Found conflicting Python requirements:
+    - project:parent: <3.13, >=3.13
     ");
 
     Ok(())

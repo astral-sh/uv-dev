@@ -56,7 +56,8 @@ fn diagnostic_for_error<'a>(error: &'a (dyn Error + 'static)) -> Option<Diagnost
                 .or_else(|| uv_settings::diagnostic_for_error(error))
                 .or_else(|| uv_workspace::pyproject::diagnostic_for_error(error))
                 .or_else(|| uv_workspace::dependency_groups::diagnostic_for_error(error))
-                .or_else(|| uv_workspace::diagnostic_for_error(error));
+                .or_else(|| uv_workspace::diagnostic_for_error(error))
+                .or_else(|| crate::commands::project::diagnostics::diagnostic_for_error(error));
         }
         let metadata = metadata_for_error(error);
         owners.push(metadata.hints);

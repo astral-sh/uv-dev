@@ -61,6 +61,7 @@ use uv_workspace::{ProjectEnvironmentSelection, RequiresPythonSources, Workspace
 
 use crate::commands::pip::loggers::{InstallLogger, ResolveLogger};
 use crate::commands::pip::operations::{Changelog, Modifications};
+use crate::commands::project::diagnostics::PythonRequirementsDiagnostic;
 use crate::commands::project::install_target::InstallTarget;
 use crate::commands::reporters::{PythonDownloadReporter, ResolverReporter};
 use crate::commands::{capitalize, conjunction, pip};
@@ -72,6 +73,7 @@ use crate::settings::{
 pub(crate) mod add;
 pub(crate) mod audit;
 pub(crate) mod check;
+pub(crate) mod diagnostics;
 pub(crate) mod environment;
 pub(crate) mod export;
 pub(crate) mod format;
@@ -167,7 +169,13 @@ pub(crate) enum ProjectError {
         "The requested interpreter resolved to Python {_0}, which is incompatible with the project's Python requirement: `{_1}`{}",
         format_optional_requires_python_sources(_2, *_3)
     )]
-    RequestedPythonProjectIncompatibility(Version, RequiresPython, RequiresPythonSources, bool),
+    RequestedPythonProjectIncompatibility(
+        Version,
+        RequiresPython,
+        RequiresPythonSources,
+        bool,
+        Option<Box<PythonRequirementsDiagnostic>>,
+    ),
 
     #[error(
         "The Python request from `{python_request}` resolved to Python {version}, which is incompatible with the project's Python requirement: `{requires_python}`{}\nUse `uv python pin` to update the `.python-version` file to a compatible version",
@@ -179,13 +187,20 @@ pub(crate) enum ProjectError {
         requires_python: RequiresPython,
         requires_python_sources: Box<RequiresPythonSources>,
         workspace: bool,
+        diagnostic: Option<Box<PythonRequirementsDiagnostic>>,
     },
 
     #[error(
         "The resolved Python interpreter (Python {_0}) is incompatible with the project's Python requirement: `{_1}`{}",
         format_optional_requires_python_sources(_2, *_3)
     )]
-    RequiresPythonProjectIncompatibility(Version, RequiresPython, RequiresPythonSources, bool),
+    RequiresPythonProjectIncompatibility(
+        Version,
+        RequiresPython,
+        RequiresPythonSources,
+        bool,
+        Option<Box<PythonRequirementsDiagnostic>>,
+    ),
 
     #[error(
         "The requested interpreter resolved to Python {0}, which is incompatible with the script's Python requirement: `{1}`"
@@ -237,7 +252,10 @@ pub(crate) enum ProjectError {
         "Found conflicting Python requirements:\n{}",
         format_requires_python_sources(_0)
     )]
-    DisjointRequiresPython(BTreeMap<(PackageName, Option<GroupName>), VersionSpecifiers>),
+    DisjointRequiresPython(
+        RequiresPythonSources,
+        Option<Box<PythonRequirementsDiagnostic>>,
+    ),
 
     #[error("Environment marker is empty")]
     EmptyEnvironment,
@@ -487,7 +505,7 @@ impl uv_errors::Hinted for ProjectError {
             | Self::MissingExtraScript(_)
             | Self::OverlappingMarkers(..)
             | Self::DisjointEnvironment(..)
-            | Self::DisjointRequiresPython(_)
+            | Self::DisjointRequiresPython(..)
             | Self::EmptyEnvironment
             | Self::InvalidProjectEnvironmentDir(..)
             | Self::UvLockParse(_)
@@ -682,9 +700,17 @@ pub(crate) fn find_requires_python(
             }
         }
     }
-    match RequiresPython::intersection(requires_python.iter().map(|(.., specifiers)| specifiers)) {
-        Some(requires_python) => Ok(Some(requires_python)),
-        None => Err(ProjectError::DisjointRequiresPython(requires_python)),
+    if let Some(requires_python) =
+        RequiresPython::intersection(requires_python.iter().map(|(.., specifiers)| specifiers))
+    {
+        Ok(Some(requires_python))
+    } else {
+        let diagnostic =
+            PythonRequirementsDiagnostic::new(workspace, &requires_python).map(Box::new);
+        Err(ProjectError::DisjointRequiresPython(
+            requires_python,
+            diagnostic,
+        ))
     }
 }
 
@@ -711,6 +737,9 @@ pub(crate) fn validate_project_requires_python(
         .filter(|(.., requires)| !requires.contains(interpreter.python_version()))
         .collect::<RequiresPythonSources>();
     let workspace_non_trivial = workspace.is_some_and(|workspace| workspace.packages().len() > 1);
+    let diagnostic = workspace
+        .and_then(|workspace| PythonRequirementsDiagnostic::new(workspace, &conflicting_requires))
+        .map(Box::new);
 
     match source {
         PythonRequestSource::UserRequest => {
@@ -719,6 +748,7 @@ pub(crate) fn validate_project_requires_python(
                 requires_python.clone(),
                 conflicting_requires,
                 workspace_non_trivial,
+                diagnostic,
             ))
         }
         PythonRequestSource::DotPythonVersion(file) => {
@@ -728,6 +758,7 @@ pub(crate) fn validate_project_requires_python(
                 requires_python: requires_python.clone(),
                 requires_python_sources: Box::new(conflicting_requires),
                 workspace: workspace_non_trivial,
+                diagnostic,
             })
         }
         PythonRequestSource::RequiresPython => {
@@ -736,6 +767,7 @@ pub(crate) fn validate_project_requires_python(
                 requires_python.clone(),
                 conflicting_requires,
                 workspace_non_trivial,
+                diagnostic,
             ))
         }
     }
