@@ -54,7 +54,8 @@ fn diagnostic_for_error<'a>(error: &'a (dyn Error + 'static)) -> Option<Diagnost
             presentation = uv_publish::diagnostic_for_error(error)
                 .or_else(|| uv_requirements_txt::diagnostic_for_error(error))
                 .or_else(|| uv_settings::diagnostic_for_error(error))
-                .or_else(|| uv_workspace::pyproject::diagnostic_for_error(error));
+                .or_else(|| uv_workspace::pyproject::diagnostic_for_error(error))
+                .or_else(|| uv_workspace::dependency_groups::diagnostic_for_error(error));
         }
         let metadata = metadata_for_error(error);
         owners.push(metadata.hints);
@@ -218,6 +219,7 @@ fn format_chain(name: &PackageName, version: Option<&Version>, chain: &Derivatio
 #[cfg(test)]
 mod tests {
     use std::error::Error;
+    use std::path::Path;
     use std::sync::Arc;
 
     use assert_fs::prelude::*;
@@ -225,6 +227,7 @@ mod tests {
     use reqwest::StatusCode;
 
     use uv_client::{BaseClientBuilder, Connectivity};
+    use uv_distribution::MetadataError;
     use uv_distribution_types::{DerivationChain, IsBuildBackendError};
     use uv_errors::{ErrorOptions, HintOrdering, Hinted, Hints, write_error_chain_with_options};
     use uv_fs::Simplified;
@@ -234,6 +237,7 @@ mod tests {
     use uv_resolver::ResolveError;
     use uv_settings::FilesystemOptions;
     use uv_types::AnyErrorBuild;
+    use uv_workspace::dependency_groups::{DependencyGroupError, FlatDependencyGroups};
     use uv_workspace::pyproject::{PyProjectToml, PyprojectTomlError, SourceError};
 
     use crate::commands::pip::{self, operations};
@@ -343,6 +347,45 @@ mod tests {
         let error = PyProjectToml::from_string("[project]\n".to_owned(), "pyproject.toml")
             .expect_err("missing project name in test input");
         assert!(diagnostic_for_error(&Arc::new(error)).is_some());
+    }
+
+    #[test]
+    fn formats_dependency_group_source_through_project_metadata() -> anyhow::Result<()> {
+        let pyproject = PyProjectToml::from_string(
+            indoc::indoc! {r#"
+                [project]
+                name = "demo"
+                version = "0.1.0"
+
+                [dependency-groups]
+                dev = [{ include-group = "missing" }]
+            "#}
+            .to_string(),
+            "project/pyproject.toml",
+        )?;
+        let error = || {
+            FlatDependencyGroups::from_pyproject_toml(Path::new("project"), &pyproject)
+                .expect_err("the included group is missing")
+        };
+        let project = ProjectError::Metadata(MetadataError::DependencyGroup(error()));
+        let owner = hidden_root(&project);
+
+        assert!(owner.is::<DependencyGroupError>());
+        assert!(std::ptr::eq(
+            project.source().expect("the actual semantic cause"),
+            owner.source().expect("the dependency-group cause"),
+        ));
+        assert!(diagnostic_for_error(&Box::new(error())).is_some());
+        assert!(diagnostic_for_error(&Arc::new(error())).is_some());
+        assert_snapshot!(format_error(&project), @r#"
+        error: Project `demo @ project` has malformed dependency groups
+          cause: Failed to find group `missing` included by `dev`
+           --> project/pyproject.toml:6:26
+            |
+          6 | dev = [{ include-group = "missing" }]
+            |                          ^^^^^^^^^ undefined group
+        "#);
+        Ok(())
     }
 
     #[test]

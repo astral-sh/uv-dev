@@ -12513,40 +12513,85 @@ fn transitive_group_conflicts_cycle() -> Result<()> {
         "#,
     )?;
 
-    uv_snapshot!(context.filters(), context.sync(), @"
+    uv_snapshot!(context.filters(), context.sync(), @r#"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Project `example` has malformed dependency groups
       cause: Detected a cycle in `dependency-groups`: `dev` -> `test` -> `dev`
-    ");
+        --> pyproject.toml:14:31
+         |
+      14 |             { include-group = "dev" },
+         |                               ^^^^^ closes the cycle
+      info: Group `test` is included by `dev` here
+        --> pyproject.toml:10:31
+         |
+      10 |             { include-group = "test" },
+         |                               ------ included here
+    "#);
 
-    uv_snapshot!(context.filters(), context.sync().arg("--group").arg("dev"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--group").arg("dev"), @r#"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Project `example` has malformed dependency groups
       cause: Detected a cycle in `dependency-groups`: `dev` -> `test` -> `dev`
-    ");
+        --> pyproject.toml:14:31
+         |
+      14 |             { include-group = "dev" },
+         |                               ^^^^^ closes the cycle
+      info: Group `test` is included by `dev` here
+        --> pyproject.toml:10:31
+         |
+      10 |             { include-group = "test" },
+         |                               ------ included here
+    "#);
 
-    uv_snapshot!(context.filters(), context.sync().arg("--group").arg("dev").arg("--group").arg("test"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--group").arg("dev").arg("--group").arg("test"), @r#"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Project `example` has malformed dependency groups
       cause: Detected a cycle in `dependency-groups`: `dev` -> `test` -> `dev`
-    ");
+        --> pyproject.toml:14:31
+         |
+      14 |             { include-group = "dev" },
+         |                               ^^^^^ closes the cycle
+      info: Group `test` is included by `dev` here
+        --> pyproject.toml:10:31
+         |
+      10 |             { include-group = "test" },
+         |                               ------ included here
+    "#);
 
-    uv_snapshot!(context.filters(), context.sync().arg("--group").arg("test").arg("--group").arg("magic"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--group").arg("test").arg("--group").arg("magic"), @r#"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Project `example` has malformed dependency groups
       cause: Detected a cycle in `dependency-groups`: `dev` -> `test` -> `dev`
-    ");
+        --> pyproject.toml:14:31
+         |
+      14 |             { include-group = "dev" },
+         |                               ^^^^^ closes the cycle
+      info: Group `test` is included by `dev` here
+        --> pyproject.toml:10:31
+         |
+      10 |             { include-group = "test" },
+         |                               ------ included here
+    "#);
 
-    uv_snapshot!(context.filters(), context.sync().arg("--group").arg("dev").arg("--group").arg("magic"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--group").arg("dev").arg("--group").arg("magic"), @r#"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Project `example` has malformed dependency groups
       cause: Detected a cycle in `dependency-groups`: `dev` -> `test` -> `dev`
-    ");
+        --> pyproject.toml:14:31
+         |
+      14 |             { include-group = "dev" },
+         |                               ^^^^^ closes the cycle
+      info: Group `test` is included by `dev` here
+        --> pyproject.toml:10:31
+         |
+      10 |             { include-group = "test" },
+         |                               ------ included here
+    "#);
 
     Ok(())
 }
