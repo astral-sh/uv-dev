@@ -387,11 +387,12 @@ impl<'env> LockOperation<'env> {
         match self.mode {
             LockMode::Frozen(source) => {
                 // Read the existing lockfile, but don't attempt to lock the project.
-                let lock_filename = target.lock_filename();
-                let existing = target
-                    .read()
-                    .await?
-                    .ok_or(ProjectError::MissingLockfile(source, lock_filename))?;
+                let existing = target.read().await?.ok_or_else(|| {
+                    ProjectError::MissingLockfile(
+                        source,
+                        Box::new(target.recovery_target(self.project_dir, self.recovery_action)),
+                    )
+                })?;
 
                 // Check if the discovered workspace members match the locked workspace members.
                 if let LockTarget::Workspace(workspace) = target {
@@ -432,7 +433,7 @@ impl<'env> LockOperation<'env> {
                 let Some((existing, existing_contents)) = target.read_with_contents().await? else {
                     return Err(ProjectError::MissingLockfile(
                         lock_source.into(),
-                        lock_filename,
+                        Box::new(target.recovery_target(self.project_dir, self.recovery_action)),
                     ));
                 };
 

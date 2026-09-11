@@ -12,7 +12,7 @@ use crate::commands::pip::operations::ExtrasWithoutSourceError;
 use crate::commands::project::ProjectError;
 use crate::commands::project::add::AddDependencyError;
 use crate::commands::project::remove::DependencyNotFoundError;
-use crate::commands::project::run::RecursionLimitError;
+use crate::commands::project::run::{MissingScriptLockfileError, RecursionLimitError};
 use crate::commands::project::version::MissingProjectVersionError;
 use crate::commands::python::install::InvalidUpgradeRequestError;
 use crate::commands::tool::common::NoExecutablesError;
@@ -98,6 +98,7 @@ pub(super) fn metadata_for_error<'a>(error: &'a (dyn StdError + 'static)) -> Err
         uv_resolver::NoSolutionError => ErrorMetadata::hinted,
         uv_resolver::LockError => ErrorMetadata::hinted,
         ToolRunScriptError => |error| ErrorMetadata::hinted(error).with_info(error.own_info()),
+        MissingScriptLockfileError => ErrorMetadata::hinted,
         RecursionLimitError => ErrorMetadata::hinted,
         DependencyNotFoundError => |error| {
             ErrorMetadata::hinted(error).with_info(error.own_info())

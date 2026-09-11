@@ -26,6 +26,7 @@ use uv_configuration::{
 };
 use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::Requirement;
+use uv_errors::{Hinted, Hints};
 use uv_fs::which::is_executable;
 use uv_fs::{PythonExt, Simplified, create_symlink};
 use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
@@ -69,11 +70,11 @@ use crate::commands::pip::operations::Modifications;
 use crate::commands::project::environment::{CachedEnvironment, EphemeralEnvironment};
 use crate::commands::project::install_target::InstallTarget;
 use crate::commands::project::lock::LockMode;
-use crate::commands::project::lock_target::LockTarget;
+use crate::commands::project::lock_target::{LockTarget, LockfileRecovery, LockfileRecoveryAction};
 use crate::commands::project::{
-    EnvironmentSpecification, LinkErrorReporting, PreferenceLocation, ProjectEnvironment,
-    ProjectError, ScriptEnvironment, ScriptInterpreter, UniversalState, WorkspacePython,
-    default_dependency_groups, script_extra_build_requires, script_specification,
+    EnvironmentSpecification, LinkErrorReporting, MissingLockfileSource, PreferenceLocation,
+    ProjectEnvironment, ProjectError, ScriptEnvironment, ScriptInterpreter, UniversalState,
+    WorkspacePython, default_dependency_groups, script_extra_build_requires, script_specification,
     update_environment, validate_project_requires_python,
 };
 use crate::commands::reporters::PythonDownloadReporter;
@@ -83,6 +84,52 @@ use crate::settings::{
     FrozenSource, GlobalSettings, LockCheck, LockedSource, ResolverInstallerSettings,
     ResolverSettings,
 };
+
+/// An explicit request to use a missing script lockfile.
+#[derive(Debug, Error)]
+#[error("Unable to find lockfile for Python script, but {lock_source} was provided.")]
+pub(crate) struct MissingScriptLockfileError {
+    lock_source: MissingLockfileSource,
+    recovery: ScriptLockfileRecovery,
+}
+
+impl Hinted for MissingScriptLockfileError {
+    fn hints(&self) -> Hints<'_> {
+        self.recovery.create_hint().into()
+    }
+}
+
+#[derive(Debug)]
+enum ScriptLockfileRecovery {
+    Local(Box<LockfileRecovery>),
+    SaveLocal { project_dir: PathBuf },
+}
+
+impl ScriptLockfileRecovery {
+    fn for_script(script: &Pep723Item, project_dir: &Path) -> Self {
+        match script {
+            Pep723Item::Script(script) => Self::Local(Box::new(
+                LockTarget::Script(script)
+                    .recovery_target(project_dir, LockfileRecoveryAction::UpdateLockfile),
+            )),
+            Pep723Item::Stdin(_) | Pep723Item::Remote(..) => Self::SaveLocal {
+                project_dir: project_dir.to_path_buf(),
+            },
+        }
+    }
+
+    fn create_hint(&self) -> String {
+        match self {
+            Self::Local(recovery) => recovery.create_hint(),
+            Self::SaveLocal { project_dir } => {
+                let project = project_dir.simplified_display();
+                format!(
+                    "To use a lockfile, save the Python script to a local file, then run `uv lock --no-locked --no-frozen` with `--project` set to `{project}` and `--script` set to the saved file, using the original command's working directory and applicable index, constraint, and other resolution options. Then repeat the original `uv run` command from the same working directory, replacing the script input with the saved file, setting `--project` to `{project}`, and keeping all other options.",
+                )
+            }
+        }
+    }
+}
 
 /// Run a command.
 #[expect(clippy::fn_params_excessive_bools)]
@@ -326,15 +373,16 @@ pub(crate) async fn run(
             if let LockCheck::Enabled(lock_check) = lock_check {
                 match lock_check {
                     LockedSource::Cli(_) => {
-                        bail!(
-                            "Unable to find lockfile for Python script, but `{lock_check}` was provided. To create a lockfile, run `{}`.",
-                            "uv lock --script".green(),
-                        );
+                        let error = MissingScriptLockfileError {
+                            lock_source: lock_check.into(),
+                            recovery: ScriptLockfileRecovery::for_script(&script, project_dir),
+                        };
+                        return Err(UvError::unexpected(error.into()).into());
                     }
                     LockedSource::Env => {
                         warn_user!(
-                            "No lockfile found for Python script (ignoring `{lock_check}`); run `{}` to generate a lockfile",
-                            "uv lock --script".green(),
+                            "No lockfile found for Python script (ignoring `{lock_check}`). {}",
+                            ScriptLockfileRecovery::for_script(&script, project_dir).create_hint(),
                         );
                     }
                 }
@@ -342,15 +390,16 @@ pub(crate) async fn run(
             if let Some(frozen_source) = frozen {
                 match frozen_source {
                     FrozenSource::Cli(_) => {
-                        bail!(
-                            "Unable to find lockfile for Python script, but `{frozen_source}` was provided. To create a lockfile, run `{}`.",
-                            "uv lock --script".green(),
-                        );
+                        let error = MissingScriptLockfileError {
+                            lock_source: frozen_source.into(),
+                            recovery: ScriptLockfileRecovery::for_script(&script, project_dir),
+                        };
+                        return Err(UvError::unexpected(error.into()).into());
                     }
                     FrozenSource::Env => {
                         warn_user!(
-                            "No lockfile found for Python script (ignoring `--frozen`); run `{}` to generate a lockfile",
-                            "uv lock --script".green(),
+                            "No lockfile found for Python script (ignoring `--frozen`). {}",
+                            ScriptLockfileRecovery::for_script(&script, project_dir).create_hint(),
                         );
                     }
                 }

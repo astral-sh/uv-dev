@@ -1908,7 +1908,9 @@ async fn audit_script_frozen_missing_lockfile() {
         .arg(server.uri()), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    error: Unable to find lockfile at `script.py.lock`, but `--frozen` was provided. To create a lockfile, run `uv lock` or `uv sync` without the flag.
+    error: Unable to find lockfile at `script.py.lock`, but `--frozen` was provided.
+
+    hint: To create the lockfile, run `uv lock --no-locked --no-frozen` with `--project` set to `[TEMP_DIR]/` and `--script` set to `[TEMP_DIR]/script.py`, using the original command's working directory and applicable index, constraint, and other resolution options.
     ");
 }
 
