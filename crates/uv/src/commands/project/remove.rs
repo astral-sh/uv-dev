@@ -467,25 +467,46 @@ pub(crate) struct DependencyNotFoundError {
 
 impl Hinted for DependencyNotFoundError {
     fn hints(&self) -> Hints<'_> {
+        let selector = |dependency_type: &DependencyType| match dependency_type {
+            DependencyType::Production => None,
+            DependencyType::Dev => Some("--dev".to_owned()),
+            DependencyType::Optional(group) => Some(format!("--optional {group}")),
+            DependencyType::Group(group) => Some(format!("--group {group}")),
+        };
+        let selected = selector(&self.dependency_type);
         self.found_in
             .iter()
-            .map(|dep_ty| match dep_ty {
-                DependencyType::Production => format!(
-                    "Run `{}` to remove the production dependency",
-                    format!("uv remove {}", self.package).bold(),
-                ),
-                DependencyType::Dev => format!(
-                    "Run `{}` to remove the development dependency",
-                    format!("uv remove {} --dev", self.package).bold(),
-                ),
-                DependencyType::Optional(group) => format!(
-                    "Run `{}` to remove the optional dependency",
-                    format!("uv remove {} --optional {group}", self.package).bold(),
-                ),
-                DependencyType::Group(group) => format!(
-                    "Run `{}` to remove the dependency from the `{group}` group",
-                    format!("uv remove {} --group {group}", self.package).bold(),
-                ),
+            .map(|dependency_type| {
+                // Correct only the dependency selector so other options still select the same
+                // project, workspace member, or script when the command is repeated.
+                let action = match (selected.as_deref(), selector(dependency_type)) {
+                    (Some(selected), Some(replacement)) => format!(
+                        "Re-run the command with `{}` instead of `{}`",
+                        replacement.bold(),
+                        selected.bold(),
+                    ),
+                    (None, Some(replacement)) => {
+                        format!("Re-run the command with `{}`", replacement.bold())
+                    }
+                    (Some(selected), None) => {
+                        format!("Re-run the command without `{}`", selected.bold())
+                    }
+                    (None, None) => "Re-run the command".to_owned(),
+                };
+                match dependency_type {
+                    DependencyType::Production => {
+                        format!("{action} to remove the production dependency")
+                    }
+                    DependencyType::Dev => {
+                        format!("{action} to remove the development dependency")
+                    }
+                    DependencyType::Optional(_) => {
+                        format!("{action} to remove the optional dependency")
+                    }
+                    DependencyType::Group(group) => {
+                        format!("{action} to remove the dependency from the `{group}` group")
+                    }
+                }
             })
             .collect()
     }
@@ -558,19 +579,19 @@ mod tests {
           {
             "hints": [
               {
-                "message": "Run `uv remove requests` to remove the production dependency",
+                "message": "Re-run the command without `--group missing` to remove the production dependency",
                 "ordering": "any"
               },
               {
-                "message": "Run `uv remove requests --dev` to remove the development dependency",
+                "message": "Re-run the command with `--dev` instead of `--group missing` to remove the development dependency",
                 "ordering": "any"
               },
               {
-                "message": "Run `uv remove requests --optional speedups` to remove the optional dependency",
+                "message": "Re-run the command with `--optional speedups` instead of `--group missing` to remove the optional dependency",
                 "ordering": "any"
               },
               {
-                "message": "Run `uv remove requests --group lint` to remove the dependency from the `lint` group",
+                "message": "Re-run the command with `--group lint` instead of `--group missing` to remove the dependency from the `lint` group",
                 "ordering": "any"
               }
             ],
@@ -590,6 +611,53 @@ mod tests {
             ],
             "message": "The dependency `requests` could not be found in `dependency-groups.missing`"
           }
+        ]
+        "#);
+        Ok(())
+    }
+
+    #[test]
+    fn removal_advice_only_changes_the_dependency_selector() -> anyhow::Result<()> {
+        let errors = [
+            DependencyNotFoundError {
+                package: "requests".parse()?,
+                dependency_type: DependencyType::Production,
+                found_in: vec![DependencyType::Group("lint".parse()?)],
+            },
+            DependencyNotFoundError {
+                package: "requests".parse()?,
+                dependency_type: DependencyType::Dev,
+                found_in: vec![DependencyType::Production],
+            },
+        ];
+        let mut hints = Vec::new();
+        for error in errors {
+            let mut output = String::new();
+            write_error_chain_with_options(
+                &error,
+                &Hints::none(),
+                ErrorOptions::default()
+                    .with_format(ErrorFormat::Json)
+                    .with_diagnostic(diagnostic_for_error)
+                    .with_stream(&mut output),
+            )?;
+            let report: serde_json::Value = serde_json::from_str(&output)?;
+            hints.push(report["errors"][0]["hints"].clone());
+        }
+        assert_json_snapshot!(hints, @r#"
+        [
+          [
+            {
+              "message": "Re-run the command with `--group lint` to remove the dependency from the `lint` group",
+              "ordering": "any"
+            }
+          ],
+          [
+            {
+              "message": "Re-run the command without `--dev` to remove the production dependency",
+              "ordering": "any"
+            }
+          ]
         ]
         "#);
         Ok(())
