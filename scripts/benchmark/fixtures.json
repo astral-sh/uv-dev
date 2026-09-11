@@ -1,5 +1,15 @@
 [
   {
+    "filename": "uv.pyproject.toml",
+    "url": "https://raw.githubusercontent.com/astral-sh/uv/c7db143b6a64b9ef73ab5cd39a3241a24c8807bc/pyproject.toml",
+    "sha256": "d273d221a95a861dec0e7ec58f505c0e2110c93f21ad5d4a43111490eab93f27"
+  },
+  {
+    "filename": "prefect.pyproject.toml",
+    "url": "https://raw.githubusercontent.com/PrefectHQ/prefect/c85deeb5f305c307181bd0001972f291ea3fd465/pyproject.toml",
+    "sha256": "29d348c3bb117122f508f0ff9623a05ca6770439a7ba15097738566b5465f123"
+  },
+  {
     "filename": "flask.metadata",
     "url": "https://files.pythonhosted.org/packages/ec/f9/7f9263c5695f4bd0023734af91bedb2ff8209e8de6ead162f35d8dc762fd/flask-3.1.2-py3-none-any.whl.metadata",
     "sha256": "a1183adc300021ca0b02bee4cd380810a7e6f3fe07313469996988a6d758fe3b"
