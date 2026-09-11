@@ -8497,7 +8497,8 @@ fn remove_locked_reverts_project() -> Result<()> {
     ----- stderr -----
     Resolved 1 package in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
     assert_eq!(context.read("pyproject.toml"), pyproject);
     assert_eq!(context.read("uv.lock"), lock);
@@ -8534,7 +8535,8 @@ fn add_locked_readonly_workspace() -> Result<()> {
     ----- stderr -----
     Resolved 2 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
     assert_eq!(context.read("member/pyproject.toml"), member);
     assert_eq!(context.read("uv.lock"), lock);

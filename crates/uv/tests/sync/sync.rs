@@ -11053,8 +11053,9 @@ fn mismatched_name_self_editable_package() -> Result<()> {
     ----- stderr -----
     Resolved 2 packages in [TIME]
     error: Failed to build `foo @ file://[TEMP_DIR]/`
-      hint: `foo` was included because `project` (v0.1.0) depends on `foo`
       cause: Package metadata name `project` does not match given name `foo`
+
+    hint: `foo` was included because `project` (v0.1.0) depends on `foo`
     ");
 
     Ok(())
@@ -17127,7 +17128,8 @@ fn project_build_hashes_lock_and_sync() -> Result<()> {
     ----- stderr -----
     Resolved 1 package in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
     Ok(())
 }

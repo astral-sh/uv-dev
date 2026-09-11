@@ -10583,7 +10583,8 @@ fn export_batch_lock_modes() -> Result<()> {
     ----- stderr -----
     Resolved 1 package in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
     assert_eq!(context.read("uv.lock"), lock);
     assert_snapshot!(context.read("dev.txt"), @"original");

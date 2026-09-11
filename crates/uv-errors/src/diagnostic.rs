@@ -74,7 +74,7 @@ impl<'a> Diagnostic<'a> {
     /// merged using their usual ordering and duplicate-suggestion rules. The supplied presentation
     /// controls the displayed message, source snippets, and next-source override.
     #[must_use]
-    pub fn with_presentation_override(mut self, mut presentation: Self) -> Self {
+    pub(crate) fn with_presentation_override(mut self, mut presentation: Self) -> Self {
         self.info.append(&mut presentation.info);
         presentation.info = self.info;
         self.hints.extend(presentation.hints);

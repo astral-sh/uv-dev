@@ -8666,8 +8666,10 @@ fn lock_requires_python_fork_wheels() -> Result<()> {
              And because only a<=3.0.0 is available, we can conclude that a>=3.0.0 cannot be used.
              And because we know from (1) that a>=2.0.0,<3.0.0 cannot be used, we can conclude that a>=2.0.0 cannot be used.
              And because your project depends on a>=2, we can conclude that your project's requirements are unsatisfiable.
-      hint: Wheels are available for `a` (v2.0.0) with the following Python ABI tag: `cp313`
-      hint: The `requires-python` value (>=3.12) includes Python versions that are not supported by your dependencies (e.g., a==3.0.0 only supports >=3.13). Consider using a more restrictive `requires-python` value (like >=3.13).
+
+    hint: Wheels are available for `a` (v2.0.0) with the following Python ABI tag: `cp313`
+
+    hint: The `requires-python` value (>=3.12) includes Python versions that are not supported by your dependencies (e.g., a==3.0.0 only supports >=3.13). Consider using a more restrictive `requires-python` value (like >=3.13).
     ");
 
     Ok(())
@@ -8801,7 +8803,8 @@ fn lock_requires_python_wheels_stable_abi() -> Result<()> {
     error: No solution found when resolving dependencies
       cause: Because a==1.0.0 has no wheels with a matching Python version tag (e.g., `cp312`) and only a==1.0.0 is available, we can conclude that all versions of a cannot be used.
              And because your project depends on a, we can conclude that your project's requirements are unsatisfiable.
-      hint: Wheels are available for `a` (v1.0.0) with the following Python ABI tag: `abi3`
+
+    hint: Wheels are available for `a` (v1.0.0) with the following Python ABI tag: `abi3`
     ");
 
     Ok(())
@@ -11977,7 +11980,8 @@ fn lock_new_extras() -> Result<()> {
     ----- stderr -----
     Resolved 7 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     uv_snapshot!(context.filters(), context.lock()
@@ -12093,7 +12097,8 @@ fn lock_metadata_free_new_extra_marker() -> Result<()> {
     ----- stderr -----
     Resolved 4 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     uv_snapshot!(context.filters(), context.lock()
@@ -21505,7 +21510,8 @@ fn lock_metadata_free_frozen_empty_extra() -> Result<()> {
             ----- stderr -----
             Resolved 2 packages in [TIME]
             error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-              hint: To update the lockfile, run `uv lock`.
+
+            hint: To update the lockfile, run `uv lock`.
             ");
         }
         Ok::<(), anyhow::Error>(())
@@ -21682,7 +21688,8 @@ fn lock_regenerates_dependencies_without_metadata() -> Result<()> {
     ----- stderr -----
     Resolved 9 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     pyproject_toml.write_str(&original_pyproject.replace("urllib3==1.0.0", "urllib3>=2"))?;
@@ -21697,7 +21704,8 @@ fn lock_regenerates_dependencies_without_metadata() -> Result<()> {
     error: No solution found when resolving dependencies for split (markers: python_full_version >= '3.12' and sys_platform == 'win32')
       cause: Because only urllib3==1.0.0 is available and your project depends on urllib3>=2, we can conclude that your project's requirements are unsatisfiable.
              And because your project requires project[empty], we can conclude that your project's requirements are unsatisfiable.
-      hint: The resolution failed for an environment that is not the current one, consider limiting the environments with `tool.uv.environments`.
+
+    hint: The resolution failed for an environment that is not the current one, consider limiting the environments with `tool.uv.environments`.
     ");
 
     pyproject_toml.write_str(&original_pyproject.replace(
@@ -21714,7 +21722,8 @@ fn lock_regenerates_dependencies_without_metadata() -> Result<()> {
     ----- stderr -----
     Resolved 9 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     pyproject_toml.write_str(&original_pyproject.replace(
@@ -21731,7 +21740,8 @@ fn lock_regenerates_dependencies_without_metadata() -> Result<()> {
     ----- stderr -----
     Resolved 9 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     pyproject_toml.write_str(&original_pyproject.replace(r#""urllib3==1.0.0","#, ""))?;
@@ -21745,7 +21755,8 @@ fn lock_regenerates_dependencies_without_metadata() -> Result<()> {
     ----- stderr -----
     Resolved 8 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--check` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     Ok(())
@@ -22019,7 +22030,8 @@ fn lock_metadata_free_nested_group_conditional_registry_constraint() -> Result<(
     ----- stderr -----
     Resolved 3 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     context
@@ -22045,7 +22057,8 @@ fn lock_metadata_free_nested_group_conditional_registry_constraint() -> Result<(
     ----- stderr -----
     Resolved 2 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     Ok(())
@@ -23225,8 +23238,9 @@ fn lock_metadata_free_shared_conditional_provider_sources() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to resolve dependencies for package `extra-leaf==0.1.0`
-      hint: `extra-leaf` (v0.1.0) was included because `project` (v0.1.0) depends on `extra-leaf`
       cause: Package `extra-twig` was included as a URL dependency. URL dependencies must be expressed as direct requirements or constraints. Consider adding `extra-twig @ file://[TEMP_DIR]/extra-twig` to your dependencies or constraints file.
+
+    hint: `extra-leaf` (v0.1.0) was included because `project` (v0.1.0) depends on `extra-leaf`
     ");
 
     Ok(())
@@ -23572,7 +23586,8 @@ fn lock_metadata_free_dynamic_version_excluded_source() -> Result<()> {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because leaf was not found in the provided package locations and your project depends on leaf, we can conclude that your project's requirements are unsatisfiable.
-      hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
+
+    hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
     ");
 
     Ok(())
@@ -23678,7 +23693,8 @@ fn lock_metadata_free_overridden_recursive_extra_source() -> Result<()> {
     ----- stderr -----
     Resolved 4 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     Ok(())
@@ -23971,8 +23987,9 @@ fn lock_metadata_free_shared_static_metadata_direct_source() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to resolve dependencies for package `anyio==4.4.0`
-      hint: `anyio` (v4.4.0) was included because `project` (v0.1.0) depends on `anyio`
       cause: Package `six` was included as a URL dependency. URL dependencies must be expressed as direct requirements or constraints. Consider adding `six @ http://[LOCALHOST]/files/six-1.0.0-py3-none-any.whl` to your dependencies or constraints file.
+
+    hint: `anyio` (v4.4.0) was included because `project` (v0.1.0) depends on `anyio`
     ");
 
     Ok(())
@@ -43435,7 +43452,8 @@ fn lock_required_environment_macos_release() -> Result<()> {
     error: No solution found when resolving dependencies for split (markers: python_full_version >= '3.12' and platform_machine == 'arm64' and platform_release < '25' and sys_platform == 'darwin')
       cause: Because only a==2.0.0 is available and a==2.0.0 has no `platform_machine == 'arm64' and sys_platform == 'darwin'`-compatible wheels, we can conclude that all versions of a cannot be used.
              And because your project depends on a, we can conclude that your project's requirements are unsatisfiable.
-      hint: The resolution failed for an environment that is not the current one, consider limiting the environments with `tool.uv.environments`.
+
+    hint: The resolution failed for an environment that is not the current one, consider limiting the environments with `tool.uv.environments`.
     ");
     Ok(())
 }
