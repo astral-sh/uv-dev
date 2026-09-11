@@ -1622,9 +1622,9 @@ fn tool_install_suggest_other_packages_with_executable() {
      + watchfiles==0.21.0
      + websockets==12.0
     error: Failed to install entrypoints for `fastapi`
+      info: An executable with the name `fastapi` is available via dependency `fastapi-cli`
 
-    hint: An executable with the name `fastapi` is available via dependency `fastapi-cli`.
-                Did you mean `uv tool install fastapi-cli`?
+    hint: Install `fastapi-cli` as the tool package instead
     ");
 }
 

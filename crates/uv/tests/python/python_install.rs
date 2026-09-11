@@ -3738,8 +3738,9 @@ fn python_install_upgrade_version_file() {
     exit_code: 1 (failure)
     ----- stderr -----
     error: `uv python install --upgrade` only accepts minor versions, got: 3.12.4
+      info: The version request came from `.python-version`
 
-    hint: The version request came from a `.python-version` file; change the patch version in the file to upgrade instead
+    hint: Change the patch version in `.python-version` to upgrade instead
     ");
 }
 
