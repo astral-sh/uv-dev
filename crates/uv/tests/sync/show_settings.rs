@@ -4587,11 +4587,11 @@ fn run_pep723_script_preview_features() -> anyhow::Result<()> {
     uv_snapshot!(context.filters(), show_settings(), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: TOML parse error at line 4, column 1
-      |
-    4 | [tool.uv]
-      | ^^^^^^^^^
-    invalid type: integer `123`, expected a string
+    error: invalid type: integer `123`, expected a string
+       --> main.py:5:3
+        |
+      5 | # [tool.uv]
+        |   ^^^^^^^^^
     ");
 
     context
@@ -4638,11 +4638,11 @@ fn run_pep723_script_preview_features() -> anyhow::Result<()> {
     uv_snapshot!(context.filters(), show_settings(), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: TOML parse error at line 4, column 1
-      |
-    4 | [tool.uv]
-      | ^^^^^^^^^
-    cannot specify both `preview` and `preview-features`
+    error: cannot specify both `preview` and `preview-features`
+       --> main.py:5:3
+        |
+      5 | # [tool.uv]
+        |   ^^^^^^^^^
     ");
 
     Ok(())

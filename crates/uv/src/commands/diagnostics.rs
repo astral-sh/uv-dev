@@ -53,6 +53,7 @@ fn diagnostic_for_error<'a>(error: &'a (dyn Error + 'static)) -> Option<Diagnost
         if presentation.is_none() {
             presentation = uv_publish::diagnostic_for_error(error)
                 .or_else(|| uv_requirements_txt::diagnostic_for_error(error))
+                .or_else(|| uv_scripts::diagnostic_for_error(error))
                 .or_else(|| uv_settings::diagnostic_for_error(error))
                 .or_else(|| uv_workspace::pyproject::diagnostic_for_error(error))
                 .or_else(|| uv_workspace::dependency_groups::diagnostic_for_error(error))
@@ -235,8 +236,10 @@ mod tests {
     use uv_fs::Simplified;
     use uv_pep440::Version;
     use uv_publish::PublishSendError;
+    use uv_redacted::DisplaySafeUrl;
     use uv_requirements_txt::{RequirementsTxt, SourceCache};
     use uv_resolver::ResolveError;
+    use uv_scripts::Pep723Metadata;
     use uv_settings::FilesystemOptions;
     use uv_types::AnyErrorBuild;
     use uv_workspace::dependency_groups::{DependencyGroupError, FlatDependencyGroups};
@@ -349,6 +352,43 @@ mod tests {
         let error = PyProjectToml::from_string("[project]\n".to_owned(), "pyproject.toml")
             .expect_err("missing project name in test input");
         assert!(diagnostic_for_error(&Arc::new(error)).is_some());
+    }
+
+    #[test]
+    fn script_parse_error_retains_original_coordinates() {
+        let script = "print('café')\r\n# /// script\r\n# requires-python = \">=3.11\"\r\n# dependencies = [\"\"]\r\n# ///\r\nTOKEN = 'not metadata'\r\n";
+        let error = || {
+            Pep723Metadata::parse_with_name(script.as_bytes(), "script.py")
+                .expect_err("empty requirement in script metadata")
+        };
+        assert!(error().source().is_none());
+        assert!(diagnostic_for_error(&Box::new(error())).is_some());
+        assert!(diagnostic_for_error(&Arc::new(error())).is_some());
+        assert_snapshot!(format_error(&error()), @r#"
+        error: Empty field is not allowed for PEP508
+           --> script.py:4:19
+            |
+          4 | # dependencies = [""]
+            |                   ^^
+        "#);
+    }
+
+    #[test]
+    fn remote_script_source_name_is_redacted() -> anyhow::Result<()> {
+        let url = DisplaySafeUrl::parse("https://user:secret@example.com/script.py")?;
+        let error = Pep723Metadata::parse_with_name(
+            b"# /// script\n# dependencies = [\"\"]\n# ///\n",
+            url.to_string(),
+        )
+        .expect_err("empty requirement in remote script metadata");
+        assert_snapshot!(format_error(&error), @r#"
+        error: Empty field is not allowed for PEP508
+           --> https://user:****@example.com/script.py:2:19
+            |
+          2 | # dependencies = [""]
+            |                   ^^
+        "#);
+        Ok(())
     }
 
     #[test]

@@ -7371,6 +7371,7 @@ version = "0.0.79"
 dependencies = [
  "fs-err",
  "indoc",
+ "insta",
  "memchr",
  "regex",
  "serde",
@@ -7380,12 +7381,15 @@ dependencies = [
  "url",
  "uv-configuration",
  "uv-distribution-types",
+ "uv-errors",
+ "uv-fs",
  "uv-normalize",
  "uv-pep440",
  "uv-pep508",
  "uv-pypi-types",
  "uv-redacted",
  "uv-settings",
+ "uv-toml",
  "uv-warnings",
  "uv-workspace",
 ]

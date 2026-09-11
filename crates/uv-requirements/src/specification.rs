@@ -319,7 +319,10 @@ impl RequirementsSpecification {
                     content
                 };
 
-                let metadata = match Pep723Metadata::parse(content.as_bytes()) {
+                let metadata = match Pep723Metadata::parse_with_name(
+                    content.as_bytes(),
+                    script_source_name(path),
+                ) {
                     Ok(Some(script)) => script,
                     Ok(None) => {
                         return Err(anyhow::anyhow!(
@@ -378,7 +381,9 @@ impl RequirementsSpecification {
                 };
 
                 // Detect if it's a PEP 723 script.
-                if let Some(metadata) = Pep723Metadata::parse(content.as_bytes())? {
+                if let Some(metadata) =
+                    Pep723Metadata::parse_with_name(content.as_bytes(), script_source_name(path))?
+                {
                     Self::from_pep723_metadata(&metadata)
                 } else {
                     // If it's not a PEP 723 script, assume it's a `requirements.txt` file.
@@ -733,6 +738,18 @@ pub struct GroupsSpecification {
     pub root: PathBuf,
     /// The enabled groups.
     pub groups: Vec<PipGroupName>,
+}
+
+/// Use the source the user supplied, without exposing URL credentials in a diagnostic origin.
+fn script_source_name(path: &Path) -> String {
+    if path == Path::new("-") {
+        "<stdin>".to_string()
+    } else if path.starts_with("http://") || path.starts_with("https://") {
+        DisplaySafeUrl::parse(&path.to_string_lossy())
+            .map_or_else(|_| "<remote script>".to_string(), |url| url.to_string())
+    } else {
+        path.portable_display().to_string()
+    }
 }
 
 /// Read the contents of a path, fetching over HTTP(S) if necessary.
