@@ -1079,9 +1079,7 @@ pub struct Sources(#[cfg_attr(feature = "schemars", schemars(with = "SourcesWire
 impl Sources {
     /// Return an [`Iterator`] over the sources.
     ///
-    /// If the iterator contains multiple entries, they will always use disjoint markers.
-    ///
-    /// The iterator will contain at most one registry source.
+    /// Entries with the same extra and dependency-group selectors use pairwise-disjoint markers.
     pub fn iter(&self) -> impl Iterator<Item = &Source> {
         self.0.iter()
     }
@@ -1090,53 +1088,59 @@ impl Sources {
         match wire {
             SourcesWire::One(source) => Ok(Self(vec![source])),
             SourcesWire::Many(sources) => {
-                for (index, [lhs, rhs]) in sources.array_windows().enumerate() {
-                    if lhs.extra() != rhs.extra() {
-                        continue;
-                    }
-                    if lhs.group() != rhs.group() {
-                        continue;
-                    }
+                for (left_index, lhs) in sources.iter().enumerate() {
+                    for (right_index, rhs) in sources.iter().enumerate().skip(left_index + 1) {
+                        if lhs.extra() != rhs.extra() {
+                            continue;
+                        }
+                        if lhs.group() != rhs.group() {
+                            continue;
+                        }
 
-                    let lhs = lhs.marker();
-                    let rhs = rhs.marker();
-                    if !lhs.is_disjoint(rhs) {
-                        let left = SourceMarker { index, marker: lhs };
-                        let right = SourceMarker {
-                            index: index + 1,
-                            marker: rhs,
-                        };
-                        let provenance = |missing| SourcesProvenance::Markers {
-                            count: sources.len(),
-                            left,
-                            right,
-                            missing,
-                        };
-                        let Some(left) = lhs.contents().map(|contents| contents.to_string()) else {
+                        let lhs = lhs.marker();
+                        let rhs = rhs.marker();
+                        if !lhs.is_disjoint(rhs) {
+                            let left = SourceMarker {
+                                index: left_index,
+                                marker: lhs,
+                            };
+                            let right = SourceMarker {
+                                index: right_index,
+                                marker: rhs,
+                            };
+                            let provenance = |missing| SourcesProvenance::Markers {
+                                count: sources.len(),
+                                left,
+                                right,
+                                missing,
+                            };
+                            let Some(left) = lhs.contents().map(|contents| contents.to_string())
+                            else {
+                                return Err(SourcesFailure {
+                                    error: SourceError::MissingMarkers,
+                                    provenance: Box::new(provenance(Some(left_index))),
+                                });
+                            };
+
+                            let Some(right) = rhs.contents().map(|contents| contents.to_string())
+                            else {
+                                return Err(SourcesFailure {
+                                    error: SourceError::MissingMarkers,
+                                    provenance: Box::new(provenance(Some(right_index))),
+                                });
+                            };
+
+                            let hint = lhs.negate().and(rhs);
+                            let hint = hint
+                                .contents()
+                                .map(|contents| contents.to_string())
+                                .unwrap_or_else(|| "true".to_string());
+
                             return Err(SourcesFailure {
-                                error: SourceError::MissingMarkers,
-                                provenance: Box::new(provenance(Some(index))),
+                                error: SourceError::OverlappingMarkers(left, right, hint),
+                                provenance: Box::new(provenance(None)),
                             });
-                        };
-
-                        let Some(right) = rhs.contents().map(|contents| contents.to_string())
-                        else {
-                            return Err(SourcesFailure {
-                                error: SourceError::MissingMarkers,
-                                provenance: Box::new(provenance(Some(index + 1))),
-                            });
-                        };
-
-                        let hint = lhs.negate().and(rhs);
-                        let hint = hint
-                            .contents()
-                            .map(|contents| contents.to_string())
-                            .unwrap_or_else(|| "true".to_string());
-
-                        return Err(SourcesFailure {
-                            error: SourceError::OverlappingMarkers(left, right, hint),
-                            provenance: Box::new(provenance(None)),
-                        });
+                        }
                     }
                 }
 
