@@ -134,6 +134,11 @@ path = "benches/multi_index.rs"
 harness = false
 
 [[bench]]
+name = "credential_lookup"
+path = "benches/credential_lookup.rs"
+harness = false
+
+[[bench]]
 name = "uv_pypi_types"
 path = "benches/uv_pypi_types.rs"
 harness = false
@@ -144,6 +149,7 @@ tempfile = { workspace = true }
 
 [dev-dependencies]
 uv = { workspace = true }
+uv-auth = { workspace = true }
 uv-build-backend = { workspace = true }
 uv-cache = { workspace = true }
 uv-cli = { workspace = true }
@@ -162,6 +168,7 @@ uv-platform-tags = { workspace = true }
 uv-preview = { workspace = true }
 uv-pypi-types = { workspace = true }
 uv-python = { workspace = true }
+uv-redacted = { workspace = true }
 uv-requirements-txt = { workspace = true }
 uv-resolver = { workspace = true }
 uv-types = { workspace = true }
@@ -170,12 +177,16 @@ uv-workspace = { workspace = true }
 
 anyhow = { workspace = true }
 astral-tl = { workspace = true }
+async-trait = { workspace = true }
 async_zip = { workspace = true }
 clap = { workspace = true }
 criterion = { version = "5.0.1", default-features = false, package = "codspeed-criterion-compat", features = ["async_tokio"] }
 flate2 = { workspace = true }
 futures = { workspace = true }
+http = { workspace = true }
 jiff = { workspace = true }
+reqwest = { workspace = true }
+reqwest-middleware = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 tar-codec = { workspace = true }
