@@ -89,6 +89,8 @@ pub(crate) mod lock_target;
 pub(super) mod lockfile;
 mod python;
 pub(crate) mod remove;
+#[cfg(test)]
+mod requires_python_warnings;
 pub(crate) mod run;
 pub(crate) mod sync;
 mod toolchain;
