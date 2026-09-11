@@ -246,6 +246,7 @@ pub(crate) async fn run(
             // Generate a lockfile.
             let lock = match Box::pin(
                 project::lock::LockOperation::new(
+                    project_dir,
                     mode,
                     &settings.resolver,
                     &client_builder,
@@ -769,6 +770,7 @@ pub(crate) async fn run(
 
                 let result = match Box::pin(
                     project::lock::LockOperation::new(
+                        project_dir,
                         mode,
                         &settings.resolver,
                         &client_builder,

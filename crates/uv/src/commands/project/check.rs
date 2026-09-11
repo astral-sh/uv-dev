@@ -413,6 +413,7 @@ pub(crate) async fn check(
         };
         let result = match Box::pin(
             project::lock::LockOperation::new(
+                project_dir,
                 mode,
                 &settings.resolver,
                 &client_builder,
@@ -578,6 +579,7 @@ pub(crate) async fn check(
 
         let result = match Box::pin(
             project::lock::LockOperation::new(
+                project_dir,
                 mode,
                 &settings.resolver,
                 &client_builder,
