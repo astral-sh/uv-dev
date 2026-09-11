@@ -1,0 +1,51 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 21223,
+        "title": "Verify locked source archives before building metadata",
+        "url": "https://github.com/astral-sh/uv/pull/21223",
+        "state": "merged",
+        "reason": "astral-sh/uv#21223 landed in uv 0.12.11 and changed `uv sync` to verify isolated build dependencies using hashes derived from the full project lockfile, matching both the regression boundary and execution path reported."
+      },
+      {
+        "kind": "issue",
+        "number": 7059,
+        "title": "Wrong hash is used for repeated `tensorflow-text`",
+        "url": "https://github.com/astral-sh/uv/issues/7059",
+        "state": "closed",
+        "reason": "astral-sh/uv#7059 had the same visible failure: a correct macOS wheel was rejected against a Linux registry hash when the package appeared under multiple platform conditions. It affected ordinary resolution rather than isolated build verification."
+      },
+      {
+        "kind": "pull_request",
+        "number": 7060,
+        "title": "Use distribution hash over registry hash",
+        "url": "https://github.com/astral-sh/uv/pull/7060",
+        "state": "merged",
+        "reason": "astral-sh/uv#7060 fixed astral-sh/uv#7059 by prioritizing the selected distribution's hash over package-level registry hashes, establishing the relevant artifact-specific behavior."
+      },
+      {
+        "kind": "issue",
+        "number": 13112,
+        "title": "SHA mismatch if wheel has no sha in the index, but sdist has",
+        "url": "https://github.com/astral-sh/uv/issues/13112",
+        "state": "closed",
+        "reason": "astral-sh/uv#13112 was another `uv.lock` artifact-association failure: a downloaded wheel was checked against the same package/version's sdist hash. Its missing-wheel-hash trigger differs from this platform-specific isolated-build trigger."
+      },
+      {
+        "kind": "pull_request",
+        "number": 17157,
+        "title": "Avoid enforcing incorrect hash in mixed-hash settings",
+        "url": "https://github.com/astral-sh/uv/pull/17157",
+        "state": "merged",
+        "reason": "astral-sh/uv#17157 fixed astral-sh/uv#13112 by limiting installation hashes to the selected wheel or sdist instead of combining package-wide hashes, closely matching the artifact-scoping requirement exposed here."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests for `Hash mismatch`, `build-system.requires`, `uv sync --no-install-project`, `uv.lock`, aarch64/platform wheels, repeated package identities, isolated build dependencies, multi-index sources, and distribution-specific versus package-level hashes. The uv 0.12.10-to-0.12.11 release history and referenced PR chains were inspected. astral-sh/uv#18938 and astral-sh/uv#16784 were ruled out because their hashes were missing upstream; astral-sh/uv#17260 concerned zstd versus uncompressed artifacts; astral-sh/uv#14000 concerns resolution-time candidate choice; and astral-sh/uv#18059 concerns source propagation for extra build dependencies."
+  },
+  "type": "bug",
+  "type_reason": "A valid wheel is incorrectly rejected despite its computed hash being correct. Source and release history show that astral-sh/uv#21223 introduced lock-derived verification for isolated build dependencies in uv 0.12.11. Historical fixes addressed analogous wrong-artifact hash failures, but no open issue or pull request tracks this returned behavior in the build-isolation path, so this is a regression bug rather than a duplicate.",
+  "summary": "astral-sh/uv#21223 is the closest causal change. astral-sh/uv#7059 with astral-sh/uv#7060 and astral-sh/uv#13112 with astral-sh/uv#17157 are the closest historical wrong-artifact hash precedents; none already tracks this regression.",
+  "draft_response": "Thanks for the focused reproduction. This is a bug, and the uv 0.12.11 boundary matches astral-sh/uv#21223, which changed `uv sync` to verify isolated build dependencies using hashes derived from the full `uv.lock`. A build resolver may select a different platform/index artifact with the same package name and version, but that artifact should not be rejected against hashes belonging to another locked artifact.\n\nThis is the same class of artifact-scoping problem addressed historically by astral-sh/uv#7060 and astral-sh/uv#17157, but neither discussion tracks this build-isolation regression, so this issue should remain open. The next step is to convert the provided case into an integration regression test with distinct platform-wheel hashes, then scope build-dependency verification to the relevant artifact/source without weakening the locked-source validation from astral-sh/uv#21223."
+}
