@@ -5,7 +5,9 @@ use criterion::{BenchmarkGroup, BenchmarkId, measurement::WallTime};
 use rustix::io::Errno;
 use uv_cache_info::{CacheInfo, CacheInfoError, Timestamp};
 
-use super::{BehaviorFixture, Fixture, cache_result, isolated_time, on_isolated_thread};
+use super::{
+    BehaviorFixture, Fixture, benchmark_note, cache_result, isolated_time, on_isolated_thread,
+};
 
 #[path = "statx.rs"]
 mod statx;
@@ -81,7 +83,7 @@ fn available<T>(result: io::Result<T>, context: &str) -> Option<T> {
     if let Err(error) = &result
         && unavailable_configuration(error)
     {
-        eprintln!("{context}: {error}");
+        benchmark_note(format_args!("{context}: {error}"));
         return None;
     }
     Some(result.expect(context))
@@ -90,6 +92,12 @@ fn available<T>(result: io::Result<T>, context: &str) -> Option<T> {
 #[derive(Clone, Copy)]
 struct PreparedConfiguration {
     worker_limits: Option<[u32; 2]>,
+}
+
+#[derive(Clone, Copy)]
+enum Workload {
+    Metadata,
+    CacheInfo,
 }
 
 fn validate_configuration(
@@ -109,14 +117,17 @@ fn validate_configuration(
         Some(PreparedConfiguration { worker_limits })
     });
     if let Some(prepared) = &prepared {
-        eprintln!(
+        benchmark_note(format_args!(
             "cache_key_backends/{name}/{}: active STATX, io-wq limits {:?}, {} glob leaves",
             fixture.name,
             prepared.worker_limits,
             fixture.entries.len()
-        );
+        ));
     } else {
-        eprintln!("cache_key_backends/{name}/{}: unavailable", fixture.name);
+        benchmark_note(format_args!(
+            "cache_key_backends/{name}/{}: unavailable",
+            fixture.name
+        ));
     }
     prepared
 }
@@ -125,6 +136,7 @@ fn prepared_scanner(
     configuration: Configuration,
     fixture: &Fixture,
     prepared: PreparedConfiguration,
+    workload: Workload,
 ) -> Scanner {
     let mut scanner =
         Scanner::new(configuration).expect("Active statx configuration became unavailable");
@@ -148,12 +160,23 @@ fn prepared_scanner(
 
     // Warm and validate the same-configuration task's io-wq before starting the sample timer.
     let before = scanner.activity();
-    assert_eq!(
-        scanner
-            .metadata(&fixture.entries)
-            .expect("Active statx source fixture became unavailable"),
-        fixture.timestamps
-    );
+    match workload {
+        Workload::Metadata => {
+            assert_eq!(
+                scanner
+                    .metadata(&fixture.entries)
+                    .expect("Active statx source fixture became unavailable"),
+                fixture.timestamps
+            );
+        }
+        Workload::CacheInfo => {
+            assert_eq!(
+                CacheInfo::from_directory_with_glob_collector(&fixture.root, &mut scanner)
+                    .expect("Active statx cache-info fixture became unavailable"),
+                fixture.cache_info
+            );
+        }
+    }
     scanner.assert_activity(before, fixture.entries.len());
     scanner
 }
@@ -236,7 +259,7 @@ pub(super) fn benchmark_metadata(
             bencher.iter_custom(|iterations| {
                 isolated_time(
                     iterations,
-                    || prepared_scanner(configuration, fixture, prepared),
+                    || prepared_scanner(configuration, fixture, prepared, Workload::Metadata),
                     |scanner| {
                         let before = scanner.activity();
                         let timestamps = scanner
@@ -264,7 +287,7 @@ pub(super) fn benchmark_cache_info(
             bencher.iter_custom(|iterations| {
                 isolated_time(
                     iterations,
-                    || prepared_scanner(configuration, fixture, prepared),
+                    || prepared_scanner(configuration, fixture, prepared, Workload::CacheInfo),
                     |scanner| {
                         let before = scanner.activity();
                         let cache_info = CacheInfo::from_directory_with_glob_collector(
@@ -286,7 +309,14 @@ pub(super) fn benchmark_cache_info(
                     bencher.iter_custom(|iterations| {
                         isolated_time(
                             iterations,
-                            || drop(prepared_scanner(configuration, fixture, prepared)),
+                            || {
+                                drop(prepared_scanner(
+                                    configuration,
+                                    fixture,
+                                    prepared,
+                                    Workload::CacheInfo,
+                                ));
+                            },
                             |()| {
                                 // The sample's submitting task already owns the same-QD io-wq.
                                 // Each operation includes ring creation and destruction, not

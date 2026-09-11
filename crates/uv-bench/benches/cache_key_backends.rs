@@ -9,8 +9,9 @@
 extern crate uv_performance_memory_allocator;
 
 use std::env;
+use std::fmt;
 use std::hint::black_box;
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -44,6 +45,10 @@ fn is_codspeed_simulation() -> bool {
         env::var("CODSPEED_RUNNER_MODE").as_deref(),
         Ok("instrumentation" | "simulation")
     )
+}
+
+fn benchmark_note(message: fmt::Arguments<'_>) {
+    writeln!(io::stderr().lock(), "{message}").expect("Failed to write benchmark metadata");
 }
 
 fn on_isolated_thread<T: Send>(operation: impl FnOnce() -> T + Send) -> T {
@@ -182,10 +187,10 @@ impl Fixture {
         let timestamps = ordinary_metadata(&collector.entries);
         assert!(!collector.entries.is_empty());
         assert!(!timestamps.is_empty());
-        eprintln!(
+        benchmark_note(format_args!(
             "cache_key_backends fixture {name}: {} glob leaves",
             collector.entries.len()
-        );
+        ));
         Self {
             _temporary: temporary,
             name,
@@ -431,7 +436,7 @@ fn source_cache_keys(criterion: &mut Criterion) {
             bencher.iter_custom(|iterations| {
                 isolated_time(
                     iterations,
-                    || (),
+                    || assert_eq!(ordinary_metadata(&fixture.entries), fixture.timestamps),
                     |()| ordinary_metadata(black_box(&fixture.entries)),
                 )
             });
@@ -444,7 +449,12 @@ fn source_cache_keys(criterion: &mut Criterion) {
                     bencher.iter_custom(|iterations| {
                         isolated_time(
                             iterations,
-                            || (),
+                            || {
+                                assert_eq!(
+                                    worker_metadata(&fixture.entries, pool),
+                                    fixture.timestamps
+                                );
+                            },
                             |()| worker_metadata(black_box(&fixture.entries), pool),
                         )
                     });
@@ -486,7 +496,13 @@ fn source_cache_keys(criterion: &mut Criterion) {
         bencher.iter_custom(|iterations| {
             isolated_time(
                 iterations,
-                || (),
+                || {
+                    assert_eq!(
+                        CacheInfo::from_directory(default.path())
+                            .expect("Failed to warm default source cache key"),
+                        default_info
+                    );
+                },
                 |()| {
                     CacheInfo::from_directory(black_box(default.path()))
                         .expect("Failed to compute default source cache key")
@@ -501,7 +517,13 @@ fn source_cache_keys(criterion: &mut Criterion) {
             bencher.iter_custom(|iterations| {
                 isolated_time(
                     iterations,
-                    || (),
+                    || {
+                        assert_eq!(
+                            CacheInfo::from_directory(&fixture.root)
+                                .expect("Failed to warm source cache key"),
+                            fixture.cache_info
+                        );
+                    },
                     |()| {
                         CacheInfo::from_directory(black_box(&fixture.root))
                             .expect("Failed to compute source cache key")
@@ -514,7 +536,7 @@ fn source_cache_keys(criterion: &mut Criterion) {
             bencher.iter_custom(|iterations| {
                 isolated_time(
                     iterations,
-                    || (),
+                    || fixture.assert_cache_info(&mut CollectedOrdinary),
                     |()| {
                         CacheInfo::from_directory_with_glob_collector(
                             black_box(&fixture.root),
@@ -533,7 +555,7 @@ fn source_cache_keys(criterion: &mut Criterion) {
                     bencher.iter_custom(|iterations| {
                         isolated_time(
                             iterations,
-                            || (),
+                            || fixture.assert_cache_info(&mut Workers(pool)),
                             |()| {
                                 CacheInfo::from_directory_with_glob_collector(
                                     black_box(&fixture.root),
@@ -552,7 +574,10 @@ fn source_cache_keys(criterion: &mut Criterion) {
                         bencher.iter_custom(|iterations| {
                             isolated_time(
                                 iterations,
-                                || (),
+                                || {
+                                    let pool = worker_pool(*threads);
+                                    fixture.assert_cache_info(&mut Workers(&pool));
+                                },
                                 |()| {
                                     let pool = worker_pool(*threads);
                                     CacheInfo::from_directory_with_glob_collector(
