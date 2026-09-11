@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::collections::HashSet;
+use std::error::Error as StdError;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -195,6 +196,56 @@ pub enum PylockTomlErrorKind {
     Deserialize(#[from] toml::de::Error),
 }
 
+impl uv_errors::Hinted for PylockTomlErrorKind {
+    fn transparent_source(&self) -> Option<&(dyn StdError + 'static)> {
+        match self {
+            Self::WheelFilename(error) => Some(error),
+            Self::SourceDistFilename(error) => Some(error),
+            Self::ToUrl(error) => Some(error),
+            Self::GitUrlParse(error) => Some(error),
+            Self::LockError(error) => Some(error),
+            Self::Extension(error) => Some(error),
+            Self::Jiff(error) => Some(error),
+            Self::Io(error) => Some(error),
+            Self::Deserialize(error) => Some(error),
+            Self::DuplicateActivePackage(..)
+            | Self::ArchiveSizeMismatch { .. }
+            | Self::IncompatibleRequiresPython(..)
+            | Self::WheelWithDirectory(..)
+            | Self::WheelWithVcs(..)
+            | Self::WheelWithArchive(..)
+            | Self::SdistWithDirectory(..)
+            | Self::SdistWithVcs(..)
+            | Self::SdistWithArchive(..)
+            | Self::DirectoryWithVcs(..)
+            | Self::DirectoryWithArchive(..)
+            | Self::VcsWithArchive(..)
+            | Self::MissingSource(..)
+            | Self::GitArchiveUnsupported(..)
+            | Self::MissingWheel(..)
+            | Self::WheelMissingPathUrl(..)
+            | Self::SdistMissingPathUrl(..)
+            | Self::ArchiveMissingPathUrl(..)
+            | Self::VcsMissingPathUrl(..)
+            | Self::MissingHashes(..)
+            | Self::DownloadFile(..)
+            | Self::StreamFile(..)
+            | Self::ReadFile(..)
+            | Self::UrlMissingFilename(..)
+            | Self::InvalidArtifactUrl(..)
+            | Self::PathMissingFilename(..)
+            | Self::PathToUrl
+            | Self::UrlToPath
+            | Self::NeitherSourceDistNorWheel(..)
+            | Self::NoBinaryNoBuild(..)
+            | Self::NoBinary(..)
+            | Self::NoBuild(..)
+            | Self::IncompatibleWheelOnly(..)
+            | Self::NoBinaryWheelOnly(..) => None,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct PylockTomlError {
     kind: Box<PylockTomlErrorKind>,
@@ -220,6 +271,10 @@ impl uv_errors::Hinted for PylockTomlError {
         } else {
             uv_errors::Hints::none()
         }
+    }
+
+    fn transparent_source(&self) -> Option<&(dyn StdError + 'static)> {
+        Some(self.kind.as_ref())
     }
 }
 

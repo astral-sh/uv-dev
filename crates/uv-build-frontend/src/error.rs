@@ -1,4 +1,5 @@
 use std::env;
+use std::error::Error as StdError;
 use std::fmt::{Display, Formatter};
 use std::io;
 use std::path::PathBuf;
@@ -10,7 +11,7 @@ use regex::regex;
 use thiserror::Error;
 use uv_configuration::BuildOutput;
 use uv_distribution_types::IsBuildBackendError;
-use uv_errors::{Hinted, Hints};
+use uv_errors::{HintOrdering, Hinted, Hints};
 use uv_fs::Simplified;
 use uv_normalize::PackageName;
 use uv_pep440::Version;
@@ -111,6 +112,38 @@ impl Hinted for Error {
             Self::Lowering(err) => err.hints(),
             Self::RequirementsResolve(_, err) | Self::RequirementsInstall(_, err) => err.hints(),
             _ => Hints::none(),
+        }
+    }
+
+    fn own_hints(&self) -> Hints<'_> {
+        match self {
+            // The source contains the backend's output, which provides the evidence for this
+            // advice.
+            Self::BuildBackend(_) | Self::MissingHeader(_) => {
+                self.hints().with_ordering(HintOrdering::Last)
+            }
+            _ => Hints::none(),
+        }
+    }
+
+    fn transparent_source(&self) -> Option<&(dyn StdError + 'static)> {
+        match self {
+            Self::Io(error) => Some(error),
+            Self::Lowering(error) => Some(error),
+            Self::InvalidSourceDist(_)
+            | Self::InvalidPyprojectTomlSyntax(_)
+            | Self::InvalidPyprojectTomlSchema(_)
+            | Self::InvalidBackendPath(_)
+            | Self::BackendPathOutsideSourceTree(_)
+            | Self::RequirementsResolve(..)
+            | Self::RequirementsInstall(..)
+            | Self::Virtualenv(_)
+            | Self::CommandFailed(..)
+            | Self::BuildBackend(_)
+            | Self::MissingHeader(_)
+            | Self::BuildScriptPath(_)
+            | Self::CyclicBuildDependency(_)
+            | Self::UnmatchedRuntime(..) => None,
         }
     }
 }

@@ -1,6 +1,7 @@
 //! Common operations shared across the `pip` API and subcommands.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::error::Error as StdError;
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -1538,6 +1539,26 @@ impl uv_errors::Hinted for Error {
             | Self::Requirements(_)
             | Self::RequirementsWithContext { .. }
             | Self::OutdatedEnvironment(_) => uv_errors::Hints::none(),
+        }
+    }
+
+    fn own_hints(&self) -> uv_errors::Hints<'_> {
+        uv_errors::Hints::none()
+    }
+
+    fn transparent_source(&self) -> Option<&(dyn StdError + 'static)> {
+        match self {
+            Self::Prepare(error) => Some(error),
+            Self::Resolve(error) => Some(error),
+            Self::Uninstall(error) => Some(error),
+            Self::Hash(error) => Some(error),
+            Self::Io(error) => Some(error),
+            Self::Fmt(error) => Some(error),
+            Self::Requirements(error) => Some(error),
+            Self::Anyhow(error) => Some(error.as_ref()),
+            Self::NoSolution { .. }
+            | Self::RequirementsWithContext { .. }
+            | Self::OutdatedEnvironment(_) => None,
         }
     }
 }

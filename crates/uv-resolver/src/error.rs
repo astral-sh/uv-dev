@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet, Bound};
+use std::error::Error as StdError;
 use std::fmt::{Debug, Formatter};
 use std::ops::Deref;
 use std::sync::{Arc, OnceLock};
@@ -185,6 +186,34 @@ impl uv_errors::Hinted for ResolveError {
             Self::Distribution(error) => uv_errors::Hinted::hints(error),
             Self::Dependencies(error, ..) => uv_errors::Hinted::hints(error.as_ref()),
             _ => uv_errors::Hints::none(),
+        }
+    }
+
+    fn own_hints(&self) -> uv_errors::Hints<'_> {
+        uv_errors::Hints::none()
+    }
+
+    fn transparent_source(&self) -> Option<&(dyn StdError + 'static)> {
+        match self {
+            Self::Client(error) => Some(error),
+            Self::Distribution(error) => Some(error),
+            Self::DistributionType(error) => Some(error),
+            Self::NoSolution(error) => Some(error.as_ref()),
+            Self::Dependencies(..)
+            | Self::ChannelClosed
+            | Self::UnregisteredTask(_)
+            | Self::ConflictingUrls { .. }
+            | Self::ConflictingIndexesForEnvironment { .. }
+            | Self::ConflictingIndexes(..)
+            | Self::DisallowedUrl { .. }
+            | Self::Dist(..)
+            | Self::InvalidVersion(_)
+            | Self::UnhashedPackage(_)
+            | Self::ConflictingDistribution(_)
+            | Self::PackageUnavailable(_)
+            | Self::InvalidExtraInConflictMarker { .. }
+            | Self::InvalidValueInConflictMarker { .. }
+            | Self::MismatchedPackageName { .. } => None,
         }
     }
 }
@@ -926,6 +955,14 @@ impl uv_errors::Hinted for NoSolutionError {
 impl uv_errors::Hinted for Box<NoSolutionError> {
     fn hints(&self) -> uv_errors::Hints<'_> {
         self.as_ref().hints()
+    }
+
+    fn own_hints(&self) -> uv_errors::Hints<'_> {
+        uv_errors::Hints::none()
+    }
+
+    fn transparent_source(&self) -> Option<&(dyn StdError + 'static)> {
+        Some(self.as_ref())
     }
 }
 

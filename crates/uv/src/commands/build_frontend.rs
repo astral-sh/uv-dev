@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::error::Error as StdError;
 use std::fmt::Write as _;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -182,6 +183,39 @@ impl Hinted for Error {
                 }
             }
             _ => Hints::none(),
+        }
+    }
+
+    fn own_hints(&self) -> Hints<'_> {
+        match self {
+            Self::Extract(_) => self.hints(),
+            _ => Hints::none(),
+        }
+    }
+
+    fn transparent_source(&self) -> Option<&(dyn StdError + 'static)> {
+        match self {
+            Self::Io(error) => Some(error),
+            Self::FindOrDownloadPython(error) => Some(error),
+            Self::HashStrategy(error) => Some(error),
+            Self::FlatIndex(error) => Some(error),
+            Self::ClientBuild(error) => Some(error),
+            Self::BuildPlan(error) => Some(error.as_ref()),
+            Self::Extract(error) => Some(error),
+            Self::Operations(error) => Some(error),
+            Self::Join(error) => Some(error),
+            Self::BuildBackend(error) => Some(error),
+            Self::BuildDispatch(error) => Some(error),
+            Self::BuildFrontend(error) => Some(error),
+            Self::Project(error) => Some(error.as_ref()),
+            Self::Fmt(_)
+            | Self::ListForcePep517
+            | Self::ListNonUv { .. }
+            | Self::InvalidSourceDistExt(..)
+            | Self::InvalidBuiltSourceDistFilename(_)
+            | Self::InvalidBuiltWheelFilename(_)
+            | Self::NameMismatch(..)
+            | Self::VersionMismatch(..) => None,
         }
     }
 }

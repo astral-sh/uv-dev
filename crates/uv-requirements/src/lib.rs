@@ -9,6 +9,8 @@ pub use crate::upgrade::{
     read_requirements_txt,
 };
 
+use std::error::Error as StdError;
+
 use uv_distribution_types::{Dist, DistErrorKind, Requirement, RequirementSource};
 
 mod extras;
@@ -42,6 +44,19 @@ pub enum Error {
 
     #[error(transparent)]
     Io(#[from] std::io::Error),
+}
+
+impl uv_errors::Hinted for Error {
+    fn transparent_source(&self) -> Option<&(dyn StdError + 'static)> {
+        match self {
+            Self::Distribution(error) => Some(error.as_ref()),
+            Self::DistributionTypes(error) => Some(error),
+            Self::HashStrategy(error) => Some(error),
+            Self::WheelFilename(error) => Some(error),
+            Self::Io(error) => Some(error),
+            Self::Dist(..) => None,
+        }
+    }
 }
 
 impl Error {

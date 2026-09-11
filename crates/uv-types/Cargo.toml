@@ -35,5 +35,8 @@ papaya = { workspace = true }
 rustc-hash = { workspace = true }
 thiserror = { workspace = true }
 
+[dev-dependencies]
+insta = { workspace = true }
+
 [features]
 default = []

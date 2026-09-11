@@ -14,6 +14,7 @@ pub use wheel::{build_editable, build_wheel, list_wheel, metadata};
 
 use rustc_hash::FxHashSet;
 use std::collections::HashSet;
+use std::error::Error as StdError;
 use std::ffi::OsStr;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -100,6 +101,37 @@ impl uv_errors::Hinted for Error {
         match self {
             Self::PortableGlob { source, .. } => uv_errors::Hinted::hints(source),
             _ => uv_errors::Hints::none(),
+        }
+    }
+
+    fn own_hints(&self) -> uv_errors::Hints<'_> {
+        uv_errors::Hints::none()
+    }
+
+    fn transparent_source(&self) -> Option<&(dyn StdError + 'static)> {
+        match self {
+            Self::Io(error) => Some(error),
+            Self::Persist(..)
+            | Self::Toml(..)
+            | Self::TomlSerialize(..)
+            | Self::Validation(..)
+            | Self::InvalidModuleName(..)
+            | Self::PortableGlob { .. }
+            | Self::GlobSetTooLarge { .. }
+            | Self::PyprojectTomlExcluded
+            | Self::WalkDir { .. }
+            | Self::AsyncZip(..)
+            | Self::Csv(..)
+            | Self::Json(..)
+            | Self::MissingInitPy(..)
+            | Self::NotANamespace(..)
+            | Self::InvalidModuleRoot(..)
+            | Self::InvalidDataRoot { .. }
+            | Self::VenvInSourceTree(..)
+            | Self::InconsistentSteps(..)
+            | Self::TarWrite(..)
+            | Self::TarCodecWrite(..)
+            | Self::GzipWrite(..) => None,
         }
     }
 }
