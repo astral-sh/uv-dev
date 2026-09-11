@@ -83,7 +83,7 @@ macro_rules! warn_user_once {
 mod tests {
     use anyhow::anyhow;
     use insta::assert_snapshot;
-    use uv_errors::{ErrorOptions, Hints};
+    use uv_errors::{Diagnostic, ErrorOptions, HintOrdering, Hints};
 
     use super::write_warning_chain_with_options;
 
@@ -125,6 +125,41 @@ mod tests {
           cause: Permission denied
 
         hint: Check the registry permissions.
+        ");
+    }
+
+    #[test]
+    fn format_warning_with_owned_hints() {
+        let error = anyhow!(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "Permission denied",
+        ))
+        .context("Failed to install Python");
+        let mut output = String::new();
+        write_warning_chain_with_options(
+            error.as_ref(),
+            &Hints::none(),
+            ErrorOptions::default()
+                .with_diagnostic(|error| {
+                    if error.is::<std::io::Error>() {
+                        Some(
+                            Diagnostic::default()
+                                .with_hints(Hints::from("Check the registry permissions")),
+                        )
+                    } else {
+                        Some(Diagnostic::default().with_hints(
+                            Hints::from("Retry the installation").with_ordering(HintOrdering::Last),
+                        ))
+                    }
+                })
+                .with_stream(&mut output),
+        )
+        .unwrap();
+        assert_snapshot!(anstream::adapter::strip_str(&output), @"
+        warning: Failed to install Python
+          cause: Permission denied
+          hint: Check the registry permissions
+          hint: Retry the installation
         ");
     }
 }

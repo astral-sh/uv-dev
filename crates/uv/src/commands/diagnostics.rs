@@ -7,22 +7,15 @@ use rustc_hash::FxHashMap;
 use version_ranges::Ranges;
 
 use uv_distribution_types::{DerivationChain, DerivationStep};
-use uv_errors::{Diagnostic, Hinted, Hints};
+use uv_errors::{Diagnostic, Hints};
 use uv_normalize::PackageName;
 use uv_pep440::{Version, strip_local_version_sentinels};
 
-use crate::commands::pip;
-use crate::commands::pip::install::ExternallyManagedError;
-use crate::commands::pip::operations::ExtrasWithoutSourceError;
-use crate::commands::project::ProjectError;
-use crate::commands::project::add::AddDependencyError;
-use crate::commands::project::remove::DependencyNotFoundError;
-use crate::commands::project::run::RecursionLimitError;
-use crate::commands::project::version::MissingProjectVersionError;
-use crate::commands::python::install::InvalidUpgradeRequestError;
-use crate::commands::tool::common::NoExecutablesError;
-use crate::commands::tool::run::{ToolRunScriptError, ToolRunUsageError};
 use crate::printer::Printer;
+
+use self::registry::metadata_for_error;
+
+mod registry;
 
 static SUGGESTIONS: LazyLock<FxHashMap<PackageName, PackageName>> = LazyLock::new(|| {
     let suggestions: Vec<(String, String)> =
@@ -42,7 +35,7 @@ static SUGGESTIONS: LazyLock<FxHashMap<PackageName, PackageName>> = LazyLock::ne
 pub(crate) fn write_error_chain(err: &anyhow::Error, printer: Printer) -> std::fmt::Result {
     uv_errors::write_error_chain_with_options(
         err.as_ref(),
-        &hints_for_error(err),
+        &Hints::none(),
         uv_errors::ErrorOptions::default()
             .with_diagnostic(diagnostic_for_error)
             .with_stream(printer.stderr_important()),
@@ -51,70 +44,33 @@ pub(crate) fn write_error_chain(err: &anyhow::Error, printer: Printer) -> std::f
 
 /// Resolve presentation data for one concrete error, without changing its source chain.
 fn diagnostic_for_error<'a>(error: &'a (dyn Error + 'static)) -> Option<Diagnostic<'a>> {
-    // This transparent wrapper delegates its message and source to the inner error, so that
-    // error is not itself present in the standard source chain.
-    if let Some(pip::operations::Error::Anyhow(inner)) =
-        error.downcast_ref::<pip::operations::Error>()
-    {
-        return diagnostic_for_error(inner.as_ref());
+    // Transparent wrappers display their inner root without exposing it as a separate source.
+    // Resolve that root's presentation and hints at this same visible node.
+    let mut presentation = None;
+    let mut owners = Vec::new();
+    let mut current = Some(error);
+    while let Some(error) = current {
+        if presentation.is_none() {
+            presentation = uv_publish::diagnostic_for_error(error)
+                .or_else(|| uv_requirements_txt::diagnostic_for_error(error))
+                .or_else(|| uv_settings::diagnostic_for_error(error))
+                .or_else(|| uv_workspace::pyproject::diagnostic_for_error(error));
+        }
+        let metadata = metadata_for_error(error);
+        owners.push(metadata.hints);
+        current = metadata.transparent;
     }
-    uv_publish::diagnostic_for_error(error)
-        .or_else(|| uv_requirements_txt::diagnostic_for_error(error))
-        .or_else(|| uv_settings::diagnostic_for_error(error))
-        .or_else(|| uv_workspace::pyproject::diagnostic_for_error(error))
-}
 
-/// Walk an error chain and collect hint strings from all known error types.
-///
-/// This is the central "hint for error" function. It walks the full error chain
-/// (via `anyhow::Error::chain`) and tries to downcast each error to known types
-/// that implement [`Hinted`]. All hint rendering logic should be consolidated here.
-pub(crate) fn hints_for_error(err: &anyhow::Error) -> Hints<'static> {
+    // Native inner hints precede any additional suggestions owned by a transparent wrapper.
+    // This collection is independent of which presentation override takes precedence.
     let mut hints = Hints::none();
-    for cause in err.chain() {
-        collect_hint::<AddDependencyError>(cause, &mut hints);
-        collect_hint::<ToolRunUsageError>(cause, &mut hints);
-        collect_hint::<Box<uv_resolver::NoSolutionError>>(cause, &mut hints);
-        collect_hint::<uv_resolver::NoSolutionError>(cause, &mut hints);
-        collect_hint::<uv_resolver::ResolveError>(cause, &mut hints);
-        collect_hint::<uv_resolver::LockError>(cause, &mut hints);
-        collect_hint::<pip::operations::Error>(cause, &mut hints);
-        collect_hint::<ToolRunScriptError>(cause, &mut hints);
-        collect_hint::<RecursionLimitError>(cause, &mut hints);
-        collect_hint::<DependencyNotFoundError>(cause, &mut hints);
-        collect_hint::<ExtrasWithoutSourceError>(cause, &mut hints);
-        collect_hint::<ProjectError>(cause, &mut hints);
-        collect_hint::<NoExecutablesError>(cause, &mut hints);
-        collect_hint::<ExternallyManagedError>(cause, &mut hints);
-        collect_hint::<MissingProjectVersionError>(cause, &mut hints);
-        collect_hint::<InvalidUpgradeRequestError>(cause, &mut hints);
-        collect_hint::<crate::commands::build_frontend::Error>(cause, &mut hints);
-        collect_hint::<uv_build_backend::Error>(cause, &mut hints);
-        collect_hint::<uv_build_frontend::Error>(cause, &mut hints);
-        collect_hint::<uv_python::Error>(cause, &mut hints);
-        collect_hint::<uv_installer::IncompatibleWheelError>(cause, &mut hints);
-        collect_hint::<uv_distribution::Error>(cause, &mut hints);
-        collect_hint::<uv_python::BrokenLink>(cause, &mut hints);
-        collect_hint::<uv_resolver::PylockTomlError>(cause, &mut hints);
-        collect_hint::<uv_requirements_txt::MakeEditableError>(cause, &mut hints);
-        collect_hint::<uv_python::InterpreterError>(cause, &mut hints);
-        collect_hint::<uv_workspace::pyproject::SourceError>(cause, &mut hints);
-        collect_hint::<uv_distribution::LoweringError>(cause, &mut hints);
-        collect_hint::<uv_virtualenv::Error>(cause, &mut hints);
-        collect_hint::<uv_client::Error>(cause, &mut hints);
-        #[cfg(not(feature = "self-update"))]
-        collect_hint::<crate::ExternallyInstalledError>(cause, &mut hints);
+    for owner in owners.into_iter().rev() {
+        hints.extend(owner);
     }
-    hints
-}
-
-/// If `cause` can be downcast to `T`, collect its hints.
-fn collect_hint<T: Hinted + std::error::Error + 'static>(
-    cause: &(dyn std::error::Error + 'static),
-    hints: &mut Hints<'static>,
-) {
-    if let Some(inner) = cause.downcast_ref::<T>() {
-        hints.extend(inner.hints());
+    if hints.is_empty() {
+        presentation
+    } else {
+        Some(presentation.unwrap_or_default().with_hints(hints))
     }
 }
 
@@ -262,19 +218,49 @@ fn format_chain(name: &PackageName, version: Option<&Version>, chain: &Derivatio
 #[cfg(test)]
 mod tests {
     use std::error::Error;
+    use std::sync::Arc;
 
     use assert_fs::prelude::*;
-    use insta::{assert_debug_snapshot, assert_snapshot};
+    use insta::assert_snapshot;
     use reqwest::StatusCode;
 
-    use uv_errors::{ErrorOptions, Hints, write_error_chain_with_options};
+    use uv_client::{BaseClientBuilder, Connectivity};
+    use uv_distribution_types::{DerivationChain, IsBuildBackendError};
+    use uv_errors::{ErrorOptions, HintOrdering, Hinted, Hints, write_error_chain_with_options};
     use uv_fs::Simplified;
+    use uv_pep440::Version;
     use uv_publish::PublishSendError;
+    use uv_requirements_txt::{RequirementsTxt, SourceCache};
+    use uv_resolver::ResolveError;
     use uv_settings::FilesystemOptions;
+    use uv_types::AnyErrorBuild;
     use uv_workspace::pyproject::{PyProjectToml, PyprojectTomlError, SourceError};
 
-    use super::{diagnostic_for_error, hints_for_error};
-    use crate::commands::pip;
+    use crate::commands::pip::{self, operations};
+    use crate::commands::project::ProjectError;
+
+    use super::diagnostic_for_error;
+
+    fn format_error(error: &(dyn Error + 'static)) -> String {
+        let mut output = String::new();
+        write_error_chain_with_options(
+            error,
+            &Hints::none(),
+            ErrorOptions::default()
+                .with_width_override(80)
+                .with_diagnostic(diagnostic_for_error)
+                .with_stream(&mut output),
+        )
+        .unwrap();
+        anstream::adapter::strip_str(&output).to_string()
+    }
+
+    fn hidden_root<'a>(mut error: &'a (dyn Error + 'static)) -> &'a (dyn Error + 'static) {
+        while let Some(source) = super::registry::metadata_for_error(error).transparent {
+            error = source;
+        }
+        error
+    }
 
     #[test]
     fn resolves_diagnostics_through_transparent_operation_errors() -> anyhow::Result<()> {
@@ -318,6 +304,7 @@ mod tests {
 
         // Rendering must use the input that failed, not a later version of the file.
         file.write_str("preview-features = []\n")?;
+        let error = Arc::new(error);
         let mut output = String::new();
         write_error_chain_with_options(
             &error,
@@ -353,21 +340,278 @@ mod tests {
         assert!(error.source().is_none());
         assert!(diagnostic_for_error(&error).is_some());
         assert!(diagnostic_for_error(&Box::new(error)).is_some());
+        let error = PyProjectToml::from_string("[project]\n".to_owned(), "pyproject.toml")
+            .expect_err("missing project name in test input");
+        assert!(diagnostic_for_error(&Arc::new(error)).is_some());
     }
 
     #[test]
-    fn collects_source_hints_through_pyproject_errors() {
-        let err = anyhow::Error::new(PyprojectTomlError::Source(SourceError::OverlappingMarkers(
+    fn formats_unregistered_erased_build_owner() {
+        #[derive(Debug, thiserror::Error)]
+        #[error("Third-party build backend failed")]
+        struct CustomError(#[source] std::io::Error);
+
+        impl Hinted for CustomError {
+            fn hints(&self) -> Hints<'_> {
+                Hints::from("Set the backend-specific environment variable")
+                    .with_ordering(HintOrdering::Last)
+            }
+        }
+
+        impl IsBuildBackendError for CustomError {
+            fn is_build_backend_error(&self) -> bool {
+                true
+            }
+
+            fn is_user_failure(&self) -> bool {
+                true
+            }
+        }
+
+        let error =
+            AnyErrorBuild::from(CustomError(std::io::Error::other("backend-specific cause")));
+        assert_snapshot!(format_error(&error), @"
+        error: Third-party build backend failed
+          cause: backend-specific cause
+          hint: Set the backend-specific environment variable
+        ");
+    }
+
+    #[test]
+    fn formats_native_metadata_through_erased_build_owners() {
+        let resolution = AnyErrorBuild::from(uv_dispatch::BuildDispatchError::Resolve(
+            ResolveError::Dependencies(
+                Box::new(ResolveError::Distribution(uv_distribution::Error::NoBuild)),
+                "sklearn".parse().unwrap(),
+                Version::new([1, 0]),
+                DerivationChain::default(),
+            ),
+        ));
+        let publish = AnyErrorBuild::from(uv_dispatch::BuildDispatchError::Anyhow(
+            anyhow::Error::new(PublishSendError::Status(
+                StatusCode::BAD_REQUEST,
+                "Invalid package metadata".to_string(),
+            )),
+        ));
+
+        assert_snapshot!(format!("{}\n{}", format_error(&resolution), format_error(&publish)), @"
+        error: Failed to resolve dependencies for package `sklearn==1.0`
+          hint: `sklearn` is often confused for `scikit-learn`. Did you mean to install
+                `scikit-learn` instead?
+          cause: Building source distributions is disabled
+
+        error: Server returned status code 400 Bad Request
+          info: The server included the following context:
+            |
+            | Invalid package metadata
+        ");
+    }
+
+    #[test]
+    fn formats_hints_through_tool_errors() {
+        let error = ProjectError::Tool(uv_tool::Error::VirtualEnvError(
+            uv_virtualenv::Error::Exists {
+                name: "virtual environment",
+                path: "tool-env".into(),
+            },
+        ));
+
+        assert_snapshot!(format_error(&error), @"
+        error: A virtual environment already exists at: tool-env
+          hint: Use the `--clear` flag or set `UV_VENV_CLEAR=1` to replace the existing
+                virtual environment
+        ");
+    }
+
+    #[test]
+    fn resolves_transparent_client_roots() {
+        let client = || uv_client::Error::from(uv_client::ErrorKind::NoIndex("demo".to_owned()));
+        let tool = uv_tool::Error::EnvironmentError(uv_python::Error::ManagedPython(
+            uv_python::managed::Error::Download(
+                uv_python::downloads::Error::RemotePythonDownloadsJSONClient(Box::new(client())),
+            ),
+        ));
+        let osv = uv_audit::osv::Error::Client(client());
+
+        assert!(tool.source().is_none());
+        assert!(osv.source().is_none());
+        assert!(hidden_root(&tool).is::<uv_client::Error>());
+        assert!(hidden_root(&osv).is::<uv_client::Error>());
+    }
+
+    #[test]
+    fn resolves_transparent_lock_roots() {
+        let lock =
+            uv_resolver::LockError::from(uv_configuration::ScopedOverrideSourceError::Index {
+                package: "demo".parse().unwrap(),
+                dependency: "dependency".parse().unwrap(),
+            });
+        let error = uv_resolver::PylockTomlError::from(lock);
+
+        assert!(error.source().is_none());
+        assert!(hidden_root(&error).is::<uv_configuration::ScopedOverrideSourceError>());
+    }
+
+    #[tokio::test]
+    async fn formats_requirements_source_through_shared_error() {
+        let directory = assert_fs::TempDir::new().unwrap();
+        let requirements = directory.child("requirements.txt");
+        let error = RequirementsTxt::parse_str(
+            "-e demo==1.0\n",
+            requirements.path(),
+            directory.path(),
+            &BaseClientBuilder::default().connectivity(Connectivity::Offline),
+            &mut SourceCache::default(),
+        )
+        .await
+        .expect_err("a registry requirement cannot be editable");
+
+        let source_path = regex::escape(&requirements.path().portable_display().to_string());
+        insta::with_settings!({ filters => [(source_path.as_str(), "requirements.txt")] }, {
+            assert_snapshot!(format_error(&Arc::new(error)), @"
+            error: Unsupported editable requirement
+               --> requirements.txt:1:1
+                |
+              1 | -e demo==1.0
+                | ^^^^^^^^^^^^ not editable
+              cause: Registry requirements cannot be editable
+              hint: Editable requirements must refer to a local directory
+            ");
+        });
+    }
+
+    #[test]
+    fn formats_source_hints_through_pyproject_errors() {
+        let error = PyprojectTomlError::Source(SourceError::OverlappingMarkers(
             "sys_platform == 'win32'".to_string(),
             "python_version == '3.12'".to_string(),
             "python_version != '3.12'".to_string(),
+        ));
+
+        assert_snapshot!(format_error(&error), @"
+        error: Failed to parse `tool.uv.sources`
+          cause: Source markers must be disjoint, but the following markers overlap:
+                 `sys_platform == 'win32'` and `python_version == '3.12'`.
+          hint: replace `python_version == '3.12'` with `python_version != '3.12'`
+        ");
+    }
+
+    #[test]
+    fn formats_transparent_root_metadata() {
+        let error = ProjectError::Operation(operations::Error::Anyhow(anyhow::Error::new(
+            uv_publish::PublishSendError::Status(
+                http::StatusCode::BAD_REQUEST,
+                "Invalid package metadata".to_string(),
+            ),
         )));
 
-        let hints = hints_for_error(&err);
-        assert_debug_snapshot!(hints.iter().collect::<Vec<_>>(), @r#"
-        [
-            "replace `python_version == '3.12'` with `python_version != '3.12'`",
-        ]
-        "#);
+        assert_snapshot!(format_error(&error), @"
+        error: Server returned status code 400 Bad Request
+          info: The server included the following context:
+            |
+            | Invalid package metadata
+        ");
+    }
+
+    #[test]
+    fn formats_hints_through_transparent_build_errors() {
+        let error = uv_build_frontend::Error::RequirementsResolve(
+            "build-system.requires",
+            uv_types::AnyErrorBuild::from(uv_dispatch::BuildDispatchError::Anyhow(
+                anyhow::Error::new(uv_build_backend::Error::PortableGlob {
+                    field: "tool.uv.build-backend.source-include".to_string(),
+                    source: uv_globfilter::PortableGlobError::InvalidCharacterUv {
+                        glob: "[".to_string(),
+                        pos: 0,
+                        invalid: '[',
+                    },
+                }),
+            )),
+        );
+        let error = ProjectError::Operation(operations::Error::Anyhow(anyhow::Error::new(error)));
+
+        assert_snapshot!(format_error(&error), @"
+        error: Failed to resolve requirements from build-system.requires
+          cause: Unsupported glob expression in: tool.uv.build-backend.source-include
+          cause: Invalid character `[` at position 0 in glob: `[`
+          hint: Characters can be escaped with a backslash
+        ");
+    }
+
+    #[test]
+    fn formats_distribution_hints_at_their_owner() {
+        let error = ResolveError::Dependencies(
+            Box::new(ResolveError::Distribution(uv_distribution::Error::NoBuild)),
+            "sklearn".parse().unwrap(),
+            Version::new([1, 0]),
+            DerivationChain::default(),
+        );
+        let error = ProjectError::Operation(operations::Error::Resolve(error));
+
+        assert_snapshot!(format_error(&error), @"
+        error: Failed to resolve dependencies for package `sklearn==1.0`
+          hint: `sklearn` is often confused for `scikit-learn`. Did you mean to install
+                `scikit-learn` instead?
+          cause: Building source distributions is disabled
+        ");
+    }
+
+    #[test]
+    fn formats_hints_through_boxed_and_shared_sources() {
+        #[derive(Debug, thiserror::Error)]
+        #[error("Failed to load project metadata")]
+        struct Metadata(#[source] Arc<uv_distribution::Error>);
+
+        let error = Metadata(Arc::new(uv_distribution::Error::MetadataLowering(
+            uv_distribution::MetadataError::LoweringError(
+                "demo".parse().unwrap(),
+                Box::new(uv_distribution::LoweringError::MissingIndex {
+                    package: "demo".parse().unwrap(),
+                    index: "private".parse().unwrap(),
+                    hint: Some("Declare the index in the project configuration".to_string()),
+                }),
+            ),
+        )));
+
+        assert_snapshot!(format_error(&error), @"
+        error: Failed to load project metadata
+          cause: Failed to parse entry: `demo`
+          cause: Package `demo` references an undeclared index: `private`
+          hint: Declare the index in the project configuration
+        ");
+    }
+
+    #[test]
+    fn formats_presentation_through_boxed_and_shared_sources() {
+        #[derive(Debug, thiserror::Error)]
+        #[error("Failed to publish a boxed request")]
+        struct Boxed(#[source] Box<uv_publish::PublishSendError>);
+
+        #[derive(Debug, thiserror::Error)]
+        #[error("Failed to publish a shared request")]
+        struct Shared(#[source] Arc<uv_publish::PublishSendError>);
+
+        let error = || {
+            uv_publish::PublishSendError::Status(
+                http::StatusCode::BAD_REQUEST,
+                "Invalid package metadata".to_string(),
+            )
+        };
+        let boxed = Boxed(Box::new(error()));
+        let shared = Shared(Arc::new(error()));
+
+        assert_snapshot!(format!("{}\n{}", format_error(&boxed), format_error(&shared)), @"
+        error: Failed to publish a boxed request
+          cause: Server returned status code 400 Bad Request
+          info: The server included the following context:
+            |
+            | Invalid package metadata
+
+        error: Failed to publish a shared request
+          cause: Server returned status code 400 Bad Request
+          info: The server included the following context:
+            |
+            | Invalid package metadata
+        ");
     }
 }

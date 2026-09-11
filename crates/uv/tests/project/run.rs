@@ -1201,8 +1201,7 @@ fn run_pep723_script_lock() -> Result<()> {
     ----- stderr -----
     Resolved 3 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-
-    hint: To update the lockfile, run `uv lock`.
+      hint: To update the lockfile, run `uv lock`.
     ");
 
     // Re-running the script with `--frozen` should also error, but at runtime.
@@ -2630,8 +2629,7 @@ fn run_locked() -> Result<()> {
     ----- stderr -----
     Resolved 2 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-
-    hint: To update the lockfile, run `uv lock`.
+      hint: To update the lockfile, run `uv lock`.
     ");
 
     let updated = context.read("uv.lock");
@@ -5845,8 +5843,7 @@ fn detect_infinite_recursion() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: `uv run` was recursively invoked 6 times which exceeds the limit of 5
-
-    hint: If you are running a script with `uv run` in the shebang, you may need to include the `--script` flag
+      hint: If you are running a script with `uv run` in the shebang, you may need to include the `--script` flag
     ");
 
     Ok(())

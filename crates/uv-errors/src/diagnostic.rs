@@ -44,9 +44,8 @@ impl<'a> Diagnostic<'a> {
     ///
     /// [`HintOrdering::First`] and [`HintOrdering::Any`] are rendered beside this error. Its
     /// [`HintOrdering::Last`] suggestions follow its complete source chain.
-    #[cfg(test)]
     #[must_use]
-    pub(crate) fn with_hints(mut self, hints: Hints<'a>) -> Self {
+    pub fn with_hints(mut self, hints: Hints<'a>) -> Self {
         self.hints.extend(hints);
         self
     }

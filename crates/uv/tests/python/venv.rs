@@ -48,8 +48,7 @@ fn create_venv() {
     Creating virtual environment at: .venv
     error: Failed to create virtual environment
       cause: A virtual environment already exists at: .venv
-
-    hint: Use the `--clear` flag or set `UV_VENV_CLEAR=1` to replace the existing virtual environment
+      hint: Use the `--clear` flag or set `UV_VENV_CLEAR=1` to replace the existing virtual environment
     "
     );
 
@@ -413,16 +412,15 @@ fn create_centralized_project_environment() -> Result<()> {
     uv_snapshot!(context.filters(), context.venv()
         .arg("--no-clear")
         .arg("--preview-features")
-        .arg("centralized-project-envs"), @r#"
+        .arg("centralized-project-envs"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
     Creating virtual environment `project-cp3.12.[X]-[HASH]`
     error: Failed to create virtual environment
       cause: A virtual environment already exists at: [CACHE_DIR]/environments-v2/project-cp3.12.[X]-[HASH]
-
-    hint: Use the `--clear` flag or set `UV_VENV_CLEAR=1` to replace the existing virtual environment
-    "#);
+      hint: Use the `--clear` flag or set `UV_VENV_CLEAR=1` to replace the existing virtual environment
+    ");
 
     assert_eq!(
         target,
@@ -1463,8 +1461,7 @@ fn non_empty_dir_exists() -> Result<()> {
     Creating virtual environment at: .venv
     error: Failed to create virtual environment
       cause: A directory already exists at: .venv
-
-    hint: Use the `--clear` flag or set `UV_VENV_CLEAR=1` to replace the existing directory
+      hint: Use the `--clear` flag or set `UV_VENV_CLEAR=1` to replace the existing directory
     ");
 
     uv_snapshot!(context.filters(), context.venv()
@@ -1478,8 +1475,7 @@ fn non_empty_dir_exists() -> Result<()> {
     Creating virtual environment at: .venv
     error: Failed to create virtual environment
       cause: uv will not clear a directory that is not a virtual environment
-
-    hint: Use the `--force` flag to remove the existing directory anyway
+      hint: Use the `--force` flag to remove the existing directory anyway
     "
     );
 
@@ -1535,8 +1531,7 @@ fn non_empty_dir_exists_allow_existing() -> Result<()> {
     Creating virtual environment at: .venv
     error: Failed to create virtual environment
       cause: A directory already exists at: .venv
-
-    hint: Use the `--clear` flag or set `UV_VENV_CLEAR=1` to replace the existing directory
+      hint: Use the `--clear` flag or set `UV_VENV_CLEAR=1` to replace the existing directory
     "
     );
 
@@ -2031,8 +2026,7 @@ fn venv_python_preference() {
     Creating virtual environment at: .venv
     error: Failed to create virtual environment
       cause: A virtual environment already exists at: .venv
-
-    hint: Use the `--clear` flag or set `UV_VENV_CLEAR=1` to replace the existing virtual environment
+      hint: Use the `--clear` flag or set `UV_VENV_CLEAR=1` to replace the existing virtual environment
     ");
 
     uv_snapshot!(context.filters(), context.venv().arg("--clear").arg("--no-managed-python"), @"
@@ -2050,8 +2044,7 @@ fn venv_python_preference() {
     Creating virtual environment at: .venv
     error: Failed to create virtual environment
       cause: A virtual environment already exists at: .venv
-
-    hint: Use the `--clear` flag or set `UV_VENV_CLEAR=1` to replace the existing virtual environment
+      hint: Use the `--clear` flag or set `UV_VENV_CLEAR=1` to replace the existing virtual environment
     ");
 
     uv_snapshot!(context.filters(), context.venv().arg("--clear").arg("--managed-python"), @"
@@ -2325,8 +2318,7 @@ fn no_clear_with_existing_directory() {
     Creating virtual environment at: .venv
     error: Failed to create virtual environment
       cause: A virtual environment already exists at: .venv
-
-    hint: Use the `--clear` flag or set `UV_VENV_CLEAR=1` to replace the existing virtual environment
+      hint: Use the `--clear` flag or set `UV_VENV_CLEAR=1` to replace the existing virtual environment
     "
     );
 }
@@ -2373,8 +2365,7 @@ fn no_clear_overrides_clear() {
     Creating virtual environment at: .venv
     error: Failed to create virtual environment
       cause: A directory already exists at: .venv
-
-    hint: Use the `--clear` flag or set `UV_VENV_CLEAR=1` to replace the existing directory
+      hint: Use the `--clear` flag or set `UV_VENV_CLEAR=1` to replace the existing directory
     "
     );
 }
@@ -2400,8 +2391,7 @@ fn no_clear_overrides_clear_env_var() {
     Creating virtual environment at: .venv
     error: Failed to create virtual environment
       cause: A directory already exists at: .venv
-
-    hint: Use the `--clear` flag or set `UV_VENV_CLEAR=1` to replace the existing directory
+      hint: Use the `--clear` flag or set `UV_VENV_CLEAR=1` to replace the existing directory
     "
     );
 }
