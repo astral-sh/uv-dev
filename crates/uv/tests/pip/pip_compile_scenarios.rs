@@ -368,7 +368,8 @@ fn compatible_python_incompatible_override() -> Result<()> {
     error: No solution found when resolving dependencies
       cause: Because the requested Python version (>=3.9) does not satisfy Python>=3.10 and a==1.0.0 depends on Python>=3.10, we can conclude that a==1.0.0 cannot be used.
              And because you require a==1.0.0, we can conclude that your requirements are unsatisfiable.
-      hint: The `--python-version` value (>=3.9) includes Python versions that are not supported by your dependencies (e.g., a==1.0.0 only supports >=3.10). Consider using a higher `--python-version` value.
+
+    hint: The `--python-version` value (>=3.9) includes Python versions that are not supported by your dependencies (e.g., a==1.0.0 only supports >=3.10). Consider using a higher `--python-version` value.
     "
     );
 

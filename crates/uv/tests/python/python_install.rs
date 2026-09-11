@@ -213,7 +213,8 @@ fn python_install_automatic() {
     exit_code: 2 (failure)
     ----- stderr -----
     error: No interpreter found in [PYTHON SOURCES]
-      hint: A managed Python download is available, but Python downloads are set to 'never'
+
+    hint: A managed Python download is available, but Python downloads are set to 'never'
     ");
 
     // Otherwise, we should fetch the latest Python version
@@ -3169,7 +3170,8 @@ fn uninstall_last_patch() {
     ----- stderr -----
     error: Failed to inspect Python interpreter from active virtual environment at `.venv/[BIN]/python`
       cause: Broken symlink at `.venv/[BIN]/python`, was the underlying Python interpreter removed?
-      hint: Consider recreating the environment (e.g., with `uv venv`)
+
+    hint: Consider recreating the environment (e.g., with `uv venv`)
     "
     );
 
@@ -3737,7 +3739,8 @@ fn python_install_upgrade_version_file() {
     exit_code: 1 (failure)
     ----- stderr -----
     error: `uv python install --upgrade` only accepts minor versions, got: 3.12.4
-      hint: The version request came from a `.python-version` file; change the patch version in the file to upgrade instead
+
+    hint: The version request came from a `.python-version` file; change the patch version in the file to upgrade instead
     ");
 }
 

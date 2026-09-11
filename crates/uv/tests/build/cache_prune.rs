@@ -367,7 +367,8 @@ fn prune_unzipped() -> Result<()> {
         |
       1 | iniconfig
         | ^^^^^^^^^ this dependency was declared here
-      hint: Packages were unavailable because the network was disabled. When the network is disabled, registry packages may only be read from the cache.
+
+    hint: Packages were unavailable because the network was disabled. When the network is disabled, registry packages may only be read from the cache.
     ");
 
     Ok(())

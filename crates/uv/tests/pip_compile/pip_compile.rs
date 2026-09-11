@@ -1596,7 +1596,8 @@ fn compile_fallback_interpreter() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: No interpreter found for PyPy in [PYTHON SOURCES]
-      hint: A managed Python download is available for PyPy, but Python downloads are set to 'never'
+
+    hint: A managed Python download is available for PyPy, but Python downloads are set to 'never'
     "
     );
 
@@ -1608,7 +1609,8 @@ fn compile_fallback_interpreter() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: No interpreter found for Python >=3.12 in [PYTHON SOURCES]
-      hint: A managed Python download is available for Python >=3.12, but Python downloads are set to 'never'
+
+    hint: A managed Python download is available for Python >=3.12, but Python downloads are set to 'never'
     "
     );
 
@@ -1802,7 +1804,8 @@ fn compile_python_build_version_different_than_target() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: No interpreter found for PyPy 3.11 in [PYTHON SOURCES]
-      hint: A managed Python download is available for PyPy 3.11, but Python downloads are set to 'never'
+
+    hint: A managed Python download is available for PyPy 3.11, but Python downloads are set to 'never'
     "
     );
 
@@ -1816,7 +1819,8 @@ fn compile_python_build_version_different_than_target() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: No interpreter found for Python 3.13 in [PYTHON SOURCES]
-      hint: A managed Python download is available for Python 3.13, but Python downloads are set to 'never'
+
+    hint: A managed Python download is available for Python 3.13, but Python downloads are set to 'never'
     "
     );
 
@@ -1992,7 +1996,8 @@ fn compile_python_37() -> Result<()> {
     error: No solution found when resolving dependencies
       cause: Because the requested Python version (>=3.7) does not satisfy Python>=3.8 and black==23.10.1 depends on Python>=3.8, we can conclude that black==23.10.1 cannot be used.
              And because you require black==23.10.1, we can conclude that your requirements are unsatisfiable.
-      hint: The `--python-version` value (>=3.7) includes Python versions that are not supported by your dependencies (e.g., black==23.10.1 only supports >=3.8). Consider using a higher `--python-version` value.
+
+    hint: The `--python-version` value (>=3.7) includes Python versions that are not supported by your dependencies (e.g., black==23.10.1 only supports >=3.8). Consider using a higher `--python-version` value.
     ");
 
     Ok(())
@@ -6749,7 +6754,8 @@ fn missing_editable_file() -> Result<()> {
     ----- stderr -----
     error: Unsupported editable requirement in `requirements.in` at line 1: `file://[TEMP_DIR]/foo/anyio-3.7.0.tar.gz`
       cause: Local archives cannot be editable
-      hint: Editable requirements must refer to a local directory
+
+    hint: Editable requirements must refer to a local directory
     ");
 
     Ok(())
@@ -7513,7 +7519,8 @@ fn no_index_requirements_txt() -> Result<()> {
         |
       2 | tqdm
         | ^^^^ this dependency was declared here
-      hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
+
+    hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
     "
     );
     assert_eq!(output.stderr.last(), Some(&b'\n'));
@@ -7614,7 +7621,8 @@ fn offline_registry() -> Result<()> {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because black was not found in the cache and you require black==23.10.1, we can conclude that your requirements are unsatisfiable.
-      hint: Packages were unavailable because the network was disabled. When the network is disabled, registry packages may only be read from the cache.
+
+    hint: Packages were unavailable because the network was disabled. When the network is disabled, registry packages may only be read from the cache.
     "
     );
 
@@ -7686,7 +7694,8 @@ fn offline_registry_prerelease() -> Result<()> {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because flask was not found in the cache and you require flask==2.0.0rc1, we can conclude that your requirements are unsatisfiable.
-      hint: Packages were unavailable because the network was disabled. When the network is disabled, registry packages may only be read from the cache.
+
+    hint: Packages were unavailable because the network was disabled. When the network is disabled, registry packages may only be read from the cache.
     ");
 
     Ok(())
@@ -7761,7 +7770,8 @@ fn offline_find_links() -> Result<()> {
         |
       1 | tqdm
         | ^^^^ this dependency was declared here
-      hint: Packages were unavailable because the network was disabled. When the network is disabled, registry packages may only be read from the cache.
+
+    hint: Packages were unavailable because the network was disabled. When the network is disabled, registry packages may only be read from the cache.
     "
     );
 
@@ -7780,7 +7790,8 @@ fn offline_find_links() -> Result<()> {
         |
       1 | tqdm
         | ^^^^ this dependency was declared here
-      hint: Packages were unavailable because the network was disabled. When the network is disabled, registry packages may only be read from the cache.
+
+    hint: Packages were unavailable because the network was disabled. When the network is disabled, registry packages may only be read from the cache.
     "
     );
 
@@ -7857,10 +7868,11 @@ fn invalid_metadata_requires_python() -> Result<()> {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because validation==2.0.0 has invalid metadata and you require validation==2.0.0, we can conclude that your requirements are unsatisfiable.
-      hint: Metadata for `validation` (v2.0.0) could not be parsed:
-              Failed to parse version: Unexpected end of version specifier, expected operator. Did you mean `==12`?:
-              12
-              ^^
+
+    hint: Metadata for `validation` (v2.0.0) could not be parsed:
+            Failed to parse version: Unexpected end of version specifier, expected operator. Did you mean `==12`?:
+            12
+            ^^
     "
     );
 
@@ -7884,8 +7896,9 @@ fn invalid_metadata_multiple_dist_info() -> Result<()> {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because validation==3.0.0 has an invalid package format and you require validation==3.0.0, we can conclude that your requirements are unsatisfiable.
-      hint: The structure of `validation` (v3.0.0) was invalid:
-              Multiple .dist-info directories found: validation-2.0.0, validation-3.0.0
+
+    hint: The structure of `validation` (v3.0.0) was invalid:
+            Multiple .dist-info directories found: validation-2.0.0, validation-3.0.0
     "
     );
 
@@ -12322,7 +12335,8 @@ requires-python = ">=3.13"
     error: No solution found when resolving dependencies
       cause: Because the requested Python version (>=3.11) does not satisfy Python>=3.13 and example==0.0.0 depends on Python>=3.13, we can conclude that example==0.0.0 cannot be used.
              And because only example==0.0.0 is available and you require example, we can conclude that your requirements are unsatisfiable.
-      hint: The `--python-version` value (>=3.11) includes Python versions that are not supported by your dependencies (e.g., example==0.0.0 only supports >=3.13). Consider using a higher `--python-version` value.
+
+    hint: The `--python-version` value (>=3.11) includes Python versions that are not supported by your dependencies (e.g., example==0.0.0 only supports >=3.13). Consider using a higher `--python-version` value.
     "
     );
 
@@ -13812,7 +13826,8 @@ fn compile_index_url_first_match_base() -> Result<()> {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because there is no version of jinja2==3.1.0 and you require jinja2==3.1.0, we can conclude that your requirements are unsatisfiable.
-      hint: `jinja2` was found on https://astral-sh.github.io/pytorch-mirror/whl/cpu, but not at the requested version (jinja2==3.1.0). A compatible version may be available on a subsequent index (e.g., https://pypi.org/simple). By default, uv will only consider versions that are published on the first index that contains a given package, to avoid dependency confusion attacks. If all indexes are equally trusted, use `--index-strategy unsafe-best-match` to consider all versions from all indexes, regardless of the order in which they were defined.
+
+    hint: `jinja2` was found on https://astral-sh.github.io/pytorch-mirror/whl/cpu, but not at the requested version (jinja2==3.1.0). A compatible version may be available on a subsequent index (e.g., https://pypi.org/simple). By default, uv will only consider versions that are published on the first index that contains a given package, to avoid dependency confusion attacks. If all indexes are equally trusted, use `--index-strategy unsafe-best-match` to consider all versions from all indexes, regardless of the order in which they were defined.
     "
     );
 
@@ -13843,7 +13858,8 @@ fn compile_index_url_first_match_marker() -> Result<()> {
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because there is no version of jinja2{sys_platform == 'linux'}==3.1.0 and you require jinja2{sys_platform == 'linux'}==3.1.0, we can conclude that your requirements are unsatisfiable.
-      hint: `jinja2` was found on https://astral-sh.github.io/pytorch-mirror/whl/cpu, but not at the requested version (jinja2==3.1.0). A compatible version may be available on a subsequent index (e.g., https://pypi.org/simple). By default, uv will only consider versions that are published on the first index that contains a given package, to avoid dependency confusion attacks. If all indexes are equally trusted, use `--index-strategy unsafe-best-match` to consider all versions from all indexes, regardless of the order in which they were defined.
+
+    hint: `jinja2` was found on https://astral-sh.github.io/pytorch-mirror/whl/cpu, but not at the requested version (jinja2==3.1.0). A compatible version may be available on a subsequent index (e.g., https://pypi.org/simple). By default, uv will only consider versions that are published on the first index that contains a given package, to avoid dependency confusion attacks. If all indexes are equally trusted, use `--index-strategy unsafe-best-match` to consider all versions from all indexes, regardless of the order in which they were defined.
     "
     );
 
@@ -14486,7 +14502,8 @@ fn no_available_version_for_root_dependency() -> Result<()> {
         |
       2 | pypyp>=1
         | ^^^^^^^^ this dependency was declared here
-      hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
+
+    hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
     ");
 
     Ok(())
@@ -14514,7 +14531,8 @@ fn no_available_version_for_root_dependency_duplicate_occurrences() -> Result<()
     ----- stderr -----
     error: No solution found when resolving dependencies
       cause: Because pypyp was not found in the provided package locations and you require pypyp>=1, we can conclude that your requirements are unsatisfiable.
-      hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
+
+    hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
     ");
 
     Ok(())
@@ -14544,7 +14562,8 @@ fn no_available_version_for_root_dependency_override() -> Result<()> {
         |
       2 | pypyp>=2
         | ^^^^^^^^ this dependency was declared here
-      hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
+
+    hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
     ");
 
     overrides.write_str("pypyp>=2 ; python_version < '3.12'\n")?;
@@ -14583,7 +14602,8 @@ fn no_available_version_for_root_dependency_source_privacy() -> Result<()> {
     error: No solution found when resolving dependencies
       cause: Because pypyp was not found in the provided package locations and you require pypyp>=1, we can conclude that your requirements are unsatisfiable.
        --> requirements.in:1:1
-      hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
+
+    hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
     ");
 
     Ok(())
@@ -14603,7 +14623,7 @@ fn no_available_version_for_root_dependency_fork() -> Result<()> {
         .into_iter()
         .chain([(
             // This hint is only shown when the current platform doesn't match the target.
-            r"\n  hint: The resolution failed for an environment that is not the current one[^\n]*",
+            r"\n\nhint: The resolution failed for an environment that is not the current one[^\n]*",
             "",
         )])
         .collect();
@@ -14640,7 +14660,7 @@ fn no_available_version_for_root_dependency_fork_ambiguity() -> Result<()> {
         .into_iter()
         .chain([(
             // This hint is only shown when the current platform doesn't match the target.
-            r"\n  hint: The resolution failed for an environment that is not the current one[^\n]*",
+            r"\n\nhint: The resolution failed for an environment that is not the current one[^\n]*",
             "",
         )])
         .collect();
@@ -15263,7 +15283,8 @@ fn no_binary_only_binary() -> Result<()> {
     error: No solution found when resolving dependencies
       cause: Because source-distribution==0.0.1 has no usable wheels and only source-distribution>=0.0.1 is available, we can conclude that source-distribution<=0.0.1 cannot be used.
              And because you require source-distribution<=0.0.1, we can conclude that your requirements are unsatisfiable.
-      hint: Wheels are required for `source-distribution` because building from source is disabled for all packages (i.e., with `--no-build`)
+
+    hint: Wheels are required for `source-distribution` because building from source is disabled for all packages (i.e., with `--no-build`)
     "
     );
 
@@ -15822,7 +15843,7 @@ fn universal_required_environment() -> Result<()> {
         .into_iter()
         .chain([(
             // This hint is only shown when the current platform doesn't match the target.
-            r"\n  hint: The resolution failed for an environment that is not the current one[^\n]*",
+            r"\n\nhint: The resolution failed for an environment that is not the current one[^\n]*",
             "",
         )])
         .collect();
@@ -16305,8 +16326,10 @@ fn unsupported_requires_python_dynamic_metadata() -> Result<()> {
     ----- stderr -----
     error: No solution found when resolving dependencies for split (markers: python_full_version >= '3.10')
       cause: Because source-distribution==0.0.3 requires Python >=3.10 and you require source-distribution{python_full_version >= '3.10'}==0.0.3, we can conclude that your requirements are unsatisfiable.
-      hint: While the active Python version is 3.8, the resolution failed for other Python versions supported by your project. Consider limiting your project's supported Python versions using `requires-python`.
-      hint: The source distribution for `source-distribution` (v0.0.3) does not include static metadata. Generating metadata for this package requires Python >=3.10, but Python 3.8.[X] is installed.
+
+    hint: While the active Python version is 3.8, the resolution failed for other Python versions supported by your project. Consider limiting your project's supported Python versions using `requires-python`.
+
+    hint: The source distribution for `source-distribution` (v0.0.3) does not include static metadata. Generating metadata for this package requires Python >=3.10, but Python 3.8.[X] is installed.
     ");
 
     Ok(())
@@ -16416,7 +16439,6 @@ fn compile_derivation_chain() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to build `wsgiref==0.1.2`
-      hint: `wsgiref` (v0.1.2) was included because `child` (v0.1.0) depends on `wsgiref`
       cause: The build backend returned an error
       cause: Call to `setuptools.build_meta:__legacy__.build_wheel` failed (exit status: 1)
 
@@ -16437,7 +16459,10 @@ fn compile_derivation_chain() -> Result<()> {
                  print "Setuptools version",version,"or greater has been installed."
                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
              SyntaxError: Missing parentheses in call to 'print'. Did you mean print(...)?
-      hint: Build failures usually indicate a problem with the package or the build environment
+
+    hint: `wsgiref` (v0.1.2) was included because `child` (v0.1.0) depends on `wsgiref`
+
+    hint: Build failures usually indicate a problem with the package or the build environment
     "#
     );
 
@@ -16468,8 +16493,10 @@ fn invalid_platform() -> Result<()> {
         |
       1 | open3d
         | ^^^^^^ this dependency was declared here
-      hint: You require CPython 3.10 (`cp310`), but we only found wheels for `open3d` (v0.15.2) with the following Python ABI tags: `cp36m`, `cp37m`, `cp38`, `cp39`
-      hint: Wheels are available for `open3d` (v0.18.0) on the following platforms: `manylinux_2_27_aarch64`, `manylinux_2_27_x86_64`, `macosx_11_0_x86_64`, `macosx_13_0_arm64`, `win_amd64`
+
+    hint: You require CPython 3.10 (`cp310`), but we only found wheels for `open3d` (v0.15.2) with the following Python ABI tags: `cp36m`, `cp37m`, `cp38`, `cp39`
+
+    hint: Wheels are available for `open3d` (v0.18.0) on the following platforms: `manylinux_2_27_aarch64`, `manylinux_2_27_x86_64`, `macosx_11_0_x86_64`, `macosx_13_0_arm64`, `win_amd64`
     ");
 
     Ok(())
@@ -19364,7 +19391,8 @@ fn compile_broken_active_venv() -> Result<()> {
     ----- stderr -----
     error: Failed to inspect Python interpreter from active virtual environment at `.venv/bin/python3`
       cause: Broken symlink at `.venv/bin/python3`, was the underlying Python interpreter removed?
-      hint: Consider recreating the environment (e.g., with `uv venv`)
+
+    hint: Consider recreating the environment (e.g., with `uv venv`)
     ");
 
     Ok(())

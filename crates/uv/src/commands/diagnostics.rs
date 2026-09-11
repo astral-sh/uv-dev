@@ -461,7 +461,8 @@ mod tests {
         assert_snapshot!(format_error(&error), @"
         error: Third-party build backend failed
           cause: backend-specific cause
-          hint: Set the backend-specific environment variable
+
+        hint: Set the backend-specific environment variable
         ");
     }
 
@@ -484,9 +485,10 @@ mod tests {
 
         assert_snapshot!(format!("{}\n{}", format_error(&resolution), format_error(&publish)), @"
         error: Failed to resolve dependencies for package `sklearn==1.0`
-          hint: `sklearn` is often confused for `scikit-learn`. Did you mean to install
-                `scikit-learn` instead?
           cause: Building source distributions is disabled
+
+        hint: `sklearn` is often confused for `scikit-learn`. Did you mean to install
+              `scikit-learn` instead?
 
         error: Server returned status code 400 Bad Request
           info: The server included the following context:
@@ -506,8 +508,9 @@ mod tests {
 
         assert_snapshot!(format_error(&error), @"
         error: A virtual environment already exists at: tool-env
-          hint: Use the `--clear` flag or set `UV_VENV_CLEAR=1` to replace the existing
-                virtual environment
+
+        hint: Use the `--clear` flag or set `UV_VENV_CLEAR=1` to replace the existing
+              virtual environment
         ");
     }
 
@@ -563,7 +566,8 @@ mod tests {
               1 | -e demo==1.0
                 | ^^^^^^^^^^^^ not editable
               cause: Registry requirements cannot be editable
-              hint: Editable requirements must refer to a local directory
+
+            hint: Editable requirements must refer to a local directory
             ");
         });
     }
@@ -583,8 +587,9 @@ mod tests {
         error: Failed to parse `tool.uv.sources`
           cause: Source markers must be disjoint, but the following markers overlap:
                  `sys_platform == 'win32'` and `python_full_version >= '3.12'`.
-          hint: replace `python_full_version >= '3.12'` with `python_full_version >=
-                '3.12' and sys_platform != 'win32'`
+
+        hint: replace `python_full_version >= '3.12'` with `python_full_version >=
+              '3.12' and sys_platform != 'win32'`
         ");
     }
 
@@ -626,7 +631,8 @@ mod tests {
         error: Failed to resolve requirements from build-system.requires
           cause: Unsupported glob expression in: tool.uv.build-backend.source-include
           cause: Invalid character `[` at position 0 in glob: `[`
-          hint: Characters can be escaped with a backslash
+
+        hint: Characters can be escaped with a backslash
         ");
     }
 
@@ -642,9 +648,10 @@ mod tests {
 
         assert_snapshot!(format_error(&error), @"
         error: Failed to resolve dependencies for package `sklearn==1.0`
-          hint: `sklearn` is often confused for `scikit-learn`. Did you mean to install
-                `scikit-learn` instead?
           cause: Building source distributions is disabled
+
+        hint: `sklearn` is often confused for `scikit-learn`. Did you mean to install
+              `scikit-learn` instead?
         ");
     }
 
@@ -670,7 +677,8 @@ mod tests {
         error: Failed to load project metadata
           cause: Failed to parse entry: `demo`
           cause: Package `demo` references an undeclared index: `private`
-          hint: Declare the index in the project configuration
+
+        hint: Declare the index in the project configuration
         ");
     }
 

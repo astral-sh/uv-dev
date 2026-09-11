@@ -286,7 +286,8 @@ mod tests {
            --> pyproject.toml:6:3
           info: The other environment is declared here
            --> pyproject.toml:4:3
-          hint: replace `sys_platform == 'darwin' or sys_platform == 'linux'` with `sys_platform == 'darwin'`
+
+        hint: replace `sys_platform == 'darwin' or sys_platform == 'linux'` with `sys_platform == 'darwin'`
            --> pyproject.toml:6:3
         ");
         let json = format_error(&error, ErrorFormat::Json)?;
@@ -318,7 +319,8 @@ mod tests {
            --> pyproject.toml:6:3
           info: The other environment is declared here
            --> pyproject.toml:4:3
-          hint: make the environment markers disjoint, or remove one of the overlapping environments
+
+        hint: make the environment markers disjoint, or remove one of the overlapping environments
         ");
         Ok(())
     }
@@ -374,7 +376,8 @@ mod tests {
            --> pyproject.toml:1:52
           info: The other environment is declared here
            --> pyproject.toml:1:25
-          hint: make the environment markers disjoint, or remove one of the overlapping environments
+
+        hint: make the environment markers disjoint, or remove one of the overlapping environments
         ");
         Ok(())
     }
