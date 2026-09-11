@@ -57,6 +57,8 @@ pub(crate) use python::update_shell::update_shell as python_update_shell;
 #[cfg(feature = "self-update")]
 pub(crate) use self_install::self_install;
 #[cfg(feature = "self-update")]
+pub(crate) use self_uninstall::self_uninstall;
+#[cfg(feature = "self-update")]
 pub(crate) use self_update::self_update;
 pub(crate) use tool::audit::audit as tool_audit;
 pub(crate) use tool::dir::dir as tool_dir;
@@ -100,6 +102,8 @@ mod python;
 pub(crate) mod reporters;
 #[cfg(feature = "self-update")]
 mod self_install;
+#[cfg(feature = "self-update")]
+mod self_uninstall;
 #[cfg(feature = "self-update")]
 mod self_update;
 #[cfg(feature = "self-update")]

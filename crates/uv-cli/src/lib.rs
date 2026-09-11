@@ -888,6 +888,8 @@ pub struct SelfNamespace {
 pub enum SelfCommand {
     /// Install uv and its companion executables.
     Install(SelfInstallArgs),
+    /// Uninstall a standalone uv installation.
+    Uninstall(SelfUninstallArgs),
     /// Update uv.
     Update(SelfUpdateArgs),
     /// Display uv's version
@@ -927,6 +929,13 @@ pub struct SelfUpdateArgs {
     pub token: Option<String>,
 
     /// Run without performing the update.
+    #[arg(long)]
+    pub dry_run: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct SelfUninstallArgs {
+    /// Show what would be removed without uninstalling uv.
     #[arg(long)]
     pub dry_run: bool,
 }
