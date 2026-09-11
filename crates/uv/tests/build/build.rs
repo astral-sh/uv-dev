@@ -1914,8 +1914,9 @@ fn build_named_index_config_file_hint() -> Result<()> {
       cause: Failed to parse entry: `hatchling`
       cause: Package `hatchling` references an undeclared index: `privindex`
        --> pyproject.toml:12:31
+      info: Index `privindex` was found in a project-level `uv.toml`, but indexes referenced via `tool.uv.sources` must be defined in the project's `pyproject.toml`
 
-    hint: Index `privindex` was found in a project-level `uv.toml`, but indexes referenced via `tool.uv.sources` must be defined in the project's `pyproject.toml`
+    hint: Define index `privindex` in the project's `pyproject.toml`
     ");
 
     Ok(())
