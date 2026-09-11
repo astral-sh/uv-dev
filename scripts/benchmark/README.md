@@ -8,11 +8,11 @@ download them into `.cache/bench-fixtures`. The script verifies every fixture ag
 SHA-256, including files already present. CI prepares these inputs before timing and includes them
 in the walltime runner artifact, so the measured workloads do not download fixtures.
 
-Whole-command workloads also need `cargo build --locked --profile profiling --bin uv`.
-Run `python3 scripts/benchmark/prepare-environments.py` to install the pinned CPython interpreter
-under `.cache/bench-python` and prime the package cache with Prefect's frozen runtime dependencies.
-The temporary environment is discarded; measured workloads reconstruct their own environments
-offline from the same lockfile and cached package artifacts.
+Whole-command workloads also need `cargo build --locked --profile profiling --bin uv`. Run
+`python3 scripts/benchmark/prepare-environments.py` to install the pinned CPython interpreter under
+`.cache/bench-python` and prime the package cache with Prefect's frozen runtime dependencies. The
+temporary environment is discarded; measured workloads reconstruct their own environments offline
+from the same lockfile and cached package artifacts.
 
 ## Getting Started
 
