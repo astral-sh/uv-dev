@@ -377,8 +377,21 @@ fn validate_dependency_groups_source(map: &SourceMap<'_>, pyproject: &PyProjectT
                         return None;
                     }
                 }
-                DependencyGroupSpecifier::Object(_) => {
-                    map.span(&path)?;
+                DependencyGroupSpecifier::Object(values) => {
+                    if map.keys(&path)?.count() != values.len() {
+                        return None;
+                    }
+                    for (object_key, expected) in values {
+                        let value_path = [
+                            Key("dependency-groups"),
+                            Key(key),
+                            Index(index),
+                            Key(object_key),
+                        ];
+                        if map.string(&value_path)? != expected.as_str() {
+                            return None;
+                        }
+                    }
                 }
             }
         }
@@ -639,6 +652,33 @@ comment = [{ include-group = "missing" }] # needed for local tests
         .context("the include should have a source span")?;
 
         assert!(validate_dependency_groups_source(&map, &pyproject).is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn mismatched_object_source_is_location_only() -> Result<()> {
+        let pyproject = PyProjectToml::from_string(
+            "[dependency-groups]\nroot = [{ include-group = 'missing' }, { note = 'first' }]\n"
+                .to_string(),
+            Path::new("pyproject.toml"),
+        )?;
+        for changed in [
+            "[dependency-groups]\nroot = [{ include-group = 'missing' }, { note = 'second' }]\n",
+            "[dependency-groups]\nroot = [{ include-group = 'missing' }, { other = 'first' }]\n",
+            "[dependency-groups]\nroot = [{ include-group = 'missing' }, { note = 'first', other = 'second' }]\n",
+        ] {
+            let map = SourceMap::parse(changed)?;
+            include_span(
+                &map,
+                &GroupInclude {
+                    group: GroupName::from_str("root")?,
+                    index: 0,
+                    included: GroupName::from_str("missing")?,
+                },
+            )
+            .context("the include should have a source span")?;
+            assert!(validate_dependency_groups_source(&map, &pyproject).is_none());
+        }
         Ok(())
     }
 
