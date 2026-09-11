@@ -1,6 +1,10 @@
 //! Find requested Python interpreters and query interpreters for information.
 use std::error::Error as StdError;
+
+use owo_colors::OwoColorize;
 use thiserror::Error;
+
+use uv_errors::{Hint, Info};
 
 #[cfg(test)]
 use uv_static::EnvVars;
@@ -131,6 +135,32 @@ impl MissingPythonHint {
             _ => format!(" for {request}"),
         }
     }
+
+    fn diagnostic_info(&self) -> Info<'static> {
+        match self {
+            Self::RequiresUpdate => Info::new(
+                "uv embeds available Python downloads and may require an update to install new versions",
+            ),
+            Self::DownloadsManual(request) => Info::new(format!(
+                "A managed Python download is available{}, but Python downloads are set to 'manual'",
+                Self::for_request(request),
+            )),
+            Self::DownloadsNever(_) | Self::PreferenceOnlySystem(_) | Self::Offline(_) => {
+                Info::new(self.to_string())
+            }
+        }
+    }
+
+    fn actionable_hint(&self) -> Option<Hint<'static>> {
+        match self {
+            Self::RequiresUpdate => Some(Hint::new("Retry with a newer version of uv")),
+            Self::DownloadsManual(request) => Some(Hint::new(format!(
+                "Use `{}` to install the required Python version",
+                format!("uv python install {}", request.to_canonical_string()).green(),
+            ))),
+            Self::DownloadsNever(_) | Self::PreferenceOnlySystem(_) | Self::Offline(_) => None,
+        }
+    }
 }
 
 impl std::fmt::Display for MissingPythonHint {
@@ -178,7 +208,7 @@ impl std::fmt::Display for MissingPythonHint {
 impl uv_errors::Hinted for Error {
     fn hints(&self) -> uv_errors::Hints<'_> {
         match self {
-            Self::MissingPython(_, Some(hint)) => uv_errors::Hints::from(hint.to_string()),
+            Self::MissingPython(_, Some(hint)) => hint.actionable_hint().into_iter().collect(),
             Self::Discovery(err) => err.hints(),
             _ => uv_errors::Hints::none(),
         }
@@ -210,6 +240,25 @@ impl uv_errors::Hinted for Error {
 }
 
 impl Error {
+    /// Return explanatory context owned by this Python discovery failure.
+    pub fn own_info(&self) -> Option<Info<'static>> {
+        match self {
+            Self::MissingPython(_, Some(hint)) => Some(hint.diagnostic_info()),
+            Self::Io(_)
+            | Self::VirtualEnv(_)
+            | Self::Query(_)
+            | Self::Discovery(_)
+            | Self::ManagedPython(_)
+            | Self::Download(_)
+            | Self::ClientBuild(_)
+            | Self::KeyError(_)
+            | Self::MissingPython(_, None)
+            | Self::MissingEnvironment(_)
+            | Self::InvalidEnvironment(_)
+            | Self::RetryParsing(_) => None,
+        }
+    }
+
     fn with_hint(self, hint: MissingPythonHint) -> Self {
         match self {
             Self::MissingPython(err, _) => Self::MissingPython(err, Some(Box::new(hint))),
@@ -221,6 +270,120 @@ impl Error {
 impl From<PythonNotFound> for Error {
     fn from(err: PythonNotFound) -> Self {
         Self::MissingPython(err, None)
+    }
+}
+
+#[cfg(test)]
+mod diagnostic_tests {
+    use uv_errors::{Diagnostic, ErrorOptions, Hinted, Hints, write_error_chain_with_options};
+
+    use super::*;
+
+    fn missing_python(hint: MissingPythonHint) -> Error {
+        Error::from(PythonNotFound {
+            request: PythonRequest::parse("3.12"),
+            python_preference: PythonPreference::OnlyManaged,
+            environment_preference: EnvironmentPreference::OnlySystem,
+        })
+        .with_hint(hint)
+    }
+
+    fn diagnostic_for_error<'a>(error: &'a (dyn StdError + 'static)) -> Option<Diagnostic<'a>> {
+        let error = error.downcast_ref::<Error>()?;
+        Some(
+            Diagnostic::default()
+                .with_hints(error.own_hints())
+                .with_info(error.own_info()?),
+        )
+    }
+
+    fn format_error(error: &Error) -> String {
+        let mut output = String::new();
+        write_error_chain_with_options(
+            error,
+            &Hints::none(),
+            ErrorOptions::default()
+                .with_width_override(1000)
+                .with_diagnostic(diagnostic_for_error)
+                .with_stream(&mut output),
+        )
+        .expect("writing to a string cannot fail");
+        anstream::adapter::strip_str(&output).to_string()
+    }
+
+    #[test]
+    fn missing_python_policy_context_is_not_advice() {
+        let request = PythonRequest::parse("3.12");
+        let errors = [
+            MissingPythonHint::DownloadsNever(request.clone()),
+            MissingPythonHint::PreferenceOnlySystem(request.clone()),
+            MissingPythonHint::Offline(request),
+        ]
+        .map(missing_python);
+
+        for error in &errors {
+            assert!(error.hints().is_empty());
+            assert!(error.own_info().is_some());
+        }
+
+        let output = errors
+            .iter()
+            .map(format_error)
+            .collect::<Vec<_>>()
+            .join("\n");
+        insta::assert_snapshot!(output, @"
+        error: No interpreter found for Python 3.12 in managed installations
+          info: A managed Python download is available for Python 3.12, but Python downloads are set to 'never'
+
+        error: No interpreter found for Python 3.12 in managed installations
+          info: A managed Python download is available for Python 3.12, but the Python preference is set to 'only system'
+
+        error: No interpreter found for Python 3.12 in managed installations
+          info: A managed Python download is available for Python 3.12, but uv is set to offline mode
+        ");
+    }
+
+    #[test]
+    fn missing_python_download_actions_are_separate() {
+        let errors = [
+            MissingPythonHint::RequiresUpdate,
+            MissingPythonHint::DownloadsManual(PythonRequest::parse("3.12")),
+        ]
+        .map(missing_python);
+
+        for error in &errors {
+            assert_eq!(error.hints().iter().count(), 1);
+            assert!(error.own_info().is_some());
+        }
+
+        let output = errors
+            .iter()
+            .map(format_error)
+            .collect::<Vec<_>>()
+            .join("\n");
+        insta::assert_snapshot!(output, @"
+        error: No interpreter found for Python 3.12 in managed installations
+          info: uv embeds available Python downloads and may require an update to install new versions
+
+        hint: Retry with a newer version of uv
+
+        error: No interpreter found for Python 3.12 in managed installations
+          info: A managed Python download is available for Python 3.12, but Python downloads are set to 'manual'
+
+        hint: Use `uv python install 3.12` to install the required Python version
+        ");
+    }
+
+    #[test]
+    fn missing_python_display_includes_context_and_action() {
+        insta::assert_snapshot!(format!(
+            "{}\n{}",
+            MissingPythonHint::RequiresUpdate,
+            MissingPythonHint::DownloadsManual(PythonRequest::parse("3.12")),
+        ), @"
+        uv embeds available Python downloads and may require an update to install new versions. Consider retrying on a newer version of uv.
+        A managed Python download is available for Python 3.12, but Python downloads are set to 'manual', use `uv python install 3.12` to install the required version
+        ");
     }
 }
 
