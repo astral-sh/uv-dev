@@ -570,17 +570,21 @@ mod tests {
 
     #[test]
     fn formats_source_hints_through_pyproject_errors() {
-        let error = PyprojectTomlError::from(SourceError::OverlappingMarkers(
-            "sys_platform == 'win32'".to_string(),
-            "python_version == '3.12'".to_string(),
-            "python_version != '3.12'".to_string(),
-        ));
+        let error = PyprojectTomlError::from(SourceError::OverlappingMarkers {
+            left: "sys_platform == 'win32'".to_string(),
+            right: "python_full_version >= '3.12'".to_string(),
+            replacement: "python_full_version >= '3.12' and sys_platform != 'win32'"
+                .parse()
+                .unwrap(),
+            suggestion: None,
+        });
 
         assert_snapshot!(format_error(&error), @"
         error: Failed to parse `tool.uv.sources`
           cause: Source markers must be disjoint, but the following markers overlap:
-                 `sys_platform == 'win32'` and `python_version == '3.12'`.
-          hint: replace `python_version == '3.12'` with `python_version != '3.12'`
+                 `sys_platform == 'win32'` and `python_full_version >= '3.12'`.
+          hint: replace `python_full_version >= '3.12'` with `python_full_version >=
+                '3.12' and sys_platform != 'win32'`
         ");
     }
 
