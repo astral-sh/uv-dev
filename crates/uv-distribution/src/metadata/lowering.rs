@@ -41,6 +41,24 @@ enum RequirementOrigin {
     Workspace,
 }
 
+/// The metadata document in which a named `tool.uv.sources` index must be declared.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum IndexDeclarationTarget {
+    /// A project's `pyproject.toml`.
+    Project,
+    /// A script's inline metadata.
+    Script,
+}
+
+impl IndexDeclarationTarget {
+    fn description(self) -> &'static str {
+        match self {
+            Self::Project => "the project's `pyproject.toml`",
+            Self::Script => "the script's inline metadata",
+        }
+    }
+}
+
 impl LoweredRequirement {
     /// Combine `project.dependencies` or `project.optional-dependencies` with `tool.uv.sources`.
     pub(crate) async fn from_requirement<'data>(
@@ -278,6 +296,7 @@ impl LoweredRequirement {
                                 return Err(LoweringError::MissingIndex {
                                     package: requirement.name.clone(),
                                     index,
+                                    declaration_target: IndexDeclarationTarget::Project,
                                     configured_index_origin,
                                     diagnostic,
                                 });
@@ -350,8 +369,11 @@ impl LoweredRequirement {
 
     /// Lower a [`uv_pep508::Requirement`] in a non-workspace setting (for example, in a PEP 723
     /// script, which runs in an isolated context).
+    ///
+    /// `declaration_target` identifies the metadata document that owns `sources` and `indexes`.
     pub async fn from_non_workspace_requirement<'data>(
         requirement: uv_pep508::Requirement<VerbatimParsedUrl>,
+        declaration_target: IndexDeclarationTarget,
         dir: &'data Path,
         sources: &'data BTreeMap<PackageName, Sources>,
         indexes: &'data [Index],
@@ -469,6 +491,7 @@ impl LoweredRequirement {
                                 return Err(LoweringError::MissingIndex {
                                     package: requirement.name.clone(),
                                     index,
+                                    declaration_target,
                                     configured_index_origin,
                                     diagnostic: None,
                                 });
@@ -604,11 +627,12 @@ pub enum LoweringError {
     GitUrlParse(#[from] GitUrlParseError),
     #[error(
         "Package `{package}` references an undeclared index: `{index}`{}",
-        missing_index_display_context(index, *configured_index_origin)
+        missing_index_display_context(index, *configured_index_origin, *declaration_target)
     )]
     MissingIndex {
         package: PackageName,
         index: IndexName,
+        declaration_target: IndexDeclarationTarget,
         configured_index_origin: Option<Origin>,
         diagnostic: Option<Box<SourceSnippet<'static>>>,
     },
@@ -655,8 +679,13 @@ pub enum LoweringError {
 impl uv_errors::Hinted for LoweringError {
     fn hints(&self) -> uv_errors::Hints<'_> {
         match self {
-            Self::MissingIndex { index, .. } => uv_errors::Hints::from(format!(
-                "Define index `{index}` in the project's `pyproject.toml`"
+            Self::MissingIndex {
+                index,
+                declaration_target,
+                ..
+            } => uv_errors::Hints::from(format!(
+                "Define index `{index}` in {}",
+                declaration_target.description(),
             )),
             _ => uv_errors::Hints::none(),
         }
@@ -668,13 +697,14 @@ impl LoweringError {
     pub(crate) fn own_info(&self) -> Option<Info<'static>> {
         let Self::MissingIndex {
             index,
+            declaration_target,
             configured_index_origin,
             ..
         } = self
         else {
             return None;
         };
-        missing_index_context(index, *configured_index_origin).map(Info::new)
+        missing_index_context(index, *configured_index_origin, *declaration_target).map(Info::new)
     }
 }
 
@@ -707,7 +737,11 @@ fn missing_index_origin(locations: &IndexLocations, index: &IndexName) -> Option
         .filter(|origin| matches!(origin, Origin::User | Origin::System | Origin::Project))
 }
 
-fn missing_index_context(index: &IndexName, origin: Option<Origin>) -> Option<String> {
+fn missing_index_context(
+    index: &IndexName,
+    origin: Option<Origin>,
+    declaration_target: IndexDeclarationTarget,
+) -> Option<String> {
     let source = match origin? {
         Origin::User => "a user-level `uv.toml`",
         Origin::System => "a system-level `uv.toml`",
@@ -716,13 +750,18 @@ fn missing_index_context(index: &IndexName, origin: Option<Origin>) -> Option<St
     };
     Some(format!(
         "Index `{index}` was found in {source}, but indexes \
-         referenced via `tool.uv.sources` must be defined in the project's \
-         `pyproject.toml`"
+         referenced via `tool.uv.sources` must be defined in {}",
+        declaration_target.description(),
     ))
 }
 
-fn missing_index_display_context(index: &IndexName, origin: Option<Origin>) -> String {
-    missing_index_context(index, origin).map_or_else(String::new, |context| format!(". {context}"))
+fn missing_index_display_context(
+    index: &IndexName,
+    origin: Option<Origin>,
+    declaration_target: IndexDeclarationTarget,
+) -> String {
+    missing_index_context(index, origin, declaration_target)
+        .map_or_else(String::new, |context| format!(". {context}"))
 }
 
 /// Convert a Git source into a [`RequirementSource`].
@@ -1103,9 +1142,18 @@ fn git_path(path: &Path) -> Result<PathBuf, LoweringError> {
 
 #[cfg(test)]
 mod tests {
-    use uv_distribution_types::{Index, IndexLocations, IndexName, IndexUrl, Origin};
+    use std::collections::BTreeMap;
+    use std::path::Path;
 
-    use super::missing_index_origin;
+    use uv_auth::CredentialsCache;
+    use uv_cache::Cache;
+    use uv_distribution_types::{Index, IndexLocations, IndexName, IndexUrl, Origin};
+    use uv_normalize::PackageName;
+    use uv_pep508::MarkerTree;
+    use uv_workspace::WorkspaceCache;
+    use uv_workspace::pyproject::{Source, Sources};
+
+    use super::{IndexDeclarationTarget, LoweredRequirement, LoweringError, missing_index_origin};
 
     #[test]
     fn missing_index_origin_identifies_configuration() -> anyhow::Result<()> {
@@ -1125,6 +1173,53 @@ mod tests {
             index.origin = origin;
             let locations = IndexLocations::new(vec![index], Vec::new(), false);
             assert_eq!(missing_index_origin(&locations, &name), None);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn non_workspace_index_target_is_retained() -> anyhow::Result<()> {
+        let name: PackageName = "demo-pkg".parse()?;
+        let sources = BTreeMap::from([(
+            name,
+            [Source::Registry {
+                index: "private".parse()?,
+                marker: MarkerTree::TRUE,
+                extra: None,
+                group: None,
+            }]
+            .into_iter()
+            .collect::<Sources>(),
+        )]);
+        let locations = IndexLocations::default();
+        let cache = Cache::from_path("unused-cache");
+        let workspace_cache = WorkspaceCache::default();
+        let credentials_cache = CredentialsCache::default();
+        for target in [
+            IndexDeclarationTarget::Project,
+            IndexDeclarationTarget::Script,
+        ] {
+            let error = LoweredRequirement::from_non_workspace_requirement(
+                "demo-pkg".parse()?,
+                target,
+                Path::new("."),
+                &sources,
+                &[],
+                &locations,
+                &cache,
+                &workspace_cache,
+                &credentials_cache,
+            )
+            .await
+            .collect::<Result<Vec<_>, _>>()
+            .expect_err("the named index is not declared");
+            let LoweringError::MissingIndex {
+                declaration_target, ..
+            } = error
+            else {
+                panic!("expected an undeclared index error");
+            };
+            assert_eq!(declaration_target, target);
         }
         Ok(())
     }

@@ -856,6 +856,7 @@ wheels = [{ filename = "example-1.0.0-cp312-cp312-macosx_11_0_arm64.whl", hash =
                 Box::new(uv_distribution::LoweringError::MissingIndex {
                     package: "demo".parse().unwrap(),
                     index: "private".parse().unwrap(),
+                    declaration_target: uv_distribution::IndexDeclarationTarget::Project,
                     configured_index_origin: Some(uv_distribution_types::Origin::Project),
                     diagnostic: None,
                 }),

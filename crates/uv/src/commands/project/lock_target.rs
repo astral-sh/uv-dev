@@ -10,7 +10,7 @@ use tracing::info_span;
 use uv_auth::CredentialsCache;
 use uv_cache::Cache;
 use uv_configuration::{DependencyGroupsWithDefaults, ExcludeDependency, NoSources, Upgrade};
-use uv_distribution::LoweredRequirement;
+use uv_distribution::{IndexDeclarationTarget, LoweredRequirement};
 use uv_distribution_types::{Index, IndexLocations, Requirement, RequiresPython};
 use uv_normalize::{GroupName, PackageName};
 use uv_pep508::RequirementOrigin;
@@ -451,6 +451,7 @@ impl<'lock> LockTarget<'lock> {
                     lowered.extend(
                         LoweredRequirement::from_non_workspace_requirement(
                             requirement,
+                            IndexDeclarationTarget::Script,
                             script.path.parent().unwrap(),
                             sources_map,
                             indexes,

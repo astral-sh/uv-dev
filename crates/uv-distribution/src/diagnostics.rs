@@ -182,7 +182,7 @@ mod tests {
     use uv_toml::SourceMap;
     use uv_workspace::pyproject::{PyProjectToml, Source};
 
-    use crate::LoweringError;
+    use crate::{IndexDeclarationTarget, LoweringError};
 
     use super::{SourceOccurrence, diagnostic_for_error, missing_index_source, missing_index_span};
 
@@ -406,6 +406,7 @@ mod tests {
         let error = LoweringError::MissingIndex {
             package,
             index: IndexName::from_str("private")?,
+            declaration_target: IndexDeclarationTarget::Project,
             configured_index_origin: Some(Origin::User),
             diagnostic: Some(Box::new(snippet)),
         };
@@ -443,6 +444,7 @@ mod tests {
             let error = LoweringError::MissingIndex {
                 package: PackageName::from_str("demo-pkg")?,
                 index: IndexName::from_str("private")?,
+                declaration_target: IndexDeclarationTarget::Project,
                 configured_index_origin: origin,
                 diagnostic: None,
             };
@@ -488,6 +490,38 @@ mod tests {
 
         hint: Define index `private` in the project's `pyproject.toml`
         ");
+        Ok(())
+    }
+
+    #[test]
+    fn missing_script_index_targets_inline_metadata() -> Result<()> {
+        let error = LoweringError::MissingIndex {
+            package: PackageName::from_str("demo-pkg")?,
+            index: IndexName::from_str("private")?,
+            declaration_target: IndexDeclarationTarget::Script,
+            configured_index_origin: Some(Origin::User),
+            diagnostic: None,
+        };
+        let mut output = String::new();
+        write_error_chain_with_options(
+            &error,
+            &error.hints(),
+            ErrorOptions::default()
+                .with_width_override(usize::MAX)
+                .with_diagnostic(diagnostic_for_error)
+                .with_stream(&mut output),
+        )?;
+
+        insta::assert_snapshot!(
+            format!("Display: {}\n{}", error, anstream::adapter::strip_str(&output)),
+            @"
+        Display: Package `demo-pkg` references an undeclared index: `private`. Index `private` was found in a user-level `uv.toml`, but indexes referenced via `tool.uv.sources` must be defined in the script's inline metadata
+        error: Package `demo-pkg` references an undeclared index: `private`
+          info: Index `private` was found in a user-level `uv.toml`, but indexes referenced via `tool.uv.sources` must be defined in the script's inline metadata
+
+        hint: Define index `private` in the script's inline metadata
+        "
+        );
         Ok(())
     }
 }
