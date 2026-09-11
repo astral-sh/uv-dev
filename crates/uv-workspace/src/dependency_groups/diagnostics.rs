@@ -393,7 +393,6 @@ mod tests {
     use std::str::FromStr;
 
     use anyhow::{Context, Result};
-    use uv_errors::SourceFile;
     use uv_normalize::GroupName;
     use uv_pep440::VersionSpecifiers;
     use uv_toml::SourceMap;
@@ -518,7 +517,7 @@ mod tests {
     }
 
     #[test]
-    fn include_spans_keep_complete_physical_lines() -> Result<()> {
+    fn include_spans_retain_occurrences_beside_multiline_values() -> Result<()> {
         let source = r#"[dependency-groups]
 separate = [
     "demo @ https://example.com/demo-1.0.0-py3-none-any.whl",
@@ -533,11 +532,10 @@ continued = [
         .replace('\n', "\r\n");
         let pyproject = PyProjectToml::from_string(source, Path::new("pyproject.toml"))?;
         let map = SourceMap::parse(&pyproject.raw)?;
-        let source = SourceFile::new("pyproject.toml", pyproject.raw.as_str());
         validate_dependency_groups_source(&map, &pyproject)
             .context("the semantic groups should match their source")?;
         let cases = [("separate", 1), ("same-line", 0), ("continued", 1)];
-        let mut windows = Vec::new();
+        let mut values = Vec::new();
         for (group, index) in cases {
             let range = include_span(
                 &map,
@@ -548,18 +546,18 @@ continued = [
                 },
             )
             .context("the include should have a source span")?;
-            windows.push(source.lines_for_span(range));
+            values.push(pyproject.raw.get(range));
         }
-        insta::assert_debug_snapshot!(windows, @r#"
+        insta::assert_debug_snapshot!(values, @r#"
         [
             Some(
-                "    { include-group = \"missing\" },\r\n",
+                "\"missing\"",
             ),
             Some(
-                "same-line = [{ include-group = \"missing\" }, \"demo \\u0040 https\\u003a//example.com/demo-1.0.0-py3-none-any.whl\"]\r\n",
+                "\"missing\"",
             ),
             Some(
-                "        demo-1.0.0-py3-none-any.whl\"\"\", { include-group = \"missing\" },\r\n",
+                "\"missing\"",
             ),
         ]
         "#);
@@ -578,7 +576,6 @@ comment = [{ include-group = "missing" }] # needed for local tests
         let pyproject =
             PyProjectToml::from_string(source.to_string(), Path::new("pyproject.toml"))?;
         let map = SourceMap::parse(source)?;
-        let source = SourceFile::new("pyproject.toml", source);
         validate_dependency_groups_source(&map, &pyproject)
             .context("the semantic groups should match their source")?;
         let cases = [
@@ -588,7 +585,7 @@ comment = [{ include-group = "missing" }] # needed for local tests
             ("unknown", 0),
             ("comment", 0),
         ];
-        let mut windows = Vec::new();
+        let mut values = Vec::new();
         for (group, index) in cases {
             let range = include_span(
                 &map,
@@ -599,24 +596,24 @@ comment = [{ include-group = "missing" }] # needed for local tests
                 },
             )
             .context("the include should have a source span")?;
-            windows.push(source.lines_for_span(range));
+            values.push(source.get(range));
         }
-        insta::assert_debug_snapshot!(windows, @r#"
+        insta::assert_debug_snapshot!(values, @r#"
         [
             Some(
-                "registry = [\"typing-extensions>=4\", { include-group = \"missing\" }]\n",
+                "\"missing\"",
             ),
             Some(
-                "marker = [\"safe; python_version >= '0' or python_version < '0'\", { include-group = \"missing\" }]\n",
+                "\"missing\"",
             ),
             Some(
-                "comment-string = [\"safe \\u0023 explanatory note\", { include-group = \"missing\" }]\n",
+                "\"missing\"",
             ),
             Some(
-                "unknown = [{ include-group = \"missing\" }, { note = \"for another tool\" }]\n",
+                "\"missing\"",
             ),
             Some(
-                "comment = [{ include-group = \"missing\" }] # needed for local tests\n",
+                "\"missing\"",
             ),
         ]
         "#);
