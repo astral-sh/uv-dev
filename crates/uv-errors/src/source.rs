@@ -52,8 +52,7 @@ impl SourceFile {
     /// This uses the renderer's LF-delimited line boundaries, including any CR bytes. Producers
     /// can inspect the same text before deciding whether a source excerpt is safe to show. An
     /// invalid UTF-8 range returns `None`.
-    #[cfg(test)]
-    fn lines_for_span(&self, span: Range<usize>) -> Option<&str> {
+    pub fn lines_for_span(&self, span: Range<usize>) -> Option<&str> {
         self.text().get(self.line_range_for_span(span)?)
     }
 
@@ -61,8 +60,7 @@ impl SourceFile {
     ///
     /// Producers can compare this window with other retained semantic source spans before
     /// deciding whether an excerpt would expose unrelated fields.
-    #[cfg(test)]
-    fn line_range_for_span(&self, span: Range<usize>) -> Option<Range<usize>> {
+    pub fn line_range_for_span(&self, span: Range<usize>) -> Option<Range<usize>> {
         let lines = SourceLines::new(self.text());
         let (first, last) = lines.annotation_lines(&span)?;
         lines.range(first, last)
@@ -184,7 +182,7 @@ impl<'a> SourceSnippet<'a> {
     /// The first valid primary annotation determines the location, or the first valid annotation
     /// when there is no primary annotation. Invalid ranges still fall back to the source name.
     #[must_use]
-    fn without_source_text(mut self) -> Self {
+    pub fn without_source_text(mut self) -> Self {
         self.show_source = false;
         self
     }
