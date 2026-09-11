@@ -3095,30 +3095,34 @@ where
                 }
                 Err(err) => UvError::unexpected(err),
             };
-            match error {
-                UvError::User(err) => {
-                    commands::diagnostics::write_error_chain(&err, printer)
-                        .expect("writing to stderr should not fail");
-                    ExitStatus::Failure.into()
-                }
-                UvError::Argument(err) => {
-                    commands::diagnostics::write_error_chain(&err, printer)
-                        .expect("writing to stderr should not fail");
-                    ExitStatus::Error.into()
-                }
-                UvError::Unexpected(err) => {
-                    trace!(
-                        "Error chain:\n{}",
-                        uv_errors::debug_error_chain(err.as_ref())
-                    );
-                    if err.backtrace().status() == std::backtrace::BacktraceStatus::Captured {
-                        trace!("Error backtrace:\n{}", err.backtrace());
-                    }
-                    commands::diagnostics::write_error_chain(&err, printer)
-                        .expect("writing to stderr should not fail");
-                    ExitStatus::Error.into()
-                }
+            let status = error.exit_status();
+            write_command_error(&error, printer).expect("writing to stderr should not fail");
+            status.into()
+        }
+    }
+}
+
+/// Render each command error independently, retaining its own diagnostic classification.
+fn write_command_error(error: &UvError, printer: Printer) -> std::fmt::Result {
+    match error {
+        UvError::User(err) | UvError::Argument(err) => {
+            commands::diagnostics::write_error_chain(err, printer)
+        }
+        UvError::Unexpected(err) => {
+            trace!(
+                "Error chain:\n{}",
+                uv_errors::debug_error_chain(err.as_ref())
+            );
+            if err.backtrace().status() == std::backtrace::BacktraceStatus::Captured {
+                trace!("Error backtrace:\n{}", err.backtrace());
             }
+            commands::diagnostics::write_error_chain(err, printer)
+        }
+        UvError::Batch(errors) => {
+            for error in errors {
+                write_command_error(error, printer)?;
+            }
+            Ok(())
         }
     }
 }
