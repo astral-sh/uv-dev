@@ -284,12 +284,12 @@ fn hint_build_dependency(package_name: Option<&PackageName>, package: &str) -> S
     );
     if let Some(package_name) = package_name {
         format!(
-            "{message} Otherwise, either add it to your `pyproject.toml` under:\n\
+            "{message} Otherwise, add it to the project's `pyproject.toml` or the script's inline metadata under:\n\
             \n\
                 [tool.uv.extra-build-dependencies]\n\
                 {} = [\"{}\"]\n\
             \n\
-            or install `{}` into the environment used by the original command and re-run that command with `{}`.",
+            Alternatively, install `{}` into the environment used by the original command and re-run that command with `{}`.",
             package_name.cyan(),
             package.cyan(),
             package.cyan(),
@@ -667,11 +667,11 @@ mod test {
             }
           ],
           [
-            "This error likely indicates that `demo-pkg` depends on `setuptools`, but doesn't declare it as a build dependency. If `demo-pkg` is a first-party package, add `setuptools` to its `build-system.requires`. Otherwise, either add it to your `pyproject.toml` under:\n\n[tool.uv.extra-build-dependencies]\ndemo-pkg = [\"setuptools\"]\n\nor install `setuptools` into the environment used by the original command and re-run that command with `--no-build-isolation`.",
+            "This error likely indicates that `demo-pkg` depends on `setuptools`, but doesn't declare it as a build dependency. If `demo-pkg` is a first-party package, add `setuptools` to its `build-system.requires`. Otherwise, add it to the project's `pyproject.toml` or the script's inline metadata under:\n\n[tool.uv.extra-build-dependencies]\ndemo-pkg = [\"setuptools\"]\n\nAlternatively, install `setuptools` into the environment used by the original command and re-run that command with `--no-build-isolation`.",
             {
               "hints": [
                 {
-                  "message": "If `demo-pkg` is a first-party package, add `setuptools` to its `build-system.requires`. Otherwise, either add it to your `pyproject.toml` under:\n\n[tool.uv.extra-build-dependencies]\ndemo-pkg = [\"setuptools\"]\n\nor install `setuptools` into the environment used by the original command and re-run that command with `--no-build-isolation`.",
+                  "message": "If `demo-pkg` is a first-party package, add `setuptools` to its `build-system.requires`. Otherwise, add it to the project's `pyproject.toml` or the script's inline metadata under:\n\n[tool.uv.extra-build-dependencies]\ndemo-pkg = [\"setuptools\"]\n\nAlternatively, install `setuptools` into the environment used by the original command and re-run that command with `--no-build-isolation`.",
                   "ordering": "last"
                 }
               ],
