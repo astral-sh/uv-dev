@@ -64,7 +64,9 @@ use uv_workspace::{
 
 use crate::commands::pip::loggers::{InstallLogger, ResolveLogger};
 use crate::commands::pip::operations::{Changelog, Modifications};
-use crate::commands::project::diagnostics::PythonRequirementsDiagnostic;
+use crate::commands::project::diagnostics::{
+    EnvironmentMarkersDiagnostic, PythonRequirementsDiagnostic,
+};
 use crate::commands::project::install_target::InstallTarget;
 use crate::commands::reporters::{PythonDownloadReporter, ResolverReporter};
 use crate::commands::{capitalize, conjunction, pip};
@@ -250,6 +252,7 @@ pub(crate) enum ProjectError {
         left: String,
         right: String,
         replacement: MarkerTree,
+        diagnostic: Option<Box<EnvironmentMarkersDiagnostic>>,
     },
 
     #[error("Environment markers `{0}` don't overlap with Python requirement `{1}`")]
@@ -437,15 +440,25 @@ impl uv_errors::Hinted for ProjectError {
                 "To regenerate the lockfile, run `uv lock --refresh --preview-features lockfile-format-check`.",
             ),
             Self::OverlappingMarkers {
-                right, replacement, ..
+                right,
+                replacement,
+                diagnostic,
+                ..
             } => {
-                let Some(replacement) = replacement.contents().filter(|_| !replacement.is_false())
+                let Some(contents) = replacement.contents().filter(|_| !replacement.is_false())
                 else {
                     return uv_errors::Hints::from(
                         "make the environment markers disjoint, or remove one of the overlapping environments",
                     );
                 };
-                uv_errors::Hints::from(format!("replace `{right}` with `{replacement}`"))
+                let mut hint = uv_errors::Hint::new(format!("replace `{right}` with `{contents}`"));
+                if let Some(suggestion) = diagnostic
+                    .as_deref()
+                    .and_then(|diagnostic| diagnostic.suggestion(*replacement))
+                {
+                    hint = hint.with_suggestion(suggestion);
+                }
+                hint.into()
             }
             Self::Lock(err) => err.hints(),
             Self::Python(err) => err.hints(),

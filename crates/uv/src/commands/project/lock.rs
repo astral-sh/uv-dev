@@ -48,6 +48,7 @@ use uv_workspace::{
 };
 
 use crate::commands::pip::loggers::{DefaultResolveLogger, ResolveLogger, SummaryResolveLogger};
+use crate::commands::project::diagnostics::{EnvironmentMarkersDiagnostic, EnvironmentMarkersKind};
 use crate::commands::project::lock_target::{LockTarget, find_lock_format_error};
 use crate::commands::project::{
     MissingLockfileSource, ProjectEnvironmentPolicy, ProjectError, ProjectInterpreter,
@@ -500,7 +501,11 @@ impl<'env> LockOperation<'env> {
 }
 
 /// Ensure that every pair of supported or required environments is disjoint.
-fn validate_environment_markers(environments: &SupportedEnvironments) -> Result<(), ProjectError> {
+fn validate_environment_markers(
+    target: LockTarget<'_>,
+    kind: EnvironmentMarkersKind,
+    environments: &SupportedEnvironments,
+) -> Result<(), ProjectError> {
     let display = |marker: MarkerTree| {
         marker
             .contents()
@@ -509,12 +514,28 @@ fn validate_environment_markers(environments: &SupportedEnvironments) -> Result<
     };
 
     for (left_index, lhs) in environments.as_markers().iter().enumerate() {
-        for rhs in &environments.as_markers()[left_index + 1..] {
+        for (right_index, rhs) in environments
+            .as_markers()
+            .iter()
+            .enumerate()
+            .skip(left_index + 1)
+        {
             if !lhs.is_disjoint(*rhs) {
+                let diagnostic = match target {
+                    LockTarget::Workspace(workspace) => EnvironmentMarkersDiagnostic::new(
+                        workspace,
+                        kind,
+                        environments,
+                        left_index,
+                        right_index,
+                    ),
+                    LockTarget::Script(_) => None,
+                };
                 return Err(ProjectError::OverlappingMarkers {
                     left: display(*lhs),
                     right: display(*rhs),
                     replacement: lhs.negate().and(*rhs),
+                    diagnostic: diagnostic.map(Box::new),
                 });
             }
         }
@@ -693,13 +714,17 @@ async fn do_lock(
     // Collect the list of supported environments.
     let environments = target.environments();
     if let Some(environments) = environments {
-        validate_environment_markers(environments)?;
+        validate_environment_markers(target, EnvironmentMarkersKind::Supported, environments)?;
     }
 
     // Collect the list of required platforms.
     let required_environments = target.required_environments();
     if let Some(required_environments) = required_environments {
-        validate_environment_markers(required_environments)?;
+        validate_environment_markers(
+            target,
+            EnvironmentMarkersKind::Required,
+            required_environments,
+        )?;
     }
 
     // Determine the supported Python range. If no range is defined, and warn and default to the
