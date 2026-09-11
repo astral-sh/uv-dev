@@ -439,7 +439,7 @@ impl RegistryClient {
                             }
                         }
                     })
-                    .buffered(8)
+                    .buffered(1)
                     .filter_map(async |result: Result<_, Error>| match result {
                         Ok((index, Some(metadata))) => Some(Ok((index, metadata))),
                         Ok((_, None)) => None,
