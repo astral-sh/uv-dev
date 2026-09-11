@@ -102,6 +102,8 @@ mod python;
 pub(crate) mod reporters;
 #[cfg(feature = "self-update")]
 mod self_install;
+#[cfg(all(feature = "self-update", unix))]
+mod self_install_shell;
 #[cfg(feature = "self-update")]
 mod self_uninstall;
 #[cfg(feature = "self-update")]

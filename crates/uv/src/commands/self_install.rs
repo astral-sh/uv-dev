@@ -1,4 +1,5 @@
 use std::fmt::Write;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -8,7 +9,9 @@ use uv_fs::{LockedFile, LockedFileMode, Simplified};
 use uv_preview::PreviewFeature;
 use uv_static::EnvVars;
 
-use crate::commands::{ExitStatus, update_shell};
+use crate::commands::ExitStatus;
+#[cfg(windows)]
+use crate::commands::update_shell;
 use crate::printer::Printer;
 
 /// The receipt remains compatible with installations made by cargo-dist.
@@ -39,6 +42,30 @@ impl Default for ReleaseSource {
             name: "uv".to_owned(),
             app_name: "uv".to_owned(),
         }
+    }
+}
+
+impl ReleaseSource {
+    fn from_repository(repository: &str) -> Result<Self> {
+        let (owner, name) = repository
+            .split_once('/')
+            .context("Release repository must be OWNER/REPOSITORY")?;
+        anyhow::ensure!(
+            !owner.is_empty()
+                && owner
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+                && !matches!(name, "" | "." | "..")
+                && name
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"-_.".contains(&byte)),
+            "Invalid release repository `{repository}`"
+        );
+        Ok(Self {
+            owner: owner.to_owned(),
+            name: name.to_owned(),
+            ..Self::default()
+        })
     }
 }
 
@@ -277,7 +304,7 @@ impl LockedInstallation {
     }
 
     /// Stage a complete distribution before changing installed executables.
-    pub(super) fn install_binaries(
+    pub(super) async fn install_binaries(
         &self,
         source: &Path,
         binaries: &[String],
@@ -295,6 +322,13 @@ impl LockedInstallation {
                 .all(|name| executable_names().contains(&name.as_str())),
             "Distribution contains an unexpected executable name"
         );
+        let legacy_to_remove = if receipt.is_none()
+            && let Ok(path) = legacy_receipt_path()
+        {
+            LockedLegacyReceipt::acquire_if_exists(&path).await?
+        } else {
+            None
+        };
         let staged = tempfile::tempdir_in(destination)?;
         for name in binaries {
             let source = source.join(name);
@@ -369,8 +403,21 @@ impl LockedInstallation {
             }
             return Err(error);
         }
+        if let Some(legacy) = legacy_to_remove {
+            legacy.remove_if_owned(&destination.join(executable_names()[0]))?;
+        }
         Ok(())
     }
+}
+
+/// Make the installation available to subsequent GitHub Actions steps.
+fn update_ci_path(directory: &Path, path: &Path) -> Result<()> {
+    let mut file = fs_err::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(path)?;
+    writeln!(file, "{}", directory.display())?;
+    Ok(())
 }
 
 pub(crate) async fn self_install(args: SelfInstallArgs, printer: Printer) -> Result<ExitStatus> {
@@ -385,7 +432,16 @@ pub(crate) async fn self_install(args: SelfInstallArgs, printer: Printer) -> Res
         .or_else(|| std::env::var_os("CARGO_DIST_FORCE_INSTALL_DIR").map(PathBuf::from))
         .or_else(|| uv_dirs::user_executable_directory(None))
         .context("Could not determine the uv installation directory")?;
-    let destination = std::path::absolute(destination)?;
+    let mut destination = std::path::absolute(destination)?;
+    // Older standalone updaters pass a Cargo-home prefix rather than its executable directory.
+    let cargo_home = std::env::var_os("CARGO_HOME")
+        .map(PathBuf::from)
+        .or_else(|| etcetera::home_dir().ok().map(|home| home.join(".cargo")));
+    if let Some(cargo_home) = cargo_home
+        && std::path::absolute(cargo_home)? == destination
+    {
+        destination.push("bin");
+    }
     let executable = std::env::current_exe()?;
     fs_err::create_dir_all(&destination)?;
     let installation = LockedInstallation::acquire(&destination).await?;
@@ -402,17 +458,23 @@ pub(crate) async fn self_install(args: SelfInstallArgs, printer: Printer) -> Res
         .context("Executable has no parent directory")?;
     let modify_path = !unmanaged
         && !args.no_modify_path
-        && std::env::var_os("INSTALLER_NO_MODIFY_PATH").is_none();
+        && (std::env::var_os(EnvVars::UV_NO_MODIFY_PATH).is_some()
+            || !uv_static::parse_boolish_environment_variable("INSTALLER_NO_MODIFY_PATH")?
+                .unwrap_or(false));
     let mut receipt = InstallReceipt::new(installation.directory.clone(), modify_path);
-    if let Some(source) = existing_source {
+    if let Some(repository) = args.source_repository {
+        receipt.source = ReleaseSource::from_repository(&repository)?;
+    } else if let Some(source) = existing_source {
         receipt.source = source;
     }
-    installation.install_binaries(
-        source,
-        &receipt.binaries,
-        (!unmanaged).then_some(&receipt),
-        None,
-    )?;
+    installation
+        .install_binaries(
+            source,
+            &receipt.binaries,
+            (!unmanaged && !args.no_update).then_some(&receipt),
+            None,
+        )
+        .await?;
     writeln!(
         printer.stderr(),
         "Installed uv {} to {}",
@@ -420,7 +482,13 @@ pub(crate) async fn self_install(args: SelfInstallArgs, printer: Printer) -> Res
         destination.simplified_display()
     )?;
     if modify_path {
+        if let Some(path) = std::env::var_os("GITHUB_PATH").filter(|path| !path.is_empty()) {
+            update_ci_path(&destination, Path::new(&path))?;
+        }
+        #[cfg(windows)]
         update_shell::update_shell(&destination, printer).await?;
+        #[cfg(unix)]
+        super::self_install_shell::update_shell(&destination, printer)?;
     }
     Ok(ExitStatus::Success)
 }
@@ -428,6 +496,20 @@ pub(crate) async fn self_install(args: SelfInstallArgs, printer: Printer) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn appends_install_directory_to_github_path() -> Result<()> {
+        let temporary = tempfile::tempdir()?;
+        let path = temporary.path().join("github-path");
+        let directory = temporary.path().join("bin");
+        fs_err::write(&path, "another-directory\n")?;
+        update_ci_path(&directory, &path)?;
+        assert_eq!(
+            fs_err::read_to_string(path)?,
+            format!("another-directory\n{}\n", directory.display())
+        );
+        Ok(())
+    }
 
     #[tokio::test]
     async fn failed_install_restores_obsolete_binaries() -> Result<()> {
@@ -451,6 +533,7 @@ mod tests {
         assert!(
             installation
                 .install_binaries(&source, &updated.binaries, Some(&updated), Some(&previous))
+                .await
                 .is_err()
         );
         assert_eq!(fs_err::read(destination.join(companion))?, b"old companion");
@@ -481,6 +564,7 @@ mod tests {
         assert!(
             installation
                 .install_binaries(&source, &updated.binaries, Some(&updated), Some(&previous))
+                .await
                 .is_err()
         );
         assert_eq!(fs_err::read(destination.join(executable))?, b"old uv");
