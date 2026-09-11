@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import subprocess
@@ -27,7 +28,10 @@ def main() -> None:
     }
     environment["UV_PYTHON_INSTALL_DIR"] = str(cache / "bench-python")
     command = [str(args.uv.resolve()), "--no-config", "--cache-dir", str(cache)]
-    versions = ["3.10.18", PYTHON, "3.12.11", "3.13.4"] if args.discovery else [PYTHON]
+    workloads = json.loads((root / "scripts/benchmark/environments.json").read_text())
+    versions = sorted({PYTHON, *(workload["python"] for workload in workloads)})
+    if args.discovery:
+        versions = sorted({*versions, "3.10.18", "3.13.4"})
     subprocess.run(
         [*command, "python", "install", "--no-bin", "--no-registry", *versions],
         env=environment,
@@ -36,28 +40,34 @@ def main() -> None:
     environment["UV_PYTHON_DOWNLOADS"] = "never"
     temporary_root = root / "target"
     temporary_root.mkdir(exist_ok=True)
-    with tempfile.TemporaryDirectory(
-        prefix="bench-project-", dir=temporary_root
-    ) as temporary:
-        project = Path(temporary)
-        shutil.copyfile(fixtures / "prefect.pyproject.toml", project / "pyproject.toml")
-        shutil.copyfile(fixtures / "prefect.lock", project / "uv.lock")
-        subprocess.run(
-            [
-                *command,
-                "--project",
-                str(project),
-                "sync",
-                "--frozen",
-                "--no-default-groups",
-                "--no-install-project",
-                "--managed-python",
-                "--python",
-                PYTHON,
-            ],
-            env=environment,
-            check=True,
-        )
+    workloads.append({"project": "prefect", "python": PYTHON, "sync-args": []})
+    for workload in workloads:
+        with tempfile.TemporaryDirectory(
+            prefix="bench-project-", dir=temporary_root
+        ) as temporary:
+            project = Path(temporary)
+            name = workload["project"]
+            shutil.copyfile(
+                fixtures / f"{name}.pyproject.toml", project / "pyproject.toml"
+            )
+            shutil.copyfile(fixtures / f"{name}.lock", project / "uv.lock")
+            subprocess.run(
+                [
+                    *command,
+                    "--project",
+                    str(project),
+                    "sync",
+                    "--frozen",
+                    "--no-default-groups",
+                    "--no-install-project",
+                    "--managed-python",
+                    "--python",
+                    workload["python"],
+                    *workload["sync-args"],
+                ],
+                env=environment,
+                check=True,
+            )
 
 
 if __name__ == "__main__":

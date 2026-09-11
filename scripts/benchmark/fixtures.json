@@ -1,5 +1,10 @@
 [
   {
+    "filename": "packse.pyproject.toml",
+    "url": "https://raw.githubusercontent.com/astral-sh/packse/18be7766b14aa3e03db37bc575959b3f4c6fbacb/pyproject.toml",
+    "sha256": "869a9af0f341191c5ab1450a3aad3198826c91ac4608f30e97924ea06f0cef10"
+  },
+  {
     "filename": "prefect-audit.lock",
     "url": "https://raw.githubusercontent.com/PrefectHQ/prefect/49301a2cf6c879c45a5a78853249e59e89758018/uv.lock",
     "sha256": "02dc17a391ae44a1b00858c5ffcea2f7a60cf2be09c01c5d4a74fe85d5ce268e"
