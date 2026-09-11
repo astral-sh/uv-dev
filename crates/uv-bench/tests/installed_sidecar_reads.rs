@@ -1,3 +1,7 @@
+#[cfg(unix)]
+#[path = "../benches/installed_sidecar_reads/read_results.rs"]
+mod read_results;
+
 #[path = "../benches/installed_sidecar_reads/timing.rs"]
 mod timing;
 
@@ -14,6 +18,66 @@ mod timing;
 mod uring {
     include!("../benches/installed_sidecar_reads/uring.rs");
     include!("installed_sidecar_reads/uring_cases.rs");
+}
+
+#[cfg(unix)]
+mod read_result_tests {
+    use std::io;
+
+    use super::read_results::{comparable, comparable_raw, read_file, read_raw};
+
+    #[test]
+    fn raw_oracle_retains_open_errors() -> io::Result<()> {
+        let root = tempfile::tempdir()?;
+        let file = root.path().join("file");
+        fs_err::write(&file, b"not a directory")?;
+        let path = file.join("child");
+
+        let raw = read_raw(&path);
+        let ordinary = read_file(&path);
+        let error = raw
+            .as_ref()
+            .expect_err("opening a child of a file must fail");
+        assert_eq!(error.kind(), io::ErrorKind::NotADirectory);
+        assert!(error.raw_os_error().is_some());
+        assert_eq!(
+            ordinary
+                .as_ref()
+                .expect_err("the contextual read must also fail")
+                .raw_os_error(),
+            None
+        );
+        assert_eq!(comparable(&ordinary), comparable(&raw));
+        assert_eq!(
+            comparable_raw(&raw),
+            Err((error.kind(), error.raw_os_error()))
+        );
+        Ok(())
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn raw_oracle_retains_directory_read_errors() -> io::Result<()> {
+        let root = tempfile::tempdir()?;
+        let raw = read_raw(root.path());
+        let ordinary = read_file(root.path());
+        let error = raw.as_ref().expect_err("reading a directory must fail");
+        assert_eq!(error.kind(), io::ErrorKind::IsADirectory);
+        assert!(error.raw_os_error().is_some());
+        assert_eq!(
+            ordinary
+                .as_ref()
+                .expect_err("the contextual read must also fail")
+                .raw_os_error(),
+            None
+        );
+        assert_eq!(comparable(&ordinary), comparable(&raw));
+        assert_eq!(
+            comparable_raw(&raw),
+            Err((error.kind(), error.raw_os_error()))
+        );
+        Ok(())
+    }
 }
 
 mod timing_tests {

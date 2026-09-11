@@ -4,7 +4,7 @@ mod tests {
     use std::collections::BTreeSet;
     use std::env;
     use std::ffi::OsStr;
-    use std::io::{self, Read, Write};
+    use std::io::{self, Write};
     use std::mem;
     use std::num::NonZeroU32;
     use std::os::fd::{AsRawFd, IntoRawFd};
@@ -21,33 +21,18 @@ mod tests {
     use rustix::fs::{Dir, Mode, OFlags, open};
     use rustix::io::Errno;
 
+    use crate::read_results::{comparable, comparable_raw, read_file as ordinary, read_raw};
+
     use super::{
         MAX_STALLED_ATTEMPTS, Operation, PendingBatch, Progress, READ_SIZE, ReadResult, Reader,
         Request, new_buffer, retryable_control_error, unavailable_worker_registration,
     };
 
-    fn ordinary(path: &Path) -> ReadResult {
-        let mut file = match fs_err::File::open(path) {
-            Ok(file) => file,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(error),
-        };
-        let mut contents = Vec::new();
-        file.read_to_end(&mut contents)?;
-        Ok(Some(contents))
-    }
-
-    fn comparable(result: &ReadResult) -> Result<Option<&[u8]>, (io::ErrorKind, Option<i32>)> {
-        match result {
-            Ok(contents) => Ok(contents.as_deref()),
-            Err(error) => Err((error.kind(), error.raw_os_error())),
-        }
-    }
-
     fn assert_results(paths: &[PathBuf], actual: &[ReadResult]) {
         assert_eq!(actual.len(), paths.len());
         for (path, actual) in paths.iter().zip(actual) {
             assert_eq!(comparable(actual), comparable(&ordinary(path)));
+            assert_eq!(comparable_raw(actual), comparable_raw(&read_raw(path)));
         }
     }
 
@@ -144,13 +129,20 @@ mod tests {
     }
 
     #[test]
+    fn raw_comparison_keeps_distinct_permission_errors() {
+        let permission: ReadResult = Err(Errno::PERM.into());
+        let access: ReadResult = Err(Errno::ACCESS.into());
+        assert_eq!(comparable(&permission), comparable(&access));
+        assert_ne!(comparable_raw(&permission), comparable_raw(&access));
+    }
+
+    #[test]
     fn invalid_path_has_the_ordinary_error_kind() {
         let path = Path::new(OsStr::from_bytes(b"invalid\0path"));
         let mut request = Request::new(path, new_buffer());
-        assert_eq!(
-            comparable(&request.result.take().expect("invalid path result")),
-            comparable(&ordinary(path))
-        );
+        let actual = request.result.take().expect("invalid path result");
+        assert_eq!(comparable(&actual), comparable(&ordinary(path)));
+        assert_eq!(comparable_raw(&actual), comparable_raw(&read_raw(path)));
     }
 
     #[test]
@@ -325,17 +317,38 @@ mod tests {
             paths[0].join("not-a-directory"),
         ];
         assert_eq!(
-            ordinary(&error_paths[0])
+            read_raw(&error_paths[0])
                 .expect_err("reading a directory must fail")
                 .raw_os_error(),
             Some(Errno::ISDIR.raw_os_error())
+        );
+        assert_eq!(
+            read_raw(&error_paths[2])
+                .expect_err("opening a child of a file must fail")
+                .raw_os_error(),
+            Some(Errno::NOTDIR.raw_os_error())
         );
         let without_ring = open_descriptors()?;
         for queue_depth in [1, 4, 16] {
             let mut reader =
                 Reader::new(NonZeroU32::new(queue_depth).expect("non-zero queue depth"))?;
             assert_results(&paths, &reader.read(&paths)?);
-            assert_results(&error_paths, &reader.read(&error_paths)?);
+            let errors = reader.read(&error_paths)?;
+            assert_results(&error_paths, &errors);
+            assert_eq!(
+                errors[0]
+                    .as_ref()
+                    .expect_err("ring directory reads must fail")
+                    .raw_os_error(),
+                Some(Errno::ISDIR.raw_os_error())
+            );
+            assert_eq!(
+                errors[2]
+                    .as_ref()
+                    .expect_err("ring opens through a file must fail")
+                    .raw_os_error(),
+                Some(Errno::NOTDIR.raw_os_error())
+            );
             let with_ring = open_descriptors()?;
             assert_eq!(with_ring.len(), without_ring.len() + 1);
             for _ in 0..64 {

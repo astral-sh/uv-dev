@@ -15,8 +15,6 @@ extern crate uv_performance_memory_allocator;
 
 use std::env;
 use std::hint::black_box;
-use std::io;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 
 #[cfg(all(
@@ -29,7 +27,11 @@ use std::path::{Path, PathBuf};
         target_arch = "powerpc64"
     )
 ))]
-use std::{fmt, io::Write, num::NonZeroU32};
+use std::{
+    fmt,
+    io::{self, Write},
+    num::NonZeroU32,
+};
 
 use criterion::{
     BenchmarkId, Criterion, Throughput, criterion_group, criterion_main, measurement::WallTime,
@@ -45,8 +47,13 @@ use uv_pypi_types::DirectUrl;
 #[path = "fixtures/installed_packages.rs"]
 mod installed_packages;
 
+#[path = "installed_sidecar_reads/read_results.rs"]
+mod read_results;
+
 #[path = "installed_sidecar_reads/timing.rs"]
 mod timing;
+
+use read_results::{ReadResult, comparable, read_file, read_raw};
 
 #[cfg(all(
     target_os = "linux",
@@ -62,8 +69,6 @@ mod timing;
 mod uring;
 
 const SIDECAR_NAMES: [&str; 3] = ["uv_cache.json", "uv_build.json", "direct_url.json"];
-
-type ReadResult = io::Result<Option<Vec<u8>>>;
 
 struct Fixture {
     _root: Option<tempfile::TempDir>,
@@ -100,7 +105,7 @@ impl Fixture {
             .iter()
             .flat_map(|directory| SIDECAR_NAMES.map(|name| directory.join(name)))
             .collect::<Vec<_>>();
-        let expected = read_ordinary(&paths);
+        let expected = paths.iter().map(|path| read_raw(path)).collect();
         let fixture = Self {
             _root: root,
             name,
@@ -108,6 +113,7 @@ impl Fixture {
             paths,
             expected,
         };
+        fixture.assert_reads(&read_ordinary(&fixture.paths));
         fixture.assert_production_values();
         fixture
     }
@@ -187,24 +193,6 @@ fn installed_directories(root: &Path) -> Vec<PathBuf> {
     directories
 }
 
-fn comparable(result: &ReadResult) -> Result<Option<&[u8]>, (io::ErrorKind, Option<i32>)> {
-    match result {
-        Ok(contents) => Ok(contents.as_deref()),
-        Err(error) => Err((error.kind(), error.raw_os_error())),
-    }
-}
-
-fn read_file(path: &Path) -> ReadResult {
-    let mut file = match fs_err::File::open(path) {
-        Ok(file) => file,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error),
-    };
-    let mut contents = Vec::new();
-    file.read_to_end(&mut contents)?;
-    Ok(Some(contents))
-}
-
 fn read_ordinary(paths: &[PathBuf]) -> Vec<ReadResult> {
     paths.iter().map(|path| read_file(path)).collect()
 }
@@ -239,11 +227,16 @@ fn worker_pool(threads: usize) -> ThreadPool {
 ))]
 fn checked_reader(fixture: &Fixture, queue_depth: NonZeroU32) -> io::Result<uring::Reader> {
     let mut reader = uring::Reader::new(queue_depth)?;
-    fixture.assert_reads(
-        &reader
-            .read(&fixture.paths)
-            .expect("Failed to probe io_uring sidecar reads"),
-    );
+    let actual = reader
+        .read(&fixture.paths)
+        .expect("Failed to probe io_uring sidecar reads");
+    fixture.assert_reads(&actual);
+    for (actual, expected) in actual.iter().zip(&fixture.expected) {
+        assert_eq!(
+            read_results::comparable_raw(actual),
+            read_results::comparable_raw(expected)
+        );
+    }
     Ok(reader)
 }
 
