@@ -13,7 +13,7 @@ use petgraph::graph::NodeIndex;
 use serde::Deserialize;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use toml::Table as TomlTable;
-use toml_edit::{Array, ArrayOfTables, Item, Table, Value, value};
+use toml_edit::{Array, ArrayOfTables, Item, Table, value};
 use url::Url;
 
 use uv_client::{RegistryClient, WrappedReqwestError};
@@ -47,22 +47,8 @@ use uv_small_str::SmallString;
 use uv_warnings::warn_user_once;
 
 use crate::lock::export::ExportableRequirements;
-use crate::lock::{Source, WheelTagHint, is_wheel_unreachable};
+use crate::lock::{Source, WheelTagHint, each_element_on_its_line_array, is_wheel_unreachable};
 use crate::{Installable, LockError, ResolverOutput};
-
-/// Format an array so that each element is on its own line and has a trailing comma.
-fn each_element_on_its_line_array(elements: impl Iterator<Item = impl Into<Value>>) -> Array {
-    let mut array = elements
-        .map(|item| {
-            let mut value = item.into();
-            value.decor_mut().set_prefix("\n    ");
-            value
-        })
-        .collect::<Array>();
-    array.set_trailing_comma(true);
-    array.set_trailing("\n");
-    array
-}
 
 #[derive(Debug, thiserror::Error)]
 pub enum PylockTomlErrorKind {
