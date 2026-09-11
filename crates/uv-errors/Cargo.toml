@@ -14,6 +14,7 @@ annotate-snippets = { workspace = true }
 anstream = { workspace = true }
 owo-colors = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 terminal_size = { workspace = true }
 textwrap = { workspace = true }
 uv-static = { workspace = true }
@@ -22,7 +23,6 @@ uv-static = { workspace = true }
 anyhow = { workspace = true }
 indoc = { workspace = true }
 insta = { workspace = true }
-serde_json = { workspace = true }
 thiserror = { workspace = true }
 
 [lints]
