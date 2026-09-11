@@ -281,7 +281,7 @@ impl uv_errors::Hinted for PylockTomlError {
 
 impl PylockTomlError {
     /// Return the wheel-tag mismatch owned by this `pylock.toml` failure.
-    pub fn own_info(&self) -> Option<Info<'static>> {
+    pub(crate) fn own_info(&self) -> Option<Info<'static>> {
         self.hint.as_ref().map(WheelTagHint::diagnostic_info)
     }
 }

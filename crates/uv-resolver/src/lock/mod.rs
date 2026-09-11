@@ -7006,7 +7006,7 @@ impl std::fmt::Display for LockError {
 
 impl LockError {
     /// Return the wheel-tag mismatch owned by this lockfile failure.
-    pub fn own_info(&self) -> Option<Info<'static>> {
+    pub(crate) fn own_info(&self) -> Option<Info<'static>> {
         self.hint.as_ref().map(WheelTagHint::diagnostic_info)
     }
 
