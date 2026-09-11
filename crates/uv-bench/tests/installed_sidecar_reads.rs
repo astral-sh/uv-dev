@@ -11,8 +11,10 @@ mod timing;
         target_arch = "powerpc64"
     )
 ))]
-#[path = "../benches/installed_sidecar_reads/uring.rs"]
-mod uring;
+mod uring {
+    include!("../benches/installed_sidecar_reads/uring.rs");
+    include!("installed_sidecar_reads/uring_cases.rs");
+}
 
 mod timing_tests {
     use std::cell::Cell;
