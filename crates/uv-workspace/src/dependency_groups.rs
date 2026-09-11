@@ -113,9 +113,10 @@ impl FlatDependencyGroups {
             };
 
             // "Dependency Group Includes MUST NOT include cycles, and tools SHOULD report an error if they detect a cycle."
-            if parents.contains(&name) {
+            if let Some(start) = parents.iter().position(|parent| *parent == name) {
+                // Earlier parents lead into the cycle but are not part of it.
                 return Err(DependencyGroupErrorInner::DependencyGroupCycle(Cycle(
-                    parents.iter().copied().cloned().collect(),
+                    parents[start..].iter().copied().cloned().collect(),
                 )));
             }
 
@@ -330,6 +331,38 @@ impl std::fmt::Display for Cycle {
             write!(f, " -> `{group}`")?;
         }
         write!(f, " -> `{first}`")?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error;
+    use std::path::Path;
+
+    use anyhow::{Context, Result};
+
+    use crate::pyproject::PyProjectToml;
+
+    use super::FlatDependencyGroups;
+
+    #[test]
+    fn dependency_group_cycle_excludes_noncycle_parent() -> Result<()> {
+        let pyproject = PyProjectToml::from_string(
+            r#"
+            [dependency-groups]
+            first = [{ include-group = "inner-a" }]
+            inner-a = [{ include-group = "inner-b" }]
+            inner-b = [{ include-group = "inner-a" }]
+            "#
+            .to_string(),
+            Path::new("pyproject.toml"),
+        )?;
+        let error = FlatDependencyGroups::from_pyproject_toml(Path::new("."), &pyproject)
+            .err()
+            .context("the dependency groups should contain a cycle")?;
+
+        insta::assert_snapshot!(error.source().context("the cycle error should have a source")?.to_string(), @"Detected a cycle in `dependency-groups`: `inner-a` -> `inner-b` -> `inner-a`");
         Ok(())
     }
 }
