@@ -1092,7 +1092,7 @@ fn create_venv_respects_group_requires_python() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.11.[X] interpreter at: [PYTHON-3.11]
-    warning: The requested interpreter resolved to Python 3.11.[X], which is incompatible with the project's Python requirement: `>=3.12` (from `tool.uv.dependency-groups.dev.requires-python`).
+    warning: The requested interpreter resolved to Python 3.11.[X], which is incompatible with the project's Python requirement: `>=3.12` (from dependency group `dev`).
     Creating virtual environment at: .venv
     Activate with: source .venv/[BIN]/activate
     "
@@ -1124,10 +1124,15 @@ fn create_venv_respects_group_requires_python() -> Result<()> {
     error: Found conflicting Python requirements:
     - foo: <3.12
     - foo:dev: >=3.12
-       --> pyproject.toml:4:19
-        |
-      4 | requires-python = "<3.12"
-        |                   ^^^^^^^ requires Python `<3.12`
+        --> pyproject.toml:4:19
+         |
+       4 | requires-python = "<3.12"
+         |                   ^^^^^^^ requires Python `<3.12`
+         |
+        ::: pyproject.toml:12:26
+         |
+      12 | dev = {requires-python = ">=3.12"}
+         |                          ^^^^^^^^ group `dev` requires Python `>=3.12`
     "#
     );
 
