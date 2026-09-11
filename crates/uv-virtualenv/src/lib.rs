@@ -1,3 +1,4 @@
+use std::error::Error as StdError;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -49,6 +50,17 @@ impl uv_errors::Hinted for Error {
                 "Use the `--force` flag to remove the existing directory anyway",
             ),
             _ => uv_errors::Hints::none(),
+        }
+    }
+
+    fn transparent_source(&self) -> Option<&(dyn StdError + 'static)> {
+        match self {
+            Self::Io(error) => Some(error),
+            Self::Python(error) => Some(error),
+            Self::NotFound(..)
+            | Self::Exists { .. }
+            | Self::ClearNonVirtualenv { .. }
+            | Self::NonUtf8Path { .. } => None,
         }
     }
 }

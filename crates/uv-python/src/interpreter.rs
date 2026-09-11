@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::env::consts::ARCH;
+use std::error::Error as StdError;
 use std::fmt::{Display, Formatter};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
@@ -870,6 +871,26 @@ impl uv_errors::Hinted for Error {
         match self {
             Self::BrokenLink(err) => err.hints(),
             _ => uv_errors::Hints::none(),
+        }
+    }
+
+    fn own_hints(&self) -> uv_errors::Hints<'_> {
+        uv_errors::Hints::none()
+    }
+
+    fn transparent_source(&self) -> Option<&(dyn StdError + 'static)> {
+        match self {
+            Self::BrokenLink(error) => Some(error),
+            Self::Io(_)
+            | Self::NotFound(_)
+            | Self::SpawnFailed { .. }
+            | Self::PermissionDenied { .. }
+            | Self::UnexpectedResponse(_)
+            | Self::StatusCode(_)
+            | Self::QueryScript { .. }
+            | Self::Encode(_) => None,
+            #[cfg(windows)]
+            Self::CorruptWindowsPackage { .. } => None,
         }
     }
 }
