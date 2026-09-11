@@ -1,0 +1,113 @@
+name: Run uv nextest on linux
+description: Prepare uv's linux test environment and run one partition.
+inputs:
+  partition:
+    description: One-based partition number.
+    default: "1"
+  partitions:
+    description: Total number of partitions.
+    default: "1"
+  save-cache:
+    description: Whether to save the Rust build cache.
+    default: "true"
+runs:
+  using: composite
+  steps:
+    - name: "Install mold"
+      shell: bash
+      run: ./scripts/install-mold.sh
+
+    - name: "Install Rust toolchain"
+      shell: bash
+      run: rustup toolchain install --profile minimal
+
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      id: rust-cache
+      with:
+        prefix-key: v1-rust-workspace
+        shared-key: ${{ format('{0}-cargo-test-linux', hashFiles('Cargo.toml')) }}
+        cache-workspace-crates: "true"
+        save-if: ${{ inputs.save-cache == 'true' }}
+
+    - name: "Record Cargo cache freshness"
+      if: ${{ inputs.save-cache == 'true' && steps.rust-cache.outputs.cache-hit != 'true' }}
+      shell: bash
+      run: touch "$RUNNER_TEMP/uv-cargo-cache-marker"
+
+    - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      with:
+        version: "0.12.10"
+        checksum: "173d95a0c32d18c896c46ba6fafbf3cf9c14ab74b033f81b76c883ef492a976b"
+
+    - name: "Install required Python versions"
+      shell: bash
+      run: uv python install
+
+    - name: "Install secret service"
+      shell: bash
+      run: |
+        # Try the next configured mirror after the first failed download.
+        cat /etc/apt/apt-mirrors.txt
+        printf '%s\n' \
+          'Acquire::Retries "0";' \
+          'Acquire::http::Timeout "10";' \
+          'Acquire::https::Timeout "10";' \
+          | sudo tee /etc/apt/apt.conf.d/80-retries > /dev/null
+        sudo apt install -y --no-install-recommends gnome-keyring
+
+    - name: "Start gnome-keyring"
+      # run gnome-keyring with 'foobar' as password for the login keyring
+      # this will create a new login keyring and unlock it
+      # the login password doesn't matter, but the keyring must be unlocked for the tests to work
+      shell: bash
+      run: gnome-keyring-daemon --components=secrets --daemonize --unlock <<< 'foobar'
+
+    - name: "Create btrfs filesystem"
+      shell: bash
+      run: |
+        sudo apt install -y btrfs-progs
+        truncate -s 1G /tmp/btrfs.img
+        mkfs.btrfs /tmp/btrfs.img
+        sudo mkdir /btrfs
+        sudo mount -o loop /tmp/btrfs.img /btrfs
+        sudo chown "$(id -u):$(id -g)" /btrfs
+
+    - name: "Create tmpfs filesystem"
+      shell: bash
+      run: |
+        sudo mkdir /tmpfs
+        sudo mount -t tmpfs -o size=256m tmpfs /tmpfs
+        sudo chown "$(id -u):$(id -g)" /tmpfs
+
+    - name: "Create minix filesystem (low hardlink limit)"
+      shell: bash
+      run: |
+        truncate -s 16M /tmp/minix.img
+        mkfs.minix /tmp/minix.img
+        sudo mkdir /minix
+        sudo mount -o loop /tmp/minix.img /minix
+        sudo chown "$(id -u):$(id -g)" /minix
+
+    - name: "Cargo test"
+      env:
+        # Retry more than default to reduce flakes in CI
+        UV_HTTP_RETRIES: 5
+        RUST_BACKTRACE: 1
+        CARGO_UNSTABLE_MTIME_ON_USE: ${{ inputs.save-cache == 'true' && steps.rust-cache.outputs.cache-hit != 'true' }}
+        UV_INTERNAL__TEST_COW_FS: /btrfs
+        UV_INTERNAL__TEST_NOCOW_FS: /tmpfs
+        UV_INTERNAL__TEST_ALT_FS: /tmpfs
+        UV_INTERNAL__TEST_LOWLINKS_FS: /minix
+      uses: astral-sh/github-actions/nextest@4a67b826d91cd36483b2a7a6a0fa39d966f4638c
+      with:
+        name: linux
+        partition: ${{ inputs.partition }}
+        partitions: ${{ inputs.partitions }}
+        junit-path: target/nextest/ci*/junit.xml
+        arguments: >-
+          ["--cargo-profile","fast-build-nightly","-Z","panic-abort-tests","-Z","checksum-freshness","--features","test-python-patch,test-universal,native-auth,secret-service","--workspace","--profile","ci-linux"]
+
+    - name: "Prune superseded workspace artifacts"
+      if: ${{ inputs.save-cache == 'true' && steps.rust-cache.outputs.cache-hit != 'true' }}
+      shell: bash
+      run: python3 scripts/prune_cargo_workspace_cache.py target/fast-build-nightly "$RUNNER_TEMP/uv-cargo-cache-marker"

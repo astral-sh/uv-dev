@@ -1,0 +1,92 @@
+name: Run uv nextest on windows
+description: Prepare uv's windows test environment and run one partition.
+inputs:
+  partition:
+    description: One-based partition number.
+    default: "1"
+  partitions:
+    description: Total number of partitions.
+    default: "1"
+  save-cache:
+    description: Whether to save the Rust build cache.
+    default: "true"
+runs:
+  using: composite
+  steps:
+    - name: Setup Dev Drive
+      shell: pwsh
+      run: ${{ github.workspace }}/.github/workflows/setup-dev-drive.ps1
+
+    # actions/checkout does not let us clone into anywhere outside ${{ github.workspace }}, so we have to copy the clone...
+    - name: Copy Git Repo to Dev Drive
+      shell: pwsh
+      run: |
+        Copy-Item -Path "${{ github.workspace }}" -Destination "$Env:UV_WORKSPACE" -Recurse
+
+    - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      with:
+        version: "0.12.10"
+        checksum: "f65744f94072152b1f86ba2aace4d01f1124d9a8ecb235805039e3718c36cac2"
+
+    - name: "Install required Python versions"
+      shell: pwsh
+      run: uv python install
+
+    - name: "Install Rust toolchain"
+      working-directory: ${{ env.UV_WORKSPACE }}
+      shell: pwsh
+      run: rustup toolchain install --profile minimal
+
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      id: rust-cache
+      with:
+        prefix-key: v1-rust-workspace
+        key: ${{ hashFiles('Cargo.toml') }}
+        workspaces: ${{ env.UV_WORKSPACE }}
+        cache-workspace-crates: "true"
+        # Use the same cache entry across the partitions
+        add-job-id-key: false
+        save-if: ${{ inputs.save-cache == 'true' }}
+
+    - name: "Record Cargo cache freshness"
+      if: ${{ inputs.save-cache == 'true' && steps.rust-cache.outputs.cache-hit != 'true' }}
+      shell: pwsh
+      run: New-Item -ItemType File -Path "$env:RUNNER_TEMP/uv-cargo-cache-marker"
+
+    - name: "Create NTFS test directory (low hardlink limit)"
+      shell: pwsh
+      run: New-Item -Path "C:\uv" -ItemType Directory -Force
+
+    - name: "Create SMB test share (alternative filesystem)"
+      shell: pwsh
+      run: |
+        New-Item -Path "C:\uv-smb" -ItemType Directory -Force
+        New-SmbShare -Name "uv-alt-fs" -Path "C:\uv-smb" -FullAccess "Everyone"
+
+    - name: "Cargo test"
+      env:
+        # Retry more than default to reduce flakes in CI
+        UV_HTTP_RETRIES: 5
+        # Avoid permission errors during concurrent tests
+        # See https://github.com/astral-sh/uv/issues/6940
+        UV_LINK_MODE: copy
+        RUST_BACKTRACE: 1
+        CARGO_UNSTABLE_MTIME_ON_USE: ${{ inputs.save-cache == 'true' && steps.rust-cache.outputs.cache-hit != 'true' }}
+        UV_INTERNAL__TEST_ALT_FS: "\\\\localhost\\uv-alt-fs"
+        UV_INTERNAL__TEST_SMB_FS: "\\\\localhost\\uv-alt-fs"
+        UV_INTERNAL__TEST_LOWLINKS_FS: "C:\\uv"
+      uses: astral-sh/github-actions/nextest@4a67b826d91cd36483b2a7a6a0fa39d966f4638c
+      with:
+        name: windows
+        partition: ${{ inputs.partition }}
+        partitions: ${{ inputs.partitions }}
+        junit-path: target/nextest/ci*/junit.xml
+        working-directory: ${{ env.UV_WORKSPACE }}
+        arguments: >-
+          ["--cargo-profile","fast-build-nightly","-Z","panic-abort-tests","-Z","checksum-freshness","--no-default-features","--features","test-python,test-pypi,test-python-managed,test-windows-registry,native-auth,windows-native","--workspace","--profile","ci-windows"]
+
+    - name: "Prune superseded workspace artifacts"
+      if: ${{ inputs.save-cache == 'true' && steps.rust-cache.outputs.cache-hit != 'true' }}
+      working-directory: ${{ env.UV_WORKSPACE }}
+      shell: pwsh
+      run: python scripts/prune_cargo_workspace_cache.py target/fast-build-nightly "$env:RUNNER_TEMP/uv-cargo-cache-marker"

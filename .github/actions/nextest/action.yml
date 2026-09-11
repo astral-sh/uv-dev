@@ -1,0 +1,44 @@
+name: Run uv nextest
+description: Prepare the current platform and run one uv test partition.
+inputs:
+  partition:
+    description: One-based partition number.
+    default: "1"
+  partitions:
+    description: Total number of partitions.
+    default: "1"
+  save-cache:
+    description: Whether to save the Rust build cache.
+    default: "true"
+runs:
+  using: composite
+  steps:
+    - name: Configure the test environment
+      shell: bash
+      run: |
+        printf '%s\n' \
+          'CARGO_INCREMENTAL=0' \
+          'CARGO_NET_RETRY=10' \
+          'CARGO_TERM_COLOR=always' \
+          'PYTHON_VERSION=3.12' \
+          'RUSTC_BOOTSTRAP=1' \
+          'RUSTUP_MAX_RETRIES=10' \
+          'UV_LOCKED=1' >> "$GITHUB_ENV"
+    - uses: $/.github/actions/nextest-linux
+      if: runner.os == 'Linux'
+      with:
+        partition: ${{ inputs.partition }}
+        partitions: ${{ inputs.partitions }}
+        save-cache: ${{ inputs.save-cache }}
+    - uses: $/.github/actions/nextest-macos
+      if: runner.os == 'macOS'
+      with:
+        partition: ${{ inputs.partition }}
+        partitions: ${{ inputs.partitions }}
+        save-cache: ${{ inputs.save-cache }}
+    - uses: $/.github/actions/nextest-windows
+      if: runner.os == 'Windows'
+      with:
+        partition: ${{ inputs.partition }}
+        partitions: ${{ inputs.partitions }}
+        save-cache: ${{ inputs.save-cache }}
