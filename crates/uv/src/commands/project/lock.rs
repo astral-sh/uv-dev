@@ -21,6 +21,7 @@ use uv_distribution_types::{
     DependencyMetadata, HashCollection, IndexLocations, NameRequirementSpecification, Requirement,
     RequiresPython, UnresolvedRequirementSpecification,
 };
+use uv_errors::{ErrorOptions, Hints};
 use uv_git::ResolvedRepositoryReference;
 use uv_git_types::GitOid;
 use uv_lock::{Lock, Package, ResolverManifest, SatisfiesResult};
@@ -47,6 +48,7 @@ use uv_workspace::{
     DiscoveryOptions, Editability, VirtualProject, WorkspaceCache, WorkspaceMember,
 };
 
+use crate::commands::diagnostics::diagnostic_for_error;
 use crate::commands::locked_requirements::{LockedRequirements, read_lock_requirements};
 use crate::commands::pip::loggers::{DefaultResolveLogger, ResolveLogger, SummaryResolveLogger};
 use crate::commands::project::lock_target::{LockTarget, find_lock_format_error};
@@ -975,7 +977,9 @@ async fn do_lock(
                 warn_user_with_chain!(
                     anyhow::Error::from(err)
                         .context("Failed to validate existing lockfile")
-                        .as_ref()
+                        .as_ref(),
+                    Hints::none(),
+                    ErrorOptions::default().with_diagnostic(diagnostic_for_error),
                 );
                 None
             }
