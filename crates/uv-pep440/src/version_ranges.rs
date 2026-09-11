@@ -255,7 +255,7 @@ impl From<VersionSpecifier> for Ranges<Version> {
                 }
             }
             Operator::GreaterThanEqual => Self::higher_than(version),
-            Operator::EqualStar => {
+            Operator::EqualStar | Operator::NotEqualStar => {
                 let low = version.with_dev(Some(0));
                 let mut high = low.clone();
                 if let Some(post) = high.post() {
@@ -270,24 +270,12 @@ impl From<VersionSpecifier> for Ranges<Version> {
                     *release.last_mut().unwrap() += 1;
                     high = high.with_release(release);
                 }
-                Self::from_range_bounds(low..high)
-            }
-            Operator::NotEqualStar => {
-                let low = version.with_dev(Some(0));
-                let mut high = low.clone();
-                if let Some(post) = high.post() {
-                    high = high.with_post(Some(post + 1));
-                } else if let Some(pre) = high.pre() {
-                    high = high.with_pre(Some(Prerelease {
-                        kind: pre.kind,
-                        number: pre.number + 1,
-                    }));
+                let range = Self::from_range_bounds(low..high);
+                if operator == Operator::NotEqualStar {
+                    range.complement()
                 } else {
-                    let mut release = high.release().to_vec();
-                    *release.last_mut().unwrap() += 1;
-                    high = high.with_release(release);
+                    range
                 }
-                Self::from_range_bounds(low..high).complement()
             }
         }
     }
@@ -351,7 +339,7 @@ pub fn release_specifier_to_range(specifier: VersionSpecifier, trim: bool) -> Ra
             let upper = Version::new(rest.iter().chain([&(last + 1)]));
             Ranges::from_range_bounds(version_trimmed..upper)
         }
-        Operator::EqualStar => {
+        Operator::EqualStar | Operator::NotEqualStar => {
             // For (not-)equal-star, trailing zeroes are still before the star.
             let low_full = version.only_release();
             let high = {
@@ -361,19 +349,12 @@ pub fn release_specifier_to_range(specifier: VersionSpecifier, trim: bool) -> Ra
                 high = high.with_release(release);
                 high
             };
-            Ranges::from_range_bounds(version..high)
-        }
-        Operator::NotEqualStar => {
-            // For (not-)equal-star, trailing zeroes are still before the star.
-            let low_full = version.only_release();
-            let high = {
-                let mut high = low_full.clone();
-                let mut release = high.release().to_vec();
-                *release.last_mut().unwrap() += 1;
-                high = high.with_release(release);
-                high
-            };
-            Ranges::from_range_bounds(version..high).complement()
+            let range = Ranges::from_range_bounds(version..high);
+            if operator == Operator::NotEqualStar {
+                range.complement()
+            } else {
+                range
+            }
         }
     }
 }
@@ -734,6 +715,107 @@ mod tests {
     fn skips_ranges_without_internal_sentinels() {
         for range in [Ranges::singleton(version("1.0")), range("<1.0.post1")] {
             assert!(canonicalize_version_ranges(&range).is_none());
+        }
+    }
+
+    #[test]
+    fn wildcard_ranges_have_expected_bounds() {
+        // Constructors also accept pre- and post-release prefixes, unlike textual wildcards.
+        for (prefix, lower, upper) in [
+            ("1", "1.dev0", "2.dev0"),
+            ("0.0", "0.0.dev0", "0.1.dev0"),
+            ("1.2.0", "1.2.0.dev0", "1.2.1.dev0"),
+            ("1.2a3", "1.2a3.dev0", "1.2a4.dev0"),
+            ("1.2b3", "1.2b3.dev0", "1.2b4.dev0"),
+            ("1.2rc3", "1.2rc3.dev0", "1.2rc4.dev0"),
+            ("1.2.post4", "1.2.post4.dev0", "1.2.post5.dev0"),
+            ("1.2a3.post4", "1.2a3.post4.dev0", "1.2a3.post5.dev0"),
+            ("1.2.dev7", "1.2.dev0", "1.3.dev0"),
+            ("2!1.2.0", "2!1.2.0.dev0", "2!1.2.1.dev0"),
+        ] {
+            let specified_version = version(prefix);
+            let equal = Ranges::<Version>::from(VersionSpecifier::equals_star_version(
+                specified_version.clone(),
+            ));
+            let not_equal = Ranges::<Version>::from(VersionSpecifier::not_equals_star_version(
+                specified_version,
+            ));
+            let expected = Ranges::<Version>::from_range_bounds(version(lower)..version(upper));
+            let actual_bounds = equal
+                .bounding_range()
+                .map(|(start, end)| (start.map(ToString::to_string), end.map(ToString::to_string)));
+
+            assert_eq!(equal, expected, "wildcard range for {prefix}");
+            assert_eq!(
+                actual_bounds,
+                Some((
+                    Bound::Included(lower.to_owned()),
+                    Bound::Excluded(upper.to_owned()),
+                )),
+                "wildcard bounds for {prefix}"
+            );
+            assert_eq!(
+                not_equal,
+                equal.complement(),
+                "wildcard complement for {prefix}"
+            );
+        }
+    }
+
+    #[test]
+    fn release_only_wildcard_ranges_have_expected_bounds() {
+        // Wildcard precision includes trailing zeroes even when marker bounds are trimmed.
+        for (prefix, lower, upper, is_empty) in [
+            ("1", "1", "2", false),
+            ("0.0", "0.0", "0.1", false),
+            ("1.2.0", "1.2.0", "1.2.1", false),
+            ("1.2a3", "1.2a3", "1.3", false),
+            ("1.2b3", "1.2b3", "1.3", false),
+            ("1.2rc3", "1.2rc3", "1.3", false),
+            ("1.2.post4", "1.2.post4", "1.3", false),
+            ("1.2a3.post4", "1.2a3.post4", "1.3", false),
+            ("1.2.dev7", "1.2.dev7", "1.3", false),
+            // The release-only upper bound has no epoch.
+            ("2!1.2.0", "2!1.2.0", "1.2.1", true),
+        ] {
+            let specified_version = version(prefix);
+            let expected = Ranges::<Version>::from_range_bounds(version(lower)..version(upper));
+            let expected_bounds = (!is_empty).then(|| {
+                (
+                    Bound::Included(lower.to_owned()),
+                    Bound::Excluded(upper.to_owned()),
+                )
+            });
+            assert_eq!(expected.is_empty(), is_empty, "range for {prefix}");
+
+            for trim in [false, true] {
+                let equal = release_specifier_to_range(
+                    VersionSpecifier::equals_star_version(specified_version.clone()),
+                    trim,
+                );
+                let not_equal = release_specifier_to_range(
+                    VersionSpecifier::not_equals_star_version(specified_version.clone()),
+                    trim,
+                );
+                let actual_bounds = equal.bounding_range().map(|(start, end)| {
+                    (start.map(ToString::to_string), end.map(ToString::to_string))
+                });
+
+                assert_eq!(equal, expected, "wildcard range for {prefix}, trim={trim}");
+                assert_eq!(
+                    actual_bounds, expected_bounds,
+                    "wildcard bounds for {prefix}, trim={trim}"
+                );
+                assert_eq!(
+                    not_equal,
+                    equal.complement(),
+                    "wildcard complement for {prefix}, trim={trim}"
+                );
+                if is_empty {
+                    assert_eq!(equal, Ranges::empty(), "empty range for {prefix}");
+                    assert_eq!(not_equal, Ranges::full(), "full complement for {prefix}");
+                }
+            }
         }
     }
 
