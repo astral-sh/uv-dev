@@ -273,10 +273,12 @@ fn invalid_requirements_txt_with_carriage_return_source_context() -> Result<()> 
         .arg("requirements.txt"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Couldn't parse requirement in `requirements.txt` at position 53
+    error: Couldn't parse requirement
       cause: after parsing `1.0`, found `.x`, which is not part of a valid version
-             flask==1.0.x
-                  ^^^^^^^
+       --> requirements.txt:1:45
+        |
+      1 | --index-url https://example.com/simple␍flask==1.0.x␍
+        |                                             ^^^^^^^ invalid requirement
     ");
 
     Ok(())
@@ -1370,6 +1372,9 @@ async fn invalid_remote_requirements_txt() -> Result<()> {
     error: Failed to parse included requirements file
       info: The file was included here
        --> requirements.txt:1:1
+        |
+      1 | -r http://user:********@[LOCALHOST]/requirements.txt
+        | -------------------------------------------------------- included here
       cause: Couldn't parse requirement
       cause: after parsing `1.0`, found `.x`, which is not part of a valid version
        --> http://user:****@[LOCALHOST]/requirements.txt:2:6

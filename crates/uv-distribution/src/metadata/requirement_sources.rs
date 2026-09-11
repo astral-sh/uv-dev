@@ -182,7 +182,11 @@ mod tests {
              |
            7 |   "other==2",
              |   ^^^^^^^^^^ declared here
+             |
             ::: pyproject.toml:10:14
+             |
+          10 | "Z.Tools" = ["other==3"]
+             |              ^^^^^^^^^^ declared here
              |
             ::: pyproject.toml:12:3
              |
@@ -312,13 +316,28 @@ mod tests {
             &metadata(source)?,
         )
         .context("each declaration should have an exact source")?;
-        insta::assert_snapshot!(render(sources)?, @"
+        insta::assert_snapshot!(render(sources)?, @r#"
         error: project requirement declarations
            --> pyproject.toml:5:3
+            |
+          5 |   'demo==1,>=2', # required by the application
+            |   ^^^^^^^^^^^^^ declared here
+            |
            ::: pyproject.toml:6:3
+            |
+          6 |   'other==2,>=3', 'direct @ https://example.com/direct-1.0.0-py3-none-any.whl',
+            |   ^^^^^^^^^^^^^^ declared here
+            |
            ::: pyproject.toml:6:19
+            |
+          6 |   'other==2,>=3', 'direct @ https://example.com/direct-1.0.0-py3-none-any.whl',
+            |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ declared here
+            |
            ::: pyproject.toml:7:3
-        ");
+            |
+          7 |   "marked==3,>=4; sys_platform != 'win32'",
+            |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ declared here
+        "#);
         Ok(())
     }
 }
