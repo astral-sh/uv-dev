@@ -7020,9 +7020,9 @@ impl WheelTagHint {
             .iter()
             .map(|filename| {
                 tags.compatibility(
-                    filename.python_tags().iter(),
-                    filename.abi_tags().iter(),
-                    filename.platform_tags().iter(),
+                    filename.python_tags(),
+                    filename.abi_tags(),
+                    filename.platform_tags(),
                 )
             })
             .max()?;
