@@ -98,6 +98,7 @@ class Fixtures:
 
 class Server(ThreadingHTTPServer):
     daemon_threads = True
+    request_queue_size = 128
 
     def __init__(self, fixtures: Fixtures, delay: float) -> None:
         super().__init__(("127.0.0.1", 0), Handler)
