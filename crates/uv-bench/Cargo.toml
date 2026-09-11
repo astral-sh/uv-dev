@@ -114,6 +114,11 @@ path = "benches/simple_api_html.rs"
 harness = false
 
 [[bench]]
+name = "cache_management"
+path = "benches/cache_management.rs"
+harness = false
+
+[[bench]]
 name = "uv_pypi_types"
 path = "benches/uv_pypi_types.rs"
 harness = false
