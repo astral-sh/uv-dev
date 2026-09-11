@@ -23566,7 +23566,11 @@ fn lock_overlapping_environment() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Supported environments must be disjoint, but the following markers overlap: `sys_platform != 'win32'` and `python_full_version >= '3.11'`
+       --> pyproject.toml:9:57
+      info: The other environment is declared here
+       --> pyproject.toml:9:25
       hint: replace `python_full_version >= '3.11'` with `python_full_version >= '3.11' and sys_platform == 'win32'`
+       --> pyproject.toml:9:57
     ");
 
     Ok(())
@@ -23599,6 +23603,9 @@ fn lock_overlapping_environment_non_adjacent() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Supported environments must be disjoint, but the following markers overlap: `sys_platform == 'linux'` and `sys_platform == 'linux'`
+       --> pyproject.toml:12:13
+      info: The other environment is declared here
+       --> pyproject.toml:10:13
       hint: make the environment markers disjoint, or remove one of the overlapping environments
     ");
 
@@ -23632,6 +23639,9 @@ fn lock_overlapping_required_environment_non_adjacent() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Supported environments must be disjoint, but the following markers overlap: `sys_platform == 'linux'` and `sys_platform == 'linux'`
+       --> pyproject.toml:12:13
+      info: The other environment is declared here
+       --> pyproject.toml:10:13
       hint: make the environment markers disjoint, or remove one of the overlapping environments
     ");
 
@@ -23661,9 +23671,58 @@ fn lock_overlapping_environment_subsumed() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Supported environments must be disjoint, but the following markers overlap: `sys_platform != 'win32'` and `sys_platform == 'linux'`
+       --> pyproject.toml:9:52
+      info: The other environment is declared here
+       --> pyproject.toml:9:25
       hint: make the environment markers disjoint, or remove one of the overlapping environments
     ");
 
+    Ok(())
+}
+
+/// Environment declarations belong to the workspace root, even when locking from a member.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_overlapping_environment_workspace_source() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        # café
+        [tool.uv.workspace]
+        members = ["member"]
+
+        [tool.uv]
+        environments = [
+            "sys_platform == 'linux'",
+            "sys_platform == 'win32'",
+            "sys_platform == 'linux' or sys_platform == 'darwin'", # sentinel-secret
+        ]
+    "#})?;
+    let member = context.temp_dir.child("member");
+    member.create_dir_all()?;
+    member.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "member"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+
+        [tool.uv]
+        environments = ["sys_platform == 'darwin'", "sys_platform == 'darwin'"]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.lock().current_dir(&member).arg("--offline").arg("--no-index"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Supported environments must be disjoint, but the following markers overlap: `sys_platform == 'linux'` and `sys_platform == 'darwin' or sys_platform == 'linux'`
+       --> [TEMP_DIR]/pyproject.toml:9:5
+      info: The other environment is declared here
+       --> [TEMP_DIR]/pyproject.toml:7:5
+      hint: replace `sys_platform == 'darwin' or sys_platform == 'linux'` with `sys_platform == 'darwin'`
+       --> [TEMP_DIR]/pyproject.toml:9:5
+    ");
     Ok(())
 }
 
