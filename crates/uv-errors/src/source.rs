@@ -4,7 +4,9 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use annotate_snippets::renderer::{AnsiColor, Effects};
-use annotate_snippets::{AnnotationKind, Element, Group, Level, Origin, Renderer, Snippet};
+use annotate_snippets::{AnnotationKind, Element, Group, Level, Origin, Patch, Renderer, Snippet};
+
+use crate::SourceSuggestion;
 
 /// Immutable source text retained when an error is produced.
 ///
@@ -77,7 +79,7 @@ impl SourceFile {
     }
 
     /// Reuse this retained snapshot's line index when resolving source positions.
-    fn position_index(&self) -> SourcePositionIndex<'_> {
+    pub(crate) fn position_index(&self) -> SourcePositionIndex<'_> {
         SourcePositionIndex {
             lines: self.lines(),
             line_start: self.line_start(),
@@ -199,6 +201,7 @@ pub(crate) enum SourceLevel {
     Error,
     Warning,
     Info,
+    Hint,
 }
 
 impl SourceLevel {
@@ -215,6 +218,7 @@ impl SourceLevel {
             Self::Error => Level::ERROR,
             Self::Warning => Level::WARNING,
             Self::Info => Level::INFO,
+            Self::Hint => Level::HELP,
         }
     }
 }
@@ -233,6 +237,74 @@ pub(crate) fn write_snippets(
     for snippet in snippets {
         group = group.elements(source_elements(snippet));
     }
+    write_group(stream, group, width)
+}
+
+/// Render an explicitly authorized edit preview, or just its source locations.
+pub(crate) fn write_suggestion(
+    stream: &mut impl Write,
+    suggestion: &SourceSuggestion,
+    width: Option<usize>,
+) -> fmt::Result {
+    if !suggestion.show_source() || !suggestion.preview_line_numbers_fit() {
+        let source = suggestion.source();
+        let name = normalize_single_line(source.name());
+        if name.is_empty() {
+            return Ok(());
+        }
+        let positions = source.position_index();
+        let locations = suggestion.edits().iter().filter_map(|edit| {
+            let position = positions.position(edit.range.start)?;
+            Some(
+                Origin::path(name.clone())
+                    .line(position.line)
+                    .char_column(position.character_column + 1),
+            )
+        });
+        return write_group(
+            stream,
+            Group::with_level(SourceLevel::Hint.level()).elements(locations),
+            width,
+        );
+    }
+
+    let snippet = suggestion.snippet();
+    let Some(view) = source_view(&snippet) else {
+        return Ok(());
+    };
+    let SourceViewKind::Windows(windows) = view.kind else {
+        return write_snippets(stream, &[snippet], width, SourceLevel::Hint);
+    };
+
+    let mut group = Group::with_level(SourceLevel::Hint.level());
+    for window in windows {
+        let normalized = NormalizedSource::new(window.text);
+        let patches = window
+            .annotations
+            .into_iter()
+            .filter_map(|annotation| {
+                let edit = suggestion.edits().get(annotation.index)?;
+                Some(Patch::new(
+                    normalized.range(annotation.range),
+                    normalize_extra_controls(&edit.replacement),
+                ))
+            })
+            .collect::<Vec<_>>();
+        if patches.is_empty() {
+            continue;
+        }
+        let mut rendered = Snippet::source(normalized.text)
+            .line_start(window.line_start)
+            .patches(patches);
+        if let Some(name) = &view.name {
+            rendered = rendered.path(name.clone());
+        }
+        group = group.element(rendered);
+    }
+    write_group(stream, group, width)
+}
+
+fn write_group(stream: &mut impl Write, group: Group<'_>, width: Option<usize>) -> fmt::Result {
     if group.is_empty() {
         return Ok(());
     }
@@ -242,6 +314,7 @@ pub(crate) fn write_snippets(
         .error(AnsiColor::Red.on_default().effects(Effects::BOLD))
         .warning(AnsiColor::Yellow.on_default().effects(Effects::BOLD))
         .info(context_style)
+        .help(context_style)
         .line_num(context_style)
         .context(context_style)
         // The renderer doubles this value in its long-line layout. Keep an effectively
@@ -367,6 +440,8 @@ impl SourcePositionIndex<'_> {
 }
 
 pub(crate) struct SourceAnnotationView<'a> {
+    /// The occurrence in the original snippet's annotation list.
+    index: usize,
     /// The original, half-open byte range relative to the selected window.
     pub(crate) range: Range<usize>,
     display_range: Range<usize>,
@@ -487,6 +562,7 @@ pub(crate) fn source_view<'a>(snippet: &'a SourceSnippet<'_>) -> Option<SourceVi
                 }
             }
             annotations.push(SourceAnnotationView {
+                index,
                 range: annotation.range.start - range.start..annotation.range.end - range.start,
                 display_range: visible_range.start - range.start..visible_range.end - range.start,
                 label: annotation.label.as_deref(),

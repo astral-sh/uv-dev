@@ -29188,6 +29188,7 @@ fn lock_multiple_sources_conflict() -> Result<()> {
       info: The other source is declared here
        --> pyproject.toml:10:173
       hint: replace `sys_platform == 'win32'` with `python_full_version != '3.12.*' and sys_platform == 'win32'`
+       --> pyproject.toml:11:163
     ");
 
     Ok(())
