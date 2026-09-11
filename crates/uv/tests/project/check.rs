@@ -2939,8 +2939,7 @@ fn check_no_project() -> Result<()> {
     ----- stderr -----
     warning: `uv check` is experimental and may change without warning. Pass `--preview-features check-command` to disable this warning.
     error: No interpreter found for Python >=3.12 in [PYTHON SOURCES]
-
-    hint: A managed Python download is available for Python >=3.12, but Python downloads are set to 'never'
+      info: A managed Python download is available for Python >=3.12, but Python downloads are set to 'never'
     ");
 
     // The unavailable project environment is not initialized when project discovery is disabled.
