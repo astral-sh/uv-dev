@@ -7,7 +7,8 @@ use rustc_hash::FxHashSet;
 use uv_auth::CredentialsCache;
 use uv_cache::Cache;
 use uv_configuration::NoSources;
-use uv_distribution_types::{IndexLocations, Requirement};
+use uv_distribution_types::{IndexLocations, Requirement, RequirementProvenance};
+use uv_errors::SourceFile;
 use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep508::MarkerTree;
 use uv_workspace::dependency_groups::FlatDependencyGroups;
@@ -15,6 +16,7 @@ use uv_workspace::pyproject::{Sources, ToolUvSources};
 use uv_workspace::{DiscoveryOptions, MemberDiscovery, ProjectWorkspace, WorkspaceCache};
 
 use crate::Metadata;
+use crate::metadata::requirement_sources::project_requirement_sources;
 use crate::metadata::{GitWorkspaceMember, LoweredRequirement, MetadataError};
 
 #[derive(Debug, Clone)]
@@ -31,6 +33,7 @@ impl RequiresDist {
     /// dependencies.
     pub(crate) async fn from_project_maybe_workspace(
         metadata: uv_pypi_types::RequiresDist,
+        pyproject_source: Option<SourceFile>,
         install_path: &Path,
         git_member: Option<&GitWorkspaceMember<'_>>,
         locations: &IndexLocations,
@@ -40,6 +43,8 @@ impl RequiresDist {
         workspace_cache: &WorkspaceCache,
         credentials_cache: &CredentialsCache,
     ) -> Result<Self, MetadataError> {
+        let requirement_sources =
+            pyproject_source.and_then(|source| project_requirement_sources(&source, &metadata));
         let discovery = DiscoveryOptions {
             stop_discovery_at: git_member.map(|git_member| {
                 git_member
@@ -62,11 +67,16 @@ impl RequiresDist {
         )
         .await?
         else {
-            return Self::from_metadata23_with_source_context(metadata, git_member);
+            return Self::from_metadata23_with_source_context(
+                metadata,
+                requirement_sources,
+                git_member,
+            );
         };
 
         Self::from_project_workspace(
             metadata,
+            requirement_sources,
             &project_workspace,
             git_member,
             locations,
@@ -81,13 +91,19 @@ impl RequiresDist {
 
     fn from_metadata23_with_source_context(
         metadata: uv_pypi_types::RequiresDist,
+        requirement_sources: Option<Box<[RequirementProvenance]>>,
         git_member: Option<&GitWorkspaceMember<'_>>,
     ) -> Result<Self, MetadataError> {
+        let mut requirement_sources = requirement_sources.map(Box::into_iter);
         let requires_dist = Box::into_iter(metadata.requires_dist)
             .map(|requirement| {
+                let provenance = requirement_sources.as_mut().and_then(Iterator::next);
                 let requirement_name = requirement.name.clone();
                 LoweredRequirement::preserve_git_source(requirement, git_member)
-                    .map(LoweredRequirement::into_inner)
+                    .map(|requirement| Requirement {
+                        provenance,
+                        ..requirement.into_inner()
+                    })
                     .map_err(|err| MetadataError::LoweringError(requirement_name, Box::new(err)))
             })
             .collect::<Result<Box<_>, _>>()?;
@@ -103,6 +119,7 @@ impl RequiresDist {
 
     async fn from_project_workspace(
         metadata: uv_pypi_types::RequiresDist,
+        requirement_sources: Option<Box<[RequirementProvenance]>>,
         project_workspace: &ProjectWorkspace,
         git_member: Option<&GitWorkspaceMember<'_>>,
         locations: &IndexLocations,
@@ -193,9 +210,14 @@ impl RequiresDist {
 
         // Lower the requirements.
         let mut requires_dist = Vec::new();
+        let mut requirement_sources = requirement_sources.map(Box::into_iter);
         for requirement in Box::into_iter(metadata.requires_dist) {
+            let provenance = requirement_sources.as_mut().and_then(Iterator::next);
             if no_sources.for_package(&requirement.name) {
-                requires_dist.push(Requirement::from(requirement));
+                requires_dist.push(Requirement {
+                    provenance,
+                    ..Requirement::from(requirement)
+                });
                 continue;
             }
 
@@ -222,7 +244,10 @@ impl RequiresDist {
                 .await
                 .map(|requirement| {
                     requirement
-                        .map(LoweredRequirement::into_inner)
+                        .map(|requirement| Requirement {
+                            provenance: provenance.clone(),
+                            ..requirement.into_inner()
+                        })
                         .map_err(|err| {
                             MetadataError::LoweringError(requirement_name.clone(), Box::new(err))
                         })
@@ -461,6 +486,7 @@ mod test {
     use std::path::Path;
     use std::str::FromStr;
 
+    use anyhow::{Context, bail};
     use indoc::indoc;
     use insta::assert_snapshot;
     use tempfile::TempDir;
@@ -469,16 +495,27 @@ mod test {
     use uv_cache::Cache;
     use uv_configuration::NoSources;
     use uv_distribution_types::IndexLocations;
+    use uv_errors::SourceFile;
     use uv_normalize::PackageName;
     use uv_pep508::Requirement;
     use uv_workspace::{DiscoveryOptions, ProjectWorkspace, WorkspaceCache};
 
     use crate::RequiresDist;
+    use crate::metadata::requirement_sources::project_requirement_sources;
     use crate::metadata::requires_dist::FlatRequiresDist;
 
     async fn requires_dist_from_pyproject_toml(
         temp_dir: &Path,
         contents: &str,
+    ) -> anyhow::Result<RequiresDist> {
+        requires_dist_from_pyproject_toml_with_sources(temp_dir, contents, &NoSources::default())
+            .await
+    }
+
+    async fn requires_dist_from_pyproject_toml_with_sources(
+        temp_dir: &Path,
+        contents: &str,
+        no_sources: &NoSources,
     ) -> anyhow::Result<RequiresDist> {
         let workspace_cache = WorkspaceCache::default();
         fs_err::create_dir_all(temp_dir)?;
@@ -496,18 +533,73 @@ mod test {
         .await?;
         let pyproject_toml = uv_pypi_types::PyProjectToml::from_toml(contents, "pyproject.toml")?;
         let requires_dist = uv_pypi_types::RequiresDist::from_pyproject_toml(pyproject_toml)?;
+        let requirement_sources = project_requirement_sources(
+            &SourceFile::new("pyproject.toml", contents),
+            &requires_dist,
+        );
         Ok(RequiresDist::from_project_workspace(
             requires_dist,
+            requirement_sources,
             &project_workspace,
             None,
             &IndexLocations::default(),
-            &NoSources::default(),
+            no_sources,
             true,
             &cache,
             &workspace_cache,
             &CredentialsCache::new(),
         )
         .await?)
+    }
+
+    #[tokio::test]
+    async fn project_requirement_sources_survive_lowering() -> anyhow::Result<()> {
+        let input = indoc! {r#"
+            [project]
+            name = "project"
+            version = "0.1.0"
+            dependencies = ["demo==1,>=2"]
+
+            [tool.uv.sources]
+            demo = { index = "private", marker = "sys_platform == 'linux'" }
+
+            [[tool.uv.index]]
+            name = "private"
+            url = "https://example.com/simple"
+        "#};
+        let temp_dir = TempDir::new()?;
+        let metadata = requires_dist_from_pyproject_toml(temp_dir.path(), input).await?;
+        let [first, remaining] = metadata.requires_dist.as_ref() else {
+            bail!("expected an index source and its uncovered marker range");
+        };
+        let first_source = first.provenance.as_ref().context("index source location")?;
+        let remaining_source = remaining
+            .provenance
+            .as_ref()
+            .context("remaining source location")?;
+        assert!(first_source.unambiguous_with(remaining_source).is_some());
+        assert_ne!(first.marker, remaining.marker);
+
+        let metadata =
+            requires_dist_from_pyproject_toml_with_sources(temp_dir.path(), input, &NoSources::All)
+                .await?;
+        let [requirement] = metadata.requires_dist.as_ref() else {
+            bail!("expected one requirement when source overrides are disabled");
+        };
+        assert!(requirement.provenance.is_some());
+
+        // Equivalent wheel or cache metadata does not establish an authored source occurrence.
+        let metadata = uv_pypi_types::RequiresDist::from_pyproject_toml(
+            uv_pypi_types::PyProjectToml::from_toml(input, "pyproject.toml")?,
+        )?;
+        let metadata = RequiresDist::from_metadata23_with_source_context(metadata, None, None)?;
+        assert!(
+            metadata
+                .requires_dist
+                .iter()
+                .all(|requirement| requirement.provenance.is_none())
+        );
+        Ok(())
     }
 
     async fn format_err(input: &str) -> String {

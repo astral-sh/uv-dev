@@ -93,6 +93,136 @@ fn lock_preserves_noncanonical_lock() -> Result<()> {
     Ok(())
 }
 
+/// Static project requirements retain their authored locations in resolver explanations.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_project_requirement_sources() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = [
+            "pypyp==1,>=1.2",
+        ]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: your project depends on pypyp==1 and pypyp>=1.2, which are incompatible
+       --> pyproject.toml:6:5
+        |
+      6 |     "pypyp==1,>=1.2",
+        |     ^^^^^^^^^^^^^^^^ no version can satisfy this requirement
+    "#);
+    Ok(())
+}
+
+/// Applicability and source-marker splits retain the active authored occurrence.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_project_requirement_source_splits() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = [
+            "pypyp==1,>=1.2; python_version < '3.12'",
+            "pypyp==1,>=1.2; python_version >= '3.12'",
+        ]
+
+        [tool.uv.sources]
+        pypyp = { index = "private", marker = "sys_platform == 'linux'" }
+
+        [[tool.uv.index]]
+        name = "private"
+        url = "https://example.com/simple"
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: your project depends on pypyp==1 and pypyp>=1.2, which are incompatible
+       --> pyproject.toml:7:5
+    ");
+    Ok(())
+}
+
+/// Optional declarations use their authored extra and array occurrence, not a reconstructed marker.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_optional_requirement_sources() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+
+        [project.optional-dependencies]
+        "Z.Tools" = ["pypyp==1,>=1.2; python_version < '3.12'"]
+        "Dev.Tools" = [
+            "pypyp==1,>=1.2",
+        ]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because project[dev-tools] depends on pypyp==1 and pypyp>=1.2, which are incompatible and your project requires project[dev-tools], we can conclude that your project's requirements are unsatisfiable.
+        --> pyproject.toml:10:5
+         |
+      10 |     "pypyp==1,>=1.2",
+         |     ^^^^^^^^^^^^^^^^ no version can satisfy this requirement
+    "#);
+    Ok(())
+}
+
+/// Equal active declarations cannot be attributed to one of their distinct source locations.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_duplicate_requirement_sources() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = [
+            "pypyp==1,>=1.2",
+            "pypyp==1,>=1.2",
+        ]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: your project depends on pypyp==1 and pypyp>=1.2, which are incompatible
+    ");
+    Ok(())
+}
+
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_wheel_registry() -> Result<()> {
