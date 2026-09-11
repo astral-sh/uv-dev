@@ -13,7 +13,7 @@ use uv_workspace::pyproject::{PyProjectToml, Source};
 
 use crate::LoweringError;
 
-/// Resolve retained source locations without changing the lowering error or its source chain.
+/// Resolve retained source context without changing the lowering error or its source chain.
 pub fn diagnostic_for_error<'a>(error: &'a (dyn Error + 'static)) -> Option<Diagnostic<'a>> {
     let error = error.downcast_ref::<LoweringError>().or_else(|| {
         error
@@ -21,8 +21,22 @@ pub fn diagnostic_for_error<'a>(error: &'a (dyn Error + 'static)) -> Option<Diag
             .map(AsRef::as_ref)
     })?;
     match error {
-        LoweringError::MissingIndex { diagnostic, .. } => {
-            Some(Diagnostic::default().with_snippet(diagnostic.as_deref()?.clone()))
+        LoweringError::MissingIndex {
+            package,
+            index,
+            diagnostic,
+            ..
+        } => {
+            let mut presentation = Diagnostic::new(format!(
+                "Package `{package}` references an undeclared index: `{index}`"
+            ));
+            if let Some(info) = error.own_info() {
+                presentation = presentation.with_info(info);
+            }
+            if let Some(snippet) = diagnostic.as_deref() {
+                presentation = presentation.with_snippet(snippet.clone());
+            }
+            Some(presentation)
         }
         LoweringError::MissingWorkspaceSource(_)
         | LoweringError::NonWorkspaceSource(..)
@@ -161,7 +175,7 @@ mod tests {
     use std::str::FromStr;
 
     use anyhow::{Context, Result};
-    use uv_distribution_types::IndexName;
+    use uv_distribution_types::{IndexName, Origin};
     use uv_errors::{ErrorOptions, Hinted, write_error_chain_with_options};
     use uv_normalize::{ExtraName, GroupName, PackageName};
     use uv_pep508::MarkerTree;
@@ -392,7 +406,7 @@ mod tests {
         let error = LoweringError::MissingIndex {
             package,
             index: IndexName::from_str("private")?,
-            hint: Some("Declare the index in the project configuration".to_string()),
+            configured_index_origin: Some(Origin::User),
             diagnostic: Some(Box::new(snippet)),
         };
         assert!(diagnostic_for_error(&error).is_some());
@@ -410,8 +424,69 @@ mod tests {
         insta::assert_snapshot!(anstream::adapter::strip_str(&output), @"
         error: Package `demo-pkg` references an undeclared index: `private`
            --> ./pyproject.toml:2:157
+          info: Index `private` was found in a user-level `uv.toml`, but indexes referenced via `tool.uv.sources` must be defined in the project's `pyproject.toml`
 
-        hint: Declare the index in the project configuration
+        hint: Define index `private` in the project's `pyproject.toml`
+        ");
+        Ok(())
+    }
+
+    #[test]
+    fn missing_index_context_does_not_require_source_text() -> Result<()> {
+        let mut reports = Vec::new();
+        for origin in [
+            None,
+            Some(Origin::User),
+            Some(Origin::System),
+            Some(Origin::Project),
+        ] {
+            let error = LoweringError::MissingIndex {
+                package: PackageName::from_str("demo-pkg")?,
+                index: IndexName::from_str("private")?,
+                configured_index_origin: origin,
+                diagnostic: None,
+            };
+            assert!(diagnostic_for_error(&error).is_some());
+            assert!(error.source().is_none());
+            let mut output = String::new();
+            write_error_chain_with_options(
+                &error,
+                &error.hints(),
+                ErrorOptions::default()
+                    .with_width_override(usize::MAX)
+                    .with_diagnostic(diagnostic_for_error)
+                    .with_stream(&mut output),
+            )?;
+            reports.push(format!(
+                "Display: {}\n{}",
+                error,
+                anstream::adapter::strip_str(&output)
+            ));
+        }
+
+        insta::assert_snapshot!(reports.join("\n"), @"
+        Display: Package `demo-pkg` references an undeclared index: `private`
+        error: Package `demo-pkg` references an undeclared index: `private`
+
+        hint: Define index `private` in the project's `pyproject.toml`
+
+        Display: Package `demo-pkg` references an undeclared index: `private`. Index `private` was found in a user-level `uv.toml`, but indexes referenced via `tool.uv.sources` must be defined in the project's `pyproject.toml`
+        error: Package `demo-pkg` references an undeclared index: `private`
+          info: Index `private` was found in a user-level `uv.toml`, but indexes referenced via `tool.uv.sources` must be defined in the project's `pyproject.toml`
+
+        hint: Define index `private` in the project's `pyproject.toml`
+
+        Display: Package `demo-pkg` references an undeclared index: `private`. Index `private` was found in a system-level `uv.toml`, but indexes referenced via `tool.uv.sources` must be defined in the project's `pyproject.toml`
+        error: Package `demo-pkg` references an undeclared index: `private`
+          info: Index `private` was found in a system-level `uv.toml`, but indexes referenced via `tool.uv.sources` must be defined in the project's `pyproject.toml`
+
+        hint: Define index `private` in the project's `pyproject.toml`
+
+        Display: Package `demo-pkg` references an undeclared index: `private`. Index `private` was found in a project-level `uv.toml`, but indexes referenced via `tool.uv.sources` must be defined in the project's `pyproject.toml`
+        error: Package `demo-pkg` references an undeclared index: `private`
+          info: Index `private` was found in a project-level `uv.toml`, but indexes referenced via `tool.uv.sources` must be defined in the project's `pyproject.toml`
+
+        hint: Define index `private` in the project's `pyproject.toml`
         ");
         Ok(())
     }

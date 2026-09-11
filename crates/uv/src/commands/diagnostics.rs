@@ -856,7 +856,7 @@ wheels = [{ filename = "example-1.0.0-cp312-cp312-macosx_11_0_arm64.whl", hash =
                 Box::new(uv_distribution::LoweringError::MissingIndex {
                     package: "demo".parse().unwrap(),
                     index: "private".parse().unwrap(),
-                    hint: Some("Declare the index in the project configuration".to_string()),
+                    configured_index_origin: Some(uv_distribution_types::Origin::Project),
                     diagnostic: None,
                 }),
             ),
@@ -866,8 +866,11 @@ wheels = [{ filename = "example-1.0.0-cp312-cp312-macosx_11_0_arm64.whl", hash =
         error: Failed to load project metadata
           cause: Failed to parse entry: `demo`
           cause: Package `demo` references an undeclared index: `private`
+          info: Index `private` was found in a project-level `uv.toml`, but indexes
+                referenced via `tool.uv.sources` must be defined in the project's
+                `pyproject.toml`
 
-        hint: Declare the index in the project configuration
+        hint: Define index `private` in the project's `pyproject.toml`
         ");
     }
 

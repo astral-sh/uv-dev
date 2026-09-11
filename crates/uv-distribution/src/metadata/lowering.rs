@@ -13,7 +13,7 @@ use uv_distribution_types::{
     Index, IndexCredentialsError, IndexLocations, IndexMetadata, IndexName, Origin, Requirement,
     RequirementSource,
 };
-use uv_errors::SourceSnippet;
+use uv_errors::{Info, SourceSnippet};
 use uv_fs::{Simplified, normalize_absolute_path, normalize_path};
 use uv_git_types::{GitLfs, GitReference, GitUrl, GitUrlParseError};
 use uv_normalize::{ExtraName, GroupName, PackageName};
@@ -256,7 +256,8 @@ impl LoweredRequirement {
                                     name.as_ref().is_some_and(|name| *name == index)
                                 })
                             else {
-                                let hint = missing_index_hint(locations, &index);
+                                let configured_index_origin =
+                                    missing_index_origin(locations, &index);
                                 let (pyproject_dir, pyproject) = match origin {
                                     RequirementOrigin::Project => {
                                         (project_dir, project_pyproject_toml)
@@ -277,7 +278,7 @@ impl LoweredRequirement {
                                 return Err(LoweringError::MissingIndex {
                                     package: requirement.name.clone(),
                                     index,
-                                    hint,
+                                    configured_index_origin,
                                     diagnostic,
                                 });
                             };
@@ -463,11 +464,12 @@ impl LoweredRequirement {
                                     name.as_ref().is_some_and(|name| *name == index)
                                 })
                             else {
-                                let hint = missing_index_hint(locations, &index);
+                                let configured_index_origin =
+                                    missing_index_origin(locations, &index);
                                 return Err(LoweringError::MissingIndex {
                                     package: requirement.name.clone(),
                                     index,
-                                    hint,
+                                    configured_index_origin,
                                     diagnostic: None,
                                 });
                             };
@@ -600,11 +602,14 @@ pub enum LoweringError {
     MoreThanOneGitRef,
     #[error(transparent)]
     GitUrlParse(#[from] GitUrlParseError),
-    #[error("Package `{package}` references an undeclared index: `{index}`")]
+    #[error(
+        "Package `{package}` references an undeclared index: `{index}`{}",
+        missing_index_display_context(index, *configured_index_origin)
+    )]
     MissingIndex {
         package: PackageName,
         index: IndexName,
-        hint: Option<String>,
+        configured_index_origin: Option<Origin>,
         diagnostic: Option<Box<SourceSnippet<'static>>>,
     },
     #[error("Workspace members are not allowed in non-workspace contexts")]
@@ -650,11 +655,26 @@ pub enum LoweringError {
 impl uv_errors::Hinted for LoweringError {
     fn hints(&self) -> uv_errors::Hints<'_> {
         match self {
-            Self::MissingIndex {
-                hint: Some(hint), ..
-            } => uv_errors::Hints::from(hint.clone()),
+            Self::MissingIndex { index, .. } => uv_errors::Hints::from(format!(
+                "Define index `{index}` in the project's `pyproject.toml`"
+            )),
             _ => uv_errors::Hints::none(),
         }
+    }
+}
+
+impl LoweringError {
+    /// Explain why a configured index is not available to `tool.uv.sources`.
+    pub(crate) fn own_info(&self) -> Option<Info<'static>> {
+        let Self::MissingIndex {
+            index,
+            configured_index_origin,
+            ..
+        } = self
+        else {
+            return None;
+        };
+        missing_index_context(index, *configured_index_origin).map(Info::new)
     }
 }
 
@@ -677,27 +697,32 @@ impl std::fmt::Display for SourceKind {
     }
 }
 
-/// Generate a hint for a missing index if the index name is found in a configuration file
-/// (e.g., `uv.toml`) rather than in the project's `pyproject.toml`.
-fn missing_index_hint(locations: &IndexLocations, index: &IndexName) -> Option<String> {
-    let config_index = locations
+/// Retain the origin of an index found outside the project's `pyproject.toml`.
+fn missing_index_origin(locations: &IndexLocations, index: &IndexName) -> Option<Origin> {
+    locations
         .simple_indexes()
         .filter(|idx| !matches!(idx.origin, Some(Origin::Cli)))
-        .find(|idx| idx.name.as_ref().is_some_and(|name| *name == *index));
+        .find(|idx| idx.name.as_ref().is_some_and(|name| *name == *index))
+        .and_then(|idx| idx.origin)
+        .filter(|origin| matches!(origin, Origin::User | Origin::System | Origin::Project))
+}
 
-    config_index.and_then(|idx| {
-        let source = match idx.origin {
-            Some(Origin::User) => "a user-level `uv.toml`",
-            Some(Origin::System) => "a system-level `uv.toml`",
-            Some(Origin::Project) => "a project-level `uv.toml`",
-            Some(Origin::Cli | Origin::RequirementsTxt) | None => return None,
-        };
-        Some(format!(
-            "Index `{index}` was found in {source}, but indexes \
-             referenced via `tool.uv.sources` must be defined in the project's \
-             `pyproject.toml`"
-        ))
-    })
+fn missing_index_context(index: &IndexName, origin: Option<Origin>) -> Option<String> {
+    let source = match origin? {
+        Origin::User => "a user-level `uv.toml`",
+        Origin::System => "a system-level `uv.toml`",
+        Origin::Project => "a project-level `uv.toml`",
+        Origin::Cli | Origin::RequirementsTxt => return None,
+    };
+    Some(format!(
+        "Index `{index}` was found in {source}, but indexes \
+         referenced via `tool.uv.sources` must be defined in the project's \
+         `pyproject.toml`"
+    ))
+}
+
+fn missing_index_display_context(index: &IndexName, origin: Option<Origin>) -> String {
+    missing_index_context(index, origin).map_or_else(String::new, |context| format!(". {context}"))
 }
 
 /// Convert a Git source into a [`RequirementSource`].
@@ -1074,4 +1099,33 @@ fn git_path(path: &Path) -> Result<PathBuf, LoweringError> {
     path.simple_canonicalize()
         .or_else(|_| normalize_absolute_path(path))
         .map_err(LoweringError::RelativeTo)
+}
+
+#[cfg(test)]
+mod tests {
+    use uv_distribution_types::{Index, IndexLocations, IndexName, IndexUrl, Origin};
+
+    use super::missing_index_origin;
+
+    #[test]
+    fn missing_index_origin_identifies_configuration() -> anyhow::Result<()> {
+        let name: IndexName = "private".parse()?;
+        for origin in [Origin::User, Origin::System, Origin::Project] {
+            let mut index =
+                Index::from_extra_index_url(IndexUrl::parse("https://example.com/simple", None)?)
+                    .with_origin(origin);
+            index.name = Some(name.clone());
+            let locations = IndexLocations::new(vec![index], Vec::new(), false);
+            assert_eq!(missing_index_origin(&locations, &name), Some(origin));
+        }
+        for origin in [None, Some(Origin::Cli), Some(Origin::RequirementsTxt)] {
+            let mut index =
+                Index::from_extra_index_url(IndexUrl::parse("https://example.com/simple", None)?);
+            index.name = Some(name.clone());
+            index.origin = origin;
+            let locations = IndexLocations::new(vec![index], Vec::new(), false);
+            assert_eq!(missing_index_origin(&locations, &name), None);
+        }
+        Ok(())
+    }
 }
