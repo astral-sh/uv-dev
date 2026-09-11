@@ -28,8 +28,16 @@ pub(crate) struct ErrorReport {
 
 impl ErrorReport {
     /// Resolve the presentation of each actual error in the chain.
-    pub(crate) fn new(error: &(dyn Error + 'static), resolver: Option<DiagnosticFn>) -> Self {
-        let (root, sources) = resolve_error_chain(error, resolver);
+    ///
+    /// Explicit report hints belong to the outer error. Merge them before serialization so their
+    /// priority and exact source-suggestion identity use the same rules as the terminal renderer.
+    pub(crate) fn new(
+        error: &(dyn Error + 'static),
+        resolver: Option<DiagnosticFn>,
+        hints: &Hints<'_>,
+    ) -> Self {
+        let (mut root, sources) = resolve_error_chain(error, resolver);
+        root.diagnostic.hints.extend(hints.clone());
         Self {
             schema_version: 1,
             coordinates: Coordinates {
@@ -49,19 +57,6 @@ impl ErrorReport {
     #[must_use]
     pub(crate) fn with_level(mut self, level: &str) -> Self {
         self.level = plain_text(level);
-        self
-    }
-
-    /// The legacy formatter's explicitly supplied hints belong to the outer error and are always
-    /// displayed after the complete chain, retaining their relative display order.
-    pub(crate) fn with_trailing_hints(mut self, hints: &Hints<'_>) -> Self {
-        if let Some(root) = self.errors.first_mut() {
-            root.hints
-                .extend(report_hints(hints).into_iter().map(|mut hint| {
-                    hint.ordering = ReportHintOrdering::Last;
-                    hint
-                }));
-        }
         self
     }
 }
@@ -363,7 +358,7 @@ mod tests {
     use insta::assert_json_snapshot;
 
     use crate::{
-        Diagnostic, Hint, HintOrdering, Info, SourceAnnotation, SourceFile, SourceSnippet,
+        Diagnostic, Hint, HintOrdering, Hints, Info, SourceAnnotation, SourceFile, SourceSnippet,
     };
 
     use super::{ErrorReport, write_report};
@@ -402,7 +397,7 @@ mod tests {
         } else if error.is::<Middle>() {
             Some(
                 Diagnostic::new("native middle")
-                    .with_info(Info::new("replaced context"))
+                    .with_info(Info::new("native middle context"))
                     .with_hints(
                         Hint::new("middle native")
                             .with_ordering(HintOrdering::First)
@@ -425,7 +420,7 @@ mod tests {
     #[test]
     fn retains_actual_causes_and_metadata_owners() {
         let error = Outer(Middle(Inner));
-        assert_json_snapshot!(ErrorReport::new(&error, Some(chain_diagnostic)).with_level("warning"), @r#"
+        assert_json_snapshot!(ErrorReport::new(&error, Some(chain_diagnostic), &Hints::none()).with_level("warning"), @r#"
         {
           "schema_version": 1,
           "coordinates": {
@@ -457,6 +452,9 @@ mod tests {
             {
               "message": "middle presentation",
               "info": [
+                {
+                  "message": "native middle context"
+                },
                 {
                   "message": "middle context"
                 }
@@ -520,7 +518,7 @@ mod tests {
                     SourceAnnotation::secondary(range_of(text, "42")).with_label("related"),
                 ),
         ]);
-        let report = ErrorReport::new(&error, Some(input_diagnostic));
+        let report = ErrorReport::new(&error, Some(input_diagnostic), &Hints::none());
         assert_json_snapshot!(&report.errors[0].sources, @r#"
         [
           {
@@ -592,7 +590,11 @@ mod tests {
                 })
             },
         );
-        let report = ErrorReport::new(&InputError(vec![snippet]), Some(input_diagnostic));
+        let report = ErrorReport::new(
+            &InputError(vec![snippet]),
+            Some(input_diagnostic),
+            &Hints::none(),
+        );
         let annotations = (0..64)
             .map(|index| {
                 serde_json::json!({
@@ -632,7 +634,7 @@ mod tests {
                 )
                 .without_source_text(),
         ]);
-        let report = ErrorReport::new(&error, Some(input_diagnostic));
+        let report = ErrorReport::new(&error, Some(input_diagnostic), &Hints::none());
         assert_json_snapshot!(&report.errors[0].sources, @r#"
         [
           {
@@ -660,7 +662,7 @@ mod tests {
                 .with_annotation(SourceAnnotation::primary(0..100)),
             SourceSnippet::new(SourceFile::new("", "hidden")).without_source_text(),
         ]);
-        let report = ErrorReport::new(&error, Some(input_diagnostic));
+        let report = ErrorReport::new(&error, Some(input_diagnostic), &Hints::none());
         assert_json_snapshot!(&report.errors[0].sources, @r#"
         [
           {
@@ -687,7 +689,7 @@ mod tests {
             SourceSnippet::new(SourceFile::new("input.toml", text))
                 .with_annotation(SourceAnnotation::primary(0..text.len())),
         ]);
-        let report = ErrorReport::new(&error, Some(input_diagnostic));
+        let report = ErrorReport::new(&error, Some(input_diagnostic), &Hints::none());
         let mut output = String::new();
         write_report(&mut output, &report)?;
         assert!(!output.trim_end_matches('\n').chars().any(|character| {
