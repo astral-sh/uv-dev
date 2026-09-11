@@ -3032,31 +3032,153 @@ fn allowed_transitive_url_dependency() -> Result<()> {
     Ok(())
 }
 
-/// Request `transitive_url_dependency`, which depends on `iniconfig @ git+https://github.com/pytest-dev/iniconfig@9cae43103df70bac6fde7b9f35ad11a9f1be0cb4`.
-/// Since this `iniconfig @ git+https://github.com/pytest-dev/iniconfig.git@9cae43103df70bac6fde7b9f35ad11a9f1be0cb4.git` is declared as a constraint, and
-/// those map to the same canonical URL, we should accept it.
+/// A transitive Git dependency and a constraint with a `.git` suffix identify the same repository
+/// and commit.
 #[test]
 #[cfg(feature = "test-git")]
 fn allowed_transitive_canonical_url_dependency() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
+    let repository = context.temp_dir.child("repository");
+    repository.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "iniconfig"
+        version = "2.0.0"
+        dependencies = []
+    "#})?;
+
+    anyhow::ensure!(
+        context
+            .external_command("git")
+            .args(["init", "--quiet"])
+            .arg(repository.path())
+            .env("GIT_DEFAULT_HASH", "sha1")
+            .status()?
+            .success(),
+        "failed to initialize Git fixture"
+    );
+    anyhow::ensure!(
+        context
+            .external_command("git")
+            .arg("-C")
+            .arg(repository.path())
+            .args(["add", "pyproject.toml"])
+            .status()?
+            .success(),
+        "failed to stage Git fixture"
+    );
+    anyhow::ensure!(
+        context
+            .external_command("git")
+            .arg("-C")
+            .arg(repository.path())
+            .args([
+                "-c",
+                "user.name=ferris",
+                "-c",
+                "user.email=ferris@example.com",
+                "commit",
+                "--quiet",
+                "-m",
+                "Initial commit",
+            ])
+            .env("GIT_AUTHOR_DATE", "2000-01-01T00:00:00Z")
+            .env("GIT_COMMITTER_DATE", "2000-01-01T00:00:00Z")
+            .status()?
+            .success(),
+        "failed to commit Git fixture"
+    );
+    let commit = context
+        .external_command("git")
+        .arg("-C")
+        .arg(repository.path())
+        .args(["rev-parse", "--verify", "HEAD^{commit}"])
+        .output()?;
+    anyhow::ensure!(commit.status.success(), "failed to read Git fixture commit");
+    let commit = String::from_utf8(commit.stdout)?;
+    let commit = commit.trim();
+    anyhow::ensure!(
+        commit.len() == 40 && commit.bytes().all(|byte| byte.is_ascii_hexdigit()),
+        "expected a full Git commit"
+    );
+
+    // Both URL spellings must be valid Git sources at the same commit.
+    let bare_repository = context.temp_dir.child("repository.git");
+    anyhow::ensure!(
+        context
+            .external_command("git")
+            .args(["clone", "--quiet", "--bare", "--local"])
+            .arg(repository.path())
+            .arg(bare_repository.path())
+            .status()?
+            .success(),
+        "failed to clone Git fixture"
+    );
+    let bare_commit = context
+        .external_command("git")
+        .arg("-C")
+        .arg(bare_repository.path())
+        .args(["rev-parse", "--verify", "HEAD^{commit}"])
+        .output()?;
+    anyhow::ensure!(
+        bare_commit.status.success(),
+        "failed to read bare Git fixture commit"
+    );
+    assert_eq!(String::from_utf8(bare_commit.stdout)?.trim(), commit);
+
+    let repository_url = Url::from_directory_path(repository.path())
+        .map_err(|()| anyhow::anyhow!("failed to convert repository path to file URL"))?;
+    let repository_url = repository_url
+        .as_str()
+        .trim_end_matches('/')
+        .replace('@', "%40");
+    let bare_repository_url = Url::from_directory_path(bare_repository.path())
+        .map_err(|()| anyhow::anyhow!("failed to convert bare repository path to file URL"))?;
+    let bare_repository_url = bare_repository_url
+        .as_str()
+        .trim_end_matches('/')
+        .replace('@', "%40");
+    let constrained_requirement = format!("iniconfig @ git+{bare_repository_url}@{commit}");
+
+    // Local directories receive first-party privileges, so use a source archive.
+    let pyproject_toml = indoc::formatdoc! {r#"
+        [project]
+        name = "hatchling-editable"
+        version = "0.1.0"
+        dependencies = ["iniconfig @ git+{repository_url}@{commit}"]
+    "#};
+    let archive = context.temp_dir.child("hatchling_editable-0.1.0.tar.gz");
+    write_tar_gz(
+        File::create(archive.path())?,
+        &[(
+            "hatchling_editable-0.1.0/pyproject.toml",
+            pyproject_toml.as_bytes(),
+        )],
+    )?;
+    let archive_url = Url::from_file_path(archive.path())
+        .map_err(|()| anyhow::anyhow!("failed to convert archive path to file URL"))?;
     let requirements_in = context.temp_dir.child("requirements.in");
-    requirements_in.write_str("hatchling_editable @ https://github.com/astral-sh/uv/files/14762645/hatchling_editable.zip")?;
-
+    requirements_in.write_str(&format!("hatchling_editable @ {archive_url}"))?;
     let constraints_txt = context.temp_dir.child("constraints.txt");
-    constraints_txt.write_str("iniconfig @ git+https://github.com/pytest-dev/iniconfig.git@9cae43103df70bac6fde7b9f35ad11a9f1be0cb4")?;
+    constraints_txt.write_str(&constrained_requirement)?;
 
-    uv_snapshot!(context.filters(), context.pip_compile()
+    let commit_filter = format!("@{commit}");
+    let mut filters = context.filters();
+    filters.push((&commit_filter, "@[COMMIT]"));
+    let output = uv_snapshot!(filters, context.pip_compile()
         .arg("requirements.in")
         .arg("--constraint")
-        .arg("constraints.txt"), @"
+        .arg("constraints.txt")
+        .arg("--offline")
+        .arg("--no-index")
+        .arg("--no-build"), @"
     exit_code: 0 (success)
     ----- stdout -----
     # This file was autogenerated by uv via the following command:
-    #    uv pip compile --cache-dir [CACHE_DIR] requirements.in --constraint constraints.txt
-    hatchling-editable @ https://github.com/astral-sh/uv/files/14762645/hatchling_editable.zip
+    #    uv pip compile --cache-dir [CACHE_DIR] requirements.in --constraint constraints.txt --offline --no-index --no-build
+    hatchling-editable @ file://[TEMP_DIR]/hatchling_editable-0.1.0.tar.gz
         # via -r requirements.in
-    iniconfig @ git+https://github.com/pytest-dev/iniconfig.git@9cae43103df70bac6fde7b9f35ad11a9f1be0cb4
+    iniconfig @ git+file://[TEMP_DIR]/repository.git@[COMMIT]
         # via
         #   -c constraints.txt
         #   hatchling-editable
@@ -3065,6 +3187,8 @@ fn allowed_transitive_canonical_url_dependency() -> Result<()> {
     Resolved 2 packages in [TIME]
     "
     );
+    let stdout = String::from_utf8(output.stdout)?;
+    assert!(stdout.lines().any(|line| line == constrained_requirement));
 
     Ok(())
 }
