@@ -333,6 +333,7 @@ impl LoweredRequirement {
                         marker,
                         source,
                         origin: requirement.origin.clone(),
+                        provenance: None,
                     }))
                 }
             }))
@@ -514,6 +515,7 @@ impl LoweredRequirement {
                         marker,
                         source,
                         origin: requirement.origin.clone(),
+                        provenance: None,
                     }))
                 }
             }))
@@ -564,6 +566,7 @@ impl LoweredRequirement {
                 git_directory_source_from_path(&install_path, git_member)?
             },
             origin: requirement.origin,
+            provenance: None,
         }))
     }
 

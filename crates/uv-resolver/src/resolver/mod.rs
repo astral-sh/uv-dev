@@ -2151,6 +2151,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                                 groups: requirement.groups.clone(),
                                 source: requirement.source.clone(),
                                 origin: requirement.origin.clone(),
+                                provenance: requirement.provenance.clone(),
                                 marker: marker.simplify_extras(slice::from_ref(&extra)),
                             }
                         }
@@ -2194,6 +2195,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                         groups: req.groups.clone(),
                         source: req.source.clone(),
                         origin: req.origin.clone(),
+                        provenance: req.provenance.clone(),
                         marker: req.marker,
                     });
                 }
@@ -2371,6 +2373,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                             groups: constraint.groups.clone(),
                             source: constraint.source.clone(),
                             origin: constraint.origin.clone(),
+                            provenance: constraint.provenance.clone(),
                             marker,
                         })
                     }
@@ -2408,6 +2411,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                             groups: constraint.groups.clone(),
                             source: constraint.source.clone(),
                             origin: constraint.origin.clone(),
+                            provenance: constraint.provenance.clone(),
                             marker,
                         })
                     }

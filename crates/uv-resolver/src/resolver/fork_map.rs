@@ -160,6 +160,7 @@ mod tests {
                 Some(project_name),
                 group,
             )),
+            provenance: None,
         };
 
         let mut map = ForkMap::default();

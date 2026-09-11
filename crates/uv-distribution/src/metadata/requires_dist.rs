@@ -401,6 +401,7 @@ impl FlatRequiresDist {
                     groups: requirement.groups.clone(),
                     source: requirement.source.clone(),
                     origin: requirement.origin.clone(),
+                    provenance: requirement.provenance.clone(),
                     marker,
                 };
                 if requirement.name == *name {
@@ -431,6 +432,7 @@ impl FlatRequiresDist {
                     groups: req.groups.clone(),
                     source: req.source.clone(),
                     origin: req.origin.clone(),
+                    provenance: req.provenance.clone(),
                     marker: req.marker,
                 });
             }

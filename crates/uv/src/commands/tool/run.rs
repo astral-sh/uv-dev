@@ -908,6 +908,7 @@ async fn get_or_create_environment(
                             conflict: None,
                         },
                         origin: None,
+                        provenance: None,
                     };
 
                     (executable, requirement)
@@ -928,6 +929,7 @@ async fn get_or_create_environment(
                             conflict: None,
                         },
                         origin: None,
+                        provenance: None,
                     };
 
                     (executable, requirement)
@@ -995,6 +997,7 @@ async fn get_or_create_environment(
                     conflict: None,
                 },
                 origin: None,
+                provenance: None,
             })
         } else {
             None

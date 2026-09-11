@@ -6704,7 +6704,7 @@ fn normalize_url(mut url: DisplaySafeUrl) -> UrlString {
 /// 1. Removes any sensitive credentials.
 /// 2. Ensures that the lock and install paths are appropriately framed with respect to the
 ///    current [`Workspace`].
-/// 3. Removes the `origin` field, which is only used in `requirements.txt`.
+/// 3. Removes runtime origin and source-provenance data.
 /// 4. Simplifies the markers using the provided [`RequiresPython`] instance.
 fn normalize_requirement(
     mut requirement: Requirement,
@@ -6758,6 +6758,7 @@ fn normalize_requirement(
                     url: VerbatimUrl::from_url(url),
                 },
                 origin: None,
+                provenance: None,
             })
         }
         RequirementSource::GitPath {
@@ -6804,6 +6805,7 @@ fn normalize_requirement(
                     url: VerbatimUrl::from_url(url),
                 },
                 origin: None,
+                provenance: None,
             })
         }
         RequirementSource::Path {
@@ -6827,6 +6829,7 @@ fn normalize_requirement(
                     url,
                 },
                 origin: None,
+                provenance: None,
             })
         }
         RequirementSource::Directory {
@@ -6852,6 +6855,7 @@ fn normalize_requirement(
                     url,
                 },
                 origin: None,
+                provenance: None,
             })
         }
         RequirementSource::Registry {
@@ -6878,6 +6882,7 @@ fn normalize_requirement(
                     conflict,
                 },
                 origin: None,
+                provenance: None,
             })
         }
         RequirementSource::Url {
@@ -6911,6 +6916,7 @@ fn normalize_requirement(
                     url: VerbatimUrl::from_url(url),
                 },
                 origin: None,
+                provenance: None,
             })
         }
     }

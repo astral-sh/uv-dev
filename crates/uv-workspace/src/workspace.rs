@@ -602,6 +602,7 @@ impl Workspace {
                     }
                 },
                 origin: None,
+                provenance: None,
             })
         })
     }
@@ -737,6 +738,7 @@ impl Workspace {
                     }
                 },
                 origin: None,
+                provenance: None,
             })
         })
     }

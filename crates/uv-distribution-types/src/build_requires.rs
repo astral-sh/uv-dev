@@ -121,6 +121,7 @@ impl ExtraBuildRequires {
                                 })?;
                             let requirement = Requirement {
                                 source: RequirementSource::from(dist),
+                                provenance: None,
                                 ..requirement
                             };
                             Ok::<_, ExtraBuildRequiresError>(ExtraBuildRequirement {
