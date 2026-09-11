@@ -4,9 +4,9 @@ pub use download::LocalWheel;
 pub use error::Error;
 pub use index::{BuiltWheelIndex, RegistryWheelIndex};
 pub use metadata::{
-    ArchiveMetadata, BuildRequires, FlatRequiresDist, LoweredExtraBuildDependencies,
-    LoweredRequirement, LoweringError, Metadata, MetadataError, RequiresDist,
-    SourcedDependencyGroups,
+    ArchiveMetadata, BuildRequires, FlatRequiresDist, IndexDeclarationTarget,
+    LoweredExtraBuildDependencies, LoweredRequirement, LoweringError, Metadata, MetadataError,
+    RequiresDist, SourcedDependencyGroups,
 };
 pub use reporter::Reporter;
 pub use source::{StaticMetadataDatabase, prune};

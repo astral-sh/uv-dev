@@ -12,7 +12,7 @@ use uv_cache::Cache;
 use uv_configuration::{
     Constraints, DependencyGroupsWithDefaults, ExcludeDependency, NoSources, Upgrade,
 };
-use uv_distribution::LoweredRequirement;
+use uv_distribution::{IndexDeclarationTarget, LoweredRequirement};
 use uv_distribution_types::{
     Index, IndexLocations, MinimumLibcVersion, NameRequirementSpecification, Requirement,
     RequiresPython,
@@ -512,6 +512,7 @@ impl<'lock> LockTarget<'lock> {
                     lowered.extend(
                         LoweredRequirement::from_non_workspace_requirement(
                             requirement,
+                            IndexDeclarationTarget::Script,
                             script.path.parent().unwrap(),
                             sources_map,
                             indexes,
