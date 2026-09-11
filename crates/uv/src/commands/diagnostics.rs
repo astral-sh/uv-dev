@@ -623,7 +623,7 @@ mod tests {
                 | ^^^^^^^^^^^^ not editable
               cause: Registry requirements cannot be editable
 
-            hint: Editable requirements must refer to a local directory
+            hint: Use a local directory for an editable requirement
             ");
         });
     }
@@ -688,7 +688,7 @@ mod tests {
           cause: Unsupported glob expression in: tool.uv.build-backend.source-include
           cause: Invalid character `[` at position 0 in glob: `[`
 
-        hint: Characters can be escaped with a backslash
+        hint: Escape the character with a backslash
         ");
     }
 
