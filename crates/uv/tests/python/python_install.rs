@@ -3170,7 +3170,7 @@ fn uninstall_last_patch() {
     error: Failed to inspect Python interpreter from active virtual environment at `.venv/[BIN]/python`
       cause: Broken symlink at `.venv/[BIN]/python`, was the underlying Python interpreter removed?
 
-    hint: Consider recreating the environment (e.g., with `uv venv`)
+    hint: Consider recreating the environment at `[VENV]/`
     "
     );
 

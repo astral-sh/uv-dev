@@ -1,3 +1,5 @@
+#[cfg(unix)]
+use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::{FileTouch, PathChild};
 use assert_fs::{fixture::FileWriteStr, prelude::PathCreateDir};
@@ -743,6 +745,55 @@ fn python_find_venv_invalid() {
     ----- stdout -----
     [PYTHON-3.12]
     ");
+}
+
+/// A broken active environment is identified even when it is outside the command's directory.
+#[cfg(unix)]
+#[test]
+fn python_find_broken_venv_recovery_target() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_python_names()
+        .with_filtered_virtualenv_bin()
+        .with_filtered_exe_suffix();
+    let directory = context.temp_dir.child("working-directory");
+    directory.create_dir_all()?;
+    let environment = context.temp_dir.child("external's environment");
+    context.venv().arg(environment.path()).assert().success();
+    let original_environment = fs_err::read_to_string(context.venv.join("pyvenv.cfg"))?;
+
+    let interpreter = venv_bin_path(environment.path()).join("python");
+    fs_err::remove_file(&interpreter)?;
+    fs_err::os::unix::fs::symlink(context.temp_dir.child("removed-python"), &interpreter)?;
+
+    uv_snapshot!(context.filters(), context.python_find()
+        .arg("--directory")
+        .arg(directory.path())
+        .env(EnvVars::VIRTUAL_ENV, environment.path()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to inspect Python interpreter from active virtual environment at `[TEMP_DIR]/external's environment/[BIN]/[PYTHON]`
+      cause: Broken symlink at `[TEMP_DIR]/external's environment/[BIN]/[PYTHON]`, was the underlying Python interpreter removed?
+
+    hint: Consider recreating the environment at `[TEMP_DIR]/external's environment`
+    ");
+
+    context
+        .venv()
+        .arg(environment.path())
+        .arg("--clear")
+        .assert()
+        .success();
+    context
+        .python_find()
+        .env(EnvVars::VIRTUAL_ENV, environment.path())
+        .assert()
+        .success();
+    assert_eq!(
+        fs_err::read_to_string(context.venv.join("pyvenv.cfg"))?,
+        original_environment
+    );
+
+    Ok(())
 }
 
 #[test]

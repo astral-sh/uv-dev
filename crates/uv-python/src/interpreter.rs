@@ -926,10 +926,24 @@ impl Display for BrokenLink {
 impl uv_errors::Hinted for BrokenLink {
     fn hints(&self) -> uv_errors::Hints<'_> {
         if self.venv {
-            uv_errors::Hints::from(format!(
-                "Consider recreating the environment (e.g., with `{}`)",
-                "uv venv".green()
-            ))
+            // `is_virtualenv_executable` recognizes the grandparent for both `bin/python` and
+            // `Scripts/python.exe`. An absolute path remains meaningful after `--directory`.
+            let environment = self
+                .path
+                .parent()
+                .and_then(Path::parent)
+                .and_then(|path| std::path::absolute(path).ok());
+            uv_errors::Hints::from(if let Some(environment) = environment {
+                format!(
+                    "Consider recreating the environment at `{}`",
+                    environment.simplified_display(),
+                )
+            } else {
+                format!(
+                    "Consider recreating the environment containing the interpreter at `{}`",
+                    self.path.simplified_display(),
+                )
+            })
         } else {
             uv_errors::Hints::none()
         }
