@@ -51,6 +51,7 @@ toml_edit = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
+anstream = { workspace = true }
 anyhow = { workspace = true }
 assert_fs = { workspace = true }
 insta = { workspace = true }
