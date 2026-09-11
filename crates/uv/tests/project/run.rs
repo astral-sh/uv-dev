@@ -523,11 +523,32 @@ fn run_pep723_script_empty_dependency() -> Result<()> {
     uv_snapshot!(context.filters(), context.run().arg("--script").arg("script.py"), @r#"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: TOML parse error at line 2, column 17
-      |
-    2 | dependencies = [""]
-      |                 ^^
-    Empty field is not allowed for PEP508
+    error: Empty field is not allowed for PEP508
+       --> script.py:3:19
+        |
+      3 | # dependencies = [""]
+        |                   ^^
+    "#);
+
+    Ok(())
+}
+
+#[test]
+fn run_pep723_stdin_parse_error() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let script = context.temp_dir.child("script.py");
+    script.write_str(
+        "print('café')\r\n# /// script\r\n# dependencies = [\r\n#   \"\",\r\n# ]\r\n# ///\r\n",
+    )?;
+
+    uv_snapshot!(context.filters(), context.run().stdin(std::fs::File::open(script)?).arg("-"), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Empty field is not allowed for PEP508
+       --> <stdin>:4:5
+        |
+      4 | #   "",
+        |     ^^
     "#);
 
     Ok(())

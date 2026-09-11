@@ -1468,7 +1468,7 @@ impl ParsedRunCommand {
 
                 let (url, downloaded_script, args) =
                     remote_command.download(&client_builder).await?;
-                let script = match Pep723Metadata::read(&downloaded_script).await {
+                let script = match Pep723Metadata::read(&downloaded_script, url.to_string()).await {
                     Ok(Some(metadata)) => Some(Pep723Item::Remote(metadata, url)),
                     Ok(None) => None,
                     Err(Pep723Error::Io(err)) if err.kind() == std::io::ErrorKind::NotFound => None,

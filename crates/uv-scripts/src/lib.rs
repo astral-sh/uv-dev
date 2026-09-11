@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 use memchr::memmem::Finder;
 use serde::Deserialize;
@@ -12,16 +12,23 @@ use tracing::instrument;
 use url::Url;
 
 use uv_configuration::NoSources;
+use uv_fs::Simplified;
 use uv_normalize::PackageName;
 use uv_pep440::VersionSpecifiers;
 use uv_pypi_types::VerbatimParsedUrl;
 use uv_redacted::DisplaySafeUrl;
 use uv_settings::{GlobalOptions, ResolverInstallerSchema};
+use uv_toml::ParseError;
 use uv_warnings::warn_user;
 use uv_workspace::pyproject::{ExtraBuildDependency, Sources};
 
 pub use uv_configuration::ExcludeDependency;
 pub use uv_workspace::pyproject::OverrideDependency;
+
+use self::source::MetadataSourceMap;
+pub use self::source::diagnostic_for_error;
+
+mod source;
 
 static FINDER: LazyLock<Finder> = LazyLock::new(|| Finder::new(b"# /// script"));
 
@@ -171,27 +178,22 @@ impl Pep723Script {
     ///
     /// See: <https://peps.python.org/pep-0723/>
     pub async fn read(file: impl AsRef<Path>) -> Result<Option<Self>, Pep723Error> {
-        let contents = fs_err::tokio::read(&file).await?;
+        let file = file.as_ref();
+        let contents = fs_err::tokio::read(file).await?;
 
         // Extract the `script` tag.
-        let ScriptTag {
-            prelude,
-            metadata,
-            postlude,
-        } = match ScriptTag::parse(&contents) {
-            Ok(Some(tag)) => tag,
-            Ok(None) => return Ok(None),
-            Err(err) => return Err(err),
+        let Some(tag) = ScriptTag::parse(&contents)? else {
+            return Ok(None);
         };
 
         // Parse the metadata.
-        let metadata = Pep723Metadata::from_str(&metadata)?;
+        let metadata = tag.parse_metadata(&contents, file.portable_display().to_string())?;
 
         Ok(Some(Self {
             path: std::path::absolute(file)?,
             metadata,
-            prelude,
-            postlude,
+            prelude: tag.prelude,
+            postlude: tag.postlude,
         }))
     }
 
@@ -367,34 +369,36 @@ pub struct Pep723Metadata {
 impl Pep723Metadata {
     /// Parse the PEP 723 metadata from `stdin`.
     pub fn parse(contents: &[u8]) -> Result<Option<Self>, Pep723Error> {
+        Self::parse_with_name(contents, "<stdin>")
+    }
+
+    /// Parse metadata while retaining its caller-provided, display-safe source name.
+    pub fn parse_with_name(
+        contents: &[u8],
+        name: impl Into<Arc<str>>,
+    ) -> Result<Option<Self>, Pep723Error> {
         // Extract the `script` tag.
-        let ScriptTag { metadata, .. } = match ScriptTag::parse(contents) {
-            Ok(Some(tag)) => tag,
-            Ok(None) => return Ok(None),
-            Err(err) => return Err(err),
+        let Some(tag) = ScriptTag::parse(contents)? else {
+            return Ok(None);
         };
 
         // Parse the metadata.
-        Ok(Some(Self::from_str(&metadata)?))
+        Ok(Some(tag.parse_metadata(contents, name)?))
     }
 
     /// Read the PEP 723 `script` metadata from a Python file, if it exists.
     ///
     /// Returns `None` if the file is missing a PEP 723 metadata block.
     ///
+    /// `name` identifies the original input, such as a display-safe URL for a downloaded file.
+    ///
     /// See: <https://peps.python.org/pep-0723/>
-    pub async fn read(file: impl AsRef<Path>) -> Result<Option<Self>, Pep723Error> {
+    pub async fn read(
+        file: impl AsRef<Path>,
+        name: impl Into<Arc<str>>,
+    ) -> Result<Option<Self>, Pep723Error> {
         let contents = fs_err::tokio::read(&file).await?;
-
-        // Extract the `script` tag.
-        let ScriptTag { metadata, .. } = match ScriptTag::parse(&contents) {
-            Ok(Some(tag)) => tag,
-            Ok(None) => return Ok(None),
-            Err(err) => return Err(err),
-        };
-
-        // Parse the metadata.
-        Ok(Some(Self::from_str(&metadata)?))
+        Self::parse_with_name(&contents, name)
     }
 }
 
@@ -452,12 +456,18 @@ pub enum Pep723Error {
     #[error(transparent)]
     Utf8(#[from] std::str::Utf8Error),
     #[error(transparent)]
-    Toml(#[from] toml::de::Error),
+    Toml(#[from] ParseError),
     #[error("Invalid filename `{0}` supplied")]
     InvalidFilename(String),
 }
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+impl From<toml::de::Error> for Pep723Error {
+    fn from(error: toml::de::Error) -> Self {
+        Self::Toml(error.into())
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct ScriptTag {
     /// The content of the script before the metadata block.
     prelude: String,
@@ -465,9 +475,35 @@ pub struct ScriptTag {
     metadata: String,
     /// The content of the script after the metadata block.
     postlude: String,
+    /// Coordinates into the original script, before removing comment prefixes.
+    source: Option<MetadataSourceMap>,
 }
 
+impl PartialEq for ScriptTag {
+    fn eq(&self, other: &Self) -> bool {
+        self.prelude == other.prelude
+            && self.metadata == other.metadata
+            && self.postlude == other.postlude
+    }
+}
+
+impl Eq for ScriptTag {}
+
 impl ScriptTag {
+    fn parse_metadata(
+        &self,
+        contents: &[u8],
+        name: impl Into<Arc<str>>,
+    ) -> Result<Pep723Metadata, Pep723Error> {
+        Pep723Metadata::from_str(&self.metadata).map_err(|error| {
+            Pep723Error::Toml(if let Some(source) = &self.source {
+                source.parse_error(error, &self.metadata, contents, name)
+            } else {
+                error.into()
+            })
+        })
+    }
+
     /// Given the contents of a Python file, extract the `script` metadata block with leading
     /// comment hashes removed, any preceding shebang or content (prelude), and the remaining Python
     /// script.
@@ -497,10 +533,12 @@ impl ScriptTag {
     ///
     /// See: <https://peps.python.org/pep-0723/>
     pub fn parse(contents: &[u8]) -> Result<Option<Self>, Pep723Error> {
+        let original = contents;
         // Identify the opening pragma.
         let Some(index) = FINDER.find(contents) else {
             return Ok(None);
         };
+        let opening = index;
 
         // The opening pragma must be the first line, or immediately preceded by a newline.
         if !(index == 0 || matches!(contents[index - 1], b'\r' | b'\n')) {
@@ -657,11 +695,13 @@ impl ScriptTag {
         let prelude = prelude.to_string();
         let metadata = toml.join("\n") + "\n";
         let postlude = postlude.join("\n") + "\n";
+        let source = MetadataSourceMap::from_script(original, opening, index - 1, &metadata);
 
         Ok(Some(Self {
             prelude,
             metadata,
             postlude,
+            source,
         }))
     }
 }

@@ -100,6 +100,7 @@ pub(super) fn metadata_for_error<'a>(error: &'a (dyn StdError + 'static)) -> Err
         uv_virtualenv::Error => ErrorMetadata::hinted,
         uv_client::Error => ErrorMetadata::hinted,
         uv_publish::PublishSendError => |_| ErrorMetadata::default(),
+        uv_scripts::Pep723Error => |_| ErrorMetadata::default(),
         uv_settings::Error => |_| ErrorMetadata::default(),
         uv_workspace::pyproject::PyprojectTomlError => |_| ErrorMetadata::default(),
         uv_requirements_txt::RequirementsTxtFileError => |_| ErrorMetadata::default(),

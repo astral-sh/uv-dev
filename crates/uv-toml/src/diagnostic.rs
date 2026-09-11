@@ -12,20 +12,35 @@ use uv_errors::{Diagnostic, SourceAnnotation, SourceFile, SourceSnippet};
 pub struct ParseError {
     error: Box<toml::de::Error>,
     document: Option<SourceFile>,
+    span: Option<Range<usize>>,
 }
 
 impl ParseError {
     /// Retain the decoded document from the boundary that produced this error.
     pub fn new(error: toml::de::Error, document: SourceFile) -> Self {
+        let span = error.span();
         Self {
             error: Box::new(error),
             document: Some(document),
+            span,
+        }
+    }
+
+    /// Retain a span mapped from the parser input into a different source snapshot.
+    ///
+    /// The caller is responsible for mapping the complete range. Invalid source ranges use the
+    /// original TOML error's display instead of highlighting an unrelated location.
+    pub fn new_with_span(error: toml::de::Error, document: SourceFile, span: Range<usize>) -> Self {
+        Self {
+            error: Box::new(error),
+            document: Some(document),
+            span: Some(span),
         }
     }
 
     /// Describe the error using its retained source, if its span is available and valid.
     pub fn diagnostic(&self) -> Option<Diagnostic<'_>> {
-        diagnostic_for_error(&self.error, self.document.as_ref()?)
+        diagnostic_for_span(&self.error, self.document.as_ref()?, self.span.clone()?)
     }
 }
 
@@ -34,6 +49,7 @@ impl From<toml::de::Error> for ParseError {
         Self {
             error: Box::new(error),
             document: None,
+            span: None,
         }
     }
 }
@@ -61,8 +77,17 @@ pub fn diagnostic_for_error<'a>(
     error: &'a toml::de::Error,
     document: &SourceFile,
 ) -> Option<Diagnostic<'a>> {
-    let excerpt = line_excerpt(document.text(), error.span()?)?;
-    let source = SourceFile::new(document.name(), excerpt.text).with_line_start(excerpt.line_start);
+    diagnostic_for_span(error, document, error.span()?)
+}
+
+fn diagnostic_for_span<'a>(
+    error: &'a toml::de::Error,
+    document: &SourceFile,
+    span: Range<usize>,
+) -> Option<Diagnostic<'a>> {
+    let excerpt = line_excerpt(document.text(), span)?;
+    let line_start = document.line_start().checked_add(excerpt.line_start - 1)?;
+    let source = SourceFile::new(document.name(), excerpt.text).with_line_start(line_start);
     let snippet = SourceSnippet::new(source)
         .with_context_lines(0)
         .with_annotation(SourceAnnotation::primary(excerpt.range));
