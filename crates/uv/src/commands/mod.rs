@@ -108,8 +108,6 @@ mod self_install_shell;
 mod self_uninstall;
 #[cfg(feature = "self-update")]
 mod self_update;
-#[cfg(feature = "self-update")]
-mod self_update_native;
 mod tool;
 mod update_shell;
 mod venv;

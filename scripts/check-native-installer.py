@@ -144,6 +144,60 @@ def check(archive: Path, installer: Path | None, version: str) -> None:
             raise ValueError("Uninstall left the managed executable or receipt behind")
 
 
+def check_legacy_downgrade(directory: Path, version: str) -> None:
+    """Exercise a published pre-native release and its legacy self-update receipt."""
+    name = "uv.exe" if os.name == "nt" else "uv"
+    current = (directory / name).resolve()
+    with tempfile.TemporaryDirectory(prefix="uv-downgrade-check-") as temporary:
+        root = Path(temporary)
+        destination = root / "bin"
+        legacy = root / "legacy"
+        env = dict(os.environ)
+        for variable in (
+            "UV_UNMANAGED_INSTALL",
+            "UV_DISABLE_UPDATE",
+            "UV_DOWNLOAD_URL",
+            "INSTALLER_DOWNLOAD_URL",
+            "UV_INSTALLER_GITHUB_BASE_URL",
+            "UV_INSTALLER_GHE_BASE_URL",
+            "UV_GITHUB_TOKEN",
+            "AXOUPDATER_CONFIG_WORKING_DIR",
+            "CARGO_DIST_FORCE_INSTALL_DIR",
+        ):
+            env.pop(variable, None)
+        env.update(
+            {
+                "UV_NO_CONFIG": "1",
+                "UV_NO_MODIFY_PATH": "1",
+                "UV_CACHE_DIR": str(root / "cache"),
+                "AXOUPDATER_CONFIG_PATH": str(legacy),
+            }
+        )
+        install = [
+            str(current),
+            "self",
+            "install",
+            "--preview-features",
+            "self-management",
+            "--source-repository",
+            "astral-sh/uv",
+            "--install-dir",
+            str(destination),
+        ]
+        subprocess.run(install, env=env, check=True)
+        installed = destination / name
+        subprocess.run([str(installed), "self", "update", version], env=env, check=True)
+        if not (legacy / "uv-receipt.json").is_file():
+            raise ValueError("Downgrade did not create a legacy receipt")
+        subprocess.run(
+            [str(installed), "self", "update", version, "--dry-run"],
+            env=env,
+            check=True,
+        )
+        subprocess.run(install, env=env, check=True)
+        subprocess.run([str(installed), "self", "uninstall"], env=env, check=True)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     source = parser.add_mutually_exclusive_group(required=True)
@@ -152,12 +206,17 @@ def main() -> None:
     parser.add_argument("--target")
     parser.add_argument("--installer", type=Path)
     parser.add_argument(
+        "--downgrade-version", help="Also exercise this published pre-native release"
+    )
+    parser.add_argument(
         "--version",
         default=tomllib.loads((ROOT / "crates/uv/Cargo.toml").read_text())["package"][
             "version"
         ],
     )
     args = parser.parse_args()
+    if args.downgrade_version and not args.binary_directory:
+        parser.error("--downgrade-version requires --binary-directory")
     if args.archive:
         check(args.archive, args.installer, args.version)
     else:
@@ -169,6 +228,8 @@ def main() -> None:
                 args.installer,
                 args.version,
             )
+        if args.downgrade_version:
+            check_legacy_downgrade(args.binary_directory, args.downgrade_version)
 
 
 if __name__ == "__main__":

@@ -242,6 +242,19 @@ impl InstallReceipt {
         uv_fs::write_atomic_sync(path, serde_json::to_vec_pretty(self)?)?;
         Ok(())
     }
+
+    async fn write_legacy(&self, path: &Path, executable: &Path) -> Result<LockedLegacyReceipt> {
+        let lock = LockedLegacyReceipt::acquire(path).await?;
+        if path.try_exists()? {
+            anyhow::ensure!(
+                Self::read(path)?.owns_executable(executable),
+                "Cannot downgrade uv: the legacy install receipt at `{}` belongs to another installation",
+                path.display()
+            );
+        }
+        self.write(path)?;
+        Ok(lock)
+    }
 }
 
 /// Serialize changes to the receipt shared by legacy standalone installations.
@@ -310,6 +323,7 @@ impl LockedInstallation {
         binaries: &[String],
         receipt: Option<&InstallReceipt>,
         previous: Option<&InstallReceipt>,
+        legacy_receipt: Option<&Path>,
     ) -> Result<()> {
         let destination = &self.directory;
         anyhow::ensure!(
@@ -349,7 +363,7 @@ impl LockedInstallation {
         let backup = staged.path().join("obsolete");
         fs_err::create_dir(&backup)?;
         let mut removed = Vec::new();
-        let result = (|| -> Result<()> {
+        let result: Result<()> = async {
             // Keep obsolete, receipt-owned companions available for rollback until the new receipt
             // is committed. Never recursively remove an unexpected directory at a binary path.
             for name in &obsolete {
@@ -367,6 +381,18 @@ impl LockedInstallation {
                 fs_err::rename(&target, backup.join(name))?;
                 removed.push(name);
             }
+            // Make an older executable self-updatable before replacing the current binary. A
+            // legacy receipt for another installation must never be overwritten by a downgrade.
+            let _legacy_lock = if let Some(path) = legacy_receipt {
+                Some(
+                    receipt
+                        .context("Legacy self-management requires an install receipt")?
+                        .write_legacy(path, &destination.join(executable_names()[0]))
+                        .await?,
+                )
+            } else {
+                None
+            };
             // Install the launcher last so it cannot select an incompletely copied uv binary.
             for name in binaries {
                 let source = staged.path().join(name);
@@ -386,7 +412,8 @@ impl LockedInstallation {
                 fs_err::remove_file(destination.join(RECEIPT_NAME))?;
             }
             Ok(())
-        })();
+        }
+        .await;
         if let Err(error) = result {
             for name in removed {
                 if let Err(restore_error) =
@@ -473,6 +500,7 @@ pub(crate) async fn self_install(args: SelfInstallArgs, printer: Printer) -> Res
             &receipt.binaries,
             (!unmanaged && !args.no_update).then_some(&receipt),
             None,
+            None,
         )
         .await?;
     writeln!(
@@ -496,6 +524,37 @@ pub(crate) async fn self_install(args: SelfInstallArgs, printer: Printer) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn legacy_compatibility_receipt_cannot_replace_another_installation() {
+        let temporary = tempfile::tempdir().unwrap();
+        let first = temporary.path().join("first");
+        let second = temporary.path().join("second");
+        fs_err::create_dir_all(&first).unwrap();
+        fs_err::create_dir_all(&second).unwrap();
+        let first_executable = first.join(executable_names()[0]);
+        let second_executable = second.join(executable_names()[0]);
+        fs_err::write(&first_executable, b"first").unwrap();
+        fs_err::write(&second_executable, b"second").unwrap();
+        let path = temporary.path().join("legacy/uv-receipt.json");
+        let receipt = InstallReceipt::new(first, false);
+        drop(
+            receipt
+                .write_legacy(&path, &first_executable)
+                .await
+                .unwrap(),
+        );
+        drop(
+            receipt
+                .write_legacy(&path, &first_executable)
+                .await
+                .unwrap(),
+        );
+        let before = fs_err::read(&path).unwrap();
+        let other = InstallReceipt::new(second, true);
+        assert!(other.write_legacy(&path, &second_executable).await.is_err());
+        assert_eq!(fs_err::read(&path).unwrap(), before);
+    }
 
     #[test]
     fn appends_install_directory_to_github_path() -> Result<()> {
@@ -532,7 +591,13 @@ mod tests {
         let installation = LockedInstallation::acquire(&destination).await?;
         assert!(
             installation
-                .install_binaries(&source, &updated.binaries, Some(&updated), Some(&previous))
+                .install_binaries(
+                    &source,
+                    &updated.binaries,
+                    Some(&updated),
+                    Some(&previous),
+                    None
+                )
                 .await
                 .is_err()
         );
@@ -558,18 +623,71 @@ mod tests {
         let previous = InstallReceipt::new(destination.clone(), false);
         previous.write(&destination.join(RECEIPT_NAME))?;
         let before = fs_err::read(destination.join(RECEIPT_NAME))?;
+        let legacy = temporary.path().join("legacy/uv-receipt.json");
+        previous.write(&legacy)?;
+        let legacy_before = fs_err::read(&legacy)?;
         let mut updated = InstallReceipt::new(destination.clone(), false);
         updated.binaries = vec![executable.to_owned()];
         let installation = LockedInstallation::acquire(&destination).await?;
         assert!(
             installation
-                .install_binaries(&source, &updated.binaries, Some(&updated), Some(&previous))
+                .install_binaries(
+                    &source,
+                    &updated.binaries,
+                    Some(&updated),
+                    Some(&previous),
+                    Some(&legacy)
+                )
                 .await
                 .is_err()
         );
         assert_eq!(fs_err::read(destination.join(executable))?, b"old uv");
         assert_eq!(fs_err::read(companion.join("another-tool"))?, b"keep");
         assert_eq!(fs_err::read(destination.join(RECEIPT_NAME))?, before);
+        assert_eq!(fs_err::read(legacy)?, legacy_before);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn conflicting_legacy_receipt_restores_obsolete_binaries() -> Result<()> {
+        let temporary = tempfile::tempdir()?;
+        let source = temporary.path().join("source");
+        let destination = temporary.path().join("destination");
+        let foreign = temporary.path().join("foreign");
+        fs_err::create_dir_all(&source)?;
+        fs_err::create_dir_all(&destination)?;
+        fs_err::create_dir_all(&foreign)?;
+        let executable = executable_names()[0];
+        let companion = executable_names()[1];
+        fs_err::write(source.join(executable), b"new uv")?;
+        fs_err::write(destination.join(executable), b"old uv")?;
+        fs_err::write(destination.join(companion), b"old companion")?;
+        fs_err::write(foreign.join(executable), b"another uv")?;
+        let legacy = temporary.path().join("legacy/uv-receipt.json");
+        InstallReceipt::new(foreign, false).write(&legacy)?;
+        let legacy_before = fs_err::read(&legacy)?;
+        let previous = InstallReceipt::new(destination.clone(), false);
+        previous.write(&destination.join(RECEIPT_NAME))?;
+        let before = fs_err::read(destination.join(RECEIPT_NAME))?;
+        let mut updated = InstallReceipt::new(destination.clone(), false);
+        updated.binaries = vec![executable.to_owned()];
+        let installation = LockedInstallation::acquire(&destination).await?;
+        assert!(
+            installation
+                .install_binaries(
+                    &source,
+                    &updated.binaries,
+                    Some(&updated),
+                    Some(&previous),
+                    Some(&legacy)
+                )
+                .await
+                .is_err()
+        );
+        assert_eq!(fs_err::read(destination.join(executable))?, b"old uv");
+        assert_eq!(fs_err::read(destination.join(companion))?, b"old companion");
+        assert_eq!(fs_err::read(destination.join(RECEIPT_NAME))?, before);
+        assert_eq!(fs_err::read(legacy)?, legacy_before);
         Ok(())
     }
 }
