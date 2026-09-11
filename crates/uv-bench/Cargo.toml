@@ -99,6 +99,11 @@ path = "benches/requirements_files.rs"
 harness = false
 
 [[bench]]
+name = "python_discovery"
+path = "benches/python_discovery.rs"
+harness = false
+
+[[bench]]
 name = "uv_pypi_types"
 path = "benches/uv_pypi_types.rs"
 harness = false
