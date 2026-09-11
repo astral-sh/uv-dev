@@ -5,14 +5,18 @@ use std::str::FromStr;
 
 use anyhow::{Context, Result};
 use fs_err as fs;
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 
-use uv_configuration::{DependencyMode, ExcludeDependency, Excludes, Override, Overrides};
+use uv_configuration::{
+    DependencyMode, ExcludeDependency, Excludes, Override, Overrides, initialize_rayon_once,
+};
 use uv_distribution_filename::EggInfoFilename;
 use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, Diagnostic, ExtraBuildRequires, ExtraBuildVariables,
-    InstalledDist, InstalledDistKind, Name, NameRequirementSpecification, PackageConfigSettings,
-    Requirement, UnresolvedRequirement, UnresolvedRequirementSpecification,
+    InstalledDist, InstalledDistError, InstalledDistInfo, InstalledDistKind, Name,
+    NameRequirementSpecification, PackageConfigSettings, Requirement, UnresolvedRequirement,
+    UnresolvedRequirementSpecification,
 };
 use uv_fs::Simplified;
 use uv_normalize::PackageName;
@@ -26,6 +30,11 @@ use uv_types::InstalledPackagesProvider;
 use uv_warnings::warn_user;
 
 use crate::satisfies::RequirementSatisfaction;
+
+/// Small environments avoid starting the installer thread pool just to inspect a few sidecars.
+const MIN_PARALLEL_DIST_INFOS: usize = 64;
+/// Bound the number of in-flight reads and results held before reporting the next error.
+const DIST_INFO_READ_BATCH_SIZE: usize = 32;
 
 /// An index over the packages installed in an environment.
 ///
@@ -74,33 +83,11 @@ impl SitePackages {
         let mut by_name: FxHashMap<PackageName, Vec<usize>> = FxHashMap::default();
         let mut by_url: FxHashMap<DisplaySafeUrl, Vec<usize>> = FxHashMap::default();
 
-        for site_packages in interpreter.site_packages() {
-            // Read the site-packages directory.
-            let site_packages = match fs::read_dir(site_packages.as_ref()) {
-                Ok(read_dir) => sorted_dist_like_paths(read_dir).with_context(|| {
-                    format!(
-                        "Failed to read site-packages directory contents: {}",
-                        site_packages.user_display()
-                    )
-                })?,
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                    continue;
-                }
-                Err(err) => return Err(err).context("Failed to read site-packages directory"),
-            };
-
-            // Index all installed packages by name.
-            for path in site_packages {
-                if let Some(package_names) = package_names
-                    && let Some(package_name) = installed_dist_name(&path)
-                    && !package_names.contains(&package_name)
-                {
-                    continue;
-                }
-
-                let dist_info = match InstalledDist::try_from_path(&path) {
+        let mut index_distribution =
+            |path: &Path, dist_info: Result<Option<InstalledDist>, InstalledDistError>| {
+                let dist_info = match dist_info {
                     Ok(Some(dist_info)) => dist_info,
-                    Ok(None) => continue,
+                    Ok(None) => return Ok(()),
                     Err(_)
                         if path.file_name().is_some_and(|name| {
                             name.to_str().is_some_and(|name| name.starts_with('~'))
@@ -110,7 +97,7 @@ impl SitePackages {
                             "Ignoring dangling temporary directory: `{}`",
                             path.simplified_display().cyan()
                         );
-                        continue;
+                        return Ok(());
                     }
                     Err(err) => {
                         return Err(err).context(format!(
@@ -123,7 +110,7 @@ impl SitePackages {
                 if let Some(package_names) = package_names
                     && !package_names.contains(dist_info.name())
                 {
-                    continue;
+                    return Ok(());
                 }
 
                 let idx = distributions.len();
@@ -139,8 +126,76 @@ impl SitePackages {
                     by_url.entry(dist.url.clone()).or_default().push(idx);
                 }
 
-                // Add the distribution to the database.
                 distributions.push(Some(dist_info));
+                Ok(())
+            };
+
+        for site_packages in interpreter.site_packages() {
+            // Read the site-packages directory.
+            let mut site_packages = match fs::read_dir(site_packages.as_ref()) {
+                Ok(read_dir) => sorted_dist_like_paths(read_dir).with_context(|| {
+                    format!(
+                        "Failed to read site-packages directory contents: {}",
+                        site_packages.user_display()
+                    )
+                })?,
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                    continue;
+                }
+                Err(err) => return Err(err).context("Failed to read site-packages directory"),
+            };
+
+            // Select known distribution kinds and requested names before reading any sidecars.
+            site_packages.retain(|path| {
+                if path
+                    .extension()
+                    .is_none_or(|ext| ext != "dist-info" && ext != "egg-info" && ext != "egg-link")
+                {
+                    return false;
+                }
+                if let Some(package_names) = package_names
+                    && let Some(package_name) = installed_dist_name(path)
+                {
+                    return package_names.contains(&package_name);
+                }
+                true
+            });
+
+            let parallel = site_packages
+                .iter()
+                .filter(|path| path.extension().is_some_and(|ext| ext == "dist-info"))
+                .take(MIN_PARALLEL_DIST_INFOS)
+                .count()
+                == MIN_PARALLEL_DIST_INFOS;
+
+            if parallel {
+                initialize_rayon_once();
+                for paths in site_packages.chunks(DIST_INFO_READ_BATCH_SIZE) {
+                    let dist_infos = paths
+                        .par_iter()
+                        .map(|path| {
+                            path.extension()
+                                .is_some_and(|ext| ext == "dist-info")
+                                .then(|| InstalledDistInfo::try_from_path(path))
+                        })
+                        .collect::<Vec<_>>();
+
+                    // Interpret results in path order so warnings and the first error are stable.
+                    // Legacy distributions can emit diagnostics while reading their metadata.
+                    for (path, dist_info) in paths.iter().zip(dist_infos) {
+                        let dist_info = match dist_info {
+                            Some(dist_info) => {
+                                dist_info.map(|dist_info| dist_info.map(InstalledDist::from))
+                            }
+                            None => InstalledDist::try_from_path(path),
+                        };
+                        index_distribution(path, dist_info)?;
+                    }
+                }
+            } else {
+                for path in site_packages {
+                    index_distribution(&path, InstalledDist::try_from_path(&path))?;
+                }
             }
         }
 

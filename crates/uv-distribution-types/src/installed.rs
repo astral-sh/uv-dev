@@ -162,6 +162,94 @@ pub struct InstalledLegacyEditable {
     pub egg_info: Box<Path>,
 }
 
+/// The eagerly read sidecars of an installed `.dist-info` distribution.
+///
+/// Reading the sidecars does not emit diagnostics. Converting the result into an [`InstalledDist`]
+/// reports an invalid direct URL, allowing callers to read directories concurrently and report
+/// diagnostics in a deterministic order.
+#[derive(Debug)]
+pub struct InstalledDistInfo {
+    name: PackageName,
+    version: Version,
+    path: Box<Path>,
+    cache_info: Option<CacheInfo>,
+    build_info: Option<BuildInfo>,
+    direct_url: Option<DirectUrl>,
+}
+
+impl InstalledDistInfo {
+    /// Read a distribution from a `.dist-info` directory without reading `METADATA` or `WHEEL`.
+    pub fn try_from_path(path: &Path) -> Result<Option<Self>, InstalledDistError> {
+        if path.extension().is_none_or(|ext| ext != "dist-info") {
+            return Ok(None);
+        }
+
+        let Some(file_stem) = path.file_stem() else {
+            return Ok(None);
+        };
+        let Some(file_stem) = file_stem.to_str() else {
+            return Ok(None);
+        };
+        let Some((name, version)) = file_stem.split_once('-') else {
+            return Ok(None);
+        };
+
+        let name = PackageName::from_str(name)?;
+        let version = Version::from_str(version)?;
+        let cache_info = InstalledDist::read_cache_info(path)?;
+        let build_info = InstalledDist::read_build_info(path)?;
+        let direct_url = InstalledDist::read_direct_url(path)?;
+
+        Ok(Some(Self {
+            name,
+            version,
+            path: path.to_path_buf().into_boxed_path(),
+            cache_info,
+            build_info,
+            direct_url,
+        }))
+    }
+}
+
+impl From<InstalledDistInfo> for InstalledDist {
+    fn from(dist_info: InstalledDistInfo) -> Self {
+        let InstalledDistInfo {
+            name,
+            version,
+            path,
+            cache_info,
+            build_info,
+            direct_url,
+        } = dist_info;
+
+        if let Some(direct_url) = direct_url {
+            match DisplaySafeUrl::try_from(&direct_url) {
+                Ok(url) => {
+                    return Self::from(InstalledDistKind::Url(InstalledDirectUrlDist {
+                        name,
+                        version,
+                        editable: matches!(&direct_url, DirectUrl::LocalDirectory { dir_info, .. } if dir_info.editable == Some(true)),
+                        direct_url: Box::new(direct_url),
+                        url,
+                        path,
+                        cache_info,
+                        build_info,
+                    }));
+                }
+                Err(err) => warn!("Failed to parse direct URL: {err}"),
+            }
+        }
+
+        Self::from(InstalledDistKind::Registry(InstalledRegistryDist {
+            name,
+            version,
+            path,
+            cache_info,
+            build_info,
+        }))
+    }
+}
+
 impl InstalledDist {
     /// Try to parse a distribution from a `.dist-info` directory name (like `django-5.0a1.dist-info`).
     ///
@@ -169,59 +257,8 @@ impl InstalledDist {
     pub fn try_from_path(path: &Path) -> Result<Option<Self>, InstalledDistError> {
         // Ex) `cffi-1.16.0.dist-info`
         if path.extension().is_some_and(|ext| ext == "dist-info") {
-            let Some(file_stem) = path.file_stem() else {
-                return Ok(None);
-            };
-            let Some(file_stem) = file_stem.to_str() else {
-                return Ok(None);
-            };
-            let Some((name, version)) = file_stem.split_once('-') else {
-                return Ok(None);
-            };
-
-            let name = PackageName::from_str(name)?;
-            let version = Version::from_str(version)?;
-            let cache_info = Self::read_cache_info(path)?;
-            let build_info = Self::read_build_info(path)?;
-
-            return if let Some(direct_url) = Self::read_direct_url(path)? {
-                match DisplaySafeUrl::try_from(&direct_url) {
-                    Ok(url) => Ok(Some(Self::from(InstalledDistKind::Url(
-                        InstalledDirectUrlDist {
-                            name,
-                            version,
-                            editable: matches!(&direct_url, DirectUrl::LocalDirectory { dir_info, .. } if dir_info.editable == Some(true)),
-                            direct_url: Box::new(direct_url),
-                            url,
-                            path: path.to_path_buf().into_boxed_path(),
-                            cache_info,
-                            build_info,
-                        },
-                    )))),
-                    Err(err) => {
-                        warn!("Failed to parse direct URL: {err}");
-                        Ok(Some(Self::from(InstalledDistKind::Registry(
-                            InstalledRegistryDist {
-                                name,
-                                version,
-                                path: path.to_path_buf().into_boxed_path(),
-                                cache_info,
-                                build_info,
-                            },
-                        ))))
-                    }
-                }
-            } else {
-                Ok(Some(Self::from(InstalledDistKind::Registry(
-                    InstalledRegistryDist {
-                        name,
-                        version,
-                        path: path.to_path_buf().into_boxed_path(),
-                        cache_info,
-                        build_info,
-                    },
-                ))))
-            };
+            return InstalledDistInfo::try_from_path(path)
+                .map(|dist_info| dist_info.map(Self::from));
         }
 
         // Ex) `zstandard-0.22.0-py3.12.egg-info` or `vtk-9.2.6.egg-info`
