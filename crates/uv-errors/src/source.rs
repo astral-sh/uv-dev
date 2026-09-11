@@ -14,15 +14,20 @@ use annotate_snippets::{AnnotationKind, Element, Group, Level, Origin, Renderer,
 pub struct SourceFile {
     name: Arc<str>,
     text: Arc<str>,
+    /// All clones share the same immutable text and line boundaries.
+    line_starts: Arc<[usize]>,
     line_start: usize,
 }
 
 impl SourceFile {
     /// Retain the display name and complete decoded contents of a source file.
     pub fn new(name: impl Into<Arc<str>>, text: impl Into<Arc<str>>) -> Self {
+        let text: Arc<str> = text.into();
+        let line_starts = source_line_starts(&text).into();
         Self {
             name: name.into(),
-            text: text.into(),
+            text,
+            line_starts,
             line_start: 1,
         }
     }
@@ -66,9 +71,24 @@ impl SourceFile {
     /// Producers can compare this window with other retained semantic source spans before
     /// deciding whether an excerpt would expose unrelated fields.
     pub fn line_range_for_span(&self, span: Range<usize>) -> Option<Range<usize>> {
-        let lines = SourceLines::new(self.text());
+        let lines = self.lines();
         let (first, last) = lines.annotation_lines(&span)?;
         lines.range(first, last)
+    }
+
+    /// Reuse this retained snapshot's line index when resolving source positions.
+    fn position_index(&self) -> SourcePositionIndex<'_> {
+        SourcePositionIndex {
+            lines: self.lines(),
+            line_start: self.line_start(),
+        }
+    }
+
+    fn lines(&self) -> SourceLines<'_> {
+        SourceLines {
+            text: self.text(),
+            starts: Cow::Borrowed(&self.line_starts),
+        }
     }
 }
 
@@ -76,11 +96,17 @@ impl fmt::Debug for SourceFile {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         // Configuration files can contain credentials, so verbose error logging must not dump
         // their complete retained contents.
+        let Self {
+            name,
+            text,
+            line_starts: _,
+            line_start,
+        } = self;
         formatter
             .debug_struct("SourceFile")
-            .field("name", &self.name)
-            .field("len", &self.text.len())
-            .field("line_start", &self.line_start)
+            .field("name", name)
+            .field("len", &text.len())
+            .field("line_start", line_start)
             .finish()
     }
 }
@@ -353,7 +379,8 @@ pub(crate) struct SourceAnnotationView<'a> {
 /// unrelated configuration lines must not become visible merely because annotations are nearby.
 pub(crate) fn source_view<'a>(snippet: &'a SourceSnippet<'_>) -> Option<SourceView<'a>> {
     let source = &snippet.source;
-    let lines = SourceLines::new(source.text());
+    let positions = source.position_index();
+    let lines = &positions.lines;
     let name = normalize_single_line(source.name());
     let name = (!name.is_empty()).then_some(name);
     let origin = |name: Option<String>| {
@@ -376,8 +403,8 @@ pub(crate) fn source_view<'a>(snippet: &'a SourceSnippet<'_>) -> Option<SourceVi
             .filter(valid)
             .find(|annotation| annotation.kind == AnnotationKind::Primary)
             .or_else(|| snippet.annotations.iter().find(valid));
-        let Some(position) = annotation
-            .and_then(|annotation| lines.position(annotation.range.start, source.line_start))
+        let Some(position) =
+            annotation.and_then(|annotation| positions.position(annotation.range.start))
         else {
             return origin(name);
         };
@@ -492,16 +519,14 @@ struct SourceWindow {
 
 struct SourceLines<'a> {
     text: &'a str,
-    starts: Vec<usize>,
+    starts: Cow<'a, [usize]>,
 }
 
 impl<'a> SourceLines<'a> {
     fn new(text: &'a str) -> Self {
         Self {
             text,
-            starts: std::iter::once(0)
-                .chain(text.match_indices('\n').map(|(index, _)| index + 1))
-                .collect(),
+            starts: Cow::Owned(source_line_starts(text)),
         }
     }
 
@@ -571,6 +596,12 @@ impl<'a> SourceLines<'a> {
         }
         range
     }
+}
+
+fn source_line_starts(text: &str) -> Vec<usize> {
+    std::iter::once(0)
+        .chain(text.match_indices('\n').map(|(index, _)| index + 1))
+        .collect()
 }
 
 /// Additional control characters not normalized by `annotate-snippets` itself. Replacing each
@@ -657,13 +688,18 @@ impl<'a> NormalizedSource<'a> {
 
 #[cfg(test)]
 mod tests {
+    use std::borrow::Cow;
     use std::error::Error;
     use std::ops::Range;
+    use std::sync::Arc;
 
     use insta::{assert_debug_snapshot, assert_snapshot};
     use owo_colors::AnsiColors;
 
-    use super::{SourceAnnotation, SourceFile, SourceLevel, SourceSnippet, write_snippets};
+    use super::{
+        SourceAnnotation, SourceFile, SourceLevel, SourcePosition, SourceSnippet, SourceWindowView,
+        write_snippets,
+    };
     use crate::{Diagnostic, ErrorOptions, Hints, Info, write_error_chain_with_options};
 
     fn range_of(text: &str, value: &str) -> Range<usize> {
@@ -676,6 +712,167 @@ mod tests {
         write_snippets(&mut output, snippets, width, SourceLevel::Error)
             .expect("writing to a String is infallible");
         anstream::adapter::strip_str(&output).to_string()
+    }
+
+    fn coordinates(position: Option<SourcePosition>) -> Option<(usize, usize, usize)> {
+        position.map(|position| {
+            (
+                position.line,
+                position.byte_column,
+                position.character_column,
+            )
+        })
+    }
+
+    #[test]
+    fn source_clones_share_an_immutable_line_index() {
+        let source = SourceFile::new("lines.txt", "first\r\né🦀\nlast");
+        let excerpt = source.clone().with_line_start(41);
+        assert!(Arc::ptr_eq(&source.line_starts, &excerpt.line_starts));
+
+        assert_eq!(excerpt.line_range_for_span(7..13), Some(7..14));
+        let starts = source.line_starts.as_ref();
+        assert_eq!(starts, &[0, 7, 14]);
+
+        let source_positions = source.position_index();
+        let excerpt_positions = excerpt.position_index();
+        assert!(matches!(&source_positions.lines.starts, Cow::Borrowed(_)));
+        assert!(matches!(&excerpt_positions.lines.starts, Cow::Borrowed(_)));
+        assert!(std::ptr::eq(starts, source_positions.lines.starts.as_ref()));
+        assert!(std::ptr::eq(
+            starts,
+            excerpt_positions.lines.starts.as_ref()
+        ));
+        assert_debug_snapshot!(
+            (
+                coordinates(source_positions.position(13)),
+                coordinates(excerpt_positions.position(13)),
+                excerpt.lines_for_span(7..13),
+            ),
+            @r#"
+        (
+            Some(
+                (
+                    2,
+                    6,
+                    2,
+                ),
+            ),
+            Some(
+                (
+                    42,
+                    6,
+                    2,
+                ),
+            ),
+            Some(
+                "é🦀\n",
+            ),
+        )
+        "#
+        );
+    }
+
+    #[test]
+    fn source_position_indexes_preserve_excerpt_coordinates() {
+        let text = "é\r\nβ🦀\rtail\n";
+        let source = SourceFile::new("excerpt.txt", text).with_line_start(10);
+        let positions = source.position_index();
+        let window = SourceWindowView {
+            text: &text[4..],
+            line_start: 11,
+            annotations: Vec::new(),
+        };
+        let window_positions = window.position_index();
+        for offset in 0..=window.text.len() + 1 {
+            assert_eq!(
+                coordinates(window_positions.position(offset)),
+                coordinates(positions.position(offset + 4)),
+                "window offset {offset}"
+            );
+        }
+
+        assert_debug_snapshot!(
+            [0, 1, 2, 3, 4, 6, 10, 11, 15, 16, 17]
+                .map(|offset| coordinates(positions.position(offset))),
+            @"
+        [
+            Some(
+                (
+                    10,
+                    0,
+                    0,
+                ),
+            ),
+            None,
+            Some(
+                (
+                    10,
+                    2,
+                    1,
+                ),
+            ),
+            Some(
+                (
+                    10,
+                    3,
+                    2,
+                ),
+            ),
+            Some(
+                (
+                    11,
+                    0,
+                    0,
+                ),
+            ),
+            Some(
+                (
+                    11,
+                    2,
+                    1,
+                ),
+            ),
+            Some(
+                (
+                    11,
+                    6,
+                    2,
+                ),
+            ),
+            Some(
+                (
+                    11,
+                    7,
+                    3,
+                ),
+            ),
+            Some(
+                (
+                    11,
+                    11,
+                    7,
+                ),
+            ),
+            Some(
+                (
+                    12,
+                    0,
+                    0,
+                ),
+            ),
+            None,
+        ]
+        "
+        );
+        assert!(
+            source
+                .clone()
+                .with_line_start(usize::MAX)
+                .position_index()
+                .position(4)
+                .is_none()
+        );
     }
 
     #[test]
@@ -1155,6 +1352,7 @@ mod tests {
     #[test]
     fn source_debug_does_not_expose_contents() {
         let source = SourceFile::new("uv.toml", "token = \"not-for-diagnostics\"\n");
+        assert_eq!(source.line_range_for_span(0..0), Some(0..30));
         assert_debug_snapshot!(source, @r#"
         SourceFile {
             name: "uv.toml",
