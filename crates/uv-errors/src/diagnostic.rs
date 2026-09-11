@@ -14,6 +14,7 @@ use crate::line_wrap::wrap_text;
 pub struct Diagnostic<'a> {
     pub(crate) message: Option<Cow<'a, str>>,
     pub(crate) info: Vec<Info<'a>>,
+    pub(crate) source: Option<Box<Self>>,
 }
 
 impl<'a> Diagnostic<'a> {
@@ -22,6 +23,7 @@ impl<'a> Diagnostic<'a> {
         Self {
             message: Some(message.into()),
             info: Vec::new(),
+            source: None,
         }
     }
 
@@ -29,6 +31,17 @@ impl<'a> Diagnostic<'a> {
     #[must_use]
     pub fn with_info(mut self, info: Info<'a>) -> Self {
         self.info.push(info);
+        self
+    }
+
+    /// Supply presentation data for the next error returned by [`Error::source`].
+    ///
+    /// This takes precedence over the diagnostic resolver for that error. It does not add a
+    /// source to the error chain, and is ignored if there is no next source.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_source(mut self, source: Self) -> Self {
+        self.source = Some(Box::new(source));
         self
     }
 }
