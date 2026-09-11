@@ -220,10 +220,10 @@ impl Reader {
 
     fn retire(&mut self) {
         let drained = self.drain_submitted();
-        self.retire_after_drain(drained);
+        self.retire_after_drain(&drained);
     }
 
-    fn retire_after_drain(&mut self, drained: io::Result<()>) {
+    fn retire_after_drain(&mut self, drained: &io::Result<()>) {
         if drained.is_err()
             && let Some(mut batch) = self.pending.take()
         {
@@ -461,10 +461,10 @@ impl Request {
         } else {
             let buffer = self.buffer.as_ref().ok_or_else(invalid_completion)?;
             // SAFETY: The matching READ CQE has completed this buffer's only in-flight request.
-            // The successful result initializes exactly `length` bytes, and no new read is queued
-            // until this completion has been consumed. A short positive read is not EOF.
-            let bytes = unsafe { &(*buffer.get())[..length] };
-            self.contents.extend_from_slice(bytes);
+            // The array was initialized on allocation, and no new read is queued until this
+            // completion has been consumed. A short positive read is not EOF.
+            let bytes = unsafe { &*buffer.get() };
+            self.contents.extend_from_slice(&bytes[..length]);
         }
         Ok(())
     }

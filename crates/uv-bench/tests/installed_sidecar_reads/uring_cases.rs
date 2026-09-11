@@ -508,7 +508,7 @@ mod tests {
         assert_eq!(submitted, 1);
 
         // One bounded batch is deliberately retained until this test process exits.
-        reader.retire_after_drain(Err(Errno::PERM.into()));
+        reader.retire_after_drain(&Err(Errno::PERM.into()));
         assert_eq!(counter.load(Ordering::SeqCst), 0);
         assert!(reader.pending.is_none());
         assert!(reader.ring.is_none());
