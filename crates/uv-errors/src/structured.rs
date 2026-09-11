@@ -17,6 +17,7 @@ use crate::{
 /// The error array is ordered from the outer error to its innermost cause. Each entry owns its
 /// information, hints, and source locations. Source text is limited to the same explicitly
 /// selected windows as the terminal renderer; a retained file is never serialized wholesale.
+/// Recognized URL components are masked without changing the original UTF-8 byte coordinates.
 /// This uv-dev representation is not a stable machine-readable output contract.
 #[derive(Serialize)]
 pub(crate) struct ErrorReport {
@@ -243,6 +244,7 @@ enum ReportSourceContent {
 #[derive(Serialize)]
 struct ReportWindow {
     line_start: usize,
+    /// Display text whose URL masks retain the original byte length and line boundaries.
     text: String,
     annotations: Vec<ReportAnnotation>,
 }
@@ -271,7 +273,7 @@ impl From<SourceWindowView<'_>> for ReportWindow {
             .collect();
         Self {
             line_start: window.line_start,
-            text: window.text.to_string(),
+            text: window.redacted_text().into_owned(),
             annotations,
         }
     }
@@ -326,7 +328,7 @@ fn plain_text(text: &str) -> String {
 }
 
 /// Write one complete JSON line. Escaping layout controls changes only the JSON transport, not the
-/// decoded source text or the coordinates that refer to it.
+/// decoded display text or the original coordinates that refer to it.
 pub(crate) fn write_report(stream: &mut impl Write, report: &ErrorReport) -> fmt::Result {
     let mut serialized = serde_json::to_string(report).map_err(|_| fmt::Error)?;
     if serialized
@@ -358,7 +360,8 @@ mod tests {
     use insta::assert_json_snapshot;
 
     use crate::{
-        Diagnostic, Hint, HintOrdering, Hints, Info, SourceAnnotation, SourceFile, SourceSnippet,
+        Diagnostic, Hint, HintOrdering, Hints, Info, SourceAnnotation, SourceEdit, SourceFile,
+        SourceSnippet, SourceSuggestion, SuggestionApplicability,
     };
 
     use super::{ErrorReport, write_report};
@@ -618,6 +621,98 @@ mod tests {
                 }]
             }])
         );
+        Ok(())
+    }
+
+    #[test]
+    fn source_urls_keep_original_utf8_byte_coordinates() -> Result<(), Box<dyn Error>> {
+        let text = "invalid = !\r--index-url https://user:sëcret🦀@example.invalid/simple?sig=秘密&safe=yes\r\n";
+        let source = SourceFile::new("requirements.txt", text).with_line_start(7);
+        let value = range_of(text, "safe=yes");
+        let error = InputError(vec![
+            SourceSnippet::new(source.clone())
+                .with_annotation(SourceAnnotation::primary(range_of(text, "!")))
+                .with_annotation(SourceAnnotation::secondary(value.clone())),
+        ]);
+        let report = ErrorReport::new(&error, Some(input_diagnostic), &Hints::none());
+        let sources = serde_json::to_value(&report.errors[0].sources)?;
+        let displayed = sources[0]["windows"][0]["text"]
+            .as_str()
+            .ok_or("the source window has text")?;
+        assert_eq!(displayed.len(), text.len());
+        assert_eq!(displayed.get(value.clone()), text.get(value));
+        assert_eq!(source.text(), text);
+        assert_json_snapshot!(sources, @r#"
+        [
+          {
+            "kind": "snippet",
+            "name": "requirements.txt",
+            "windows": [
+              {
+                "annotations": [
+                  {
+                    "kind": "primary",
+                    "range": {
+                      "end": {
+                        "byte_column": 11,
+                        "line": 7
+                      },
+                      "start": {
+                        "byte_column": 10,
+                        "line": 7
+                      }
+                    }
+                  },
+                  {
+                    "kind": "secondary",
+                    "range": {
+                      "end": {
+                        "byte_column": 91,
+                        "line": 7
+                      },
+                      "start": {
+                        "byte_column": 83,
+                        "line": 7
+                      }
+                    }
+                  }
+                ],
+                "line_start": 7,
+                "text": "invalid = !\r--index-url https://user:***********@example.invalid/simple?sig=******&safe=yes\r\n"
+              }
+            ]
+          }
+        ]
+        "#);
+        Ok(())
+    }
+
+    #[test]
+    fn source_url_masks_do_not_change_exact_edits() -> Result<(), Box<dyn Error>> {
+        let text = "url = 'https://user:original-secret@example.invalid'; marker = 'old'\n";
+        let source = SourceFile::new("pyproject.toml", text);
+        let range = range_of(text, "'old'");
+        let replacement = "'https://user:replacement-secret@example.invalid'";
+        let suggestion = SourceSuggestion::new(
+            source.clone(),
+            [SourceEdit::new(range.clone(), replacement)],
+            SuggestionApplicability::DisplayOnly,
+        )
+        .ok_or("the edit has a valid source range")?;
+        let hints = Hint::new("Replace the marker")
+            .with_suggestion(suggestion)
+            .into();
+        let report = serde_json::to_value(ErrorReport::new(&Inner, None, &hints))?;
+        let edit = &report["errors"][0]["hints"][0]["suggestion"]["edits"][0];
+        assert_eq!(edit["replacement"], replacement);
+        assert_eq!(
+            edit["range"],
+            serde_json::json!({
+                "start": {"line": 1, "byte_column": range.start},
+                "end": {"line": 1, "byte_column": range.end},
+            })
+        );
+        assert_eq!(source.text(), text);
         Ok(())
     }
 

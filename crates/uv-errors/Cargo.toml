@@ -18,6 +18,7 @@ serde_json = { workspace = true }
 terminal_size = { workspace = true }
 textwrap = { workspace = true }
 unicode-width = { workspace = true }
+uv-redacted = { workspace = true }
 uv-static = { workspace = true }
 
 [dev-dependencies]

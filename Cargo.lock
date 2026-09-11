@@ -6588,6 +6588,7 @@ dependencies = [
  "textwrap",
  "thiserror",
  "unicode-width 0.2.2",
+ "uv-redacted",
  "uv-static",
 ]
 
