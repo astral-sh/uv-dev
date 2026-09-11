@@ -6107,9 +6107,11 @@ dependencies = [
  "flate2",
  "fs-err",
  "futures",
+ "globwalk",
  "hex",
  "io-uring",
  "jiff",
+ "linux-raw-sys",
  "rayon",
  "rustix",
  "serde_json",
@@ -6143,6 +6145,7 @@ dependencies = [
  "uv-resolver",
  "uv-types",
  "uv-workspace",
+ "walkdir",
 ]
 
 [[package]]
