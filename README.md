@@ -10,6 +10,12 @@ The reporter requests a package-scoped counterpart to `--no-cache` for `uv sync`
 
 The same underlying request is already tracked in astral-sh/uv#7642. Its second section asks for a way to mark a package so its compiled wheels are not cached when the build depends on the active HPC module or architecture. A maintainer explicitly identified `--no-cache-package <name>` as a possible interface in that discussion.
 
+In the current discussion, a maintainer asked why the existing `--refresh-package <name>` option would not satisfy the request. They also clarified that `--no-cache` works by constructing an entirely new temporary cache directory and indicated that doing so per package is unlikely. The remaining question is whether package refresh provides the reporter's required behavior—particularly rebuilding on every invocation and avoiding cache writes—or whether the requested strict cache isolation is materially different.
+
+## Maintainer feedback and open question
+
+The latest maintainer feedback narrows the design question from “add a package-scoped cache flag” to “identify behavior that `--refresh-package <name>` does not already provide.” No final decision was made. Before prioritizing a new option, the discussion needs a concrete explanation or reproduction showing why package refresh is insufficient for the motivating package and build conditions.
+
 ## Draft response
 
 This package-scoped cache opt-out is already tracked in astral-sh/uv#7642. The second request there covers compiled packages whose build output depends on external environment state, and the discussion specifically identifies `--no-cache-package <name>` as a possible interface. Let's centralize the feature discussion there.
