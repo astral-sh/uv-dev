@@ -4509,7 +4509,7 @@ fn require_hashes_find_links_no_hash() -> Result<()> {
     error: Failed to download and build `basic-package==0.1.0`
       cause: Failed to resolve requirements from `build-system.requires`
       cause: No solution found when resolving: `uv-build>=0.8.3, <0.9.0`
-      cause: Because uv-build was not found in the package registry and you require uv-build>=0.8.3,<0.9.0, we can conclude that your requirements are unsatisfiable.
+      cause: uv-build was not found in the package registry.
     "
     );
 
@@ -4716,7 +4716,7 @@ fn require_hashes_registry_valid_hash() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving dependencies
-      cause: Because example-a-961b4c22 was not found in the package registry and you require example-a-961b4c22==1.0.0, we can conclude that your requirements are unsatisfiable.
+      cause: example-a-961b4c22 was not found in the package registry.
     "
     );
 

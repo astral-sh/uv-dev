@@ -1693,7 +1693,7 @@ async fn tool_upgrade_resolution_hints() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to upgrade simple-launcher
-      cause: Because simple-launcher was not found in the package registry and you require simple-launcher>0.1.0, we can conclude that your requirements are unsatisfiable.
+      cause: simple-launcher was not found in the package registry.
 
     hint: An index URL (http://[LOCALHOST]/simple) could not be queried due to a lack of valid authentication credentials (401 Unauthorized)
     ");
