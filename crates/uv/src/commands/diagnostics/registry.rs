@@ -133,7 +133,9 @@ pub(super) fn metadata_for_error<'a>(error: &'a (dyn StdError + 'static)) -> Err
         uv_workspace::dependency_groups::DependencyGroupError => |_| ErrorMetadata::default(),
     );
     #[cfg(not(feature = "self-update"))]
-    registered!(crate::ExternallyInstalledError => ErrorMetadata::hinted);
+    registered!(crate::ExternallyInstalledError => |error| {
+        ErrorMetadata::hinted(error).with_info(error.own_info())
+    });
 
     ErrorMetadata::default()
 }

@@ -2490,7 +2490,7 @@ fn invalid_editable_no_url() -> Result<()> {
         | ^^^^^^^^^^^^^^^ not editable
       cause: Registry requirements cannot be editable
 
-    hint: Editable requirements must refer to a local directory
+    hint: Use a local directory for an editable requirement
     "
     );
 
@@ -2513,7 +2513,7 @@ fn invalid_editable_unnamed_remote_url_requirements_txt() -> Result<()> {
     error: Unsupported editable requirement in `requirements.txt` at line 1: `http://user:****@example.com/black-1.0.0-py3-none-any.whl`
       cause: Remote archives cannot be editable
 
-    hint: Editable requirements must refer to a local directory
+    hint: Use a local directory for an editable requirement
     "
     );
 
@@ -2532,7 +2532,7 @@ fn invalid_editable_unnamed_remote_url_cli() {
     error: Unsupported editable requirement: `http://user:****@example.com/black-1.0.0-py3-none-any.whl`
       cause: Remote archives cannot be editable
 
-    hint: Editable requirements must refer to a local directory
+    hint: Use a local directory for an editable requirement
     "
     );
 }
@@ -2556,7 +2556,7 @@ fn invalid_editable_named_https_url() -> Result<()> {
     error: Unsupported editable requirement in `requirements.txt` at line 3: `black @ https://files.pythonhosted.org/packages/0f/89/294c9a6b6c75a08da55e9d05321d0707e9418735e3062b12ef0f54c33474/black-24.4.2-py3-none-any.whl`
       cause: Remote archives cannot be editable
 
-    hint: Editable requirements must refer to a local directory
+    hint: Use a local directory for an editable requirement
     "
     );
 

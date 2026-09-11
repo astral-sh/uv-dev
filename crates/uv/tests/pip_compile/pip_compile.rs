@@ -6752,7 +6752,7 @@ fn missing_editable_file() -> Result<()> {
     error: Unsupported editable requirement in `requirements.in` at line 1: `file://[TEMP_DIR]/foo/anyio-3.7.0.tar.gz`
       cause: Local archives cannot be editable
 
-    hint: Editable requirements must refer to a local directory
+    hint: Use a local directory for an editable requirement
     ");
 
     Ok(())
