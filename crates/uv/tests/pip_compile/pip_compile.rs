@@ -16577,7 +16577,9 @@ fn compile_derivation_chain() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to build `wsgiref==0.1.2`
+      info: `wsgiref` (v0.1.2) was included because `child` (v0.1.0) depends on `wsgiref`
       cause: The build backend returned an error
+      info: Build failures usually indicate a problem with the package or the build environment
       cause: Call to `setuptools.build_meta:__legacy__.get_requires_for_build_wheel` failed (exit status: 1)
 
              [stderr]
@@ -16597,10 +16599,6 @@ fn compile_derivation_chain() -> Result<()> {
                  print "Setuptools version",version,"or greater has been installed."
                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
              SyntaxError: Missing parentheses in call to 'print'. Did you mean print(...)?
-
-    hint: `wsgiref` (v0.1.2) was included because `child` (v0.1.0) depends on `wsgiref`
-
-    hint: Build failures usually indicate a problem with the package or the build environment
     "#
     );
 
