@@ -1817,7 +1817,7 @@ fn is_windows_store_shim(path: &Path) -> bool {
         return false;
     };
 
-    let mut buf = [0u16; MAXIMUM_REPARSE_DATA_BUFFER_SIZE as usize];
+    let mut buf = [0u16; MAXIMUM_REPARSE_DATA_BUFFER_SIZE as usize / size_of::<u16>()];
     let mut bytes_returned = 0;
 
     // SAFETY: The buffer is large enough to hold the reparse point.
@@ -1829,7 +1829,7 @@ fn is_windows_store_shim(path: &Path) -> bool {
             None,
             0,
             Some(buf.as_mut_ptr().cast()),
-            buf.len() as u32 * 2,
+            size_of_val(&buf) as u32,
             Some(&raw mut bytes_returned),
             None,
         )
@@ -1847,8 +1847,86 @@ fn is_windows_store_shim(path: &Path) -> bool {
         return false;
     }
 
-    let reparse_point = String::from_utf16_lossy(&buf[..bytes_returned as usize]);
+    is_windows_store_python_redirector(&buf, bytes_returned as usize)
+}
+
+#[cfg(any(windows, test))]
+fn is_windows_store_python_redirector(buf: &[u16], bytes_returned: usize) -> bool {
+    // Keep an odd final byte zero-extended, as in the zero-initialized output buffer.
+    let reparse_point = String::from_utf16_lossy(&buf[..bytes_returned.div_ceil(size_of::<u16>())]);
     reparse_point.contains("\\AppInstallerPythonRedirector.exe")
+}
+
+#[cfg(test)]
+mod windows_store_reparse_tests {
+    use super::is_windows_store_python_redirector;
+
+    const MAXIMUM_BYTES: usize = 16 * 1024;
+    const REDIRECTOR: &str = "\\AppInstallerPythonRedirector.exe";
+
+    fn check_returned_bytes(data: &[u8], expected: bool) {
+        assert!(data.len() <= MAXIMUM_BYTES);
+        let mut old_buffer = [0u16; MAXIMUM_BYTES];
+        for (word, bytes) in old_buffer.iter_mut().zip(data.chunks(2)) {
+            *word = u16::from_le_bytes([bytes[0], bytes.get(1).copied().unwrap_or(0)]);
+        }
+
+        let current = &old_buffer[..MAXIMUM_BYTES / size_of::<u16>()];
+        let actual = is_windows_store_python_redirector(current, data.len());
+        let previous = String::from_utf16_lossy(&old_buffer[..data.len()]).contains(REDIRECTOR);
+        assert_eq!(actual, expected);
+        assert_eq!(actual, previous);
+    }
+
+    #[test]
+    fn zero_even_and_odd_byte_counts() {
+        check_returned_bytes(&[], false);
+
+        let redirector = REDIRECTOR
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect::<Vec<_>>();
+        check_returned_bytes(&redirector, true);
+        // The final ASCII byte still forms a complete code unit after zero extension.
+        check_returned_bytes(&redirector[..redirector.len() - 1], true);
+        check_returned_bytes(&redirector[..redirector.len() - 2], false);
+
+        let mut with_surrogates = vec![0x00, 0xd8];
+        with_surrogates.extend_from_slice(&redirector);
+        with_surrogates.extend_from_slice(&[0x00, 0xdc]);
+        check_returned_bytes(&with_surrogates, true);
+    }
+
+    #[test]
+    fn maximum_byte_count() {
+        #[cfg(windows)]
+        assert_eq!(
+            MAXIMUM_BYTES,
+            windows::Win32::Storage::FileSystem::MAXIMUM_REPARSE_DATA_BUFFER_SIZE as usize
+        );
+
+        let redirector = REDIRECTOR
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect::<Vec<_>>();
+        let mut data = vec![0; MAXIMUM_BYTES];
+        data[MAXIMUM_BYTES - redirector.len()..].copy_from_slice(&redirector);
+        check_returned_bytes(&data, true);
+        check_returned_bytes(&data[..MAXIMUM_BYTES - 1], true);
+        check_returned_bytes(&data[..MAXIMUM_BYTES - 2], false);
+    }
+
+    #[test]
+    fn ignores_unreturned_code_units() {
+        let mut data = vec![0];
+        data.extend(REDIRECTOR.encode_utf16());
+        assert!(!is_windows_store_python_redirector(&data, 0));
+        assert!(!is_windows_store_python_redirector(&data, 2));
+        assert!(is_windows_store_python_redirector(
+            &data,
+            size_of_val(data.as_slice())
+        ));
+    }
 }
 
 /// On Unix, we do not need to deal with Windows store shims.
