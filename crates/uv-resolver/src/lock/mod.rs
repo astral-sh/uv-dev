@@ -80,6 +80,7 @@ use crate::{
     ResolverOutput,
 };
 
+mod cache;
 mod deserialize;
 pub(crate) mod export;
 mod installable;
@@ -2049,6 +2050,9 @@ impl Lock {
     /// TOML parser, preserving its compatibility and error reporting. Lockfiles
     /// that use an unsupported schema version are rejected.
     pub fn from_toml(input: &str) -> Result<Self, LockParseError> {
+        if let Some(lock) = cache::get(input) {
+            return Ok(lock);
+        }
         let lock = match Self::from_canonical_toml(input) {
             Ok(lock) => lock,
             Err(_) => match toml::from_str(input) {
@@ -2075,7 +2079,28 @@ impl Lock {
             });
         }
 
+        cache::insert(input, &lock);
         Ok(lock)
+    }
+
+    /// Enable bounded, content-addressed reuse of parsed lockfiles in this process.
+    #[doc(hidden)]
+    pub fn enable_process_cache() {
+        cache::enable();
+    }
+
+    /// Observe cache accesses after releasing the cache's mutex.
+    ///
+    /// The second argument is true for a hit and false for a newly parsed lockfile.
+    #[doc(hidden)]
+    pub fn observe_process_cache(observer: fn(&str, bool)) {
+        cache::observe(observer);
+    }
+
+    /// Return the number of cached lockfiles and their total source size.
+    #[doc(hidden)]
+    pub fn process_cache_stats() -> (usize, usize) {
+        cache::stats()
     }
 
     /// Returns the TOML representation of this lockfile.
@@ -4730,7 +4755,7 @@ impl PackageWire {
         unambiguous_package_ids: &FxHashMap<PackageName, PackageId>,
     ) -> Result<Package, LockError> {
         // Consistency check
-        if !uv_flags::contains(uv_flags::EnvironmentFlags::SKIP_WHEEL_FILENAME_CHECK) {
+        if !uv_flags::contains_or_default(uv_flags::EnvironmentFlags::SKIP_WHEEL_FILENAME_CHECK) {
             if let Some(version) = &self.id.version {
                 for wheel in &self.wheels {
                     if *version != wheel.filename.version
