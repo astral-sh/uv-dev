@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use itertools::Either;
 use rustc_hash::FxHashSet;
@@ -337,14 +338,20 @@ impl<'lock> LockTarget<'lock> {
         }
     }
 
-    /// Read the lockfile from the workspace.
+    /// Read an immutable snapshot of the lockfile from the workspace.
     ///
     /// Returns `Ok(None)` if the lockfile does not exist.
-    pub(crate) async fn read(self) -> Result<Option<Lock>, ProjectError> {
-        Ok(self
-            .read_with_contents()
-            .await?
-            .map(|(lock, _contents)| lock))
+    pub(crate) async fn read_shared(self) -> Result<Option<Arc<Lock>>, ProjectError> {
+        let lock_path = self.lock_path();
+        match fs_err::tokio::read_to_string(&lock_path).await {
+            Ok(encoded) => {
+                let lock = info_span!("parse uv lock", path = %lock_path.display())
+                    .in_scope(|| Lock::from_toml_shared(&encoded))?;
+                Ok(Some(lock))
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(err) => Err(err.into()),
+        }
     }
 
     /// Read the lockfile and return the exact contents that were parsed.

@@ -7,6 +7,7 @@ use std::io::Read;
 #[cfg(unix)]
 use std::os::unix::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Context, anyhow, bail};
 use futures::StreamExt;
@@ -175,7 +176,7 @@ pub(crate) async fn run(
     let download_reporter = PythonDownloadReporter::single(printer);
 
     // The lockfile used for the base environment.
-    let mut base_lock: Option<(Lock, PathBuf)> = None;
+    let mut base_lock: Option<(Arc<Lock>, PathBuf)> = None;
 
     // Determine whether the command to execute is a PEP 723 script.
     let temp_dir;
@@ -263,7 +264,7 @@ pub(crate) async fn run(
             )
             .await
             {
-                Ok(result) => result.into_lock(),
+                Ok(result) => result.into_shared_lock(),
                 Err(ProjectError::Operation(err)) => {
                     return Err(UvError::from(err.with_resolution_context("script")).into());
                 }
@@ -722,7 +723,7 @@ pub(crate) async fn run(
                 // in any `--with` requirements.
                 if !isolated && !requirements.is_empty() {
                     base_lock = LockTarget::from(project.workspace())
-                        .read()
+                        .read_shared()
                         .await
                         .ok()
                         .flatten()
@@ -856,7 +857,7 @@ pub(crate) async fn run(
                 }
 
                 base_lock = Some((
-                    result.into_lock(),
+                    result.into_shared_lock(),
                     project.workspace().install_path().to_owned(),
                 ));
             }

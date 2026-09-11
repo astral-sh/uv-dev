@@ -468,7 +468,7 @@ fn serve(paths: Paths) -> Result<Bootstrap> {
                 if directory.is_absolute() && context::ensure_single_threaded().is_ok() {
                     let previous = File::open(".")?;
                     if std::env::set_current_dir(directory).is_ok() {
-                        let _ = Lock::from_toml(&contents);
+                        let _ = Lock::from_toml_shared(&contents);
                         fchdir(previous).context("Failed to restore daemon working directory")?;
                     }
                 }

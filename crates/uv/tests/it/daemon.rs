@@ -225,6 +225,70 @@ fn daemon_lock_cache_invalidation() -> Result<()> {
 }
 
 #[test]
+fn daemon_reuses_lock_for_read_only_commands() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    context.temp_dir.child("uv.lock").write_str(indoc! {r#"
+        version = 1
+        revision = 3
+        requires-python = ">=3.12"
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+    "#})?;
+    let Some(daemon) = Daemon::start(&context)? else {
+        return Ok(());
+    };
+
+    daemon.assert_success(&daemon.export(&context, false)?)?;
+    assert_eq!(daemon.status(&context)?["cached_locks"], 1);
+    assert_eq!(daemon.status(&context)?["cache_hits"], 0);
+
+    for (index, arguments) in [
+        ["tree", "--frozen", "--universal", "--offline"].as_slice(),
+        ["--quiet", "sync", "--frozen", "--offline"].as_slice(),
+        [
+            "--quiet",
+            "run",
+            "--frozen",
+            "--offline",
+            "--",
+            "python",
+            "-c",
+            "print('shared lock')",
+        ]
+        .as_slice(),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let local = daemon
+            .command(&context)
+            .arg("--no-daemon")
+            .args(arguments)
+            .output()?;
+        daemon.assert_success(&local)?;
+        let shared = daemon.command(&context).args(arguments).output()?;
+        daemon.assert_success(&shared)?;
+        assert_eq!(local.stdout, shared.stdout);
+        assert_eq!(local.stderr, shared.stderr);
+        assert_eq!(daemon.status(&context)?["cache_hits"], index + 1);
+    }
+    Ok(())
+}
+
+#[test]
 fn daemon_cache_respects_working_directory() -> Result<()> {
     let first = uv_test::test_context_with_versions!(&[]);
     let first_lock = write_project(&first)?;

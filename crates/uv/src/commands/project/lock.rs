@@ -63,7 +63,7 @@ use crate::settings::{FrozenSource, LockCheck, LockedSource, ResolverSettings};
 #[expect(clippy::large_enum_variant)]
 pub(crate) enum LockResult {
     /// The lock was unchanged.
-    Unchanged(Lock),
+    Unchanged(Arc<Lock>),
     /// The lock was changed.
     Changed(Option<Lock>, Lock),
 }
@@ -78,8 +78,15 @@ impl LockResult {
 
     pub(crate) fn into_lock(self) -> Lock {
         match self {
-            Self::Unchanged(lock) => lock,
+            Self::Unchanged(lock) => Arc::unwrap_or_clone(lock),
             Self::Changed(_, lock) => lock,
+        }
+    }
+
+    pub(crate) fn into_shared_lock(self) -> Arc<Lock> {
+        match self {
+            Self::Unchanged(lock) => lock,
+            Self::Changed(_, lock) => Arc::new(lock),
         }
     }
 }
@@ -369,7 +376,7 @@ impl<'env> LockOperation<'env> {
                 // Read the existing lockfile, but don't attempt to lock the project.
                 let lock_filename = target.lock_filename();
                 let existing = target
-                    .read()
+                    .read_shared()
                     .await?
                     .ok_or(ProjectError::MissingLockfile(source, lock_filename))?;
 
@@ -989,7 +996,7 @@ async fn do_lock(
             // Print the success message after completing resolution.
             logger.on_complete(lock.len(), start, printer)?;
 
-            Ok(LockResult::Unchanged(lock))
+            Ok(LockResult::Unchanged(Arc::new(lock)))
         }
 
         // The lockfile did not contain enough information to obtain a resolution, fallback
@@ -1152,7 +1159,7 @@ async fn do_lock(
             };
 
             if unchanged {
-                Ok(LockResult::Unchanged(lock))
+                Ok(LockResult::Unchanged(Arc::new(lock)))
             } else {
                 Ok(LockResult::Changed(previous, lock))
             }
@@ -1816,5 +1823,30 @@ impl std::fmt::Display for LockEvent<'_> {
                 )
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ptr;
+    use std::sync::Arc;
+
+    use uv_resolver::Lock;
+
+    use super::LockResult;
+
+    #[test]
+    fn unchanged_lock_result_retains_shared_snapshot() {
+        let lock =
+            Lock::from_toml_shared("version = 1\nrevision = 3\nrequires-python = \">=3.12\"\n")
+                .expect("valid lock");
+        let result = LockResult::Unchanged(Arc::clone(&lock));
+        assert!(ptr::eq(result.lock(), lock.as_ref()));
+        assert!(Arc::ptr_eq(&result.clone().into_shared_lock(), &lock));
+
+        let owned = result.into_lock();
+        assert_eq!(&owned, lock.as_ref());
+        let changed = LockResult::Changed(None, owned).into_shared_lock();
+        assert_eq!(changed, lock);
     }
 }

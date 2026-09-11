@@ -178,7 +178,7 @@ pub(crate) async fn tree(
     )
     .await
     {
-        Ok(result) => result.into_lock(),
+        Ok(result) => result.into_shared_lock(),
         Err(err) => return Err(UvError::from(err).into()),
     };
 
