@@ -104,6 +104,11 @@ path = "benches/python_discovery.rs"
 harness = false
 
 [[bench]]
+name = "conflict_markers"
+path = "benches/conflict_markers.rs"
+harness = false
+
+[[bench]]
 name = "uv_pypi_types"
 path = "benches/uv_pypi_types.rs"
 harness = false
