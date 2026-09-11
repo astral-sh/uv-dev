@@ -180,6 +180,7 @@ struct ReportWindow {
 
 impl From<SourceWindowView<'_>> for ReportWindow {
     fn from(window: SourceWindowView<'_>) -> Self {
+        let positions = window.position_index();
         let annotations = window
             .annotations
             .iter()
@@ -192,8 +193,8 @@ impl From<SourceWindowView<'_>> for ReportWindow {
                 Some(ReportAnnotation {
                     kind,
                     range: ReportRange {
-                        start: window.position(annotation.range.start)?.into(),
-                        end: window.position(annotation.range.end)?.into(),
+                        start: positions.position(annotation.range.start)?.into(),
+                        end: positions.position(annotation.range.end)?.into(),
                     },
                     label: annotation.label.map(plain_text),
                 })
@@ -508,6 +509,50 @@ mod tests {
         ]
         "#);
         assert!(!serde_json::to_string(&report)?.contains("do-not-show"));
+        Ok(())
+    }
+
+    #[test]
+    fn merged_annotations_keep_exact_utf8_coordinates() -> Result<(), Box<dyn Error>> {
+        let line = "name = 'café🦀'\r\n";
+        let text = line.repeat(64);
+        let local_range = range_of(line, "café🦀");
+        let snippet = (0..64).fold(
+            SourceSnippet::new(SourceFile::new("many.toml", text.as_str()).with_line_start(40)),
+            |snippet, index| {
+                let offset = index * line.len();
+                let range = offset + local_range.start..offset + local_range.end;
+                snippet.with_annotation(if index % 2 == 0 {
+                    SourceAnnotation::primary(range)
+                } else {
+                    SourceAnnotation::secondary(range)
+                })
+            },
+        );
+        let report = ErrorReport::new(&InputError(vec![snippet]), Some(input_diagnostic));
+        let annotations = (0..64)
+            .map(|index| {
+                serde_json::json!({
+                    "kind": if index % 2 == 0 { "primary" } else { "secondary" },
+                    "range": {
+                        "start": { "line": 40 + index, "byte_column": local_range.start },
+                        "end": { "line": 40 + index, "byte_column": local_range.end }
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            serde_json::to_value(&report.errors[0].sources)?,
+            serde_json::json!([{
+                "name": "many.toml",
+                "kind": "snippet",
+                "windows": [{
+                    "line_start": 40,
+                    "text": text,
+                    "annotations": annotations
+                }]
+            }])
+        );
         Ok(())
     }
 
