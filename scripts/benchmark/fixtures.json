@@ -1,5 +1,10 @@
 [
   {
+    "filename": "pufferlib.lock",
+    "url": "https://raw.githubusercontent.com/alex-shapiro/PufferLib/21807b34145822e307314dd0e3b503139c6aaa97/uv.lock",
+    "sha256": "c165f50499758accadeb4d6d8895cbb5fccd6b231f7fcb7f640a746b2b3ca80c"
+  },
+  {
     "filename": "click-8.4.2-py3-none-any.whl",
     "url": "https://files.pythonhosted.org/packages/fb/e2/79c688af8b210d232694e31e59da9f6ec747bae31c3f5946e4e9b98860d5/click-8.4.2-py3-none-any.whl",
     "sha256": "e6f9f66136c816745b9d65817da91d61d957fb16e02e4dcd0552553c5a197b76"
