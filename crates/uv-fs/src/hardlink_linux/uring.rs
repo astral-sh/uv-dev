@@ -190,7 +190,7 @@ impl Driver {
     ) -> bool {
         match self.queue() {
             Ok(()) => self.complete_queued_batch(submit),
-            Err(error) => self.fail_control(error),
+            Err(error) => self.fail_control(&error),
         }
     }
 
@@ -200,11 +200,11 @@ impl Driver {
     ) -> bool {
         match self.finish_batch(submit) {
             Ok(()) => true,
-            Err(error) => self.fail_control(error),
+            Err(error) => self.fail_control(&error),
         }
     }
 
-    fn fail_control(&mut self, error: io::Error) -> bool {
+    fn fail_control(&mut self, error: &io::Error) -> bool {
         self.retire();
         debug!("Falling back to individual hardlink counts: {error}");
         false
