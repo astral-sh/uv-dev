@@ -86,3 +86,60 @@ fn json_error_format_does_not_change_clap_errors() -> Result<()> {
     assert!(String::from_utf8_lossy(&output.stderr).contains("unexpected argument"));
     Ok(())
 }
+
+#[test]
+#[cfg(feature = "test-python")]
+fn json_source_marker_suggestion_identifies_a_usable_edit() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let source = "# café\n[project]\nname = 'project'\nversion = '0.1.0'\nrequires-python = '>=3.12'\n[tool.uv.sources]\ndemo = [\n  { url = 'https://user:sentinel-secret@example.com/one.whl', marker = \"sys_platform == 'linux'\" },\n  { url = 'https://user:sentinel-secret@example.com/two.whl', marker = \"python_version >= '3.12'\" },\n]\n";
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(source)?;
+
+    let output = context
+        .lock()
+        .args(["--offline", "--error-format=json"])
+        .output()?;
+    assert_eq!(output.status.code(), Some(2));
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("sentinel-secret"));
+    let report: Value = serde_json::from_slice(&output.stderr)?;
+    let suggestion = report["errors"]
+        .as_array()
+        .context("error chain is an array")?
+        .iter()
+        .flat_map(|error| error["hints"].as_array().into_iter().flatten())
+        .find_map(|hint| hint.get("suggestion"))
+        .context("the marker conflict has an exact edit")?;
+    assert_eq!(suggestion["applicability"], "display_only");
+    assert_eq!(suggestion["source"]["kind"], "location");
+    let edits = suggestion["edits"]
+        .as_array()
+        .context("edits are an array")?;
+    let [edit] = edits.as_slice() else {
+        anyhow::bail!("expected one marker edit");
+    };
+    let offset = |position: &Value| -> Result<usize> {
+        let line = usize::try_from(position["line"].as_u64().context("one-based line")?)?;
+        let column = usize::try_from(
+            position["byte_column"]
+                .as_u64()
+                .context("zero-based UTF-8 byte column")?,
+        )?;
+        Ok(source
+            .split_inclusive('\n')
+            .take(line.checked_sub(1).context("line must be positive")?)
+            .map(str::len)
+            .sum::<usize>()
+            + column)
+    };
+    let start = offset(&edit["range"]["start"])?;
+    let end = offset(&edit["range"]["end"])?;
+    let replacement = edit["replacement"]
+        .as_str()
+        .context("replacement is a string")?;
+    let mut updated = source.to_string();
+    updated.replace_range(start..end, replacement);
+    pyproject.write_str(&updated)?;
+    let output = context.lock().arg("--offline").output()?;
+    assert_eq!(output.status.code(), Some(0));
+    Ok(())
+}
