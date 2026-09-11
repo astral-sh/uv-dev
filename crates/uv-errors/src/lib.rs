@@ -414,14 +414,18 @@ pub fn write_error_chain_with_options<C: DynColor + Copy, W: fmt::Write>(
     // order places general outer advice after more specific source advice.
     let mut trailing_hints = Vec::new();
     let mut source_override = main_diagnostic.and_then(|diagnostic| {
-        trailing_hints.push(diagnostic.hints.into_owned());
+        trailing_hints.push(diagnostic.hints);
         diagnostic.source
     });
     for source in iter::successors(err.source(), |&err| err.source()) {
-        let source_diagnostic = source_override
-            .take()
-            .map(|diagnostic| *diagnostic)
-            .or_else(|| diagnostic.and_then(|diagnostic| diagnostic(source)));
+        let native_diagnostic = diagnostic.and_then(|diagnostic| diagnostic(source));
+        let source_diagnostic = match (source_override.take(), native_diagnostic) {
+            (Some(presentation), Some(native)) => {
+                Some(native.with_presentation_override(*presentation))
+            }
+            (Some(presentation), None) => Some(*presentation),
+            (None, native) => native,
+        };
         let msg = source_diagnostic
             .as_ref()
             .and_then(|diagnostic| diagnostic.message.as_deref())
@@ -459,7 +463,7 @@ pub fn write_error_chain_with_options<C: DynColor + Copy, W: fmt::Write>(
             write_hints(&mut stream, &diagnostic.hints, HintOrdering::Any, width)?;
         }
         source_override = source_diagnostic.and_then(|diagnostic| {
-            trailing_hints.push(diagnostic.hints.into_owned());
+            trailing_hints.push(diagnostic.hints);
             diagnostic.source
         });
     }
@@ -1191,6 +1195,90 @@ mod tests {
           hint: Outer trailing advice 2
 
         hint: Explicit report-level fallback
+        ");
+    }
+
+    #[test]
+    fn format_source_override_retains_native_hints() {
+        #[derive(Debug, thiserror::Error)]
+        #[error("Outer operation failed")]
+        struct Outer(#[source] Middle);
+
+        #[derive(Debug, thiserror::Error)]
+        #[error("Middle operation failed")]
+        struct Middle(#[source] HttpError);
+
+        let error = Outer(Middle(HttpError));
+        let mut output = String::new();
+        write_error_chain_with_options(
+            &error,
+            &Hints::none(),
+            ErrorOptions::default()
+                .with_width_override(80)
+                .with_diagnostic(|error| {
+                    if error.is::<Outer>() {
+                        Some(
+                            Diagnostic::default()
+                                .with_hints(
+                                    Hints::from("Outer trailing advice")
+                                        .with_ordering(HintOrdering::Last),
+                                )
+                                .with_source(
+                                    Diagnostic::new("Presented middle error")
+                                        .with_hints(Hints::from("Context-dependent middle advice"))
+                                        .with_hints(
+                                            Hints::from("Presented middle trailing advice")
+                                                .with_ordering(HintOrdering::Last),
+                                        )
+                                        .with_source(
+                                            Diagnostic::new("Presented HTTP error").with_hints(
+                                                Hints::from("Context-dependent HTTP advice"),
+                                            ),
+                                        ),
+                                ),
+                        )
+                    } else if error.is::<Middle>() {
+                        Some(
+                            Diagnostic::new("Ordinary middle message")
+                                .with_info(Info::new("Ordinary middle context"))
+                                .with_hints(
+                                    Hints::from("Middle specific advice")
+                                        .with_ordering(HintOrdering::First),
+                                )
+                                .with_hints(
+                                    Hints::from("Middle trailing advice")
+                                        .with_ordering(HintOrdering::Last),
+                                ),
+                        )
+                    } else if error.is::<HttpError>() {
+                        Some(
+                            Diagnostic::default()
+                                .with_hints(Hints::from("HTTP-specific advice"))
+                                .with_hints(
+                                    Hints::from("HTTP trailing advice")
+                                        .with_ordering(HintOrdering::Last),
+                                ),
+                        )
+                    } else {
+                        None
+                    }
+                })
+                .with_stream(&mut output),
+        )
+        .unwrap();
+
+        assert_snapshot!(anstream::adapter::strip_str(&output), @"
+        error: Outer operation failed
+          cause: Presented middle error
+          hint: Middle specific advice
+          hint: Context-dependent middle advice
+          cause: Presented HTTP error
+          hint: HTTP-specific advice
+          hint: Context-dependent HTTP advice
+          hint: HTTP trailing advice
+          hint: Middle trailing advice
+          hint: Presented middle trailing advice
+          hint: Outer trailing advice
         ");
     }
 
