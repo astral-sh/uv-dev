@@ -1984,6 +1984,7 @@ fn sync_build_isolation_package() -> Result<()> {
     error: Failed to build `source-distribution @ https://files.pythonhosted.org/packages/10/1f/57aa4cce1b1abf6b433106676e15f9fa2c92ed2bd4cf77c3b50a9e9ac773/source_distribution-0.0.1.tar.gz`
       info: `source-distribution` was included because `project` (v0.1.0) depends on `source-distribution`
       cause: The build backend returned an error
+      info: This error likely indicates that `source-distribution` depends on `hatchling`, but doesn't declare it as a build dependency
       cause: Call to `hatchling.build.build_wheel` failed (exit status: 1)
 
              [stderr]
@@ -1991,12 +1992,12 @@ fn sync_build_isolation_package() -> Result<()> {
                File "<string>", line 8, in <module>
              ModuleNotFoundError: No module named 'hatchling'
 
-    hint: This error likely indicates that `source-distribution` depends on `hatchling`, but doesn't declare it as a build dependency. If `source-distribution` is a first-party package, consider adding `hatchling` to its `build-system.requires`. Otherwise, either add it to your `pyproject.toml` under:
+    hint: If `source-distribution` is a first-party package, add `hatchling` to its `build-system.requires`. Otherwise, add it to the project's `pyproject.toml` or the script's inline metadata under:
 
           [tool.uv.extra-build-dependencies]
           source-distribution = ["hatchling"]
 
-          or `uv pip install hatchling` into the environment and re-run with `--no-build-isolation`.
+          Alternatively, install `hatchling` into the environment used by the original command and re-run that command with `--no-build-isolation`.
     "#);
 
     // Install `hatchling` for `source-distribution`.
@@ -2063,6 +2064,7 @@ fn sync_build_isolation_package_order() -> Result<()> {
     error: Failed to build `source-distribution @ https://files.pythonhosted.org/packages/10/1f/57aa4cce1b1abf6b433106676e15f9fa2c92ed2bd4cf77c3b50a9e9ac773/source_distribution-0.0.1.tar.gz`
       info: `source-distribution` was included because `project` (v0.1.0) depends on `source-distribution`
       cause: The build backend returned an error
+      info: This error likely indicates that `source-distribution` depends on `hatchling`, but doesn't declare it as a build dependency
       cause: Call to `hatchling.build.build_wheel` failed (exit status: 1)
 
              [stderr]
@@ -2070,12 +2072,12 @@ fn sync_build_isolation_package_order() -> Result<()> {
                File "<string>", line 8, in <module>
              ModuleNotFoundError: No module named 'hatchling'
 
-    hint: This error likely indicates that `source-distribution` depends on `hatchling`, but doesn't declare it as a build dependency. If `source-distribution` is a first-party package, consider adding `hatchling` to its `build-system.requires`. Otherwise, either add it to your `pyproject.toml` under:
+    hint: If `source-distribution` is a first-party package, add `hatchling` to its `build-system.requires`. Otherwise, add it to the project's `pyproject.toml` or the script's inline metadata under:
 
           [tool.uv.extra-build-dependencies]
           source-distribution = ["hatchling"]
 
-          or `uv pip install hatchling` into the environment and re-run with `--no-build-isolation`.
+          Alternatively, install `hatchling` into the environment used by the original command and re-run that command with `--no-build-isolation`.
     "#);
 
     // Add `hatchling`.
@@ -2227,6 +2229,7 @@ fn sync_build_isolation_extra() -> Result<()> {
     error: Failed to build `source-distribution @ https://files.pythonhosted.org/packages/10/1f/57aa4cce1b1abf6b433106676e15f9fa2c92ed2bd4cf77c3b50a9e9ac773/source_distribution-0.0.1.tar.gz`
       info: `source-distribution` was included because `project[compile]` (v0.1.0) depends on `source-distribution`
       cause: The build backend returned an error
+      info: This error likely indicates that `source-distribution` depends on `hatchling`, but doesn't declare it as a build dependency
       cause: Call to `hatchling.build.build_wheel` failed (exit status: 1)
 
              [stderr]
@@ -2234,12 +2237,12 @@ fn sync_build_isolation_extra() -> Result<()> {
                File "<string>", line 8, in <module>
              ModuleNotFoundError: No module named 'hatchling'
 
-    hint: This error likely indicates that `source-distribution` depends on `hatchling`, but doesn't declare it as a build dependency. If `source-distribution` is a first-party package, consider adding `hatchling` to its `build-system.requires`. Otherwise, either add it to your `pyproject.toml` under:
+    hint: If `source-distribution` is a first-party package, add `hatchling` to its `build-system.requires`. Otherwise, add it to the project's `pyproject.toml` or the script's inline metadata under:
 
           [tool.uv.extra-build-dependencies]
           source-distribution = ["hatchling"]
 
-          or `uv pip install hatchling` into the environment and re-run with `--no-build-isolation`.
+          Alternatively, install `hatchling` into the environment used by the original command and re-run that command with `--no-build-isolation`.
     "#);
 
     // Running `uv sync` with `--all-extras` should succeed, because we install the build dependencies
@@ -3048,6 +3051,7 @@ fn sync_build_dependencies_module_error_hints() -> Result<()> {
     error: Failed to build `child @ file://[TEMP_DIR]/child`
       info: `child` was included because `parent` (v0.1.0) depends on `child`
       cause: The build backend returned an error
+      info: This error likely indicates that `child@0.1.0` depends on `a`, but doesn't declare it as a build dependency
       cause: Call to `build_backend.build_wheel` failed (exit status: 1)
 
              [stderr]
@@ -3057,12 +3061,12 @@ fn sync_build_dependencies_module_error_hints() -> Result<()> {
                  import a
              ModuleNotFoundError: No module named 'a'
 
-    hint: This error likely indicates that `child@0.1.0` depends on `a`, but doesn't declare it as a build dependency. If `child` is a first-party package, consider adding `a` to its `build-system.requires`. Otherwise, either add it to your `pyproject.toml` under:
+    hint: If `child` is a first-party package, add `a` to its `build-system.requires`. Otherwise, add it to the project's `pyproject.toml` or the script's inline metadata under:
 
           [tool.uv.extra-build-dependencies]
           child = ["a"]
 
-          or `uv pip install a` into the environment and re-run with `--no-build-isolation`.
+          Alternatively, install `a` into the environment used by the original command and re-run that command with `--no-build-isolation`.
     "#);
 
     // Adding `extra-build-dependencies` should solve the issue
@@ -3108,6 +3112,7 @@ fn sync_build_dependencies_module_error_hints() -> Result<()> {
     error: Failed to build `child @ file://[TEMP_DIR]/child`
       info: `child` was included because `parent` (v0.1.0) depends on `child`
       cause: The build backend returned an error
+      info: This error likely indicates that `child@0.1.0` depends on `scikit-learn`, but doesn't declare it as a build dependency
       cause: Call to `build_backend.build_wheel` failed (exit status: 1)
 
              [stderr]
@@ -3117,12 +3122,12 @@ fn sync_build_dependencies_module_error_hints() -> Result<()> {
                  import sklearn
              ModuleNotFoundError: No module named 'sklearn'
 
-    hint: This error likely indicates that `child@0.1.0` depends on `scikit-learn`, but doesn't declare it as a build dependency. If `child` is a first-party package, consider adding `scikit-learn` to its `build-system.requires`. Otherwise, either add it to your `pyproject.toml` under:
+    hint: If `child` is a first-party package, add `scikit-learn` to its `build-system.requires`. Otherwise, add it to the project's `pyproject.toml` or the script's inline metadata under:
 
           [tool.uv.extra-build-dependencies]
           child = ["scikit-learn"]
 
-          or `uv pip install scikit-learn` into the environment and re-run with `--no-build-isolation`.
+          Alternatively, install `scikit-learn` into the environment used by the original command and re-run that command with `--no-build-isolation`.
     "#);
 
     Ok(())
