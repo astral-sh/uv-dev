@@ -1,5 +1,6 @@
 mod diagnostic;
 mod line_wrap;
+mod source;
 
 use std::borrow::Cow;
 use std::error::Error;
@@ -11,6 +12,7 @@ use owo_colors::{AnsiColors, DynColor, OwoColorize};
 use diagnostic::write_info;
 pub use diagnostic::{Diagnostic, DiagnosticFn, Info};
 use line_wrap::{get_wrap_width, wrap_text};
+use source::{SourceLevel, write_snippets};
 
 /// An error that may carry user-facing hints.
 ///
@@ -388,6 +390,12 @@ pub fn write_error_chain_with_options<C: DynColor + Copy, W: fmt::Write>(
         wrapped_main.trim()
     )?;
     if let Some(diagnostic) = &main_diagnostic {
+        write_snippets(
+            &mut stream,
+            &diagnostic.snippets,
+            width,
+            SourceLevel::for_error(&level),
+        )?;
         write_info(&mut stream, &diagnostic.info, width)?;
     }
 
@@ -423,6 +431,12 @@ pub fn write_error_chain_with_options<C: DynColor + Copy, W: fmt::Write>(
             }
         }
         if let Some(diagnostic) = &source_diagnostic {
+            write_snippets(
+                &mut stream,
+                &diagnostic.snippets,
+                width,
+                SourceLevel::for_error(&level),
+            )?;
             write_info(&mut stream, &diagnostic.info, width)?;
         }
         source_override = source_diagnostic.and_then(|diagnostic| diagnostic.source);

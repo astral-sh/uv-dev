@@ -96,6 +96,7 @@ uv-workspace = { version = "0.0.79", path = "crates/uv-workspace" }
 ambient-id = { version = "0.0.11", default-features = false, features = [
   "reqwest-middleware",
 ] }
+annotate-snippets = { version = "=0.12.16" }
 anstream = { version = "1.0.0" }
 anyhow = { version = "1.0.89" }
 arcstr = { version = "1.2.0" }
