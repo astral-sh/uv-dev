@@ -1,8 +1,9 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use assert_cmd::prelude::*;
 use assert_fs::prelude::*;
 use indoc::indoc;
 
+use uv_cache::CacheBucket;
 use uv_static::EnvVars;
 
 use uv_test::uv_snapshot;
@@ -431,6 +432,27 @@ fn prune_stale_revision() -> Result<()> {
      ~ project==0.1.0 (from file://[TEMP_DIR]/)
     ");
 
+    // A retained source tree may itself contain files named like cache revision pointers.
+    let revision_pointer = context
+        .cache_files(CacheBucket::SourceDistributions)?
+        .into_iter()
+        .find(|path| path.file_name().is_some_and(|name| name == "revision.rev"))
+        .context("missing local source revision pointer")?;
+    let revision_contents = fs_err::read(&revision_pointer)?;
+    let revisions = uv_fs::directories(
+        revision_pointer
+            .parent()
+            .context("missing source revision directory")?,
+    )?
+    .collect::<Vec<_>>();
+    assert_eq!(revisions.len(), 2);
+    for revision in &revisions {
+        let source = revision.join("src");
+        fs_err::create_dir_all(source.join("retained"))?;
+        fs_err::write(source.join("revision.rev"), &revision_contents)?;
+        fs_err::write(source.join("retained/payload"), "keep me")?;
+    }
+
     // Pruning should remove the unused revision.
     uv_snapshot!(context.filters(), context.prune().arg("--verbose"), @"
     exit_code: 0 (success)
@@ -445,6 +467,16 @@ fn prune_stale_revision() -> Result<()> {
     DEBUG Removing dangling cache archive: [CACHE_DIR]/archive-v0/[ENTRY]
     Removed [N] files ([SIZE])
     ");
+
+    let retained = revisions
+        .into_iter()
+        .filter(|revision| revision.is_dir())
+        .collect::<Vec<_>>();
+    assert_eq!(retained.len(), 1);
+    assert_eq!(
+        fs_err::read_to_string(retained[0].join("src/retained/payload"))?,
+        "keep me"
+    );
 
     // Uninstall and reinstall the package. We should use the cached version.
     uv_snapshot!(context.filters(), context
