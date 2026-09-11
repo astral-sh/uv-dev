@@ -943,10 +943,11 @@ impl<Reader: tokio::io::AsyncRead + Unpin, Callback: Fn(usize) + Unpin> tokio::i
         cx: &mut std::task::Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
+        let filled = buf.filled().len();
         std::pin::Pin::new(&mut self.as_mut().reader)
             .poll_read(cx, buf)
             .map_ok(|()| {
-                (self.callback)(buf.filled().len());
+                (self.callback)(buf.filled().len() - filled);
             })
     }
 }
