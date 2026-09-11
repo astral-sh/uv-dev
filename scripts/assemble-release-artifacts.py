@@ -97,7 +97,7 @@ def assemble(
     }
     releases = [release for release in plan["releases"] if release["app_name"] == "uv"]
     if len(releases) != 1:
-        raise ValueError("Expected one uv release in the cargo-dist plan")
+        raise ValueError("Expected one uv release in the release plan")
     archives = {}
     for name in releases[0]["artifacts"]:
         artifact = plan["artifacts"][name]

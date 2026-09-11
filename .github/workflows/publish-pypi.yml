@@ -1,7 +1,6 @@
 # Publish a release to PyPI.
 #
-# Assumed to run as a subworkflow of .github/workflows/release.yml; specifically, as a publish job
-# within `cargo-dist`.
+# Called by .github/workflows/release.yml.
 name: "Publish to PyPI"
 
 on:

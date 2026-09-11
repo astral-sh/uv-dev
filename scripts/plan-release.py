@@ -43,17 +43,6 @@ def configuration(root: Path = ROOT) -> dict[str, Any]:
     return config
 
 
-def check_legacy_configuration(root: Path = ROOT) -> None:
-    """Require the parallel release planners to agree during migration."""
-    legacy = root / "dist-workspace.toml"
-    if legacy.exists():
-        old = tomllib.loads(legacy.read_text(encoding="utf-8"))["dist"]
-        new = configuration(root)
-        for key in ("targets", "min-glibc-version"):
-            if old[key] != new[key]:
-                raise ValueError(f"Release configuration differs for {key}")
-
-
 def changelog(root: Path, version: str) -> str:
     """Read only the changelog section for the version being released."""
     contents = (root / "CHANGELOG.md").read_text(encoding="utf-8")
@@ -72,7 +61,6 @@ def release_plan(
 ) -> dict[str, Any]:
     """Describe the release's publication inventory without building or publishing."""
     config = configuration(root)
-    check_legacy_configuration(root)
     version = tomllib.loads(
         (root / "crates/uv/Cargo.toml").read_text(encoding="utf-8")
     )["package"]["version"]

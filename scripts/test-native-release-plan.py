@@ -68,15 +68,13 @@ class NativeReleasePlan(unittest.TestCase):
                 "https://github.com/example/uv/releases/download/1.2.3",
             )
 
-    def test_prerelease_and_parallel_configuration(self) -> None:
+    def test_prerelease_and_target_validation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             fixture(root, "1.2.3-rc.1+build.2")
             self.assertTrue(PLAN.release_plan(root=root)["announcement_is_prerelease"])
-            (root / "dist-workspace.toml").write_text(
-                "[dist]\ntargets = []\nmin-glibc-version = {}\n"
-            )
-            with self.assertRaisesRegex(ValueError, "configuration differs"):
+            (root / "release-targets.toml").write_text("targets = []\n")
+            with self.assertRaisesRegex(ValueError, "nonempty and unique"):
                 PLAN.release_plan(root=root)
 
     def test_publication_contract_comparison(self) -> None:

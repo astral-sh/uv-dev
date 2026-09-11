@@ -1,5 +1,8 @@
 # The uv installer
 
+The shell and PowerShell installers select and verify a compatible release archive, then invoke
+`uv self install` to install the distribution and configure the installation.
+
 ## Self-management
 
 Standalone distributions can install themselves with `uv self install`. The command installs the

@@ -5,7 +5,7 @@
 #
 # Called from:
 # - .github/workflows/ci.yml (when release-relevant files change)
-# - .github/workflows/release.yml (as a local artifacts job within `cargo-dist`)
+# - .github/workflows/release.yml
 name: "Build release binaries"
 
 on:

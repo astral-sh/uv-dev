@@ -5,7 +5,7 @@ on:
   workflow_call:
     inputs:
       plan:
-        description: "The cargo-dist release plan"
+        description: "The release plan"
         required: true
         type: string
     outputs:
