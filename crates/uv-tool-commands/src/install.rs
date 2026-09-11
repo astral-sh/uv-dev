@@ -1,3 +1,4 @@
+use std::error::Error as StdError;
 use std::fmt::Write;
 use std::str::FromStr;
 use uv_dispatch::PlatformState;
@@ -20,6 +21,7 @@ use uv_distribution_types::{
     ExtraBuildRequires, IndexCapabilities, NameRequirementSpecification, Requirement,
     RequirementSource, UnresolvedRequirementSpecification,
 };
+use uv_errors::{Diagnostic, ErrorOptions, Hints};
 use uv_installer::{BuildSettings, InstallationStrategy, Planner, SatisfiesResult, SitePackages};
 use uv_normalize::PackageName;
 use uv_pep440::{VersionSpecifier, VersionSpecifiers};
@@ -58,6 +60,12 @@ use uv_resolve_operations::latest::LatestClient;
 use uv_resolve_operations::loggers::{DefaultResolveLogger, SummaryResolveLogger};
 use uv_resolve_operations::{resolution_markers, resolution_tags};
 use uv_settings::{ResolverInstallerSettings, ResolverSettings};
+
+fn diagnostic_for_error<'a>(error: &'a (dyn StdError + 'static)) -> Option<Diagnostic<'a>> {
+    uv_settings::diagnostic_for_error(error)
+        .or_else(|| uv_workspace::pyproject::diagnostic_for_error(error))
+        .or_else(|| uv_pypi_types::diagnostic_for_error(error))
+}
 
 /// Install a tool.
 pub async fn install(
@@ -566,7 +574,9 @@ pub async fn install(
                     warn_user_with_chain!(
                         anyhow::Error::from(err)
                             .context("Failed to validate existing tool lock")
-                            .as_ref()
+                            .as_ref(),
+                        Hints::none(),
+                        ErrorOptions::default().with_diagnostic(diagnostic_for_error),
                     );
                     None
                 }
