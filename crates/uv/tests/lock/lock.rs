@@ -25479,6 +25479,7 @@ fn lock_named_index_cli() -> Result<()> {
     error: Failed to build `project @ file://[TEMP_DIR]/`
       cause: Failed to parse entry: `jinja2`
       cause: Package `jinja2` references an undeclared index: `pytorch`
+       --> pyproject.toml:9:28
     ");
 
     // But it's fine if it comes from the CLI.
@@ -25538,6 +25539,72 @@ fn lock_named_index_cli() -> Result<()> {
     Ok(())
 }
 
+/// A member source takes precedence over the root, retaining its occurrence before scope filtering.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_named_index_source_locations() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["member"]
+
+        [tool.uv.workspace]
+        members = ["packages/*"]
+
+        [tool.uv.sources]
+        member = { workspace = true }
+        "Demo.Pkg" = { index = "root-missing" }
+    "#})?;
+
+    let member_project = indoc! {r#"
+        [project]
+        name = "member"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["demo-pkg"]
+
+        [project.optional-dependencies]
+        unused = ["demo-pkg"]
+    "#};
+    let member_sources = indoc! {r#"
+        [tool.uv.sources]
+        "Demo_Pkg" = [
+            { index = "member-missing", extra = "unused" },
+            { index = "member-missing", marker = "sys_platform != 'sentinel-secret'" }, { url = "https://user:sentinel-secret@example.com/demo_pkg-1.0.0-py3-none-any.whl", marker = "sys_platform == 'sentinel-secret'" },
+        ]
+    "#};
+    let member_pyproject = context.temp_dir.child("packages/member/pyproject.toml");
+    member_pyproject.write_str(&format!("{member_project}\n{member_sources}"))?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to build `member @ file://[TEMP_DIR]/packages/member`
+      cause: Failed to parse entry: `demo-pkg`
+      cause: Package `demo-pkg` references an undeclared index: `member-missing`
+       --> packages/member/pyproject.toml:13:15
+    ");
+
+    // Without the member override, the root declaration is the source of the missing index.
+    member_pyproject.write_str(member_project)?;
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to build `member @ file://[TEMP_DIR]/packages/member`
+      cause: Failed to parse entry: `demo-pkg`
+      cause: Package `demo-pkg` references an undeclared index: `root-missing`
+       --> pyproject.toml:12:24
+    ");
+
+    Ok(())
+}
+
 /// If a named index is referenced in `tool.uv.sources` but only defined in `uv.toml`, we should
 /// provide a hint that the index was found in a configuration file.
 #[cfg(feature = "test-universal")]
@@ -25576,6 +25643,7 @@ fn lock_named_index_config_file_hint() -> Result<()> {
     error: Failed to build `project @ file://[TEMP_DIR]/`
       cause: Failed to parse entry: `jinja2`
       cause: Package `jinja2` references an undeclared index: `pytorch`
+       --> pyproject.toml:9:28
       hint: Index `pytorch` was found in a project-level `uv.toml`, but indexes referenced via `tool.uv.sources` must be defined in the project's `pyproject.toml`
     ");
 
@@ -25629,6 +25697,7 @@ fn lock_named_index_user_config_file_hint() -> Result<()> {
     error: Failed to build `project @ file://[TEMP_DIR]/`
       cause: Failed to parse entry: `jinja2`
       cause: Package `jinja2` references an undeclared index: `pytorch`
+       --> pyproject.toml:9:28
       hint: Index `pytorch` was found in a user-level `uv.toml`, but indexes referenced via `tool.uv.sources` must be defined in the project's `pyproject.toml`
     ");
 

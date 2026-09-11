@@ -6531,6 +6531,7 @@ dependencies = [
 name = "uv-distribution"
 version = "0.0.79"
 dependencies = [
+ "anstream",
  "anyhow",
  "astral-reqwest-middleware",
  "either",
@@ -6575,6 +6576,7 @@ dependencies = [
  "uv-pypi-types",
  "uv-python",
  "uv-redacted",
+ "uv-toml",
  "uv-types",
  "uv-workspace",
  "walkdir",
