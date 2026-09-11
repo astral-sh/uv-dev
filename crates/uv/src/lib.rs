@@ -34,6 +34,8 @@ use uv_cli::{
 };
 use uv_client::BaseClientBuilder;
 use uv_configuration::min_stack_size;
+#[cfg(not(feature = "self-update"))]
+use uv_errors::{Hinted, Hints, Info};
 use uv_flags::EnvironmentFlags;
 use uv_fs::{CWD, Simplified, normalize_path};
 #[cfg(feature = "self-update")]
@@ -117,17 +119,25 @@ struct ExternallyInstalledError {
 }
 
 #[cfg(not(feature = "self-update"))]
-impl uv_errors::Hinted for ExternallyInstalledError {
-    fn hints(&self) -> uv_errors::Hints<'_> {
+impl Hinted for ExternallyInstalledError {
+    fn hints(&self) -> Hints<'_> {
         if let Some(source) = &self.install_source {
-            uv_errors::Hints::from(format!(
-                "You installed uv using {}. To update uv, run `{}`",
-                source.description(),
+            Hints::from(format!(
+                "Run `{}` to update uv",
                 source.update_instructions(),
             ))
         } else {
-            uv_errors::Hints::from("Please use your package manager to update uv")
+            Hints::from("Use your package manager to update uv")
         }
+    }
+}
+
+#[cfg(not(feature = "self-update"))]
+impl ExternallyInstalledError {
+    /// Identify the package manager responsible for this installation.
+    fn own_info(&self) -> Option<Info<'static>> {
+        self.install_source
+            .map(|source| Info::new(format!("You installed uv using {}", source.description())))
     }
 }
 

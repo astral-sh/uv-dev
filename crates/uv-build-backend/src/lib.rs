@@ -555,7 +555,7 @@ mod tests {
         Unsupported glob expression in: tool.uv.build-backend.source-include
           Caused by: Invalid character `@` at position 3 in glob: `**/@test`
 
-        hint: Characters can be escaped with a backslash
+        hint: Escape the character with a backslash
         "#);
     }
 
