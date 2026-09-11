@@ -1,0 +1,17 @@
+name: Reusable nextest count smoke test
+
+on:
+  push:
+    branches: [zb/ci-nextest-reuse-smoke-20260911]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    uses: astral-sh/uv-dev/.github/workflows/test.yml@febb9fce7d39a18db2c1fef9abc254301258cc44
+    with:
+      save-rust-cache: "true"
+      test-macos: "true"
+      linux-shards: 2
+      macos-shards: 1
