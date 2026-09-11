@@ -30726,6 +30726,7 @@ fn lock_group_requires_undefined_group() -> Result<()> {
     ----- stderr -----
     error: Project `myproject` has malformed dependency groups
       cause: Failed to find group `foo` specified in `[tool.uv.dependency-groups]`
+       --> pyproject.toml:12:9
     ");
     Ok(())
 }
@@ -30759,6 +30760,9 @@ fn lock_group_requires_dev_dep() -> Result<()> {
     warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
     error: Project `myproject` has malformed dependency groups
       cause: `[tool.uv.dependency-groups]` specifies the `dev` group, but only `tool.uv.dev-dependencies` was found. To reference the `dev` group, remove the `tool.uv.dev-dependencies` section and add any development dependencies to the `dev` entry in the `[dependency-groups]` table instead.
+       --> pyproject.toml:12:9
+      info: Legacy development dependencies are defined here
+       --> pyproject.toml:9:9
     ");
     Ok(())
 }
@@ -30905,12 +30909,26 @@ fn lock_group_include_cycle() -> Result<()> {
         "#,
     )?;
 
-    uv_snapshot!(context.filters(), context.lock(), @"
+    uv_snapshot!(context.filters(), context.lock(), @r#"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Project `project` has malformed dependency groups
       cause: Detected a cycle in `dependency-groups`: `bar` -> `foobar` -> `foo` -> `bar`
-    ");
+       --> pyproject.toml:9:42
+        |
+      9 |         foo = ["anyio", {include-group = "bar"}]
+        |                                          ^^^^^ closes the cycle
+      info: Group `foobar` is included by `bar` here
+        --> pyproject.toml:10:33
+         |
+      10 |         bar = [{include-group = "foobar"}]
+         |                                 -------- included here
+      info: Group `foo` is included by `foobar` here
+        --> pyproject.toml:11:36
+         |
+      11 |         foobar = [{include-group = "foo"}]
+         |                                    ----- included here
+    "#);
 
     Ok(())
 }
@@ -30943,6 +30961,12 @@ fn lock_group_include_dev() -> Result<()> {
     warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
     error: Project `project` has malformed dependency groups
       cause: Group `foo` includes the `dev` group (`include = "dev"`), but only `tool.uv.dev-dependencies` was found. To reference the `dev` group via an `include`, remove the `tool.uv.dev-dependencies` section and add any development dependencies to the `dev` entry in the `[dependency-groups]` table instead.
+        --> pyproject.toml:12:54
+         |
+      12 |         foo = ["typing-extensions", {include-group = "dev"}]
+         |                                                      ^^^^^ the standard `dev` group is not defined
+      info: Legacy development dependencies are defined here
+       --> pyproject.toml:9:9
     "#);
 
     Ok(())
@@ -30967,13 +30991,150 @@ fn lock_group_include_missing() -> Result<()> {
         "#,
     )?;
 
-    uv_snapshot!(context.filters(), context.lock(), @"
+    uv_snapshot!(context.filters(), context.lock(), @r#"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Project `project` has malformed dependency groups
       cause: Failed to find group `bar` included by `foo`
-    ");
+       --> pyproject.toml:9:42
+        |
+      9 |         foo = ["anyio", {include-group = "bar"}]
+        |                                          ^^^^^ undefined group
+    "#);
 
+    Ok(())
+}
+
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_group_include_source_occurrences() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        # café
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [dependency-groups]
+        "0.Root" = ["same", { include-group = "sAmE" }, "same", { include-group = "mIdDlE" }]
+        middle = ["missing-name", { include-group = "MISSING_Name" }, "missing-name"]
+        same = []
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Project `project` has malformed dependency groups
+      cause: Failed to find group `missing-name` included by `middle`
+       --> pyproject.toml:9:45
+        |
+      9 | middle = ["missing-name", { include-group = "MISSING_Name" }, "missing-name"]
+        |                                             ^^^^^^^^^^^^^^ undefined group
+      info: Group `middle` is included by `0-root` here
+       --> pyproject.toml:8:75
+        |
+      8 | "0.Root" = ["same", { include-group = "sAmE" }, "same", { include-group = "mIdDlE" }]
+        |                                                                           -------- included here
+    "#);
+    Ok(())
+}
+
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_group_include_cycle_tail() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [dependency-groups]
+        first = [{ include-group = "inner-a" }]
+        inner-a = ["same", { include-group = "inner-b" }]
+        inner-b = ["same", "same", { include-group = "inner-a" }]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Project `project` has malformed dependency groups
+      cause: Detected a cycle in `dependency-groups`: `inner-a` -> `inner-b` -> `inner-a`
+       --> pyproject.toml:9:46
+        |
+      9 | inner-b = ["same", "same", { include-group = "inner-a" }]
+        |                                              ^^^^^^^^^ closes the cycle
+      info: Group `inner-b` is included by `inner-a` here
+       --> pyproject.toml:8:38
+        |
+      8 | inner-a = ["same", { include-group = "inner-b" }]
+        |                                      --------- included here
+    "#);
+    Ok(())
+}
+
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_group_include_source_privacy() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [dependency-groups]
+        first = [{ include-group = "middle" }]
+        middle = [{ include-group = "missing" }, "private \u0040 https\u003a//user:password@example.com/private-1.0.0-py3-none-any.whl"]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Project `project` has malformed dependency groups
+      cause: Failed to find group `missing` included by `middle`
+       --> pyproject.toml:8:29
+      info: Group `middle` is included by `first` here
+       --> pyproject.toml:7:28
+        |
+      7 | first = [{ include-group = "middle" }]
+        |                            -------- included here
+    "#);
+
+    pyproject_toml.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [dependency-groups]
+        first = [{ include-group = "middle" }]
+        middle = [
+            """private @ https://example.com/private-1.0.0-py3-none-any.whl?token=\
+                sentinel-secret""", { include-group = "missing" },
+        ]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Project `project` has malformed dependency groups
+      cause: Failed to find group `missing` included by `middle`
+       --> pyproject.toml:10:47
+      info: Group `middle` is included by `first` here
+       --> pyproject.toml:7:28
+        |
+      7 | first = [{ include-group = "middle" }]
+        |                            -------- included here
+    "#);
     Ok(())
 }
 

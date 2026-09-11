@@ -11689,13 +11689,17 @@ fn recursive_dependency_group() -> Result<()> {
     )?;
 
     uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--group").arg("test"), @"
+        .arg("--group").arg("test"), @r#"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to read dependency groups from: [TEMP_DIR]/pyproject.toml
       cause: Project `myproject` has malformed dependency groups
       cause: Detected a cycle in `dependency-groups`: `test` -> `test`
-    ");
+       --> pyproject.toml:9:31
+        |
+      9 |             { include-group = "test" },
+        |                               ^^^^^^ closes the cycle
+    "#);
 
     // Test mutually recursive groups.
     pyproject_toml.write_str(
@@ -11718,13 +11722,22 @@ fn recursive_dependency_group() -> Result<()> {
     )?;
 
     uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--group").arg("test"), @"
+        .arg("--group").arg("test"), @r#"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to read dependency groups from: [TEMP_DIR]/pyproject.toml
       cause: Project `myproject` has malformed dependency groups
       cause: Detected a cycle in `dependency-groups`: `dev` -> `test` -> `dev`
-    ");
+       --> pyproject.toml:9:31
+        |
+      9 |             { include-group = "dev" },
+        |                               ^^^^^ closes the cycle
+      info: Group `test` is included by `dev` here
+        --> pyproject.toml:13:31
+         |
+      13 |             { include-group = "test" },
+         |                               ------ included here
+    "#);
 
     Ok(())
 }
