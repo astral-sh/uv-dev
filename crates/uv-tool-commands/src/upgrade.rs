@@ -1,11 +1,10 @@
-use crate::common::finalize_tool_install;
 use anyhow::{Context, Result};
 use itertools::Itertools;
 use owo_colors::OwoColorize;
 use std::collections::BTreeMap;
 use std::fmt::Write;
 use std::str::FromStr;
-use tracing::{debug, trace};
+use tracing::debug;
 
 use uv_cache::Cache;
 use uv_cache_key::CanonicalUrl;
@@ -31,8 +30,8 @@ use uv_tool::{InstalledTools, Tool};
 use uv_types::{HashStrategy, SourceTreeEditablePolicy};
 use uv_workspace::WorkspaceCache;
 
-use crate::common::{ToolLock, remove_entrypoints, tool_environment_spec};
-use uv_command_support::{ExitStatus, Printer, conjunction};
+use crate::common::{ToolLock, finalize_tool_install, remove_entrypoints, tool_environment_spec};
+use uv_command_support::{ExitStatus, Printer, UvError, conjunction};
 use uv_environment_operations::{
     EnvironmentResolution, EnvironmentUpdate, resolve_environment, sync_environment,
     update_environment,
@@ -61,7 +60,6 @@ pub async fn upgrade(
     workspace_cache: &WorkspaceCache,
     printer: Printer,
     preview: Preview,
-    render_error: fn(&anyhow::Error, Printer) -> std::fmt::Result,
 ) -> Result<ExitStatus> {
     let installed_tools = InstalledTools::from_settings()?.init()?;
     let _lock = installed_tools.lock().await?;
@@ -177,17 +175,13 @@ pub async fn upgrade(
     }
 
     if !errors.is_empty() {
-        for (name, err) in errors
+        let errors = errors
             .into_iter()
             .sorted_unstable_by(|(name_a, _), (name_b, _)| name_a.cmp(name_b))
-        {
-            trace!("Error trace: {err:?}");
-            render_error(
-                &err.context(format!("Failed to upgrade {}", name.green())),
-                printer,
-            )?;
-        }
-        return Ok(ExitStatus::Failure);
+            .map(|(name, err)| {
+                UvError::user(err.context(format!("Failed to upgrade {}", name.green())))
+            });
+        return Err(UvError::batch(errors).into());
     }
 
     if did_upgrade_tool.is_empty() && did_upgrade_environment.is_empty() {
