@@ -199,7 +199,9 @@ async fn publish_files(
                 write_error_chain_with_options(
                     err.as_ref(),
                     &Hints::none(),
-                    ErrorOptions::default().with_stream(printer.stderr()),
+                    ErrorOptions::default()
+                        .with_format(printer.error_format())
+                        .with_stream(printer.stderr()),
                 )?;
                 error_count += 1;
             }
@@ -395,7 +397,9 @@ async fn gather_credentials(
                 .context("Trusted publishing failed")
                 .as_ref(),
             &Hints::none(),
-            ErrorOptions::default().with_stream(printer.stderr()),
+            ErrorOptions::default()
+                .with_format(printer.error_format())
+                .with_stream(printer.stderr()),
         )?;
     }
 
@@ -470,7 +474,7 @@ mod tests {
             &client,
             None,
             Prompt::Disabled,
-            Printer::Quiet,
+            Printer::new(1, 0, false),
         )
         .await
         .map(|(publish_url, credentials)| (publish_url, credentials.as_credentials().into_owned()))

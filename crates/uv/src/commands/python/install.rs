@@ -928,7 +928,9 @@ async fn perform_install(
                     write_error_chain_with_options(
                         err.context(format!("Failed to install {key}")).as_ref(),
                         &Hints::none(),
-                        ErrorOptions::default().with_stream(printer.stderr()),
+                        ErrorOptions::default()
+                            .with_format(printer.error_format())
+                            .with_stream(printer.stderr()),
                     )?;
                 }
                 InstallErrorKind::Bin => {
@@ -943,6 +945,7 @@ async fn perform_install(
                             .as_ref(),
                         &Hints::none(),
                         ErrorOptions::default()
+                            .with_format(printer.error_format())
                             .with_level(level)
                             .with_color(color)
                             .with_stream(printer.stderr()),
@@ -961,6 +964,7 @@ async fn perform_install(
                             .as_ref(),
                         &Hints::none(),
                         ErrorOptions::default()
+                            .with_format(printer.error_format())
                             .with_level(level)
                             .with_color(color)
                             .with_stream(printer.stderr()),

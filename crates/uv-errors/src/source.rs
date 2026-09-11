@@ -294,39 +294,49 @@ fn source_elements<'a>(snippet: &'a SourceSnippet<'_>) -> Vec<Element<'a>> {
 }
 
 /// The explicitly selected, displayable part of one source snapshot.
-struct SourceView<'a> {
-    name: Option<String>,
-    kind: SourceViewKind<'a>,
+pub(crate) struct SourceView<'a> {
+    pub(crate) name: Option<String>,
+    pub(crate) kind: SourceViewKind<'a>,
 }
 
-enum SourceViewKind<'a> {
+pub(crate) enum SourceViewKind<'a> {
     Origin,
     Location(SourcePosition),
     Windows(Vec<SourceWindowView<'a>>),
 }
 
-/// A position in the decoded input, with a one-based line and zero-based character column.
-struct SourcePosition {
-    line: usize,
-    character_column: usize,
+/// A position in the decoded input, with a one-based line and zero-based columns.
+pub(crate) struct SourcePosition {
+    pub(crate) line: usize,
+    pub(crate) byte_column: usize,
+    pub(crate) character_column: usize,
 }
 
-struct SourceWindowView<'a> {
-    text: &'a str,
-    line_start: usize,
-    annotations: Vec<SourceAnnotationView<'a>>,
+pub(crate) struct SourceWindowView<'a> {
+    pub(crate) text: &'a str,
+    pub(crate) line_start: usize,
+    pub(crate) annotations: Vec<SourceAnnotationView<'a>>,
 }
 
-struct SourceAnnotationView<'a> {
+impl SourceWindowView<'_> {
+    /// Resolve a byte offset relative to this selected window.
+    pub(crate) fn position(&self, offset: usize) -> Option<SourcePosition> {
+        SourceLines::new(self.text).position(offset, self.line_start)
+    }
+}
+
+pub(crate) struct SourceAnnotationView<'a> {
+    /// The original, half-open byte range relative to the selected window.
+    pub(crate) range: Range<usize>,
     display_range: Range<usize>,
-    label: Option<&'a str>,
-    kind: AnnotationKind,
+    pub(crate) label: Option<&'a str>,
+    pub(crate) kind: AnnotationKind,
     visible_context: Vec<Range<usize>>,
 }
 
 /// Select explicit source windows before handing source text to any renderer. In particular,
 /// unrelated configuration lines must not become visible merely because annotations are nearby.
-fn source_view<'a>(snippet: &'a SourceSnippet<'_>) -> Option<SourceView<'a>> {
+pub(crate) fn source_view<'a>(snippet: &'a SourceSnippet<'_>) -> Option<SourceView<'a>> {
     let source = &snippet.source;
     let lines = SourceLines::new(source.text());
     let name = normalize_single_line(source.name());
@@ -435,6 +445,7 @@ fn source_view<'a>(snippet: &'a SourceSnippet<'_>) -> Option<SourceView<'a>> {
                 }
             }
             annotations.push(SourceAnnotationView {
+                range: annotation.range.start - range.start..annotation.range.end - range.start,
                 display_range: visible_range.start - range.start..visible_range.end - range.start,
                 label: annotation.label.as_deref(),
                 kind: annotation.kind,
@@ -496,6 +507,7 @@ impl<'a> SourceLines<'a> {
         let prefix = self.text.get(start..offset)?;
         Some(SourcePosition {
             line: line_start.checked_add(line)?,
+            byte_column: offset - start,
             character_column: prefix.chars().count(),
         })
     }

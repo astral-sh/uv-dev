@@ -45,6 +45,7 @@ fn pip_compile_baseline() {
         quiet: 0,
         verbose: 0,
         color: Auto,
+        error_format: Text,
         network_settings: NetworkSettings {
             connectivity: Online,
             offline: Disabled,
@@ -250,6 +251,7 @@ fn publish_resolved_settings() -> anyhow::Result<()> {
         quiet: 0,
         verbose: 0,
         color: Auto,
+        error_format: Text,
         network_settings: NetworkSettings {
             connectivity: Online,
             offline: Disabled,
@@ -417,6 +419,7 @@ fn pip_install_baseline() {
         quiet: 0,
         verbose: 0,
         color: Auto,
+        error_format: Text,
         network_settings: NetworkSettings {
             connectivity: Online,
             offline: Disabled,
@@ -605,6 +608,7 @@ fn lock_baseline() {
         quiet: 0,
         verbose: 0,
         color: Auto,
+        error_format: Text,
         network_settings: NetworkSettings {
             connectivity: Online,
             offline: Disabled,
@@ -732,6 +736,7 @@ fn version_baseline() {
         quiet: 0,
         verbose: 0,
         color: Auto,
+        error_format: Text,
         network_settings: NetworkSettings {
             connectivity: Online,
             offline: Disabled,
@@ -874,6 +879,7 @@ fn tool_install_baseline() {
         quiet: 0,
         verbose: 0,
         color: Auto,
+        error_format: Text,
         network_settings: NetworkSettings {
             connectivity: Online,
             offline: Disabled,
