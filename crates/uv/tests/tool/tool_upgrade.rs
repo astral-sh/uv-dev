@@ -700,7 +700,7 @@ fn tool_upgrade_pinned_hint() {
      - pytz==2018.5
      + pytz==2024.1
 
-    hint: `babel` is pinned to `2.6.0` (installed with an exact version pin); reinstall with `uv tool install babel@latest` to upgrade to a new version.
+    hint: To upgrade `babel` from the exact pin `2.6.0`, repeat its original `uv tool install` command with a relaxed or updated version pin, keeping the other installation options.
     ");
 }
 
@@ -744,7 +744,7 @@ fn tool_upgrade_pinned_hint_with_mixed_constraint() {
      - pytz==2018.5
      + pytz==2024.1
 
-    hint: `babel` is pinned to `2.6.0` (installed with an exact version pin); reinstall with `uv tool install babel@latest` to upgrade to a new version.
+    hint: To upgrade `babel` from the exact pin `2.6.0`, repeat its original `uv tool install` command with a relaxed or updated version pin, keeping the other installation options.
     ");
 }
 
@@ -1190,7 +1190,7 @@ fn tool_upgrade_with() {
      - pytz==2018.5
      + pytz==2024.1
 
-    hint: `python-dotenv` is pinned to `0.10.2.post2` (installed with an exact version pin); reinstall with `uv tool install python-dotenv@latest` to upgrade to a new version.
+    hint: To upgrade `python-dotenv` from the exact pin `0.10.2.post2`, repeat its original `uv tool install` command with a relaxed or updated version pin, keeping the other installation options.
     ");
 }
 
