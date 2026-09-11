@@ -525,6 +525,8 @@ fn invalid_completion() -> io::Error {
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
+    use std::collections::BTreeSet;
+    use std::env;
     use std::ffi::OsStr;
     use std::io::{self, Read, Write};
     use std::mem;
@@ -533,11 +535,14 @@ mod tests {
     use std::os::unix::ffi::OsStrExt;
     use std::os::unix::net::UnixStream;
     use std::path::{Path, PathBuf};
+    use std::process::Command;
+    use std::str::from_utf8;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::mpsc;
     use std::time::Duration;
 
+    use rustix::fs::{Dir, Mode, OFlags, open};
     use rustix::io::Errno;
 
     use super::{
@@ -568,6 +573,31 @@ mod tests {
         for (path, actual) in paths.iter().zip(actual) {
             assert_eq!(comparable(actual), comparable(&ordinary(path)));
         }
+    }
+
+    fn open_descriptors() -> io::Result<BTreeSet<i32>> {
+        let directory = Dir::new(open(
+            "/proc/self/fd",
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+            Mode::empty(),
+        )?)?;
+        let observer = directory.fd()?.as_raw_fd();
+        let mut descriptors = BTreeSet::new();
+        for entry in directory {
+            let entry = entry?;
+            let name = entry.file_name().to_bytes();
+            if name == b"." || name == b".." {
+                continue;
+            }
+            let descriptor = from_utf8(name)
+                .map_err(io::Error::other)?
+                .parse::<i32>()
+                .map_err(io::Error::other)?;
+            if descriptor != observer {
+                descriptors.insert(descriptor);
+            }
+        }
+        Ok(descriptors)
     }
 
     #[test]
@@ -737,6 +767,90 @@ mod tests {
             assert_eq!(reader.ring.as_ref().map(AsRawFd::as_raw_fd), descriptor);
         }
         assert!(reader.read(&[])?.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires an io_uring-capable Linux host with procfs"]
+    fn active_reader_keeps_descriptor_count_stable() -> io::Result<()> {
+        const CHILD_ENV: &str = "UV_BENCH_SMALL_READ_FD_CHILD";
+        let test_name = concat!(
+            module_path!(),
+            "::active_reader_keeps_descriptor_count_stable"
+        )
+        .split_once("::")
+        .expect("test module path includes its crate")
+        .1;
+        if env::var(CHILD_ENV).as_deref() != Ok(test_name) {
+            // The unavailable-drain test deliberately retains descriptors. Run this one test in
+            // a fresh process so neither that test nor parallel libtest activity can affect the
+            // descriptor snapshots. The child marker prevents recursive re-execution, while the
+            // exact filter keeps all other tests out of the child process.
+            let output = Command::new(env::current_exe()?)
+                .args([
+                    "--exact",
+                    test_name,
+                    "--ignored",
+                    "--test-threads=1",
+                    "--format=pretty",
+                    "--color=never",
+                ])
+                .env(CHILD_ENV, test_name)
+                .output()?;
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(
+                output.status.success(),
+                "isolated descriptor test failed:\n{stdout}\n{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(
+                stdout
+                    .lines()
+                    .filter(|line| *line == "running 1 test")
+                    .count(),
+                1,
+                "isolated process did not execute the exact descriptor test: {stdout}"
+            );
+            return Ok(());
+        }
+
+        let root = tempfile::tempdir()?;
+        let paths = (0..37)
+            .map(|index| {
+                let path = root.path().join(format!("file-{index}"));
+                fs_err::write(&path, vec![b'x'; index * 257])?;
+                Ok(path)
+            })
+            .collect::<io::Result<Vec<_>>>()?;
+        let error_paths = vec![
+            root.path().to_path_buf(),
+            root.path().join("missing"),
+            paths[0].join("not-a-directory"),
+        ];
+        assert_eq!(
+            ordinary(&error_paths[0])
+                .expect_err("reading a directory must fail")
+                .raw_os_error(),
+            Some(Errno::ISDIR.raw_os_error())
+        );
+        let without_ring = open_descriptors()?;
+        for queue_depth in [1, 4, 16] {
+            let mut reader =
+                Reader::new(NonZeroU32::new(queue_depth).expect("non-zero queue depth"))?;
+            assert_results(&paths, &reader.read(&paths)?);
+            assert_results(&error_paths, &reader.read(&error_paths)?);
+            let with_ring = open_descriptors()?;
+            assert_eq!(with_ring.len(), without_ring.len() + 1);
+            for _ in 0..64 {
+                assert_results(&paths, &reader.read(&paths)?);
+                assert_results(&error_paths, &reader.read(&error_paths)?);
+                assert!(reader.pending.is_none());
+                assert_eq!(reader.buffers.len(), reader.capacity);
+                assert_eq!(open_descriptors()?, with_ring);
+            }
+            drop(reader);
+            assert_eq!(open_descriptors()?, without_ring);
+        }
         Ok(())
     }
 
