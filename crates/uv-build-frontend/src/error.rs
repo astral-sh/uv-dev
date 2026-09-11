@@ -11,7 +11,7 @@ use regex::regex;
 use thiserror::Error;
 use uv_configuration::BuildOutput;
 use uv_distribution_types::IsBuildBackendError;
-use uv_errors::{HintOrdering, Hinted, Hints};
+use uv_errors::{HintOrdering, Hinted, Hints, Info};
 use uv_fs::Simplified;
 use uv_normalize::PackageName;
 use uv_pep440::Version;
@@ -105,9 +105,6 @@ impl IsBuildBackendError for Error {
 impl Hinted for Error {
     fn hints(&self) -> Hints<'_> {
         match self {
-            Self::BuildBackend(_) => Hints::from(
-                "Build failures usually indicate a problem with the package or the build environment",
-            ),
             Self::MissingHeader(err) => Hints::from(err.cause.to_string()),
             Self::Lowering(err) => err.hints(),
             Self::RequirementsResolve(_, err) | Self::RequirementsInstall(_, err) => err.hints(),
@@ -119,9 +116,7 @@ impl Hinted for Error {
         match self {
             // The source contains the backend's output, which provides the evidence for this
             // advice.
-            Self::BuildBackend(_) | Self::MissingHeader(_) => {
-                self.hints().with_ordering(HintOrdering::Last)
-            }
+            Self::MissingHeader(_) => self.hints().with_ordering(HintOrdering::Last),
             _ => Hints::none(),
         }
     }
@@ -140,6 +135,32 @@ impl Hinted for Error {
             | Self::Virtualenv(_)
             | Self::CommandFailed(..)
             | Self::BuildBackend(_)
+            | Self::MissingHeader(_)
+            | Self::BuildScriptPath(_)
+            | Self::CyclicBuildDependency(_)
+            | Self::UnmatchedRuntime(..) => None,
+        }
+    }
+}
+
+impl Error {
+    /// Return explanatory context owned by this build failure.
+    pub fn own_info(&self) -> Option<Info<'static>> {
+        match self {
+            Self::BuildBackend(_) => Some(Info::new(
+                "Build failures usually indicate a problem with the package or the build environment",
+            )),
+            Self::Io(_)
+            | Self::Lowering(_)
+            | Self::InvalidSourceDist(_)
+            | Self::InvalidPyprojectTomlSyntax(_)
+            | Self::InvalidPyprojectTomlSchema(_)
+            | Self::InvalidBackendPath(_)
+            | Self::BackendPathOutsideSourceTree(_)
+            | Self::RequirementsResolve(..)
+            | Self::RequirementsInstall(..)
+            | Self::Virtualenv(_)
+            | Self::CommandFailed(..)
             | Self::MissingHeader(_)
             | Self::BuildScriptPath(_)
             | Self::CyclicBuildDependency(_)
@@ -504,7 +525,10 @@ mod test {
     use std::process::ExitStatus;
     use std::str::FromStr;
     use uv_configuration::BuildOutput;
-    use uv_errors::{ErrorWithHints, Hinted};
+    use uv_errors::{
+        Diagnostic, ErrorFormat, ErrorOptions, ErrorWithHints, Hinted, Hints,
+        write_error_chain_with_options,
+    };
     use uv_normalize::PackageName;
     use uv_pep440::Version;
 
@@ -516,6 +540,50 @@ mod test {
             .replace("exit status: ", "exit code: ");
         let formatted = ErrorWithHints::new(formatted, err.hints()).to_string();
         anstream::adapter::strip_str(&formatted).to_string()
+    }
+
+    #[test]
+    fn build_backend_context_is_not_a_hint() -> Result<(), Box<dyn std::error::Error>> {
+        let output = PythonRunnerOutput {
+            status: ExitStatus::default(),
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+        };
+        let error = Error::from_command_output(
+            "Failed building wheel through setup.py".to_string(),
+            &output,
+            BuildOutput::Quiet,
+            None,
+            None,
+            None,
+        );
+        assert_matches!(error, Error::BuildBackend(_));
+        assert!(error.hints().is_empty());
+        assert!(error.own_hints().is_empty());
+
+        let mut output = String::new();
+        write_error_chain_with_options(
+            &error,
+            &Hints::none(),
+            ErrorOptions::default()
+                .with_format(ErrorFormat::Json)
+                .with_diagnostic(|error| {
+                    error
+                        .downcast_ref::<Error>()?
+                        .own_info()
+                        .map(|info| Diagnostic::default().with_info(info))
+                })
+                .with_stream(&mut output),
+        )?;
+        let report: serde_json::Value = serde_json::from_str(&output)?;
+        insta::assert_json_snapshot!(&report["errors"][0]["info"], @r#"
+        [
+          {
+            "message": "Build failures usually indicate a problem with the package or the build environment"
+          }
+        ]
+        "#);
+        Ok(())
     }
 
     #[test]

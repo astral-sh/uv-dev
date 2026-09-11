@@ -26,7 +26,7 @@ use uv_distribution_types::{
     Identifier, Index, IndexLocations, IndexName, IndexUrl, NameRequirementSpecification,
     Requirement, RequirementSource, UnresolvedRequirement,
 };
-use uv_errors::HintOrdering;
+use uv_errors::{HintOrdering, Hinted, Hints, Info};
 use uv_fs::{LockedFile, LockedFileError, Simplified};
 use uv_git::store_credentials;
 use uv_normalize::{DEV_DEPENDENCIES, DefaultExtras, DefaultGroups, ExtraName, PackageName};
@@ -76,19 +76,24 @@ pub(crate) struct AddDependencyError {
     standard_library_package: Option<PackageName>,
 }
 
-impl uv_errors::Hinted for AddDependencyError {
-    fn hints(&self) -> uv_errors::Hints<'_> {
-        let mut hints = uv_errors::Hints::none();
-        if let Some(package) = &self.standard_library_package {
-            hints.push(format!(
-                "The module `{package}` is included in the Python standard library and usually should not be added as a dependency"
-            ));
-        }
-        hints.push(format!(
+impl Hinted for AddDependencyError {
+    fn hints(&self) -> Hints<'_> {
+        Hints::from(format!(
             "If you want to add the package regardless of the failed resolution, provide the `{}` flag to skip locking and syncing",
             "--frozen".green()
-        ));
-        hints.with_ordering(HintOrdering::Last)
+        ))
+        .with_ordering(HintOrdering::Last)
+    }
+}
+
+impl AddDependencyError {
+    /// Explain when the requested dependency is a standard-library module.
+    pub(crate) fn own_info(&self) -> Option<Info<'static>> {
+        self.standard_library_package.as_ref().map(|package| {
+            Info::new(format!(
+                "The module `{package}` is included in the Python standard library and usually should not be added as a dependency"
+            ))
+        })
     }
 }
 
@@ -1543,4 +1548,56 @@ struct DependencyEdit {
     requirement: uv_pep508::Requirement,
     source: Option<Source>,
     edit: ArrayEdit,
+}
+
+#[cfg(test)]
+mod tests {
+    use insta::assert_json_snapshot;
+    use uv_errors::{ErrorFormat, ErrorOptions, Hints, write_error_chain_with_options};
+
+    use crate::commands::diagnostics::diagnostic_for_error;
+    use crate::commands::pip::operations;
+
+    use super::AddDependencyError;
+
+    #[test]
+    fn standard_library_context_is_separate_from_frozen_advice() -> anyhow::Result<()> {
+        let error = AddDependencyError {
+            cause: anyhow::anyhow!("resolution failed"),
+            standard_library_package: Some("os".parse()?),
+        };
+        let error = operations::Error::Anyhow(anyhow::Error::new(error));
+        let mut output = String::new();
+        write_error_chain_with_options(
+            &error,
+            &Hints::none(),
+            ErrorOptions::default()
+                .with_format(ErrorFormat::Json)
+                .with_diagnostic(diagnostic_for_error)
+                .with_stream(&mut output),
+        )?;
+        let report: serde_json::Value = serde_json::from_str(&output)?;
+        assert_json_snapshot!(&report["errors"], @r#"
+        [
+          {
+            "hints": [
+              {
+                "message": "If you want to add the package regardless of the failed resolution, provide the `--frozen` flag to skip locking and syncing",
+                "ordering": "last"
+              }
+            ],
+            "info": [
+              {
+                "message": "The module `os` is included in the Python standard library and usually should not be added as a dependency"
+              }
+            ],
+            "message": "Failed to add dependencies"
+          },
+          {
+            "message": "resolution failed"
+          }
+        ]
+        "#);
+        Ok(())
+    }
 }
