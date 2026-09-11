@@ -6,9 +6,11 @@ use async_zip::base::write::ZipFileWriter;
 #[cfg(feature = "test-universal")]
 use async_zip::{Compression, ZipEntryBuilder};
 use indoc::{formatdoc, indoc};
+#[cfg(feature = "test-universal")]
+use insta::assert_json_snapshot;
 use insta::assert_snapshot;
 #[cfg(feature = "test-universal")]
-use serde_json::json;
+use serde_json::{Value, json};
 #[cfg(feature = "test-universal")]
 use sha2::{Digest, Sha256};
 use url::Url;
@@ -24482,17 +24484,23 @@ fn lock_overlapping_environment() -> Result<()> {
         "#,
     )?;
 
-    uv_snapshot!(context.filters(), context.lock(), @"
+    uv_snapshot!(context.filters(), context.lock(), @r#"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Supported environments must be disjoint, but the following markers overlap: `sys_platform != 'win32'` and `python_full_version >= '3.11'`
        --> pyproject.toml:9:57
+        |
+      9 |         environments = ["platform_system != 'Windows'", "python_version > '3.10'"]
+        |                                                         ^^^^^^^^^^^^^^^^^^^^^^^^^
       info: The other environment is declared here
        --> pyproject.toml:9:25
+        |
+      9 |         environments = ["platform_system != 'Windows'", "python_version > '3.10'"]
+        |                         ------------------------------
 
     hint: replace `python_full_version >= '3.11'` with `python_full_version >= '3.11' and sys_platform == 'win32'`
        --> pyproject.toml:9:57
-    ");
+    "#);
 
     Ok(())
 }
@@ -24520,16 +24528,22 @@ fn lock_overlapping_environment_non_adjacent() -> Result<()> {
         "#,
     )?;
 
-    uv_snapshot!(context.filters(), context.lock().arg("--offline").arg("--no-index"), @"
+    uv_snapshot!(context.filters(), context.lock().arg("--offline").arg("--no-index"), @r#"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Supported environments must be disjoint, but the following markers overlap: `sys_platform == 'linux'` and `sys_platform == 'linux'`
-       --> pyproject.toml:12:13
+        --> pyproject.toml:12:13
+         |
+      12 |             "sys_platform == 'linux'",
+         |             ^^^^^^^^^^^^^^^^^^^^^^^^^
       info: The other environment is declared here
-       --> pyproject.toml:10:13
+        --> pyproject.toml:10:13
+         |
+      10 |             "sys_platform == 'linux'",
+         |             -------------------------
 
     hint: make the environment markers disjoint, or remove one of the overlapping environments
-    ");
+    "#);
 
     Ok(())
 }
@@ -24557,16 +24571,22 @@ fn lock_overlapping_required_environment_non_adjacent() -> Result<()> {
         "#,
     )?;
 
-    uv_snapshot!(context.filters(), context.lock().arg("--offline").arg("--no-index"), @"
+    uv_snapshot!(context.filters(), context.lock().arg("--offline").arg("--no-index"), @r#"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Supported environments must be disjoint, but the following markers overlap: `sys_platform == 'linux'` and `sys_platform == 'linux'`
-       --> pyproject.toml:12:13
+        --> pyproject.toml:12:13
+         |
+      12 |             "sys_platform == 'linux'",
+         |             ^^^^^^^^^^^^^^^^^^^^^^^^^
       info: The other environment is declared here
-       --> pyproject.toml:10:13
+        --> pyproject.toml:10:13
+         |
+      10 |             "sys_platform == 'linux'",
+         |             -------------------------
 
     hint: make the environment markers disjoint, or remove one of the overlapping environments
-    ");
+    "#);
 
     Ok(())
 }
@@ -24590,16 +24610,22 @@ fn lock_overlapping_environment_subsumed() -> Result<()> {
         "#,
     )?;
 
-    uv_snapshot!(context.filters(), context.lock().arg("--offline").arg("--no-index"), @"
+    uv_snapshot!(context.filters(), context.lock().arg("--offline").arg("--no-index"), @r#"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Supported environments must be disjoint, but the following markers overlap: `sys_platform != 'win32'` and `sys_platform == 'linux'`
        --> pyproject.toml:9:52
+        |
+      9 |         environments = ["sys_platform != 'win32'", "sys_platform == 'linux'"]
+        |                                                    ^^^^^^^^^^^^^^^^^^^^^^^^^
       info: The other environment is declared here
        --> pyproject.toml:9:25
+        |
+      9 |         environments = ["sys_platform != 'win32'", "sys_platform == 'linux'"]
+        |                         -------------------------
 
     hint: make the environment markers disjoint, or remove one of the overlapping environments
-    ");
+    "#);
 
     Ok(())
 }
@@ -24621,7 +24647,7 @@ fn lock_overlapping_environment_workspace_source() -> Result<()> {
         environments = [
             "sys_platform == 'linux'",
             "sys_platform == 'win32'",
-            "sys_platform == 'linux' or sys_platform == 'darwin'", # sentinel-secret
+            "sys_platform == 'linux' or sys_platform == 'darwin'", # Linux and macOS
         ]
     "#})?;
     let member = context.temp_dir.child("member");
@@ -24637,17 +24663,149 @@ fn lock_overlapping_environment_workspace_source() -> Result<()> {
         environments = ["sys_platform == 'darwin'", "sys_platform == 'darwin'"]
     "#})?;
 
-    uv_snapshot!(context.filters(), context.lock().current_dir(&member).arg("--offline").arg("--no-index"), @"
+    uv_snapshot!(context.filters(), context.lock().current_dir(&member).arg("--offline").arg("--no-index"), @r#"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Supported environments must be disjoint, but the following markers overlap: `sys_platform == 'linux'` and `sys_platform == 'darwin' or sys_platform == 'linux'`
        --> [TEMP_DIR]/pyproject.toml:9:5
+        |
+      9 |     "sys_platform == 'linux' or sys_platform == 'darwin'", # Linux and macOS
+        |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
       info: The other environment is declared here
        --> [TEMP_DIR]/pyproject.toml:7:5
+        |
+      7 |     "sys_platform == 'linux'",
+        |     -------------------------
 
     hint: replace `sys_platform == 'darwin' or sys_platform == 'linux'` with `sys_platform == 'darwin'`
        --> [TEMP_DIR]/pyproject.toml:9:5
-    ");
+    "#);
+    Ok(())
+}
+
+/// A conflicting marker retains neighboring fields on its physical line.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_overlapping_environment_inline_sibling() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        tool = { uv = { environments = ["sys_platform == 'linux'", "sys_platform == 'linux'"], index = [{ url = "https://example.invalid/simple" }] } }
+
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--offline").arg("--no-index"), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Supported environments must be disjoint, but the following markers overlap: `sys_platform == 'linux'` and `sys_platform == 'linux'`
+       --> pyproject.toml:1:60
+        |
+      1 | tool = { uv = { environments = ["sys_platform == 'linux'", "sys_platform == 'linux'"], index = [{ url = "https://example.invalid/simple" }] } }
+        |                                                            ^^^^^^^^^^^^^^^^^^^^^^^^^
+      info: The other environment is declared here
+       --> pyproject.toml:1:33
+        |
+      1 | tool = { uv = { environments = ["sys_platform == 'linux'", "sys_platform == 'linux'"], index = [{ url = "https://example.invalid/simple" }] } }
+        |                                 -------------------------
+
+    hint: make the environment markers disjoint, or remove one of the overlapping environments
+    "#);
+
+    let output = context
+        .lock()
+        .args(["--offline", "--no-index", "--error-format=json"])
+        .output()?;
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let report: Value = serde_json::from_slice(&output.stderr)?;
+    assert_json_snapshot!(report, @r#"
+    {
+      "coordinates": {
+        "column_base": 0,
+        "column_encoding": "utf-8",
+        "line_base": 1
+      },
+      "errors": [
+        {
+          "hints": [
+            {
+              "message": "make the environment markers disjoint, or remove one of the overlapping environments",
+              "ordering": "any"
+            }
+          ],
+          "info": [
+            {
+              "message": "The other environment is declared here",
+              "sources": [
+                {
+                  "kind": "snippet",
+                  "name": "pyproject.toml",
+                  "windows": [
+                    {
+                      "annotations": [
+                        {
+                          "kind": "secondary",
+                          "range": {
+                            "end": {
+                              "byte_column": 57,
+                              "line": 1
+                            },
+                            "start": {
+                              "byte_column": 32,
+                              "line": 1
+                            }
+                          }
+                        }
+                      ],
+                      "line_start": 1,
+                      "text": "tool = { uv = { environments = [\"sys_platform == 'linux'\", \"sys_platform == 'linux'\"], index = [{ url = \"https://example.invalid/simple\" }] } }\n"
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "message": "Supported environments must be disjoint, but the following markers overlap: `sys_platform == 'linux'` and `sys_platform == 'linux'`",
+          "sources": [
+            {
+              "kind": "snippet",
+              "name": "pyproject.toml",
+              "windows": [
+                {
+                  "annotations": [
+                    {
+                      "kind": "primary",
+                      "range": {
+                        "end": {
+                          "byte_column": 84,
+                          "line": 1
+                        },
+                        "start": {
+                          "byte_column": 59,
+                          "line": 1
+                        }
+                      }
+                    }
+                  ],
+                  "line_start": 1,
+                  "text": "tool = { uv = { environments = [\"sys_platform == 'linux'\", \"sys_platform == 'linux'\"], index = [{ url = \"https://example.invalid/simple\" }] } }\n"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "level": "error",
+      "schema_version": 1
+    }
+    "#);
     Ok(())
 }
 
