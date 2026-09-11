@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "On Linux x86_64 with CPython 3.12.3, a minimal two-index fixture reproduced the issue using `uv lock --no-cache` followed by `uv sync --frozen --no-cache --no-install-project`. uv 0.12.13 expected the sole locked artifact hash `e8a3…e5b6` but computed the correct hash `1557…b992` for the alternate wheel selected for an editable dependency’s `build-system.requires`. uv 0.12.11 failed identically, while uv 0.12.10 completed successfully. The issue-context README was updated with the fixture, commands, and existing-test gap."
+}
