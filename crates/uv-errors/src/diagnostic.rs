@@ -78,9 +78,9 @@ impl<'a> Diagnostic<'a> {
 
 /// Additional context, rather than a cause or an actionable hint.
 pub struct Info<'a> {
-    message: Cow<'a, str>,
-    details: Option<Cow<'a, str>>,
-    snippets: Vec<SourceSnippet<'a>>,
+    pub(crate) message: Cow<'a, str>,
+    pub(crate) details: Option<Cow<'a, str>>,
+    pub(crate) snippets: Vec<SourceSnippet<'a>>,
 }
 
 impl<'a> Info<'a> {
