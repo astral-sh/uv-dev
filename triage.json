@@ -1,0 +1,51 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 8156,
+        "title": "Add `uv license` or similar to audit dependency licenses",
+        "url": "https://github.com/astral-sh/uv/issues/8156",
+        "state": "open",
+        "reason": "The closest license-specific issue asks how uv could obtain dependency license fields or classifiers and whether to record them in `uv.lock`. It targets a dedicated audit command rather than CycloneDX output, so it does not supersede this request."
+      },
+      {
+        "kind": "issue",
+        "number": 6012,
+        "title": "Software Bill of Materials (SBOM) output",
+        "url": "https://github.com/astral-sh/uv/issues/6012",
+        "state": "closed",
+        "reason": "The canonical parent discussion chose a lockfile-based CycloneDX `uv export` format and defined an initially minimal SBOM. It was completed without a license-specific requirement."
+      },
+      {
+        "kind": "pull_request",
+        "number": 16523,
+        "title": "Add SBOM export support",
+        "url": "https://github.com/astral-sh/uv/pull/16523",
+        "state": "merged",
+        "reason": "This implemented CycloneDX 1.5 export for astral-sh/uv#6012. The resulting exporter constructs components without licenses, while current lock package metadata contains dependency requirements and extras but no license field."
+      },
+      {
+        "kind": "issue",
+        "number": 21122,
+        "title": "`uv export --format cyclonedx1.5` omits component hashes that `uv.lock` already carries",
+        "url": "https://github.com/astral-sh/uv/issues/21122",
+        "state": "closed",
+        "reason": "This is the closest analogous CycloneDX enrichment request. Maintainers treated adding omitted hashes as an enhancement because the initial implementation deferred them; unlike licenses, those hashes already existed in `uv.lock`. It was fixed by astral-sh/uv#21131."
+      },
+      {
+        "kind": "pull_request",
+        "number": 21131,
+        "title": "Include hashes in cyclonedx exports",
+        "url": "https://github.com/astral-sh/uv/pull/21131",
+        "state": "merged",
+        "reason": "This shows how optional component data was added after the initial exporter, but it could directly reuse artifact hashes already stored in the lockfile; license support requires an additional metadata-source decision."
+      }
+    ],
+    "search_scope": "Literal searches covered `cyclonedx license`, `SBOM license`, `component license`, `license information`, `license field`, `uv export license`, `Metadata23 license`, and `License-Expression`. Conceptual searches covered dependency-license auditing, package and license metadata, classifiers, `uv.lock` storage, SBOM component metadata, indexes, and direct-URL metadata. Fix-oriented searches covered all issue states and open, closed, and merged pull requests for the original CycloneDX implementation and later missing-field fixes. No earlier tracker for licenses in CycloneDX output was found. astral-sh/uv#8156 was the most plausible duplicate but was ruled out because it requests a separate license-audit interface; astral-sh/uv#21122 differs because its hashes were already present in `uv.lock`."
+  },
+  "type": "enhancement",
+  "type_reason": "This requests optional component metadata that the existing lockfile-based exporter has never populated. The implementation explicitly leaves component licenses unset, and the lock model retains dependency requirements, extras, and groups rather than license metadata. Supporting it therefore requires a new metadata acquisition and fallback policy rather than correcting a regression. astral-sh/uv#21617 is also currently labeled `enhancement`.",
+  "summary": "No duplicate was found. astral-sh/uv#8156 concerns the same license-metadata acquisition problem but requests a dedicated audit command. astral-sh/uv#6012 and astral-sh/uv#16523 established the minimal CycloneDX exporter, while astral-sh/uv#21122 and astral-sh/uv#21131 provide an analogous but simpler enrichment precedent.",
+  "draft_response": "Thanks for raising this. The CycloneDX exporter introduced in astral-sh/uv#16523 currently leaves component licenses unset, and `uv.lock` package metadata does not retain license fields, so this is more than wiring an existing lockfile value into the output. astral-sh/uv#8156 is related, but it tracks a dedicated dependency-license audit command rather than CycloneDX enrichment, so this should remain a separate enhancement. The next design step is to define authoritative sources and fallbacks for PEP 639 license expressions, legacy license fields or classifiers, and registry, direct-URL, and local packages—especially whether export may perform additional index requests or artifact downloads when the lockfile lacks that metadata."
+}
