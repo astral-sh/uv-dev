@@ -60,7 +60,7 @@ impl SourceFile {
     ///
     /// Producers can compare this window with other retained semantic source spans before
     /// deciding whether an excerpt would expose unrelated fields.
-    fn line_range_for_span(&self, span: Range<usize>) -> Option<Range<usize>> {
+    pub fn line_range_for_span(&self, span: Range<usize>) -> Option<Range<usize>> {
         let lines = SourceLines::new(self.text());
         let (first, last) = lines.annotation_lines(&span)?;
         lines.range(first, last)

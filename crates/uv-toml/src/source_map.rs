@@ -4,7 +4,7 @@ use toml_edit::{Array, ArrayOfTables, Document, Item, TomlError};
 
 /// A step through the syntax tree of a TOML document.
 #[derive(Debug, Clone, Copy)]
-enum SourcePathSegment<'a> {
+pub enum SourcePathSegment<'a> {
     /// A decoded table key.
     Key(&'a str),
     /// The zero-based occurrence in an array or array of tables.
@@ -16,25 +16,25 @@ enum SourcePathSegment<'a> {
 /// Paths refer to parsed keys and array occurrences, not matching text. Spans are half-open
 /// UTF-8 byte ranges into the original document passed to [`Self::parse`].
 #[derive(Debug)]
-struct SourceMap<'a> {
+pub struct SourceMap<'a> {
     document: Document<&'a str>,
 }
 
 impl<'a> SourceMap<'a> {
     /// Parse an immutable document, retaining its original source spans.
-    fn parse(source: &'a str) -> Result<Self, TomlError> {
+    pub fn parse(source: &'a str) -> Result<Self, TomlError> {
         Ok(Self {
             document: Document::parse(source)?,
         })
     }
 
     /// Return the range of a value, table, or array occurrence.
-    fn span(&self, path: &[SourcePathSegment<'_>]) -> Option<Range<usize>> {
+    pub fn span(&self, path: &[SourcePathSegment<'_>]) -> Option<Range<usize>> {
         self.item(path)?.span()
     }
 
     /// Return the range of a key within a table or inline table.
-    fn key_span(&self, parent: &[SourcePathSegment<'_>], key: &str) -> Option<Range<usize>> {
+    pub fn key_span(&self, parent: &[SourcePathSegment<'_>], key: &str) -> Option<Range<usize>> {
         self.item(parent)?
             .as_table_like()?
             .get_key_value(key)?
@@ -46,17 +46,17 @@ impl<'a> SourceMap<'a> {
     ///
     /// Callers with normalized semantic names can resolve the original spelling before looking
     /// up a value's span.
-    fn keys(&self, path: &[SourcePathSegment<'_>]) -> Option<impl Iterator<Item = &str>> {
+    pub fn keys(&self, path: &[SourcePathSegment<'_>]) -> Option<impl Iterator<Item = &str>> {
         Some(self.item(path)?.as_table_like()?.iter().map(|(key, _)| key))
     }
 
     /// Return a decoded string value.
-    fn string(&self, path: &[SourcePathSegment<'_>]) -> Option<&str> {
+    pub fn string(&self, path: &[SourcePathSegment<'_>]) -> Option<&str> {
         self.item(path)?.as_str()
     }
 
     /// Return the number of values or tables in an array.
-    fn array_len(&self, path: &[SourcePathSegment<'_>]) -> Option<usize> {
+    pub fn array_len(&self, path: &[SourcePathSegment<'_>]) -> Option<usize> {
         let item = self.item(path)?;
         item.as_array()
             .map(Array::len)
