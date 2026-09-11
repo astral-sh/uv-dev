@@ -646,9 +646,8 @@ fn build_fail() -> Result<()> {
     IndentationError: unexpected indent
     error: Failed to build `[TEMP_DIR]/project`
       cause: The build backend returned an error
+      info: Build failures usually indicate a problem with the package or the build environment
       cause: Call to `setuptools.build_meta.get_requires_for_build_sdist` failed (exit status: 1)
-
-    hint: Build failures usually indicate a problem with the package or the build environment
     "#);
 
     Ok(())
@@ -941,9 +940,8 @@ fn build_all_with_failure() -> Result<()> {
     Successfully built dist/member_a-0.1.0-py3-none-any.whl
     error: Failed to build `member-b @ [TEMP_DIR]/project/packages/member_b`
       cause: The build backend returned an error
+      info: Build failures usually indicate a problem with the package or the build environment
       cause: Call to `setuptools.build_meta.get_requires_for_build_sdist` failed (exit status: 1)
-
-    hint: Build failures usually indicate a problem with the package or the build environment
     Successfully built dist/project-0.1.0.tar.gz
     Successfully built dist/project-0.1.0-py3-none-any.whl
     ");
@@ -2188,9 +2186,8 @@ fn build_hide_build_output_on_failure() -> Result<()> {
     Building source distribution...
     error: Failed to build `[TEMP_DIR]/project`
       cause: The build backend returned an error
+      info: Build failures usually indicate a problem with the package or the build environment
       cause: Call to `setuptools.build_meta.get_requires_for_build_sdist` failed (exit status: 1)
-
-    hint: Build failures usually indicate a problem with the package or the build environment
     ");
 
     Ok(())
@@ -3392,9 +3389,8 @@ fn force_pep517() -> Result<()> {
     Error: Missing module directory for `does_not_exist` in `src`. Found: `temp`
     error: Failed to build `[TEMP_DIR]/`
       cause: The build backend returned an error
+      info: Build failures usually indicate a problem with the package or the build environment
       cause: Call to `uv_build.build_sdist` failed (exit status: 1)
-
-    hint: Build failures usually indicate a problem with the package or the build environment
     ");
 
     Ok(())

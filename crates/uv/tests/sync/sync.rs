@@ -1981,6 +1981,7 @@ fn sync_build_isolation_package() -> Result<()> {
     ----- stderr -----
     Resolved 2 packages in [TIME]
     error: Failed to build `source-distribution @ https://files.pythonhosted.org/packages/10/1f/57aa4cce1b1abf6b433106676e15f9fa2c92ed2bd4cf77c3b50a9e9ac773/source_distribution-0.0.1.tar.gz`
+      info: `source-distribution` was included because `project` (v0.1.0) depends on `source-distribution`
       cause: The build backend returned an error
       cause: Call to `hatchling.build.build_wheel` failed (exit status: 1)
 
@@ -1988,8 +1989,6 @@ fn sync_build_isolation_package() -> Result<()> {
              Traceback (most recent call last):
                File "<string>", line 8, in <module>
              ModuleNotFoundError: No module named 'hatchling'
-
-    hint: `source-distribution` was included because `project` (v0.1.0) depends on `source-distribution`
 
     hint: This error likely indicates that `source-distribution` depends on `hatchling`, but doesn't declare it as a build dependency. If `source-distribution` is a first-party package, consider adding `hatchling` to its `build-system.requires`. Otherwise, either add it to your `pyproject.toml` under:
 
@@ -2061,6 +2060,7 @@ fn sync_build_isolation_package_order() -> Result<()> {
     ----- stderr -----
     Resolved 2 packages in [TIME]
     error: Failed to build `source-distribution @ https://files.pythonhosted.org/packages/10/1f/57aa4cce1b1abf6b433106676e15f9fa2c92ed2bd4cf77c3b50a9e9ac773/source_distribution-0.0.1.tar.gz`
+      info: `source-distribution` was included because `project` (v0.1.0) depends on `source-distribution`
       cause: The build backend returned an error
       cause: Call to `hatchling.build.build_wheel` failed (exit status: 1)
 
@@ -2068,8 +2068,6 @@ fn sync_build_isolation_package_order() -> Result<()> {
              Traceback (most recent call last):
                File "<string>", line 8, in <module>
              ModuleNotFoundError: No module named 'hatchling'
-
-    hint: `source-distribution` was included because `project` (v0.1.0) depends on `source-distribution`
 
     hint: This error likely indicates that `source-distribution` depends on `hatchling`, but doesn't declare it as a build dependency. If `source-distribution` is a first-party package, consider adding `hatchling` to its `build-system.requires`. Otherwise, either add it to your `pyproject.toml` under:
 
@@ -2226,6 +2224,7 @@ fn sync_build_isolation_extra() -> Result<()> {
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
     error: Failed to build `source-distribution @ https://files.pythonhosted.org/packages/10/1f/57aa4cce1b1abf6b433106676e15f9fa2c92ed2bd4cf77c3b50a9e9ac773/source_distribution-0.0.1.tar.gz`
+      info: `source-distribution` was included because `project[compile]` (v0.1.0) depends on `source-distribution`
       cause: The build backend returned an error
       cause: Call to `hatchling.build.build_wheel` failed (exit status: 1)
 
@@ -2233,8 +2232,6 @@ fn sync_build_isolation_extra() -> Result<()> {
              Traceback (most recent call last):
                File "<string>", line 8, in <module>
              ModuleNotFoundError: No module named 'hatchling'
-
-    hint: `source-distribution` was included because `project[compile]` (v0.1.0) depends on `source-distribution`
 
     hint: This error likely indicates that `source-distribution` depends on `hatchling`, but doesn't declare it as a build dependency. If `source-distribution` is a first-party package, consider adding `hatchling` to its `build-system.requires`. Otherwise, either add it to your `pyproject.toml` under:
 
@@ -2357,15 +2354,13 @@ fn sync_extra_build_dependencies() -> Result<()> {
     ----- stderr -----
     Resolved [N] packages in [TIME]
     error: Failed to build `child @ file://[TEMP_DIR]/child`
+      info: `child` was included because `parent` (v0.1.0) depends on `child`
       cause: The build backend returned an error
+      info: Build failures usually indicate a problem with the package or the build environment
       cause: Call to `build_backend.get_requires_for_build_wheel` failed (exit status: 1)
 
              [stderr]
              Missing `anyio` module
-
-    hint: `child` was included because `parent` (v0.1.0) depends on `child`
-
-    hint: Build failures usually indicate a problem with the package or the build environment
     ");
 
     // Adding `extra-build-dependencies` should solve the issue
@@ -2424,15 +2419,13 @@ fn sync_extra_build_dependencies() -> Result<()> {
     ----- stderr -----
     Resolved [N] packages in [TIME]
     error: Failed to build `child @ file://[TEMP_DIR]/child`
+      info: `child` was included because `parent` (v0.1.0) depends on `child`
       cause: The build backend returned an error
+      info: Build failures usually indicate a problem with the package or the build environment
       cause: Call to `build_backend.get_requires_for_build_wheel` failed (exit status: 1)
 
              [stderr]
              Missing `anyio` module
-
-    hint: `child` was included because `parent` (v0.1.0) depends on `child`
-
-    hint: Build failures usually indicate a problem with the package or the build environment
     ");
 
     // Write a test package that arbitrarily bans `anyio` at build time
@@ -2490,15 +2483,13 @@ fn sync_extra_build_dependencies() -> Result<()> {
     ----- stderr -----
     Resolved [N] packages in [TIME]
     error: Failed to build `bad-child @ file://[TEMP_DIR]/bad_child`
+      info: `bad-child` was included because `parent` (v0.1.0) depends on `bad-child`
       cause: The build backend returned an error
+      info: Build failures usually indicate a problem with the package or the build environment
       cause: Call to `build_backend.get_requires_for_build_wheel` failed (exit status: 1)
 
              [stderr]
              Found `anyio` module
-
-    hint: `bad-child` was included because `parent` (v0.1.0) depends on `bad-child`
-
-    hint: Build failures usually indicate a problem with the package or the build environment
     ");
 
     // But `anyio` is not provided to `bad_child` if scoped to `child`
@@ -2580,12 +2571,11 @@ fn sync_extra_build_dependencies_setuptools_legacy() -> Result<()> {
     ----- stderr -----
     error: Failed to build `child @ file://[TEMP_DIR]/child`
       cause: The build backend returned an error
+      info: Build failures usually indicate a problem with the package or the build environment
       cause: Call to `setuptools.build_meta:__legacy__.get_requires_for_build_wheel` failed (exit status: 1)
 
              [stderr]
              Missing `anyio` module
-
-    hint: Build failures usually indicate a problem with the package or the build environment
     ");
 
     // Adding `extra-build-dependencies` should solve the issue
@@ -2678,15 +2668,13 @@ fn sync_extra_build_dependencies_setuptools() -> Result<()> {
     ----- stderr -----
     Resolved [N] packages in [TIME]
     error: Failed to build `child @ file://[TEMP_DIR]/child`
+      info: `child` was included because `parent` (v0.1.0) depends on `child`
       cause: The build backend returned an error
+      info: Build failures usually indicate a problem with the package or the build environment
       cause: Call to `setuptools.build_meta.get_requires_for_build_wheel` failed (exit status: 1)
 
              [stderr]
              Missing `anyio` module
-
-    hint: `child` was included because `parent` (v0.1.0) depends on `child`
-
-    hint: Build failures usually indicate a problem with the package or the build environment
     ");
 
     // Adding `extra-build-dependencies` should solve the issue
@@ -2859,15 +2847,13 @@ fn sync_extra_build_dependencies_index() -> Result<()> {
     ----- stderr -----
     Resolved [N] packages in [TIME]
     error: Failed to build `child @ file://[TEMP_DIR]/child`
+      info: `child` was included because `parent` (v0.1.0) depends on `child`
       cause: The build backend returned an error
+      info: Build failures usually indicate a problem with the package or the build environment
       cause: Call to `build_backend.get_requires_for_build_wheel` failed (exit status: 1)
 
              [stderr]
              Expected `anyio` version 3.0 but got 4.3.0
-
-    hint: `child` was included because `parent` (v0.1.0) depends on `child`
-
-    hint: Build failures usually indicate a problem with the package or the build environment
     ");
 
     // Ensure that we're resolving to `4.3.0`, the "latest" on PyPI.
@@ -2908,15 +2894,13 @@ fn sync_extra_build_dependencies_index() -> Result<()> {
     ----- stderr -----
     Resolved [N] packages in [TIME]
     error: Failed to build `child @ file://[TEMP_DIR]/child`
+      info: `child` was included because `parent` (v0.1.0) depends on `child`
       cause: The build backend returned an error
+      info: Build failures usually indicate a problem with the package or the build environment
       cause: Call to `build_backend.get_requires_for_build_wheel` failed (exit status: 1)
 
              [stderr]
              Expected `anyio` version 4.3 but got 3.5.0
-
-    hint: `child` was included because `parent` (v0.1.0) depends on `child`
-
-    hint: Build failures usually indicate a problem with the package or the build environment
     ");
 
     uv_snapshot!(context.filters(), context.sync()
@@ -2999,15 +2983,13 @@ fn sync_extra_build_dependencies_sources_from_child() -> Result<()> {
     ----- stderr -----
     Resolved [N] packages in [TIME]
     error: Failed to build `child @ file://[TEMP_DIR]/child`
+      info: `child` was included because `project` (v0.1.0) depends on `child`
       cause: The build backend returned an error
+      info: Build failures usually indicate a problem with the package or the build environment
       cause: Call to `build_backend.get_requires_for_build_wheel` failed (exit status: 1)
 
              [stderr]
              Found system anyio instead of local anyio
-
-    hint: `child` was included because `project` (v0.1.0) depends on `child`
-
-    hint: Build failures usually indicate a problem with the package or the build environment
     ");
 
     Ok(())
@@ -3063,6 +3045,7 @@ fn sync_build_dependencies_module_error_hints() -> Result<()> {
     ----- stderr -----
     Resolved [N] packages in [TIME]
     error: Failed to build `child @ file://[TEMP_DIR]/child`
+      info: `child` was included because `parent` (v0.1.0) depends on `child`
       cause: The build backend returned an error
       cause: Call to `build_backend.get_requires_for_build_wheel` failed (exit status: 1)
 
@@ -3072,8 +3055,6 @@ fn sync_build_dependencies_module_error_hints() -> Result<()> {
                File "[TEMP_DIR]/child/build_backend.py", line 4, in <module>
                  import a
              ModuleNotFoundError: No module named 'a'
-
-    hint: `child` was included because `parent` (v0.1.0) depends on `child`
 
     hint: This error likely indicates that `child@0.1.0` depends on `a`, but doesn't declare it as a build dependency. If `child` is a first-party package, consider adding `a` to its `build-system.requires`. Otherwise, either add it to your `pyproject.toml` under:
 
@@ -3124,6 +3105,7 @@ fn sync_build_dependencies_module_error_hints() -> Result<()> {
     ----- stderr -----
     Resolved [N] packages in [TIME]
     error: Failed to build `child @ file://[TEMP_DIR]/child`
+      info: `child` was included because `parent` (v0.1.0) depends on `child`
       cause: The build backend returned an error
       cause: Call to `build_backend.get_requires_for_build_wheel` failed (exit status: 1)
 
@@ -3133,8 +3115,6 @@ fn sync_build_dependencies_module_error_hints() -> Result<()> {
                File "[TEMP_DIR]/child/build_backend.py", line 5, in <module>
                  import sklearn
              ModuleNotFoundError: No module named 'sklearn'
-
-    hint: `child` was included because `parent` (v0.1.0) depends on `child`
 
     hint: This error likely indicates that `child@0.1.0` depends on `scikit-learn`, but doesn't declare it as a build dependency. If `child` is a first-party package, consider adding `scikit-learn` to its `build-system.requires`. Otherwise, either add it to your `pyproject.toml` under:
 
@@ -6233,12 +6213,11 @@ fn sync_extra_build_dependencies_script() -> Result<()> {
     Resolved [N] packages in [TIME]
     error: Failed to build `child @ file://[TEMP_DIR]/child`
       cause: The build backend returned an error
+      info: Build failures usually indicate a problem with the package or the build environment
       cause: Call to `build_backend.get_requires_for_build_wheel` failed (exit status: 1)
 
              [stderr]
              Missing `anyio` module
-
-    hint: Build failures usually indicate a problem with the package or the build environment
     ");
 
     // Add extra build dependencies to the script
@@ -10304,7 +10283,9 @@ fn sync_derivation_chain() -> Result<()> {
     ----- stderr -----
     Resolved 2 packages in [TIME]
     error: Failed to build `wsgiref==0.1.2`
+      info: `wsgiref` (v0.1.2) was included because `project` (v0.1.0) depends on `wsgiref`
       cause: The build backend returned an error
+      info: Build failures usually indicate a problem with the package or the build environment
       cause: Call to `setuptools.build_meta:__legacy__.get_requires_for_build_wheel` failed (exit status: 1)
 
              [stderr]
@@ -10324,10 +10305,6 @@ fn sync_derivation_chain() -> Result<()> {
                  print "Setuptools version",version,"or greater has been installed."
                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
              SyntaxError: Missing parentheses in call to 'print'. Did you mean print(...)?
-
-    hint: `wsgiref` (v0.1.2) was included because `project` (v0.1.0) depends on `wsgiref`
-
-    hint: Build failures usually indicate a problem with the package or the build environment
     "#);
 
     Ok(())
@@ -10359,7 +10336,9 @@ fn sync_derivation_chain_extra() -> Result<()> {
     ----- stderr -----
     Resolved 2 packages in [TIME]
     error: Failed to build `wsgiref==0.1.2`
+      info: `wsgiref` (v0.1.2) was included because `project[wsgi]` (v0.1.0) depends on `wsgiref`
       cause: The build backend returned an error
+      info: Build failures usually indicate a problem with the package or the build environment
       cause: Call to `setuptools.build_meta:__legacy__.get_requires_for_build_wheel` failed (exit status: 1)
 
              [stderr]
@@ -10379,10 +10358,6 @@ fn sync_derivation_chain_extra() -> Result<()> {
                  print "Setuptools version",version,"or greater has been installed."
                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
              SyntaxError: Missing parentheses in call to 'print'. Did you mean print(...)?
-
-    hint: `wsgiref` (v0.1.2) was included because `project[wsgi]` (v0.1.0) depends on `wsgiref`
-
-    hint: Build failures usually indicate a problem with the package or the build environment
     "#);
 
     Ok(())
@@ -10416,7 +10391,9 @@ fn sync_derivation_chain_group() -> Result<()> {
     ----- stderr -----
     Resolved 2 packages in [TIME]
     error: Failed to build `wsgiref==0.1.2`
+      info: `wsgiref` (v0.1.2) was included because `project:wsgi` (v0.1.0) depends on `wsgiref`
       cause: The build backend returned an error
+      info: Build failures usually indicate a problem with the package or the build environment
       cause: Call to `setuptools.build_meta:__legacy__.get_requires_for_build_wheel` failed (exit status: 1)
 
              [stderr]
@@ -10436,10 +10413,6 @@ fn sync_derivation_chain_group() -> Result<()> {
                  print "Setuptools version",version,"or greater has been installed."
                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
              SyntaxError: Missing parentheses in call to 'print'. Did you mean print(...)?
-
-    hint: `wsgiref` (v0.1.2) was included because `project:wsgi` (v0.1.0) depends on `wsgiref`
-
-    hint: Build failures usually indicate a problem with the package or the build environment
     "#);
 
     Ok(())
@@ -10980,10 +10953,9 @@ fn sync_git_path_archive_missing_lfs() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to download `iniconfig @ git+https://github.com/astral-sh/archive-in-git-test@bb7ce6abf9f90544767701de5b7b0c7802dc642b#path=archives/iniconfig-2.0.0-py3-none-any.whl&lfs=true`
+      info: `iniconfig` (v2.0.0) was included because `foo` (v0.1.0) depends on `iniconfig`
       cause: The wheel `git+https://github.com/astral-sh/archive-in-git-test@bb7ce6abf9f90544767701de5b7b0c7802dc642b#path=archives/iniconfig-2.0.0-py3-none-any.whl&lfs=true` is missing Git LFS artifacts.
       cause: Git LFS extension not found. Ensure that Git LFS is installed and available.
-
-    hint: `iniconfig` (v2.0.0) was included because `foo` (v0.1.0) depends on `iniconfig`
     "
     );
 
@@ -11014,9 +10986,8 @@ fn mismatched_name_self_editable() -> Result<()> {
     ----- stderr -----
     Resolved 2 packages in [TIME]
     error: Failed to build `foo @ file://[TEMP_DIR]/`
+      info: `foo` was included because `project` (v0.1.0) depends on `foo`
       cause: Package metadata name `project` does not match given name `foo`
-
-    hint: `foo` was included because `project` (v0.1.0) depends on `foo`
     ");
 
     Ok(())
@@ -11053,9 +11024,8 @@ fn mismatched_name_self_editable_package() -> Result<()> {
     ----- stderr -----
     Resolved 2 packages in [TIME]
     error: Failed to build `foo @ file://[TEMP_DIR]/`
+      info: `foo` was included because `project` (v0.1.0) depends on `foo`
       cause: Package metadata name `project` does not match given name `foo`
-
-    hint: `foo` was included because `project` (v0.1.0) depends on `foo`
     ");
 
     Ok(())
@@ -14556,15 +14526,13 @@ fn sync_build_dependencies_respect_locked_versions() -> Result<()> {
     ----- stderr -----
     Resolved [N] packages in [TIME]
     error: Failed to build `child @ file://[TEMP_DIR]/child`
+      info: `child` was included because `parent` (v0.1.0) depends on `child`
       cause: The build backend returned an error
+      info: Build failures usually indicate a problem with the package or the build environment
       cause: Call to `build_backend.get_requires_for_build_wheel` failed (exit status: 1)
 
              [stderr]
              Expected `a` version 0.1 but got 0.3.0
-
-    hint: `child` was included because `parent` (v0.1.0) depends on `child`
-
-    hint: Build failures usually indicate a problem with the package or the build environment
     ");
 
     // Now constrain the `a` build dependency to match the runtime
@@ -14615,15 +14583,13 @@ fn sync_build_dependencies_respect_locked_versions() -> Result<()> {
     ----- stderr -----
     Resolved [N] packages in [TIME]
     error: Failed to build `child @ file://[TEMP_DIR]/child`
+      info: `child` was included because `parent` (v0.1.0) depends on `child`
       cause: The build backend returned an error
+      info: Build failures usually indicate a problem with the package or the build environment
       cause: Call to `build_backend.get_requires_for_build_wheel` failed (exit status: 1)
 
              [stderr]
              Expected `a` version 0.2 but got 0.1.0
-
-    hint: `child` was included because `parent` (v0.1.0) depends on `child`
-
-    hint: Build failures usually indicate a problem with the package or the build environment
     ");
 
     uv_snapshot!(context.filters(), context.sync().arg("--index-url").arg(server.index_url())
@@ -14674,11 +14640,10 @@ fn sync_build_dependencies_respect_locked_versions() -> Result<()> {
     ----- stderr -----
     Resolved [N] packages in [TIME]
     error: Failed to build `child @ file://[TEMP_DIR]/child`
+      info: `child` was included because `parent` (v0.1.0) depends on `child`
       cause: Failed to resolve requirements from `build-system.requires` and `extra-build-dependencies`
       cause: No solution found when resolving: `hatchling`, `a<0.3, >0.15`, `a==0.1.0 (index: http://[LOCALHOST]/simple/)`
       cause: you require a<0.3 and a>0.15, which are incompatible
-
-    hint: `child` was included because `parent` (v0.1.0) depends on `child`
     ");
 
     // Adding a version specifier should also fail
@@ -14766,12 +14731,11 @@ fn sync_extra_build_variables() -> Result<()> {
     Resolved [N] packages in [TIME]
     error: Failed to build `parent @ file://[TEMP_DIR]/`
       cause: The build backend returned an error
+      info: Build failures usually indicate a problem with the package or the build environment
       cause: Call to `build_backend.get_requires_for_build_editable` failed (exit status: 1)
 
              [stderr]
              Expected `anyio` version 3.0 but got 4.3.0
-
-    hint: Build failures usually indicate a problem with the package or the build environment
     ");
 
     // Set the variable in TOML (to an incorrect value).
@@ -14796,12 +14760,11 @@ fn sync_extra_build_variables() -> Result<()> {
     Resolved [N] packages in [TIME]
     error: Failed to build `parent @ file://[TEMP_DIR]/`
       cause: The build backend returned an error
+      info: Build failures usually indicate a problem with the package or the build environment
       cause: Call to `build_backend.get_requires_for_build_editable` failed (exit status: 1)
 
              [stderr]
              Expected `anyio` version 3.0 but got 4.3.0
-
-    hint: Build failures usually indicate a problem with the package or the build environment
     ");
 
     // Set the variable in TOML (to a correct value).
@@ -14854,9 +14817,8 @@ fn reject_unmatched_runtime() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to download and build `source-distribution==0.0.3`
+      info: `source-distribution` (v0.0.3) was included because `foo` (v0.1.0) depends on `source-distribution`
       cause: Extra build requirement `iniconfig` was declared with `match-runtime = true`, but `source-distribution` does not declare static metadata, making runtime-matching impossible
-
-    hint: `source-distribution` (v0.0.3) was included because `foo` (v0.1.0) depends on `source-distribution`
     ");
 
     Ok(())
