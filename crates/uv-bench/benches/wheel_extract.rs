@@ -1,5 +1,7 @@
 //! Extraction of published wheels through the local-file and download paths.
 
+mod common;
+
 extern crate uv_performance_memory_allocator;
 
 use std::hint::black_box;
@@ -76,5 +78,9 @@ fn wheel_extract(c: &mut Criterion<WallTime>) {
     group.finish();
 }
 
-criterion_group!(wheels, wheel_extract);
+criterion_group! {
+    name = wheels;
+    config = common::walltime_criterion();
+    targets = wheel_extract
+}
 criterion_main!(wheels);
