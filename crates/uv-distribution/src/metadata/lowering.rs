@@ -334,6 +334,7 @@ impl LoweredRequirement {
                         source,
                         scope: RequirementScope::Global,
                         origin: requirement.origin.clone(),
+                        provenance: None,
                     }))
                 }
             }))
@@ -516,6 +517,7 @@ impl LoweredRequirement {
                         source,
                         scope: RequirementScope::Global,
                         origin: requirement.origin.clone(),
+                        provenance: None,
                     }))
                 }
             }))
@@ -567,6 +569,7 @@ impl LoweredRequirement {
             },
             scope: RequirementScope::Global,
             origin: requirement.origin,
+            provenance: None,
         }))
     }
 

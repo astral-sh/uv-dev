@@ -915,6 +915,7 @@ async fn get_or_create_environment(
                         },
                         scope: RequirementScope::Global,
                         origin: None,
+                        provenance: None,
                     };
 
                     (executable, requirement)
@@ -936,6 +937,7 @@ async fn get_or_create_environment(
                         },
                         scope: RequirementScope::Global,
                         origin: None,
+                        provenance: None,
                     };
 
                     (executable, requirement)
@@ -1004,6 +1006,7 @@ async fn get_or_create_environment(
                 },
                 scope: RequirementScope::Global,
                 origin: None,
+                provenance: None,
             })
         } else {
             None

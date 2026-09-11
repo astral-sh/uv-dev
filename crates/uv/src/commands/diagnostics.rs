@@ -542,11 +542,10 @@ mod tests {
 
     #[test]
     fn resolves_transparent_lock_roots() {
-        let lock =
-            uv_lock::LockError::from(uv_configuration::ScopedOverrideSourceError::Index {
-                package: "demo".parse().unwrap(),
-                dependency: "dependency".parse().unwrap(),
-            });
+        let lock = uv_lock::LockError::from(uv_configuration::ScopedOverrideSourceError::Index {
+            package: "demo".parse().unwrap(),
+            dependency: "dependency".parse().unwrap(),
+        });
         let error = uv_lock::PylockTomlError::from(lock);
 
         assert!(error.source().is_none());
