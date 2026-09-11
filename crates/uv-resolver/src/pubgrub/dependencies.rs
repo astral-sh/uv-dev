@@ -1,9 +1,12 @@
 use std::borrow::Cow;
+use std::fmt;
 use std::iter;
 
 use either::Either;
 
-use uv_distribution_types::{IndexMetadata, Requirement, RequirementScope, RequirementSource};
+use uv_distribution_types::{
+    IndexMetadata, Requirement, RequirementProvenance, RequirementScope, RequirementSource,
+};
 use uv_normalize::{GroupName, PackageName};
 use uv_pep440::{Version, VersionSpecifiers};
 use uv_pypi_types::{ConflictItemRef, Conflicts, VerbatimParsedUrl};
@@ -74,7 +77,7 @@ impl DependencySource {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone)]
 pub(crate) struct PubGrubDependency {
     pub(crate) package: PubGrubPackage,
     pub(crate) version: Range<Version>,
@@ -100,6 +103,55 @@ pub(crate) struct PubGrubDependency {
     /// or group-scoped explicit indexes. Manifest-wide URL and index constraints are still applied
     /// separately via `Urls` and `Indexes`.
     pub(crate) source: DependencySource,
+
+    /// The authored occurrence of this edge, when retained by its producer.
+    ///
+    /// This presentation data must not distinguish otherwise equal dependency forks.
+    pub(crate) provenance: Option<RequirementProvenance>,
+}
+
+impl PartialEq for PubGrubDependency {
+    fn eq(&self, other: &Self) -> bool {
+        let Self {
+            package,
+            version,
+            parent,
+            source,
+            provenance: _,
+        } = self;
+        let Self {
+            package: other_package,
+            version: other_version,
+            parent: other_parent,
+            source: other_source,
+            provenance: _,
+        } = other;
+        package == other_package
+            && version == other_version
+            && parent == other_parent
+            && source == other_source
+    }
+}
+
+impl Eq for PubGrubDependency {}
+
+impl fmt::Debug for PubGrubDependency {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self {
+            package,
+            version,
+            parent,
+            source,
+            provenance: _,
+        } = self;
+        formatter
+            .debug_struct("PubGrubDependency")
+            .field("package", package)
+            .field("version", version)
+            .field("parent", parent)
+            .field("source", source)
+            .finish()
+    }
 }
 
 impl PubGrubDependency {
@@ -215,6 +267,7 @@ impl PubGrubDependency {
                         None
                     },
                     source,
+                    provenance: requirement.provenance.clone(),
                 },
                 PubGrubPackageInner::Marker { .. } => Self {
                     package,
@@ -225,6 +278,7 @@ impl PubGrubDependency {
                         None
                     },
                     source,
+                    provenance: requirement.provenance.clone(),
                 },
                 PubGrubPackageInner::Extra { name, .. } => {
                     if group_name.is_none() {
@@ -238,6 +292,7 @@ impl PubGrubDependency {
                         version,
                         parent: None,
                         source,
+                        provenance: requirement.provenance.clone(),
                     }
                 }
                 PubGrubPackageInner::Group { name, .. } => {
@@ -252,6 +307,7 @@ impl PubGrubDependency {
                         version,
                         parent: None,
                         source,
+                        provenance: requirement.provenance.clone(),
                     }
                 }
                 PubGrubPackageInner::Root(_) => unreachable!("Root package in dependencies"),
