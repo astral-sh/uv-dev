@@ -1340,8 +1340,9 @@ fn add_remove_dev() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: The dependency `anyio` could not be found in `project.dependencies`
+      info: `anyio` is in the `dev` group
 
-    hint: `anyio` is in the `dev` group (try: `uv remove anyio --group dev`)
+    hint: Re-run the command with `--group dev` to remove the dependency from the `dev` group
     ");
 
     // Remove the dependency.
@@ -1536,8 +1537,9 @@ fn add_remove_optional() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: The dependency `anyio` could not be found in `project.dependencies`
+      info: `anyio` is an optional dependency in the `io` extra
 
-    hint: `anyio` is an optional dependency (try: `uv remove anyio --optional io`)
+    hint: Re-run the command with `--optional io` to remove the optional dependency
     ");
 
     // Remove the dependency.
@@ -4592,10 +4594,9 @@ fn add_standard_library_error() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to add dependencies
+      info: The module `pickle` is included in the Python standard library and usually should not be added as a dependency
       cause: No solution found when resolving dependencies
       cause: Because pickle was not found in the package registry and your project depends on pickle, we can conclude that your project's requirements are unsatisfiable.
-
-    hint: The module `pickle` is included in the Python standard library and usually should not be added as a dependency
 
     hint: If you want to add the package regardless of the failed resolution, provide the `--frozen` flag to skip locking and syncing
     ");
@@ -6757,8 +6758,9 @@ fn remove_group() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: The dependency `anyio` could not be found in `dependency-groups.test`
+      info: `anyio` is a production dependency
 
-    hint: `anyio` is a production dependency
+    hint: Re-run the command without `--group test` to remove the production dependency
     ");
 
     Ok(())
@@ -8737,7 +8739,9 @@ fn fail_to_add_revert_project() -> Result<()> {
     Resolved 3 packages in [TIME]
     error: Failed to add dependencies
       cause: Failed to build `child @ file://[TEMP_DIR]/child`
+      info: `child` was included because `parent` (v0.1.0) depends on `child`
       cause: The build backend returned an error
+      info: Build failures usually indicate a problem with the package or the build environment
       cause: Call to `setuptools.build_meta.get_requires_for_build_wheel` failed (exit status: 1)
 
              [stderr]
@@ -8753,11 +8757,7 @@ fn fail_to_add_revert_project() -> Result<()> {
                File "<string>", line 1, in <module>
              ZeroDivisionError: division by zero
 
-    hint: `child` was included because `parent` (v0.1.0) depends on `child`
-
     hint: If you want to add the package regardless of the failed resolution, provide the `--frozen` flag to skip locking and syncing
-
-    hint: Build failures usually indicate a problem with the package or the build environment
     "#);
 
     let pyproject_toml = fs_err::read_to_string(context.temp_dir.join("pyproject.toml"))?;
@@ -8837,7 +8837,9 @@ fn fail_to_edit_revert_project() -> Result<()> {
     Resolved 3 packages in [TIME]
     error: Failed to add dependencies
       cause: Failed to build `child @ file://[TEMP_DIR]/child`
+      info: `child` was included because `parent` (v0.1.0) depends on `child`
       cause: The build backend returned an error
+      info: Build failures usually indicate a problem with the package or the build environment
       cause: Call to `setuptools.build_meta.get_requires_for_build_wheel` failed (exit status: 1)
 
              [stderr]
@@ -8853,11 +8855,7 @@ fn fail_to_edit_revert_project() -> Result<()> {
                File "<string>", line 1, in <module>
              ZeroDivisionError: division by zero
 
-    hint: `child` was included because `parent` (v0.1.0) depends on `child`
-
     hint: If you want to add the package regardless of the failed resolution, provide the `--frozen` flag to skip locking and syncing
-
-    hint: Build failures usually indicate a problem with the package or the build environment
     "#);
 
     let pyproject_toml = fs_err::read_to_string(context.temp_dir.join("pyproject.toml"))?;
@@ -8948,7 +8946,9 @@ fn fail_to_add_revert_workspace_root() -> Result<()> {
     Resolved 3 packages in [TIME]
     error: Failed to add dependencies
       cause: Failed to build `broken @ file://[TEMP_DIR]/broken`
+      info: `broken` was included because `parent` (v0.1.0) depends on `broken`
       cause: The build backend returned an error
+      info: Build failures usually indicate a problem with the package or the build environment
       cause: Call to `setuptools.build_meta.get_requires_for_build_editable` failed (exit status: 1)
 
              [stderr]
@@ -8967,11 +8967,7 @@ fn fail_to_add_revert_workspace_root() -> Result<()> {
                File "<string>", line 1, in <module>
              ZeroDivisionError: division by zero
 
-    hint: `broken` was included because `parent` (v0.1.0) depends on `broken`
-
     hint: If you want to add the package regardless of the failed resolution, provide the `--frozen` flag to skip locking and syncing
-
-    hint: Build failures usually indicate a problem with the package or the build environment
     "#);
 
     let pyproject_toml = fs_err::read_to_string(context.temp_dir.join("pyproject.toml"))?;
@@ -9064,7 +9060,9 @@ fn fail_to_add_revert_workspace_member() -> Result<()> {
     Resolved 4 packages in [TIME]
     error: Failed to add dependencies
       cause: Failed to build `broken @ file://[TEMP_DIR]/broken`
+      info: `broken` was included because `child` (v0.1.0) depends on `broken`
       cause: The build backend returned an error
+      info: Build failures usually indicate a problem with the package or the build environment
       cause: Call to `setuptools.build_meta.get_requires_for_build_editable` failed (exit status: 1)
 
              [stderr]
@@ -9083,11 +9081,7 @@ fn fail_to_add_revert_workspace_member() -> Result<()> {
                File "<string>", line 1, in <module>
              ZeroDivisionError: division by zero
 
-    hint: `broken` was included because `child` (v0.1.0) depends on `broken`
-
     hint: If you want to add the package regardless of the failed resolution, provide the `--frozen` flag to skip locking and syncing
-
-    hint: Build failures usually indicate a problem with the package or the build environment
     "#);
 
     let pyproject_toml = fs_err::read_to_string(context.temp_dir.join("pyproject.toml"))?;
@@ -13359,11 +13353,10 @@ fn add_with_build_constraints() -> Result<()> {
     ----- stderr -----
     error: Failed to add dependencies
       cause: Failed to download and build `requests==1.2.0`
+      info: `requests` (v1.2.0) was included because `project` (v0.1.0) depends on `requests==1.2`
       cause: Failed to resolve requirements from `setup.py` build
       cause: No solution found when resolving: `setuptools>=40.8.0`
       cause: Because you require setuptools>=40.8.0 and setuptools==1, we can conclude that your requirements are unsatisfiable.
-
-    hint: `requests` (v1.2.0) was included because `project` (v0.1.0) depends on `requests==1.2`
 
     hint: If you want to add the package regardless of the failed resolution, provide the `--frozen` flag to skip locking and syncing
     ");
