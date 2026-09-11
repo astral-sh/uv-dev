@@ -35,6 +35,7 @@ pub(super) struct Reader {
     capacity: usize,
     buffers: Vec<ReadBuffer>,
     pending: Option<PendingBatch>,
+    has_completed_io: bool,
     #[cfg(test)]
     drain_observer: Option<std::sync::mpsc::SyncSender<()>>,
 }
@@ -66,6 +67,7 @@ impl Reader {
             capacity,
             buffers: (0..capacity).map(|_| new_buffer()).collect(),
             pending: None,
+            has_completed_io: false,
             #[cfg(test)]
             drain_observer: None,
         })
@@ -73,6 +75,21 @@ impl Reader {
 
     pub(super) fn read(&mut self, paths: &[PathBuf]) -> io::Result<ReadResults> {
         self.read_with(paths, &mut IoUring::submit_and_wait)
+    }
+
+    /// Read the submitting task's effective io-wq limits after an actual request.
+    pub(super) fn worker_limits(&self) -> io::Result<Option<[u32; 2]>> {
+        if !self.has_completed_io || self.pending.is_some() {
+            return Err(invalid_completion());
+        }
+        let ring = self.ring.as_ref().ok_or_else(invalid_completion)?;
+        // Zero leaves the current bounded and unbounded worker limits unchanged.
+        let mut previous = [0; 2];
+        match ring.submitter().register_iowq_max_workers(&mut previous) {
+            Ok(()) => Ok(Some(previous)),
+            Err(error) if unavailable_worker_registration(&error) => Ok(None),
+            Err(error) => Err(error),
+        }
     }
 
     fn read_with(
@@ -105,6 +122,7 @@ impl Reader {
                 return Err(error);
             }
             let mut batch = self.pending.take().ok_or_else(invalid_completion)?;
+            self.has_completed_io |= batch.completed != 0;
             results.extend(batch.take_results()?);
             batch.return_buffers(&mut self.buffers)?;
         }
@@ -483,6 +501,15 @@ fn retryable_control_error(error: &io::Error) -> bool {
     error.kind() == io::ErrorKind::Interrupted
         || error.kind() == io::ErrorKind::WouldBlock
         || error.raw_os_error() == Some(Errno::BUSY.raw_os_error())
+}
+
+fn unavailable_worker_registration(error: &io::Error) -> bool {
+    error.kind() == io::ErrorKind::Unsupported
+        || error.raw_os_error().is_some_and(|code| {
+            code == Errno::NOSYS.raw_os_error()
+                || code == Errno::OPNOTSUPP.raw_os_error()
+                || code == Errno::INVAL.raw_os_error()
+        })
 }
 
 #[derive(Default)]

@@ -19,6 +19,18 @@ use std::io;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
+#[cfg(all(
+    target_os = "linux",
+    any(
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        target_arch = "riscv64",
+        target_arch = "loongarch64",
+        target_arch = "powerpc64"
+    )
+))]
+use std::{fmt, io::Write, num::NonZeroU32};
+
 use criterion::{
     BenchmarkId, Criterion, Throughput, criterion_group, criterion_main, measurement::WallTime,
 };
@@ -225,10 +237,7 @@ fn worker_pool(threads: usize) -> ThreadPool {
         target_arch = "powerpc64"
     )
 ))]
-fn checked_reader(
-    fixture: &Fixture,
-    queue_depth: std::num::NonZeroU32,
-) -> io::Result<uring::Reader> {
+fn checked_reader(fixture: &Fixture, queue_depth: NonZeroU32) -> io::Result<uring::Reader> {
     let mut reader = uring::Reader::new(queue_depth)?;
     fixture.assert_reads(
         &reader
@@ -236,6 +245,112 @@ fn checked_reader(
             .expect("Failed to probe io_uring sidecar reads"),
     );
     Ok(reader)
+}
+
+#[cfg(all(
+    target_os = "linux",
+    any(
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        target_arch = "riscv64",
+        target_arch = "loongarch64",
+        target_arch = "powerpc64"
+    )
+))]
+#[derive(Clone, Copy)]
+struct PreparedConfiguration {
+    worker_limits: Option<[u32; 2]>,
+}
+
+#[cfg(all(
+    target_os = "linux",
+    any(
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        target_arch = "riscv64",
+        target_arch = "loongarch64",
+        target_arch = "powerpc64"
+    )
+))]
+fn benchmark_note(message: fmt::Arguments<'_>) {
+    writeln!(io::stderr().lock(), "{message}")
+        .expect("Failed to report sidecar benchmark metadata");
+}
+
+#[cfg(all(
+    target_os = "linux",
+    any(
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        target_arch = "riscv64",
+        target_arch = "loongarch64",
+        target_arch = "powerpc64"
+    )
+))]
+fn validate_reader(
+    backend: &str,
+    fixture: &Fixture,
+    queue_depth: NonZeroU32,
+) -> Option<PreparedConfiguration> {
+    // Linux 5.15 can retain io-wq worker limits from the first ring used by a task. Preflights
+    // need independent submitting tasks just like the timed sample batches.
+    let prepared = timing::isolated(|| {
+        let reader = checked_reader(fixture, queue_depth)?;
+        let worker_limits = reader
+            .worker_limits()
+            .expect("Failed to read sidecar io-wq limits");
+        Ok::<_, io::Error>(PreparedConfiguration { worker_limits })
+    });
+    match prepared {
+        Ok(prepared) => {
+            let limits = if let Some([bounded, unbounded]) = prepared.worker_limits {
+                format!("bounded={bounded}, unbounded={unbounded}")
+            } else {
+                "unavailable".to_owned()
+            };
+            benchmark_note(format_args!(
+                "installed_sidecar_reads/{backend}/{}/{}: active OPENAT/READ, io-wq limits {limits}",
+                fixture.name,
+                fixture.directories.len()
+            ));
+            Some(prepared)
+        }
+        Err(error) => {
+            benchmark_note(format_args!(
+                "installed_sidecar_reads/{backend}/{}/{}: unavailable ({error})",
+                fixture.name,
+                fixture.directories.len()
+            ));
+            None
+        }
+    }
+}
+
+#[cfg(all(
+    target_os = "linux",
+    any(
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        target_arch = "riscv64",
+        target_arch = "loongarch64",
+        target_arch = "powerpc64"
+    )
+))]
+fn prepared_reader(
+    fixture: &Fixture,
+    queue_depth: NonZeroU32,
+    prepared: PreparedConfiguration,
+) -> uring::Reader {
+    let reader =
+        checked_reader(fixture, queue_depth).expect("io_uring sidecar reads became unavailable");
+    assert_eq!(
+        reader
+            .worker_limits()
+            .expect("Failed to read sidecar io-wq limits"),
+        prepared.worker_limits,
+        "io-wq limits changed between isolated sidecar samples"
+    );
+    reader
 }
 
 fn installed_sidecar_read_backends(criterion: &mut Criterion<WallTime>) {
@@ -337,59 +452,48 @@ fn installed_sidecar_read_backends(criterion: &mut Criterion<WallTime>) {
                 )
             ))]
             for queue_depth in [1, 8, 64, 256] {
-                let queue_depth =
-                    std::num::NonZeroU32::new(queue_depth).expect("non-zero queue depth");
-                // Omit unavailable rings; ordinary-I/O time must not acquire an io_uring label.
-                // Preflights also need their own submitting task: Linux 5.15 can retain io-wq
-                // worker limits from the first ring used by that task.
-                if !timing::isolated(|| checked_reader(fixture, queue_depth).is_ok()) {
-                    continue;
-                }
-                if include_setup {
-                    group.bench_function(
-                        fixture.benchmark_id(&format!("io-uring-{queue_depth}-fresh-ring")),
-                        |bencher| {
-                            bencher.iter_custom(|iterations| {
-                                timing::isolated_time(
-                                    iterations,
-                                    || {
-                                        drop(
-                                            checked_reader(fixture, queue_depth).expect(
-                                                "io_uring sidecar reads became unavailable",
-                                            ),
-                                        );
-                                    },
-                                    |()| {
-                                        let mut reader = uring::Reader::new(queue_depth)
-                                            .expect("io_uring sidecar reads became unavailable");
-                                        reader
-                                            .read(black_box(&fixture.paths))
-                                            .expect("Failed to read sidecars with io_uring")
-                                    },
-                                )
-                            });
-                        },
-                    );
+                let queue_depth = NonZeroU32::new(queue_depth).expect("non-zero queue depth");
+                let backend = if include_setup {
+                    format!("io-uring-{queue_depth}-fresh-ring")
                 } else {
-                    group.bench_function(
-                        fixture.benchmark_id(&format!("io-uring-{queue_depth}")),
-                        |bencher| {
-                            bencher.iter_custom(|iterations| {
-                                timing::isolated_time(
-                                    iterations,
-                                    || {
-                                        checked_reader(fixture, queue_depth)
-                                            .expect("io_uring sidecar reads became unavailable")
-                                    },
-                                    |reader| {
-                                        reader
-                                            .read(black_box(&fixture.paths))
-                                            .expect("Failed to read sidecars with io_uring")
-                                    },
-                                )
-                            });
-                        },
-                    );
+                    format!("io-uring-{queue_depth}")
+                };
+                // Omit unavailable rings; ordinary-I/O time must not acquire an io_uring label.
+                let Some(prepared) = validate_reader(&backend, fixture, queue_depth) else {
+                    continue;
+                };
+                if include_setup {
+                    group.bench_function(fixture.benchmark_id(&backend), |bencher| {
+                        bencher.iter_custom(|iterations| {
+                            timing::isolated_time(
+                                iterations,
+                                || {
+                                    drop(prepared_reader(fixture, queue_depth, prepared));
+                                },
+                                |()| {
+                                    let mut reader = uring::Reader::new(queue_depth)
+                                        .expect("io_uring sidecar reads became unavailable");
+                                    reader
+                                        .read(black_box(&fixture.paths))
+                                        .expect("Failed to read sidecars with io_uring")
+                                },
+                            )
+                        });
+                    });
+                } else {
+                    group.bench_function(fixture.benchmark_id(&backend), |bencher| {
+                        bencher.iter_custom(|iterations| {
+                            timing::isolated_time(
+                                iterations,
+                                || prepared_reader(fixture, queue_depth, prepared),
+                                |reader| {
+                                    reader
+                                        .read(black_box(&fixture.paths))
+                                        .expect("Failed to read sidecars with io_uring")
+                                },
+                            )
+                        });
+                    });
                 }
             }
         }

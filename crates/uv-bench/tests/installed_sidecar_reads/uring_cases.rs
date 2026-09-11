@@ -23,7 +23,7 @@ mod tests {
 
     use super::{
         MAX_STALLED_ATTEMPTS, Operation, PendingBatch, Progress, READ_SIZE, ReadResult, Reader,
-        Request, new_buffer, retryable_control_error,
+        Request, new_buffer, retryable_control_error, unavailable_worker_registration,
     };
 
     fn ordinary(path: &Path) -> ReadResult {
@@ -203,6 +203,17 @@ mod tests {
     }
 
     #[test]
+    fn worker_registration_unavailability_is_distinct_from_other_errors() {
+        for error in [Errno::NOSYS, Errno::OPNOTSUPP, Errno::INVAL] {
+            assert!(unavailable_worker_registration(&error.into()));
+        }
+        assert!(unavailable_worker_registration(&io::Error::from(
+            io::ErrorKind::Unsupported
+        )));
+        assert!(!unavailable_worker_registration(&Errno::PERM.into()));
+    }
+
+    #[test]
     #[ignore = "requires an io_uring-capable Linux host"]
     fn active_reader_reuses_buffers_across_batches_and_eof_reads() -> io::Result<()> {
         let root = tempfile::tempdir()?;
@@ -236,8 +247,18 @@ mod tests {
 
         let mut reader = Reader::new(NonZeroU32::new(4).expect("non-zero queue depth"))?;
         let descriptor = reader.ring.as_ref().map(AsRawFd::as_raw_fd);
+        assert_eq!(
+            reader
+                .worker_limits()
+                .expect_err("Worker limits require an actual completed request")
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert_results(&paths, &reader.read(&paths)?);
+        let worker_limits = reader.worker_limits()?;
         for _ in 0..2 {
             assert_results(&paths, &reader.read(&paths)?);
+            assert_eq!(reader.worker_limits()?, worker_limits);
             assert!(reader.pending.is_none());
             assert_eq!(reader.buffers.len(), reader.capacity);
             assert_eq!(reader.ring.as_ref().map(AsRawFd::as_raw_fd), descriptor);
