@@ -6,6 +6,7 @@ use owo_colors::OwoColorize;
 
 use crate::line_wrap::wrap_text;
 use crate::source::{SourceLevel, SourceSnippet, write_snippets};
+use crate::{HintOrdering, HintPrefix, Hints};
 
 /// User-facing presentation data for one error in a source chain.
 ///
@@ -16,6 +17,7 @@ pub struct Diagnostic<'a> {
     pub(crate) message: Option<Cow<'a, str>>,
     pub(crate) snippets: Vec<SourceSnippet<'a>>,
     pub(crate) info: Vec<Info<'a>>,
+    pub(crate) hints: Hints<'a>,
     pub(crate) source: Option<Box<Self>>,
 }
 
@@ -26,6 +28,7 @@ impl<'a> Diagnostic<'a> {
             message: Some(message.into()),
             snippets: Vec::new(),
             info: Vec::new(),
+            hints: Hints::none(),
             source: None,
         }
     }
@@ -34,6 +37,17 @@ impl<'a> Diagnostic<'a> {
     #[must_use]
     pub fn with_info(mut self, info: Info<'a>) -> Self {
         self.info.push(info);
+        self
+    }
+
+    /// Attach actionable suggestions owned by this error.
+    ///
+    /// [`HintOrdering::First`] and [`HintOrdering::Any`] are rendered beside this error. Its
+    /// [`HintOrdering::Last`] suggestions follow its complete source chain.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_hints(mut self, hints: Hints<'a>) -> Self {
+        self.hints.extend(hints);
         self
     }
 
@@ -47,13 +61,21 @@ impl<'a> Diagnostic<'a> {
 
     /// Supply presentation data for the next error returned by [`Error::source`].
     ///
-    /// This takes precedence over the diagnostic resolver for that error. It does not add a
-    /// source to the error chain, and is ignored if there is no next source.
+    /// This takes precedence over the diagnostic resolver's presentation for that error. Hints
+    /// owned by the source error are retained, followed by any hints supplied here. This does not
+    /// add a source to the error chain, and is ignored if there is no next source.
     #[cfg(test)]
     #[must_use]
     pub(crate) fn with_source(mut self, source: Self) -> Self {
         self.source = Some(Box::new(source));
         self
+    }
+
+    /// Replace presentation fields without discarding suggestions owned by the actual error.
+    pub(crate) fn with_presentation_override(mut self, mut presentation: Self) -> Self {
+        self.hints.extend(presentation.hints);
+        presentation.hints = self.hints;
+        presentation
     }
 }
 
@@ -93,6 +115,31 @@ impl<'a> Info<'a> {
 
 /// Resolve presentation data for a concrete error type.
 pub type DiagnosticFn = for<'a> fn(&'a (dyn Error + 'static)) -> Option<Diagnostic<'a>>;
+
+pub(crate) fn write_hints(
+    stream: &mut impl Write,
+    hints: &Hints<'_>,
+    ordering: HintOrdering,
+    width: Option<usize>,
+) -> fmt::Result {
+    for hint in hints.iter_for_ordering(ordering) {
+        let message = wrap_text(hint, width.map(|width| width.saturating_sub(8)), "", "", "");
+        let mut lines = message.lines();
+        writeln!(
+            stream,
+            "  {HintPrefix} {}",
+            lines.next().unwrap_or_default().trim()
+        )?;
+        for line in lines {
+            if line.trim().is_empty() {
+                writeln!(stream)?;
+            } else {
+                writeln!(stream, "        {line}")?;
+            }
+        }
+    }
+    Ok(())
+}
 
 pub(crate) fn write_info(
     stream: &mut impl Write,

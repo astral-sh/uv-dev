@@ -9,8 +9,8 @@ use std::iter;
 
 use owo_colors::{AnsiColors, DynColor, OwoColorize};
 
-use diagnostic::write_info;
 pub use diagnostic::{Diagnostic, DiagnosticFn, Info};
+use diagnostic::{write_hints, write_info};
 use line_wrap::{get_wrap_width, wrap_text};
 use source::{SourceLevel, write_snippets};
 
@@ -26,15 +26,15 @@ pub trait Hinted {
     }
 }
 
-/// The display order of a user-facing hint.
+/// The display order of a user-facing hint within its owning error.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum HintOrdering {
-    /// Advice that should be shown before other hints.
+    /// Advice that should be shown before the error's other immediate hints.
     First,
     /// Advice with no preferred placement.
     #[default]
     Any,
-    /// General advice that should follow more specific hints.
+    /// General advice that should follow the error's complete source chain.
     Last,
 }
 
@@ -85,6 +85,7 @@ impl From<String> for Hint<'_> {
 ///
 /// Each hint is rendered on its own line, prefixed with the styled `hint:` label.
 /// Hints are grouped by [`HintOrdering`], retaining insertion order within each group.
+#[derive(Default)]
 pub struct Hints<'a>(Vec<Hint<'a>>);
 
 impl<'a> Hints<'a> {
@@ -125,6 +126,14 @@ impl<'a> Hints<'a> {
             ordering: HintOrdering::First,
             remaining: [HintOrdering::Any, HintOrdering::Last].into_iter(),
         }
+    }
+
+    /// Iterate over one ordering group without changing insertion order.
+    fn iter_for_ordering(&self, ordering: HintOrdering) -> impl Iterator<Item = &str> {
+        self.0
+            .iter()
+            .filter(move |hint| hint.ordering == ordering)
+            .map(|hint| hint.message.as_ref())
     }
 
     /// Extend with another set of hints, converting borrowed hints to owned.
@@ -397,14 +406,26 @@ pub fn write_error_chain_with_options<C: DynColor + Copy, W: fmt::Write>(
             SourceLevel::for_error(&level),
         )?;
         write_info(&mut stream, &diagnostic.info, width)?;
+        write_hints(&mut stream, &diagnostic.hints, HintOrdering::First, width)?;
+        write_hints(&mut stream, &diagnostic.hints, HintOrdering::Any, width)?;
     }
 
-    let mut source_override = main_diagnostic.and_then(|diagnostic| diagnostic.source);
+    // Keep each owner's hints together while walking the real source chain. Unwinding in reverse
+    // order places general outer advice after more specific source advice.
+    let mut trailing_hints = Vec::new();
+    let mut source_override = main_diagnostic.and_then(|diagnostic| {
+        trailing_hints.push(diagnostic.hints);
+        diagnostic.source
+    });
     for source in iter::successors(err.source(), |&err| err.source()) {
-        let source_diagnostic = source_override
-            .take()
-            .map(|diagnostic| *diagnostic)
-            .or_else(|| diagnostic.and_then(|diagnostic| diagnostic(source)));
+        let native_diagnostic = diagnostic.and_then(|diagnostic| diagnostic(source));
+        let source_diagnostic = match (source_override.take(), native_diagnostic) {
+            (Some(presentation), Some(native)) => {
+                Some(native.with_presentation_override(*presentation))
+            }
+            (Some(presentation), None) => Some(*presentation),
+            (None, native) => native,
+        };
         let msg = source_diagnostic
             .as_ref()
             .and_then(|diagnostic| diagnostic.message.as_deref())
@@ -438,8 +459,17 @@ pub fn write_error_chain_with_options<C: DynColor + Copy, W: fmt::Write>(
                 SourceLevel::for_error(&level),
             )?;
             write_info(&mut stream, &diagnostic.info, width)?;
+            write_hints(&mut stream, &diagnostic.hints, HintOrdering::First, width)?;
+            write_hints(&mut stream, &diagnostic.hints, HintOrdering::Any, width)?;
         }
-        source_override = source_diagnostic.and_then(|diagnostic| diagnostic.source);
+        source_override = source_diagnostic.and_then(|diagnostic| {
+            trailing_hints.push(diagnostic.hints);
+            diagnostic.source
+        });
+    }
+
+    for hints in trailing_hints.iter().rev() {
+        write_hints(&mut stream, hints, HintOrdering::Last, width)?;
     }
 
     for hint in hints {
@@ -1092,6 +1122,188 @@ mod tests {
           info: Context from the outer error
           cause: Explicit inner message
           cause: Resolved HTTP error
+        ");
+    }
+
+    #[test]
+    fn format_hints_with_their_owner_and_source_subtree() {
+        #[derive(Debug, thiserror::Error)]
+        #[error("Outer operation failed")]
+        struct Outer(#[source] Middle);
+
+        #[derive(Debug, thiserror::Error)]
+        #[error("Middle operation failed")]
+        struct Middle(#[source] HttpError);
+
+        let error = Outer(Middle(HttpError));
+        let mut output = String::new();
+        write_error_chain_with_options(
+            &error,
+            &Hints::from("Explicit report-level fallback"),
+            ErrorOptions::default()
+                .with_width_override(80)
+                .with_diagnostic(|error| {
+                    if error.is::<Outer>() {
+                        let hints = [
+                            Hint::new("Outer trailing advice 1").with_ordering(HintOrdering::Last),
+                            Hint::new("Outer immediate advice"),
+                            Hint::new("Outer first advice").with_ordering(HintOrdering::First),
+                            Hint::new("Outer trailing advice 2").with_ordering(HintOrdering::Last),
+                        ]
+                        .into_iter()
+                        .collect();
+                        Some(Diagnostic::default().with_hints(hints))
+                    } else if error.is::<Middle>() {
+                        Some(
+                            Diagnostic::default()
+                                .with_info(Info::new("Middle context"))
+                                .with_hints(Hints::from("Middle immediate advice"))
+                                .with_hints(
+                                    Hints::from("Middle trailing advice")
+                                        .with_ordering(HintOrdering::Last),
+                                ),
+                        )
+                    } else if error.is::<HttpError>() {
+                        Some(
+                            Diagnostic::default()
+                                .with_hints(Hints::from("HTTP-specific advice"))
+                                .with_hints(
+                                    Hints::from("HTTP trailing advice")
+                                        .with_ordering(HintOrdering::Last),
+                                ),
+                        )
+                    } else {
+                        None
+                    }
+                })
+                .with_stream(&mut output),
+        )
+        .unwrap();
+
+        assert_snapshot!(anstream::adapter::strip_str(&output), @"
+        error: Outer operation failed
+          hint: Outer first advice
+          hint: Outer immediate advice
+          cause: Middle operation failed
+          info: Middle context
+          hint: Middle immediate advice
+          cause: HTTP error 400 Bad Request
+          hint: HTTP-specific advice
+          hint: HTTP trailing advice
+          hint: Middle trailing advice
+          hint: Outer trailing advice 1
+          hint: Outer trailing advice 2
+
+        hint: Explicit report-level fallback
+        ");
+    }
+
+    #[test]
+    fn format_source_override_retains_native_hints() {
+        #[derive(Debug, thiserror::Error)]
+        #[error("Outer operation failed")]
+        struct Outer(#[source] Middle);
+
+        #[derive(Debug, thiserror::Error)]
+        #[error("Middle operation failed")]
+        struct Middle(#[source] HttpError);
+
+        let error = Outer(Middle(HttpError));
+        let mut output = String::new();
+        write_error_chain_with_options(
+            &error,
+            &Hints::none(),
+            ErrorOptions::default()
+                .with_width_override(80)
+                .with_diagnostic(|error| {
+                    if error.is::<Outer>() {
+                        Some(
+                            Diagnostic::default()
+                                .with_hints(
+                                    Hints::from("Outer trailing advice")
+                                        .with_ordering(HintOrdering::Last),
+                                )
+                                .with_source(
+                                    Diagnostic::new("Presented middle error")
+                                        .with_hints(Hints::from("Context-dependent middle advice"))
+                                        .with_hints(
+                                            Hints::from("Presented middle trailing advice")
+                                                .with_ordering(HintOrdering::Last),
+                                        )
+                                        .with_source(
+                                            Diagnostic::new("Presented HTTP error").with_hints(
+                                                Hints::from("Context-dependent HTTP advice"),
+                                            ),
+                                        ),
+                                ),
+                        )
+                    } else if error.is::<Middle>() {
+                        Some(
+                            Diagnostic::new("Ordinary middle message")
+                                .with_info(Info::new("Ordinary middle context"))
+                                .with_hints(
+                                    Hints::from("Middle specific advice")
+                                        .with_ordering(HintOrdering::First),
+                                )
+                                .with_hints(
+                                    Hints::from("Middle trailing advice")
+                                        .with_ordering(HintOrdering::Last),
+                                ),
+                        )
+                    } else if error.is::<HttpError>() {
+                        Some(
+                            Diagnostic::default()
+                                .with_hints(Hints::from("HTTP-specific advice"))
+                                .with_hints(
+                                    Hints::from("HTTP trailing advice")
+                                        .with_ordering(HintOrdering::Last),
+                                ),
+                        )
+                    } else {
+                        None
+                    }
+                })
+                .with_stream(&mut output),
+        )
+        .unwrap();
+
+        assert_snapshot!(anstream::adapter::strip_str(&output), @"
+        error: Outer operation failed
+          cause: Presented middle error
+          hint: Middle specific advice
+          hint: Context-dependent middle advice
+          cause: Presented HTTP error
+          hint: HTTP-specific advice
+          hint: Context-dependent HTTP advice
+          hint: HTTP trailing advice
+          hint: Middle trailing advice
+          hint: Presented middle trailing advice
+          hint: Outer trailing advice
+        ");
+    }
+
+    #[test]
+    fn format_owned_hint_wrapping() {
+        let mut output = String::new();
+        write_error_chain_with_options(
+            &HttpError,
+            &Hints::none(),
+            ErrorOptions::default()
+                .with_width_override(35)
+                .with_diagnostic(|_| {
+                    Some(Diagnostic::default().with_hints(Hints::from(
+                        "First paragraph contains several words.\n\n  Indented example.",
+                    )))
+                })
+                .with_stream(&mut output),
+        )
+        .unwrap();
+        assert_snapshot!(anstream::adapter::strip_str(&output), @"
+        error: HTTP error 400 Bad Request
+          hint: First paragraph contains
+                several words.
+
+                  Indented example.
         ");
     }
 }
