@@ -17,7 +17,7 @@ use tracing::{debug, trace, warn};
 use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
 use uv_configuration::Concurrency;
-use uv_errors::{ErrorOptions, Hints, write_error_chain_with_options};
+use uv_errors::{ErrorOptions, Hinted, Hints, Info, write_error_chain_with_options};
 use uv_fs::Simplified;
 use uv_platform::{Arch, Libc};
 use uv_preview::{Preview, PreviewFeature};
@@ -178,15 +178,21 @@ pub(crate) struct InvalidUpgradeRequestError {
     from_version_file: bool,
 }
 
-impl uv_errors::Hinted for InvalidUpgradeRequestError {
+impl Hinted for InvalidUpgradeRequestError {
     fn hints(&self) -> Hints<'_> {
         if self.from_version_file {
-            Hints::from(
-                "The version request came from a `.python-version` file; change the patch version in the file to upgrade instead",
-            )
+            Hints::from("Change the patch version in the `.python-version` file to upgrade instead")
         } else {
             Hints::none()
         }
+    }
+}
+
+impl InvalidUpgradeRequestError {
+    /// Identify the configuration source of an unsupported upgrade request.
+    pub(crate) fn own_info(&self) -> Option<Info<'static>> {
+        self.from_version_file
+            .then(|| Info::new("The version request came from a `.python-version` file"))
     }
 }
 
@@ -1392,5 +1398,68 @@ fn matches_build(download_build: Option<&str>, installation_build: Option<&str>)
         (Some(_), None) => false,
         // Download doesn't have build info, assume matches
         (None, _) => true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use insta::assert_json_snapshot;
+    use uv_errors::{ErrorFormat, ErrorOptions, Hints, write_error_chain_with_options};
+
+    use crate::commands::diagnostics::diagnostic_for_error;
+
+    use super::{InvalidUpgradeRequestError, PythonUpgradeSource};
+
+    #[test]
+    fn upgrade_request_context_is_separate_from_advice() -> anyhow::Result<()> {
+        let errors = [
+            InvalidUpgradeRequestError {
+                command: PythonUpgradeSource::Install,
+                request: "3.12.1".to_owned(),
+                from_version_file: true,
+            },
+            InvalidUpgradeRequestError {
+                command: PythonUpgradeSource::Upgrade,
+                request: "3.12.1".to_owned(),
+                from_version_file: false,
+            },
+        ];
+        let mut reports = Vec::new();
+        for error in errors {
+            let mut output = String::new();
+            write_error_chain_with_options(
+                &error,
+                &Hints::none(),
+                ErrorOptions::default()
+                    .with_format(ErrorFormat::Json)
+                    .with_diagnostic(diagnostic_for_error)
+                    .with_stream(&mut output),
+            )?;
+            let report: serde_json::Value = serde_json::from_str(&output)?;
+            reports.push(report["errors"][0].clone());
+        }
+
+        assert_json_snapshot!(reports, @r#"
+        [
+          {
+            "hints": [
+              {
+                "message": "Change the patch version in the `.python-version` file to upgrade instead",
+                "ordering": "any"
+              }
+            ],
+            "info": [
+              {
+                "message": "The version request came from a `.python-version` file"
+              }
+            ],
+            "message": "`uv python install --upgrade` only accepts minor versions, got: 3.12.1"
+          },
+          {
+            "message": "`uv python upgrade` only accepts minor versions, got: 3.12.1"
+          }
+        ]
+        "#);
+        Ok(())
     }
 }

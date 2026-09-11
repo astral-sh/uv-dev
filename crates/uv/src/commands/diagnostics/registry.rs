@@ -90,21 +90,25 @@ pub(super) fn metadata_for_error<'a>(error: &'a (dyn StdError + 'static)) -> Err
         uv_tool::Error => ErrorMetadata::hinted,
         uv_audit::osv::Error => ErrorMetadata::hinted,
         AddDependencyError => |error| ErrorMetadata::hinted(error).with_info(error.own_info()),
-        ToolRunUsageError => ErrorMetadata::hinted,
+        ToolRunUsageError => |error| {
+            ErrorMetadata::hinted(error).with_info([error.own_info()])
+        },
         uv_resolver::NoSolutionError => ErrorMetadata::hinted,
         uv_resolver::LockError => ErrorMetadata::hinted,
-        ToolRunScriptError => ErrorMetadata::hinted,
+        ToolRunScriptError => |error| ErrorMetadata::hinted(error).with_info(error.own_info()),
         RecursionLimitError => ErrorMetadata::hinted,
         DependencyNotFoundError => |error| {
             ErrorMetadata::hinted(error).with_info(error.own_info())
         },
         ExtrasWithoutSourceError => ErrorMetadata::hinted,
-        NoExecutablesError => ErrorMetadata::hinted,
+        NoExecutablesError => |error| ErrorMetadata::hinted(error).with_info(error.own_info()),
         ExternallyManagedError => |error| {
             ErrorMetadata::hinted(error).with_info(error.own_info())
         },
         MissingProjectVersionError => ErrorMetadata::hinted,
-        InvalidUpgradeRequestError => ErrorMetadata::hinted,
+        InvalidUpgradeRequestError => |error| {
+            ErrorMetadata::hinted(error).with_info(error.own_info())
+        },
         uv_build_backend::Error => ErrorMetadata::hinted,
         uv_globfilter::PortableGlobError => ErrorMetadata::hinted,
         uv_installer::IncompatibleWheelError => |error| {

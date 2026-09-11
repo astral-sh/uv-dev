@@ -25,7 +25,7 @@ use uv_distribution_types::{
     DependencyMetadata, HashCollection, Index, IndexLocations, InstalledDist, Name, Requirement,
     RequiresPython, Resolution, UnresolvedRequirement,
 };
-use uv_errors::{ErrorWithHints, Hinted, Hints};
+use uv_errors::{ErrorWithHints, Hinted, Hints, Info};
 #[cfg(unix)]
 use uv_fs::replace_symlink;
 use uv_fs::{CWD, Simplified};
@@ -70,45 +70,60 @@ pub(crate) enum NoExecutablesError {
 
 impl Hinted for NoExecutablesError {
     fn hints(&self) -> Hints<'_> {
-        let mut hints = Hints::none();
-        let (package, matching_dependency_packages) = match self {
-            Self::Dependency { package } => {
-                hints.push(format!(
-                    "Use `--with {}` to include `{}` as a dependency without installing its executables",
-                    package.cyan(),
-                    package.cyan(),
-                ));
-                return hints;
-            }
+        match self {
+            Self::Dependency { package } => Hints::from(format!(
+                "Use `--with {}` to include `{}` as a dependency without installing its executables",
+                package.cyan(),
+                package.cyan(),
+            )),
             Self::Root {
                 package,
                 matching_dependency_packages,
-            } => (package, matching_dependency_packages),
-        };
-
-        match matching_dependency_packages.as_slice() {
-            [] => {}
-            [dep] => {
-                let command = format!("uv tool install {dep}");
-                hints.push(format!(
-                    "An executable with the name `{}` is available via dependency `{}`.\n      Did you mean `{}`?",
+            } => match matching_dependency_packages.as_slice() {
+                [] => Hints::none(),
+                [dependency] => Hints::from(format!(
+                    "Install `{}` as the tool package instead",
+                    dependency.cyan(),
+                )),
+                _ => Hints::from(format!(
+                    "Install one of the listed dependencies instead of `{}`",
                     package.cyan(),
-                    dep.cyan(),
-                    command.bold(),
-                ));
-            }
-            deps => {
-                let dep_list = deps
-                    .iter()
-                    .map(|dep| format!("- {}", dep.cyan()))
-                    .join("\n");
-                hints.push(format!(
-                    "An executable with the name `{}` is available via the following dependencies:\n{dep_list}\n      Did you mean to install one of them instead?",
-                    package.cyan(),
-                ));
-            }
+                )),
+            },
         }
-        hints
+    }
+}
+
+impl NoExecutablesError {
+    /// Describe matching executables provided by dependencies of the requested tool.
+    pub(crate) fn own_info(&self) -> Option<Info<'static>> {
+        let Self::Root {
+            package,
+            matching_dependency_packages,
+        } = self
+        else {
+            return None;
+        };
+        match matching_dependency_packages.as_slice() {
+            [] => None,
+            [dependency] => Some(Info::new(format!(
+                "An executable with the name `{}` is available via dependency `{}`",
+                package.cyan(),
+                dependency.cyan(),
+            ))),
+            dependencies => Some(
+                Info::new(format!(
+                    "An executable with the name `{}` is available via the following dependencies:",
+                    package.cyan(),
+                ))
+                .with_details(
+                    dependencies
+                        .iter()
+                        .map(|dependency| format!("- {dependency}"))
+                        .join("\n"),
+                ),
+            ),
+        }
     }
 }
 use crate::commands::project::{
@@ -978,5 +993,104 @@ fn warn_out_of_path(executable_directory: &Path) {
                 executable_directory.simplified_display().cyan(),
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use insta::{assert_json_snapshot, assert_snapshot};
+    use uv_errors::{
+        ErrorFormat, ErrorOptions, ErrorWithHints, Hinted, Hints, write_error_chain_with_options,
+    };
+
+    use crate::commands::diagnostics::diagnostic_for_error;
+
+    use super::NoExecutablesError;
+
+    #[test]
+    fn non_root_no_executables_keeps_direct_output() -> anyhow::Result<()> {
+        let error = NoExecutablesError::Dependency {
+            package: "idna".parse()?,
+        };
+        assert!(error.own_info().is_none());
+        assert_snapshot!(
+            anstream::adapter::strip_str(&ErrorWithHints::new(&error, error.hints()).to_string()),
+            @"
+        No executables are provided by package `idna`
+
+        hint: Use `--with idna` to include `idna` as a dependency without installing its executables
+        "
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn no_executables_context_is_separate_from_actions() -> anyhow::Result<()> {
+        let errors = [
+            NoExecutablesError::Root {
+                package: "demo".parse()?,
+                matching_dependency_packages: Vec::new(),
+            },
+            NoExecutablesError::Root {
+                package: "demo".parse()?,
+                matching_dependency_packages: vec!["demo-cli".parse()?],
+            },
+            NoExecutablesError::Root {
+                package: "demo".parse()?,
+                matching_dependency_packages: vec!["demo-cli".parse()?, "demo-tools".parse()?],
+            },
+        ];
+        let mut reports = Vec::new();
+        for error in errors {
+            let mut output = String::new();
+            write_error_chain_with_options(
+                &error,
+                &Hints::none(),
+                ErrorOptions::default()
+                    .with_format(ErrorFormat::Json)
+                    .with_diagnostic(diagnostic_for_error)
+                    .with_stream(&mut output),
+            )?;
+            let report: serde_json::Value = serde_json::from_str(&output)?;
+            reports.push(report["errors"][0].clone());
+        }
+
+        assert_json_snapshot!(reports, @r#"
+        [
+          {
+            "message": "Failed to install entrypoints for `demo`"
+          },
+          {
+            "hints": [
+              {
+                "message": "Install `demo-cli` as the tool package instead",
+                "ordering": "any"
+              }
+            ],
+            "info": [
+              {
+                "message": "An executable with the name `demo` is available via dependency `demo-cli`"
+              }
+            ],
+            "message": "Failed to install entrypoints for `demo`"
+          },
+          {
+            "hints": [
+              {
+                "message": "Install one of the listed dependencies instead of `demo`",
+                "ordering": "any"
+              }
+            ],
+            "info": [
+              {
+                "details": "- demo-cli\n- demo-tools",
+                "message": "An executable with the name `demo` is available via the following dependencies:"
+              }
+            ],
+            "message": "Failed to install entrypoints for `demo`"
+          }
+        ]
+        "#);
+        Ok(())
     }
 }
