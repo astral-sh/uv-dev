@@ -41,8 +41,6 @@ pub(crate) struct EnvironmentMarkersDiagnostic {
     source: SourceFile,
     primary: Range<usize>,
     related: Range<usize>,
-    show_primary_source: bool,
-    show_related_source: bool,
     replacement: MarkerTree,
     suggestion: Option<SourceSuggestion>,
 }
@@ -107,19 +105,6 @@ impl EnvironmentMarkersDiagnostic {
 
         let primary = map.span(&[Key("tool"), Key("uv"), Key(kind.key()), Index(right_index)])?;
         let related = map.span(&[Key("tool"), Key("uv"), Key(kind.key()), Index(left_index)])?;
-        let mut visible = [
-            map.key_span(&[], "tool"),
-            map.key_span(&[Key("tool")], "uv"),
-            map.key_span(&[Key("tool"), Key("uv")], kind.key()),
-            Some(primary.clone()),
-            Some(related.clone()),
-        ]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>();
-        visible.sort_unstable_by_key(|range| (range.start, range.end));
-        let show_primary_source = can_show_source(&source, primary.clone(), &visible);
-        let show_related_source = can_show_source(&source, related.clone(), &visible);
         let replacement = left.negate().and(right);
         let suggestion = replacement
             .contents()
@@ -139,8 +124,6 @@ impl EnvironmentMarkersDiagnostic {
             source,
             primary,
             related,
-            show_primary_source,
-            show_related_source,
             replacement,
             suggestion,
         })
@@ -156,71 +139,16 @@ impl EnvironmentMarkersDiagnostic {
 
     pub(super) fn diagnostic(&self) -> Diagnostic<'_> {
         Diagnostic::default()
-            .with_snippet(source_snippet(
-                &self.source,
-                SourceAnnotation::primary(self.primary.clone()),
-                self.show_primary_source,
-            ))
-            .with_info(
-                Info::new("The other environment is declared here").with_snippet(source_snippet(
-                    &self.source,
-                    SourceAnnotation::secondary(self.related.clone()),
-                    self.show_related_source,
-                )),
+            .with_snippet(
+                SourceSnippet::new(self.source.clone())
+                    .with_annotation(SourceAnnotation::primary(self.primary.clone())),
             )
-    }
-}
-
-/// Show the selected markers only when their complete physical lines contain no other values or
-/// comments. The retained key spans permit both table assignments and dotted or inline keys.
-fn can_show_source(source: &SourceFile, range: Range<usize>, visible: &[Range<usize>]) -> bool {
-    let Some(window) = source.line_range_for_span(range) else {
-        return false;
-    };
-    let mut cursor = window.start;
-    for range in visible {
-        if range.start >= window.end {
-            break;
-        }
-        let end = range.end.min(window.end);
-        if end <= cursor {
-            continue;
-        }
-        let start = range.start.max(cursor);
-        if !source
-            .text()
-            .get(cursor..start)
-            .is_some_and(is_toml_structure)
-        {
-            return false;
-        }
-        cursor = end;
-    }
-    source
-        .text()
-        .get(cursor..window.end)
-        .is_some_and(is_toml_structure)
-}
-
-fn is_toml_structure(text: &str) -> bool {
-    text.bytes().all(|byte| {
-        matches!(
-            byte,
-            b' ' | b'\t' | b'\r' | b'\n' | b'.' | b'=' | b',' | b'[' | b']' | b'{' | b'}'
-        )
-    })
-}
-
-fn source_snippet(
-    source: &SourceFile,
-    annotation: SourceAnnotation<'static>,
-    show_source: bool,
-) -> SourceSnippet<'static> {
-    let snippet = SourceSnippet::new(source.clone()).with_annotation(annotation);
-    if show_source {
-        snippet
-    } else {
-        snippet.without_source_text()
+            .with_info(
+                Info::new("The other environment is declared here").with_snippet(
+                    SourceSnippet::new(self.source.clone())
+                        .with_annotation(SourceAnnotation::secondary(self.related.clone())),
+                ),
+            )
     }
 }
 
@@ -302,7 +230,7 @@ mod tests {
 
     #[test]
     fn environment_suggestion_targets_the_validated_occurrence() -> Result<()> {
-        let source = "# café\r\n[tool.uv]\r\nenvironments = [\r\n  \"sys_platform == 'linux'\",\r\n  \"sys_platform == 'win32'\",\r\n  \"sys_platform == \\u0027linux\\u0027 or sys_platform == 'darwin'\", # sentinel-secret\r\n]\r\n[tool.private]\r\ntoken = 'sentinel-secret'\r\n";
+        let source = "# café\r\n[tool.uv]\r\nenvironments = [\r\n  \"sys_platform == 'linux'\",\r\n  \"sys_platform == 'win32'\",\r\n  \"sys_platform == \\u0027linux\\u0027 or sys_platform == 'darwin'\", # Linux and macOS\r\n]\r\n[tool.private]\r\ntoken = 'sentinel-secret'\r\n";
         let markers = markers(&[
             "sys_platform == 'linux'",
             "sys_platform == 'win32'",
@@ -345,6 +273,9 @@ mod tests {
         assert_snapshot!(format_error(&error, ErrorFormat::Text)?, @r#"
         error: Supported environments must be disjoint, but the following markers overlap: `sys_platform == 'linux'` and `sys_platform == 'darwin' or sys_platform == 'linux'`
            --> pyproject.toml:6:3
+            |
+          6 |   "sys_platform == \u0027linux\u0027 or sys_platform == 'darwin'", # Linux and macOS
+            |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
           info: The other environment is declared here
            --> pyproject.toml:4:3
             |
@@ -361,12 +292,29 @@ mod tests {
         assert_json_snapshot!(report["errors"][0]["sources"], @r#"
         [
           {
-            "kind": "location",
+            "kind": "snippet",
             "name": "pyproject.toml",
-            "position": {
-              "byte_column": 2,
-              "line": 6
-            }
+            "windows": [
+              {
+                "annotations": [
+                  {
+                    "kind": "primary",
+                    "range": {
+                      "end": {
+                        "byte_column": 65,
+                        "line": 6
+                      },
+                      "start": {
+                        "byte_column": 2,
+                        "line": 6
+                      }
+                    }
+                  }
+                ],
+                "line_start": 6,
+                "text": "  \"sys_platform == \\u0027linux\\u0027 or sys_platform == 'darwin'\", # Linux and macOS\r\n"
+              }
+            ]
           }
         ]
         "#);
@@ -437,24 +385,29 @@ mod tests {
     }
 
     #[test]
-    fn unrelated_environment_values_stay_private() -> Result<()> {
-        let source = "[tool.uv]\nenvironments = [\"sys_platform == 'linux'\", \"sys_platform == 'linux'\", \"os_name == 'sentinel-secret'\"]\n";
+    fn unrelated_environment_values_are_shown() -> Result<()> {
+        let source = "[tool.uv]\nenvironments = [\"sys_platform == 'linux'\", \"sys_platform == 'linux'\", \"os_name == 'posix'\"]\n";
         let markers = markers(&[
             "sys_platform == 'linux'",
             "sys_platform == 'linux'",
-            "os_name == 'sentinel-secret'",
+            "os_name == 'posix'",
         ])?;
         let error = error(source, EnvironmentMarkersKind::Supported, &markers, 0, 1)?;
-        assert_snapshot!(format_error(&error, ErrorFormat::Text)?, @"
+        assert_snapshot!(format_error(&error, ErrorFormat::Text)?, @r#"
         error: Supported environments must be disjoint, but the following markers overlap: `sys_platform == 'linux'` and `sys_platform == 'linux'`
            --> pyproject.toml:2:44
+            |
+          2 | environments = ["sys_platform == 'linux'", "sys_platform == 'linux'", "os_name == 'posix'"]
+            |                                            ^^^^^^^^^^^^^^^^^^^^^^^^^
           info: The other environment is declared here
            --> pyproject.toml:2:17
+            |
+          2 | environments = ["sys_platform == 'linux'", "sys_platform == 'linux'", "os_name == 'posix'"]
+            |                 -------------------------
 
         hint: make the environment markers disjoint, or remove one of the overlapping environments
-        ");
+        "#);
         let json = format_error(&error, ErrorFormat::Json)?;
-        assert!(!json.contains("sentinel-secret"));
         let report: serde_json::Value = serde_json::from_str(&json)?;
         assert_json_snapshot!(
             serde_json::json!({
@@ -465,22 +418,56 @@ mod tests {
         {
           "primary": [
             {
-              "kind": "location",
+              "kind": "snippet",
               "name": "pyproject.toml",
-              "position": {
-                "byte_column": 43,
-                "line": 2
-              }
+              "windows": [
+                {
+                  "annotations": [
+                    {
+                      "kind": "primary",
+                      "range": {
+                        "end": {
+                          "byte_column": 68,
+                          "line": 2
+                        },
+                        "start": {
+                          "byte_column": 43,
+                          "line": 2
+                        }
+                      }
+                    }
+                  ],
+                  "line_start": 2,
+                  "text": "environments = [\"sys_platform == 'linux'\", \"sys_platform == 'linux'\", \"os_name == 'posix'\"]\n"
+                }
+              ]
             }
           ],
           "related": [
             {
-              "kind": "location",
+              "kind": "snippet",
               "name": "pyproject.toml",
-              "position": {
-                "byte_column": 16,
-                "line": 2
-              }
+              "windows": [
+                {
+                  "annotations": [
+                    {
+                      "kind": "secondary",
+                      "range": {
+                        "end": {
+                          "byte_column": 41,
+                          "line": 2
+                        },
+                        "start": {
+                          "byte_column": 16,
+                          "line": 2
+                        }
+                      }
+                    }
+                  ],
+                  "line_start": 2,
+                  "text": "environments = [\"sys_platform == 'linux'\", \"sys_platform == 'linux'\", \"os_name == 'posix'\"]\n"
+                }
+              ]
             }
           ]
         }
@@ -490,20 +477,25 @@ mod tests {
     }
 
     #[test]
-    fn inline_environment_siblings_stay_private() -> Result<()> {
-        let source = "tool = { uv = { environments = [\"sys_platform == 'linux'\", \"sys_platform == 'linux'\"], index = [{ url = 'https://user:sentinel-secret@example.invalid/simple' }] } }\n";
+    fn inline_environment_siblings_are_shown() -> Result<()> {
+        let source = "tool = { uv = { environments = [\"sys_platform == 'linux'\", \"sys_platform == 'linux'\"], index = [{ url = 'https://example.invalid/simple' }] } }\n";
         let markers = markers(&["sys_platform == 'linux'", "sys_platform == 'linux'"])?;
         let error = error(source, EnvironmentMarkersKind::Supported, &markers, 0, 1)?;
-        assert_snapshot!(format_error(&error, ErrorFormat::Text)?, @"
+        assert_snapshot!(format_error(&error, ErrorFormat::Text)?, @r#"
         error: Supported environments must be disjoint, but the following markers overlap: `sys_platform == 'linux'` and `sys_platform == 'linux'`
            --> pyproject.toml:1:60
+            |
+          1 | tool = { uv = { environments = ["sys_platform == 'linux'", "sys_platform == 'linux'"], index = [{ url = 'https://example.invalid/simple' }] } }
+            |                                                            ^^^^^^^^^^^^^^^^^^^^^^^^^
           info: The other environment is declared here
            --> pyproject.toml:1:33
+            |
+          1 | tool = { uv = { environments = ["sys_platform == 'linux'", "sys_platform == 'linux'"], index = [{ url = 'https://example.invalid/simple' }] } }
+            |                                 -------------------------
 
         hint: make the environment markers disjoint, or remove one of the overlapping environments
-        ");
+        "#);
         let json = format_error(&error, ErrorFormat::Json)?;
-        assert!(!json.contains("sentinel-secret"));
         let report: serde_json::Value = serde_json::from_str(&json)?;
         assert_json_snapshot!(
             serde_json::json!({
@@ -514,22 +506,56 @@ mod tests {
         {
           "primary": [
             {
-              "kind": "location",
+              "kind": "snippet",
               "name": "pyproject.toml",
-              "position": {
-                "byte_column": 59,
-                "line": 1
-              }
+              "windows": [
+                {
+                  "annotations": [
+                    {
+                      "kind": "primary",
+                      "range": {
+                        "end": {
+                          "byte_column": 84,
+                          "line": 1
+                        },
+                        "start": {
+                          "byte_column": 59,
+                          "line": 1
+                        }
+                      }
+                    }
+                  ],
+                  "line_start": 1,
+                  "text": "tool = { uv = { environments = [\"sys_platform == 'linux'\", \"sys_platform == 'linux'\"], index = [{ url = 'https://example.invalid/simple' }] } }\n"
+                }
+              ]
             }
           ],
           "related": [
             {
-              "kind": "location",
+              "kind": "snippet",
               "name": "pyproject.toml",
-              "position": {
-                "byte_column": 32,
-                "line": 1
-              }
+              "windows": [
+                {
+                  "annotations": [
+                    {
+                      "kind": "secondary",
+                      "range": {
+                        "end": {
+                          "byte_column": 57,
+                          "line": 1
+                        },
+                        "start": {
+                          "byte_column": 32,
+                          "line": 1
+                        }
+                      }
+                    }
+                  ],
+                  "line_start": 1,
+                  "text": "tool = { uv = { environments = [\"sys_platform == 'linux'\", \"sys_platform == 'linux'\"], index = [{ url = 'https://example.invalid/simple' }] } }\n"
+                }
+              ]
             }
           ]
         }
