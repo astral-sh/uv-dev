@@ -171,6 +171,7 @@ impl<'a> SourceSnippet<'a> {
     }
 
     /// Opt in to showing this many surrounding lines for each annotation.
+    #[cfg(test)]
     #[must_use]
     pub fn with_context_lines(mut self, context_lines: usize) -> Self {
         self.context_lines = context_lines;
