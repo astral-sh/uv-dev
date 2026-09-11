@@ -25,6 +25,7 @@ use uv_git::ResolvedRepositoryReference;
 use uv_git_types::GitOid;
 use uv_normalize::{GroupName, PackageName};
 use uv_pep440::Version;
+use uv_pep508::MarkerTree;
 use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::{ConflictKind, Conflicts, SupportedEnvironments};
 use uv_python::{
@@ -498,6 +499,30 @@ impl<'env> LockOperation<'env> {
     }
 }
 
+/// Ensure that every pair of supported or required environments is disjoint.
+fn validate_environment_markers(environments: &SupportedEnvironments) -> Result<(), ProjectError> {
+    let display = |marker: MarkerTree| {
+        marker
+            .contents()
+            .map(|contents| contents.to_string())
+            .unwrap_or_else(|| "true".to_string())
+    };
+
+    for (left_index, lhs) in environments.as_markers().iter().enumerate() {
+        for rhs in &environments.as_markers()[left_index + 1..] {
+            if !lhs.is_disjoint(*rhs) {
+                return Err(ProjectError::OverlappingMarkers {
+                    left: display(*lhs),
+                    right: display(*rhs),
+                    replacement: lhs.negate().and(*rhs),
+                });
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Lock the project requirements into a lockfile.
 async fn do_lock(
     target: LockTarget<'_>,
@@ -666,65 +691,16 @@ async fn do_lock(
     }
 
     // Collect the list of supported environments.
-    let environments = {
-        let environments = target.environments();
-
-        // Ensure that the environments are disjoint.
-        if let Some(environments) = &environments {
-            for [lhs, rhs] in environments.as_markers().array_windows() {
-                if !lhs.is_disjoint(*rhs) {
-                    let hint = lhs.negate().and(*rhs);
-
-                    let lhs = lhs
-                        .contents()
-                        .map(|contents| contents.to_string())
-                        .unwrap_or_else(|| "true".to_string());
-                    let rhs = rhs
-                        .contents()
-                        .map(|contents| contents.to_string())
-                        .unwrap_or_else(|| "true".to_string());
-                    let hint = hint
-                        .contents()
-                        .map(|contents| contents.to_string())
-                        .unwrap_or_else(|| "true".to_string());
-
-                    return Err(ProjectError::OverlappingMarkers(lhs, rhs, hint));
-                }
-            }
-        }
-
-        environments
-    };
+    let environments = target.environments();
+    if let Some(environments) = environments {
+        validate_environment_markers(environments)?;
+    }
 
     // Collect the list of required platforms.
-    let required_environments = if let Some(required_environments) = target.required_environments()
-    {
-        // Ensure that the environments are disjoint.
-        for [lhs, rhs] in required_environments.as_markers().array_windows() {
-            if !lhs.is_disjoint(*rhs) {
-                let hint = lhs.negate().and(*rhs);
-
-                let lhs = lhs
-                    .contents()
-                    .map(|contents| contents.to_string())
-                    .unwrap_or_else(|| "true".to_string());
-                let rhs = rhs
-                    .contents()
-                    .map(|contents| contents.to_string())
-                    .unwrap_or_else(|| "true".to_string());
-                let hint = hint
-                    .contents()
-                    .map(|contents| contents.to_string())
-                    .unwrap_or_else(|| "true".to_string());
-
-                return Err(ProjectError::OverlappingMarkers(lhs, rhs, hint));
-            }
-        }
-
-        Some(required_environments)
-    } else {
-        None
-    };
+    let required_environments = target.required_environments();
+    if let Some(required_environments) = required_environments {
+        validate_environment_markers(required_environments)?;
+    }
 
     // Determine the supported Python range. If no range is defined, and warn and default to the
     // current minor version.
