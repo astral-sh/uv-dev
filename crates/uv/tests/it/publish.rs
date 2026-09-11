@@ -1288,6 +1288,37 @@ fn dry_run_reports_all_errors() {
     Found issues with 2 files
     "
     );
+
+    uv_snapshot!(context.filters(), context.publish()
+        .args(["--dry-run", "-q"])
+        .arg("--publish-url")
+        .arg("https://test.pypi.org/legacy/")
+        .arg("--token")
+        .arg("dummy")
+        .arg(wheel_a.path())
+        .arg(wheel_b.path()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to publish: `a-1.0.0-py3-none-any.whl`
+      cause: Failed to read metadata
+      cause: Failed to read from zip file
+      cause: unable to locate the end of central directory record
+    error: Failed to publish: `b-1.0.0-py3-none-any.whl`
+      cause: Failed to read metadata
+      cause: Failed to read from zip file
+      cause: unable to locate the end of central directory record
+    ");
+
+    uv_snapshot!(context.filters(), context.publish()
+        .args(["--dry-run", "-qq"])
+        .arg("--publish-url")
+        .arg("https://test.pypi.org/legacy/")
+        .arg("--token")
+        .arg("dummy")
+        .arg(wheel_a.path())
+        .arg(wheel_b.path()), @"
+    exit_code: 1 (failure)
+    ");
 }
 
 /// Preparation validates attestations, including during dry runs, unless they are disabled.

@@ -21,8 +21,8 @@ use uv_redacted::DisplaySafeUrl;
 use uv_settings::EnvironmentOptions;
 use uv_warnings::{warn_user, warn_user_once};
 
-use crate::commands::ExitStatus;
 use crate::commands::reporters::PublishReporter;
+use crate::commands::{ExitStatus, diagnostics};
 use crate::printer::Printer;
 
 pub(crate) async fn publish(
@@ -196,11 +196,7 @@ async fn publish_files(
                 if !dry_run {
                     return Err(err);
                 }
-                write_error_chain_with_options(
-                    err.as_ref(),
-                    &Hints::none(),
-                    ErrorOptions::default().with_stream(printer.stderr()),
-                )?;
+                diagnostics::write_error_chain(&err, printer)?;
                 error_count += 1;
             }
         }
