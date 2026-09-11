@@ -951,7 +951,7 @@ fn python_find_script_no_such_version() {
     uv_snapshot!(context.filters(), context.python_find().arg("--script").arg("foo.py"), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    No interpreter found for Python >=3.15 in [PYTHON SOURCES]
+    error: No interpreter found for Python >=3.15 in [PYTHON SOURCES]
     ");
 }
 
