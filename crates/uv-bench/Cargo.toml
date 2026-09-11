@@ -79,6 +79,11 @@ path = "benches/project_noop.rs"
 harness = false
 
 [[bench]]
+name = "installed_bytecode"
+path = "benches/installed_bytecode.rs"
+harness = false
+
+[[bench]]
 name = "uv_pypi_types"
 path = "benches/uv_pypi_types.rs"
 harness = false
