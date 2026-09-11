@@ -245,6 +245,7 @@ pub(crate) async fn install(
                 },
                 scope: RequirementScope::Global,
                 origin: None,
+                provenance: None,
             }
         }
         // Ex) `ruff@latest`
@@ -268,6 +269,7 @@ pub(crate) async fn install(
                 },
                 scope: RequirementScope::Global,
                 origin: None,
+                provenance: None,
             }
         }
         // Ex) `python`
@@ -335,6 +337,7 @@ pub(crate) async fn install(
                 },
                 scope: RequirementScope::Global,
                 origin: None,
+                provenance: None,
             })
         } else {
             None
