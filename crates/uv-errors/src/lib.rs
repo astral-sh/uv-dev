@@ -18,12 +18,32 @@ use source::{SourceLevel, write_snippets};
 /// An error that may carry user-facing hints.
 ///
 /// Implement this on error types that want to surface contextual suggestions
-/// (e.g., "try `--prerelease=allow`") to the diagnostics layer. Hints are
-/// rendered after the error output, each prefixed with `hint:`.
+/// (e.g., "try `--prerelease=allow`") to the diagnostics layer.
 pub trait Hinted {
-    /// Return any hints associated with this error.
+    /// Return all hints associated with this error, including forwarded suggestions.
+    ///
+    /// This aggregate form is useful when formatting an error without walking its source chain.
     fn hints(&self) -> Hints<'_> {
         Hints::none()
+    }
+
+    /// Return only the hints owned by this error, excluding its source chain's suggestions.
+    ///
+    /// Source-chain renderers collect each error's suggestions separately. Concrete forwarding
+    /// wrappers omit delegated suggestions; a type-erased wrapper retains its erased error's
+    /// dynamically available own hints. [`Self::transparent_source`] also lets diagnostic resolvers
+    /// reach metadata on a hidden concrete root.
+    fn own_hints(&self) -> Hints<'_> {
+        self.hints()
+    }
+
+    /// Return the inner error whose root is hidden by this error's transparent presentation.
+    ///
+    /// The returned error has the same visible message and source chain as this error. Ordinary
+    /// causes belong in [`Error::source`] instead. Diagnostic resolvers use this method to reach
+    /// metadata on a hidden root without adding a duplicate cause to the report.
+    fn transparent_source(&self) -> Option<&(dyn Error + 'static)> {
+        None
     }
 }
 

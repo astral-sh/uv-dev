@@ -1,3 +1,4 @@
+use std::error::Error as StdError;
 use std::fmt::{Debug, Display, Formatter};
 use std::future::Future;
 use std::ops::Deref;
@@ -307,6 +308,15 @@ impl uv_errors::Hinted for AnyErrorBuild {
     fn hints(&self) -> uv_errors::Hints<'_> {
         self.0.hints()
     }
+
+    fn own_hints(&self) -> uv_errors::Hints<'_> {
+        // The erased type may not be registered with the caller's diagnostic resolver.
+        self.0.own_hints()
+    }
+
+    fn transparent_source(&self) -> Option<&(dyn StdError + 'static)> {
+        Some(&**self)
+    }
 }
 
 impl<T: IsBuildBackendError> From<T> for AnyErrorBuild {
@@ -335,5 +345,61 @@ impl BuildStack {
     /// Push a package onto the stack.
     pub fn insert(&mut self, id: DistributionId) -> bool {
         self.0.insert(id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error;
+
+    use insta::assert_debug_snapshot;
+
+    use uv_distribution_types::IsBuildBackendError;
+    use uv_errors::{Hinted, Hints};
+
+    use super::AnyErrorBuild;
+
+    #[test]
+    fn erased_build_error_retains_its_owner() {
+        #[derive(Debug, thiserror::Error)]
+        #[error("backend-specific cause")]
+        struct CustomCause;
+
+        #[derive(Debug, thiserror::Error)]
+        #[error("backend-specific failure")]
+        struct CustomError(#[source] CustomCause);
+
+        impl Hinted for CustomError {
+            fn hints(&self) -> Hints<'_> {
+                Hints::from("backend-specific recovery")
+            }
+        }
+
+        impl IsBuildBackendError for CustomError {
+            fn is_build_backend_error(&self) -> bool {
+                true
+            }
+
+            fn is_user_failure(&self) -> bool {
+                true
+            }
+        }
+
+        let error = AnyErrorBuild::from(CustomError(CustomCause));
+        let hinted: &dyn Hinted = &error;
+        let owner = hinted.transparent_source().expect("an erased inner error");
+
+        assert!(owner.is::<CustomError>());
+        assert!(std::ptr::eq(
+            error.source().expect("the actual source"),
+            owner.source().expect("the inner error's source"),
+        ));
+        assert!(error.is_build_backend_error());
+        assert!(error.is_user_failure());
+        assert_debug_snapshot!(hinted.own_hints().iter().collect::<Vec<_>>(), @r#"
+        [
+            "backend-specific recovery",
+        ]
+        "#);
     }
 }

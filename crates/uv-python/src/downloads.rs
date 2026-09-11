@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::error::Error as StdError;
 use std::fmt::Display;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -138,6 +139,44 @@ pub enum Error {
     NoPythonDownloadUrlFound,
     #[error(transparent)]
     SystemTime(#[from] SystemTimeError),
+}
+
+impl uv_errors::Hinted for Error {
+    fn transparent_source(&self) -> Option<&(dyn StdError + 'static)> {
+        match self {
+            Self::Io(error) => Some(error),
+            Self::ImplementationError(error) => Some(error),
+            Self::RemotePythonDownloadsJSONClient(error) => Some(error.as_ref()),
+            Self::ClientBuild(error) => Some(error.as_ref()),
+            Self::BuildVersion(error) => Some(error),
+            Self::SystemTime(error) => Some(error),
+            Self::MissingExtension(..)
+            | Self::InvalidPythonVersion(..)
+            | Self::EmptyRequest
+            | Self::TooManyParts(..)
+            | Self::NetworkError(..)
+            | Self::NetworkErrorWithRetries { .. }
+            | Self::NetworkMiddlewareError(..)
+            | Self::ExtractError(..)
+            | Self::HashExhaustion(..)
+            | Self::HashMismatch { .. }
+            | Self::InvalidUrl(..)
+            | Self::InvalidUrlFormat(..)
+            | Self::InvalidFileUrl(..)
+            | Self::DownloadDirError(..)
+            | Self::CopyError { .. }
+            | Self::ReadError { .. }
+            | Self::InvalidRequestPlatform(..)
+            | Self::NoDownloadFound(..)
+            | Self::Mirror(..)
+            | Self::LibcDetection(..)
+            | Self::InvalidPythonDownloadsJSON(..)
+            | Self::UnsupportedPythonDownloadsJSON(..)
+            | Self::FetchingPythonDownloadsJSONError(..)
+            | Self::OfflinePythonMissing { .. }
+            | Self::NoPythonDownloadUrlFound => None,
+        }
+    }
 }
 
 impl RetriableError for Error {
