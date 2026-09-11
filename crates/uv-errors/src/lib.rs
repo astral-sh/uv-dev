@@ -3,6 +3,7 @@ mod line_wrap;
 mod report;
 mod source;
 mod structured;
+mod suggestion;
 
 use std::borrow::Cow;
 use std::error::Error;
@@ -16,8 +17,9 @@ use diagnostic::{write_hints, write_info};
 use line_wrap::{get_wrap_width, wrap_text};
 use report::resolve_error_chain;
 pub use source::{SourceAnnotation, SourceFile, SourceSnippet};
-use source::{SourceLevel, write_snippets};
+use source::{SourceLevel, write_snippets, write_suggestion};
 use structured::ErrorReport;
+pub use suggestion::{SourceEdit, SourceSuggestion, SuggestionApplicability};
 
 /// An error that may carry user-facing hints.
 ///
@@ -67,6 +69,7 @@ pub enum HintOrdering {
 pub struct Hint<'a> {
     message: Cow<'a, str>,
     ordering: HintOrdering,
+    suggestion: Option<SourceSuggestion>,
 }
 
 impl<'a> Hint<'a> {
@@ -75,6 +78,7 @@ impl<'a> Hint<'a> {
         Self {
             message: message.into(),
             ordering: HintOrdering::default(),
+            suggestion: None,
         }
     }
 
@@ -85,11 +89,19 @@ impl<'a> Hint<'a> {
         self
     }
 
+    /// Attach exact source edits owned by this hint.
+    #[must_use]
+    pub fn with_suggestion(mut self, suggestion: SourceSuggestion) -> Self {
+        self.suggestion = Some(suggestion);
+        self
+    }
+
     /// Convert a borrowed hint to owned, extending its lifetime to `'static`.
     fn into_owned(self) -> Hint<'static> {
         Hint {
             message: Cow::Owned(self.message.into_owned()),
             ordering: self.ordering,
+            suggestion: self.suggestion,
         }
     }
 }
@@ -154,16 +166,14 @@ impl<'a> Hints<'a> {
     }
 
     /// Iterate over one ordering group without changing insertion order.
-    fn iter_for_ordering(&self, ordering: HintOrdering) -> impl Iterator<Item = &str> {
-        self.0
-            .iter()
-            .filter(move |hint| hint.ordering == ordering)
-            .map(|hint| hint.message.as_ref())
+    fn iter_for_ordering(&self, ordering: HintOrdering) -> impl Iterator<Item = &Hint<'a>> {
+        self.0.iter().filter(move |hint| hint.ordering == ordering)
     }
 
     /// Extend with another set of hints, converting borrowed hints to owned.
     ///
-    /// Duplicate messages retain their first insertion position and earliest ordering.
+    /// Duplicate messages retain their first insertion position and earliest ordering. Exact
+    /// edits are retained only when every duplicate refers to the same source suggestion.
     pub fn extend(&mut self, other: Hints<'_>) {
         for hint in other.0 {
             if let Some(existing) = self
@@ -172,6 +182,11 @@ impl<'a> Hints<'a> {
                 .find(|existing| existing.message == hint.message)
             {
                 existing.ordering = existing.ordering.min(hint.ordering);
+                existing.suggestion = existing
+                    .suggestion
+                    .as_ref()
+                    .zip(hint.suggestion.as_ref())
+                    .and_then(|(existing, incoming)| existing.unambiguous_with(incoming));
             } else {
                 self.0.push(hint.into_owned());
             }
@@ -518,8 +533,13 @@ pub fn write_error_chain_with_options<C: DynColor + Copy, W: fmt::Write>(
         write_hints(&mut stream, hints, HintOrdering::Last, width)?;
     }
 
-    for hint in hints {
-        writeln!(&mut stream, "\n{HintPrefix} {hint}")?;
+    for ordering in [HintOrdering::First, HintOrdering::Any, HintOrdering::Last] {
+        for hint in hints.iter_for_ordering(ordering) {
+            writeln!(&mut stream, "\n{HintPrefix} {}", hint.message)?;
+            if let Some(suggestion) = &hint.suggestion {
+                write_suggestion(&mut stream, suggestion, width)?;
+            }
+        }
     }
 
     Ok(())
