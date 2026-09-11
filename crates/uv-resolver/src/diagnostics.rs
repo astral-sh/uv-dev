@@ -119,7 +119,8 @@ mod tests {
         insta::assert_snapshot!(anstream::adapter::strip_str(&output), @"
         error: example was not found in the provided package locations
           info: Packages were unavailable because index lookups were disabled and no additional package locations were provided
-          hint: Provide additional package locations with `--find-links <uri>`
+
+        hint: Provide additional package locations with `--find-links <uri>`
         ");
 
         assert!(diagnostic_for_error(&Box::new(no_solution())).is_some());

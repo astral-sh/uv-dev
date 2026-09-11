@@ -4561,8 +4561,7 @@ fn no_sdist_no_wheels_with_matching_abi() {
     error: No solution found when resolving dependencies
       cause: Because a==1.0.0 has no wheels with a matching Python ABI tag (e.g., `cp312`) and only a==1.0.0 is available, we can conclude that all versions of a cannot be used.
              And because you require a, we can conclude that your requirements are unsatisfiable.
-
-    hint: You require CPython 3.12 (`cp312`), but we only found wheels for `a` (v1.0.0) with the following Python ABI tag: `graalpy240_310_native`
+      info: You require CPython 3.12 (`cp312`), but we only found wheels for `a` (v1.0.0) with the following Python ABI tag: `graalpy240_310_native`
     ");
 
     context.assert_not_installed("a");
@@ -4594,8 +4593,7 @@ fn no_sdist_no_wheels_with_matching_platform() {
     error: No solution found when resolving dependencies
       cause: Because a==1.0.0 has no wheels with a matching platform tag (e.g., `manylinux_2_17_x86_64`) and only a==1.0.0 is available, we can conclude that all versions of a cannot be used.
              And because you require a, we can conclude that your requirements are unsatisfiable.
-
-    hint: Wheels are available for `a` (v1.0.0) on the following platform: `macosx_10_0_ppc64`
+      info: Wheels are available for `a` (v1.0.0) on the following platform: `macosx_10_0_ppc64`
     ");
 
     context.assert_not_installed("a");
@@ -4627,8 +4625,7 @@ fn no_sdist_no_wheels_with_matching_python() {
     error: No solution found when resolving dependencies
       cause: Because a==1.0.0 has no wheels with a matching Python implementation tag (e.g., `cp312`) and only a==1.0.0 is available, we can conclude that all versions of a cannot be used.
              And because you require a, we can conclude that your requirements are unsatisfiable.
-
-    hint: You require CPython 3.12 (`cp312`), but we only found wheels for `a` (v1.0.0) with the following Python implementation tag: `graalpy310`
+      info: You require CPython 3.12 (`cp312`), but we only found wheels for `a` (v1.0.0) with the following Python implementation tag: `graalpy310`
     ");
 
     context.assert_not_installed("a");
@@ -4661,8 +4658,7 @@ fn no_wheels_no_build() {
     error: No solution found when resolving dependencies
       cause: Because a==1.0.0 has no usable wheels and only a==1.0.0 is available, we can conclude that all versions of a cannot be used.
              And because you require a, we can conclude that your requirements are unsatisfiable.
-
-    hint: Wheels are required for `a` because building from source is disabled for `a` (i.e., with `--no-build-package a`)
+      info: Wheels are required for `a` because building from source is disabled for `a` (i.e., with `--no-build-package a`)
     ");
 
     context.assert_not_installed("a");
@@ -4753,8 +4749,7 @@ fn only_wheels_no_binary() {
     error: No solution found when resolving dependencies
       cause: Because a==1.0.0 has no source distribution and only a==1.0.0 is available, we can conclude that all versions of a cannot be used.
              And because you require a, we can conclude that your requirements are unsatisfiable.
-
-    hint: A source distribution is required for `a` because using pre-built wheels is disabled for `a` (i.e., with `--no-binary-package a`)
+      info: A source distribution is required for `a` because using pre-built wheels is disabled for `a` (i.e., with `--no-binary-package a`)
     ");
 
     context.assert_not_installed("a");
