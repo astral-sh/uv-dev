@@ -9414,7 +9414,12 @@ fn sync_python_version() -> Result<()> {
     Using CPython 3.10.[X] interpreter at: [PYTHON-3.10]
     error: The Python request from `.python-version` resolved to Python 3.10.[X], which is incompatible with the project's Python requirement: `>=3.11` (from `project.requires-python`)
     Use `uv python pin` to update the `.python-version` file to a compatible version
-       --> pyproject.toml:4:19
+       --> .python-version:1:1
+        |
+      1 | 3.10
+        | ^^^^ Python request
+        |
+       ::: pyproject.toml:4:19
         |
       4 | requires-python = ">=3.11"
         |                   ^^^^^^^^ requires Python `>=3.11`

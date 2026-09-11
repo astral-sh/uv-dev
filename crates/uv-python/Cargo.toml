@@ -76,6 +76,7 @@ windows = { workspace = true }
 [dev-dependencies]
 uv-preview = { workspace = true, features = ["testing"] }
 
+anstream = { workspace = true }
 anyhow = { workspace = true }
 assert_fs = { workspace = true }
 indoc = { workspace = true }

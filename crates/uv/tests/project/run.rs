@@ -3722,6 +3722,44 @@ fn virtual_empty() -> Result<()> {
 }
 
 #[test]
+fn run_incompatible_python_version_source() -> Result<()> {
+    let context = uv_test::test_context!("3.11");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "example"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    context
+        .temp_dir
+        .child(PYTHON_VERSION_FILENAME)
+        .write_str("# café\r\nnot-a-supported-python-request\r\n  3.11\r\n3.12\r\n")?;
+
+    uv_snapshot!(context.filters(), context.run().arg("--isolated").arg("python").arg("-V"), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    warning: Ignoring unsupported Python request `not-a-supported-python-request` in version file: [TEMP_DIR]/.python-version
+    error: The Python request from `.python-version` resolved to Python 3.11.[X], which is incompatible with the project's Python requirement: `>=3.12` (from `project.requires-python`)
+    Use `uv python pin` to update the `.python-version` file to a compatible version
+       --> .python-version:3:3
+        |
+      3 |   3.11
+        |   ^^^^ Python request
+        |
+       ::: pyproject.toml:4:19
+        |
+      4 | requires-python = ">=3.12"
+        |                   ^^^^^^^^ requires Python `>=3.12`
+    "#);
+
+    Ok(())
+}
+
+#[test]
 fn run_isolated_incompatible_python() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.9", "3.11"]);
 
@@ -3758,7 +3796,12 @@ fn run_isolated_incompatible_python() -> Result<()> {
     Using CPython 3.9.[X] interpreter at: [PYTHON-3.9]
     error: The Python request from `.python-version` resolved to Python 3.9.[X], which is incompatible with the project's Python requirement: `>=3.12` (from `project.requires-python`)
     Use `uv python pin` to update the `.python-version` file to a compatible version
-       --> pyproject.toml:4:19
+       --> .python-version:1:1
+        |
+      1 | 3.9
+        | ^^^ Python request
+        |
+       ::: pyproject.toml:4:19
         |
       4 | requires-python = ">=3.12"
         |                   ^^^^^^^^ requires Python `>=3.12`
@@ -3770,7 +3813,12 @@ fn run_isolated_incompatible_python() -> Result<()> {
     ----- stderr -----
     error: The Python request from `.python-version` resolved to Python 3.9.[X], which is incompatible with the project's Python requirement: `>=3.12` (from `project.requires-python`)
     Use `uv python pin` to update the `.python-version` file to a compatible version
-       --> pyproject.toml:4:19
+       --> .python-version:1:1
+        |
+      1 | 3.9
+        | ^^^ Python request
+        |
+       ::: pyproject.toml:4:19
         |
       4 | requires-python = ">=3.12"
         |                   ^^^^^^^^ requires Python `>=3.12`

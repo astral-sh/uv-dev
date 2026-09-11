@@ -738,8 +738,7 @@ pub(crate) fn validate_project_requires_python(
         .collect::<RequiresPythonSources>();
     let workspace_non_trivial = workspace.is_some_and(|workspace| workspace.packages().len() > 1);
     let diagnostic = workspace
-        .and_then(|workspace| PythonRequirementsDiagnostic::new(workspace, &conflicting_requires))
-        .map(Box::new);
+        .and_then(|workspace| PythonRequirementsDiagnostic::new(workspace, &conflicting_requires));
 
     match source {
         PythonRequestSource::UserRequest => {
@@ -748,7 +747,7 @@ pub(crate) fn validate_project_requires_python(
                 requires_python.clone(),
                 conflicting_requires,
                 workspace_non_trivial,
-                diagnostic,
+                diagnostic.map(Box::new),
             ))
         }
         PythonRequestSource::DotPythonVersion(file) => {
@@ -758,7 +757,8 @@ pub(crate) fn validate_project_requires_python(
                 requires_python: requires_python.clone(),
                 requires_python_sources: Box::new(conflicting_requires),
                 workspace: workspace_non_trivial,
-                diagnostic,
+                diagnostic: PythonRequirementsDiagnostic::with_python_request(file, diagnostic)
+                    .map(Box::new),
             })
         }
         PythonRequestSource::RequiresPython => {
@@ -767,7 +767,7 @@ pub(crate) fn validate_project_requires_python(
                 requires_python.clone(),
                 conflicting_requires,
                 workspace_non_trivial,
-                diagnostic,
+                diagnostic.map(Box::new),
             ))
         }
     }

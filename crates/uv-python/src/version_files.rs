@@ -1,10 +1,11 @@
-use std::ops::Add;
+use std::ops::{Add, Range};
 use std::path::{Path, PathBuf};
 
 use fs_err as fs;
 use itertools::Itertools;
 use tracing::debug;
 use uv_dirs::user_uv_config_dir;
+use uv_errors::{SourceAnnotation, SourceFile, SourceSnippet};
 use uv_fs::Simplified;
 use uv_warnings::warn_user_once;
 
@@ -22,7 +23,16 @@ pub struct PythonVersionFile {
     /// The path to the version file.
     path: PathBuf,
     /// The Python version requests declared in the file.
-    versions: Vec<PythonRequest>,
+    versions: Vec<PythonVersionEntry>,
+    /// The original decoded contents, when this file was read from disk.
+    source: Option<SourceFile>,
+}
+
+#[derive(Debug, Clone)]
+struct PythonVersionEntry {
+    request: PythonRequest,
+    /// The exact accepted occurrence in the original decoded file.
+    span: Option<Range<usize>>,
 }
 
 /// Whether to prefer the `.python-version` or `.python-versions` file.
@@ -191,30 +201,49 @@ impl PythonVersionFile {
                     "Reading Python requests from version file at `{}`",
                     path.display()
                 );
-                let versions = content
-                    .lines()
-                    .map(str::trim)
-                    .filter(|line| {
-                        // Skip comments and empty lines.
-                        !(line.is_empty() || line.starts_with('#'))
-                    })
-                    .map(PythonRequest::parse)
-                    .filter(|request| {
-                        if let PythonRequest::ExecutableName(name) = request {
-                            warn_user_once!(
-                                "Ignoring unsupported Python request `{name}` in version file: {}",
-                                path.display()
-                            );
-                            false
-                        } else {
-                            true
-                        }
-                    })
-                    .collect();
-                Ok(Some(Self { path, versions }))
+                Ok(Some(Self::from_string(path, content)))
             }
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(err) => Err(err),
+        }
+    }
+
+    fn from_string(path: PathBuf, content: String) -> Self {
+        let source = SourceFile::new(path.portable_display().to_string(), content);
+        let mut offset = 0;
+        let versions = source
+            .text()
+            .split_inclusive('\n')
+            .filter_map(|line| {
+                let line_start = offset;
+                offset += line.len();
+                let trimmed = line.trim();
+
+                // Skip comments and empty lines.
+                if trimmed.is_empty() || trimmed.starts_with('#') {
+                    return None;
+                }
+
+                let request = PythonRequest::parse(trimmed);
+                if let PythonRequest::ExecutableName(name) = &request {
+                    warn_user_once!(
+                        "Ignoring unsupported Python request `{name}` in version file: {}",
+                        path.display()
+                    );
+                    return None;
+                }
+
+                let start = line_start + line.len() - line.trim_start().len();
+                Some(PythonVersionEntry {
+                    request,
+                    span: Some(start..start + trimmed.len()),
+                })
+            })
+            .collect();
+        Self {
+            path,
+            versions,
+            source: Some(source),
         }
     }
 
@@ -226,6 +255,7 @@ impl PythonVersionFile {
         Self {
             path,
             versions: vec![],
+            source: None,
         }
     }
 
@@ -244,22 +274,48 @@ impl PythonVersionFile {
 
     /// Return the first request declared in the file, if any.
     pub fn version(&self) -> Option<&PythonRequest> {
-        self.versions.first()
+        self.versions.first().map(|entry| &entry.request)
+    }
+
+    /// Return the source location of the first accepted Python request, if it was read from disk.
+    ///
+    /// Paths can contain arbitrary user text. Retain their location without exposing their source
+    /// line; validated version and implementation requests can be shown directly.
+    pub fn version_source(&self) -> Option<SourceSnippet<'static>> {
+        let source = self.source.as_ref()?;
+        let entry = self.versions.first()?;
+        let snippet = SourceSnippet::new(source.clone()).with_annotation(
+            SourceAnnotation::primary(entry.span.clone()?).with_label("Python request"),
+        );
+        match &entry.request {
+            PythonRequest::Default
+            | PythonRequest::Any
+            | PythonRequest::Version(_)
+            | PythonRequest::Implementation(_)
+            | PythonRequest::ImplementationVersion(..)
+            | PythonRequest::Key(_) => Some(snippet),
+            PythonRequest::Directory(_)
+            | PythonRequest::File(_)
+            | PythonRequest::ExecutableName(_) => Some(snippet.without_source_text()),
+        }
     }
 
     /// Iterate of all versions declared in the file.
     pub fn versions(&self) -> impl Iterator<Item = &PythonRequest> {
-        self.versions.iter()
+        self.versions.iter().map(|entry| &entry.request)
     }
 
     /// Cast to a list of all versions declared in the file.
     pub fn into_versions(self) -> Vec<PythonRequest> {
         self.versions
+            .into_iter()
+            .map(|entry| entry.request)
+            .collect()
     }
 
     /// Cast to the first version declared in the file, if any.
     pub fn into_version(self) -> Option<PythonRequest> {
-        self.versions.into_iter().next()
+        self.versions.into_iter().next().map(|entry| entry.request)
     }
 
     /// Return the path to the version file.
@@ -278,7 +334,14 @@ impl PythonVersionFile {
     pub fn with_versions(self, versions: Vec<PythonRequest>) -> Self {
         Self {
             path: self.path,
-            versions,
+            versions: versions
+                .into_iter()
+                .map(|request| PythonVersionEntry {
+                    request,
+                    span: None,
+                })
+                .collect(),
+            source: None,
         }
     }
 
@@ -290,13 +353,175 @@ impl PythonVersionFile {
         }
         fs::tokio::write(
             &self.path,
-            self.versions
-                .iter()
+            self.versions()
                 .map(PythonRequest::to_canonical_string)
                 .join("\n")
                 .add("\n")
                 .as_bytes(),
         )
         .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error;
+    use std::path::PathBuf;
+
+    use insta::{assert_debug_snapshot, assert_snapshot};
+    use uv_errors::{Diagnostic, ErrorOptions, Hints, write_error_chain_with_options};
+
+    use super::PythonVersionFile;
+    use crate::PythonRequest;
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("The pinned Python request is incompatible")]
+    struct VersionFileError(PythonVersionFile);
+
+    fn diagnostic<'a>(error: &'a (dyn Error + 'static)) -> Option<Diagnostic<'a>> {
+        Some(
+            Diagnostic::default().with_snippet(
+                error
+                    .downcast_ref::<VersionFileError>()?
+                    .0
+                    .version_source()?,
+            ),
+        )
+    }
+
+    fn format_source(file: PythonVersionFile) -> anyhow::Result<String> {
+        let mut output = String::new();
+        write_error_chain_with_options(
+            &VersionFileError(file),
+            &Hints::none(),
+            ErrorOptions::default()
+                .with_width_override(80)
+                .with_diagnostic(diagnostic)
+                .with_stream(&mut output),
+        )?;
+        Ok(anstream::adapter::strip_str(&output).to_string())
+    }
+
+    fn version_file(contents: &str) -> PythonVersionFile {
+        PythonVersionFile::from_string(PathBuf::from(".python-version"), contents.to_owned())
+    }
+
+    #[test]
+    fn version_file_retains_selected_occurrence() -> anyhow::Result<()> {
+        let file = version_file(
+            "# café\r\nnot-a-supported-python-request\r\n\u{2003}3.11\r\n3.11\t\r\n3.12",
+        );
+        let entries = file
+            .versions
+            .iter()
+            .map(|entry| {
+                (
+                    entry.request.to_canonical_string(),
+                    entry.span.clone(),
+                    entry
+                        .span
+                        .clone()
+                        .and_then(|span| file.source.as_ref()?.text().get(span)),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_debug_snapshot!(entries, @r#"
+        [
+            (
+                "3.11",
+                Some(
+                    44..48,
+                ),
+                Some(
+                    "3.11",
+                ),
+            ),
+            (
+                "3.11",
+                Some(
+                    50..54,
+                ),
+                Some(
+                    "3.11",
+                ),
+            ),
+            (
+                "3.12",
+                Some(
+                    57..61,
+                ),
+                Some(
+                    "3.12",
+                ),
+            ),
+        ]
+        "#);
+        assert_snapshot!(format_source(file)?, @"
+        error: The pinned Python request is incompatible
+           --> .python-version:3:2
+            |
+          3 |  3.11
+            |  ^^^^ Python request
+        ");
+        Ok(())
+    }
+
+    #[test]
+    fn version_file_hides_path_requests() -> anyhow::Result<()> {
+        assert_snapshot!(
+            format_source(version_file("# private\n./credentials-containing-path/python\n"))?,
+            @"
+        error: The pinned Python request is incompatible
+           --> .python-version:2:1
+        "
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn version_file_forgets_source_after_mutation() {
+        let original = version_file("# pinned\n3.11\n");
+        let changed = original
+            .clone()
+            .with_versions(vec![PythonRequest::parse("3.12")]);
+        let new = PythonVersionFile::new(PathBuf::from(".python-version"))
+            .with_versions(vec![PythonRequest::parse("3.13")]);
+
+        assert!(original.version_source().is_some());
+        assert!(changed.version_source().is_none());
+        assert!(new.version_source().is_none());
+        assert_debug_snapshot!(
+            (
+                original.version().map(PythonRequest::to_canonical_string),
+                changed
+                    .versions()
+                    .map(PythonRequest::to_canonical_string)
+                    .collect::<Vec<_>>(),
+                changed
+                    .clone()
+                    .into_versions()
+                    .into_iter()
+                    .map(|request| request.to_canonical_string().into_owned())
+                    .collect::<Vec<_>>(),
+                new.into_version()
+                    .map(|request| request.to_canonical_string().into_owned()),
+            ),
+            @r#"
+        (
+            Some(
+                "3.11",
+            ),
+            [
+                "3.12",
+            ],
+            [
+                "3.12",
+            ],
+            Some(
+                "3.13",
+            ),
+        )
+        "#
+        );
     }
 }
