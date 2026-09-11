@@ -18,15 +18,17 @@ Adding presentation data must not change which classification the existing conve
 displayed message or adding ordered `Info` statements. Unrecognized errors use `Display`. An `Info`
 supplies context, not another cause or an instruction to the user. Actionable suggestions remain
 `Hint` values. `Diagnostic::with_source` can override the presentation of the next actual
-`Error::source()` node, but cannot create a cause or discard that source's own hints. The
-command-layer renderer uses `Printer::stderr_important()`.
+`Error::source()` node, but cannot create a cause or discard that source's own information or hints.
+The command-layer renderer uses `Printer::stderr_important()`.
 
 Hint ownership and hint ordering are separate. `Hinted::hints()` retains aggregate collection for
 direct printing; `own_hints()` describes suggestions belonging to one error, and
 `transparent_source()` exposes an inner root hidden by transparent presentation. Ordinary source
-nodes are visited separately. `HintOrdering::First` and `HintOrdering::Any` appear beside their
-owner, while `HintOrdering::Last` follows that owner's complete source chain. An outer error's
-trailing advice is therefore still owned by the outer error.
+nodes are visited separately. All hints appear at the top level after the complete error, cause, and
+information chain. `HintOrdering::First`, `HintOrdering::Any`, and `HintOrdering::Last` set priority
+within that final section; equal-priority hints follow source-chain order and then any explicit
+report-level hints. An outer error's advice is still owned by the outer error even though the
+terminal renderer collects actions into one place.
 
 The code constructing an error must retain the typed facts needed to choose its suggestions: for
 example, the requested package, command invocation, or failed resolution environment. Error
@@ -124,9 +126,11 @@ occurrences and any future solver-origin arena must remain separate from that se
 
 The experimental `ErrorReport` uses the same resolved error-chain walk as the text renderer. Its
 `errors` array contains the outer error followed by each actual cause; every entry owns its source
-locations, `info` statements, and ordered hints. Locations declare one-based lines and zero-based
-UTF-8 byte columns. Source excerpts use the same explicit windows as terminal output, and
-location-only sources do not serialize hidden annotations or retained file contents.
+locations, `info` statements, and ordered hints. Keeping these owners in the structured report does
+not change the terminal rule that every hint is a final, top-level call to action. Locations declare
+one-based lines and zero-based UTF-8 byte columns. Source excerpts use the same explicit windows as
+terminal output, and location-only sources do not serialize hidden annotations or retained file
+contents.
 
 The hidden `--error-format=json` option writes one complete JSON object per formatted error chain.
 Transport escaping makes terminal controls and layout controls visible without changing the decoded

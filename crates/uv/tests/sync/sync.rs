@@ -88,7 +88,8 @@ fn sync_lock_flags_override_environment() -> Result<()> {
     warning: Ignoring `UV_FROZEN` because `--locked` was provided
     Resolved 1 package in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
     assert_eq!(context.read("uv.lock"), lock);
 
@@ -158,7 +159,8 @@ fn sync_no_lock_flags_override_environment() -> Result<()> {
     ----- stderr -----
     Resolved 1 package in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `UV_LOCKED=1` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
     assert_eq!(context.read("uv.lock"), lock);
 
@@ -434,7 +436,8 @@ fn locked() -> Result<()> {
     ----- stderr -----
     Resolved 2 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     // Quiet mode suppresses the resolution summary, but preserves the user-facing failure.
@@ -442,7 +445,8 @@ fn locked() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     // Silent mode suppresses the final error too.
@@ -891,7 +895,8 @@ fn sync_json() -> Result<()> {
     ----- stderr -----
     Resolved 2 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     // Test that JSON output is shown even with --quiet flag
@@ -1200,7 +1205,8 @@ fn group_requires_python_useful_defaults() -> Result<()> {
       cause: Because the requested Python version (>=3.8) does not satisfy Python>=3.9 and sphinx==7.2.6 depends on Python>=3.9, we can conclude that sphinx==7.2.6 cannot be used.
              And because only sphinx<=7.2.6 is available, we can conclude that sphinx>=7.2.6 cannot be used.
              And because pharaohs-tomp:dev depends on sphinx>=7.2.6 and your project requires pharaohs-tomp:dev, we can conclude that your project's requirements are unsatisfiable.
-      hint: The `requires-python` value (>=3.8) includes Python versions that are not supported by your dependencies (e.g., sphinx==7.2.6 only supports >=3.9). Consider using a more restrictive `requires-python` value (like >=3.9).
+
+    hint: The `requires-python` value (>=3.8) includes Python versions that are not supported by your dependencies (e.g., sphinx==7.2.6 only supports >=3.9). Consider using a more restrictive `requires-python` value (like >=3.9).
     ");
 
     // Running `uv sync` should always fail, as now sphinx is involved
@@ -1211,7 +1217,8 @@ fn group_requires_python_useful_defaults() -> Result<()> {
       cause: Because the requested Python version (>=3.8) does not satisfy Python>=3.9 and sphinx==7.2.6 depends on Python>=3.9, we can conclude that sphinx==7.2.6 cannot be used.
              And because only sphinx<=7.2.6 is available, we can conclude that sphinx>=7.2.6 cannot be used.
              And because pharaohs-tomp:dev depends on sphinx>=7.2.6 and your project requires pharaohs-tomp:dev, we can conclude that your project's requirements are unsatisfiable.
-      hint: The `requires-python` value (>=3.8) includes Python versions that are not supported by your dependencies (e.g., sphinx==7.2.6 only supports >=3.9). Consider using a more restrictive `requires-python` value (like >=3.9).
+
+    hint: The `requires-python` value (>=3.8) includes Python versions that are not supported by your dependencies (e.g., sphinx==7.2.6 only supports >=3.9). Consider using a more restrictive `requires-python` value (like >=3.9).
     ");
 
     // Adding group requires python should fix it
@@ -1330,7 +1337,8 @@ fn group_requires_python_useful_non_defaults() -> Result<()> {
       cause: Because the requested Python version (>=3.8) does not satisfy Python>=3.9 and sphinx==7.2.6 depends on Python>=3.9, we can conclude that sphinx==7.2.6 cannot be used.
              And because only sphinx<=7.2.6 is available, we can conclude that sphinx>=7.2.6 cannot be used.
              And because pharaohs-tomp:mygroup depends on sphinx>=7.2.6 and your project requires pharaohs-tomp:mygroup, we can conclude that your project's requirements are unsatisfiable.
-      hint: The `requires-python` value (>=3.8) includes Python versions that are not supported by your dependencies (e.g., sphinx==7.2.6 only supports >=3.9). Consider using a more restrictive `requires-python` value (like >=3.9).
+
+    hint: The `requires-python` value (>=3.8) includes Python versions that are not supported by your dependencies (e.g., sphinx==7.2.6 only supports >=3.9). Consider using a more restrictive `requires-python` value (like >=3.9).
     ");
 
     // Running `uv sync --group mygroup` should definitely fail, as now sphinx is involved
@@ -1342,7 +1350,8 @@ fn group_requires_python_useful_non_defaults() -> Result<()> {
       cause: Because the requested Python version (>=3.8) does not satisfy Python>=3.9 and sphinx==7.2.6 depends on Python>=3.9, we can conclude that sphinx==7.2.6 cannot be used.
              And because only sphinx<=7.2.6 is available, we can conclude that sphinx>=7.2.6 cannot be used.
              And because pharaohs-tomp:mygroup depends on sphinx>=7.2.6 and your project requires pharaohs-tomp:mygroup, we can conclude that your project's requirements are unsatisfiable.
-      hint: The `requires-python` value (>=3.8) includes Python versions that are not supported by your dependencies (e.g., sphinx==7.2.6 only supports >=3.9). Consider using a more restrictive `requires-python` value (like >=3.9).
+
+    hint: The `requires-python` value (>=3.8) includes Python versions that are not supported by your dependencies (e.g., sphinx==7.2.6 only supports >=3.9). Consider using a more restrictive `requires-python` value (like >=3.9).
     ");
 
     // Adding group requires python should fix it
@@ -1969,7 +1978,6 @@ fn sync_build_isolation_package() -> Result<()> {
     ----- stderr -----
     Resolved 2 packages in [TIME]
     error: Failed to build `source-distribution @ https://files.pythonhosted.org/packages/10/1f/57aa4cce1b1abf6b433106676e15f9fa2c92ed2bd4cf77c3b50a9e9ac773/source_distribution-0.0.1.tar.gz`
-      hint: `source-distribution` was included because `project` (v0.1.0) depends on `source-distribution`
       cause: The build backend returned an error
       cause: Call to `hatchling.build.build_wheel` failed (exit status: 1)
 
@@ -1977,12 +1985,15 @@ fn sync_build_isolation_package() -> Result<()> {
              Traceback (most recent call last):
                File "<string>", line 8, in <module>
              ModuleNotFoundError: No module named 'hatchling'
-      hint: This error likely indicates that `source-distribution` depends on `hatchling`, but doesn't declare it as a build dependency. If `source-distribution` is a first-party package, consider adding `hatchling` to its `build-system.requires`. Otherwise, either add it to your `pyproject.toml` under:
 
-            [tool.uv.extra-build-dependencies]
-            source-distribution = ["hatchling"]
+    hint: `source-distribution` was included because `project` (v0.1.0) depends on `source-distribution`
 
-            or `uv pip install hatchling` into the environment and re-run with `--no-build-isolation`.
+    hint: This error likely indicates that `source-distribution` depends on `hatchling`, but doesn't declare it as a build dependency. If `source-distribution` is a first-party package, consider adding `hatchling` to its `build-system.requires`. Otherwise, either add it to your `pyproject.toml` under:
+
+          [tool.uv.extra-build-dependencies]
+          source-distribution = ["hatchling"]
+
+          or `uv pip install hatchling` into the environment and re-run with `--no-build-isolation`.
     "#);
 
     // Install `hatchling` for `source-distribution`.
@@ -2047,7 +2058,6 @@ fn sync_build_isolation_package_order() -> Result<()> {
     ----- stderr -----
     Resolved 2 packages in [TIME]
     error: Failed to build `source-distribution @ https://files.pythonhosted.org/packages/10/1f/57aa4cce1b1abf6b433106676e15f9fa2c92ed2bd4cf77c3b50a9e9ac773/source_distribution-0.0.1.tar.gz`
-      hint: `source-distribution` was included because `project` (v0.1.0) depends on `source-distribution`
       cause: The build backend returned an error
       cause: Call to `hatchling.build.build_wheel` failed (exit status: 1)
 
@@ -2055,12 +2065,15 @@ fn sync_build_isolation_package_order() -> Result<()> {
              Traceback (most recent call last):
                File "<string>", line 8, in <module>
              ModuleNotFoundError: No module named 'hatchling'
-      hint: This error likely indicates that `source-distribution` depends on `hatchling`, but doesn't declare it as a build dependency. If `source-distribution` is a first-party package, consider adding `hatchling` to its `build-system.requires`. Otherwise, either add it to your `pyproject.toml` under:
 
-            [tool.uv.extra-build-dependencies]
-            source-distribution = ["hatchling"]
+    hint: `source-distribution` was included because `project` (v0.1.0) depends on `source-distribution`
 
-            or `uv pip install hatchling` into the environment and re-run with `--no-build-isolation`.
+    hint: This error likely indicates that `source-distribution` depends on `hatchling`, but doesn't declare it as a build dependency. If `source-distribution` is a first-party package, consider adding `hatchling` to its `build-system.requires`. Otherwise, either add it to your `pyproject.toml` under:
+
+          [tool.uv.extra-build-dependencies]
+          source-distribution = ["hatchling"]
+
+          or `uv pip install hatchling` into the environment and re-run with `--no-build-isolation`.
     "#);
 
     // Add `hatchling`.
@@ -2210,7 +2223,6 @@ fn sync_build_isolation_extra() -> Result<()> {
     Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
     error: Failed to build `source-distribution @ https://files.pythonhosted.org/packages/10/1f/57aa4cce1b1abf6b433106676e15f9fa2c92ed2bd4cf77c3b50a9e9ac773/source_distribution-0.0.1.tar.gz`
-      hint: `source-distribution` was included because `project[compile]` (v0.1.0) depends on `source-distribution`
       cause: The build backend returned an error
       cause: Call to `hatchling.build.build_wheel` failed (exit status: 1)
 
@@ -2218,12 +2230,15 @@ fn sync_build_isolation_extra() -> Result<()> {
              Traceback (most recent call last):
                File "<string>", line 8, in <module>
              ModuleNotFoundError: No module named 'hatchling'
-      hint: This error likely indicates that `source-distribution` depends on `hatchling`, but doesn't declare it as a build dependency. If `source-distribution` is a first-party package, consider adding `hatchling` to its `build-system.requires`. Otherwise, either add it to your `pyproject.toml` under:
 
-            [tool.uv.extra-build-dependencies]
-            source-distribution = ["hatchling"]
+    hint: `source-distribution` was included because `project[compile]` (v0.1.0) depends on `source-distribution`
 
-            or `uv pip install hatchling` into the environment and re-run with `--no-build-isolation`.
+    hint: This error likely indicates that `source-distribution` depends on `hatchling`, but doesn't declare it as a build dependency. If `source-distribution` is a first-party package, consider adding `hatchling` to its `build-system.requires`. Otherwise, either add it to your `pyproject.toml` under:
+
+          [tool.uv.extra-build-dependencies]
+          source-distribution = ["hatchling"]
+
+          or `uv pip install hatchling` into the environment and re-run with `--no-build-isolation`.
     "#);
 
     // Running `uv sync` with `--all-extras` should succeed, because we install the build dependencies
@@ -2339,13 +2354,15 @@ fn sync_extra_build_dependencies() -> Result<()> {
     ----- stderr -----
     Resolved [N] packages in [TIME]
     error: Failed to build `child @ file://[TEMP_DIR]/child`
-      hint: `child` was included because `parent` (v0.1.0) depends on `child`
       cause: The build backend returned an error
       cause: Call to `build_backend.build_wheel` failed (exit status: 1)
 
              [stderr]
              Missing `anyio` module
-      hint: Build failures usually indicate a problem with the package or the build environment
+
+    hint: `child` was included because `parent` (v0.1.0) depends on `child`
+
+    hint: Build failures usually indicate a problem with the package or the build environment
     ");
 
     // Adding `extra-build-dependencies` should solve the issue
@@ -2404,13 +2421,15 @@ fn sync_extra_build_dependencies() -> Result<()> {
     ----- stderr -----
     Resolved [N] packages in [TIME]
     error: Failed to build `child @ file://[TEMP_DIR]/child`
-      hint: `child` was included because `parent` (v0.1.0) depends on `child`
       cause: The build backend returned an error
       cause: Call to `build_backend.build_wheel` failed (exit status: 1)
 
              [stderr]
              Missing `anyio` module
-      hint: Build failures usually indicate a problem with the package or the build environment
+
+    hint: `child` was included because `parent` (v0.1.0) depends on `child`
+
+    hint: Build failures usually indicate a problem with the package or the build environment
     ");
 
     // Write a test package that arbitrarily bans `anyio` at build time
@@ -2468,13 +2487,15 @@ fn sync_extra_build_dependencies() -> Result<()> {
     ----- stderr -----
     Resolved [N] packages in [TIME]
     error: Failed to build `bad-child @ file://[TEMP_DIR]/bad_child`
-      hint: `bad-child` was included because `parent` (v0.1.0) depends on `bad-child`
       cause: The build backend returned an error
       cause: Call to `build_backend.build_wheel` failed (exit status: 1)
 
              [stderr]
              Found `anyio` module
-      hint: Build failures usually indicate a problem with the package or the build environment
+
+    hint: `bad-child` was included because `parent` (v0.1.0) depends on `bad-child`
+
+    hint: Build failures usually indicate a problem with the package or the build environment
     ");
 
     // But `anyio` is not provided to `bad_child` if scoped to `child`
@@ -2560,7 +2581,8 @@ fn sync_extra_build_dependencies_setuptools_legacy() -> Result<()> {
 
              [stderr]
              Missing `anyio` module
-      hint: Build failures usually indicate a problem with the package or the build environment
+
+    hint: Build failures usually indicate a problem with the package or the build environment
     ");
 
     // Adding `extra-build-dependencies` should solve the issue
@@ -2653,13 +2675,15 @@ fn sync_extra_build_dependencies_setuptools() -> Result<()> {
     ----- stderr -----
     Resolved [N] packages in [TIME]
     error: Failed to build `child @ file://[TEMP_DIR]/child`
-      hint: `child` was included because `parent` (v0.1.0) depends on `child`
       cause: The build backend returned an error
       cause: Call to `setuptools.build_meta.build_wheel` failed (exit status: 1)
 
              [stderr]
              Missing `anyio` module
-      hint: Build failures usually indicate a problem with the package or the build environment
+
+    hint: `child` was included because `parent` (v0.1.0) depends on `child`
+
+    hint: Build failures usually indicate a problem with the package or the build environment
     ");
 
     // Adding `extra-build-dependencies` should solve the issue
@@ -2832,13 +2856,15 @@ fn sync_extra_build_dependencies_index() -> Result<()> {
     ----- stderr -----
     Resolved [N] packages in [TIME]
     error: Failed to build `child @ file://[TEMP_DIR]/child`
-      hint: `child` was included because `parent` (v0.1.0) depends on `child`
       cause: The build backend returned an error
       cause: Call to `build_backend.build_wheel` failed (exit status: 1)
 
              [stderr]
              Expected `anyio` version 3.0 but got 4.3.0
-      hint: Build failures usually indicate a problem with the package or the build environment
+
+    hint: `child` was included because `parent` (v0.1.0) depends on `child`
+
+    hint: Build failures usually indicate a problem with the package or the build environment
     ");
 
     // Ensure that we're resolving to `4.3.0`, the "latest" on PyPI.
@@ -2879,13 +2905,15 @@ fn sync_extra_build_dependencies_index() -> Result<()> {
     ----- stderr -----
     Resolved [N] packages in [TIME]
     error: Failed to build `child @ file://[TEMP_DIR]/child`
-      hint: `child` was included because `parent` (v0.1.0) depends on `child`
       cause: The build backend returned an error
       cause: Call to `build_backend.build_wheel` failed (exit status: 1)
 
              [stderr]
              Expected `anyio` version 4.3 but got 3.5.0
-      hint: Build failures usually indicate a problem with the package or the build environment
+
+    hint: `child` was included because `parent` (v0.1.0) depends on `child`
+
+    hint: Build failures usually indicate a problem with the package or the build environment
     ");
 
     uv_snapshot!(context.filters(), context.sync()
@@ -2968,13 +2996,15 @@ fn sync_extra_build_dependencies_sources_from_child() -> Result<()> {
     ----- stderr -----
     Resolved [N] packages in [TIME]
     error: Failed to build `child @ file://[TEMP_DIR]/child`
-      hint: `child` was included because `project` (v0.1.0) depends on `child`
       cause: The build backend returned an error
       cause: Call to `build_backend.build_wheel` failed (exit status: 1)
 
              [stderr]
              Found system anyio instead of local anyio
-      hint: Build failures usually indicate a problem with the package or the build environment
+
+    hint: `child` was included because `project` (v0.1.0) depends on `child`
+
+    hint: Build failures usually indicate a problem with the package or the build environment
     ");
 
     Ok(())
@@ -3030,7 +3060,6 @@ fn sync_build_dependencies_module_error_hints() -> Result<()> {
     ----- stderr -----
     Resolved [N] packages in [TIME]
     error: Failed to build `child @ file://[TEMP_DIR]/child`
-      hint: `child` was included because `parent` (v0.1.0) depends on `child`
       cause: The build backend returned an error
       cause: Call to `build_backend.build_wheel` failed (exit status: 1)
 
@@ -3040,12 +3069,15 @@ fn sync_build_dependencies_module_error_hints() -> Result<()> {
                File "[TEMP_DIR]/child/build_backend.py", line 4, in <module>
                  import a
              ModuleNotFoundError: No module named 'a'
-      hint: This error likely indicates that `child@0.1.0` depends on `a`, but doesn't declare it as a build dependency. If `child` is a first-party package, consider adding `a` to its `build-system.requires`. Otherwise, either add it to your `pyproject.toml` under:
 
-            [tool.uv.extra-build-dependencies]
-            child = ["a"]
+    hint: `child` was included because `parent` (v0.1.0) depends on `child`
 
-            or `uv pip install a` into the environment and re-run with `--no-build-isolation`.
+    hint: This error likely indicates that `child@0.1.0` depends on `a`, but doesn't declare it as a build dependency. If `child` is a first-party package, consider adding `a` to its `build-system.requires`. Otherwise, either add it to your `pyproject.toml` under:
+
+          [tool.uv.extra-build-dependencies]
+          child = ["a"]
+
+          or `uv pip install a` into the environment and re-run with `--no-build-isolation`.
     "#);
 
     // Adding `extra-build-dependencies` should solve the issue
@@ -3089,7 +3121,6 @@ fn sync_build_dependencies_module_error_hints() -> Result<()> {
     ----- stderr -----
     Resolved [N] packages in [TIME]
     error: Failed to build `child @ file://[TEMP_DIR]/child`
-      hint: `child` was included because `parent` (v0.1.0) depends on `child`
       cause: The build backend returned an error
       cause: Call to `build_backend.build_wheel` failed (exit status: 1)
 
@@ -3099,12 +3130,15 @@ fn sync_build_dependencies_module_error_hints() -> Result<()> {
                File "[TEMP_DIR]/child/build_backend.py", line 5, in <module>
                  import sklearn
              ModuleNotFoundError: No module named 'sklearn'
-      hint: This error likely indicates that `child@0.1.0` depends on `scikit-learn`, but doesn't declare it as a build dependency. If `child` is a first-party package, consider adding `scikit-learn` to its `build-system.requires`. Otherwise, either add it to your `pyproject.toml` under:
 
-            [tool.uv.extra-build-dependencies]
-            child = ["scikit-learn"]
+    hint: `child` was included because `parent` (v0.1.0) depends on `child`
 
-            or `uv pip install scikit-learn` into the environment and re-run with `--no-build-isolation`.
+    hint: This error likely indicates that `child@0.1.0` depends on `scikit-learn`, but doesn't declare it as a build dependency. If `child` is a first-party package, consider adding `scikit-learn` to its `build-system.requires`. Otherwise, either add it to your `pyproject.toml` under:
+
+          [tool.uv.extra-build-dependencies]
+          child = ["scikit-learn"]
+
+          or `uv pip install scikit-learn` into the environment and re-run with `--no-build-isolation`.
     "#);
 
     Ok(())
@@ -6200,7 +6234,8 @@ fn sync_extra_build_dependencies_script() -> Result<()> {
 
              [stderr]
              Missing `anyio` module
-      hint: Build failures usually indicate a problem with the package or the build environment
+
+    hint: Build failures usually indicate a problem with the package or the build environment
     ");
 
     // Add extra build dependencies to the script
@@ -8059,7 +8094,8 @@ fn sync_wheel_url_source_error() -> Result<()> {
     ----- stderr -----
     Resolved 3 packages in [TIME]
     error: Distribution `cffi==1.17.1 @ direct+https://files.pythonhosted.org/packages/08/fd/cc2fedbd887223f9f5d170c96e57cbf655df9831a6546c1727ae13fa977a/cffi-1.17.1-cp310-cp310-macosx_11_0_arm64.whl` can't be installed because the binary distribution is incompatible with the current platform
-      hint: You're using CPython 3.12 (`cp312`), but `cffi` (v1.17.1) only has wheels with the following Python ABI tag: `cp310`
+
+    hint: You're using CPython 3.12 (`cp312`), but `cffi` (v1.17.1) only has wheels with the following Python ABI tag: `cp310`
     ");
 
     Ok(())
@@ -8103,7 +8139,8 @@ fn sync_wheel_path_source_error() -> Result<()> {
     ----- stderr -----
     Resolved 3 packages in [TIME]
     error: Distribution `cffi==1.17.1 @ path+cffi-1.17.1-cp310-cp310-macosx_11_0_arm64.whl` can't be installed because the binary distribution is incompatible with the current platform
-      hint: You're using CPython 3.12 (`cp312`), but `cffi` (v1.17.1) only has wheels with the following Python ABI tag: `cp310`
+
+    hint: You're using CPython 3.12 (`cp312`), but `cffi` (v1.17.1) only has wheels with the following Python ABI tag: `cp310`
     ");
 
     Ok(())
@@ -10266,7 +10303,6 @@ fn sync_derivation_chain() -> Result<()> {
     ----- stderr -----
     Resolved 2 packages in [TIME]
     error: Failed to build `wsgiref==0.1.2`
-      hint: `wsgiref` (v0.1.2) was included because `project` (v0.1.0) depends on `wsgiref`
       cause: The build backend returned an error
       cause: Call to `setuptools.build_meta:__legacy__.build_wheel` failed (exit status: 1)
 
@@ -10287,7 +10323,10 @@ fn sync_derivation_chain() -> Result<()> {
                  print "Setuptools version",version,"or greater has been installed."
                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
              SyntaxError: Missing parentheses in call to 'print'. Did you mean print(...)?
-      hint: Build failures usually indicate a problem with the package or the build environment
+
+    hint: `wsgiref` (v0.1.2) was included because `project` (v0.1.0) depends on `wsgiref`
+
+    hint: Build failures usually indicate a problem with the package or the build environment
     "#);
 
     Ok(())
@@ -10319,7 +10358,6 @@ fn sync_derivation_chain_extra() -> Result<()> {
     ----- stderr -----
     Resolved 2 packages in [TIME]
     error: Failed to build `wsgiref==0.1.2`
-      hint: `wsgiref` (v0.1.2) was included because `project[wsgi]` (v0.1.0) depends on `wsgiref`
       cause: The build backend returned an error
       cause: Call to `setuptools.build_meta:__legacy__.build_wheel` failed (exit status: 1)
 
@@ -10340,7 +10378,10 @@ fn sync_derivation_chain_extra() -> Result<()> {
                  print "Setuptools version",version,"or greater has been installed."
                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
              SyntaxError: Missing parentheses in call to 'print'. Did you mean print(...)?
-      hint: Build failures usually indicate a problem with the package or the build environment
+
+    hint: `wsgiref` (v0.1.2) was included because `project[wsgi]` (v0.1.0) depends on `wsgiref`
+
+    hint: Build failures usually indicate a problem with the package or the build environment
     "#);
 
     Ok(())
@@ -10374,7 +10415,6 @@ fn sync_derivation_chain_group() -> Result<()> {
     ----- stderr -----
     Resolved 2 packages in [TIME]
     error: Failed to build `wsgiref==0.1.2`
-      hint: `wsgiref` (v0.1.2) was included because `project:wsgi` (v0.1.0) depends on `wsgiref`
       cause: The build backend returned an error
       cause: Call to `setuptools.build_meta:__legacy__.build_wheel` failed (exit status: 1)
 
@@ -10395,7 +10435,10 @@ fn sync_derivation_chain_group() -> Result<()> {
                  print "Setuptools version",version,"or greater has been installed."
                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
              SyntaxError: Missing parentheses in call to 'print'. Did you mean print(...)?
-      hint: Build failures usually indicate a problem with the package or the build environment
+
+    hint: `wsgiref` (v0.1.2) was included because `project:wsgi` (v0.1.0) depends on `wsgiref`
+
+    hint: Build failures usually indicate a problem with the package or the build environment
     "#);
 
     Ok(())
@@ -10936,9 +10979,10 @@ fn sync_git_path_archive_missing_lfs() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to download `iniconfig @ git+https://github.com/astral-sh/archive-in-git-test@bb7ce6abf9f90544767701de5b7b0c7802dc642b#path=archives/iniconfig-2.0.0-py3-none-any.whl&lfs=true`
-      hint: `iniconfig` (v2.0.0) was included because `foo` (v0.1.0) depends on `iniconfig`
       cause: The wheel `git+https://github.com/astral-sh/archive-in-git-test@bb7ce6abf9f90544767701de5b7b0c7802dc642b#path=archives/iniconfig-2.0.0-py3-none-any.whl&lfs=true` is missing Git LFS artifacts.
       cause: Git LFS extension not found. Ensure that Git LFS is installed and available.
+
+    hint: `iniconfig` (v2.0.0) was included because `foo` (v0.1.0) depends on `iniconfig`
     "
     );
 
@@ -10970,8 +11014,9 @@ fn mismatched_name_self_editable() -> Result<()> {
     ----- stderr -----
     Resolved 2 packages in [TIME]
     error: Failed to build `foo @ file://[TEMP_DIR]/`
-      hint: `foo` was included because `project` (v0.1.0) depends on `foo`
       cause: Package metadata name `project` does not match given name `foo`
+
+    hint: `foo` was included because `project` (v0.1.0) depends on `foo`
     ");
 
     Ok(())
@@ -11846,7 +11891,8 @@ fn sync_dry_run_and_locked() -> Result<()> {
     Would install 1 package
      + iniconfig==2.0.0
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     let updated = context.read("uv.lock");
@@ -12132,7 +12178,8 @@ fn sync_locked_script() -> Result<()> {
     Using script environment at: [CACHE_DIR]/environments-v2/script-[HASH]
     Resolved 4 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     uv_snapshot!(context.filters(), context.sync().arg("--script").arg("script.py"), @"
@@ -12230,7 +12277,8 @@ fn sync_locked_script() -> Result<()> {
     warning: Resolving despite existing lockfile due to fork markers being disjoint with `requires-python`: `python_full_version >= '3.11'` vs `python_full_version >= '3.8' and python_full_version < '3.11'`
     Resolved 6 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     uv_snapshot!(context.filters(), context.sync().arg("--script").arg("script.py"), @"
@@ -13038,7 +13086,8 @@ fn sync_build_constraints() -> Result<()> {
     ----- stderr -----
     Resolved 2 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-      hint: To update the lockfile, run `uv lock`.
+
+    hint: To update the lockfile, run `uv lock`.
     ");
 
     // Changing the build constraints should lead to a re-resolve.
@@ -13500,7 +13549,8 @@ fn sync_required_environment_hint() -> Result<()> {
     ----- stderr -----
     Resolved 2 packages in [TIME]
     error: Distribution `a==1.0.0 @ registry+http://[LOCALHOST]/simple/` can't be installed because it doesn't have a source distribution or wheel for the current platform
-      hint: You're on [PLATFORM] (`[TAG]`), but `a` (v1.0.0) only has wheels for the following platform: `macosx_10_0_ppc64`; consider adding "sys_platform == '[PLATFORM]' and platform_machine == '[MACHINE]'" to `tool.uv.required-environments` to ensure uv resolves to a version with compatible wheels
+
+    hint: You're on [PLATFORM] (`[TAG]`), but `a` (v1.0.0) only has wheels for the following platform: `macosx_10_0_ppc64`; consider adding "sys_platform == '[PLATFORM]' and platform_machine == '[MACHINE]'" to `tool.uv.required-environments` to ensure uv resolves to a version with compatible wheels
     "#);
 
     Ok(())
@@ -14118,7 +14168,8 @@ fn sync_python_preference() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: No interpreter found for Python 3.11 in managed installations
-      hint: A managed Python download is available for Python 3.11, but Python downloads are set to 'never'
+
+    hint: A managed Python download is available for Python 3.11, but Python downloads are set to 'never'
     ");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -14195,7 +14246,8 @@ fn sync_python_missing_download_hint() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: No interpreter found for Python 3.100 in [PYTHON SOURCES]
-      hint: uv embeds available Python downloads and may require an update to install new versions. Consider retrying on a newer version of uv.
+
+    hint: uv embeds available Python downloads and may require an update to install new versions. Consider retrying on a newer version of uv.
     ");
 
     Ok(())
@@ -14465,13 +14517,15 @@ fn sync_build_dependencies_respect_locked_versions() -> Result<()> {
     ----- stderr -----
     Resolved [N] packages in [TIME]
     error: Failed to build `child @ file://[TEMP_DIR]/child`
-      hint: `child` was included because `parent` (v0.1.0) depends on `child`
       cause: The build backend returned an error
       cause: Call to `build_backend.build_wheel` failed (exit status: 1)
 
              [stderr]
              Expected `a` version 0.1 but got 0.3.0
-      hint: Build failures usually indicate a problem with the package or the build environment
+
+    hint: `child` was included because `parent` (v0.1.0) depends on `child`
+
+    hint: Build failures usually indicate a problem with the package or the build environment
     ");
 
     // Now constrain the `a` build dependency to match the runtime
@@ -14522,13 +14576,15 @@ fn sync_build_dependencies_respect_locked_versions() -> Result<()> {
     ----- stderr -----
     Resolved [N] packages in [TIME]
     error: Failed to build `child @ file://[TEMP_DIR]/child`
-      hint: `child` was included because `parent` (v0.1.0) depends on `child`
       cause: The build backend returned an error
       cause: Call to `build_backend.build_wheel` failed (exit status: 1)
 
              [stderr]
              Expected `a` version 0.2 but got 0.1.0
-      hint: Build failures usually indicate a problem with the package or the build environment
+
+    hint: `child` was included because `parent` (v0.1.0) depends on `child`
+
+    hint: Build failures usually indicate a problem with the package or the build environment
     ");
 
     uv_snapshot!(context.filters(), context.sync().arg("--index-url").arg(server.index_url())
@@ -14579,10 +14635,11 @@ fn sync_build_dependencies_respect_locked_versions() -> Result<()> {
     ----- stderr -----
     Resolved [N] packages in [TIME]
     error: Failed to build `child @ file://[TEMP_DIR]/child`
-      hint: `child` was included because `parent` (v0.1.0) depends on `child`
       cause: Failed to resolve requirements from `build-system.requires` and `extra-build-dependencies`
       cause: No solution found when resolving: `hatchling`, `a<0.3, >0.15`, `a==0.1.0 (index: http://[LOCALHOST]/simple/)`
       cause: you require a<0.3 and a>0.15, which are incompatible
+
+    hint: `child` was included because `parent` (v0.1.0) depends on `child`
     ");
 
     // Adding a version specifier should also fail
@@ -14674,7 +14731,8 @@ fn sync_extra_build_variables() -> Result<()> {
 
              [stderr]
              Expected `anyio` version 3.0 but got 4.3.0
-      hint: Build failures usually indicate a problem with the package or the build environment
+
+    hint: Build failures usually indicate a problem with the package or the build environment
     ");
 
     // Set the variable in TOML (to an incorrect value).
@@ -14703,7 +14761,8 @@ fn sync_extra_build_variables() -> Result<()> {
 
              [stderr]
              Expected `anyio` version 3.0 but got 4.3.0
-      hint: Build failures usually indicate a problem with the package or the build environment
+
+    hint: Build failures usually indicate a problem with the package or the build environment
     ");
 
     // Set the variable in TOML (to a correct value).
@@ -14756,8 +14815,9 @@ fn reject_unmatched_runtime() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to download and build `source-distribution==0.0.3`
-      hint: `source-distribution` (v0.0.3) was included because `foo` (v0.1.0) depends on `source-distribution`
       cause: Extra build requirement `iniconfig` was declared with `match-runtime = true`, but `source-distribution` does not declare static metadata, making runtime-matching impossible
+
+    hint: `source-distribution` (v0.0.3) was included because `foo` (v0.1.0) depends on `source-distribution`
     ");
 
     Ok(())
@@ -15495,7 +15555,8 @@ async fn sync_non_pep625_sdist() -> Result<()> {
     error: No solution found when resolving dependencies
       cause: Because basic-package==0.1.0 has a non-PEP 625-compliant source distribution filename and only basic-package==0.1.0 is available, we can conclude that all versions of basic-package cannot be used.
              And because your project depends on basic-package, we can conclude that your project's requirements are unsatisfiable.
-      hint: `basic-package` was found on http://[LOCALHOST]/simple, but not at the requested version (basic-package==0.1.0). A compatible version may be available on a subsequent index (e.g., https://pypi.org/simple). By default, uv will only consider versions that are published on the first index that contains a given package, to avoid dependency confusion attacks. If all indexes are equally trusted, use `--index-strategy unsafe-best-match` to consider all versions from all indexes, regardless of the order in which they were defined.
+
+    hint: `basic-package` was found on http://[LOCALHOST]/simple, but not at the requested version (basic-package==0.1.0). A compatible version may be available on a subsequent index (e.g., https://pypi.org/simple). By default, uv will only consider versions that are published on the first index that contains a given package, to avoid dependency confusion attacks. If all indexes are equally trusted, use `--index-strategy unsafe-best-match` to consider all versions from all indexes, regardless of the order in which they were defined.
     ");
 
     Ok(())

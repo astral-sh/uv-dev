@@ -158,8 +158,10 @@ mod tests {
         assert_snapshot!(anstream::adapter::strip_str(&output), @"
         warning: Failed to install Python
           cause: Permission denied
-          hint: Check the registry permissions
-          hint: Retry the installation
+
+        hint: Check the registry permissions
+
+        hint: Retry the installation
         ");
     }
 }

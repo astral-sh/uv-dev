@@ -217,7 +217,8 @@ mod tests {
            --> pyproject.toml:6:63
           info: The other source is declared here
            --> pyproject.toml:5:63
-          hint: replace `python_full_version >= '3.12'` with `python_full_version >= '3.12' and sys_platform != 'linux'`
+
+        hint: replace `python_full_version >= '3.12'` with `python_full_version >= '3.12' and sys_platform != 'linux'`
            --> pyproject.toml:6:63
         ");
     }
@@ -277,7 +278,8 @@ mod tests {
            --> pyproject.toml:5:30
           info: The other source is declared here
            --> pyproject.toml:3:31
-          hint: make the source markers disjoint, or remove one of the overlapping sources
+
+        hint: make the source markers disjoint, or remove one of the overlapping sources
         ");
     }
 
