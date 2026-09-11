@@ -61,6 +61,8 @@ use uv_workspace::{DiscoveryOptions, Workspace, WorkspaceCache};
 use crate::commands::{ParsedRunCommand, RunCommand, ScriptPath};
 
 mod commands;
+mod invocation;
+use invocation::run_with_args;
 #[cfg(not(feature = "self-update"))]
 mod install_source;
 mod logging;
@@ -787,6 +789,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 !args.settings.no_annotate,
                 !args.settings.no_header,
                 args.settings.custom_compile_command,
+                invocation::args().collect(),
                 args.settings.emit_index_url,
                 args.settings.emit_find_links,
                 args.settings.emit_build_options,
@@ -2856,6 +2859,7 @@ async fn run_project(
                 args.frozen,
                 args.include_annotations,
                 args.include_header,
+                invocation::args().collect(),
                 args.include_index_url,
                 args.include_find_links,
                 script,
@@ -3073,6 +3077,7 @@ where
     I: IntoIterator<Item = T>,
     T: Into<OsString> + Clone,
 {
+    let args = args.into_iter().map(Into::into).collect::<Vec<_>>();
     #[cfg(windows)]
     uv_windows::install_unhandled_exception_handler();
 
@@ -3089,7 +3094,7 @@ where
 
     // `std::env::args` is not `Send` so we parse before passing to our runtime
     // https://github.com/rust-lang/rust/pull/48005
-    let cli = match Cli::try_parse_from(args) {
+    let cli = match Cli::try_parse_from(args.iter().cloned()) {
         Ok(cli) => cli,
         Err(mut err) => {
             suggest_subcommand(&mut err);
@@ -3114,7 +3119,11 @@ where
             .build()
             .expect("Failed building the Runtime");
         // Box the large main future to avoid stack overflows.
-        let result = runtime.block_on(Box::pin(run(cli, GlobalInitialization::Initialize)));
+        let result = runtime.block_on(Box::pin(run_with_args(
+            cli,
+            GlobalInitialization::Initialize,
+            args,
+        )));
         // Avoid waiting for pending tasks to complete.
         //
         // The resolver may have kicked off HTTP requests during resolution that
