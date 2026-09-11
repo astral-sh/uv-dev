@@ -224,12 +224,15 @@ impl Reader {
     }
 
     fn retire_after_drain(&mut self, drained: io::Result<()>) {
-        if drained.is_err() {
+        if drained.is_err()
+            && let Some(mut batch) = self.pending.take()
+        {
             // Ring shutdown can cancel asynchronously on supported kernels. If the submitted
             // CQEs cannot be observed, retain this single bounded batch until process exit so a
             // late open/read cannot access freed storage or a recycled descriptor. The reader
             // stays retired, so another call cannot accumulate more retained batches.
-            mem::forget(self.pending.take());
+            batch.discard_results();
+            mem::forget(batch);
         }
         // Without SQPOLL, closing the ring also discards entries never submitted to the kernel.
         // Submitted operations have either completed or kept all of their storage alive above.
@@ -322,6 +325,15 @@ impl PendingBatch {
             buffers.push(request.buffer.take().ok_or_else(invalid_completion)?);
         }
         Ok(())
+    }
+
+    fn discard_results(&mut self) {
+        for request in &mut self.requests {
+            // Accumulated and completed file contents are never kernel-accessed. Only the fixed
+            // read buffer, pathname, and descriptor must outlive an unobserved completion.
+            drop(mem::take(&mut request.contents));
+            drop(request.result.take());
+        }
     }
 }
 
@@ -633,6 +645,31 @@ mod tests {
             comparable(&request.result.take().expect("invalid path result")),
             comparable(&ordinary(path))
         );
+    }
+
+    #[test]
+    fn retirement_discards_only_non_kernel_data() -> io::Result<()> {
+        let paths = vec![PathBuf::from("file")];
+        let mut batch = PendingBatch::new(&paths, vec![new_buffer()])?;
+        let request = &mut batch.requests[0];
+        request.file = Some(tempfile::tempfile()?.into());
+        request.contents = vec![1; READ_SIZE * 2];
+        request.result = Some(Ok(Some(vec![2; READ_SIZE * 2])));
+        let path = request.path.as_ref().expect("owned pathname").as_ptr();
+        let buffer = request.buffer.as_ref().expect("owned buffer").get();
+        let descriptor = request.file.as_ref().map(AsRawFd::as_raw_fd);
+
+        batch.discard_results();
+        let request = &batch.requests[0];
+        assert_eq!(request.contents.capacity(), 0);
+        assert!(request.result.is_none());
+        assert_eq!(
+            request.path.as_ref().expect("owned pathname").as_ptr(),
+            path
+        );
+        assert_eq!(request.buffer.as_ref().expect("owned buffer").get(), buffer);
+        assert_eq!(request.file.as_ref().map(AsRawFd::as_raw_fd), descriptor);
+        Ok(())
     }
 
     #[test]
