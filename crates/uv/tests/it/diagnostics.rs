@@ -323,11 +323,26 @@ fn json_source_marker_suggestion_identifies_a_usable_edit() -> Result<()> {
         .args(["--offline", "--error-format=json"])
         .output()?;
     assert_eq!(output.status.code(), Some(2));
-    assert!(!String::from_utf8_lossy(&output.stderr).contains("sentinel-secret"));
     let report: Value = serde_json::from_slice(&output.stderr)?;
-    let suggestion = report["errors"]
+    let errors = report["errors"]
         .as_array()
-        .context("error chain is an array")?
+        .context("error chain is an array")?;
+    let redacted_url = format!(
+        "https://user:{}@example.com/two.whl",
+        "*".repeat("sentinel-secret".len())
+    );
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("sentinel-secret"));
+    assert!(errors.iter().any(|error| {
+        error["sources"].as_array().is_some_and(|sources| {
+            sources.iter().any(|source| {
+                source["kind"] == "snippet"
+                    && source["windows"][0]["text"]
+                        .as_str()
+                        .is_some_and(|text| text.contains(&redacted_url))
+            })
+        })
+    }));
+    let suggestion = errors
         .iter()
         .flat_map(|error| error["hints"].as_array().into_iter().flatten())
         .find_map(|hint| hint.get("suggestion"))
