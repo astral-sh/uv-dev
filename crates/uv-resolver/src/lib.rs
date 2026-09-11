@@ -1,3 +1,4 @@
+pub use diagnostics::diagnostic_for_error;
 pub use error::{ErrorTree, NoSolutionError, NoSolutionHeader, ResolveError};
 pub use exclude_newer::{
     ExcludeNewer, ExcludeNewerChange, ExcludeNewerOverrideChange, ExcludeNewerPackage,
@@ -47,6 +48,7 @@ type FxHashbrownMap<K, V> = hashbrown::HashMap<K, V, rustc_hash::FxBuildHasher>;
 
 mod candidate_selector;
 mod dependency_provider;
+mod diagnostics;
 mod error;
 mod exclude_newer;
 mod exclusions;

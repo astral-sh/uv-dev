@@ -5,7 +5,9 @@ use std::sync::Arc;
 
 use reqwest::StatusCode;
 
-use uv_distribution_types::{IncompatibleDist, Requirement, RequirementSource};
+use uv_distribution_types::{
+    IncompatibleDist, Requirement, RequirementProvenance, RequirementSource,
+};
 use uv_normalize::{ExtraName, PackageName};
 use uv_pep440::{Version, VersionSpecifiers};
 use uv_platform_tags::{AbiTag, Tags};
@@ -22,6 +24,20 @@ pub enum UnavailableReason {
     Version(UnavailableVersion),
 }
 
+impl UnavailableReason {
+    /// Combine presentation data when two semantically equal unavailability reasons are merged.
+    pub(crate) fn with_merged_provenance(mut self, other: &Self) -> Self {
+        if let (
+            Self::Version(UnavailableVersion::UnsatisfiableDependency(requirement)),
+            Self::Version(UnavailableVersion::UnsatisfiableDependency(other)),
+        ) = (&mut self, other)
+        {
+            requirement.merge_provenance(other);
+        }
+        self
+    }
+}
+
 impl Display for UnavailableReason {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -32,11 +48,12 @@ impl Display for UnavailableReason {
 }
 
 /// A requirement whose version specifiers resolve to an empty range.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone)]
 pub struct UnsatisfiableRequirement {
     name: PackageName,
     extras: Box<[ExtraName]>,
     version_specifiers: VersionSpecifiers,
+    provenance: Option<RequirementProvenance>,
 }
 
 impl UnsatisfiableRequirement {
@@ -52,7 +69,21 @@ impl UnsatisfiableRequirement {
             name: requirement.name.clone(),
             extras: requirement.extras.clone(),
             version_specifiers: specifier.clone(),
+            provenance: requirement.provenance.clone(),
         })
+    }
+
+    /// The source is usable only while every equivalent witness identifies the same occurrence.
+    pub(crate) fn merge_provenance(&mut self, other: &Self) {
+        self.provenance = self
+            .provenance
+            .as_ref()
+            .zip(other.provenance.as_ref())
+            .and_then(|(provenance, other)| provenance.unambiguous_with(other));
+    }
+
+    pub(crate) fn provenance(&self) -> Option<&RequirementProvenance> {
+        self.provenance.as_ref()
     }
 
     fn fmt_package(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -70,6 +101,33 @@ impl UnsatisfiableRequirement {
         Ok(())
     }
 }
+
+impl std::fmt::Debug for UnsatisfiableRequirement {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        let Self {
+            name,
+            extras,
+            version_specifiers,
+            provenance: _,
+        } = self;
+        formatter
+            .debug_struct("UnsatisfiableRequirement")
+            .field("name", name)
+            .field("extras", extras)
+            .field("version_specifiers", version_specifiers)
+            .finish()
+    }
+}
+
+impl PartialEq for UnsatisfiableRequirement {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.extras == other.extras
+            && self.version_specifiers == other.version_specifiers
+    }
+}
+
+impl Eq for UnsatisfiableRequirement {}
 
 impl Display for UnsatisfiableRequirement {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
